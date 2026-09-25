@@ -12,6 +12,9 @@ export interface MetricDimensions {
   [key: string]: string;
 }
 
+/** One datapoint in a PutMetricData call, as the build* helpers below hand it to emitMetrics. */
+type MetricEntry = { name: string; value: number; dimensions?: MetricDimensions; unit: StandardUnit };
+
 /**
  * Emit a metric to CloudWatch
  *
@@ -518,45 +521,91 @@ export async function recordReconcileRun(): Promise<void> {
 }
 
 /**
- * One un-chunked rescue tick: its outcome, and what it moved. Emitted every run including the
- * zero-work ones, because "no files needed rescuing" and "the sweep is switched off or broken"
- * are the two readings an operator has to be able to tell apart, and both report zero enqueued.
+ * The exact MetricData shape one rescue tick emits - exported so the two alarms' dimension
+ * contract is unit-testable on its own, without mocking the AWS SDK (same reason
+ * buildFeedbackDeliveryFailureMetrics below is exported).
  *
- * One PutMetricData call for all three datapoints - the sweep runs on a daily cron, so there is
- * no reason to spend three API calls on it. Dimensions stay off the two counters: their sum is
- * the question, and the outcome is already carried by the Runs metric alongside them.
+ * Each of the three counters is emitted TWICE: once on the stage-less stream it has always
+ * written, and once with the raw deploy stage added as a `Stage` dimension. A dimensioned metric
+ * is a DISTINCT stream in CloudWatch, so the stage-less stream cannot be scoped in place - every
+ * deployed stage writes it, which is how a dev-stage rescue failure ends up counting toward
+ * production's threshold. Emitting both streams is what lets the alarms move to the scoped one
+ * without a deploy window where an alarm reads a stream nobody writes yet, and it leaves the
+ * stage-less stream as the cross-stage total. Note the cost of that: a query that sums ACROSS
+ * dimension sets (a SEARCH expression, not a plain metric selection) now counts every run twice.
  *
- * Covers the HOSTED daily cron only. runChunkRescueSweep has a second driver, the self-host
- * worker tick in server/worker/main.ts, which deliberately emits nothing - there is no CloudWatch
- * on a self-host install. So a zero here means the hosted cron found no work, never that no
- * install swept.
- *
- * Alarms, both in infra/alarms.ts: dataLakeChunkRescueFailuresHigh reads ChunkRescueFailures,
- * and dataLakeChunkRescueSweepFailing reads ChunkRescueRuns at outcome=failed.
- *
- * No `Stage` dimension, unlike the feedback-delivery metrics below: every deployed stage writes
- * the same stream, so a dev-stage failure counts toward production's threshold. Deliberately not
- * fixed here - a dimensioned metric is a DISTINCT stream, so scoping means emitting a coarse
- * `{ Stage }` rollup alongside and repointing BOTH alarms at it, and half of that change leaves
- * an alarm reading a stream nobody writes (see buildFeedbackDeliveryFailureMetrics below for that
- * trap, already live on one sibling alarm). Worth doing where it can be verified on a deployed
- * stage; the gap predates this function.
+ * NOTE the asymmetry with the feedback-delivery builders below: those add a COARSE `{ Stage }`-only
+ * rollup, and copying that shape here would break an alarm. dataLakeChunkRescueSweepFailing reads
+ * ChunkRescueRuns at outcome=failed with `Sum > 0`, so a `{ Stage }`-only Runs stream - which
+ * counts every run, the healthy ones included - would page daily on a working sweep. The scoped
+ * Runs entry therefore keeps `outcome` alongside `Stage`.
  */
-export async function recordChunkRescueSweep(
+export function buildChunkRescueSweepMetrics(
   outcome: ChunkRescueOutcome,
   enqueued: number,
-  failed: number
-): Promise<void> {
-  return emitMetrics(DATA_LAKE_BATCH_NAMESPACE, [
+  failed: number,
+  stage: string | undefined
+): MetricEntry[] {
+  // `||` not `??`: PutMetricData validates the request as a whole and rejects an empty dimension
+  // value, so an empty-string stage would drop all six datapoints - including the alarm-critical
+  // failure counters. Degrading to an unread `Stage=unknown` stream loses the alarm for that run;
+  // rejecting the call loses the record of the run entirely.
+  const scoped = stage || 'unknown';
+  return [
     {
       name: DataLakeBatchMetrics.CHUNK_RESCUE_RUNS,
       value: 1,
       dimensions: { outcome },
       unit: StandardUnit.Count,
     },
+    {
+      name: DataLakeBatchMetrics.CHUNK_RESCUE_RUNS,
+      value: 1,
+      dimensions: { outcome, Stage: scoped },
+      unit: StandardUnit.Count,
+    },
     { name: DataLakeBatchMetrics.CHUNK_RESCUE_ENQUEUED, value: enqueued, unit: StandardUnit.Count },
+    {
+      name: DataLakeBatchMetrics.CHUNK_RESCUE_ENQUEUED,
+      value: enqueued,
+      dimensions: { Stage: scoped },
+      unit: StandardUnit.Count,
+    },
     { name: DataLakeBatchMetrics.CHUNK_RESCUE_FAILURES, value: failed, unit: StandardUnit.Count },
-  ]);
+    {
+      name: DataLakeBatchMetrics.CHUNK_RESCUE_FAILURES,
+      value: failed,
+      dimensions: { Stage: scoped },
+      unit: StandardUnit.Count,
+    },
+  ];
+}
+
+/**
+ * One un-chunked rescue tick: its outcome, and what it moved. Emitted every run including the
+ * zero-work ones, because "no files needed rescuing" and "the sweep is switched off or broken"
+ * are the two readings an operator has to be able to tell apart, and both report zero enqueued.
+ *
+ * One PutMetricData call carries every datapoint - the sweep runs on a daily cron, so there is no
+ * reason to spend several API calls on it, and a partial failure across several would leave the
+ * counters disagreeing with the outcome.
+ *
+ * Covers the HOSTED daily cron only. runChunkRescueSweep has a second driver, the self-host
+ * worker tick in server/worker/main.ts, which deliberately emits nothing - there is no CloudWatch
+ * on a self-host install. So a zero here means the hosted cron found no work, never that no
+ * install swept.
+ *
+ * Alarms, both in infra/alarms.ts and both reading the stage-scoped streams:
+ * dataLakeChunkRescueFailuresHigh reads ChunkRescueFailures at `{ Stage }`, and
+ * dataLakeChunkRescueSweepFailing reads ChunkRescueRuns at `{ outcome: 'failed', Stage }`.
+ */
+export async function recordChunkRescueSweep(
+  outcome: ChunkRescueOutcome,
+  enqueued: number,
+  failed: number,
+  stage: string | undefined
+): Promise<void> {
+  return emitMetrics(DATA_LAKE_BATCH_NAMESPACE, buildChunkRescueSweepMetrics(outcome, enqueued, failed, stage));
 }
 
 /**
@@ -608,8 +657,6 @@ export async function emitFeedbackDeliveryMetrics(
   return emitMetrics(FEEDBACK_DELIVERY_NAMESPACE, metrics);
 }
 
-type FeedbackMetricEntry = { name: string; value: number; dimensions?: MetricDimensions; unit: StandardUnit };
-
 /**
  * The exact MetricData shape a delivery failure emits - exported so the alarm's dimension
  * contract is unit-testable on its own, without mocking the AWS SDK.
@@ -630,7 +677,7 @@ export function buildFeedbackDeliveryFailureMetrics(
   stageClass: FeedbackDeliveryStageClass,
   errorType: string,
   stage: string | undefined
-): FeedbackMetricEntry[] {
+): MetricEntry[] {
   return [
     {
       name: FeedbackDeliveryMetrics.DELIVERY_FAILED,
@@ -659,8 +706,8 @@ export function buildFeedbackDeliverySkippedMetrics(
   stageClass: FeedbackDeliveryStageClass,
   reason: FeedbackDeliverySkipReason,
   stage: string | undefined
-): FeedbackMetricEntry[] {
-  const metrics: FeedbackMetricEntry[] = [
+): MetricEntry[] {
+  const metrics: MetricEntry[] = [
     {
       name: FeedbackDeliveryMetrics.DELIVERY_SKIPPED,
       value: 1,
@@ -702,4 +749,27 @@ export async function recordFeedbackDeliverySkipped(
   stage: string | undefined
 ): Promise<void> {
   return emitFeedbackDeliveryMetrics(buildFeedbackDeliverySkippedMetrics(channel, stageClass, reason, stage));
+}
+
+// Auth Security Metrics - Namespace: Lumina5/AuthSecurity
+// SessionReuseRevoked: a refresh token was presented after its rotation window, indicating
+// a possible stolen token (the session is revoked and both parties are logged out).
+// SessionRecovered: a stale token was accepted under the benign-recovery allowance
+// (lost response on a transient network failure).
+
+const AUTH_SECURITY_NAMESPACE = 'Lumina5/AuthSecurity';
+
+export const AuthSecurityMetrics = {
+  SESSION_REUSE_REVOKED: 'SessionReuseRevoked',
+  SESSION_RECOVERED: 'SessionRecovered',
+} as const;
+
+/** Emits one count when a refresh token reuse revokes a session (presumed theft). */
+export async function recordSessionReuseRevoked(): Promise<void> {
+  return emitMetric(AUTH_SECURITY_NAMESPACE, AuthSecurityMetrics.SESSION_REUSE_REVOKED, 1, {}, StandardUnit.Count);
+}
+
+/** Emits one count when a stale token is accepted under the recovery allowance (benign retry). */
+export async function recordSessionRecovered(): Promise<void> {
+  return emitMetric(AUTH_SECURITY_NAMESPACE, AuthSecurityMetrics.SESSION_RECOVERED, 1, {}, StandardUnit.Count);
 }

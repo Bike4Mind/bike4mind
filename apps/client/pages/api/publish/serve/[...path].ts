@@ -5,7 +5,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import type { Request, Response, NextFunction } from 'express';
 import { marked } from 'marked';
 import { getPublishedArtifactsStorage } from '@server/utils/storage';
-import { PublishedArtifact } from '@bike4mind/database';
+import { PublishedArtifact, User } from '@bike4mind/database';
 import {
   buildPublishUrlPath,
   checkShareGrant,
@@ -19,6 +19,7 @@ import {
   type PublishUser,
   type SandboxAsset,
 } from '@server/services/publish';
+import { stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
 import { getClientIp } from '@server/utils/ip';
 import { parsePublishPath } from '@server/services/publish/parsePublishPath';
 import { HASH_BRIDGE_JS } from '@server/services/publish/fragmentNav';
@@ -35,7 +36,22 @@ import {
   isAppWrapperHost,
   VIEWER_SANDBOX,
 } from '@server/services/publish/viewerSecurity';
-import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
+import { buildShareFooterHtml, buildSignupGateHtml } from '@client/app/utils/shareFooter';
+// Use require for all Prism imports so ESM/CJS interop can't split the singleton:
+// language component files call require('../prism-core') and must get the exact same
+// object reference that our highlight calls use.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const Prism = require('prismjs') as typeof import('prismjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+require('prismjs/components/prism-python');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+require('prismjs/components/prism-typescript');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+require('prismjs/components/prism-jsx');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+require('prismjs/components/prism-tsx');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+require('prismjs/components/prism-json');
 import {
   EXPORT_CONTENT_TYPE,
   buildExportActionsHtml,
@@ -56,6 +72,15 @@ import {
 import { B4M_HORIZONTAL_LOGO_SVG } from '@client/app/utils/b4mLogo';
 import { WEBSITE_URL, getBrandName } from '@client/config/general';
 import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
+
+/**
+ * A reply's `renderedBody`, with any `b4m_cards` fence stripped, for every surface below that
+ * cannot render cards (raw text, markdown/HTML export, the viewer page's own extraction). Not
+ * gated on `source.kind` - a fabfile body never contains this fence, so stripping is a no-op.
+ */
+function replyBodyForExport(artifact: PublishedArtifactLean): string {
+  return stripSearchResultCardFences(artifact.renderedBody ?? '', artifact.citables);
+}
 
 /**
  * GET /api/publish/serve/[...path] - the public viewer for published artifacts.
@@ -507,7 +532,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
           ? buildMarkdownExport(
               artifact.title || SHARED_FALLBACK_TITLE,
               artifact.description,
-              artifact.renderedBody ?? ''
+              replyBodyForExport(artifact)
             )
           : renderViewerPage(artifact, { noindex: true, noReferrer: isShare, standalone: true });
       bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
@@ -524,7 +549,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     // normal page render instead.
     if (typeof req.query.a === 'string' && req.query.a !== '') {
       const idx = Number(req.query.a);
-      const { artifacts } = extractViewerArtifacts(artifact.renderedBody ?? '', artifact.source.kind);
+      const { artifacts } = extractViewerArtifacts(replyBodyForExport(artifact), artifact.source.kind);
       const target = Number.isInteger(idx) && idx >= 0 ? artifacts[idx] : undefined;
       if (!target || (target.type !== 'html' && target.type !== 'svg')) {
         return res.status(404).json({ error: 'Not found' });
@@ -554,7 +579,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       return sendRawArtifact(
         res,
         artifact,
-        artifact.renderedBody ?? '',
+        replyBodyForExport(artifact),
         req.user as { id?: string } | undefined,
         req.headers['user-agent']
       );
@@ -574,12 +599,23 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     // we render the placeholder card instead of a frame that can never load.
     const canFrameArtifacts = isOpenPublic || isShare || passphraseVerified;
     const exportFormats = exportSelfAuthorizes ? exportFormatsFor(artifact.source.kind) : [];
+    // Best-effort lookup: a missing/failed name degrades to no attribution line, never blocks rendering.
+    const ownerName = await User.findById(artifact.ownerId)
+      .select('name')
+      .lean<{ name?: string } | null>()
+      .then(u => u?.name ?? null)
+      .catch(() => null);
     const page = renderViewerPage(artifact, {
       noindex: !searchIndexable,
       noReferrer: isShare,
       selfPath,
       canFrameArtifacts,
       exportFormats,
+      sharedBy: ownerName ?? undefined,
+      // A share-link holder is already authorized to see everything on this page, and a
+      // signed-in viewer already has an account - the prompt is only for an anonymous
+      // visitor who arrived at a plain public link.
+      signupPrompt: !isShare && !req.user,
     });
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     // The page itself stays script-free (`script-src 'none'` neutralizes any markup that
@@ -1273,6 +1309,9 @@ interface PublishedArtifactLean {
   storageKeyPrefix: string;
   manifest: Array<{ path: string; mimeType: string }>;
   renderedBody?: string;
+  /** Snapshot of the source reply's citables, so a `b4m_map` fence in `renderedBody` resolves
+   *  even after the source Quest changes or is deleted. Reply source only. */
+  citables?: CitableSource[];
   source: { kind: 'bundle' | 'reply' | 'fabfile' };
   sha256Index?: string;
   versions?: Array<{ sha256Index: string }>;
@@ -1445,6 +1484,29 @@ function cleanViewerTitle(rawTitle: string | undefined, artifacts: ParsedArtifac
 /** An artifact carrying its own JS. Non-global so `.test` stays stateless across calls. */
 const ARTIFACT_HAS_SCRIPT = /<script[\s>]/i;
 
+const PRISM_LANG: Record<string, string> = {
+  react: 'tsx',
+  python: 'python',
+  html: 'markup',
+  svg: 'markup',
+  json: 'json',
+  mermaid: 'javascript',
+  recharts: 'tsx',
+  code: 'javascript',
+  javascript: 'javascript',
+  typescript: 'typescript',
+};
+
+function highlightArtifactCode(content: string, type: string, language?: string): string {
+  const lang = (language && Prism.languages[language] ? language : PRISM_LANG[type]) ?? 'javascript';
+  const grammar = Prism.languages[lang] ?? Prism.languages.javascript;
+  try {
+    return Prism.highlight(content, grammar, lang);
+  } catch {
+    return escapeHtml(content);
+  }
+}
+
 /**
  * How one embedded artifact renders. Single source of truth so `renderArtifactBlock` and the
  * lead-artifact hero check in `renderViewerPage` can never disagree about what appears:
@@ -1495,9 +1557,9 @@ function artifactFrameClass(extraClass: string): string {
  * SANDBOXED iframe pointed at the `?a={index}` sub-document (so its JS runs isolated on an
  * opaque origin, never on the script-free reply page) - but ONLY when `canFrame` says the
  * sub-request will authorize (see the call site). Every other type (react/code/python/
- * mermaid/recharts) needs the app runtime the static viewer can't provide, so it gets a
- * clean placeholder card instead of leaking raw markup. `index` MUST match the position in the
- * same parseArtifactsWithFallback result the `?a` handler indexes into.
+ * mermaid/recharts) renders as a syntax-highlighted code view so the source is visible behind
+ * the sign-up gate. `index` MUST match the position in the same parseArtifactsWithFallback
+ * result the `?a` handler indexes into.
  *
  * `standalone` (the `?export=html` download) has no `?a=` route to point at, so an html/svg
  * artifact is inlined as an iframe `srcdoc` instead - same `VIEWER_SANDBOX` opaque-origin
@@ -1507,8 +1569,8 @@ function artifactFrameClass(extraClass: string): string {
  * `?a=` either, since an iframe navigation carries no Authorization header. There it inlines
  * the SAME srcdoc, which is the identical opaque-origin posture minus script execution: the
  * page's `script-src 'none'` CSP is inherited by an about:srcdoc child, so a SCRIPTED artifact
- * would render half-broken (markup and CSS, dead JS) and is kept as a card instead. Script-free
- * documents (a styled report, an SVG) render fully, which is what the gated owner came for.
+ * would render half-broken (markup and CSS, dead JS) and falls back to a code view instead.
+ * Script-free documents (a styled report, an SVG) render fully.
  */
 function renderArtifactBlock(
   artifact: ParsedArtifact,
@@ -1530,9 +1592,7 @@ function renderArtifactBlock(
       extraClass
     )}" sandbox="${VIEWER_SANDBOX}" loading="lazy" title="${title}" src="${src}"></iframe>`;
   }
-  return `<div class="b4m-artifact-card"><strong>${title}</strong><span>${escapeHtml(
-    artifact.type
-  )} artifact - open in the app to view</span></div>`;
+  return `<pre class="b4m-code"><code>${highlightArtifactCode(artifact.content, artifact.type, artifact.language)}</code></pre>`;
 }
 
 /**
@@ -1564,6 +1624,16 @@ function renderViewerPage(
      * root-relative report link, and the export links themselves.
      */
     standalone?: boolean;
+    /** Display name of the artifact owner, shown in the page header. Omitted when unknown. */
+    sharedBy?: string;
+    /**
+     * Show the anonymous-visitor sign-up affordances (header link + prompt card). The
+     * content on this page is already fully delivered either way, so this only controls
+     * whether we invite the visitor to make their own - never whether they can read this
+     * one. False for a share-link viewer (already authorized by the link) and a signed-in
+     * viewer (already has an account); see the call site for the exact condition.
+     */
+    signupPrompt?: boolean;
   }
 ): string {
   const {
@@ -1573,8 +1643,10 @@ function renderViewerPage(
     canFrameArtifacts = false,
     exportFormats = [],
     standalone = false,
+    sharedBy,
+    signupPrompt = false,
   } = opts;
-  const body = artifact.renderedBody ?? '';
+  const body = replyBodyForExport(artifact);
   let contentHtml: string;
   let displayTitle = artifact.title || SHARED_FALLBACK_TITLE;
   if (artifact.source.kind === 'reply') {
@@ -1647,6 +1719,13 @@ function renderViewerPage(
         reportPublicId: artifact.publicId,
       }) + buildExportActionsHtml(selfPath, exportFormats);
 
+  // Sign-up prompt: shown to anonymous, non-share-link viewers only (not standalone
+  // exports, share-link holders, or signed-in viewers - all of whom already have full
+  // access, so there is nothing to invite them past).
+  const gate = standalone || !signupPrompt ? null : buildSignupGateHtml();
+  const gateStyles = gate?.styles ?? '';
+  const gateHtml = gate?.html ?? '';
+
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -1658,7 +1737,7 @@ function renderViewerPage(
 <style>
   :root { color-scheme: light dark; }
   body { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; line-height: 1.6;
-         max-width: 760px; margin: 0 auto; padding: 2rem 1.25rem 4rem; color: #1a1a2e; background: #fff; }
+         max-width: 760px; margin: 0 auto; padding: 0 1.25rem 4rem; color: #1a1a2e; background: #eef1f6; }
   @media (prefers-color-scheme: dark) { body { color: #e6e6f0; background: #0f0f1a; } a { color: #8ab4ff; } }
   h1, h2, h3 { line-height: 1.25; }
   pre.b4m-pre, pre { background: rgba(127,127,127,.12); padding: 1rem; border-radius: 8px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }
@@ -1673,11 +1752,77 @@ function renderViewerPage(
          border: 1px solid rgba(127,127,127,.3); border-radius: 8px; background: rgba(127,127,127,.08); }
   .b4m-artifact-card span { font-size: .85rem; opacity: .75; }
   .b4m-footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid rgba(127,127,127,.3); font-size: .85rem; opacity: .7; }
+  /* Syntax-highlighted code block (One Dark theme, always dark so no media-query needed) */
+  pre.b4m-code { background:#282c34; color:#abb2bf; border-radius:10px; padding:1.25rem 1.5rem;
+    overflow-x:auto; white-space:pre; font:13.5px/1.6 'JetBrains Mono','Fira Code',ui-monospace,monospace;
+    tab-size:2; margin:1rem 0; border:1px solid rgba(255,255,255,.07);
+    box-shadow:0 4px 24px rgba(0,0,0,.3); }
+  pre.b4m-code code { background:none; padding:0; border-radius:0; }
+  pre.b4m-code .token.comment,
+  pre.b4m-code .token.prolog,
+  pre.b4m-code .token.doctype,
+  pre.b4m-code .token.cdata { color:#5c6370; font-style:italic }
+  pre.b4m-code .token.keyword,
+  pre.b4m-code .token.important { color:#c678dd }
+  pre.b4m-code .token.string,
+  pre.b4m-code .token.attr-value,
+  pre.b4m-code .token.regex { color:#98c379 }
+  pre.b4m-code .token.number,
+  pre.b4m-code .token.boolean { color:#d19a66 }
+  pre.b4m-code .token.function { color:#61afef }
+  pre.b4m-code .token.class-name { color:#e5c07b }
+  pre.b4m-code .token.tag { color:#e06c75 }
+  pre.b4m-code .token.attr-name,
+  pre.b4m-code .token.variable { color:#d19a66 }
+  pre.b4m-code .token.builtin,
+  pre.b4m-code .token.selector { color:#56b6c2 }
+  pre.b4m-code .token.operator,
+  pre.b4m-code .token.punctuation { color:#abb2bf }
+  /* Page header -- exact spec from design */
+  #b4m-ph { display: flex; align-items: center; justify-content: space-between;
+            padding-top: 26px; padding-bottom: 20px; border-bottom: 1px solid rgba(11,21,36,.08); }
+  .b4m-ph-left { display: flex; align-items: center; gap: 13px; min-width: 0; }
+  .b4m-ph-icon { width: 34px; height: 34px; flex-shrink: 0; display: block; }
+  .b4m-ph-title { font: 700 18px/1.2 Sora, system-ui, sans-serif; color: #0B1524; }
+  .b4m-ph-sub { font: 500 12px/1.4 Manrope, sans-serif; color: #6b7787; margin-top: 3px; }
+  .b4m-ph-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+  .b4m-live { font: 600 11px Manrope, sans-serif; letter-spacing: .06em; text-transform: uppercase;
+              color: #0A7DC1; background: rgba(41,211,245,.14); padding: 6px 11px; border-radius: 999px; }
+  .b4m-ph-share { font: 600 12.5px Manrope, sans-serif; color: #0B1524; text-decoration: none;
+                  border: 1px solid rgba(11,21,36,.14); padding: 7px 14px; border-radius: 8px; }
+  #b4m-content { margin-top: 22px; }
+  @media (prefers-color-scheme: dark) {
+    #b4m-ph { border-color: rgba(255,255,255,.1); }
+    .b4m-ph-title { color: #e6e6f0; }
+    .b4m-ph-sub { color: rgba(255,255,255,.5); }
+    .b4m-live { background: rgba(41,211,245,.2); color: #29D3F5; }
+    .b4m-ph-share { color: #e6e6f0; border-color: rgba(255,255,255,.2); }
+  }
+  ${gateStyles}
 </style>
 </head>
 <body>
+${
+  standalone
+    ? ''
+    : `<header id="b4m-ph">
+  <div class="b4m-ph-left">
+    <img src="/images/logos/Colored_Favicon.svg" alt="" class="b4m-ph-icon">
+    <div>
+      <div class="b4m-ph-title">${titleHtml}</div>
+      <div class="b4m-ph-sub">${sharedBy ? `Shared by ${escapeHtml(sharedBy)} \u00B7 ` : ''}read-only artifact</div>
+    </div>
+  </div>
+  <div class="b4m-ph-right">
+    <span class="b4m-live">Live</span>
+    ${signupPrompt ? '<a href="/register" class="b4m-ph-share">Sign up</a>' : ''}
+  </div>
+</header>`
+}
+<div id="b4m-content">
 <article>${contentHtml}</article>
 ${footer}
+</div>${gateHtml}
 </body>
 </html>`;
 }

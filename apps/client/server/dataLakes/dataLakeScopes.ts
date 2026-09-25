@@ -11,6 +11,22 @@ import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@serv
  * cousins) that write a lake's membership through a caller-supplied tag also
  * import `assertDataLakeTagWriteScope` from here - see that function's doc.
  *
+ * The org-membership doors are the other out-of-family site, for `datalake:share`:
+ * DELETE `organizations/[id]/members/[userId]` declares `DATA_LAKE_SHARE_SCOPES` on
+ * `baseApi`, and DELETE `organizations/[id]/members` asserts `assertDataLakeShareScope`
+ * in-handler so its GET/POST keep their existing scope behaviour. Both end a departing
+ * member's lake grants below the service boundary, which is why a membership route
+ * needs a data-lake scope at all.
+ *
+ * The ownership-offer doors are the third: the transfer-ownership DELETE and the
+ * recipient `ownership-offers/[offerId]/accept` and `/decline` all assert
+ * `assertDataLakeShareScope`, because each one moves or settles who owns the lake.
+ *
+ * Keep that enumeration complete. A scope preflight is sized from the enforcement
+ * sites for a scope, not from its home prefix (docs/architecture/api-key-scope-rollout.md,
+ * step 2), so a `datalake:share` preflight run over `/api/data-lakes` alone would miss
+ * both doors above and under-report the re-mint list.
+ *
  * `admin:*` is deliberately absent from all of them. A route is in its staging
  * grace period only while EVERY scope it accepts is staged (decideScopeGate),
  * and `admin:*` can never be staged - listing it would leave this whole family

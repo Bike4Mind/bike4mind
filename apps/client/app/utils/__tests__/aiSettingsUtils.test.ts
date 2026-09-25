@@ -55,6 +55,18 @@ describe('computeDefaultMaxTokens', () => {
     expect(computeDefaultMaxTokens({ contextWindow: 200000, max_tokens: 4096 })).toBe(4096);
   });
 
+  it('does not clamp the window-based target to a derived cap', () => {
+    // max_tokens: 4096 here is toModelInfo's substitute for a row that declares none, not a
+    // real ceiling - the quarter-window share (100000) must not be pulled back down to it.
+    expect(computeDefaultMaxTokens({ contextWindow: 400000, max_tokens: 4096, maxOutputTokensDerived: true })).toBe(
+      100000
+    );
+  });
+
+  it('still honors a declared cap that happens to equal the derived default', () => {
+    expect(computeDefaultMaxTokens({ contextWindow: 400000, max_tokens: 4096 })).toBe(4096);
+  });
+
   it('floors fractional results from the halving branch', () => {
     // ctx 4097, max 4097: halve to 2048.5 -> 2048
     expect(computeDefaultMaxTokens({ contextWindow: 4097, max_tokens: 4097 })).toBe(2048);
@@ -95,6 +107,20 @@ describe('refitMaxTokensForModel', () => {
 
     it('still lowers a value the model cannot accept', () => {
       expect(refitMaxTokensForModel(128000, small, { allowRaise: false })).toBe(16384);
+    });
+  });
+
+  describe('a derived max_tokens', () => {
+    const derivedCatalogOnly = { contextWindow: 400000, max_tokens: 4096, maxOutputTokensDerived: true };
+
+    it('does not reset a value already set above the derived cap', () => {
+      // The whole point of the flag: 4096 is toModelInfo's default, not a real ceiling, so a
+      // higher persisted value must survive instead of being treated as a stale carry-over.
+      expect(refitMaxTokensForModel(64000, derivedCatalogOnly, { allowRaise: false })).toBe(64000);
+    });
+
+    it('raises a low value to the window-based target, not the derived cap', () => {
+      expect(refitMaxTokensForModel(0, derivedCatalogOnly)).toBe(100000);
     });
   });
 });

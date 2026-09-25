@@ -7,6 +7,8 @@ import { createMocks } from 'node-mocks-http';
  * the raw-array response, and the type/id guards.
  */
 
+const TOKEN = 'wVvJ0hEr1sKq7nQ9YpB2fL4dXz8TcMuGaSiN3ROZjkw';
+
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
   postHandler: null as null | ((req: any, res: any) => unknown),
@@ -65,20 +67,20 @@ describe('GET /api/[type]/[id]/invites', () => {
   it('delegates to listInvitesForDocument with the mapped invite type and returns the raw array', async () => {
     const invites = [{ id: 'i1', type: 'FabFile' }];
     listInvitesForDocument.mockResolvedValue(invites);
-    const { req, res } = createMocks({ method: 'GET', query: { type: 'files', id: 'doc-1' } });
+    const { req, res } = createMocks({ method: 'GET', query: { type: 'files', id: '507f1f77bcf86cd799439011' } });
     (req as any).user = { id: 'u1' };
     await mockRefs.getHandler!(req, res);
 
     expect(listInvitesForDocument).toHaveBeenCalledWith(
       req.user,
-      { documentId: 'doc-1', type: 'FabFile' },
+      { documentId: '507f1f77bcf86cd799439011', type: 'FabFile' },
       expect.objectContaining({ db: expect.any(Object) })
     );
     expect(res._getJSONData()).toEqual(invites);
   });
 
   it('returns 400 for an unrecognized type without calling the service', async () => {
-    const { req, res } = createMocks({ method: 'GET', query: { type: 'bogus', id: 'doc-1' } });
+    const { req, res } = createMocks({ method: 'GET', query: { type: 'bogus', id: '507f1f77bcf86cd799439011' } });
     (req as any).user = { id: 'u1' };
     await mockRefs.getHandler!(req, res);
     expect(res._getStatusCode()).toBe(400);
@@ -95,16 +97,34 @@ describe('GET /api/[type]/[id]/invites', () => {
 
   it('accepts the raw InviteType in the path as well as the alias', async () => {
     listInvitesForDocument.mockResolvedValue([]);
-    const { req, res } = createMocks({ method: 'GET', query: { type: 'FabFile', id: 'doc-1' } });
+    const { req, res } = createMocks({ method: 'GET', query: { type: 'FabFile', id: '507f1f77bcf86cd799439011' } });
     (req as any).user = { id: 'u1' };
     await mockRefs.getHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
     expect(listInvitesForDocument).toHaveBeenCalledWith(
       req.user,
-      { documentId: 'doc-1', type: 'FabFile' },
+      { documentId: '507f1f77bcf86cd799439011', type: 'FabFile' },
       expect.anything()
     );
+  });
+
+  // The list is share-authorized, so this is not an authorization hole - it is a redeemable secret
+  // with no consumer on this surface, re-readable from any cache of the response.
+  it('strips every bearer token from the listed invites', async () => {
+    listInvitesForDocument.mockResolvedValue([
+      { id: 'i1', type: 'FabFile', token: TOKEN },
+      { id: 'i2', type: 'FabFile' },
+    ]);
+    const { req, res } = createMocks({ method: 'GET', query: { type: 'files', id: '507f1f77bcf86cd799439011' } });
+    (req as any).user = { id: 'u1' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(JSON.stringify(res._getJSONData())).not.toContain(TOKEN);
+    expect(res._getJSONData()).toEqual([
+      { id: 'i1', type: 'FabFile' },
+      { id: 'i2', type: 'FabFile' },
+    ]);
   });
 });
 
@@ -118,13 +138,31 @@ describe('POST /api/[type]/[id]/invites', () => {
     createInvite.mockResolvedValue({ id: 'i1', recipients: { pending: [] } });
   });
 
+  // The `link` is the one place the token belongs, and it is what the client reads. Echoing the bare
+  // field alongside it puts the same secret in a second, unadvertised place in the body.
+  it('returns the token inside the share link and nowhere else', async () => {
+    createInvite.mockResolvedValue({ id: 'i1', token: TOKEN, recipients: { pending: [] } });
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await mockRefs.postHandler!(req, res);
+
+    const body = res._getJSONData();
+    expect(body.link).toContain(TOKEN);
+    expect('token' in body).toBe(false);
+  });
+
   it.each([
     ['alias', 'files'],
     ['raw InviteType', 'FabFile'],
   ])('accepts the %s form and creates against FabFile', async (_label: string, pathType: string) => {
     const { req, res } = createMocks({
       method: 'POST',
-      query: { type: pathType, id: 'doc-1' },
+      query: { type: pathType, id: '507f1f77bcf86cd799439011' },
       body: { permissions: ['read'] },
     });
     (req as any).user = { id: 'u1' };
@@ -133,7 +171,7 @@ describe('POST /api/[type]/[id]/invites', () => {
 
     expect(createInvite).toHaveBeenCalledWith(
       req.user,
-      expect.objectContaining({ id: 'doc-1', type: 'FabFile' }),
+      expect.objectContaining({ id: '507f1f77bcf86cd799439011', type: 'FabFile' }),
       expect.anything()
     );
   });
@@ -142,19 +180,19 @@ describe('POST /api/[type]/[id]/invites', () => {
     // Security property: body spread used to win over the path param. Verify the path param is authoritative.
     const { req, res } = createMocks({
       method: 'POST',
-      query: { type: 'files', id: 'doc-path-id' },
-      body: { permissions: ['read'], id: 'attacker-doc-id' },
+      query: { type: 'files', id: '507f1f77bcf86cd799439013' },
+      body: { permissions: ['read'], id: '507f1f77bcf86cd799439014' },
     });
     (req as any).user = { id: 'u1' };
     await mockRefs.postHandler!(req, res);
     expect(createInvite).toHaveBeenCalledWith(
       req.user,
-      expect.objectContaining({ id: 'doc-path-id', type: 'FabFile' }),
+      expect.objectContaining({ id: '507f1f77bcf86cd799439013', type: 'FabFile' }),
       expect.anything()
     );
     expect(createInvite).not.toHaveBeenCalledWith(
       req.user,
-      expect.objectContaining({ id: 'attacker-doc-id' }),
+      expect.objectContaining({ id: '507f1f77bcf86cd799439014' }),
       expect.anything()
     );
   });
@@ -162,7 +200,7 @@ describe('POST /api/[type]/[id]/invites', () => {
   it('accepts a future ISO expiresAt and coerces it to Date', async () => {
     const { req, res } = createMocks({
       method: 'POST',
-      query: { type: 'files', id: 'doc-1' },
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
       body: { permissions: ['read'], expiresAt: '2099-12-31T00:00:00.000Z' },
     });
     (req as any).user = { id: 'u1' };
@@ -177,7 +215,7 @@ describe('POST /api/[type]/[id]/invites', () => {
   it('maps null expiresAt to undefined so the service prefault applies', async () => {
     const { req, res } = createMocks({
       method: 'POST',
-      query: { type: 'files', id: 'doc-1' },
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
       body: { permissions: ['read'], expiresAt: null },
     });
     (req as any).user = { id: 'u1' };
@@ -192,7 +230,7 @@ describe('POST /api/[type]/[id]/invites', () => {
   it('rejects a past expiresAt without calling the service', async () => {
     const { req, res } = createMocks({
       method: 'POST',
-      query: { type: 'files', id: 'doc-1' },
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
       body: { permissions: ['read'], expiresAt: '2020-01-01T00:00:00.000Z' },
     });
     (req as any).user = { id: 'u1' };
@@ -203,7 +241,7 @@ describe('POST /api/[type]/[id]/invites', () => {
   it('rejects a missing permissions field without calling the service', async () => {
     const { req, res } = createMocks({
       method: 'POST',
-      query: { type: 'files', id: 'doc-1' },
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
       body: {},
     });
     (req as any).user = { id: 'u1' };
@@ -212,7 +250,11 @@ describe('POST /api/[type]/[id]/invites', () => {
   });
 
   it('rejects an unrecognized type without calling the service', async () => {
-    const { req, res } = createMocks({ method: 'POST', query: { type: 'bogus', id: 'doc-1' }, body: {} });
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'bogus', id: '507f1f77bcf86cd799439011' },
+      body: {},
+    });
     (req as any).user = { id: 'u1' };
 
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('Invalid type');
@@ -230,10 +272,10 @@ describe('DELETE /api/[type]/[id]/invites', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('takes type and id from the path and ignores conflicting body values', async () => {
-    cancelInvite.mockResolvedValue([{ id: 'i1', documentId: 'doc-1', type: 'Project' }]);
+    cancelInvite.mockResolvedValue([{ id: 'i1', documentId: '507f1f77bcf86cd799439011', type: 'Project' }]);
     const { req, res } = createMocks({
       method: 'DELETE',
-      query: { type: 'Project', id: 'doc-1' },
+      query: { type: 'Project', id: '507f1f77bcf86cd799439011' },
       body: { type: 'Organization', id: 'victim-doc', email: 'a@b.test' },
     });
     (req as any).user = { id: 'u1' };
@@ -242,7 +284,7 @@ describe('DELETE /api/[type]/[id]/invites', () => {
 
     expect(cancelInvite).toHaveBeenCalledWith(
       req.user,
-      { type: 'Project', id: 'doc-1', email: 'a@b.test' },
+      { type: 'Project', id: '507f1f77bcf86cd799439011', email: 'a@b.test' },
       expect.objectContaining({ db: expect.any(Object) })
     );
   });
@@ -250,10 +292,10 @@ describe('DELETE /api/[type]/[id]/invites', () => {
   it('passes the raw InviteType from the path, not a URL alias', async () => {
     // Guards against resolving this segment through the alias map alone: 'Organization' is not a
     // key of that map, so every cancel in the product would break.
-    cancelInvite.mockResolvedValue([{ id: 'i1', documentId: 'org-1', type: 'Organization' }]);
+    cancelInvite.mockResolvedValue([{ id: 'i1', documentId: '507f1f77bcf86cd799439015', type: 'Organization' }]);
     const { req, res } = createMocks({
       method: 'DELETE',
-      query: { type: 'Organization', id: 'org-1' },
+      query: { type: 'Organization', id: '507f1f77bcf86cd799439015' },
       body: { email: 'a@b.test' },
     });
     (req as any).user = { id: 'u1' };
@@ -262,16 +304,16 @@ describe('DELETE /api/[type]/[id]/invites', () => {
 
     expect(cancelInvite).toHaveBeenCalledWith(
       req.user,
-      { type: 'Organization', id: 'org-1', email: 'a@b.test' },
+      { type: 'Organization', id: '507f1f77bcf86cd799439015', email: 'a@b.test' },
       expect.anything()
     );
   });
 
   it('also accepts the lowercase alias GET/POST use', async () => {
-    cancelInvite.mockResolvedValue([{ id: 'i1', documentId: 'org-1', type: 'Organization' }]);
+    cancelInvite.mockResolvedValue([{ id: 'i1', documentId: '507f1f77bcf86cd799439015', type: 'Organization' }]);
     const { req, res } = createMocks({
       method: 'DELETE',
-      query: { type: 'organizations', id: 'org-1' },
+      query: { type: 'organizations', id: '507f1f77bcf86cd799439015' },
       body: {},
     });
     (req as any).user = { id: 'u1' };
@@ -280,17 +322,17 @@ describe('DELETE /api/[type]/[id]/invites', () => {
 
     expect(cancelInvite).toHaveBeenCalledWith(
       req.user,
-      { type: 'Organization', id: 'org-1', email: undefined },
+      { type: 'Organization', id: '507f1f77bcf86cd799439015', email: undefined },
       expect.anything()
     );
   });
 
   it.each([
-    ['an unrecognized type', { type: 'bogus', id: 'doc-1' }],
+    ['an unrecognized type', { type: 'bogus', id: '507f1f77bcf86cd799439011' }],
     // An inherited Object.prototype key must not resolve through the alias map.
-    ['an inherited alias-map key', { type: 'constructor', id: 'doc-1' }],
+    ['an inherited alias-map key', { type: 'constructor', id: '507f1f77bcf86cd799439011' }],
     ['a missing id', { type: 'Project' }],
-    ['a missing type', { id: 'doc-1' }],
+    ['a missing type', { id: '507f1f77bcf86cd799439011' }],
   ])('rejects %s without calling the service', async (_label: string, query: Record<string, string>) => {
     const { req, res } = createMocks({ method: 'DELETE', query, body: {} });
     (req as any).user = { id: 'u1' };

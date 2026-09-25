@@ -304,7 +304,7 @@ const ChangeEmailCard = () => {
             p: 2,
           }}
         >
-          <EmailIcon sx={{ fontSize: 32, color: 'primary.main', flexShrink: 0 }} />
+          <EmailIcon sx={{ fontSize: 32, color: 'primary.plainColor', flexShrink: 0 }} />
 
           <Box sx={{ flex: 1, minWidth: 0 }}>
             <Typography level="title-md" sx={{ mb: 0.5 }}>

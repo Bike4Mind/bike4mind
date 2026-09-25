@@ -9,6 +9,7 @@ import {
   dataLakeBatchRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  lakeMembershipChangeEventRepository,
   orgGoogleDriveConnectionRepository,
   scopedSettingsRepository,
   sessionRepository,
@@ -25,13 +26,14 @@ import {
   type IUserDocument,
   isLakeIngestable,
 } from '@bike4mind/common';
-import { BadRequestError } from '@bike4mind/utils';
+import { BadRequestError, checkStorageLimit, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { createFabFile } from '@server/managers/fabFileManager';
 import defineAbilitiesFor from '@server/auth/ability';
 import { getFilesStorage } from '@server/utils/storage';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
 import {
   disableDriveConnectionForLake,
   getValidConnectionDriveAccessToken,
@@ -876,6 +878,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // was authorized by an org owner/manager at connect time (verifyOrgAccess). Pass the resolved lake
     // itself (not a hand-projection) so `organizationId` reaches the org-manageable manage rung.
     const membershipActor = { userId: connection.connectedBy, isAdmin: true };
+    // Every membership write in this handler is the Drive connector sync itself, not a person at
+    // a keyboard - see LakeMembershipChangeOrigin's own doc comment for why that has to be stated
+    // explicitly here rather than inferred from `membershipActor`, which carries a real user id.
+    const membershipAuditDb = { lakeMembershipChangeEvents: lakeMembershipChangeEventRepository };
     const recomputeStats = () =>
       dataLakeService.recomputeLakeStats(lake, {
         db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
@@ -972,9 +978,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
      */
     const retireSupersededCopy = async (staleCopy: (typeof existingDocs)[number], replacementFabFileId: string) => {
       // Per-lake by construction: clears this lake's meta-tag and prefixed content tags, nothing else.
-      await dataLakeService.removeFileFromLake(membershipActor, lake, staleCopy.id, {
-        db: { fabFiles: fabFileRepository },
-      });
+      await dataLakeService.removeFileFromLake(
+        membershipActor,
+        lake,
+        staleCopy.id,
+        { db: { fabFiles: fabFileRepository, ...membershipAuditDb }, logger },
+        { origin: 'connector' }
+      );
 
       // Re-read AFTER the unpick, so the gate runs against the tags that actually SURVIVE it. The
       // question a hard delete must answer is "now that this file has left THIS lake, does any other
@@ -1054,12 +1064,20 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             fabFileChunks: fabFileChunkRepository,
             users: userRepository,
             sessions: sessionRepository,
+            dataLakes: dataLakeRepository,
+            ...membershipAuditDb,
           },
           storage: getFilesStorage(),
           onDeleteComplete: async (_fabFile, size) => {
             reclaimedBytesByUserId.set(ownerId, (reclaimedBytesByUserId.get(ownerId) ?? 0) + size);
           },
           searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
+          logger,
+          // This is the sole-lake-copy hard delete, reached only after removeFileFromLake above
+          // already unpicked it from `lake` and confirmed no other lake claims it - so this
+          // normally finds zero remaining membership. Wired anyway so a future claim this poll
+          // does not yet know about still gets a 'removed' row instead of a silent gap.
+          origin: 'connector',
         }
       );
       if (action !== 'deleted') {
@@ -1136,9 +1154,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     //    membership-only unpick loses nothing (the FabFile stays in the owner's Files, chunks untouched).
     //    Stats recompute is deferred to the end so it also reflects the stale copies retired in the loop.
     for (const doc of removed) {
-      await dataLakeService.removeFileFromLake(membershipActor, lake, doc.id, {
-        db: { fabFiles: fabFileRepository },
-      });
+      await dataLakeService.removeFileFromLake(
+        membershipActor,
+        lake,
+        doc.id,
+        { db: { fabFiles: fabFileRepository, ...membershipAuditDb }, logger },
+        { origin: 'connector' }
+      );
     }
 
     let retired = 0;
@@ -1189,12 +1211,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         return;
       }
 
-      // The admission contract (#1680) for the lake this sync is JOINING every candidate into. This
-      // door resolves its lake server-side and stamps the meta-tag itself (below), and it creates its
-      // FabFiles through the manager's direct `FabFile.create` rather than
-      // `fabFileService.createFabFile` - so neither the meta-tag chokepoint nor the service gate ever
-      // sees it. Structurally the same unwired door `generate-presigned-urls-batch` needed its own
-      // explicit call for.
+      // This door still creates its FabFiles through the manager's direct `FabFile.create` rather
+      // than `fabFileService.createFabFile`, so it bypasses the meta-tag write-authorization
+      // chokepoint (assertCanWriteDataLakeTags) - see generate-presigned-urls-batch.ts's own
+      // explicit call for the same reason. It calls that chokepoint explicitly below, exactly as
+      // generate-presigned-urls-batch.ts does.
       //
       // Once per sync, before the batch: the lake and the owner-to-be are the same for every
       // candidate, so a refusal is a property of the connection, not of any one file. No FabFile
@@ -1205,22 +1226,43 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // A refusal is DETERMINISTIC - retrying re-reads the same lever and the same policy - so it is
       // recorded as guidance and returned cleanly rather than rethrown into an SQS retry that would
       // spin to the DLQ. Same treatment as the candidate cap above.
+      // Both gates below read the same admin/scoped settings repositories; the second also needs
+      // dataLakes for the origin check.
+      const gateDb = { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository };
       try {
         await dataLakeService.assertLakeAdmission([lake], [{ userId: connection.connectedBy }], {
-          db: { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
+          db: gateDb,
           logger,
         });
-      } catch (admissionError) {
-        if (!(admissionError instanceof BadRequestError)) throw admissionError;
-        logger.warn('[driveLakeIngest] data lake refused this content at admission; refusing the sync', {
+
+        // The origin check this door has always skipped, now that a curated lake must refuse a
+        // scheduled sync. Once per sync, matching the admission call above: lake and owner-to-be are
+        // the same for every candidate, so a refusal is a property of the connection, not of one file.
+        // Same placement, same scope as the admission gate above: it covers ADDITIONS only, so the
+        // retire sweep and the zero-candidate cursor advancement already ran unaffected by origin -
+        // refusing a removal would strand the lake out of sync with no way to converge.
+        //
+        // isAdmin is synthetic, same reasoning as membershipActor above (see its comment) - it short-
+        // circuits the manage rung (canManageLake in manageRule.ts), so what this call actually adds
+        // beyond that is the origin check below plus a newly-caught purged lake (`!lake`). The origin
+        // check itself is privilege-blind, so the synthetic admin does not weaken it.
+        await dataLakeService.assertCanWriteDataLakeTags(membershipActor, [lake.datalakeTag], {
+          db: { dataLakes: dataLakeRepository, ...gateDb },
+          logger,
+          unattended: true,
+        });
+      } catch (refusalError) {
+        if (!(refusalError instanceof BadRequestError)) throw refusalError;
+        logger.warn('[driveLakeIngest] data lake refused this sync at admission or authorization', {
           connectionId,
           dataLakeId: lake.id,
           candidates: candidates.length,
+          reason: refusalError.message,
         });
         // A lever flipped mid-chain refuses the remainder; the slices already ingested still have to
         // settle their shared batch rather than leave it processing.
         if (adoptedBatch) await settleChainedBatch(adoptedBatch.id);
-        await releaseClaim(admissionError.message);
+        await releaseClaim(refusalError.message);
         return;
       }
 
@@ -1283,6 +1325,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         logger.info('[driveLakeIngest] skipping file', { driveFileId, reason, recorded, ...extra });
       };
 
+      // Resolved once per run, not per file - the loop can walk hundreds of candidates.
+      const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+      const maxFileSize = getSettingsValue('MaxFileSize', settings, MAX_FILE_SIZE_DEFAULT_MB) * 1024 * 1024;
+
       // 6) One file at a time: size-gate -> fetch -> create FabFile -> append its manifest entry ->
       //    upload. Only one file's bytes are ever live, and the manifest entry precedes the upload so
       //    the objectCreated/chunk/vectorize claims the upload fires can find it (see header).
@@ -1290,6 +1336,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // Set when Drive throttled this slice, which changes both the continuation's delay and the
       // message the operator sees if the chain runs out of slices still throttled.
       let rateLimited = false;
+      // currentStorageSize is a snapshot read once per run, so several files that each pass the
+      // storage check individually would otherwise overshoot the quota together.
+      let acceptedBytes = 0;
       for (const [index, file] of candidates.entries()) {
         // Yield rather than get killed, checked BEFORE starting a file so the run never dies between
         // creating a FabFile and uploading its bytes - including before the FIRST file: a slice whose
@@ -1307,6 +1356,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         // (surfaced as export_too_large) plus the post-fetch guard below.
         if (file.size != null && file.size > MAX_INGEST_FILE_BYTES) {
           await skip(file.id, 'oversized', { size: file.size });
+          continue;
+        }
+
+        if (file.size != null && file.size >= maxFileSize) {
+          await skip(file.id, 'exceeds_max_file_size', { size: file.size });
           continue;
         }
 
@@ -1338,6 +1392,28 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         }
 
         const { bytes, mimeType } = result;
+
+        // Both size checks above only see file.size, which Drive omits for Docs/Sheets exports;
+        // this pair is the backstop that still catches those once the real byte count is known.
+        if (bytes.length >= maxFileSize) {
+          await skip(file.id, 'exceeds_max_file_size', { size: bytes.length });
+          continue;
+        }
+
+        // Checked against the user, not the connection's org: objectCreated debits the
+        // uploading user, and this handler's own reclaim path deducts from that same counter,
+        // so an org-scoped check here could never fire.
+        // Retires so far this run are already deleted, but their bytes are only staged in
+        // reclaimedBytesByUserId until flushReclaimedStorage after the loop - credit them now.
+        const stagedReclaim = reclaimedBytesByUserId.get(user.id) ?? 0;
+        try {
+          await checkStorageLimit(user, Math.max(0, acceptedBytes + bytes.length - stagedReclaim));
+        } catch (error) {
+          if (!(error instanceof BadRequestError)) throw error;
+          await skip(file.id, 'storage_limit', { size: bytes.length });
+          continue;
+        }
+
         const ext = mime.extension(mimeType);
         const fileKey = `${uuidv4()}${ext ? `.${ext}` : ''}`;
         const tags = await applyFallbackTags([{ name: datalakeTag, strength: DATALAKE_TAG_STRENGTH }]);
@@ -1365,6 +1441,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           ability
         );
 
+        // This door stamps the lake's meta-tag directly into `tags` at creation (above) rather than
+        // going through `addFileToLake` - there is no FabFile yet for that door to gate on when the
+        // tags are decided - so the membership event has to be recorded explicitly here instead of
+        // riding along inside that shared write.
+        await dataLakeService.recordLakeMembershipChange(
+          { actor: membershipActor, lake, fabFileId: fabFile.id, action: 'added', origin: 'connector' },
+          { db: membershipAuditDb, logger }
+        );
+
         // Manifest entry BEFORE the bytes land - the upload fires objectCreated synchronously and its
         // downstream claims need this entry to already exist (ordering is load-bearing; see header).
         await dataLakeBatchRepository.appendFiles(batch.id, [
@@ -1378,6 +1463,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
         await storage.upload(bytes, fileKey, { ContentType: mimeType });
         uploaded++;
+        acceptedBytes += bytes.length;
 
         // Confirm the upload SYNCHRONOUSLY, right here - not left to the async S3 objectCreated
         // event. findDriveFileIdsByBatchId (what a resumed slice subtracts) excludes 'pending' rows

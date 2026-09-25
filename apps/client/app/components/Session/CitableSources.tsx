@@ -6,11 +6,14 @@ import {
   Storage as DatasetIcon,
   Extension as McpIcon,
   WarningAmberRounded as TruncatedIcon,
+  CompareArrowsRounded as ConflictIcon,
 } from '@mui/icons-material';
 import { CitableSource, CitableSourceType } from '@bike4mind/common';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useNavigate } from '@tanstack/react-router';
 import { useCitationInteraction } from './CitationInteractionContext';
+import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import { citedPassageOf } from '@client/app/components/Knowledge/citedPassage';
 
 interface CitableSourcesProps {
   citables: CitableSource[];
@@ -47,7 +50,32 @@ const getFaviconUrl = (url: string): string | null => {
   }
 };
 
-const CitableSourceItem: FC<{ source: CitableSource }> = ({ source }) => {
+/** Names listed in the conflict tooltip before it degrades to a count. Keeps one line readable. */
+const CONFLICT_NAMES_SHOWN = 2;
+
+/**
+ * Titles of the other cited sources this one provably disagrees with (#3041).
+ *
+ * Resolved against the rendered chips rather than read off the chip itself: the detector stamps
+ * `fabFileId`s, and only a sibling chip knows the title behind one. An unresolvable id is still a
+ * real conflict - its partner may not have survived the dedup above - so it degrades to a count
+ * rather than dropping a true signal.
+ *
+ * `Array.isArray` because `metadata` is an open bag filled from a stored document: a malformed
+ * value must render no badge, never throw inside the reply.
+ */
+const conflictingTitlesOf = (source: CitableSource, titleById: Map<string, string>): string[] => {
+  const ids = source.metadata?.conflictsWith;
+  if (!Array.isArray(ids)) return [];
+  const named = ids.map(id => titleById.get(id)).filter((title): title is string => !!title);
+  const unnamed = ids.length - named.length;
+  return unnamed > 0 ? [...named, `${unnamed} further source${unnamed === 1 ? '' : 's'}`] : named;
+};
+
+const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[] }> = ({
+  source,
+  conflictingTitles,
+}) => {
   const [faviconError, setFaviconError] = useState(false);
   const navigate = useNavigate();
   // Opt-in host override: when a surface provides onCitationClick (e.g. the
@@ -89,6 +117,11 @@ const CitableSourceItem: FC<{ source: CitableSource }> = ({ source }) => {
     handleHostClick ??
     (isInternal
       ? () => {
+          // Hand the reader's destination the passage this chip cited, so the viewer can mark it
+          // instead of dropping them at the top of the document (#3038). Written on EVERY internal
+          // click, clearing on a chip that carries no passage: a leftover anchor from the previous
+          // citation would otherwise mark a stale extent in the newly-opened file.
+          setSessionLayout({ citedPassage: citedPassageOf(source) });
           const url = new URL(source.url!, window.location.origin);
           navigate({ to: url.pathname as never, search: Object.fromEntries(url.searchParams) as never });
         }
@@ -106,11 +139,24 @@ const CitableSourceItem: FC<{ source: CitableSource }> = ({ source }) => {
   const isTruncated = source.metadata?.truncated === true;
   const truncationCap = typeof source.metadata?.cap === 'number' ? source.metadata.cap : undefined;
 
+  // Retrieval found this source stating a value another cited source states differently (#3041) -
+  // the same finding the model was warned about, so the reader is not the only one left unaware.
+  // Worded as "may disagree" deliberately: the detector is a pattern match over prose and its own
+  // contract is that a finding means "worth a human's eye", never a proven contradiction
+  // (b4m-core/common/src/constants/corpusInconsistency.ts). Holds for a future kind joining the
+  // asserted list too, which is why the wording names no specific kind.
+  const conflictTooltip = conflictingTitles.length
+    ? `May disagree with ${conflictingTitles.slice(0, CONFLICT_NAMES_SHOWN).join(', ')}` +
+      `${conflictingTitles.length > CONFLICT_NAMES_SHOWN ? ` and ${conflictingTitles.length - CONFLICT_NAMES_SHOWN} more` : ''}. ` +
+      'This is a heuristic match over the retrieved passages, not a proven contradiction - read the sources before relying on either.'
+    : '';
+
   return (
     <Box
       component={renderAsButton ? 'button' : source.url ? 'a' : 'div'}
       type={renderAsButton ? 'button' : undefined}
       href={!renderAsButton ? source.url : undefined}
+      data-testid="citable-source-chip"
       onClick={handleClick}
       target={!renderAsButton && source.url ? '_blank' : undefined}
       rel={!renderAsButton && source.url ? 'noopener noreferrer' : undefined}
@@ -205,6 +251,18 @@ const CitableSourceItem: FC<{ source: CitableSource }> = ({ source }) => {
               />
             </Tooltip>
           )}
+          {conflictTooltip && (
+            <Tooltip size="sm" title={conflictTooltip}>
+              <ConflictIcon
+                data-testid="citable-conflict-badge"
+                // The Tooltip only names the conflict to a reader who can hover it. titleAccess is
+                // what puts the same sentence on the accessibility tree (SvgIcon renders it as
+                // <title> and drops its default aria-hidden), so the signal is not sight-only.
+                titleAccess={conflictTooltip}
+                sx={{ fontSize: '0.9rem', color: 'warning.500', flexShrink: 0 }}
+              />
+            </Tooltip>
+          )}
         </Box>
 
         {source.description && (
@@ -248,6 +306,13 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables, maxHeight = 200 }) 
     }
     return out;
   }, [citables]);
+
+  // Built off the DEDUPED list so a title resolves to the chip actually rendered for that id.
+  const titleById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const source of uniqueCitables) if (source.id) map.set(source.id, source.title);
+    return map;
+  }, [uniqueCitables]);
 
   if (uniqueCitables.length === 0) {
     return null;
@@ -303,7 +368,11 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables, maxHeight = 200 }) 
         }}
       >
         {uniqueCitables.map((source, index) => (
-          <CitableSourceItem key={source.id || source.url || index} source={source} />
+          <CitableSourceItem
+            key={source.id || source.url || index}
+            source={source}
+            conflictingTitles={conflictingTitlesOf(source, titleById)}
+          />
         ))}
       </Stack>
     </Box>

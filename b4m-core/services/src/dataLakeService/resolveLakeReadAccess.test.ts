@@ -8,7 +8,9 @@ import {
   resolveReadGrant,
   resolveLakeReadAccess,
   resolveEnforceReadGrants,
+  resolveEnforceReadGrantsResult,
   manageGrantedLakeIdsFor,
+  supersededOwnLakeIdsFor,
   ENFORCE_LAKE_READ_GRANTS_KEY,
 } from './resolveLakeReadAccess';
 import type { LakeGrant } from './manageRule';
@@ -230,6 +232,47 @@ describe('resolveEnforceReadGrants - fail-safe flag read', () => {
     const logger = { warn: vi.fn() };
     expect(await resolveEnforceReadGrants(settings, logger)).toBe(false);
     expect(logger.warn).toHaveBeenCalledOnce();
+  });
+});
+
+// #3155: a telemetry caller (the gate-excluded-lake count) cannot use the plain boolean above,
+// because its `false` return is ambiguous by design - report-only vs. a read that threw. This is
+// the sibling that tells the two apart.
+describe('resolveEnforceReadGrantsResult - tells "off" apart from "read failed"', () => {
+  it('unwired settings -> report-only, read counted as succeeded (nothing to fail)', async () => {
+    expect(await resolveEnforceReadGrantsResult(undefined)).toEqual({ enforced: false, readSucceeded: true });
+  });
+
+  it('setting ON -> enforced, read succeeded', async () => {
+    const settings = { getSettingsValue: vi.fn().mockResolvedValue(true) };
+    expect(await resolveEnforceReadGrantsResult(settings)).toEqual({ enforced: true, readSucceeded: true });
+  });
+
+  it('setting OFF (falsy value) -> report-only, read succeeded', async () => {
+    const settings = { getSettingsValue: vi.fn().mockResolvedValue(undefined) };
+    expect(await resolveEnforceReadGrantsResult(settings)).toEqual({ enforced: false, readSucceeded: true });
+  });
+
+  it('a FAILED read -> report-only AND readSucceeded: false, and still warns', async () => {
+    const settings = { getSettingsValue: vi.fn().mockRejectedValue(new Error('boom')) };
+    const logger = { warn: vi.fn() };
+    expect(await resolveEnforceReadGrantsResult(settings, logger)).toEqual({
+      enforced: false,
+      readSucceeded: false,
+    });
+    expect(logger.warn).toHaveBeenCalledOnce();
+  });
+
+  // Review: the previous version fed the SAME rejecting settings to both halves and compared
+  // `x === x.enforced` - a comparison that passes on any false-on-rejection implementation without
+  // ever exercising the true-on-success path. Asserting the actual booleans on both branches is
+  // what makes this a real pass-through check, not a tautology.
+  it('resolveEnforceReadGrants stays a thin wrapper over the enforced half - both the ON and the failed path', async () => {
+    const onSettings = { getSettingsValue: vi.fn().mockResolvedValue(true) };
+    expect(await resolveEnforceReadGrants(onSettings)).toBe(true);
+
+    const failingSettings = { getSettingsValue: vi.fn().mockRejectedValue(new Error('boom')) };
+    expect(await resolveEnforceReadGrants(failingSettings)).toBe(false);
   });
 });
 
@@ -623,5 +666,93 @@ describe('grant reach - read vs manage', () => {
   it('both degrade to an empty reach with no repo wired', async () => {
     expect(await grantedLakeReachFor('me', ['orgA'])).toEqual({ grantedLakeIds: [], orgGrantedLakes: {} });
     expect(await manageGrantedLakeIdsFor('me', undefined)).toEqual([]);
+  });
+});
+
+/**
+ * The exclusion set that keeps `findAccessible`'s owner arm from mirroring raw creator provenance
+ * after ownership has moved. The verdict itself belongs to `resolveEffectiveOwnerIds`; what is
+ * pinned here is that this resolver asks it the right question about the right lakes, and that it
+ * stays cheap.
+ */
+describe('supersededOwnLakeIdsFor - creator provenance vs effective ownership', () => {
+  const ME = { userId: 'me', isAdmin: false };
+  const grantRow = (dataLakeId: string, principalId: string, role: string, principalType = 'user') => ({
+    dataLakeId,
+    principalType,
+    principalId,
+    role,
+  });
+
+  const repos = (createdLakeIds: string[], rows: ReturnType<typeof grantRow>[]) => ({
+    dataLakes: { findIdsCreatedBy: vi.fn().mockResolvedValue(createdLakeIds) },
+    grants: { listActiveByLakes: vi.fn().mockResolvedValue(rows) },
+  });
+
+  it('supersedes a created lake whose owner grant is held by someone else', async () => {
+    const { dataLakes, grants } = repos(['lake1'], [grantRow('lake1', 'successor', 'owner')]);
+    expect(await supersededOwnLakeIdsFor(ME, dataLakes as never, grants as never)).toEqual(['lake1']);
+  });
+
+  it('leaves a created lake alone while the caller still holds its owner grant', async () => {
+    const { dataLakes, grants } = repos(['lake1'], [grantRow('lake1', ME.userId, 'owner')]);
+    expect(await supersededOwnLakeIdsFor(ME, dataLakes as never, grants as never)).toEqual([]);
+  });
+
+  it('leaves a co-owned lake alone - one of the owner rows being the caller is enough', async () => {
+    const { dataLakes, grants } = repos(
+      ['lake1'],
+      [grantRow('lake1', 'someone', 'owner'), grantRow('lake1', ME.userId, 'owner')]
+    );
+    expect(await supersededOwnLakeIdsFor(ME, dataLakes as never, grants as never)).toEqual([]);
+  });
+
+  it('leaves a grant-less legacy lake alone - with no owner row the creator IS the owner', async () => {
+    // Lakes predating the grant model carry none, so this is the common case, not an edge one.
+    const { dataLakes, grants } = repos(['lake1'], []);
+    expect(await supersededOwnLakeIdsFor(ME, dataLakes as never, grants as never)).toEqual([]);
+  });
+
+  it('ignores rows that are not owner-role USER grants', async () => {
+    // A curator or reader does not displace an owner, and an ORG-principal row is not a user id -
+    // counting either would evict a creator who is still the owner.
+    const { dataLakes, grants } = repos(
+      ['lake1', 'lake2'],
+      [grantRow('lake1', 'other', 'curator'), grantRow('lake2', 'orgA', 'owner', 'organization')]
+    );
+    expect(await supersededOwnLakeIdsFor(ME, dataLakes as never, grants as never)).toEqual([]);
+  });
+
+  it('scopes the grant read to the lakes the caller created, and skips it when there are none', async () => {
+    const { dataLakes, grants } = repos([], []);
+    expect(await supersededOwnLakeIdsFor(ME, dataLakes as never, grants as never)).toEqual([]);
+    expect(grants.listActiveByLakes).not.toHaveBeenCalled();
+
+    const some = repos(['lake1', 'lake2'], []);
+    await supersededOwnLakeIdsFor(ME, some.dataLakes as never, some.grants as never);
+    expect(some.grants.listActiveByLakes).toHaveBeenCalledWith(['lake1', 'lake2'], { activeAsOf: expect.any(Date) });
+  });
+
+  it('skips an admin entirely - their context emits no owner arm to narrow', async () => {
+    const { dataLakes, grants } = repos(['lake1'], [grantRow('lake1', 'successor', 'owner')]);
+    expect(await supersededOwnLakeIdsFor({ userId: 'me', isAdmin: true }, dataLakes as never, grants as never)).toEqual(
+      []
+    );
+    expect(dataLakes.findIdsCreatedBy).not.toHaveBeenCalled();
+  });
+
+  it('degrades to no exclusions - and no reads at all - without a grant repo or a caller id', async () => {
+    const { dataLakes } = repos(['lake1'], []);
+    expect(await supersededOwnLakeIdsFor(ME, dataLakes as never, undefined)).toEqual([]);
+    expect(
+      await supersededOwnLakeIdsFor(
+        { userId: '', isAdmin: false },
+        dataLakes as never,
+        {
+          listActiveByLakes: vi.fn(),
+        } as never
+      )
+    ).toEqual([]);
+    expect(dataLakes.findIdsCreatedBy).not.toHaveBeenCalled();
   });
 });

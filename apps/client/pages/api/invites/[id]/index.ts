@@ -2,7 +2,6 @@
 // GET/DELETE /api/invites/[id]
 
 import {
-  Invite,
   inviteRepository,
   fabFileRepository,
   sessionRepository,
@@ -10,7 +9,7 @@ import {
   organizationRepository,
   Group,
 } from '@bike4mind/database';
-import { getInviteDetails, filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
+import { canViewInvite, getInviteDetails, filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sharingService } from '@bike4mind/services';
@@ -27,8 +26,15 @@ const handler = baseApi()
         return res.status(400).json({ message: 'Invite Share request' });
       }
 
-      const invite = await Invite.findById(id);
-      if (!invite) {
+      // The share-link landing page reaches this with the invite's bearer TOKEN; a legacy link
+      // still carries an `_id`. resolveRedeemableInvite admits the token always and the id only
+      // while the invite has no token of its own, so a tokenized invite cannot be opened by
+      // guessing ObjectIds around a real one.
+      const invite = await sharingService.resolveRedeemableInvite(id, { db: { invites: inviteRepository } });
+      // A caller who is not a named recipient or share-authorized gets the same 404 as a missing
+      // or malformed id: a 403 would confirm the id exists, and splitting 400 from 404 between
+      // malformed and valid-but-unauthorized is the same class of signal.
+      if (!invite || !(await canViewInvite(req.user, invite))) {
         return res.status(404).json({ message: 'Invite Not Found' });
       }
 

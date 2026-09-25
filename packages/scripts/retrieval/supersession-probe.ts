@@ -354,6 +354,9 @@ async function findOrCreateProbeLake(userId: string): Promise<{ lakeId: string }
     datalakeTag: DATALAKE_TAG,
     createdByUserId: userId,
     status: 'active',
+    // Unlike the help-corpus cron, this lake is only ever seeded by a developer running this
+    // script by hand - never on a schedule - so 'curated' is the accurate declaration here.
+    origin: 'curated',
   });
   logger.log(`Created data lake "${LAKE_SLUG}" (${created.id}).`);
   return { lakeId: created.id };
@@ -483,6 +486,9 @@ async function seedOneGeneration(
     updatedAt: now,
   };
 
+  // Operator-run probe seeding its own scratch lake, not a user-facing ingest door, so the admin
+  // MaxFileSize check and the per-user storage quota do not apply here. Separate from the
+  // "gate-less" note above, which is about lake-membership admission, not these.
   const fabFile = await fabFileRepository.create({
     userId,
     fileName: doc.fileName,

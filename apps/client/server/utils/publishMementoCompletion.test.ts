@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
-import type { MementoGates } from '@bike4mind/services';
+import type { MementoGates } from '@bike4mind/services/llm';
 import { publishMementoCompletion, type MementoCompletionExecution } from './publishMementoCompletion';
 
 const publishMock = vi.fn<(payload: unknown) => Promise<void>>();

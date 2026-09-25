@@ -99,7 +99,7 @@ const ContentPublishingModal: React.FC<ContentPublishingModalProps> = ({ open, o
                     cursor: 'pointer',
                     transition: 'all 0.2s ease',
                     '&:hover': {
-                      borderColor: outputFormat === 'blog' ? 'primary.600' : 'neutral.outlinedHoverBorder',
+                      borderColor: outputFormat === 'blog' ? 'primary.600' : 'neutral.outlinedBorder',
                     },
                   }}
                 >

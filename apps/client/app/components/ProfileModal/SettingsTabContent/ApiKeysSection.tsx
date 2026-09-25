@@ -151,7 +151,7 @@ const SpeechTabContent = () => {
                           minHeight: '28px !important',
                           '&:hover': {
                             backgroundColor: 'neutral.outlinedHoverBg',
-                            borderColor: 'neutral.outlinedHoverBorder',
+                            borderColor: 'neutral.outlinedBorder',
                           },
                         }}
                         slots={{ root: IconButton }}
@@ -215,6 +215,7 @@ const PROVIDER_LABELS: Record<ApiKeyType, string | null> = {
   [ApiKeyType.gemini]: 'Google Gemini',
   [ApiKeyType.xai]: 'xAI',
   [ApiKeyType.kimi]: 'Moonshot (Kimi)',
+  [ApiKeyType.deepseek]: 'DeepSeek',
   [ApiKeyType.bfl]: 'Black Forest Labs',
   [ApiKeyType.voyageai]: 'Voyage AI',
   [ApiKeyType.elevenlabs]: 'ElevenLabs',
@@ -437,7 +438,7 @@ const ProviderContainer = ({
                               minHeight: '28px !important',
                               '&:hover': {
                                 backgroundColor: 'neutral.outlinedHoverBg',
-                                borderColor: 'neutral.outlinedHoverBorder',
+                                borderColor: 'neutral.outlinedBorder',
                               },
                             }}
                             slots={{ root: IconButton }}

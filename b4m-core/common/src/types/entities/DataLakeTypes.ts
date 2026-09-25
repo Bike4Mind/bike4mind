@@ -1,4 +1,4 @@
-import type { LakeInconsistencyReport } from '../../constants/corpusInconsistency';
+import type { LakeInconsistencyScanSummary } from '../../constants/corpusInconsistency';
 import { IBaseRepository, type IMongoDocument } from '.';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { ILakeUsageSummary } from './UsageEventTypes';
@@ -8,10 +8,16 @@ import type { ILakeUsageSummary } from './UsageEventTypes';
 /**
  * Lake lifecycle. Stable states (draft/active/archived/deleted) plus transitional
  * states (archiving/unarchiving/restoring/deleting/purging) that exist to drive UI and make a crashed
- * mid-operation observable. draft -> active is one-way. It happens implicitly once the lake
- * holds its first member file (see `activateIfDraft` below), and unconditionally when an
- * archived or deleted lake is restored, which is how an empty lake can end up active.
+ * mid-operation observable.
  *
+ * draft <-> active is a DELIBERATE, two-way move: `promoteDataLake` publishes a draft (the only
+ * door onto `activateIfDraft` below) and `demoteDataLake` reverses it. Neither fires as a side
+ * effect of adding content - a draft lake that fills up with files stays a draft, excluded from
+ * grounding, until an owner or admin explicitly promotes it. Restoring an archived or
+ * deleted lake still lands unconditionally on `active`, which is how an empty lake can end up
+ * active without ever passing through an explicit promote.
+ *
+
  * `purging` is the one transitional state that is NOT recoverable by retrying the same action:
  * it is claimed the moment a phase-2 hard delete is ACCEPTED (#1744), before the background
  * sweep runs, so that `listDeletedDataLakes` stops offering Restore on a lake whose
@@ -65,6 +71,14 @@ export const DATA_LAKE_STABLE_STATUSES = [
 export const DATA_LAKE_TRANSITIONAL_STATUSES: readonly DataLakeStatus[] = DATA_LAKE_STATUSES.filter(
   s => !(DATA_LAKE_STABLE_STATUSES as readonly DataLakeStatus[]).includes(s)
 );
+
+export const DATA_LAKE_ORIGINS = ['curated', 'connector-fed'] as const;
+
+/**
+ * Derived from the constant above, NOT a parallel union - the mongoose enum imports that same
+ * constant, so a value added here reaches the schema by construction.
+ */
+export type DataLakeOrigin = (typeof DATA_LAKE_ORIGINS)[number];
 
 export type TransitionalRetryAction = 'archive' | 'unarchive' | 'restore' | 'delete';
 
@@ -193,6 +207,14 @@ export const isLakeIngestable = (status?: DataLakeStatus): status is LakeIngesta
   (LAKE_INGESTABLE_STATUSES as readonly (DataLakeStatus | undefined)[]).includes(status);
 
 /**
+ * Fails closed: only an explicit 'connector-fed' passes, so an absent or unexpected origin is
+ * refused rather than silently admitted. Shared by both origin gates - the Drive bind door
+ * (drive-sync.ts) and the unattended-ingest guard (authorizeLakeWrite.ts) - so they read the
+ * same fact with the same polarity.
+ */
+export const acceptsConnectorContent = (origin?: DataLakeOrigin): boolean => origin === 'connector-fed';
+
+/**
  * What a terminal lifecycle settle may write alongside the status it settles on: the spent
  * file-sweep marks it clears, and the actor stamp from `lakeConfigWriteStamp`. Deliberately narrow
  * - a settle records the OUTCOME of a transition, so widening this to arbitrary lake fields would
@@ -318,16 +340,33 @@ export interface IDataLake {
    */
   requiredPassageTokenTarget?: number | null;
   /**
-   * Last computed cross-document inconsistency report (#2242), and when.
+   * What the last cross-document detection run reported about ITSELF (#2242), and when it ran.
+   *
+   * A SUMMARY, never the findings. Each finding is a `DataLakeFinding` row, keyed so re-detecting a
+   * known problem updates it instead of duplicating it; what stays here is only what describes the
+   * pass (`sampled`, `memberCount`, the exact `countsByKind`) and so belongs to no single row. See
+   * `LakeInconsistencyScanSummary` for why the findings must not also be stored here.
    *
    * STORED rather than computed on read, because detection needs chunk TEXT and lake health is
    * forbidden from scanning the chunk collection (#1665 measured that as ruinous at connector scale).
-   * So an owner-triggered pass writes it here and health renders what it finds, the same separation
-   * `converge` uses between planning and executing. A null report means "never run", which the
-   * surface must distinguish from "run and found nothing".
+   * So a pass writes it here and health renders what it finds, the same separation `converge` uses
+   * between planning and executing. Null means "never run", which the surface must distinguish from
+   * "run and found nothing". Moves only when a run SUCCEEDS - `lastInconsistencyScanAt` is the stamp
+   * that moves on every attempt.
    */
-  inconsistencyReport?: LakeInconsistencyReport | null;
+  inconsistencyReport?: LakeInconsistencyScanSummary | null;
   inconsistencyComputedAt?: Date | null;
+  /**
+   * Last time the scheduled detection sweep ATTEMPTED this lake (`lakeInconsistencySweep`), stamped
+   * whether the pass succeeded or failed, and the sweep's fairness key - it scans `status: 'active'`
+   * lakes oldest-attempted-first (null/never-scanned sorts first), so a fleet larger than one run's
+   * cap drains across runs instead of the same `_id` prefix being rescanned forever.
+   *
+   * Deliberately NOT `inconsistencyComputedAt`, which would otherwise serve as the same key: that
+   * one dates the stored summary, so stamping it on a failed pass would date a summary the failed
+   * pass never wrote. Same split, and the same reasoning, as `lastHealthCheckedAt`.
+   */
+  lastInconsistencyScanAt?: Date | null;
   /** Tag prefix for all files in this data lake, must end with ":" (e.g. "acme:") */
   fileTagPrefix: string;
   /** Auto-computed meta-tag: "datalake:<slug>" */
@@ -358,17 +397,17 @@ export interface IDataLake {
    * `updatedAt` and no field says by whom.
    *
    * Written by every CONFIG-write service - updateDataLake, setLakeVisibility,
-   * transferLakeOwnership, and the archive/unarchive + delete/restore lifecycle pairs - so the
-   * answer holds for the whole config surface, not just the metadata PUT. Lifecycle stamps only on
+   * transferLakeOwnership, promoteDataLake/demoteDataLake, and the archive/unarchive +
+   * delete/restore lifecycle pairs - so the answer holds for the whole config surface, not just
+   * the metadata PUT. Lifecycle stamps only on
    * the TERMINAL transition, one stamp per operator action rather than one per intermediate hop.
    *
    * Deliberately NOT stamped: createDataLake already records its actor as createdByUserId, and a
    * lake nobody has reconfigured should read as exactly that rather than as self-updated; file
    * membership (addFileToLake/removeFileFromDataLake) changes the lake's CONTENT rather than its
    * configuration and is attributed per file; recomputeLakeStats is UNATTRIBUTED BY DESIGN rather
-   * than operator-free (a tag edit, a file toggle or a batch completion drives it, and it can flip
-   * status via activateIfDraft - it takes an optional actor only to attribute the config-change
-   * event that flip emits, and deliberately never writes this stamp); the lake-memory
+   * than operator-free (a tag edit, a file toggle or a batch completion drives it, it moves only
+   * the cached counts, and it deliberately never writes this stamp); the lake-memory
    * lease is genuine headless bookkeeping; and resetEmbeddingSpend moves a cost meter, not an
    * answering behavior. So this reads as "who last changed how this lake is configured", never
    * "who last touched this lake in any way".
@@ -423,6 +462,14 @@ export interface IDataLake {
   embeddingSpendMicroUsd?: number;
   /** Last time files were synced/uploaded to this data lake */
   lastSyncAt?: Date;
+  /**
+   * Last time the scheduled lake health sweep graded this lake (`lakeHealthSweep`), stamped
+   * whether the grading succeeded or failed. Doubles as the sweep's fairness key: it scans
+   * `status: 'active'` lakes oldest-checked-first (null/never-checked sorts first), so a fleet
+   * larger than one run's cap drains across runs instead of the same prefix by `_id` being
+   * regraded forever while the tail is never reached. Not touched by anything else.
+   */
+  lastHealthCheckedAt?: Date | null;
   /**
    * The exact `deletedAt` stamp phase-1 delete wrote on this lake's members, so restore can
    * un-delete that batch and nothing else. Not a time window: it is matched by EQUALITY, which is
@@ -504,6 +551,14 @@ export interface IDataLake {
    * currently knows - the ledger is the only source for that.
    */
   lakeMemoryPurgedAt?: Date | null;
+  /**
+   * Who is allowed to fill this lake. A DECLARATION by the owner, not a record of what happened:
+   * `curated` refuses unattended ingest, `connector-fed` admits it. Read by the unattended arm of
+   * assertCanWriteDataLakeTags and by the Drive connect door, which refuses to bind a folder to a
+   * curated lake. A new lake is curated unless the creating request declares otherwise, which the
+   * wizard does when a Drive folder was already picked.
+   */
+  origin: DataLakeOrigin;
 }
 
 export interface IDataLakeDocument extends IDataLake, IMongoDocument {}
@@ -573,8 +628,59 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     entitlementKeys: string[],
     organizationIds?: string[] | null,
     userId?: string | null,
-    opts?: { grantedLakeIds?: string[]; orgGrantedLakes?: Record<string, string[]> }
+    opts?: {
+      grantedLakeIds?: string[];
+      orgGrantedLakes?: Record<string, string[]>;
+      /**
+       * Lakes to withhold from the CREATOR arm: ones the caller created but no longer effectively
+       * owns (`resolveEffectiveOwnerIds`). Pre-resolved by the caller via
+       * `supersededOwnLakeIdsForTurn`, the same seam `grantedLakeIds` uses, because the answer
+       * lives in the grant collection. It narrows ONLY that arm - a superseded creator who still
+       * holds a grant, the lake's tag, or its entitlement keeps reaching it through the arm that
+       * actually authorizes them. Absent leaves the arm at bare creator provenance, which
+       * over-matches once ownership has moved.
+       */
+      supersededOwnLakeIds?: string[];
+    }
   ): Promise<IDataLakeDocument[]>;
+  /**
+   * Count-only companion to `findActiveByUserTagsAndEntitlements` (#3055): active lakes the
+   * caller can see exist - by org membership or public listing - but whose own
+   * `requiredUserTag`/`requiredEntitlement` gate they hold neither of. Excludes lakes reached
+   * through the owner or grant bypass (those are never "excluded"; the resolver restores them
+   * regardless of the gate) and gateless lakes (never a candidate for THIS count - they resolve
+   * for every org member).
+   *
+   * NEVER RETURNS A LAKE DOCUMENT, deliberately - a `countDocuments`, not a `find`. This method
+   * exists solely to measure denial for a caller-facing count; it must never become a second way
+   * to read a lake's fields, or the resolver's read-side stays a stricter gate than this one.
+   */
+  countGateExcludedLakes(
+    userTags: string[],
+    entitlementKeys: string[],
+    organizationIds: string[] | undefined,
+    userId: string | undefined,
+    opts?: {
+      grantedLakeIds?: string[];
+      orgGrantedLakes?: Record<string, string[]>;
+      /**
+       * Lakes to withhold from the owner-bypass exemption (#3055): ones the caller
+       * created but no longer effectively owns (`resolveEffectiveOwnerIds`), the same set
+       * `findActiveByUserTagsAndEntitlements` withholds from its own creator arm. `createdByUserId`
+       * is immutable, so without this a caller whose ownership was transferred away keeps reporting
+       * a false zero for a lake they can no longer reach through the owner bypass - the count and
+       * the resolver's own read-side would disagree about who still owns it.
+       */
+      supersededOwnLakeIds?: string[];
+      /**
+       * Restricts the count to lakes whose `datalakeTag` is in this list - the per-turn-scoped
+       * question "of exactly these lakes, how many are excluded" for a caller that named specific
+       * lakes by identity, as opposed to the whole-account question this method otherwise answers.
+       * Absent or empty runs the unrestricted, account-wide count.
+       */
+      restrictToTags?: string[];
+    }
+  ): Promise<number>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
   /**
    * Datastore-side accessibility filter - owner OR org-admin OR public OR (org-match AND
@@ -596,8 +702,23 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
       includePublic?: boolean;
       grantedLakeIds?: string[];
       orgGrantedLakes?: Record<string, string[]>;
+      /**
+       * Lakes to withhold from the OWNER arm: ones the caller created but no longer effectively owns
+       * (`resolveEffectiveOwnerIds`). Pre-resolved by the caller via `supersededOwnLakeIdsFor`, the
+       * same seam `grantedLakeIds` uses, because the answer lives in the grant collection. Absent
+       * leaves the arm at bare creator provenance, which over-matches once ownership has moved -
+       * every list caller should pass it.
+       */
+      supersededOwnLakeIds?: string[];
     }
   ): Promise<IDataLakeDocument[]>;
+
+  /**
+   * Ids of every lake the given user CREATED, in any status. The candidate set `supersededOwnLakeIdsFor`
+   * joins against the grant collection to decide which of them ownership has moved off; creator
+   * provenance alone answers nothing about ownership, which is why this returns bare ids.
+   */
+  findIdsCreatedBy(userId: string): Promise<string[]>;
   /**
    * The discover/browse catalog: active, PUBLIC lakes the given caller can actually reach.
    * Deliberately PER-CALLER, not one catalog for everyone: it applies the same gate as
@@ -619,6 +740,16 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
       offset?: number;
       grantedLakeIds?: string[];
       orgGrantedLakes?: Record<string, string[]>;
+      /**
+       * Lakes to withhold from the CREATOR arm: ones the caller created but no longer effectively
+       * owns (`resolveEffectiveOwnerIds`). Pre-resolved by the caller via
+       * `supersededOwnLakeIdsForTurn`, the same seam `grantedLakeIds` uses, because the answer
+       * lives in the grant collection. It narrows ONLY that arm - a superseded creator who still
+       * holds a grant, the lake's tag, or its entitlement keeps reaching it through the arm that
+       * actually authorizes them. Absent leaves the arm at bare creator provenance, which
+       * over-matches once ownership has moved.
+       */
+      supersededOwnLakeIds?: string[];
     }
   ): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */
@@ -657,12 +788,30 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    */
   resetEmbeddingSpend(id: string): Promise<boolean>;
   /**
-   * One-way draft -> active, the transition that makes a lake reachable from `findPublicLakes`
-   * and the `findActive*` retrieval arms. Guarded inside the query, so a caller holding a stale
-   * copy of the document cannot resurrect an archived or deleted lake. Returns whether this call
-   * was the one that flipped it.
+   * draft -> active, the transition that makes a lake reachable from `findPublicLakes` and the
+   * `findActive*` retrieval arms. Guarded inside the query, so a caller holding a stale copy of
+   * the document cannot resurrect an archived or deleted lake. Returns whether this call was the
+   * one that flipped it.
+   *
+   * The ONLY caller is `promoteDataLake`, which gates it on `canManageLake` - this method itself
+   * checks no authorization, matching every other `claim*`/lifecycle primitive on this interface.
+   * Nothing else may call it: the automatic flip that used to run on every membership write
+   * (`recomputeLakeStats`) is gone - a draft lake with files stays draft until an owner or
+   * admin promotes it on purpose.
+   *
+   * `extra` carries the actor's write stamp (`lastUpdatedByUserId`) so the single conditional
+   * update also attributes the write, without a second round trip - there is no side effect to
+   * sequence between a claim and a settle here, unlike archive/unarchive.
    */
-  activateIfDraft(id: string): Promise<boolean>;
+  activateIfDraft(id: string, extra?: Pick<LakeSettleFields, 'lastUpdatedByUserId'>): Promise<boolean>;
+  /**
+   * The reverse of `activateIfDraft`: active -> draft, guarded the same way (conditional in the
+   * query, so a stale caller cannot demote a lake some other transition already moved on). The
+   * only caller is `demoteDataLake`. Draft is excluded from grounding at query time (`status ===
+   * 'active'` is checked live on every retrieval, never cached), so this takes effect on the next
+   * lookup - there is nothing "in flight" to reconcile.
+   */
+  demoteToDraft(id: string, extra?: Pick<LakeSettleFields, 'lastUpdatedByUserId'>): Promise<boolean>;
   /**
    * Claim `filesDeletedAt` for a phase-1 teardown: writes `at` only if the lake carries no stamp,
    * and returns the stamp now in force - the existing one when a concurrent teardown or a crashed
@@ -768,6 +917,57 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   setLakeMemoryCursor(id: string, cursor: string | null): Promise<void>;
   /** Advance the cursor only while the purge fence still matches `fenceAt`; false means it moved. */
   setLakeMemoryCursorIfFenceUnmoved(id: string, cursor: string | null, fenceAt: Date | null): Promise<boolean>;
+  /**
+   * Stamp `lastHealthCheckedAt` for the lake health sweep's staleness ordering - see the field's
+   * own doc comment. Called for every lake the sweep ATTEMPTS, success or failure, so a lake that
+   * keeps failing does not sort first forever and starve the rest of the fleet.
+   */
+  markHealthChecked(id: string, at: Date): Promise<void>;
+  /**
+   * One page of the health sweep's staleness-ordered scan of active lakes: oldest/never-checked
+   * first, keyset-paged on (lastHealthCheckedAt, _id). `excludeCheckedAt` is the stamp the calling
+   * run writes as it grades, and excluding it is load-bearing rather than an optimization - the
+   * scan sorts on the same field the run mutates, so without it every lake already graded this run
+   * re-enters the candidate set behind an older cursor and is graded twice.
+   */
+  findDueForHealthCheck(params: {
+    cursor: { lastHealthCheckedAt: Date | null; id: string } | null;
+    limit: number;
+    excludeCheckedAt: Date;
+    projection: Record<string, 0 | 1>;
+  }): Promise<IDataLakeDocument[]>;
+  /** Whether any candidate remains behind `cursor`, so a run can tell a deferred remainder from a
+   * last page that merely landed on the cap. */
+  hasMoreDueForHealthCheck(
+    cursor: { lastHealthCheckedAt: Date | null; id: string } | null,
+    excludeCheckedAt: Date
+  ): Promise<boolean>;
+  /**
+   * Stamp `lastInconsistencyScanAt` for the detection sweep's staleness ordering - see the field's
+   * own doc comment. Called for every lake the sweep ATTEMPTS, success or failure, so a lake whose
+   * pass keeps failing does not sort first forever and starve the rest of the fleet.
+   */
+  markInconsistencyScanned(id: string, at: Date): Promise<void>;
+  /**
+   * One page of the detection sweep's staleness-ordered scan of active lakes: oldest/never-scanned
+   * first, keyset-paged on (lastInconsistencyScanAt, _id). `excludeScannedAt` is the stamp the
+   * calling run writes as it scans, and excluding it is load-bearing rather than an optimization,
+   * for exactly the reason `findDueForHealthCheck` documents: the scan sorts on the same field the
+   * run mutates, so without it every lake already scanned this run re-enters the candidate set
+   * behind an older cursor and is scanned twice - which here means a second ~1000-chunk pass.
+   */
+  findDueForInconsistencyScan(params: {
+    cursor: { lastInconsistencyScanAt: Date | null; id: string } | null;
+    limit: number;
+    excludeScannedAt: Date;
+    projection: Record<string, 0 | 1>;
+  }): Promise<IDataLakeDocument[]>;
+  /** Whether any candidate remains behind `cursor`, so a run can tell a deferred remainder from a
+   * last page that merely landed on the cap. */
+  hasMoreDueForInconsistencyScan(
+    cursor: { lastInconsistencyScanAt: Date | null; id: string } | null,
+    excludeScannedAt: Date
+  ): Promise<boolean>;
 }
 
 // ── Data Lake Batch ─────────────────────────────────────────────────────────
@@ -939,6 +1139,13 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * default is the safe one.
    */
   updateFileStatus(batchId: string, fabFileId: string, status: BatchFileStatus, error?: string): Promise<void>;
+  /**
+   * Replace the error text on an already-'failed' manifest entry and nothing else, so an entry
+   * stays in step with a FabFile whose error a permanent verdict has superseded. Not
+   * updateFileStatus: that would restamp `failureCounted: false` and strip the outgoing failure's
+   * charge attribution, which revertFileFailure needs to hand those counters back.
+   */
+  supersedeFileError(batchId: string, fabFileId: string, error: string): Promise<void>;
   /**
    * Append manifest entries to a batch atomically ($push). Called as files are
    * created (presigned-URL issuance) so the manifest is populated incrementally.

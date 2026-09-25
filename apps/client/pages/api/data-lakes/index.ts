@@ -11,9 +11,10 @@ import {
   adminSettingsRepository,
   fallbackLakeSettingsRepository,
 } from '@bike4mind/database';
-import { CreateDataLakeRequestInput } from '@bike4mind/common';
+import { CreateDataLakeRequestInput, BadRequestError, ForbiddenError } from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { isValidObjectId } from '@server/utils/objectId';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
 
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
@@ -45,9 +46,31 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       // ctx.administeredOrgIds is deliberately zeroed. Without it that rung goes dark on this list.
       organizations: organizationRepository,
     };
+    // `?preauthorizableFor=<userId>` labels `canPreauthorize` for that user instead of the caller,
+    // so the admin key-mint picker can offer exactly the lakes the mint route will accept (#2945).
+    // The row set is unchanged either way - only the admission label moves.
+    // Every PRESENT value is screened, and anything but one well-formed id is refused rather than
+    // dropped: a silently ignored param answers with the CALLER's admission labels, which is the
+    // exact mislabeling this parameter exists to remove, and the caller only learns of it as a 400
+    // from the mint route much later. So `!== undefined` rather than truthiness (a bare
+    // `?preauthorizableFor=` is a present, empty string) and a typeof test that rejects the
+    // array express hands back for a repeated `?a=1&a=2`, instead of letting it fall through.
+    const rawPreauthorizableFor = req.query.preauthorizableFor;
+    let preauthorizeForUserId: string | undefined;
+    if (rawPreauthorizableFor !== undefined) {
+      if (!ctx.isAdmin) {
+        throw new ForbiddenError('preauthorizableFor is admin-only');
+      }
+      // Unchecked, a malformed id reaches the org-admin lookup as a CastError and surfaces as a 500.
+      if (typeof rawPreauthorizableFor !== 'string' || !isValidObjectId(rawPreauthorizableFor)) {
+        throw new BadRequestError('preauthorizableFor must be a single user id');
+      }
+      preauthorizeForUserId = rawPreauthorizableFor;
+    }
+
     // Admins see all data lakes; non-admins see only those they can access (owner/org/tag).
     const dataLakes = ctx.isAdmin
-      ? await dataLakeService.listAllDataLakes(ctx, { db, logger: req.logger })
+      ? await dataLakeService.listAllDataLakes(ctx, { db, logger: req.logger, preauthorizeForUserId })
       : await dataLakeService.listDataLakes(ctx, { db });
 
     return res.json({ data: dataLakes });

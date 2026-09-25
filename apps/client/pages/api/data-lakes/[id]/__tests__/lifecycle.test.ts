@@ -7,6 +7,8 @@ const h = vi.hoisted(() => ({
   deleteDataLake: vi.fn(),
   unarchiveDataLake: vi.fn(),
   restoreDeletedDataLake: vi.fn(),
+  promoteDataLake: vi.fn(),
+  demoteDataLake: vi.fn(),
   cleanupDeletedDataLake: vi.fn(),
   acceptDataLakePurge: vi.fn(),
   releasePurgingToDeleted: vi.fn(),
@@ -46,6 +48,8 @@ vi.mock('@bike4mind/services', () => ({
     deleteDataLake: h.deleteDataLake,
     unarchiveDataLake: h.unarchiveDataLake,
     restoreDeletedDataLake: h.restoreDeletedDataLake,
+    promoteDataLake: h.promoteDataLake,
+    demoteDataLake: h.demoteDataLake,
     cleanupDeletedDataLake: h.cleanupDeletedDataLake,
     acceptDataLakePurge: h.acceptDataLakePurge,
     canManageLake: h.canManageLake,
@@ -59,6 +63,7 @@ vi.mock('@bike4mind/database', () => ({
   // omitted because the mock replaces the whole module: a missing export is an import-time
   // failure, not a silent undefined.
   lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
+  lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   adminSettingsRepository: {
     findBySettingNames: vi.fn().mockResolvedValue([]),
     findAll: vi.fn().mockResolvedValue([]),
@@ -75,6 +80,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   fabFileRepository: {},
   fabFileChunkRepository: {},
+  userRepository: { incrementCurrentStorage: vi.fn() },
 }));
 vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpenSearchEnabled }));
@@ -87,6 +93,7 @@ vi.mock('@server/integrations/google/drive/common', () => ({
 }));
 
 import handler from '../lifecycle';
+import { fabFileChunkRepository } from '@bike4mind/database';
 
 const makeRes = () => {
   const json = vi.fn();
@@ -221,6 +228,8 @@ describe('POST /api/data-lakes/[id]/lifecycle - retrievalIndex wiring (archive/d
     h.deleteDataLake.mockResolvedValue({ id: 'lake1', status: 'deleted' });
     h.unarchiveDataLake.mockResolvedValue({ restoredCount: 0, skippedDuplicates: 0 });
     h.restoreDeletedDataLake.mockResolvedValue({ restoredCount: 0, skippedDuplicates: 0 });
+    h.promoteDataLake.mockResolvedValue({ id: 'lake1', status: 'active' });
+    h.demoteDataLake.mockResolvedValue({ id: 'lake1', status: 'draft' });
   });
 
   // The audit repos are wired through one shared helper (lakeConfigAuditDb) precisely so the four
@@ -233,6 +242,8 @@ describe('POST /api/data-lakes/[id]/lifecycle - retrievalIndex wiring (archive/d
     ['unarchive', 'unarchiveDataLake'],
     ['restore', 'restoreDeletedDataLake'],
     ['delete', 'deleteDataLake'],
+    ['promote', 'promoteDataLake'],
+    ['demote', 'demoteDataLake'],
   ])('%s wires the config-audit repositories into the service', async (action, serviceName) => {
     const { res } = makeRes();
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
@@ -298,6 +309,25 @@ describe('POST /api/data-lakes/[id]/lifecycle - retrievalIndex wiring (archive/d
       expect.anything(),
       'lake1',
       expect.objectContaining({ retrievalIndex: expect.objectContaining({ removeForDataLake: expect.anything() }) })
+    );
+  });
+
+  // Pins the IDENTITY of the object, not merely that something truthy rides along: a door that
+  // wired an unrelated stub (or a fresh `{}`) would still pass a shape-only assertion while
+  // leaving bestEffortIndexRemove's residency-confirm clear pointed at nothing real. archive/delete
+  // are the two doors on this route that carry the retrieval index; unarchive/restore have no
+  // removal step to clear a confirm for.
+  it.each([
+    ['archive', 'archiveDataLake'],
+    ['delete', 'deleteDataLake'],
+  ])('%s wires the real fabFileChunkRepository into db.fabFileChunks', async (action, serviceName) => {
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
+
+    expect(h[serviceName as keyof typeof h]).toHaveBeenCalledWith(
+      expect.anything(),
+      'lake1',
+      expect.objectContaining({ db: expect.objectContaining({ fabFileChunks: fabFileChunkRepository }) })
     );
   });
 

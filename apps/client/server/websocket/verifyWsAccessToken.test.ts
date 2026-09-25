@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockFindByKeyName = vi.fn();
 vi.mock('@bike4mind/database/infra', () => ({
-  secretRotationRepository: { findByKeyName: (...args: unknown[]) => mockFindByKeyName(...args) },
+  secretRotationRepository: { findByKeyNameWithSecret: (...args: unknown[]) => mockFindByKeyName(...args) },
 }));
 
 const mockIsWithinGraceWindow = vi.fn();
@@ -26,6 +26,7 @@ vi.mock('@server/utils/errors', () => ({
 }));
 
 import { verifyWsAccessToken } from './verifyWsAccessToken';
+import { configureSecretsAtRest, encryptAtRest, generateEncryptionKey } from '@bike4mind/utils/security';
 
 describe('verifyWsAccessToken', () => {
   beforeEach(() => {
@@ -50,6 +51,16 @@ describe('verifyWsAccessToken', () => {
     mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'refresh' });
 
     await expect(verifyWsAccessToken('token-123')).rejects.toThrow('Invalid token type');
+    expect(mockFindById).not.toHaveBeenCalled();
+  });
+
+  it('rejects a relying-party OAuth access token (kind=oauth) before touching the user', async () => {
+    // An OAuth access token is scope/audience-bound to OAuth-reachable REST routes, not a session
+    // credential for the socket. oauthRouteGate does not cover this surface, so the default-deny
+    // must live here or the token would ride the socket as a full session.
+    mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'access', kind: 'oauth' });
+
+    await expect(verifyWsAccessToken('token-123')).rejects.toThrow('OAuth access tokens are not accepted');
     expect(mockFindById).not.toHaveBeenCalled();
   });
 
@@ -80,5 +91,26 @@ describe('verifyWsAccessToken', () => {
     await verifyWsAccessToken('token-123');
 
     expect(mockVerifyToken).toHaveBeenCalledWith('token-123', 'prev-secret');
+  });
+
+  // Regression guard: previousKey is stored encrypted at rest, so a reader that skips
+  // decryptAtRest verifies grace-window tokens against ciphertext and every real rotated
+  // token fails. The plaintext fixture above cannot catch that (decrypt passes plaintext
+  // through unchanged); this one holds real ciphertext and fails if the decrypt is dropped.
+  it('decrypts an encrypted rotated previousKey before verifying', async () => {
+    const PREV_SECRET = 'the-outgoing-signing-secret';
+    configureSecretsAtRest(generateEncryptionKey());
+    try {
+      const ciphertext = encryptAtRest(PREV_SECRET);
+      expect(ciphertext).not.toBe(PREV_SECRET); // guard the fixture itself is encrypted
+      mockFindByKeyName.mockResolvedValue({ rotatedAt: new Date(), previousKey: ciphertext });
+      mockIsWithinGraceWindow.mockReturnValue(true);
+
+      await verifyWsAccessToken('token-123');
+
+      expect(mockVerifyToken).toHaveBeenCalledWith('token-123', PREV_SECRET);
+    } finally {
+      configureSecretsAtRest(undefined);
+    }
   });
 });

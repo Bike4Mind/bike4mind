@@ -59,6 +59,15 @@ const makeAdapters = (files: ReturnType<typeof file>[], lakeDoc: IDataLakeDocume
           doc.tags.push(...toAdd.map(name => ({ name, strength })));
           return toAdd.length;
         }),
+        // Same store mutation as the push above, returning the PRE-IMAGE instead of a count - the
+        // membership door reads it to tell a real join from filling in a missing meta-tag.
+        pushTagReturningPriorState: vi.fn(async (id: string, name: string, strength = 0) => {
+          const doc = store.get(id);
+          if (!doc || doc.tags.some(t => t.name === name)) return null;
+          const prior = { userId: doc.userId, tags: [...doc.tags] };
+          doc.tags.push({ name, strength });
+          return prior;
+        }),
         computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 3, totalSizeBytes: 99, totalChunkedChars: 0 }),
       },
       fileTags: { touchLastActivityBy: vi.fn() },
@@ -186,7 +195,7 @@ describe('toggleTags - data lake meta-tags', () => {
 
     await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
 
-    expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake'], 1);
+    expect(adapters.db.fabFiles.pushTagReturningPriorState).toHaveBeenCalledWith('f1', 'datalake:lake', 1);
   });
 
   it('recomputes the lake stats in both directions', async () => {
@@ -207,54 +216,15 @@ describe('toggleTags - data lake meta-tags', () => {
     });
   });
 
-  it('activates a draft lake the toggle just added a file to (#1342)', async () => {
-    // The door the bug was reported through. It never wrote status itself - only batch creation
-    // did - so a lake filled this way stayed draft and never reached Discover or retrieval.
+  // Adding a file to a draft lake no longer publishes it as a side effect - the toggle
+  // still corrects the lake's stats, but status is untouched until an explicit promote.
+  it("corrects a draft lake's stats without publishing it", async () => {
     const adapters = makeAdapters([file('f1')], lake({ status: 'draft' }));
 
     await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
 
-    expect(adapters.db.dataLakes.activateIfDraft).toHaveBeenCalledWith('lake1');
-  });
-
-  // #1964: the one remaining door that could emit an `auto-activate` config-change row without
-  // ever attaching an `auditPrincipal` - the four config-write routes (#1917) and the other
-  // recompute callers (#2124) already do. Mutation-verified: deleting the `auditPrincipal` line
-  // from the actor at toggleTags.ts's actor construction turns the first case red (the fallback
-  // derives `principalKind: 'user'` from `actor.userId` instead).
-  describe('auto-activate audit principal (#1964)', () => {
-    it('names the API key, not the human, when a key-driven toggle activates a draft lake', async () => {
-      const adapters = makeAdapters([file('f1')], lake({ status: 'draft' }));
-      adapters.db.dataLakes.activateIfDraft = vi.fn().mockResolvedValue(true);
-
-      await run(
-        adapters,
-        { ids: ['f1'], tags: ['datalake:lake'] },
-        { auditPrincipal: { principalKind: 'apiKey', principalId: 'key-abc', onBehalfOfUserId: 'owner' } }
-      );
-
-      expect(adapters.db.lakeConfigChangeEvents.record).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: 'auto-activate',
-          principalKind: 'apiKey',
-          principalId: 'key-abc',
-          onBehalfOfUserId: 'owner',
-        })
-      );
-    });
-
-    it('still names the session user with no onBehalfOfUserId when no key is involved', async () => {
-      const adapters = makeAdapters([file('f1')], lake({ status: 'draft' }));
-      adapters.db.dataLakes.activateIfDraft = vi.fn().mockResolvedValue(true);
-
-      await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
-
-      expect(adapters.db.lakeConfigChangeEvents.record).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'auto-activate', principalKind: 'user', principalId: 'owner' })
-      );
-      const [event] = adapters.db.lakeConfigChangeEvents.record.mock.calls[0];
-      expect('onBehalfOfUserId' in event).toBe(false);
-    });
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', expect.anything());
+    expect(adapters.db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
   });
 
   it('recomputes a lake once for the whole batch, not once per file', async () => {
@@ -296,7 +266,7 @@ describe('toggleTags - data lake meta-tags', () => {
 
     await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
 
-    expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake'], 1);
+    expect(adapters.db.fabFiles.pushTagReturningPriorState).toHaveBeenCalledWith('f1', 'datalake:lake', 1);
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });
 
@@ -358,7 +328,7 @@ describe('toggleTags - data lake meta-tags', () => {
     await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
 
     // The caller asked to toggle the meta-tag, and the file does not carry it.
-    expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake'], 1);
+    expect(adapters.db.fabFiles.pushTagReturningPriorState).toHaveBeenCalledWith('f1', 'datalake:lake', 1);
   });
 
   it('still recomputes stats and surfaces the error when one file of a batch fails', async () => {
@@ -404,7 +374,7 @@ describe('toggleTags - meta-tag join file-ownership conjunct', () => {
 
     await runAs('admin', adapters, { ids: ['f1'], tags: ['datalake:lake'] });
 
-    expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake'], 1);
+    expect(adapters.db.fabFiles.pushTagReturningPriorState).toHaveBeenCalledWith('f1', 'datalake:lake', 1);
   });
 
   it('refuses a platform admin joining an unrelated third party file', async () => {

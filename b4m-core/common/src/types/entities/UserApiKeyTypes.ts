@@ -15,6 +15,14 @@ export enum ApiKeyScope {
    *  call chat/completions - a leaked bridge key has the narrow blast
    *  radius of a sprite-spawning credential, not a billable AI key. */
   CC_BRIDGE = 'cc-bridge:connect',
+  /**
+   * Read the key owner's OWN commercial state - tier, credit balance, entitlement
+   * keys - via `GET /api/v1/me`. Split from the AI scopes on purpose: a key minted
+   * to generate text has no business enumerating what its owner has paid for. It
+   * gates only `GET /api/v1/me` and adds no other reach, so it carries the `:read`
+   * suffix that puts it in the New-Key modal's read-only preset.
+   */
+  ME_READ = 'me:read',
   ADMIN = 'admin:*',
   MARKETING_REPORTS_READ = 'marketing-reports:read',
   MARKETING_REPORTS_WRITE = 'marketing-reports:write',
@@ -81,7 +89,43 @@ export enum ApiKeyScope {
    * read-gated routes (e.g. GET /api/data-lakes/articles) with the caller's own credential.
    */
   DATALAKE_QUERY = 'datalake:query',
+  /**
+   * Read the Overwatch analytics surface - the cross-product overview, product
+   * inventory and config, first-party metrics, product-stat history, funnel,
+   * and pipeline freshness. Exists so an agent can be handed a credential that
+   * can only *look*: it is deliberately NOT the read half of
+   * {@link OVERWATCH_INGEST_WRITE}, which is a per-product ingest credential
+   * bound to one `productId` and able to write that product's numbers. Handing
+   * an explorer the ingest key would let it fabricate the very stats it reports
+   * on, so the two are separate scopes rather than a read/write pair.
+   *
+   * Like every scope, it authorizes but never entitles - the Overwatch access
+   * check (`requestHasOverwatchAccess`: admin OR developer OR `overwatch:pro`)
+   * still runs against the key's owner and can refuse on its own. A key minted
+   * with this scope by a user who does not hold Overwatch access opens nothing.
+   * That check and the routes it guards live in the Overwatch overlay package;
+   * neither has an implementation in this repository, so nothing here verifies
+   * the claim - it is a property of the consumer, recorded for the reader.
+   */
+  OVERWATCH_READ = 'overwatch:read',
 }
+
+/**
+ * Scopes bound to a single dedicated flow: bridge pairing, the embed widget,
+ * Overwatch ingest. A key carrying ANY of these is *confined* and both ends of the
+ * system say the same thing about it in the same words:
+ *  - at mint (createUserApiKey): a confined scope must be the key's only scope, so
+ *    a confined key is never persisted alongside reach it would then lose;
+ *  - at runtime (apiKeyScopeGate `isConfinedKey`/`decideScopeGate`): it authorizes
+ *    only routes that explicitly name one of these, never the scope-less default.
+ *
+ * `admin:*` is deliberately absent - it is broad by design.
+ */
+export const CONFINED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
+  ApiKeyScope.CC_BRIDGE,
+  ApiKeyScope.EMBED_CHAT,
+  ApiKeyScope.OVERWATCH_INGEST_WRITE,
+];
 
 export enum ApiKeyStatus {
   ACTIVE = 'active',

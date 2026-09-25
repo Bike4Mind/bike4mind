@@ -33,6 +33,7 @@ export const secrets = {
   OPENAI_ADMIN_API_KEY: new sst.Secret('OPENAI_ADMIN_API_KEY', 'not-configured'),
   XAI_API_KEY: new sst.Secret('XAI_API_KEY', 'not-configured'),
   MOONSHOT_API_KEY: new sst.Secret('MOONSHOT_API_KEY', 'not-configured'),
+  DEEPSEEK_API_KEY: new sst.Secret('DEEPSEEK_API_KEY', 'not-configured'),
   OKTA_AUDIENCE: new sst.Secret('OKTA_AUDIENCE', 'not-configured'),
   OKTA_CLIENT_ID: new sst.Secret('OKTA_CLIENT_ID', 'not-configured'),
   OKTA_CLIENT_SECRET: new sst.Secret('OKTA_CLIENT_SECRET', 'not-configured'),

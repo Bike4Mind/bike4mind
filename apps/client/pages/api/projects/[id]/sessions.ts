@@ -12,8 +12,20 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { logEvent } from '@server/utils/analyticsLog';
 import { ProjectEvents, redactSessionsForClient } from '@bike4mind/common';
 import { ActivityType } from '@client/config/activities';
-import { ProjectSessionsRequestBody } from '../../../../types/api';
+import { z } from 'zod';
 import { SessionEvents } from '@server/utils/eventBus';
+import { filterSessionIdsByOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
+import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@server/utils/sessionOperationCounts';
+
+// Shape stays loose (no hex check) for the reason recorded above ProjectFilesRequestSchema in
+// types/api.ts: the queries behind addSessions/removeSessions guard ids themselves.
+const sessionIdsArray = z.array(z.string().min(1));
+
+const addSessionIdsBodySchema = z.object({ sessionIds: sessionIdsArray.min(1) });
+
+// No .min(1): removeSessions (b4m-core) is a no-op on an empty array, and this route is
+// API-key reachable, so DELETE stays as lenient as the sibling files.ts route.
+const removeSessionIdsBodySchema = z.object({ sessionIds: sessionIdsArray });
 
 const handler = baseApi()
   .get(
@@ -38,7 +50,7 @@ const handler = baseApi()
   .post(
     asyncHandler<{ id: string }>(async (req, res) => {
       const { id } = req.query as { id: string };
-      const { sessionIds } = req.body as ProjectSessionsRequestBody;
+      const { sessionIds } = addSessionIdsBodySchema.parse(req.body);
 
       const project = await projectService.get(
         req.user.id,
@@ -72,8 +84,21 @@ const handler = baseApi()
         );
       });
 
+      // Iterates the RESOLVED sessions rather than the request's raw id list: `addSessions`
+      // returns one row per distinct notebook, so the same id sent twice no longer queues (and
+      // pays for) two identical summaries.
+      // Attaching a notebook to a project is free; only the summary it triggers costs credits, and
+      // this fan-out is already best-effort (Promise.allSettled). So a refusal skips the queueing
+      // rather than failing the attach - the client types this response as ISessionDocument[],
+      // leaving the warning log as where a skipped summary surfaces (#1852).
+      const summarizableSessionIds = await filterSessionIdsByOperationalCredits(sessions, {
+        operationsPerSession: OPERATIONS_PER_SUMMARIZE_WITH_TAGGING,
+        operation: 'session summarization',
+        logger: req.logger,
+      });
+
       await Promise.allSettled(
-        sessionIds.map(async (sessionId: string) => {
+        sessions.map(async session => {
           logEvent(
             {
               userId: req.user.id,
@@ -81,13 +106,14 @@ const handler = baseApi()
               metadata: {
                 projectId: id,
                 projectName: project.name,
-                contentId: sessionId,
+                contentId: session.id,
                 contentType: 'session',
               },
             },
             { ability: req.ability }
           );
-          await SessionEvents.Summarize.publish({ sessionId: sessionId, callTagging: true, trigger: 'project' });
+          if (!summarizableSessionIds.has(session.id)) return;
+          await SessionEvents.Summarize.publish({ sessionId: session.id, callTagging: true, trigger: 'project' });
         })
       );
 
@@ -97,7 +123,7 @@ const handler = baseApi()
   .delete(
     asyncHandler<{ id: string }>(async (req, res) => {
       const { id } = req.query as { id: string };
-      const { sessionIds } = req.body as ProjectSessionsRequestBody;
+      const { sessionIds } = removeSessionIdsBodySchema.parse(req.body);
 
       const project = await withTransaction(() =>
         projectService.removeSessions(

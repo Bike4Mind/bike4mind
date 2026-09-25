@@ -1,4 +1,5 @@
 import type { DataLakeMembershipScope } from '../types/entities/FabFileTypes';
+import type { DataLakeOrigin, DataLakeStatus } from '../types/entities/DataLakeTypes';
 
 /**
  * Namespace prefix for the per-lake join meta-tag (`datalake:<slug>` or
@@ -39,6 +40,12 @@ export type DataLakeGroundingMode = (typeof DATA_LAKE_GROUNDING_MODES)[number];
  * that predate it, whose stored value is absent) at the create-time resolution seam.
  */
 export const DEFAULT_DATA_LAKE_GROUNDING_MODE: DataLakeGroundingMode = 'retrieve';
+
+/**
+ * Default origin for a lake with no stored value: `curated`. Applied at every read site that
+ * hydrates a `DataLakeConfig.origin` (the field is optional - see its own doc comment for why).
+ */
+export const DEFAULT_DATA_LAKE_ORIGIN: DataLakeOrigin = 'curated';
 
 /**
  * Trim a lake's `fileTagPrefix` and return it only if it is usable as a tag prefix
@@ -391,6 +398,19 @@ export interface DataLakeConfig {
    * this. Absent on projections that don't resolve an actor (e.g. tag-only lookups).
    */
   canManage?: boolean;
+  /**
+   * Lake lifecycle (see `DataLakeStatus`), reader-visible - it is what tells a client a lake is
+   * still `draft` and excluded from grounding, so the manager can offer Publish/Move to
+   * draft and explain why a lake with files answers nothing. Absent for a fallback (built-in)
+   * registry lake, which has no document and no lifecycle - always serving.
+   */
+  status?: DataLakeStatus;
+  /**
+   * Who fills this lake (see IDataLake.origin). Reader-visible so the manager can badge a
+   * connector-fed lake without a second fetch. Absent for a fallback (built-in) registry lake,
+   * which has no document.
+   */
+  origin?: DataLakeOrigin;
 }
 
 /**
@@ -423,7 +443,9 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    */
   requiredPassageTokenTarget?: number;
   /**
-   * Whether the requesting caller CREATED this lake (createdByUserId === caller). Server-computed
+   * Whether the requesting caller effectively OWNS this lake - `isEffectiveOwner`, not raw
+   * `createdByUserId`, so a creator whose ownership has been transferred or handed off reads
+   * `false` and the owner-grant holder it moved to reads `true`. Server-computed
    * per request. The manager list is "lakes I can reach", not "lakes I own": it also surfaces org
    * lakes, strangers' public lakes, and - for a global admin - every tenant's lakes. So the UI
    * marks a not-own lake to keep an admin from mistaking someone else's (even private) lake for
@@ -538,10 +560,11 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
   canManageSettings: boolean;
   /**
    * Whether the requesting caller may ERASE this lake's extracted memory profile - an irreversible
-   * crypto-shred. Strictly narrower than `canManage`: creator or platform admin only, with no grant
-   * or org-admin rung, mirroring `DELETE /api/memory/lake/:id` exactly. Both come from the one
-   * `canShredLakeMemory` predicate so the button and the endpoint cannot drift; rendering the erase
-   * affordance on `canManage` instead offered it to curators and org admins the endpoint then 403'd.
+   * crypto-shred. Strictly narrower than `canManage`: effective owner or platform admin only, with
+   * no curator or org-admin rung, mirroring `DELETE /api/memory/lake/:id` exactly. Both come from the
+   * one `canShredLakeMemory` predicate so the button and the endpoint cannot drift; rendering the
+   * erase affordance on `canManage` instead offered it to curators and org admins the endpoint then
+   * 403'd.
    *
    * REQUIRED for the same reason as `canRebuild` and `canManageSettings`: an absent field reads as
    * falsy and hides the affordance silently instead of failing the build at the producer that forgot
@@ -733,6 +756,8 @@ export function toDataLakeConfig(dl: {
   description?: string;
   isPublic?: boolean;
   lakeMemoryEnabled?: boolean;
+  status?: DataLakeStatus;
+  origin?: DataLakeOrigin;
 }): DataLakeConfig {
   return {
     id: dl.id,
@@ -746,6 +771,8 @@ export function toDataLakeConfig(dl: {
     description: dl.description,
     isPublic: dl.isPublic,
     lakeMemoryEnabled: dl.lakeMemoryEnabled,
+    status: dl.status,
+    origin: dl.origin,
   };
 }
 

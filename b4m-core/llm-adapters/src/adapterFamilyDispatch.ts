@@ -12,6 +12,7 @@ import MoonshotBedrockBackend from './bedrockBackend/moonshot';
 import TitanBedrockBackend from './bedrockBackend/titan';
 import { BFLBackend } from './bflBackend';
 import { GeminiBackend } from './geminiBackend';
+import { DeepSeekBackend } from './deepseekBackend';
 import { KimiBackend } from './kimiBackend';
 import { LocalImageBackend } from './localImageBackend';
 import { OllamaBackend } from './ollamaBackend';
@@ -95,11 +96,13 @@ export function backendForAdapterFamily(
       const key = keyOrThrow(apiKeyTable.kimi, 'Moonshot');
       return key ? new KimiBackend(key, logger) : null;
     }
+    case 'deepseek': {
+      const key = keyOrThrow(apiKeyTable.deepseek, 'DeepSeek');
+      return key ? new DeepSeekBackend(key, logger) : null;
+    }
     case 'bfl': {
-      // Matches the legacy switch and resolveListingKey: no key falls back to
-      // the demo key rather than to null.
       const key = keyOrThrow(apiKeyTable.bfl, 'BFL');
-      return new BFLBackend(key ?? 'demo-key');
+      return key ? new BFLBackend(key) : null;
     }
     case 'local-image': {
       const baseUrl = keyOrThrow(apiKeyTable['local-image'], 'Local image');

@@ -16,11 +16,14 @@ import { WebsocketContextValue } from '../contexts/WebsocketContext';
 import { ImageEditCommandArgs, ImageGenerationCommandArgs } from '../components/commands/ImageGenerationCommand';
 import { LLMSettings } from '../components/commands/LLMCommand';
 import { QueryClient } from '@tanstack/react-query';
+import { terminalQuests } from '../hooks/chatCompletionState';
 
 type CommandArgs = CommandArgExtra & ImageGenerationCommandArgs & ImageEditCommandArgs & LLMSettings;
 
 export type CommandArgExtra = {
   userId: string;
+  username?: string;
+  userEmail?: string;
   command: string;
   params: string;
   currentSession: ISessionDocument | null;
@@ -30,6 +33,9 @@ export type CommandArgExtra = {
   dashboardParams?: LLMApiRequestBody['dashboardParams'];
   promptFileIds?: string[];
   questId?: string; // If we want to retry a quest response we pass the questId
+  // Correct-and-retry target. Distinct from `questId`: that re-runs a quest in place, this
+  // sends a new turn carrying the user's correction and links it to the answer it corrects.
+  correctsQuestId?: string;
   enableQuestMaster?: boolean;
   enableMementos?: boolean;
   enableArtifacts?: boolean;
@@ -40,6 +46,8 @@ export type CommandArgExtra = {
   projectId?: string;
   organizationId?: string | null;
   researchMode?: LLMApiRequestBody['researchMode'];
+  /** Suppresses the server-side tool auto-offers for this turn. See LLMContext.skipAutoOffers. */
+  skipAutoOffers?: LLMApiRequestBody['skipAutoOffers'];
   deepResearchConfig?: {
     maxDepth?: number;
     duration?: number;
@@ -59,7 +67,7 @@ export type CommandArgExtra = {
 };
 
 export type CommandKey =
-  '/llm' | '/roll' | '/key' | '/models' | '/gen_image' | '/gen_video' | '/edit_image' | '/create_agent';
+  '/llm' | '/roll' | '/key' | '/models' | '/gen_image' | '/gen_video' | '/edit_image' | '/create_agent' | '/feedback';
 
 export type CommandHandlers = {
   [key in CommandKey]?: (args: any) => Promise<void | { session: ISessionDocument; quest: IChatHistoryItemDocument }>;
@@ -69,6 +77,9 @@ export const handleCommand = async (commandHandlers: CommandHandlers, args: Comm
   const { userId, command, params, ...rest } = args;
   const handler = commandHandlers[command as CommandKey];
   if (handler) {
+    // A re-run restarts an existing quest in place; its earlier terminal frame must not mark
+    // the new run's chunks stale. Image/video payloads carry no updatedAt to prove recency.
+    if (rest.questId) terminalQuests.forget(rest.questId);
     return await handler({ userId, params, ...rest });
   } else {
     throw new Error(`Unknown command ${command}`);
@@ -98,6 +109,7 @@ export const extractCommandAndParams = (
   // Check if input starts with a known command - if so, don't modify it
   const knownCommands = [
     '/create_agent',
+    '/feedback',
     '/llm',
     '/roll',
     '/key',

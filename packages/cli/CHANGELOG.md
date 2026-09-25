@@ -1,5 +1,35 @@
 # @bike4mind/cli
 
+## 1.1.0
+
+### Minor Changes
+
+- [#3035](https://github.com/Bike4Mind/bike4mind/pull/3035) [`fce5f89`](https://github.com/Bike4Mind/bike4mind/commit/fce5f89e763183642afcce37706252073aa20baf) Thanks [@julsanchez](https://github.com/julsanchez)! - gate repo config, MCP, hooks and skills behind a per-project trust decision
+
+### Patch Changes
+
+- [#2848](https://github.com/Bike4Mind/bike4mind/pull/2848) [`c6c35c3`](https://github.com/Bike4Mind/bike4mind/commit/c6c35c3ac15cf06526b4503bf4a18cef7a929b30) Thanks [@choyno](https://github.com/choyno)! - surface the credit-exhaustion classifier and emit type on both chat surfaces
+
+- [#3058](https://github.com/Bike4Mind/bike4mind/pull/3058) [`c2ff307`](https://github.com/Bike4Mind/bike4mind/commit/c2ff307506fc29e14b7d88fabb0dce89f01a2085) Thanks [@onoya](https://github.com/onoya)! - report omitted research file references
+
+- [#3112](https://github.com/Bike4Mind/bike4mind/pull/3112) [`b9ddc38`](https://github.com/Bike4Mind/bike4mind/commit/b9ddc386391140d6bdd30ee5b00ba8324f68b98a) Thanks [@julsanchez](https://github.com/julsanchez)! - route every model-callable tool through the permission wrapper and shared path validator
+
+## 1.0.0
+
+### Major Changes
+
+- [#2778](https://github.com/Bike4Mind/bike4mind/pull/2778) [`f3d4563`](https://github.com/Bike4Mind/bike4mind/commit/f3d4563c442e4471fd37d3bf35baac96095f5fc5) Thanks [@onoya](https://github.com/onoya)! - keep the LLM tool closure out of the package barrel
+
+### Patch Changes
+
+- [#2823](https://github.com/Bike4Mind/bike4mind/pull/2823) [`a4e980d`](https://github.com/Bike4Mind/bike4mind/commit/a4e980d956c721aa734dde981420adcb4bfaa243) Thanks [@onoya](https://github.com/onoya)! - escape dynamic regex inputs and guard dynamic object writes
+
+## 0.22.0
+
+### Minor Changes
+
+- [#2762](https://github.com/Bike4Mind/bike4mind/pull/2762) [`adc900a`](https://github.com/Bike4Mind/bike4mind/commit/adc900ab152e00d3324bc228ac73c98a5cb5e2ef) Thanks [@maconard](https://github.com/maconard)! - add DeepSeek as a first-party provider and close Moonshot gaps
+
 ## 0.21.0
 
 ### Minor Changes

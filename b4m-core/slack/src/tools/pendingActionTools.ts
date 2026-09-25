@@ -1,4 +1,4 @@
-import { ToolDefinition } from '@bike4mind/services';
+import { ToolDefinition } from '@bike4mind/services/llm';
 import { IUserDocument } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 

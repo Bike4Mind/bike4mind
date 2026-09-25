@@ -935,7 +935,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         }
       : undefined;
 
-  const aiResponse = await sendMessageToNotebookAndGetResponse(
+  const { text: aiResponse, citables: aiResponseCitables } = await sendMessageToNotebookAndGetResponse(
     notebookId,
     user!.id,
     commandToSend,
@@ -970,7 +970,12 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     }
 
     // Create rich formatted blocks (tables extracted into Slack native table attachments)
-    let formatted = formatAgentResponse(commandHandler.parsedCommand.agentName || 'agent', aiResponse, undefined);
+    let formatted = formatAgentResponse(
+      commandHandler.parsedCommand.agentName || 'agent',
+      aiResponse,
+      undefined,
+      aiResponseCitables
+    );
 
     // Add custom agent indicator if using a custom agent
     if (commandHandler.isUsingCustomAgent()) {

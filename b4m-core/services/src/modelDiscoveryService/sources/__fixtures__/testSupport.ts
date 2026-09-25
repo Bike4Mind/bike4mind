@@ -8,6 +8,7 @@ export const CREDENTIALS: DiscoveryCredentials = {
   bfl: 'test-bfl',
   xai: 'test-xai',
   kimi: 'test-kimi',
+  deepseek: 'test-deepseek',
   voyageai: null,
   ollama: 'http://localhost:11434',
   imageGen: null,

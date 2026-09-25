@@ -4,13 +4,19 @@
  * Shared utility for verifying user access to organization resources.
  * Used by org-scoped API endpoints (webhooks, GitHub connection, etc.)
  *
+ * Three tiers, widest last. State which one you mean at every call site; picking the wrong one
+ * either leaks across a tenant boundary or breaks a members' screen:
+ * - `verifyOrgOwner`      - owner only
+ * - `verifyOrgAccess`     - owner or manager
+ * - `verifyOrgMembership` - any member (shareable ACL)
+ *
  * Security:
  * - Returns NotFoundError for both missing and unauthorized (prevents enumeration)
  * - Admin users have access to all organizations
- * - Non-admin users must be owner or manager
  */
 
 import { organizationRepository } from '@bike4mind/database/infra';
+import type { IUserDocument } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { isValidObjectId } from '@server/utils/objectId';
 import { resolveActiveOrg } from './resolveActiveOrg';
@@ -59,6 +65,92 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
 }
 
 /**
+ * Verify the caller OWNS the organization, returning the organization document.
+ *
+ * The strictest of the three tiers in this file - owner only, where `verifyOrgAccess` also admits
+ * the manager and `verifyOrgMembership` admits any member. Use it wherever only the party that
+ * owns the org may act: billing writes (committing the org to a charge, or changing what it pays)
+ * and org-level integration wiring (`integrations/slack/*`, where connecting or disconnecting a
+ * workspace acts for the whole tenant). A manager has agreed to neither.
+ *
+ * Non-oracular, like its siblings: a nonexistent org and an org the caller does not own both answer
+ * NotFoundError, so the route cannot be used to enumerate which organization ids exist.
+ *
+ * Four routes still spell this same bar out inline. All four answer ForbiddenError /
+ * BadRequestError after an unconditional lookup, so unlike this helper they DO leak which org ids
+ * exist; each is left alone only because changing the status it returns is a visible API change.
+ * If you touch one, move it onto this helper rather than copying the inline form again:
+ * - `organizations/subscriptions/update-seats.ts:40`
+ * - `stripe/portal.ts:43`
+ * - `organizations/[id]/admins.ts:27-29`
+ * - `organizations/[id]/manager.ts:28-32` (assign) and `:51-55` (remove)
+ *
+ * Grep for BOTH spellings when re-deriving this list. The last two write `org.userId === user.id`
+ * into an `isOwner` local and negate it later, so a search for the `!==` form alone misses them -
+ * which is how an earlier version of this comment came to call a two-entry list complete.
+ *
+ * Separately, `webhooks/github/subscriptions/index.ts:35-62` is a private copy of
+ * `verifyOrgMembership`, not of this function - fold it into that sibling, not this one.
+ */
+export async function verifyOrgOwner(user: { id: string; isAdmin: boolean }, orgId: string) {
+  if (!orgId || !isValidObjectId(orgId)) {
+    throw new BadRequestError('Invalid organization ID');
+  }
+
+  const org = await organizationRepository.findById(orgId);
+  if (!org) {
+    throw new NotFoundError('Organization not found');
+  }
+
+  // Platform admins pass through, matching every other gate in this file.
+  if (!user.isAdmin && org.userId !== user.id) {
+    throw new NotFoundError('Organization not found');
+  }
+
+  return org;
+}
+
+/**
+ * Verify the caller BELONGS to the organization, returning the organization document.
+ *
+ * The membership-level sibling of `verifyOrgAccess`: use this for org-scoped READS a plain member
+ * legitimately makes (the org's own subscription plan, say), and `verifyOrgAccess` for anything
+ * only an owner/manager should see or change. Picking the wrong one either leaks across a tenant
+ * boundary or breaks a members' screen, so state which you mean at every call site.
+ *
+ * Deliberately non-oracular: `findAccessibleById` returns null for BOTH a nonexistent org and one
+ * the caller has no access to, and both collapse to the same NotFoundError, so this route cannot be
+ * used to enumerate which organization ids exist.
+ *
+ * Uses the shareable ACL (owner + `users[]` + the groups arm), matching `resolveActiveOrg` rather
+ * than the narrower `findMembershipOrgIds`; a read gate must not be stricter than the write-target
+ * validator or a member loses sight of an org they can already act as.
+ */
+// Takes the whole user rather than the `id`/`groups`/`isAdmin` slice it actually reads: the
+// shareable ACL is declared as `findAccessibleById(user: IUserDocument, id)`, so narrowing here
+// would only move the lie to a cast at that call site. Callers pass `req.user`.
+export async function verifyOrgMembership(user: IUserDocument, orgId: string) {
+  if (!orgId || !isValidObjectId(orgId)) {
+    throw new BadRequestError('Invalid organization ID');
+  }
+
+  // Admins already reach every org through the gates below them; verify existence only.
+  if (user.isAdmin) {
+    const org = await organizationRepository.findById(orgId);
+    if (!org) {
+      throw new NotFoundError('Organization not found');
+    }
+    return org;
+  }
+
+  const org = await organizationRepository.shareable.findAccessibleById(user, orgId);
+  if (!org) {
+    throw new NotFoundError('Organization not found');
+  }
+  return org;
+}
+
+/**
  * Resolve the organization to bill for an AI action from a client-supplied value, rejecting any org
  * the caller is not a member of. This is the trust boundary for the LLM/media routes, which
  * otherwise pass `req.body.organizationId` through to the debit unverified.
@@ -74,8 +166,8 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
  *
  * The IMPLICIT own-org fallback (`undefined` request) is different: the caller did not choose it,
  * so a stale `organizationId` pointer must degrade to personal scope rather than 403-lock the
- * caller out of a route they could always reach. Stale pointers already exist in the data (revoke,
- * `deleteOrganization`, and `assignManager` paths leave them), so validating the fallback through
+ * caller out of a route they could always reach. Stale pointers already exist in the data (the
+ * `deleteOrganization` and `assignManager` paths leave them), so validating the fallback through
  * the same gate and catching a non-member/missing rejection matches `chat.ts`: billing is never an
  * automatic consequence of the home-org field. Security holds either way - a non-member org is
  * never billed; the fallback just bills personally instead of failing the request.

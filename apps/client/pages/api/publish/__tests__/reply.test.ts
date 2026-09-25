@@ -125,4 +125,30 @@ describe('POST /api/publish/reply - ownership', () => {
     const res = await run(makeReq({ id: OWNER, isAdmin: false }));
     expect(res.statusCode).toBe(404);
   });
+
+  // A b4m_map fence in `renderedBody` refers to places by id only - it must resolve against a
+  // snapshot of the reply's citables even after the source Quest is edited or deleted, so the
+  // snapshot has to be written at publish time (#3250 follow-up).
+  it('stores the reply promptMeta citables on the published artifact', async () => {
+    const citables = [
+      { id: 'place:1', type: 'web_url', title: 'Barr', metadata: { place: { id: '1', name: 'Barr' } } },
+    ];
+    dbMocks.questLean.mockResolvedValue({ reply: 'Hello world', promptMeta: { citables } });
+    await run(makeReq({ id: OWNER, isAdmin: false }));
+    expect(dbMocks.findOneAndUpdate).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ $set: expect.objectContaining({ citables }) }),
+      expect.anything()
+    );
+  });
+
+  it('stores no citables when the reply has none', async () => {
+    dbMocks.questLean.mockResolvedValue({ reply: 'Hello world' });
+    await run(makeReq({ id: OWNER, isAdmin: false }));
+    expect(dbMocks.findOneAndUpdate).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ $set: expect.objectContaining({ citables: undefined }) }),
+      expect.anything()
+    );
+  });
 });

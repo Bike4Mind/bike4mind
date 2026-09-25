@@ -18,6 +18,7 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
 const mockSetLLM = vi.fn();
 let mockSize: string = '1024x1024';
 let mockImageModel: string = ImageModels.FLUX_PRO_1_1;
+let mockQuality: string = 'standard';
 
 vi.mock('@client/app/contexts/LLMContext', () => ({
   useLLM: () => ({
@@ -26,7 +27,7 @@ vi.mock('@client/app/contexts/LLMContext', () => ({
     imageEditModel: ImageModels.GPT_IMAGE_1_5,
     setLLM: mockSetLLM,
     size: mockSize,
-    quality: 'standard',
+    quality: mockQuality,
     style: 'vivid',
     seed: null,
     output_format: 'png',
@@ -165,6 +166,78 @@ describe('ImageGenerationModelSelectionModal — handleModelChange size reset', 
   });
 });
 
+describe('ImageGenerationModelSelectionModal - gpt-image-2 size handling', () => {
+  beforeEach(() => {
+    mockSetLLM.mockClear();
+    capturedSetModel = null;
+  });
+
+  afterEach(() => {
+    mockImageModel = ImageModels.FLUX_PRO_1_1;
+    mockSize = '1024x1024';
+  });
+
+  it('keeps a gpt-image-2 preset when switching to gpt-image-2', async () => {
+    mockSize = '2048x2048'; // a gpt-image-2 preset, and not a gpt-image-1 size
+
+    render(
+      <TestWrapper>
+        <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    await act(async () => {
+      capturedSetModel!(ImageModels.GPT_IMAGE_2 as ModelName);
+    });
+
+    const lastCall = mockSetLLM.mock.calls[mockSetLLM.mock.calls.length - 1][0];
+    expect(lastCall).not.toHaveProperty('size');
+  });
+
+  it('keeps a custom size gpt-image-2 supports, and offers it in the size picker', async () => {
+    // 1280x960 is the BFL default: it is not a gpt-image-2 preset but it does satisfy the
+    // constraints, so it survives the switch. It must still be renderable, or the Select
+    // shows blank and the user cannot see what they are about to generate.
+    mockSize = '1280x960';
+    mockImageModel = ImageModels.GPT_IMAGE_2;
+
+    const { getByTestId } = render(
+      <TestWrapper>
+        <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    await act(async () => {
+      capturedSetModel!(ImageModels.GPT_IMAGE_2 as ModelName);
+    });
+
+    const lastCall = mockSetLLM.mock.calls[mockSetLLM.mock.calls.length - 1][0];
+    expect(lastCall).not.toHaveProperty('size');
+    expect(getByTestId('image-setting-size-select')).toHaveTextContent('1280x960');
+  });
+
+  it('resets a size gpt-image-2 rejects', async () => {
+    mockSize = '1440x810'; // 810 is not a multiple of 16, so gpt-image-2 will not take it
+
+    render(
+      <TestWrapper>
+        <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    await act(async () => {
+      capturedSetModel!(ImageModels.GPT_IMAGE_2 as ModelName);
+    });
+
+    expect(mockSetLLM).toHaveBeenCalledWith(
+      expect.objectContaining({
+        imageModel: ImageModels.GPT_IMAGE_2,
+        size: IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.defaultSize,
+      })
+    );
+  });
+});
+
 describe('ImageGenerationModelSelectionModal — safety_tolerance hard cap', () => {
   it('does not offer safety_tolerance values above the hard cap', () => {
     const { getByTestId, queryByText } = render(
@@ -206,5 +279,67 @@ describe('ImageGenerationModelSelectionModal - settings the selected model ignor
     );
 
     expect(getByTestId('image-setting-seed-input').querySelector('input')).not.toBeDisabled();
+  });
+});
+
+describe('ImageGenerationModelSelectionModal - Quality select', () => {
+  beforeEach(() => {
+    mockSetLLM.mockClear();
+  });
+
+  afterEach(() => {
+    mockImageModel = ImageModels.FLUX_PRO_1_1;
+    mockQuality = 'standard';
+  });
+
+  const qualityWrites = () =>
+    mockSetLLM.mock.calls.filter(([update]) => update && Object.prototype.hasOwnProperty.call(update, 'quality'));
+
+  it('leaves a GPT-Image quality the user picked alone', async () => {
+    mockImageModel = ImageModels.GPT_IMAGE_2;
+    mockQuality = 'high';
+
+    const { getByTestId } = render(
+      <TestWrapper>
+        <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    await act(async () => {});
+
+    expect(qualityWrites()).toEqual([]);
+    expect(getByTestId('image-setting-quality-select').textContent).toBe('High');
+  });
+
+  it('coerces a quality from the other vocabulary to the model default', async () => {
+    mockImageModel = ImageModels.GPT_IMAGE_2;
+    mockQuality = 'hd'; // DALL-E vocabulary, not offered for GPT-Image
+
+    render(
+      <TestWrapper>
+        <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    await act(async () => {});
+
+    expect(mockSetLLM).toHaveBeenCalledWith({ quality: 'low' });
+  });
+
+  it('does not touch quality while the dialog is closed', async () => {
+    // ToolsSection mounts this component unconditionally, so a closed dialog must not
+    // write to the shared LLM store - AdvancedAIModal edits the same field.
+    mockImageModel = ImageModels.GPT_IMAGE_2;
+    mockQuality = 'hd';
+
+    render(
+      <TestWrapper>
+        <ImageGenerationModelSelectionModal open={false} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    await act(async () => {});
+
+    expect(qualityWrites()).toEqual([]);
   });
 });

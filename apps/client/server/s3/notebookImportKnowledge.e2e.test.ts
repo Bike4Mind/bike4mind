@@ -72,7 +72,7 @@ function knowledgeFile(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function makeService(overrides: Record<string, unknown> = {}, uploaded: string[] = []) {
+function makeService(overrides: Record<string, unknown> = {}, uploaded: string[] = [], deleted: string[] = []) {
   const adapters = {
     sessionRepository: createSessionWrites(),
     chatHistoryRepository: createChatHistoryWrites(),
@@ -83,9 +83,13 @@ function makeService(overrides: Record<string, unknown> = {}, uploaded: string[]
     toolRepository: { create: async () => null },
     agentRepository: { create: async () => null },
     userRepository: { findById: async () => ({ id: USER }) },
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
     fileStorageService: {
       uploadFile: async (path: string) => {
         uploaded.push(path);
+      },
+      deleteFile: async (path: string) => {
+        deleted.push(path);
       },
     },
     logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
@@ -123,6 +127,39 @@ describe('notebook import writes knowledge files', () => {
     // The bytes were uploaded to this path, so the record has to point at the same one.
     expect(file?.filePath).toBe(uploaded[0]);
     expect(result.importedAttachments).toBe(1);
+  });
+
+  it('books the stored byte length on malformed base64, not the pre-decode gate length', async () => {
+    const written: Buffer[] = [];
+    // '!' is not a base64 character. byteLength derives 300000 from the string length alone;
+    // Buffer.from drops every character and yields an empty buffer.
+    const junk = '!'.repeat(400_000);
+    expect(Buffer.byteLength(junk, 'base64')).toBe(300_000);
+
+    const result = await makeService({
+      fileStorageService: {
+        uploadFile: async (_path: string, bytes: Buffer) => {
+          written.push(bytes);
+        },
+        deleteFile: async () => {},
+      },
+    }).importNotebooks(
+      USER,
+      payload([knowledgeFile({ name: 'junk.pdf', size: 300_000, content: junk })]) as never,
+      OPTIONS as never
+    );
+
+    expect(result.errors).toEqual([]);
+    // Without this, a regression that skips the upload entirely fails on `undefined.byteLength`
+    // rather than on the size assertion below.
+    expect(written).toHaveLength(1);
+    expect(written[0].byteLength).toBe(0);
+
+    // The row is what every refund reads: fabFileService/delete.ts deducts this number from the
+    // user's currentStorageSize, while the credit came from the real object size. A row claiming
+    // 300000 bytes for an object holding none is a repeatable storage drain.
+    const file = await FabFile.findOne({ userId: USER });
+    expect(file?.fileSize).toBe(0);
   });
 
   it('carries the original knowledge type through the export', async () => {
@@ -182,7 +219,9 @@ describe('notebook import writes knowledge files', () => {
   it('warns once, not twice, when a file has an unknown type and also fails to write', async () => {
     // Content resolves, so the upload succeeds and the loop reaches the write - which then fails
     // on the missing required `fileName`. That is the only ordering where both warnings compete.
-    const result = await makeService().importNotebooks(
+    const uploaded: string[] = [];
+    const deleted: string[] = [];
+    const result = await makeService({}, uploaded, deleted).importNotebooks(
       USER,
       payload([knowledgeFile({ type: 'SOMETHING_NEWER', name: undefined })]) as never,
       OPTIONS as never
@@ -193,6 +232,11 @@ describe('notebook import writes knowledge files', () => {
     expect(await FabFile.countDocuments({})).toBe(0);
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings?.[0]).toContain('Failed to import knowledge file');
+    // The row never landed, so the object the upload left behind is removed. Without `name` the
+    // entry is named by its export id rather than reported as `"undefined"`.
+    expect(result.warnings?.[0]).toContain('kf-1');
+    expect(uploaded).toHaveLength(1);
+    expect(deleted).toEqual(uploaded);
   });
 
   it('leaves an imported file pending for an out-of-band scan, never stamped clean', async () => {

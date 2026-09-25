@@ -3,8 +3,16 @@ import { LLMEvents } from '@server/utils/eventBus';
 import { apiKeyRepository, adminSettingsRepository, Memento } from '@bike4mind/database';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
-import { ChatModels, MEMENTO_EMBEDDING_MODEL, toMementoVector, MementoTier, MementoType } from '@bike4mind/common';
-import { apiKeyService, MementoEvaluationService, mementoService } from '@bike4mind/services';
+import {
+  ChatModels,
+  MEMENTO_EMBEDDING_ID,
+  MEMENTO_EMBEDDING_MODEL,
+  toMementoVector,
+  MementoTier,
+  MementoType,
+} from '@bike4mind/common';
+import { apiKeyService, mementoService } from '@bike4mind/services';
+import { MementoEvaluationService } from '@bike4mind/services/llm';
 import { isMementosV2Enabled, writeFactToLedger } from '@server/memory/mementoLedgerMirror';
 import { generateMementoSummaryEmbedding } from '@server/utils/mementoEmbedding';
 
@@ -154,7 +162,6 @@ export const handler = withEventContext(async (event, logger) => {
     // manual create endpoint) adds the Ollama provider and returns null when no embedding provider is
     // available, degrading to an un-embedded memento rather than failing.
     const summaryEmbedding = await generateMementoSummaryEmbedding(evaluation.summary, {
-      adminSettings: adminSettingsRepository,
       apiKeyTable,
       logger,
     });
@@ -186,6 +193,7 @@ export const handler = withEventContext(async (event, logger) => {
               summary: evaluation.summary,
               fullContent: updatedFullContent, // append new prompt to history
               embedding: summaryEmbedding,
+              embeddingModel: MEMENTO_EMBEDDING_ID,
               weight: newWeight,
               lastAccessedAt: new Date(),
               tags: mergedTags,
@@ -218,7 +226,7 @@ export const handler = withEventContext(async (event, logger) => {
       summary: evaluation.summary,
       fullContent: prompt,
       tags: evaluation.tags || [],
-      ...(summaryEmbedding ? { embedding: summaryEmbedding } : {}),
+      ...(summaryEmbedding ? { embedding: summaryEmbedding, embeddingModel: MEMENTO_EMBEDDING_ID } : {}),
       lastAccessedAt: new Date(),
     });
 

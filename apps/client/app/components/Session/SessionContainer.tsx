@@ -7,7 +7,7 @@ import SessionBottom from './SessionBottom';
 import SessionMiddle from './SessionMiddle';
 import SessionTop from './SessionTop';
 import NotebookSplash from './NotebookSplash';
-import useSessionLayout, { setSessionLayout, type DefaultLayoutType } from '@client/app/hooks/useSessionLayout';
+import useSessionLayout, { type DefaultLayoutType } from '@client/app/hooks/useSessionLayout';
 import { useNotebookFilepond } from '@client/app/components/Session/NotebookFilepondProvider';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import KnowledgeViewer from '../Knowledge/KnowledgeViewer';
@@ -17,7 +17,7 @@ import { useGetProject } from '@client/app/hooks/data/projects';
 import { useNotebookSearch } from '@client/app/contexts/NotebookSearchContext';
 import ResizableSplitter from './ResizableSplitter';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
-import { useSearch, useLocation, useNavigate } from '@tanstack/react-router';
+import { useSearch, useNavigate } from '@tanstack/react-router';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useSubscribeToSession, useSubscribeToSessionQuests } from '@client/app/hooks/data/sessions';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
@@ -25,6 +25,7 @@ import { recordSessionActivity } from '@client/app/utils/sessionActivityCleanup'
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import { useQueryClient } from '@tanstack/react-query';
 import { useFileDropZone } from './hooks/useFileDropZone';
+import { applySessionCreated } from './hooks/applySessionCreated';
 import { useSessionCacheMigration } from './hooks/useSessionCacheMigration';
 import { ChatCompletionProvider } from '@client/app/contexts/ChatCompletionContext';
 
@@ -62,6 +63,22 @@ export function shouldAttemptSessionOpen(
  */
 export function shouldShowChromeBand(layout: DefaultLayoutType, isMobile: boolean): boolean {
   return layout === 'vertical' && !isMobile;
+}
+
+/**
+ * Main-axis direction of the row holding the KnowledgeViewer, the splitter and the chat.
+ *
+ * The 'row-reverse' case is load-bearing beyond layout. DOM order stays knowledge -> splitter
+ * -> chat, which ResizableSplitter's children[0]/[2] lookup depends on, while the chat renders
+ * physically LEFT and the viewer RIGHT. That is the whole reason ResizableSplitter SUBTRACTS
+ * to move the separator right, in both its drag and its arrow keys. Turning this into a plain
+ * 'row' moves the wrong pane and no test in that component would notice, so the coupling is
+ * pinned in SessionContainer.openGuard.test.ts instead. Keep the two in sync.
+ */
+export function splitRowFlexDirection(layout: DefaultLayoutType, isMobile: boolean): 'row-reverse' | 'column' | 'row' {
+  if (shouldShowChromeBand(layout, isMobile)) return 'row-reverse';
+  if (layout === 'horizontal' || (isMobile && layout === 'vertical')) return 'column';
+  return 'row';
 }
 
 interface SessionLayoutProps {
@@ -207,7 +224,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const { changeSession, currentSessionId: contextSessionId, setCurrentSessionId, setCurrentSession } = useSessions();
   const queryClient = useQueryClient();
-  const { migrateQuests, migrateSession } = useSessionCacheMigration();
+  const { migrateQuests, migrateSession, cleanupOptimistic } = useSessionCacheMigration();
   const pendingFirstMessage = useSessionLayout(s => s.pendingFirstMessage);
   const layout = useSessionLayout(s => s.layout);
   const knowledgeViewerWidth = useSessionLayout(s => s.knowledgeViewerWidth) || 50;
@@ -229,7 +246,6 @@ const SessionContainer: FC<SessionLayoutProps> = ({
   const [isFullWidth, setIsFullWidth] = useState(false);
   const isMobile = useIsMobile();
   const navigate = useNavigate();
-  const location = useLocation();
   const { subscribeToAction } = useWebsocket();
 
   // Stable ref for callback so the effect doesn't re-subscribe on every render
@@ -253,47 +269,26 @@ const SessionContainer: FC<SessionLayoutProps> = ({
     const unsubscribe = subscribeToAction('session.created', async message => {
       if (message.action !== 'session.created') return;
       const { action, ...realSession } = message;
-      const realId = message.id;
 
-      // Read pendingOptimisticId synchronously from Zustand - this is the exact
-      // client-generated tmpId written at send time. Using .getState() avoids the
-      // stale-ref bug where contextSessionIdRef might still hold the *previous*
-      // session's ID if the user navigated to /new and sent a message before the
-      // clearing useEffect had a chance to run.
-      const { pendingOptimisticId: tmpId } = useSessionLayout.getState();
-
-      // When pre-navigation was used (tmpId set and different from realId), migrate
-      // all cached data from the temporary client-generated ID to the real server ID.
-      if (tmpId && tmpId !== realId) {
-        migrateQuests(tmpId, realId);
-        migrateSession(tmpId, realId, realSession);
-      }
-
-      setCurrentSessionId(realId);
-      // Merge over an already-adopted copy of the SAME session instead of replacing it: the
-      // client may have adopted the create response (Data Lake open/attach mints one holding
-      // knowledgeIds) before this event lands, and a replace makes whatever the wire copy
-      // lacks vanish - the knowledgeIds hydration effect then zeroes the workbench it had
-      // just filled. A different id is the optimistic-migration path and replaces as before.
-      setCurrentSession(prev => (prev && prev.id === realId ? { ...prev, ...realSession } : realSession));
-
-      // Notify parent (e.g. /opti) so it can sync its local session state.
-      if (onSessionCreatedRef.current) {
-        onSessionCreatedRef.current(realId);
-      }
-
-      // Navigate to the real session ID with replace:true so the temporary ID
-      // never lands in the browser history stack. Only navigate when we were in
-      // the optimistic pending state (tmpId was set) or still on /new.
-      if (tmpId || location.pathname === '/new') {
-        const currentProjectId = searchProjectIdRef.current;
-        await navigate({
-          to: '/notebooks/$id',
-          params: { id: realId },
-          search: currentProjectId ? { projectId: currentProjectId } : {},
-          replace: true,
-        });
-      }
+      const mintedHere = await applySessionCreated(realSession, {
+        queryClient,
+        migrateQuests,
+        migrateSession,
+        cleanupOptimistic,
+        setCurrentSessionId,
+        setCurrentSession,
+        onSessionCreated: onSessionCreatedRef.current,
+        navigateToSession: id => {
+          const currentProjectId = searchProjectIdRef.current;
+          return navigate({
+            to: '/notebooks/$id',
+            params: { id },
+            search: currentProjectId ? { projectId: currentProjectId } : {},
+            replace: true,
+          });
+        },
+      });
+      if (!mintedHere) return;
 
       // Defer project query invalidation so it doesn't trigger refetches/re-renders
       // during the critical streaming startup window
@@ -305,14 +300,6 @@ const SessionContainer: FC<SessionLayoutProps> = ({
           queryClient.invalidateQueries({ queryKey: ['projects', projectIdForInvalidation] });
         }, 5000);
       }
-
-      // Clear pending fields AFTER navigation so that the effectiveSessionId guard
-      // (pendingFirstMessage ? undefined : currentSessionId) never briefly exposes
-      // the tmpId to API hooks. By the time we reach here, React has committed
-      // setCurrentSessionId(realId), so clearing pendingFirstMessage is safe.
-      // Only clear the optimistic ID guard here - pendingFirstMessage is cleared by
-      // SessionMiddle once it has real data, to avoid a flash of empty content.
-      setSessionLayout({ pendingOptimisticId: null });
     });
 
     return () => {
@@ -324,10 +311,10 @@ const SessionContainer: FC<SessionLayoutProps> = ({
     navigate,
     setCurrentSession,
     setCurrentSessionId,
-    location.pathname,
     queryClient,
     migrateQuests,
     migrateSession,
+    cleanupOptimistic,
   ]);
 
   // Measure SessionBottom height for dynamic positioning of scroll to bottom
@@ -457,14 +444,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
       <Box
         sx={{
           display: 'flex',
-          // row-reverse in the split: the chat sits LEFT and the KnowledgeViewer right.
-          // DOM order stays knowledge -> splitter -> chat, which ResizableSplitter's
-          // children[0]/[2] lookup depends on; it flips the drag sign instead.
-          flexDirection: isVerticalSplit
-            ? 'row-reverse'
-            : layout === 'horizontal' || (isMobile && layout === 'vertical')
-              ? 'column'
-              : 'row',
+          flexDirection: splitRowFlexDirection(layout, isMobile),
           rowGap: layout === 'horizontal' || (isMobile && layout === 'vertical') ? '10px' : '0px',
           p: isMobile ? '0px' : '0px',
           height: '100%',

@@ -19,10 +19,12 @@ import { RekognitionImageModerationService } from '@bike4mind/utils/imageModerat
 import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@server/utils/analyticsLog';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { ImageEditService } from '@bike4mind/services';
+import { ImageEditService } from '@bike4mind/services/llm';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { fabFilesService } from '@bike4mind/services';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { createAttachmentLakeAccess } from '@server/queueHandlers/agentExecutor.attachmentLakeAccess';
+import type { IUserDocument } from '@bike4mind/common';
 import { Resource } from 'sst';
 
 let _imageEdit: ImageEditService | undefined;
@@ -45,6 +47,9 @@ export const getImageEdit = (): ImageEditService => {
       },
       imageProcessorLambdaName: Resource.ImageProcessor.name,
       imageModerationService: new RekognitionImageModerationService(Logger.globalInstance),
+      // Owner-wide lake arms for the reference-image lookup, parity with imageGeneration - a
+      // lake-only anchor the workbench admitted must still resolve as an edit input.
+      resolveLakeAccess: (user: IUserDocument, logger: Logger) => createAttachmentLakeAccess(user, logger)(),
       startImageEditProcess: async body => {
         const queue = new SQSService();
         const queueUrl = getSourceQueueUrl('imageEditQueue');

@@ -58,7 +58,7 @@ vi.mock('@client/app/utils/uiSideEffectDispatcher', () => ({
   dispatchUiSideEffects: dispatchUiSideEffectsMock,
 }));
 
-import { useAgentExecutionSubscriptions } from './useAgentExecution';
+import { useAgentExecutionSubscriptions, useAgentExecutionDispatch } from './useAgentExecution';
 import { useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStore';
 import { AGENT_TRACE_ROUTE } from '@client/app/utils/agentTraceLink';
 
@@ -520,5 +520,78 @@ describe('useAgentExecutionSubscriptions -- sweep hygiene', () => {
     expect(
       ws.sendJsonMessage.mock.calls.filter(c => (c[0] as { command?: string }).command === 'reconnect')
     ).toHaveLength(0);
+  });
+});
+
+/**
+ * `toolCallId` identity wire: the server binds a `permission_response` to the
+ * specific pause it named, via the id the client echoes back. Nothing previously
+ * asserted that this hook actually threads the id through on any of its three
+ * legs (live `permission_request`, `reconnect_result.pendingPermission` replay,
+ * and the `permission_response` send) - each was deletable with the suite green.
+ */
+describe('useAgentExecutionSubscriptions -- toolCallId identity wire', () => {
+  beforeEach(() => {
+    ws.sendJsonMessage.mockClear();
+    ws.readyState = 3; // CLOSED
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  it('a live permission_request stores the toolCallId on pendingPermission', async () => {
+    mountSubscriptions();
+    useAgentExecutionStore.getState().startExecution('exec-1', 'sess-1');
+
+    await handlers['permission_request']({
+      action: 'permission_request',
+      executionId: 'exec-1',
+      toolName: 'send_slack_message',
+      toolInput: { text: 'hi' },
+      iteration: 1,
+      toolCallId: 'toolu_live_1',
+    });
+
+    expect(useAgentExecutionStore.getState().executions['exec-1']?.pendingPermission?.toolCallId).toBe('toolu_live_1');
+  });
+
+  it('reconnect_result threads pendingPermission.toolCallId through to the store', async () => {
+    useAgentExecutionStore.getState().startExecution('exec-2', 'sess-2');
+    ws.readyState = 1; // OPEN
+    mountSubscriptions();
+
+    await handlers['reconnect_result']({
+      action: 'reconnect_result',
+      found: true,
+      executionId: 'exec-2',
+      status: 'awaiting_permission',
+      pendingPermission: {
+        toolName: 'send_slack_message',
+        toolInput: { text: 'hi' },
+        requestedAt: new Date(),
+        toolCallId: 'toolu_reconnect_1',
+      },
+    });
+
+    expect(useAgentExecutionStore.getState().executions['exec-2']?.pendingPermission?.toolCallId).toBe(
+      'toolu_reconnect_1'
+    );
+  });
+
+  it('respondToPermission sends the toolCallId on permission_response', () => {
+    const { result } = renderHook(() => useAgentExecutionDispatch());
+
+    result.current.respondToPermission('exec-3', 'send_slack_message', true, false, 'toolu_response_1');
+
+    expect(ws.sendJsonMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'agent_execute',
+        command: 'permission_response',
+        executionId: 'exec-3',
+        toolName: 'send_slack_message',
+        toolCallId: 'toolu_response_1',
+        approved: true,
+        rememberForSession: false,
+      })
+    );
   });
 });

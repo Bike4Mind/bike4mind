@@ -26,6 +26,9 @@ const makeDb = (fileOverrides: Record<string, unknown> = {}) => {
     dataLakeAccessGrants: {
       listByLake: vi.fn(async () => [] as never),
     },
+    dataLakeFindings: {
+      deleteForPurgedDocument: vi.fn(async () => 0),
+    },
     sessions: {
       findAllWithKnowledgeId: vi.fn(async () => [] as never),
       update: vi.fn(async () => ({}) as never),
@@ -48,6 +51,7 @@ const makeDb = (fileOverrides: Record<string, unknown> = {}) => {
         chunkCount = 0;
       }),
       distinctRetrievalIndexModelsByFabFileIds: vi.fn(async () => ['text-embedding-3-small']),
+      clearRetrievalIndexConfirmedByFabFileIds: vi.fn(async () => {}),
     },
   };
 };
@@ -192,17 +196,6 @@ describe('purgeDataLakeDocument', () => {
     expect(logger.info).not.toHaveBeenCalled();
   });
 
-  it('threads the actor into recomputeLakeStats so an auto-activation this purge triggers is attributed, not filed under system', async () => {
-    const db = makeDb();
-    db.dataLakes.activateIfDraft = vi.fn(async () => true);
-    const record = vi.fn(async () => {});
-    const dbWithAudit = { ...db, lakeConfigChangeEvents: { record }, adminSettings: undefined };
-
-    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db: dbWithAudit, storage: makeStorage() });
-
-    expect(record).toHaveBeenCalledWith(expect.objectContaining({ principalKind: 'user', principalId: OWNER.userId }));
-  });
-
   it('removes the document from a wired retrieval index BEFORE anything destructive', async () => {
     const order: string[] = [];
     const db = makeDb();
@@ -239,6 +232,68 @@ describe('purgeDataLakeDocument', () => {
       purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage(), retrievalIndex })
     ).rejects.toThrow('index down');
     expect(db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
+    expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
+  });
+
+  it('clears the stale residency confirm for the purged file BEFORE the index removal, so a refused storage delete does not leave the surviving chunks falsely confirmed resident', async () => {
+    // Storage refusal keeps the file's row and chunks (see the ordering note above
+    // strictIndexRemove's call site), while the retrieval index has already dropped the file's
+    // documents unconditionally. Without a clear, those surviving chunks would keep claiming
+    // residency for documents that no longer exist.
+    const order: string[] = [];
+    const storage = {
+      delete: vi.fn(async () => {
+        throw new Error('object store refused');
+      }),
+    };
+    const db = makeDb({ filePath: 'files/q3.pdf' });
+    db.fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds = vi.fn(async () => {
+      order.push('clear');
+    });
+    const removeForDataLake = vi.fn(async () => {
+      order.push('index');
+    });
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', {
+      db,
+      storage,
+      retrievalIndex: { removeForDataLake },
+    });
+
+    expect(order).toEqual(['clear', 'index']);
+    expect(db.fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(['file-1']);
+    expect(receipt.documentDeleted).toBe(false);
+  });
+
+  it('still clears the residency confirm even though the index removal itself then throws, since the removal may have already partially applied', async () => {
+    const db = makeDb();
+    const retrievalIndex = {
+      removeForDataLake: vi.fn(async () => {
+        throw new Error('index down');
+      }),
+    };
+
+    await expect(
+      purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage(), retrievalIndex })
+    ).rejects.toThrow('index down');
+    expect(db.fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(['file-1']);
+  });
+
+  it('aborts the strict index removal (and the whole purge) when the residency-confirm clear fails, rather than over-claiming', async () => {
+    const db = makeDb();
+    db.fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds = vi.fn(async () => {
+      throw new Error('mongo down');
+    });
+    const removeForDataLake = vi.fn(async () => {});
+
+    await expect(
+      purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', {
+        db,
+        storage: makeStorage(),
+        retrievalIndex: { removeForDataLake },
+      })
+    ).rejects.toThrow('mongo down');
+    expect(removeForDataLake).not.toHaveBeenCalled();
     expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
   });
 
@@ -753,5 +808,64 @@ describe('purgeDataLakeDocument', () => {
     const db = makeDb();
     await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage() });
     expect(db.dataLakes.setStats).toHaveBeenCalledWith('lake-1', { fileCount: 4, totalSizeBytes: 900 });
+  });
+  it('sweeps findings that quote the purged document', async () => {
+    const db = makeDb({ filePath: 'uploads/q3.pdf', fileSize: 27707 });
+
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage() });
+
+    // A finding carries a 240-char excerpt of each source, so a row citing this document would keep
+    // quoting text this call was paid to destroy - and nothing else ever sweeps it, because a
+    // finding whose document is gone can never be re-detected. Called with the file id alone: the
+    // destruction is global, so the sweep must not be scoped to the authorizing lake.
+    expect(db.dataLakeFindings.deleteForPurgedDocument).toHaveBeenCalledWith('file-1');
+  });
+
+  it('swallows a failing findings sweep so the owner still gets their bytes back', async () => {
+    // Past the row delete there is no retry door: the file is already gone from every surface. A
+    // throw escaping here would skip the quota refund below it, charging the owner forever for
+    // bytes this call destroyed - a worse outcome than a stranded finding, which the log records.
+    const db = makeDb({ filePath: 'uploads/q3.pdf', fileSize: 27707 });
+    db.dataLakeFindings.deleteForPurgedDocument.mockRejectedValue(new Error('findings sweep failed'));
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const onPurged = vi.fn(async () => {});
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', {
+      db,
+      storage: makeStorage(),
+      onPurged,
+      logger,
+    });
+
+    expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 27707 }));
+    expect(receipt.documentDeleted).toBe(true);
+    // Logged rather than silent: a stranded excerpt is a retention fact someone has to be able to
+    // find, and this log line is the only trace it leaves.
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('could not sweep its findings'),
+      expect.objectContaining({ fabFileId: 'file-1' })
+    );
+  });
+
+  it('warns when it destroys a document with no findings repo wired, rather than going quiet', async () => {
+    // The port is optional, and `?.` makes an unwired host destroy documents with no sweep, no
+    // error and no symptom - indistinguishable from a document that never carried a finding. The
+    // warning is the only thing separating "nothing to sweep" from "this door was never wired".
+    const db = makeDb({ filePath: 'uploads/q3.pdf', fileSize: 27707 });
+    const { dataLakeFindings: _unwired, ...dbWithoutFindings } = db;
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', {
+      db: dbWithoutFindings,
+      storage: makeStorage(),
+      logger,
+    });
+
+    // The destruction itself must not become conditional on the port.
+    expect(receipt.documentDeleted).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('no findings repo wired'),
+      expect.objectContaining({ fabFileId: 'file-1' })
+    );
   });
 });

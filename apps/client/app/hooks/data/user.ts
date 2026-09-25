@@ -115,10 +115,15 @@ export function useUpdateUser(options: { onSuccess?: () => void; onSettled?: () 
 
   return useMutation({
     mutationFn: async ({ id, data }: { id: string; data: Partial<IUser> }) => await updateUserToServer(id, data),
-    onSuccess: (freshUser, { id }) => {
+    onSuccess: (response, { id }) => {
+      // `ignoredFields` is a per-response envelope key, not a user field: the route adds
+      // it when the request carried keys its schema does not accept. Split it off so it
+      // never lands in the cached user document.
+      const { ignoredFields, ...freshUser } = (response ?? {}) as Partial<IUser> & { ignoredFields?: string[] };
+
       // Update the user cache immediately with the server response so that any
       // useEffect watching userData sees the new values, not stale pre-update data.
-      if (freshUser) {
+      if (response) {
         queryClient.setQueryData(['users', id], freshUser);
       }
       queryClient.invalidateQueries({ queryKey: ['sessions'] });
@@ -131,7 +136,13 @@ export function useUpdateUser(options: { onSuccess?: () => void; onSettled?: () 
       queryClient.invalidateQueries({ queryKey: ['identify'] });
 
       if (onSuccess) onSuccess();
-      toast.success('Profile updated successfully');
+      // A partial write must not read as a clean save -- the whole point of the route
+      // reporting ignoredFields is that the person who made the edit finds out.
+      if (ignoredFields?.length) {
+        toast.warning(`Profile saved, but these fields were not applied: ${ignoredFields.join(', ')}`);
+      } else {
+        toast.success('Profile updated successfully');
+      }
     },
     onError(error: unknown) {
       let errorMessage = 'Failed to update Profile.';

@@ -11,6 +11,7 @@ describe('fabFileKeys parity with pre-registry literals', () => {
     expect(fabFileKeys.doc(null)).toEqual(['fabFiles', null]);
     expect(fabFileKeys.content('f1')).toEqual(['fabFiles', 'f1', 'content']);
     expect(fabFileKeys.content(undefined)).toEqual(['fabFiles', undefined, 'content']);
+    expect(fabFileKeys.contentRead('f1', true)).toEqual(['fabFiles', 'f1', 'content', true]);
     expect(fabFileKeys.name('f1')).toEqual(['fabFiles', 'name', 'f1']);
   });
 

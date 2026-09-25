@@ -49,8 +49,11 @@ const SITES: { path: string; matches: number; note: string }[] = [
   },
   {
     path: 'packages/database/src/models/content/FabFileModel.ts',
-    matches: 1,
-    note: 'Atlas $vectorSearch filter clause - the match happens inside the database',
+    matches: 2,
+    note:
+      'Atlas $vectorSearch filter clause (scoring exclusion) AND the self-host residency aggregate ' +
+      '(annResidentFabFileIds, which chunks were dispatched TO this model) - same filter shape, same ' +
+      'field, both would need to move together if the exact-match rule ever grew aliases',
   },
   {
     path: 'b4m-core/services/src/dataLakeService/openSearchChunkAdapter.ts',
@@ -115,10 +118,16 @@ const NOT_THIS_RULE: { pattern: RegExp; reason: string }[] = [
     reason: 'A typeof guard on the queue payload, not a comparison of one model to another.',
   },
   {
-    pattern: /(?<![.\w])embeddingModel\s*!==\s*defaultEmbeddingModelForEnv\(\)/,
+    pattern:
+      /(?<![.\w])embeddingModel\s*!==\s*(defaultEmbeddingModelForEnv\(\)|OpenAIEmbeddingModel\.TEXT_EMBEDDING_ADA_002)/,
     reason:
-      'Compares the QUERY model to the deployment default for a telemetry warning. No file label ' +
-      'is involved; a `file.embeddingModel` form still trips the guard.',
+      'Compares the QUERY model to the space unlabeled chunks are ASSUMED to sit in, for a telemetry ' +
+      'warning. No file label is involved; a `file.embeddingModel` form still trips the guard. Both ' +
+      'right-hand spellings are the one site: it used to read the deployment default, and is now ' +
+      'pinned to the ada-002 constant on purpose, because an unset label means the row predates the ' +
+      'field and its space is a historical fact no current setting can restate. Keying the diagnostic ' +
+      'off the default inverts it the moment the default moves - it would go quiet on exactly the case ' +
+      'worth auditing and fire on the one that is fine.',
   },
   {
     pattern:

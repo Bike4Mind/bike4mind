@@ -69,11 +69,38 @@ jobs:
     ...
 
   help-docs:
-    needs: changes
-    if: needs.changes.outputs.docs-changed == 'true'
-    ...
+    needs: [changes, core-build]
+    if: |
+      !cancelled() &&
+      needs.changes.outputs.docs-changed == 'true' &&
+      needs.core-build.result != 'failure'
+    steps:
+      ...
+      - id: download-core
+        uses: actions/download-artifact@v7
+        with:
+          name: core-build-${{ needs.core-build.outputs.core-content-hash }}
+        continue-on-error: true
+      - if: steps.download-core.outcome == 'failure'
+        run: pnpm core:build
+      ...
 
 ```
+
+`help-docs` is the shape to copy for any job gated on `docs-changed` that also needs the
+core packages built. `core-build` is gated on `deployable`, so on a docs-only PR it skips;
+a plain `needs: core-build` would make this job inherit that skip and go quiet on exactly
+the changes it exists to guard. A status-check function in the `if` is what lifts the
+implicit `success()` on `needs` and lets a skipped `core-build` through - use `!cancelled()`
+rather than `always()`, which also survives run cancellation and would keep an expensive job
+on a runner after a superseded push. `needs.core-build.result != 'failure'` then does the
+real gating, and admits a `cancelled` core-build (runner loss), which the fallback covers.
+Keep the block scalar: a bare `if: !cancelled() && ...` is a YAML tag indicator, not text.
+
+With `core-build` skipped the artifact name interpolates to the literal `core-build-`,
+so the download fails; `continue-on-error: true` plus the `outcome == 'failure'` fallback
+is what turns that into a local build instead of a red leg. That pairing is enforced by
+`packages/scripts/src/checkHelpDocsJobWired.test.ts` for every job written this way.
 
 ## Inputs
 

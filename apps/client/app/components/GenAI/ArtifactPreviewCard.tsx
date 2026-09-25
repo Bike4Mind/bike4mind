@@ -1,5 +1,5 @@
 import React, { useState, type ReactNode } from 'react';
-import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
+import { Box, Button, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
 import type { Theme } from '@mui/joy';
 import {
   OpenInFullOutlined as ExpandIcon,
@@ -21,9 +21,13 @@ import { KnowledgeType } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { brand } from '@client/app/utils/themes/colors';
 import SwitchSelector from '@client/app/components/common/fields/SwitchSelector';
+import { useUser } from '@client/app/contexts/UserContext';
+import { usePublishShare } from '@client/app/hooks/usePublishShare';
+import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
+import { buildArtifactPublishWiring } from '@client/app/utils/publishApi';
+import type { ArtifactType } from '@bike4mind/common';
 
 // Shared by copy / save / open-in-viewer: 18px glyphs dimmed to 70%, brightening to full
 // on hover, over the same hover fill the sidebar items use (notebooklist.hoverBg) rather
@@ -122,23 +126,36 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   const workBenchFiles = useWorkBenchFiles(currentSessionId);
   const { setWorkBenchFiles } = useWorkBenchActions();
   const queryClient = useQueryClient();
-  const { isFeatureEnabled } = useFeatureEnabled();
-  const artifactsEnabled = isFeatureEnabled('enableArtifacts');
+
+  const shareUser = useUser(s => s.currentUser);
+  const selectedAccount = useSelectedAccount(s => s.selectedAccount);
+  const activeOrg = selectedAccount && !selectedAccount.personal ? selectedAccount : null;
+  const teamOrg = activeOrg && String(activeOrg.id) === String(shareUser?.organizationId) ? activeOrg : null;
+  const { publishAndShare: publishAndShareArtifact, modal: artifactShareModal } = usePublishShare();
 
   const hasPreview = !!renderPreview;
   const hasSource = !!source || !!renderSource;
   // A code toggle only means something when there are two views to flip between.
   const showCodeToggle = !!actions.codeToggle && hasPreview && hasSource;
 
-  const [collapsedState, setIsExpanded] = useState(!artifactsEnabled);
+  // Cards mount expanded: the body is the thing the reader asked for. This used to seed from
+  // the `enableArtifacts` flag, which gates artifact GENERATION and has never gated their
+  // display -- so it only ever hid the artifact behind a click for the users who had the
+  // feature switched on, which is the admin default.
+  const [expandedState, setIsExpanded] = useState(true);
   const [showRenderedPreview, setShowRenderedPreview] = useState(defaultRenderedView);
 
-  const isExpanded = collapsible ? collapsedState : true;
+  const isExpanded = collapsible ? expandedState : true;
 
   const isSelected = useSessionLayout(s => s.selectedArtifactId) === artifactId;
 
   // With no source to fall back to, the live render is the only body there is.
   const renderedView = hasPreview && (hasSource ? showRenderedPreview : true);
+
+  // A card that expands into a live render shows no body at all once collapsed. Its source
+  // teaser is the first three lines of the file, which for HTML is DOCTYPE boilerplate that
+  // reads identically on every artifact; source-primary types (React, code, Python) keep it.
+  const showSourceBody = hasSource && !renderedView;
 
   // Clicking anywhere on the card means exactly one thing: expand/collapse, same as the
   // chevron. Switching between the render and the source is the code/preview button's job
@@ -200,6 +217,29 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
     }
   };
 
+  const handleShare = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!source?.trim()) return;
+    if (!shareUser?.id) {
+      toast.error('You must be signed in to publish');
+      return;
+    }
+    // questmaster publishes as 'code'; all other types use their own discriminant.
+    const publishType: ArtifactType = artifactType === 'questmaster' ? 'code' : (artifactType as ArtifactType);
+    publishAndShareArtifact({
+      title,
+      ...(teamOrg ? { orgOption: { label: 'Team', hint: `Members of ${teamOrg.name}` } } : {}),
+      ...buildArtifactPublishWiring({
+        artifactId,
+        type: publishType,
+        content: source,
+        title,
+        userId: String(shareUser.id),
+        orgId: teamOrg?.id,
+      }),
+    });
+  };
+
   // Push live content changes to the Knowledge Base store. Guarded: a card that merely
   // mounts (scrolled back into view) must not overwrite the store with older content (#457).
   useSelectedArtifactContentSync(artifactId, artifactType, contentKey, artifactContent);
@@ -208,22 +248,28 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
     <Card
       variant="outlined"
       data-testid={`${testIdPrefix}-artifact-card`}
-      sx={{
+      sx={theme => ({
         // surface2 is the sidebar/header surface. Joy's background.level1 default is not
         // defined by this theme, so the cards would otherwise sit on an unpicked color.
         backgroundColor: 'background.surface2',
+        // Same card recipe as a fenced code block (markdown/syntaxTheme.ts): the
+        // fill stays the theme's own surface and a brand-blue veil falls across
+        // it, so every framed thing a reply produces is one family. backgroundImage
+        // rather than a background shorthand, so the fill above still resolves per
+        // color scheme.
+        backgroundImage: `linear-gradient(180deg, ${theme.palette.reading.cardTintTop}, ${theme.palette.reading.cardTintBottom})`,
         borderRadius: '8px',
         position: 'relative',
         overflow: 'visible',
         borderWidth: 1,
-        borderColor: isSelected ? 'primary.500' : 'neutral.outlinedBorder',
+        borderColor: isSelected ? 'primary.500' : theme.palette.reading.cardLine,
         transition: 'all 0.2s ease-in-out',
         cursor: collapsible ? 'pointer' : 'default',
         '&:hover': {
           transform: 'translateY(-2px)',
           boxShadow: 'sm',
         },
-      }}
+      })}
       onClick={handleToggleExpand}
     >
       {/* Type badge: the icon and the type label are one pill overhanging the card
@@ -235,7 +281,12 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
         sx={theme => ({
           position: 'absolute',
           top: '-8px',
-          left: '-8px',
+          // Below `sm` the message stack drops its inline padding (Session/MessageContent),
+          // so the card sits flush with the screen edge and a left overhang would be
+          // clipped. Same breakpoint as that padding; there the pill sits inset from the
+          // card edge instead, keeping only the top overhang.
+          left: '16px',
+          [theme.breakpoints.up('sm')]: { left: '-8px' },
           zIndex: 1,
           backgroundColor: brand[800],
           color: 'text.primary',
@@ -367,6 +418,36 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
               <ExpandIcon />
             </IconButton>
           </Tooltip>
+
+          {source && (
+            // The card's own onClick collapses it, so swallow clicks meant for the button.
+            <Box onClick={e => e.stopPropagation()} sx={{ display: 'flex', flexShrink: 0 }}>
+              <Button
+                size="sm"
+                variant="solid"
+                onClick={handleShare}
+                data-testid={`${testIdPrefix}-artifact-share-btn`}
+                sx={{
+                  backgroundColor: brand[800],
+                  color: '#fff',
+                  fontWeight: 600,
+                  // Pin to the same rendered height as the sm IconButtons beside it.
+                  '--Button-minHeight': '2rem',
+                  '--Button-paddingBlock': '0.25rem',
+                  '--Button-paddingInline': '12px',
+                  lineHeight: 1,
+                  // Colour alone on hover. It sits in a row of still, quiet icons, where a
+                  // button that grows and glows is the only thing moving on the card.
+                  transition: 'background-color 0.15s ease',
+                  '&:hover': {
+                    backgroundColor: brand[900],
+                  },
+                }}
+              >
+                Share
+              </Button>
+            </Box>
+          )}
         </Stack>
 
         {stats && (
@@ -381,7 +462,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
           <Box sx={{ mt: 2 }} onClick={e => e.stopPropagation()}>
             {renderPreview?.()}
           </Box>
-        ) : hasSource ? (
+        ) : showSourceBody ? (
           renderSource ? (
             <Box sx={{ mt: 2 }}>{renderSource()}</Box>
           ) : (
@@ -411,6 +492,10 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
             </Box>
           )
         ) : null}
+
+        {/* Stop propagation so clicks inside the modal don't reach the Card's
+            handleToggleExpand and toggle the expand state behind the open dialog. */}
+        <Box onClick={e => e.stopPropagation()}>{artifactShareModal}</Box>
       </Box>
     </Card>
   );

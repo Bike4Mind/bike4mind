@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/utils",
-  "version": "5.0.2",
+  "version": "6.2.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -77,6 +77,26 @@
       "require": {
         "types": "./dist/escapeRegex.d.cts",
         "default": "./dist/escapeRegex.cjs"
+      }
+    },
+    "./safeObjectKey": {
+      "import": {
+        "types": "./dist/safeObjectKey.d.mts",
+        "default": "./dist/safeObjectKey.mjs"
+      },
+      "require": {
+        "types": "./dist/safeObjectKey.d.cts",
+        "default": "./dist/safeObjectKey.cjs"
+      }
+    },
+    "./globMatches": {
+      "import": {
+        "types": "./dist/globMatches.d.mts",
+        "default": "./dist/globMatches.mjs"
+      },
+      "require": {
+        "types": "./dist/globMatches.d.cts",
+        "default": "./dist/globMatches.cjs"
       }
     },
     "./contentDisposition": {
@@ -159,20 +179,20 @@
     "@google/genai": "^1.46.0",
     "axios": "1.18.0",
     "cheerio": "1.2.0",
-    "csv-parse": "^7.0.1",
-    "dayjs": "^1.11.21",
-    "dotenv": "^17.4.2",
-    "file-type": "^22.0.1",
+    "csv-parse": "^7.0.2",
+    "dayjs": "^1.11.23",
+    "file-type": "^22.1.0",
+    "image-size": "^1.2.1",
     "jimp": "^1.6.1",
-    "jszip": "^3.10.1",
+    "jszip": "^3.10.2",
     "lodash": "^4.18.1",
-    "mammoth": "^1.12.0",
+    "mammoth": "^1.12.3",
     "mime-types": "^3.0.2",
     "openai": "^6.46.0",
     "tiktoken": "^1.0.22",
-    "tldts": "^7.4.8",
+    "tldts": "^7.4.13",
     "unpdf": "^1.6.2",
-    "uuid": "^14.0.1",
+    "uuid": "^14.0.2",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.4.3"
   },

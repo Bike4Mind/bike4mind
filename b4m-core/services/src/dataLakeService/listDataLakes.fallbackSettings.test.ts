@@ -24,21 +24,53 @@ const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
 
 describe('listDataLakes / listAllDataLakes - canManageSettings flag for fallback (built-in) lakes', () => {
   it('canManageSettings is true for an admin on a fallback lake (listAllDataLakes)', async () => {
-    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn(),
+        find: vi.fn().mockResolvedValue([]),
+      },
+    };
     const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
     expect(result.find(l => l.id === 'opti-knowledge')?.canManageSettings).toBe(true);
   });
 
   it('canManageSettings is false for a non-admin reader on a fallback lake (listDataLakes)', async () => {
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([]),
+        find: vi.fn(),
+      },
+    };
     const result = await listDataLakes(ctx({ userId: 'me', userTags: ['Opti'] }), { db });
     expect(result.find(l => l.id === 'opti-knowledge')?.canManageSettings).toBe(false);
+  });
+
+  it('stamps a curated origin on a fallback lake, which the registry entry itself does not carry', async () => {
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn(),
+        find: vi.fn().mockResolvedValue([]),
+      },
+    };
+    const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
+    // Not just "not connector-fed": an undefined here is what made the client's `?? default`
+    // load-bearing, and it disagreed with resolveFallbackLake's hardcoded 'curated'.
+    expect(result.find(l => l.id === 'opti-knowledge')?.origin).toBe('curated');
   });
 
   it('canManageSettings === canManage for a DB lake (both true for the owner, both false for a stranger)', async () => {
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine, theirs]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine, theirs]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'me' }), { db });
 
@@ -50,7 +82,11 @@ describe('listDataLakes / listAllDataLakes - canManageSettings flag for fallback
 describe('listAllDataLakes - overlay fields (groundingMode, preferredSystemPromptId, systemPrompt) for fallback lakes', () => {
   it('merges the overlay groundingMode for an admin', async () => {
     const db = {
-      dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) },
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn(),
+        find: vi.fn().mockResolvedValue([]),
+      },
       fallbackLakeSettings: {
         findByLakeIds: vi.fn().mockResolvedValue([{ lakeId: 'opti-knowledge', groundingMode: 'inline' }]),
       },
@@ -61,7 +97,11 @@ describe('listAllDataLakes - overlay fields (groundingMode, preferredSystemPromp
 
   it('merges the overlay preferredSystemPromptId for an admin', async () => {
     const db = {
-      dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) },
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn(),
+        find: vi.fn().mockResolvedValue([]),
+      },
       fallbackLakeSettings: {
         findByLakeIds: vi
           .fn()
@@ -74,7 +114,11 @@ describe('listAllDataLakes - overlay fields (groundingMode, preferredSystemPromp
 
   it('merges the overlay systemPrompt for an admin, trimmed', async () => {
     const db = {
-      dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) },
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn(),
+        find: vi.fn().mockResolvedValue([]),
+      },
       fallbackLakeSettings: {
         findByLakeIds: vi.fn().mockResolvedValue([{ lakeId: 'opti-knowledge', systemPrompt: '  Cite sources.  ' }]),
       },
@@ -85,7 +129,11 @@ describe('listAllDataLakes - overlay fields (groundingMode, preferredSystemPromp
 
   it('omits a blank/whitespace-only overlay systemPrompt (blank-as-absent, matching toManageableConfig)', async () => {
     const db = {
-      dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) },
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn(),
+        find: vi.fn().mockResolvedValue([]),
+      },
       fallbackLakeSettings: {
         findByLakeIds: vi.fn().mockResolvedValue([{ lakeId: 'opti-knowledge', systemPrompt: '   ' }]),
       },
@@ -96,7 +144,11 @@ describe('listAllDataLakes - overlay fields (groundingMode, preferredSystemPromp
 
   it('does NOT surface systemPrompt to a non-admin - the canManageSettings gate, not read access', async () => {
     const db = {
-      dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() },
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([]),
+        find: vi.fn(),
+      },
       fallbackLakeSettings: {
         findByLakeIds: vi.fn().mockResolvedValue([{ lakeId: 'opti-knowledge', systemPrompt: 'Cite sources.' }]),
       },
@@ -110,7 +162,11 @@ describe('listAllDataLakes - overlay fields (groundingMode, preferredSystemPromp
 
   it('omits all three fields when no overlay row exists', async () => {
     const db = {
-      dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) },
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn(),
+        find: vi.fn().mockResolvedValue([]),
+      },
       fallbackLakeSettings: { findByLakeIds: vi.fn().mockResolvedValue([]) },
     };
     const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
@@ -120,7 +176,13 @@ describe('listAllDataLakes - overlay fields (groundingMode, preferredSystemPromp
   });
 
   it('lists cleanly with no overlay adapter wired (back-compat)', async () => {
-    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn(),
+        find: vi.fn().mockResolvedValue([]),
+      },
+    };
     const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
     expect(result.find(l => l.id === 'opti-knowledge')?.groundingMode).toBeUndefined();
     expect(result.find(l => l.id === 'opti-knowledge')?.preferredSystemPromptId).toBeUndefined();

@@ -26,6 +26,7 @@ import type { DagDispatcher, DagHandoffSignal } from './tools/implementation/coo
 import { isToolOfferable, type ToolAvailability } from './toolAvailability';
 import { extractAndSaveEntitiesFromToolResult, shouldExtractEntitiesFromTool } from '../conversationContextService';
 import type { MinimalSessionRepository } from '../conversationContextService/types';
+import { notifyToolFinish } from './toolFinishObserver';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -51,6 +52,8 @@ export interface ToolBuilderDeps {
   suppressLakeArms?: ToolContext['suppressLakeArms'];
   /** Session lake scope, forwarded to the tool context (see ToolContext.sessionRetrievalTags). */
   sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
+  /** Lake-scope sidecar, forwarded to the tool context (see ToolContext.sessionLakeScopeExplicit). */
+  sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
   /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
   sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
   /**
@@ -216,6 +219,31 @@ export interface ToolBuilderCallbacks {
 /** Options passed to buildSharedTools */
 export interface BuildSharedToolsOptions {
   enabledTools?: string[];
+  /**
+   * The caller asked to be offered ONLY the tools it named, so server-side additions it never
+   * named are withheld - today that means MCP tools, which are merged after the `enabledTools`
+   * filter and are not part of it.
+   *
+   * This must be driven by an EXPLICIT caller signal, never inferred from `enabledTools` being
+   * empty: an empty list is the ordinary chat payload (the web client defaults to `toolMode:
+   * 'smart'` with an empty `tools` array), so treating it as a request for silence would strip
+   * MCP tools from normal chat. Agent-only servers are exempt - they are never in the main
+   * model's schemas, so withholding them would remove delegation capability rather than save the
+   * caller anything.
+   */
+  offerOnlyNamedTools?: boolean;
+  /**
+   * Tool names the session forbids, in the same namespace the tool answers to - so an MCP tool is
+   * named by its namespaced `server__tool` id.
+   *
+   * Every caller with a denylist should pass it, even one that also filters the returned array:
+   * two things this function produces are unreachable from that array - agent-only MCP tools,
+   * routed to the delegation pool instead of being returned, and `parentTools`, captured by the
+   * delegate tool's closure. An offered (non-agent-only) MCP tool DOES appear in the returned
+   * array, so a caller's own post-build filter reaches that one too - passing this option is
+   * still required to close the other two.
+   */
+  sessionDisabledTools?: readonly string[];
   mcpToolsByServer?: Record<string, Array<{ name: string } & ICompletionOptionTools>>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   config?: { [key in LlmTools]?: any };
@@ -270,6 +298,8 @@ export function buildSharedTools(
 ): ICompletionOptionTools[] | undefined {
   const {
     enabledTools = [],
+    offerOnlyNamedTools = false,
+    sessionDisabledTools,
     mcpToolsByServer = {},
     config = {},
     agentOnlyMcpServers = [],
@@ -295,6 +325,7 @@ export function buildSharedTools(
     fullyInlinedAttachmentIds,
     suppressLakeArms,
     sessionRetrievalTags,
+    sessionLakeScopeExplicit,
     sessionPreauthorizedLakeIds,
   } = deps;
 
@@ -313,6 +344,7 @@ export function buildSharedTools(
       fullyInlinedAttachmentIds,
       suppressLakeArms,
       sessionRetrievalTags,
+      sessionLakeScopeExplicit,
       sessionPreauthorizedLakeIds,
       questId: callbacks.questId,
       getAbortSignal,
@@ -328,6 +360,7 @@ export function buildSharedTools(
       image_generation: config.image_generation,
       edit_image: config.image_generation,
       audio_generation: config.audio_generation,
+      web_search: config.web_search,
     },
     model,
     imageProcessorLambdaName,
@@ -347,7 +380,16 @@ export function buildSharedTools(
       .filter(tool => tool in llmToolDefinitions && isToolOfferable(tool, toolAvailability))
       .map(tool => llmToolDefinitions[tool]);
 
-    const undefinedTools = enabledTools.filter(tool => !llmToolDefinitions[tool]);
+    // Ids namespaced to a CONNECTED server are excluded here even though they're not native
+    // tools: they are handled by the MCP merge loop below, not skipped, so warning about them as
+    // "undefined" would be a false positive on the one route (`session.enabledTools`) that can
+    // name an MCP tool under `offerOnlyNamedTools`. Scoped to the servers actually in
+    // `mcpToolsByServer` rather than to any id containing `__`, so a typo'd, stale, or
+    // disconnected-server id still warns - those are exactly the cases the warning is for, and
+    // under `offerOnlyNamedTools` they are why a caller gets silence instead of the tool it named.
+    const connectedServerPrefixes = Object.keys(mcpToolsByServer).map(serverName => `${serverName}__`);
+    const isConnectedMcpToolId = (tool: string) => connectedServerPrefixes.some(prefix => tool.startsWith(prefix));
+    const undefinedTools = enabledTools.filter(tool => !llmToolDefinitions[tool] && !isConnectedMcpToolId(tool));
     if (undefinedTools.length > 0) {
       logger.warn(`Undefined tools requested (will be skipped): ${undefinedTools.join(', ')}`);
     }
@@ -372,21 +414,50 @@ export function buildSharedTools(
     }
   }
 
-  // Merge MCP tools
+  // Merge MCP tools.
+  //
+  // MCP tools are merged AFTER the native `enabledTools` filter and were never subject to it, so
+  // no narrowing lever could reach them and a caller asking for a minimal tool profile still paid
+  // for every schema its servers expose (#2960).
+  //
+  // The gate is `offerOnlyNamedTools`, an explicit caller signal - NOT `enabledTools` being empty.
+  // An empty list is the ordinary chat payload (the web client defaults to `toolMode: 'smart'`
+  // with an empty `tools` array and scopes MCP through `mcpServers` instead), so inferring intent
+  // from it would strip MCP tools from normal chat.
+  //
+  // Agent-only servers are exempt on purpose: they are withheld from the main model's schemas
+  // anyway, so they cost nothing the caller is trying to avoid, and dropping them here would
+  // quietly remove delegation capability instead.
   const allMcpTools = Object.values(mcpToolsByServer).flat();
   logger.debug('[MCP] Merging MCP tools:', {
     mcpToolsCount: allMcpTools.length,
     mcpToolNames: allMcpTools.map(t => t.name),
     enabledToolsCount: enabledTools.length,
+    offerOnlyNamedTools,
   });
 
   const agentOnlyMcpTools: ICompletionOptionTools[] = [];
+  const namedToolNames = new Set(enabledTools);
+  const deniedToolNames = new Set(sessionDisabledTools ?? []);
+  const deniedMcpToolNames: string[] = [];
+  const unnamedMcpToolNames: string[] = [];
 
   for (const [serverName, serverTools] of Object.entries(mcpToolsByServer)) {
     const isAgentOnly = agentOnlyMcpServers.includes(serverName);
 
     for (const item of serverTools) {
       const { name, toolFn: originalToolFn, ...rest } = item;
+      // Denied by name, not by server: a session may forbid one tool of a server it otherwise
+      // uses. `name` is already the namespaced `server__tool` id, which is the id the denylist
+      // speaks and the one the model would have seen.
+      if (deniedToolNames.has(name)) {
+        deniedMcpToolNames.push(name);
+        continue;
+      }
+      if (offerOnlyNamedTools && !isAgentOnly && !namedToolNames.has(name)) {
+        unnamedMcpToolNames.push(name);
+        continue;
+      }
       tools ??= [];
 
       const wrappedToolFn = createMcpToolWrapper(name, originalToolFn, logger, callbacks, deps);
@@ -397,6 +468,21 @@ export function buildSharedTools(
         tools.push({ ...rest, toolFn: wrappedToolFn });
       }
     }
+  }
+
+  if (unnamedMcpToolNames.length > 0) {
+    // Logged rather than dropped in silence: this is the branch where a connected server
+    // contributes nothing, which otherwise reads as the server being broken.
+    logger.info(
+      `[MCP] Withholding ${unnamedMcpToolNames.length} unnamed MCP tools - the caller asked to be offered only ` +
+        `the tools it named: ${unnamedMcpToolNames.join(', ')}`
+    );
+  }
+
+  if (deniedMcpToolNames.length > 0) {
+    logger.info(
+      `[MCP] Dropped ${deniedMcpToolNames.length} session-disabled MCP tools: ${deniedMcpToolNames.join(', ')}`
+    );
   }
 
   if (agentOnlyMcpTools.length > 0) {
@@ -411,7 +497,11 @@ export function buildSharedTools(
     return tools;
   }
 
-  const parentTools = [...tools, ...agentOnlyMcpTools];
+  // Filtered here rather than left to a caller's post-build pass: `parentTools` is captured by the
+  // delegate tool's closure below, so it never appears in the array this function returns and a
+  // denylist applied to that array cannot reach it. Without this, a session-forbidden tool stays
+  // callable by a dispatched subagent - the same loophole the delegate gate exists to close.
+  const parentTools = [...tools, ...agentOnlyMcpTools].filter(tool => !deniedToolNames.has(tool.toolSchema.name));
 
   const subagentModelInfo = deps.precomputed?.models.find(m => m.id === model);
   const subagentLlm = getLlmByModel(deps.apiKeyTable!, {
@@ -525,23 +615,10 @@ function wrapNavigateViewTool(
 // Tool-finish observer (host seam)
 // ---------------------------------------------------------------------------
 
-export interface ToolFinishObservation {
-  toolName: string;
-  userId?: string;
-}
-
-/**
- * Optional host-registered observer called after ANY tool completes on the
- * shared pipeline (chat, agents, quests). Fire-and-forget by contract: it is
- * invoked synchronously, never awaited, and exceptions are swallowed - an
- * observer can never add latency to or break a tool call. First consumer: the
- * Gears progression system.
- */
-let toolFinishObserver: ((observation: ToolFinishObservation) => void) | null = null;
-
-export function setToolFinishObserver(observer: ((observation: ToolFinishObservation) => void) | null): void {
-  toolFinishObserver = observer;
-}
+// The seam itself lives in a dependency-free leaf module so the host can
+// register an observer without tracing the tool registry into every route
+// bundle. Re-exported here to keep the ./llm barrel surface unchanged.
+export { setToolFinishObserver, type ToolFinishObservation } from './toolFinishObserver';
 
 function wrapToolsForSentinels(
   tools: ICompletionOptionTools[],
@@ -557,15 +634,9 @@ function wrapToolsForSentinels(
       toolFn: async (args: unknown) => {
         const result = await originalToolFn(args);
 
-        // Non-blocking host observer (see setToolFinishObserver): sync call,
-        // no await, exceptions swallowed - zero added latency by contract.
-        if (toolFinishObserver) {
-          try {
-            toolFinishObserver({ toolName, userId });
-          } catch {
-            // observers must never break or slow a tool call
-          }
-        }
+        // Non-blocking host observer: sync, never awaited, exceptions swallowed
+        // inside notifyToolFinish - zero added latency by contract.
+        notifyToolFinish({ toolName, userId });
 
         // Extract __uiSideEffect sentinel
         if (callbacks.onUiSideEffect) {

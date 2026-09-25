@@ -47,18 +47,22 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/database/infra', () => ({
   secretRotationRepository: {
-    findByKeyName: vi.fn().mockResolvedValue(null),
+    findByKeyNameWithSecret: vi.fn().mockResolvedValue(null),
   },
 }));
 
 // dayjs stub - keeps previousSecret undefined (no recent rotation)
-vi.mock('@bike4mind/common', () => ({
-  dayjs: () => ({
-    isAfter: () => false,
-    subtract: () => ({}),
-  }),
-  redactUserSecretsForSelf: (user: unknown) => user,
-}));
+vi.mock('@bike4mind/common', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+  return {
+    ...actual,
+    dayjs: () => ({
+      isAfter: () => false,
+      subtract: () => ({}),
+    }),
+    redactUserSecretsForSelf: (user: unknown) => user,
+  };
+});
 
 vi.mock('@server/utils/errors', () => ({
   UnauthorizedError: class UnauthorizedError extends Error {

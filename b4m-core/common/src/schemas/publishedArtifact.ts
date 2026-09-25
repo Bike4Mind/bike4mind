@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { VisibilitySchema } from './artifacts';
 import { CommentPolicySchema } from './annotation';
 import { ArtifactTypeSchema } from '../types/entities/ArtifactTypes';
+import { CitableSourceSchema } from './promptMeta';
 
 /**
  * Published-artifact schemas - the B4M instantiation of the `artifact-publishing`
@@ -321,8 +322,8 @@ export const PUBLISH_TAGS_MAX = 20;
 /**
  * Normalize one tag: trim, collapse internal whitespace, lowercase.
  *
- * Lowercasing is a deliberate trade. It loses the author's capitalisation ("IonQ" stores as
- * "ionq"), and in exchange every downstream use becomes an exact match: the filter is a plain
+ * Lowercasing is a deliberate trade. It loses the author's capitalisation ("NorthWind" stores as
+ * "northwind"), and in exchange every downstream use becomes an exact match: the filter is a plain
  * equality query that can use an index, the vocabulary groups without a case-folding pass, and
  * "Security" cannot sit beside "security" as two chips meaning the same thing. Case-preserving
  * storage with case-insensitive comparison would need a collation or a parallel folded field on
@@ -425,6 +426,9 @@ export const PublishedArtifactSchema = z.object({
 
   /** Rendered body snapshot for reply/fabfile viewer pages (markdown or text). */
   renderedBody: z.string().optional(),
+  /** Snapshot of the source reply's citables (reply source only), so a `b4m_map` fence in
+   *  `renderedBody` can still resolve its place ids after the source Quest is edited or deleted. */
+  citables: z.array(CitableSourceSchema).optional(),
 
   publishedAt: z.date(),
   previousVersionMeta: ArtifactVersionMetaSchema.optional(),

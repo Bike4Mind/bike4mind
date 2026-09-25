@@ -16,8 +16,16 @@ import { sendToClient } from '@server/websocket/utils';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { filterReadableQuests } from '@server/utils/sessionAccess';
 import { apiKeyService } from '@bike4mind/services';
-import { ChatModels, isImageServeable } from '@bike4mind/common';
+import {
+  ChatModels,
+  isImageServeable,
+  ORG_FEEDBACK_SUMMARY_JOB_TYPE,
+  stripSearchResultCardFences,
+  type CitableSource,
+} from '@bike4mind/common';
+import { OrgFeedbackSummaryPayload, runOrgFeedbackSummary } from '@server/queueHandlers/orgFeedbackSummary';
 import { getSubQuestStatusIcon } from '@client/app/utils/subQuestStatusPresentation';
+import { extractReplies } from '@client/app/utils/replyUtils';
 import { z } from 'zod';
 import { Resource } from 'sst';
 import { createZipBuffer } from './createZipBuffer';
@@ -28,6 +36,19 @@ const QuestExportPayload = z.object({
   planId: z.string(),
   userId: z.string(),
 });
+
+/**
+ * This queue carries two job types. See `orgFeedbackSummary.ts` for why the summary rides here
+ * instead of getting a queue of its own, and for what it inherits by doing so.
+ *
+ * A plain union rather than `z.discriminatedUnion`, because messages already in flight when this
+ * ships carry no `jobType` at all and must still parse as an export - a discriminated union needs
+ * the key present on every arm.
+ */
+const QueuePayload = z.union([
+  OrgFeedbackSummaryPayload,
+  QuestExportPayload.extend({ jobType: z.literal('questExport').optional() }),
+]);
 
 type ExportStatus = 'assembling' | 'downloading_images' | 'summarizing' | 'zipping' | 'completed' | 'failed';
 
@@ -128,6 +149,24 @@ function getExtensionFromUrl(url: string): string {
     // ignore
   }
   return '.png';
+}
+
+/**
+ * The assistant text of a linked quest, as the chat transcript renders it.
+ *
+ * The streaming pipeline persists answers into `replies[]`; the scalar `reply` is the legacy/error
+ * field and is null on a normal successful turn, so reading it alone exported an empty body for
+ * every completed task. `extractReplies` is the same rule the transcript renders by, which also
+ * keeps hidden reasoning out of a customer-facing export.
+ *
+ * It yields nothing when `replies[]` is present but holds only thinking-only slots, and never
+ * consults `reply` in that case - so retry with the scalar, which is where an error message for
+ * exactly that kind of turn would have landed.
+ */
+function extractQuestReply(chatItem: Record<string, unknown>): string {
+  const reply = chatItem.reply as string | null | undefined;
+  const replies = chatItem.replies as string[] | undefined;
+  return extractReplies({ reply, replies })[0] ?? extractReplies({ reply })[0] ?? '';
 }
 
 function slugify(text: string): string {
@@ -255,7 +294,16 @@ ${content}`;
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
-  const { exportJobId, planId, userId } = secureParameters(JSON.parse(body), QuestExportPayload);
+  // secureParameters stays on the front of this, rather than a raw parse per arm: it is what turns
+  // a malformed message into a 422 the wrapper swallows instead of a retry loop into the DLQ.
+  const message = secureParameters(JSON.parse(body), QueuePayload);
+
+  if (message.jobType === ORG_FEEDBACK_SUMMARY_JOB_TYPE) {
+    await runOrgFeedbackSummary(message, logger);
+    return;
+  }
+
+  const { exportJobId, planId, userId } = message;
 
   logger.updateMetadata({ exportJobId, planId, userId });
 
@@ -403,8 +451,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           if (!chatItem) {
             markdown += `_Response content unavailable._\n\n`;
           } else {
-            const reply = (chatItem.reply as string) || '';
-            markdown += `${reply}\n\n`;
+            const replyText = extractQuestReply(chatItem);
+            const citables = (chatItem.promptMeta as { citables?: CitableSource[] } | undefined)?.citables;
+            markdown += replyText
+              ? `${stripSearchResultCardFences(replyText, citables)}\n\n`
+              : `_No response content._\n\n`;
 
             // Collect images from this chat item
             const images = (chatItem.images as string[]) || [];

@@ -9,10 +9,12 @@ import {
   getSettingsByNames,
   getSettingsMap,
   getSettingsValue,
+  checkStorageLimit,
 } from '@bike4mind/utils';
 import { RekognitionImageModerationService, ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
-import { apiKeyService, moderateImageOrThrow } from '@bike4mind/services';
+import { apiKeyService } from '@bike4mind/services';
+import { moderateImageOrThrow } from '@bike4mind/services/llm';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
 
@@ -140,6 +142,13 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
     throw new ForbiddenError("You don't have permission to modify this agent");
   }
 
+  // Cheap early refusal: checkStorageLimit does no DB I/O (b4m-core/utils/src/user.ts),
+  // it only reads fields already on req.user, so an already-over-quota user is turned
+  // away before paying for image generation, moderation, and the download. The exact
+  // check against imageBuffer.length still runs later to catch the request that only
+  // goes over because of this specific image.
+  await checkStorageLimit(req.user!, 0);
+
   try {
     // Get operations model for text generation (LLM for prompt generation)
     const { modelId, llm } = await OperationsModelService.getOperationsModel();
@@ -150,8 +159,8 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
 
     // Determine which image model to use
     // Priority: user's selected model > operations model
-    let imageModelId: string;
-    let imageModelInfo: ModelInfo | undefined;
+    let imageModelId: string | null;
+    let imageModelInfo: ModelInfo | null | undefined;
 
     if (userImageModel) {
       // User specified an image model - use it
@@ -192,6 +201,12 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
         );
       }
       imageLogger.info(`Using operations image model: ${imageModelId}`);
+    }
+
+    // Re-asserted here (both branches above already guarantee this): narrows the type for
+    // every use below, which the if/else diamond above does not do on its own.
+    if (!imageModelId || !imageModelInfo) {
+      throw new BadRequestError('No image generation model available.');
     }
 
     imageLogger.info(`Generating avatar for agent ${agent.name}`, {
@@ -313,7 +328,8 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
     // Step 3: Download the image and store it properly as a FabFile
     imageLogger.info(`Downloading and storing generated image...`);
 
-    // Declare updatedAgent with fallback value
+    // Declare updatedAgent with fallback value, used only if the storage/DB step
+    // below fails after moderation and the quota check have already passed.
     let updatedAgent = {
       ...agent,
       visual: {
@@ -323,29 +339,36 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
       },
     };
 
+    // Download the image from the provider
+    const imageBuffer = await downloadImageBuffer(imageUrl);
+
+    // Moderate the freshly generated avatar before it's ever uploaded or
+    // returned. The server has the bytes in hand right here, so (unlike an uploaded
+    // file, which is presigned direct-to-S3 and scanned asynchronously by objectCreated)
+    // this check runs synchronously and gates storage/response entirely. This call sits
+    // outside the storage try/catch below: on a confirmed block, or on an infrastructure
+    // failure (Rekognition throttle/timeout/SDK error), moderateImageOrThrow throws and
+    // that error propagates straight to the outer catch, so nothing is uploaded, no
+    // FabFile is created, and no image URL (signed, temporary, or blocked) is ever
+    // returned to the client.
+    const moderationSettings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+    await moderateImageOrThrow({
+      service: new RekognitionImageModerationService(req.logger),
+      enabled: getSettingsValue('ImageModerationEnabled', moderationSettings) ?? true,
+      incidents: imageModerationIncidentRepository,
+      buffer: imageBuffer,
+      mimeType: 'image/png',
+      incidentMeta: { userId, provider: 'avatar', model: 'avatar' },
+      logger: req.logger,
+    });
+
+    // Bytes here come from the image provider, not a user upload, so MaxFileSize
+    // (the knowledge-upload cap) does not apply; the per-user storage quota does.
+    // Also kept outside the storage try/catch below so a refusal surfaces as the
+    // BadRequestError it is, instead of falling back to the temporary provider URL.
+    await checkStorageLimit(req.user!, imageBuffer.length);
+
     try {
-      // Download the image from the provider
-      const imageBuffer = await downloadImageBuffer(imageUrl);
-
-      // Moderate the freshly generated avatar before it's ever uploaded or
-      // returned. The server has the bytes in hand right here, so (unlike an uploaded
-      // file, which is presigned direct-to-S3 and scanned asynchronously by objectCreated)
-      // this check runs synchronously and gates storage/response entirely. On a confirmed
-      // block this throws `ImageModerationBlockedError`, which the catch below rethrows
-      // immediately (rather than falling back to the temporary provider URL) so nothing
-      // is uploaded, no FabFile is created, and no image URL (signed or temporary) is
-      // ever returned to the client.
-      const moderationSettings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-      await moderateImageOrThrow({
-        service: new RekognitionImageModerationService(req.logger),
-        enabled: getSettingsValue('ImageModerationEnabled', moderationSettings) ?? true,
-        incidents: imageModerationIncidentRepository,
-        buffer: imageBuffer,
-        mimeType: 'image/png',
-        incidentMeta: { userId, provider: 'avatar', model: 'avatar' },
-        logger: req.logger,
-      });
-
       // Create a unique filename for the avatar
       const fileName = `agent-${agent.id}-avatar-${Date.now()}.png`;
       const filePath = fileName; // Simple filename without directories
@@ -464,7 +487,16 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
       generationPrompt: cleanPrompt,
     });
   } catch (error) {
-    imageLogger.error('Error generating agent avatar:', error);
+    imageLogger.error('Error generating agent avatar:', error, {
+      agentId: agent.id,
+      userId,
+    });
+
+    // Let the shared error handler render this with its real status and message
+    // (400, "File size exceeds storage limit"), same as every other upload door.
+    if (error instanceof BadRequestError) {
+      throw error;
+    }
 
     // Provide user-friendly error messages
     let errorMessage = 'Failed to generate avatar. Please try again.';

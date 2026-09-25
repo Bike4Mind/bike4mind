@@ -68,6 +68,7 @@ type SessionRow = Pick<
   | 'summary'
   | 'summaryAt'
   | 'tags'
+  | 'taggedAt'
   | 'isAutoNamed'
   | 'lastUsedModel'
   | 'knowledgeIds'
@@ -307,6 +308,10 @@ export class NotebookExportService {
       summary: session.summary,
       summaryAt: session.summaryAt ? new Date(session.summaryAt).toISOString() : undefined,
       tags: session.tags || [],
+      // Emitted beside `tags` for the same reason `summaryAt` sits beside `summary`: the stamp and
+      // the value it belongs to have to travel together, or an import cannot tell a tagged file
+      // from an untagged one and leaves the target's stale stamp in place.
+      taggedAt: session.taggedAt ? new Date(session.taggedAt).toISOString() : undefined,
       isAutoNamed: session.isAutoNamed || false,
       lastUsedModel: session.lastUsedModel ?? undefined,
       chatHistory,
@@ -710,6 +715,16 @@ export class NotebookExportService {
         // export has never contained, and that `anonymize` does not strip.
         performance: performance && { totalResponseTime: performance.totalResponseTime },
         context: context && { contextWindowUsage: context.contextWindowUsage },
+      };
+    }
+
+    // citables resolve b4m_map fences in the reply text this export already includes, unlike the
+    // rest of promptMeta which is opt-in metadata about the reply - so it must not share the
+    // includeMetadata gate, or turning that toggle off silently drops the place list.
+    if (message.promptMeta?.citables) {
+      exportedMessage.promptMeta = {
+        ...exportedMessage.promptMeta,
+        citables: message.promptMeta.citables,
       };
     }
 

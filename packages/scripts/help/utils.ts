@@ -34,9 +34,10 @@ export const ADMIN_HELP_CONTENT_DIR = 'app/generated/help-content-admin';
 /*
  * Neither constant is statically resolvable at its read sites, and that is deliberate. Both server
  * readers interpolate them into a template literal so that no content root ever reaches a `path.*`
- * call: @vercel/nft cannot fold a `path.resolve()` whose base it does not know, and its fallback
- * is to glob the entire app directory into the traced bundle - measured at 47 MB against Lambda's
- * hard 250 MB ceiling. See `apps/client/server/help/contentPath.ts` for the full reasoning.
+ * call: the file tracer cannot fold a `path.resolve()` whose base it does not know, and its
+ * fallback is to glob the entire app directory into the traced bundle - measured at 47 MB against
+ * Lambda's hard 250 MB ceiling. See `apps/client/server/help/contentPath.ts` for the full
+ * reasoning.
  *
  * The consequence is that nothing traces these directories implicitly any more. Both roots are
  * declared in `outputFileTracingIncludes` in `apps/client/next.config.mjs`, and that declaration
@@ -220,7 +221,20 @@ export interface MarkdownSection {
  * - If an H2 section exceeds `maxSectionTokens`, it is re-split at H3
  *   boundaries (H4+ stays with parent H3).
  * - Sections smaller than `minSectionLength` chars merge forward (or backward
- *   if last).
+ *   if last). When a section is the ONLY one an article has, it is kept
+ *   regardless of size rather than dropped - same "never leave the file with
+ *   zero chunks" tradeoff SmartChunker.mergeOrDropNearEmptyChunks makes for
+ *   the fab-pipeline chunker (#2817), since help chunks are `isGlobalRead`
+ *   and losing the only content would be worse than a short passage. This is
+ *   the only OTHER producer that writes to `fabfilechunks`, with its own,
+ *   deliberately more conservative default (100 chars vs. that chunker's
+ *   `MIN_CHUNK_CHARS_FLOOR` of 50) tuned for RAG passage quality, not just a
+ *   near-empty floor - do not casually lower it to match. The two callers
+ *   below MUST agree on these defaults: vectorize writes embeddings keyed on
+ *   the (slug, sectionPath) boundaries this produces, and runtime content
+ *   resolution re-derives those same keys to look the chunk back up. Changing
+ *   a default silently invalidates every already-generated vector until a
+ *   `help:regenerate` pass re-derives them.
  *
  * Used at build time (vectorize script) and at runtime (content resolution
  * for vector search results).

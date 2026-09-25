@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { isDocumentSource } from '@bike4mind/common';
 import {
   agentRepository,
   dataLakeAccessGrantRepository,
@@ -38,9 +39,10 @@ import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import type { EntitlementRequest } from '@server/entitlements';
 
 // The kinds this endpoint reads/deletes. `lake` differs from the owner-scoped kinds: a lake is
-// org-shared, so its READ authz is entitlement/tag/org access (assertLakeAccess) and its DELETE is a
-// MANAGE action (creator/admin) - not the "is this mine" rule the other kinds use. Static-registry
-// (fallback) lakes have no creator and no keyed memory ledger, so they resolve to a 404 here.
+// org-shared, so its READ authz is entitlement/tag/org access (assertLakeAccess) and its DELETE is
+// an OWNER action (effective owner/admin) - not the "is this mine" rule the other kinds use.
+// Static-registry (fallback) lakes have no creator and no keyed memory ledger, so they resolve to a
+// 404 here.
 // (Lake retention is also handled OUT of band: lake deletion crypto-shreds the ledger in
 // cleanupDeletedDataLake, so this surface is for the in-app read/manage flows, not retention.)
 const SUPPORTED_PRINCIPAL_KINDS: readonly PrincipalKind[] = ['user', 'agent', 'org', 'system', 'lake'];
@@ -55,9 +57,14 @@ const SUPPORTED_PRINCIPAL_KINDS: readonly PrincipalKind[] = ['user', 'agent', 'o
 async function resolveLakeMemoryTarget(
   req: EntitlementRequest,
   id: string
-): Promise<{ principal: Principal; ownerUserId: string; dataLakeId: string } | null> {
+): Promise<{
+  principal: Principal;
+  ownerUserId: string;
+  dataLakeId: string;
+  grants: dataLakeService.LakeGrant[];
+} | null> {
   const ctx = await toAccessContext(req);
-  const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+  const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
     db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
   });
   // BOTH halves of the ledger key must be present, and the tag half is not optional paranoia: the
@@ -67,7 +74,12 @@ async function resolveLakeMemoryTarget(
   // collection, including other tenants'. `extractLakeMemory` and `recallLakeMemoryForSession` guard
   // the same pair for the same reason; a lake with no tag simply has no keyed ledger to serve.
   if (!lake.createdByUserId || !lake.datalakeTag) return null;
-  return { principal: { kind: 'lake', id: lake.datalakeTag }, ownerUserId: lake.createdByUserId, dataLakeId: lake.id };
+  return {
+    principal: { kind: 'lake', id: lake.datalakeTag },
+    ownerUserId: lake.createdByUserId,
+    dataLakeId: lake.id,
+    grants,
+  };
 }
 
 type ReadStore = { principal: Principal; store: MemoryStore } | { status: number; error: string };
@@ -148,9 +160,9 @@ const handler = baseApi();
  * Owner-scoped: a caller may delete only their own user memory (agent/org deletion follows the
  * write path).
  *
- * LAKE: a manage action (creator/admin), because a lake's memory is org-shared - only the owner may
- * shred what the whole org reads. Pure ledger (no V1 memento twin, which is user-scoped), so a shred
- * never has to reach the memento store the user path reconciles against.
+ * LAKE: an owner action (effective owner/admin), because a lake's memory is org-shared - only the
+ * owner may shred what the whole org reads. Pure ledger (no V1 memento twin, which is user-scoped),
+ * so a shred never has to reach the memento store the user path reconciles against.
  *
  * Irreversible.
  */
@@ -172,21 +184,22 @@ handler.delete(async (req, res) => {
     const target = await resolveLakeMemoryTarget(req, id);
     if (!target) return res.status(404).json({ error: 'No memory found for this principal.' });
 
-    // Reading a lake is org-shared, but DELETING it is a MANAGE action: only the creator (or an
-    // admin) may shred what the whole org reads. A reader who isn't the creator gets a 403, not a
-    // 404 - assertLakeAccess already confirmed they can see the lake. Mirrors the lifecycle guards
-    // (data-lakes/[id]/lifecycle.ts).
+    // Reading a lake is org-shared, but DELETING it is an OWNER action: only the effective owner (or
+    // an admin) may shred what the whole org reads. Another reader gets a 403, not a 404 -
+    // assertLakeAccessWithGrants already confirmed they can see the lake. Mirrors the lifecycle
+    // guards (data-lakes/[id]/lifecycle.ts).
     // The SAME predicate the list surface hands the UI as `canManageMemory`. Previously this was
     // `canManageLake` called with neither grants nor `organizationId`, which happens to reduce to
-    // creator-or-admin - so the gate was right but expressed as a coincidence, and the button that
-    // fronts it was gated on the grant-aware flag instead. Named, both sides read the same rule.
+    // creator-or-admin, so transferred owners were rejected. Named, both sides now read the same
+    // grant-aware owner rule.
     if (
       !dataLakeService.canShredLakeMemory(
         { createdByUserId: target.ownerUserId },
-        { userId: ownerUserId, isAdmin: !!req.user?.isAdmin }
+        { userId: ownerUserId, isAdmin: !!req.user?.isAdmin },
+        target.grants
       )
     ) {
-      return res.status(403).json({ error: 'Only the lake creator can delete its memory.' });
+      return res.status(403).json({ error: 'Only the lake owner can delete its memory.' });
     }
 
     // A lake belief is pure LEDGER - no V1 memento twin (that union is user-scoped), so a single
@@ -348,10 +361,17 @@ handler.get(async (req, res) => {
   let withheldOrphans = 0;
   if (kind === 'lake') {
     const survivingSources = createSurvivingSourcesResolver({ fabfiles: fabFileRepository });
-    const surviving = await survivingSources([...new Set(profile.beliefs.flatMap(b => b.sources ?? []))]);
-    // A source-less belief is kept: nothing was destroyed, so it is not an orphan.
+    // Documents only, on both sides of this check. A curator-resolution belief also cites the finding
+    // it was decided on (#3049), which is not a FabFile: feeding it to the resolver logs `skipping ids
+    // that cannot address a row by _id` on every read, and counting it as a source would make such a
+    // belief permanently un-orphanable - it would outlive the destruction of every document it names,
+    // which is the exact disclosure this block exists to close.
+    const documentSources = (belief: (typeof profile.beliefs)[number]): string[] =>
+      (belief.sources ?? []).filter(isDocumentSource);
+    const surviving = await survivingSources([...new Set(profile.beliefs.flatMap(documentSources))]);
+    // A belief citing no DOCUMENT is kept: nothing was destroyed, so it is not an orphan.
     const kept = profile.beliefs.filter(b => {
-      const sources = b.sources ?? [];
+      const sources = documentSources(b);
       return sources.length === 0 || sources.some(sourceId => surviving.has(sourceId));
     });
     withheldOrphans = profile.beliefs.length - kept.length;
@@ -361,6 +381,13 @@ handler.get(async (req, res) => {
   // Strip the embedding from each belief before serializing. A vector is 512 floats (~1MB across a
   // real user's beliefs) that no reader of this endpoint needs - and, like the /api/mementos 502, an
   // unbounded vector payload is how this route would eventually blow the Lambda response limit.
+  //
+  // `sources` is NOT filtered here, deliberately: a curator-resolution belief's `finding:<id>` entry
+  // (#3049) goes over the wire alongside the FabFile ids. Stripping it would leave a `human-reviewed`
+  // belief with no way to say which finding it came from, which is the one piece of provenance a
+  // reader of this endpoint would actually want. The cost is that a consumer of `belief.sources`
+  // cannot assume every entry addresses a FabFile - use `isDocumentSource` before any id lookup, as
+  // the orphan check above does.
   const lean = ({ embedding: _e, ...b }: (typeof served.beliefs)[number]) => b;
   const leanProfile = { ...served, beliefs: served.beliefs.map(lean) };
   // Reported rather than filtered silently, so a reader can tell a small profile from a censored one.

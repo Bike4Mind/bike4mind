@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { BrowsePublicDataLakesResult, PublicDataLakeSummary } from '@bike4mind/common';
@@ -57,6 +57,7 @@ import {
   __resetPurgingLakesForTests,
   INITIAL_REBUILD_POLL_STATE,
   nextRebuildPoll,
+  rebuildBacklog,
   lakeMemoryPollInterval,
   LAKE_MEMORY_POLL_MS,
   useBrowsePublicDataLakes,
@@ -71,17 +72,23 @@ import {
   useApplyTaxonomySuggestions,
   useRechunkDataLake,
   useSetLakeVisibility,
+  useUpdateDataLake,
   useUpdateFallbackLakeSettings,
   useArchiveDataLake,
   useGetTransitionalDataLakes,
   useRetryLakeLifecycle,
   useTransferLakeOwnership,
+  useCancelLakeOwnershipOffer,
+  useAcceptLakeOwnershipOffer,
+  useDeclineLakeOwnershipOffer,
   usePurgeDataLakeDocument,
   useCreateDataLake,
   useReanalyzeTaxonomy,
   useDismissTaxonomy,
   useGrantLakeAccess,
   useRevokeLakeAccess,
+  useReprocessFabFile,
+  useUnderChunkedCount,
 } from './dataLakes';
 
 const PAGE_SIZE = 24;
@@ -835,6 +842,31 @@ describe('useDuplicatePrefixLake freshness', () => {
 });
 
 /**
+ * What the badge counts as "still to drain". Extracted from the refetchInterval closure and tested
+ * here for the same reason nextRebuildPoll is: the sum decides whether the panel polls at all, and a
+ * wrong one is silent - the badge simply never ticks down.
+ */
+describe('rebuildBacklog', () => {
+  it('sums both repairable populations, so a lake with only stale-space files still polls', () => {
+    // The regression: keying the poll off underChunkedCount alone. Clicking Re-embed on a lake whose
+    // chunk sizes are all fine leaves that count at 0, so polling never starts.
+    expect(rebuildBacklog({ underChunkedCount: 0, staleEmbeddingSpaceCount: 7 })).toBe(7);
+    expect(rebuildBacklog({ underChunkedCount: 3, staleEmbeddingSpaceCount: 7 })).toBe(10);
+  });
+
+  it('treats an unresolvable embedding space as nothing to drain, not as a backlog', () => {
+    // null means the server could not resolve a space to compare against, so there is no wave to
+    // wait on. Counting it as work would poll a rescan every 5s against a count that cannot move.
+    expect(rebuildBacklog({ underChunkedCount: 0, staleEmbeddingSpaceCount: null })).toBe(0);
+    expect(rebuildBacklog({ underChunkedCount: 2, staleEmbeddingSpaceCount: null })).toBe(2);
+  });
+
+  it('is zero before the status has loaded', () => {
+    expect(rebuildBacklog(undefined)).toBe(0);
+  });
+});
+
+/**
  * Rebuild badge poll cadence. This logic has now carried two consecutive defects - it stopped
  * polling before the work it reported on had finished, and then, once both counts were summed, it
  * could never stop at all - and both shipped because nothing executed it. nextRebuildPoll is pure
@@ -912,11 +944,21 @@ describe('lakeMemoryPollInterval', () => {
  * raising staleTime or dropping the toggle would strand the row the owner just created. These pin
  * the invalidation itself.
  *
+ * Each door is asserted twice, from one table: the lake it wrote IS invalidated, and the bare
+ * `['dataLakeConfigHistory']` root is NOT. The second half is the half that cannot be dropped:
+ * configHistory sits outside the `list` prefix precisely so a rename does not refetch every lake's
+ * history (see dataLakeKeys.ts), and invalidating the root undoes that silently - nothing errors,
+ * the UI stays correct, and the only symptom is every open lake history refetching on every
+ * unrelated lake edit. A positive `toContain` check cannot see it, because a door that invalidated
+ * BOTH the root and the scoped key would satisfy one.
+ *
+ * A new door that records a config-change row belongs in this table, not in a case of its own.
+ *
  * The key is asserted as the literal `['dataLakeConfigHistory', 'lake1']` prefix rather than through
  * dataLakeKeys.configHistoryOf: building the expectation from the same helper the hook calls would
  * still pass if that helper's shape drifted away from what the query is actually keyed under.
  */
-describe('config-history invalidation on the non-update config writes', () => {
+describe('config-history invalidation on the config-writing doors', () => {
   const mountWith = () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
@@ -927,132 +969,159 @@ describe('config-history invalidation on the non-update config writes', () => {
   const invalidatedKeys = (invalidate: ReturnType<typeof vi.spyOn>) =>
     invalidate.mock.calls.map(call => JSON.stringify((call[0] as { queryKey?: unknown })?.queryKey));
 
-  it("useSetLakeVisibility invalidates the changed lake's history", async () => {
-    const { wrapper, invalidate } = mountWith();
-    apiPost.mockResolvedValueOnce({ data: { id: 'lake1' } });
+  type ConfigWriteDoor = {
+    name: string;
+    /** Queues this door's response, mounts it, and runs the write against lake1. */
+    drive: (wrapper: React.FC<{ children: React.ReactNode }>) => Promise<void>;
+  };
 
-    const { result } = renderHook(() => useSetLakeVisibility(), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync({ id: 'lake1', visibility: 'public' });
-    });
+  const doors: ConfigWriteDoor[] = [
+    // The original writer of this key, and the shape the rest were measured against.
+    {
+      name: 'useUpdateDataLake',
+      drive: async wrapper => {
+        apiPut.mockResolvedValueOnce({ data: { id: 'lake1' } });
+        const { result } = renderHook(() => useUpdateDataLake(), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync({ id: 'lake1', name: 'Renamed' });
+        });
+      },
+    },
+    // The static/registry lake's admin overlay. A different route and a different service from
+    // useUpdateDataLake, but it records the same `update` action, so it owes the same invalidation.
+    {
+      name: 'useUpdateFallbackLakeSettings',
+      drive: async wrapper => {
+        apiPut.mockResolvedValueOnce({ data: { id: 'lake1' } });
+        const { result } = renderHook(() => useUpdateFallbackLakeSettings(), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync({ id: 'lake1', groundingMode: 'retrieve' });
+        });
+      },
+    },
+    {
+      name: 'useSetLakeVisibility',
+      drive: async wrapper => {
+        apiPost.mockResolvedValueOnce({ data: { id: 'lake1' } });
+        const { result } = renderHook(() => useSetLakeVisibility(), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync({ id: 'lake1', visibility: 'public' });
+        });
+      },
+    },
+    // The ACCEPT door, not the offer door: an offer moves nothing and records nothing, so it owes
+    // no history invalidation. Accepting applies the transfer through grant rows (no document field
+    // moves), so the history row is the ONLY record the handover happened - and the recipient who
+    // just accepted is the reader most likely to open History next.
+    {
+      name: 'useAcceptLakeOwnershipOffer',
+      drive: async wrapper => {
+        apiPost.mockResolvedValueOnce({ data: { data: { newOwnerUserId: 'u2', demotedUserIds: ['u1'] } } });
+        const { result } = renderHook(() => useAcceptLakeOwnershipOffer(), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync({ offerId: 'o1', dataLakeId: 'lake1' });
+        });
+      },
+    },
+    {
+      name: 'useGrantLakeAccess',
+      drive: async wrapper => {
+        apiPost.mockResolvedValueOnce({ data: { data: { principalId: 'u1', role: 'reader' } } });
+        const { result } = renderHook(() => useGrantLakeAccess(), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync({ id: 'lake1', principalType: 'user', principalId: 'u1', role: 'reader' });
+        });
+      },
+    },
+    {
+      name: 'useRevokeLakeAccess',
+      drive: async wrapper => {
+        apiDelete.mockResolvedValueOnce({ data: { data: { revoked: true } } });
+        const { result } = renderHook(() => useRevokeLakeAccess(), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync({ id: 'lake1', principalType: 'user', principalId: 'u1' });
+        });
+      },
+    },
+    // One entry for all five lifecycle callers (archive/unarchive/restore/delete plus the
+    // status-driven retry): they share `invalidateAfterLifecycle`, so the key and its scoping are
+    // decided in one place and per-action cases would assert the same line five times.
+    {
+      name: 'a lifecycle action',
+      drive: async wrapper => {
+        apiPost.mockResolvedValueOnce({ data: { success: true } });
+        const { result } = renderHook(() => useArchiveDataLake(), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync('lake1');
+        });
+      },
+    },
+    // The purge door builds its own onSuccess around the pending-purge suppression rather than going
+    // through invalidateAfterLifecycle, which is how it missed this key while the other four
+    // lifecycle actions had it. Inert in today's UI (a purge is accepted from the Deleted section,
+    // History unmounted), so this pins the CONSISTENCY - and `purge` is the action least worth
+    // special-casing, being the only audit record a purge leaves. Not reachable via the retry path
+    // either: TransitionalRetryAction excludes it, so nothing else picks up the slack.
+    {
+      name: 'useCleanupDataLake',
+      drive: async wrapper => {
+        apiPost.mockResolvedValueOnce({ data: { success: true } });
+        const { result } = renderHook(() => useCleanupDataLake(), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync('lake1');
+        });
+      },
+    },
+    // Purging one document is NOT lake-scoped (it invalidates the files and health ROOTS), which
+    // makes it the door most likely to reach for the history root as well - but the config row it
+    // can write comes from recomputeLakeStats' draft -> active flip on the purged-from lake alone.
+    {
+      name: 'usePurgeDataLakeDocument',
+      drive: async wrapper => {
+        apiPost.mockResolvedValueOnce({ data: { verified: true, chunksBefore: 3, chunksRemaining: 0 } });
+        const { result } = renderHook(() => usePurgeDataLakeDocument('lake1'), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync('f1');
+        });
+      },
+    },
+    // Covers `invalidateLakeFileMembershipQueries`, shared with useAddFileToDataLake. Inert in
+    // today's UI (these fire from the file wizard, where the History observer is unmounted), so it
+    // pins the CONSISTENCY rather than a visible bug: every client path whose write can record a
+    // config-history row invalidates that lake's history, with no per-path reasoning about which
+    // ones currently matter.
+    {
+      name: 'a file removal',
+      drive: async wrapper => {
+        apiDelete.mockResolvedValueOnce({ data: { success: true, fileCount: 1, totalSizeBytes: 4 } });
+        const { result } = renderHook(() => useRemoveFileFromDataLake('lake1'), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync('f1');
+        });
+      },
+    },
+  ];
 
-    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+  beforeEach(() => {
+    // The api spies are module-scoped and shared, so an unconsumed `...Once` queued by a sibling
+    // describe would otherwise answer this door's request instead of its own mock.
+    apiPost.mockReset();
+    apiPut.mockReset();
+    apiDelete.mockReset();
   });
 
-  it("a lifecycle action invalidates the acted-on lake's history", async () => {
+  // A purge writes module-scoped suppression state. Cleared here rather than inside the case so a
+  // failing assertion cannot also strand 'lake1' for the cases that follow.
+  afterEach(__resetPurgingLakesForTests);
+
+  it.each(doors)("$name invalidates the written lake's history, and only that lake's", async ({ drive }) => {
     const { wrapper, invalidate } = mountWith();
-    apiPost.mockResolvedValueOnce({ data: { success: true } });
 
-    const { result } = renderHook(() => useArchiveDataLake(), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync('lake1');
-    });
+    await drive(wrapper);
 
-    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
-  });
-
-  it("a file removal invalidates that lake's history too - it can trigger the auto-activate row", async () => {
-    // Inert in today's UI (this hook fires from the file wizard, where the History observer is
-    // unmounted), so this pins the CONSISTENCY rather than a visible bug: every client path whose
-    // write can record a config-history row invalidates that lake's history, with no per-path
-    // reasoning about which ones currently matter.
-    const { wrapper, invalidate } = mountWith();
-    apiDelete.mockResolvedValueOnce({ data: { success: true, fileCount: 1, totalSizeBytes: 4 } });
-
-    const { result } = renderHook(() => useRemoveFileFromDataLake('lake1'), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync('f1');
-    });
-
-    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
-  });
-
-  it("useGrantLakeAccess invalidates the shared lake's history", async () => {
-    const { wrapper, invalidate } = mountWith();
-    apiPost.mockResolvedValueOnce({ data: { data: { principalId: 'u1', role: 'reader' } } });
-
-    const { result } = renderHook(() => useGrantLakeAccess(), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync({ id: 'lake1', principalType: 'user', principalId: 'u1', role: 'reader' });
-    });
-
-    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
-  });
-
-  it("useRevokeLakeAccess invalidates the lake's history", async () => {
-    const { wrapper, invalidate } = mountWith();
-    apiDelete.mockResolvedValueOnce({ data: { data: { revoked: true } } });
-
-    const { result } = renderHook(() => useRevokeLakeAccess(), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync({ id: 'lake1', principalType: 'user', principalId: 'u1' });
-    });
-
-    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
-  });
-
-  // The transfer door moves no document field, so its history row is the ONLY record that the
-  // handover happened - and the manager who just confirmed the transfer is the reader most likely
-  // to open History next.
-  it("useTransferLakeOwnership invalidates the transferred lake's history", async () => {
-    const { wrapper, invalidate } = mountWith();
-    apiPost.mockResolvedValueOnce({ data: { newOwnerUserId: 'u2', demotedUserIds: ['u1'] } });
-
-    const { result } = renderHook(() => useTransferLakeOwnership(), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync({ id: 'lake1', newOwnerUserId: 'u2' });
-    });
-
-    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
-  });
-
-  // The purge door builds its own onSuccess around the pending-purge suppression rather than going
-  // through invalidateAfterLifecycle, which is how it missed this key while the other four
-  // lifecycle actions had it. Inert in today's UI (a purge is accepted from the Deleted section,
-  // History unmounted), so this pins the CONSISTENCY - and `purge` is the action least worth
-  // special-casing, being the only audit record a purge leaves. Not reachable via the retry path
-  // either: TransitionalRetryAction excludes it, so nothing else picks up the slack.
-  it("useCleanupDataLake invalidates the purged lake's history", async () => {
-    const { wrapper, invalidate } = mountWith();
-    apiPost.mockResolvedValueOnce({ data: { success: true } });
-
-    const { result } = renderHook(() => useCleanupDataLake(), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync('lake1');
-    });
-    // A purge writes module-scoped suppression state, and this describe has no reset of its own.
-    // Cleared before the assertion so a failure here cannot also strand 'lake1' for later cases.
-    __resetPurgingLakesForTests();
-
-    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
-  });
-
-  // The static/registry lake's admin overlay. A different route and a different service from
-  // useUpdateDataLake, but it records the same `update` action, so it owes the same invalidation.
-  it("useUpdateFallbackLakeSettings invalidates the edited lake's history", async () => {
-    const { wrapper, invalidate } = mountWith();
-    apiPut.mockResolvedValueOnce({ data: { id: 'lake1' } });
-
-    const { result } = renderHook(() => useUpdateFallbackLakeSettings(), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync({ id: 'lake1', groundingMode: 'retrieve' });
-    });
-
-    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
-  });
-
-  it('scopes the invalidation to that one lake, never the whole history root', async () => {
-    // configHistory sits outside the `list` prefix precisely so a rename does not refetch every
-    // lake's history (see dataLakeKeys.ts). Invalidating the bare root here would undo that.
-    const { wrapper, invalidate } = mountWith();
-    apiPost.mockResolvedValueOnce({ data: { id: 'lake1' } });
-
-    const { result } = renderHook(() => useSetLakeVisibility(), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync({ id: 'lake1', visibility: 'private' });
-    });
-
-    expect(invalidatedKeys(invalidate)).not.toContain(JSON.stringify(['dataLakeConfigHistory']));
+    const keys = invalidatedKeys(invalidate);
+    expect(keys).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+    expect(keys).not.toContain(JSON.stringify(['dataLakeConfigHistory']));
   });
 });
 
@@ -1213,17 +1282,100 @@ describe('useRechunkDataLake paused refusal (#2223)', () => {
   });
 });
 
+describe('useRechunkDataLake: enqueued 0 on a non-empty detection', () => {
+  beforeEach(() => {
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.warning).mockClear();
+  });
+
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useRechunkDataLake('lake1'), { wrapper });
+  };
+
+  it('warns rather than calling the lake clean when the re-embed wave queued nothing', async () => {
+    // The reset deletes a wave's passages BEFORE any send, so a run whose sends all failed returns
+    // this shape after emptying the files it names. Keyed on `enqueued` alone, the owner was told
+    // every file was already in the current space at the one moment that was least true.
+    apiPost.mockResolvedValueOnce({ data: { detected: 7, enqueued: 0, remaining: 7 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ select: 'stale-embedding-space' });
+    });
+
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('none were queued'));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('keeps the reassuring re-embed wording for a genuinely empty detection', async () => {
+    apiPost.mockResolvedValueOnce({ data: { detected: 0, enqueued: 0, remaining: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ select: 'stale-embedding-space' });
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('Every file in this lake is already in the current embedding space.');
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it('warns on the passages wave too, where the same all-sends-failed shape arrives', async () => {
+    apiPost.mockResolvedValueOnce({ data: { detected: 5, enqueued: 0, remaining: 5 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync(undefined);
+    });
+
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('none were queued'));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+});
+
+describe('useUnderChunkedCount: the unresolvable-space discriminator', () => {
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useUnderChunkedCount('lake1'), { wrapper });
+  };
+
+  beforeEach(() => {
+    apiGet.mockReset();
+  });
+
+  it('carries a server-reported FALSE through, so the panel can say the space is unknown', async () => {
+    apiGet.mockResolvedValue({
+      data: { underChunkedCount: 0, failedCount: 0, staleEmbeddingSpaceCount: null, embeddingSpaceResolved: false },
+    });
+    const { result } = mount();
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(result.current.data?.embeddingSpaceResolved).toBe(false);
+  });
+
+  it('maps an ABSENT field to null, not false - an older server is a deploy skew, not a diagnosis', async () => {
+    // The whole point of the field. `?? false` here would light the advisory for every owner on
+    // the planet during any rolling deploy, which is the false positive the panel's `?? 0` was
+    // originally written to avoid.
+    apiGet.mockResolvedValue({ data: { underChunkedCount: 0, failedCount: 0, staleEmbeddingSpaceCount: null } });
+    const { result } = mount();
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(result.current.data?.embeddingSpaceResolved).toBeNull();
+  });
+});
+
 describe('useTransferLakeOwnership cache invalidation', () => {
-  it('refreshes the access view, the picker and the lake LIST - ownership decides canManage', async () => {
-    // The list matters as much as the view: once the actor is no longer the owner, controls that
-    // were theirs (transfer, the visibility expose gate) must disappear from the panel rather than
-    // linger until something else happens to refetch. `dataLakeKeys.list` is the bare ['data-lakes']
-    // prefix, so this one invalidation also covers the public/archived/deleted catalogs.
+  it('refreshes the picker and the access view - the pending offer is read from the picker', async () => {
+    // The offer moves no ownership, so the lake LIST is deliberately left alone: nothing a manager
+    // can do has changed. The picker query is what the dialog re-reads to render "waiting on X".
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
       React.createElement(QueryClientProvider, { client: queryClient }, children);
-    apiPost.mockResolvedValueOnce({ data: { newOwnerUserId: 'u9', demotedUserIds: ['u1'] } });
+    apiPost.mockResolvedValueOnce({ data: { offer: { id: 'o1' } } });
 
     const { result } = renderHook(() => useTransferLakeOwnership(), { wrapper });
     await act(async () => {
@@ -1234,7 +1386,6 @@ describe('useTransferLakeOwnership cache invalidation', () => {
     const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
     expect(keys).toContain(JSON.stringify(['data-lakes', 'access', 'lake1']));
     expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-candidates', 'lake1']));
-    expect(keys).toContain(JSON.stringify(['data-lakes']));
   });
 
   it("surfaces the server refusal text, not axios's generic status message", async () => {
@@ -1256,6 +1407,141 @@ describe('useTransferLakeOwnership cache invalidation', () => {
     });
 
     expect(toast.error).toHaveBeenCalledWith('An organization admin cannot transfer a data lake to themselves');
+  });
+
+  it('refreshes the picker on a FAILED offer too, so a stale pending state cannot stick', async () => {
+    // Finding 5: a refusal can mean the dialog's cached state is stale ("already has a pending
+    // offer", the offer was cancelled elsewhere). Only invalidating on success left dead controls.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockRejectedValueOnce(new Error('This data lake already has a pending ownership offer'));
+
+    const { result } = renderHook(() => useTransferLakeOwnership(), { wrapper });
+    await act(async () => {
+      await expect(result.current.mutateAsync({ id: 'lake1', newOwnerUserId: 'u9' })).rejects.toThrow();
+    });
+
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-candidates', 'lake1']));
+  });
+});
+
+describe('useCancelLakeOwnershipOffer', () => {
+  it('DELETEs the pending offer and refreshes the picker that renders it', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiDelete.mockResolvedValueOnce({ data: { offer: { id: 'o1', status: 'cancelled' } } });
+
+    const { result } = renderHook(() => useCancelLakeOwnershipOffer(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1' });
+    });
+
+    expect(apiDelete).toHaveBeenCalledWith('/api/data-lakes/lake1/transfer-ownership');
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-candidates', 'lake1']));
+  });
+
+  it('refreshes the picker on a FAILED cancel too', async () => {
+    // The recipient may have accepted just before the offerer clicked Cancel: the 404 must refresh
+    // the stale "Cancel offer" state rather than leave a button that can never succeed.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiDelete.mockRejectedValueOnce(new Error('This data lake has no pending ownership offer'));
+
+    const { result } = renderHook(() => useCancelLakeOwnershipOffer(), { wrapper });
+    await act(async () => {
+      await expect(result.current.mutateAsync({ id: 'lake1' })).rejects.toThrow();
+    });
+
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-candidates', 'lake1']));
+  });
+});
+
+describe('useAcceptLakeOwnershipOffer cache invalidation', () => {
+  it('refreshes the offers list, the lake list and the access view - ownership decides canManage', async () => {
+    // Accepting DOES move ownership, so the lake list matters: controls that were the actor's may
+    // legitimately vanish, and the manager's own banner entry is gone.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockResolvedValueOnce({ data: { data: { newOwnerUserId: 'u9', demotedUserIds: ['u1'] } } });
+
+    const { result } = renderHook(() => useAcceptLakeOwnershipOffer(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ offerId: 'o1', dataLakeId: 'lake1' });
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/ownership-offers/o1/accept');
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-offers']));
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'access', 'lake1']));
+  });
+
+  it('refreshes the offers and the lake on a FAILED accept too', async () => {
+    // An expired or stale offer fails the accept; the banner must drop it rather than keep offering
+    // something the server will keep refusing.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockRejectedValueOnce(new Error('This ownership offer has expired'));
+
+    const { result } = renderHook(() => useAcceptLakeOwnershipOffer(), { wrapper });
+    await act(async () => {
+      await expect(result.current.mutateAsync({ offerId: 'o1', dataLakeId: 'lake1' })).rejects.toThrow();
+    });
+
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-offers']));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'access', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+  });
+});
+
+describe('useDeclineLakeOwnershipOffer', () => {
+  it('POSTs the decline and refreshes only the offers list', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockResolvedValueOnce({ data: { data: { id: 'o1', status: 'declined' } } });
+
+    const { result } = renderHook(() => useDeclineLakeOwnershipOffer(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ offerId: 'o1' });
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/ownership-offers/o1/decline');
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-offers']));
+    // Nothing changed hands, so the lake list is NOT refetched for a decline.
+    expect(keys).not.toContain(JSON.stringify(['data-lakes']));
+  });
+
+  it('refreshes the offers list on a FAILED decline too', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockRejectedValueOnce(new Error('This ownership offer is no longer open'));
+
+    const { result } = renderHook(() => useDeclineLakeOwnershipOffer(), { wrapper });
+    await act(async () => {
+      await expect(result.current.mutateAsync({ offerId: 'o1' })).rejects.toThrow();
+    });
+
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-offers']));
   });
 });
 
@@ -1752,5 +2038,43 @@ describe('server refusal text reaches the toast', () => {
     });
 
     expect(toast.error).toHaveBeenCalledWith('boom');
+  });
+});
+
+/**
+ * The client half of #3167. The server authorizes a non-owning lake manager only on the lake it is
+ * NAMED, so a dropped `dataLakeId` here does not error - the request simply falls back to the
+ * caller's own rights and 404s again, which is exactly the bug. Asserting the body is the only
+ * place that regression is visible.
+ */
+describe('useReprocessFabFile request body', () => {
+  const mount = <T>(hook: () => T): { result: { current: T } } => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(hook, { wrapper });
+  };
+
+  beforeEach(() => {
+    apiPost.mockReset();
+    apiPost.mockResolvedValue({ data: { messageId: 'm1' } });
+  });
+
+  it('names the lake whose manage rights authorize a file the caller does not own', async () => {
+    const { result } = mount(() => useReprocessFabFile('lake1'));
+    await act(async () => {
+      await result.current.mutateAsync('file1');
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/files/reprocess', { fabFileId: 'file1', dataLakeId: 'lake1' });
+  });
+
+  it('omits dataLakeId entirely when there is no lake context, rather than sending null', async () => {
+    const { result } = mount(() => useReprocessFabFile(null));
+    await act(async () => {
+      await result.current.mutateAsync('file1');
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/files/reprocess', { fabFileId: 'file1' });
   });
 });

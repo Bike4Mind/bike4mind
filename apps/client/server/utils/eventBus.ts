@@ -1,10 +1,13 @@
 import { z } from 'zod';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { Resource } from 'sst';
-import { QuestStartBodySchema } from '@bike4mind/services';
+// Leaf subpath, not the ./llm barrel: eventBus is imported by hundreds of API
+// routes, and the barrel would trace the tool registry into every one of them.
+import { QuestStartBodySchema } from '@bike4mind/services/llm/questStartBody';
 import {
   ContextTelemetrySchema,
   ContextTelemetryAlertsSchema,
+  PERSISTED_SESSION_SUMMARY_TRIGGERS,
   SRE_ANALYSIS_COMPLETED_EVENT,
   type SreFixRequest,
 } from '@bike4mind/common';
@@ -156,7 +159,12 @@ export const SessionEvents = {
       sessionId: z.string(),
       userId: z.string().optional(),
       callTagging: z.boolean().optional(),
-      trigger: z.enum(['manual', 'project', 'earlyMilestone', 'contentGrowth', 'throttling']).optional(),
+      // Persisted list, not the full union: the handler stamps this straight onto the session, so
+      // accepting a decision-only reason here would store provenance for a run that never happened.
+      // Required, because the handler's write goes through $set, which drops an undefined - an event
+      // without a trigger would leave a NEW summary sitting next to the PREVIOUS run's provenance.
+      // Every publisher already passes one, and the summarizeSession chain now types it that way.
+      trigger: z.enum(PERSISTED_SESSION_SUMMARY_TRIGGERS),
     })
   ),
   Tag: event(

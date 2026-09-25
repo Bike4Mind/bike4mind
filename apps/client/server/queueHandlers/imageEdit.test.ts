@@ -41,8 +41,8 @@ vi.mock('@server/utils/storage', () => ({
 
 // Stub the service constructor - we don't care about its internals, only that the
 // factory call site evaluates its arguments (which is where the Resource access lives).
-vi.mock('@bike4mind/services', async () => {
-  const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+vi.mock('@bike4mind/services/llm', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/services/llm')>('@bike4mind/services/llm');
   // `class` (not arrow `vi.fn`) so `new ImageEditService(...)` works while still
   // evaluating the constructor args - where the `Resource.X` access we want to track lives.
   return {

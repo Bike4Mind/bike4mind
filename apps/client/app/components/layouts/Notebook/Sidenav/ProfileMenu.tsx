@@ -40,8 +40,11 @@ import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettingsOutlin
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import GavelIcon from '@mui/icons-material/GavelOutlined';
 import ExtensionIcon from '@mui/icons-material/ExtensionOutlined';
+import FeedbackOutlinedIcon from '@mui/icons-material/FeedbackOutlined';
+import { defaultFeedbackRollupWindow } from '@client/app/utils/feedbackRollupWindow';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesomeOutlined';
+import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
 import LogoDevIcon from '@mui/icons-material/LogoDev';
 import LogoutIcon from '@mui/icons-material/LogoutOutlined';
 import RefreshIcon from '@mui/icons-material/RefreshOutlined';
@@ -330,6 +333,17 @@ const ProfileMenu = () => {
             }}
           />
           <MenuRow
+            testId="profile-menu-feedback-rollup"
+            icon={<FeedbackOutlinedIcon sx={{ fontSize: '18px' }} />}
+            label={t('feedback.rollupTitle', 'Your feedback')}
+            onClick={() => {
+              // The route fills a missing window itself, but its search type requires both bounds,
+              // so the menu hands over the same default rather than a bare link.
+              navigate({ to: '/feedback/rollup', search: defaultFeedbackRollupWindow() });
+              closeNavigation();
+            }}
+          />
+          <MenuRow
             testId="profile-menu-api-keys"
             icon={<KeyOutlinedIcon sx={{ fontSize: '18px' }} />}
             label={t('apiKeys.title', 'API Keys')}
@@ -514,6 +528,19 @@ const ProfileMenu = () => {
                     closeAll();
                   }}
                 />
+                {/* Admin-only while the page is placeholder copy. Drop the gate - and move
+                    this row to the sidenav rail - once it replaces the first-run slider. */}
+                {isAdmin && (
+                  <MenuRow
+                    testId="profile-more-tutorials"
+                    icon={<MenuBookOutlinedIcon sx={{ fontSize: '18px' }} />}
+                    label={t('tutorials.title', 'Tutorials')}
+                    onClick={() => {
+                      navigate({ to: '/tutorials/explore' });
+                      closeNavigation();
+                    }}
+                  />
+                )}
                 <MenuRow
                   testId="profile-more-about"
                   icon={<InfoOutlinedIcon sx={{ fontSize: '18px' }} />}

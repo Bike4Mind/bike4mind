@@ -12,6 +12,7 @@ import {
   getSharedSessionsFromServer,
   updateSessionToServer,
 } from '@client/app/utils/sessionsAPICalls';
+import type { SessionUpdatePayload } from '@client/app/utils/sessionsAPICalls';
 import {
   InfiniteData,
   QueryClient,
@@ -41,6 +42,8 @@ import { useJobStatus } from '@client/app/hooks/useJobStatus';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
 import { isOptimisticId } from '@client/app/utils/llm';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
+import { visibleReplyForExport } from '@client/app/utils/replyUtils';
+import { getInsufficientCreditsMessage } from '@client/app/utils/error';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
 
 export function useDeleteAllSessions(options: { onSuccess?: () => void } = {}) {
@@ -432,7 +435,7 @@ export function useToggleFavoriteSession(sessionId: string) {
  * declares; `propagateToProjects` is a write OPTION rather than session state, and
  * controls whether new knowledgeIds also fan out to the containing projects.
  */
-export type UpdateSessionInput = Partial<ISessionDocument> & { id: string; propagateToProjects?: boolean };
+export type UpdateSessionInput = SessionUpdatePayload & { id: string; propagateToProjects?: boolean };
 
 export function useUpdateSession(callback?: { onSuccess?: (session: ISessionDocument) => void }) {
   const queryClient = useQueryClient();
@@ -476,9 +479,10 @@ export const useDownloadSession = () => {
       let dataString = title + '\n\n';
       quests.data.forEach((quest: IChatHistoryItem) => {
         dataString += 'User:' + quest.prompt + '\n';
-        (quest.replies || []).forEach(reply => {
+        const reply = visibleReplyForExport(quest);
+        if (reply) {
           dataString += 'AI:' + reply + '\n';
-        });
+        }
         dataString += '\n';
       });
       const blob = new Blob([dataString], { type: 'text/plain;charset=utf-8' });
@@ -517,9 +521,10 @@ const buildSessionMarkdown = (session: ISessionDocument, quests: IChatHistoryIte
   let markdown = `# ${formatSessionTitle(session.name)}\n\n`;
   quests.forEach((quest: IChatHistoryItem) => {
     markdown += `**User:** ${quest.prompt}\n\n`;
-    (quest.replies || []).forEach(reply => {
+    const reply = visibleReplyForExport(quest);
+    if (reply) {
       markdown += `**AI:** ${reply}\n\n`;
-    });
+    }
     markdown += '---\n\n';
   });
   return markdown;
@@ -667,23 +672,28 @@ export const useSummarizeSession = () => {
 
   return useMutation({
     mutationFn: async (sessionId: string) => {
-      const session = queryClient.getQueryData<ISessionDocument>(['sessions', sessionId]);
-      const sessionName = formatSessionTitle(session?.name);
-
       // Start tracking the job globally
       startJob(sessionId, 'summarize');
-      toast.success(`Started summarizing "${sessionName}"`);
 
       const result = await generateSessionSummary(sessionId);
       return result;
     },
-    onError: (_, sessionId) => {
+    // Announced on acceptance, not on click. A credit refusal is now an ordinary outcome of this
+    // request, and an optimistic toast would tell the user it started and then immediately
+    // contradict itself with the refusal.
+    onSuccess: (_, sessionId) => {
+      const session = queryClient.getQueryData<ISessionDocument>(['sessions', sessionId]);
+      toast.success(`Started summarizing "${formatSessionTitle(session?.name)}"`);
+    },
+    onError: (error, sessionId) => {
       const session = queryClient.getQueryData<ISessionDocument>(['sessions', sessionId]);
       const sessionName = formatSessionTitle(session?.name);
 
       // Clear the job status on error
       endJob(sessionId, 'summarize');
-      toast.error(`Failed to start summarizing "${sessionName}"`);
+      // A credit refusal names the balance and the remediation; the generic message would
+      // send the user hunting for a bug that isn't there.
+      toast.error(getInsufficientCreditsMessage(error) ?? `Failed to start summarizing "${sessionName}"`);
     },
   });
 };
@@ -694,23 +704,24 @@ export const useUpdateSessionTags = () => {
 
   return useMutation({
     mutationFn: async (sessionId: string) => {
-      const session = queryClient.getQueryData<ISessionDocument>(['sessions', sessionId]);
-      const sessionName = formatSessionTitle(session?.name);
-
       // Start tracking the job globally
       startJob(sessionId, 'generateTags');
-      toast.success(`Started generating tags for "${sessionName}"`);
 
       const result = await generateSessionTags(sessionId);
       return result;
     },
-    onError: (_, sessionId) => {
+    // Announced on acceptance, not on click - see useSummarizeSession.
+    onSuccess: (_, sessionId) => {
+      const session = queryClient.getQueryData<ISessionDocument>(['sessions', sessionId]);
+      toast.success(`Started generating tags for "${formatSessionTitle(session?.name)}"`);
+    },
+    onError: (error, sessionId) => {
       const session = queryClient.getQueryData<ISessionDocument>(['sessions', sessionId]);
       const sessionName = formatSessionTitle(session?.name);
 
       // Clear the job status on error
       endJob(sessionId, 'generateTags');
-      toast.error(`Failed to start generating tags for "${sessionName}"`);
+      toast.error(getInsufficientCreditsMessage(error) ?? `Failed to start generating tags for "${sessionName}"`);
     },
   });
 };

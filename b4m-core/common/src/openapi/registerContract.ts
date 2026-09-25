@@ -85,6 +85,24 @@ export function registerContract(contract: EndpointContract): void {
       content[body.contentType] = { schema: componentSchema(body, `${contract.operationId}Response${status}Alt${i}`) };
     });
 
+    // A poll result is a different operation's body, so it is registered as a
+    // standalone component rather than content of this status: the description
+    // points a caller at it. zod-to-openapi emits every registered definition,
+    // referenced or not.
+    if (spec.pollResult) {
+      // Keyed by status, not just operationId: two statuses on one contract both
+      // declaring pollResult would otherwise register the same component name twice,
+      // and whichever registration ran last would silently win for both responses.
+      const pollResultName = `${contract.operationId}${status}PollResult`;
+      registry.register(
+        pollResultName,
+        spec.pollResult.schema.openapi(pollResultName, {
+          description: spec.pollResult.description,
+          ...(spec.pollResult.example !== undefined && { example: spec.pollResult.example }),
+        })
+      );
+    }
+
     responses[status] = {
       description: spec.description,
       content,
@@ -99,16 +117,16 @@ export function registerContract(contract: EndpointContract): void {
     };
   }
 
-  // Any NON-streaming contract with a request body OR path params returns 422 on
-  // validation failure. Body validation: both adapters guarantee it (Next: ZodError
-  // -> errorHandler -> UnprocessableEntity; Lambda: safeParse -> 422). Path-param
-  // validation currently only runs on the Next adapter (see the `pathParams` doc
-  // comment in api-contract/types.ts) - documenting 422 here regardless is still
-  // correct for every contract actually served today. Auto-document it (unless the
-  // contract declares its own 422). Streaming endpoints are excluded: they open
-  // the stream first, so a bad body arrives as an in-band SSE `error` event, not
-  // a 422 JSON body.
-  if ((contract.request || contract.pathParams) && !contract.streaming && !responses['422']) {
+  // Any NON-streaming contract with a request body, path params, or query params
+  // returns 422 on validation failure. Body validation: both adapters guarantee it
+  // (Next: ZodError -> errorHandler -> UnprocessableEntity; Lambda: safeParse ->
+  // 422). Path/query-param validation currently only runs on the Next adapter (see
+  // the `pathParams`/`queryParams` doc comments in api-contract/types.ts) -
+  // documenting 422 here regardless is still correct for every contract actually
+  // served today. Auto-document it (unless the contract declares its own 422).
+  // Streaming endpoints are excluded: they open the stream first, so a bad body
+  // arrives as an in-band SSE `error` event, not a 422 JSON body.
+  if ((contract.request || contract.pathParams || contract.queryParams) && !contract.streaming && !responses['422']) {
     responses['422'] = {
       description: 'Request failed validation.',
       content: { 'application/json': { schema: ErrorResponse } },
@@ -138,11 +156,13 @@ export function registerContract(contract: EndpointContract): void {
   }
 
   const requestSchema = contract.requestDoc ?? contract.request;
-  // No `.openapi(name)` here: zod-to-openapi always inlines `request.params` into the
-  // operation's `parameters` array rather than a referenceable component, so a name
-  // would never appear in the output - passing the schema directly is equivalent and
-  // doesn't imply a component that doesn't exist.
+  // No `.openapi(name)` here: zod-to-openapi always inlines `request.params`/
+  // `request.query` into the operation's `parameters` array rather than a
+  // referenceable component, so a name would never appear in the output - passing
+  // the schema directly is equivalent and doesn't imply a component that doesn't
+  // exist.
   const params = contract.pathParams;
+  const query = contract.queryParams;
 
   registry.registerPath({
     method: contract.method,
@@ -153,9 +173,10 @@ export function registerContract(contract: EndpointContract): void {
     tags: contract.tags,
     security,
     request:
-      requestSchema || params
+      requestSchema || params || query
         ? {
             ...(params && { params }),
+            ...(query && { query }),
             ...(requestSchema && {
               body: {
                 required: true,

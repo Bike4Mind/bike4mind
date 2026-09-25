@@ -12,6 +12,10 @@ name: Lockfile Integrity
 #
 # A second step blocks premium-overlay paths from the lockfile (see
 # scripts/check-no-overlay-lockfile.sh).
+#
+# A second job checks the root pnpm.overrides block against the ranges packages
+# declare once installed (see scripts/check-pnpm-overrides.mjs). It needs a real
+# node_modules tree, so it installs; the grep job above stays instant.
 
 on:
   pull_request:
@@ -21,6 +25,13 @@ on:
   # for why a required check must run on merge_group).
   merge_group:
     branches: [main]
+
+env:
+  NODE_VERSION: '24'
+
+concurrency:
+  group: lockfile-integrity-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
@@ -42,3 +53,39 @@ jobs:
       # private overlay structure to this public repo.
       - name: Check for premium overlay paths in pnpm-lock.yaml
         run: bash scripts/check-no-overlay-lockfile.sh
+
+  overrides:
+    name: Overrides agree with declared ranges
+    if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: '**/pnpm-lock.yaml'
+
+      # Declared ranges live only in each package's own package.json, never in
+      # the lockfile, so the guard needs a materialized tree. Caching the pnpm
+      # store rather than node_modules is what keeps that tree honest: a
+      # restored node_modules can hold a virtual-store entry for a version pnpm
+      # no longer resolves, and the guard would read it as current.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check pnpm.overrides against declared ranges
+        run: node scripts/check-pnpm-overrides.mjs
+
+      - name: Run overrides guard tests
+        run: pnpm exec vitest run --dir scripts/__tests__ --reporter=verbose check-pnpm-overrides

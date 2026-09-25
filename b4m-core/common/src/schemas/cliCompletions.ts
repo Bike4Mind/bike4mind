@@ -1,4 +1,7 @@
 import { z } from 'zod';
+// Specific file, not the `../types` barrel - this module is imported by
+// completions.contract.ts, which must stay off the barrel (see the note there).
+import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 
 /**
  * Tool schema matching ICompletionOptionTools.toolSchema. The Zod surface only
@@ -157,11 +160,27 @@ const CompletionContentEventSchema = z.object({
   thinking: z.array(z.any()).optional(),
 });
 
-const CompletionSseErrorEventSchema = z.object({
+/**
+ * The in-band terminal failure frame. Because this endpoint flushes SSE headers
+ * before it authenticates or prices anything, EVERY failure past the malformed-body
+ * check arrives here under a 200 - there is no pre-stream 422 on this surface the
+ * way there is on /api/chat and /api/embed/chat.
+ *
+ * `code` is the machine-readable classifier, drawn from QUEST_ERROR_CODES (itself a
+ * narrowing of the platform-wide API_ERROR_CODES, so it cannot drift from the codes
+ * the JSON surfaces use). It is what makes mid-generation credit exhaustion
+ * detectable: the `message` is prose and callers must never match on it. Absent for
+ * unclassified failures, so treat it as optional.
+ *
+ * The field is `code` rather than the conventions' `errorCode` because this frame
+ * shipped that way and is a published wire shape; the vocabulary is what had to be
+ * shared, not the key.
+ */
+export const CompletionSseErrorEventSchema = z.object({
   type: z.literal('error'),
   message: z.string(),
   requestId: z.string().optional(),
-  code: z.string().optional(),
+  code: z.enum(QUEST_ERROR_CODES).optional(),
 });
 
 /** One `data:` event in the `text/event-stream` completions response. */

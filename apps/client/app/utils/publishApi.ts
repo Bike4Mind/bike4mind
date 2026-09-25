@@ -10,7 +10,7 @@ import type {
 } from '@bike4mind/common';
 import { ELISION_PUBLISH_BODY, SCOPE_URL_PREFIX } from '@bike4mind/common';
 import { detectElidedSafe } from '@client/app/utils/artifactParser';
-import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
+import { buildShareFooterHtml, buildSignupGateHtml } from '@client/app/utils/shareFooter';
 import { exportHref, type PublishExportFormat } from '@client/app/utils/publishExport';
 
 /** Summary row for the published-artifacts management list. */
@@ -315,14 +315,22 @@ export async function updatePublishedDiscoverable(publicId: string, discoverable
   await api.patch(`/api/publish/artifacts/${publicId}`, { discoverable });
 }
 
-/** Access gate on top of `visibility: 'public'` - see issue #383. */
+/**
+ * Access gate layered on top of a share surface - see issue #383. Applies to BOTH
+ * surfaces that enforce it: `visibility: 'public'` (/p/*, via checkVisibility) and an
+ * active share token (/a/<token>, via checkShareGrant, at any visibility).
+ */
 export type PublishAccessGateInput =
   { kind: 'passphrase'; passphrase: string } | { kind: 'domain'; allowedDomains: string[] } | null;
 
 /**
- * Set, rotate, or clear (null) a public item's access gate (owner/admin).
+ * Set, rotate, or clear (null) an item's access gate (owner/admin).
  * The passphrase is sent once and stored only as a hash server-side; there is
  * no API to read it back - rotating means setting a new one.
+ *
+ * The item must already have an enforcing surface: public visibility, OR a share
+ * token (mint one with `createOrGetShareToken` FIRST). Otherwise the server rejects
+ * the write with `GATE_REQUIRES_ENFORCING_SURFACE` rather than store a gate nothing honors.
  */
 export async function updatePublishedAccessGate(publicId: string, accessGate: PublishAccessGateInput): Promise<void> {
   await api.patch(`/api/publish/artifacts/${publicId}`, { accessGate });
@@ -696,12 +704,13 @@ export function buildArtifactIndexHtml(type: string, content: string, title: str
     return /<\/body>/i.test(content) ? content.replace(/<\/body>/i, `${footer}</body>`) : content + footer;
   }
 
+  const gate = buildSignupGateHtml();
   const PAGE = (inner: string, extraStyle = '') => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta property="og:title" content="${t}"><title>${t}</title>
-<style>:root{color-scheme:light dark}body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;line-height:1.6;max-width:900px;margin:0 auto;padding:2rem 1.25rem 4rem}pre{background:rgba(127,127,127,.12);padding:1rem;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word}img,svg{max-width:100%;height:auto}${extraStyle}</style>
-</head><body>${inner}${buildShareFooterHtml({ source: 'artifact' })}</body></html>`;
+<style>:root{color-scheme:light dark}body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;line-height:1.6;max-width:900px;margin:0 auto;padding:2rem 1.25rem 4rem}pre{background:rgba(127,127,127,.12);padding:1rem;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word}img,svg{max-width:100%;height:auto}${extraStyle}${gate.styles}</style>
+</head><body>${inner}${buildShareFooterHtml({ source: 'artifact' })}${gate.html}</body></html>`;
 
   if (type === 'html') return PAGE(content); // HTML fragment
   if (type === 'svg') return PAGE(content); // inline SVG markup
@@ -726,6 +735,23 @@ export function toShareTokenUrl(shareToken: string): string {
   return path;
 }
 
+export interface ShareTokenState {
+  hasShareToken: boolean;
+  shareToken: string | null;
+  shareUrl: string | null;
+  shareTokenUpdatedAt: string | null;
+}
+
+/**
+ * Read whether a no-sign-in share link is live, WITHOUT minting one (owner/admin).
+ * Use this - not `createOrGetShareToken` - to decide which controls to render, so
+ * that merely opening a surface never creates a link.
+ */
+export async function getShareTokenState(publicId: string): Promise<ShareTokenState> {
+  const { data } = await api.get<ShareTokenState>(`/api/publish/${publicId}/share-token`);
+  return data;
+}
+
 /**
  * Mint (idempotent) or fetch the no-sign-in share token for a published artifact
  * (owner/admin). Pass `regenerate: true` to rotate it, which immediately revokes
@@ -746,7 +772,12 @@ export async function regenerateShareToken(publicId: string): Promise<{ shareTok
   return createOrGetShareToken(publicId, true);
 }
 
-/** Revoke the share token so every `/a` link 404s immediately (owner/admin). */
+/**
+ * Revoke the share token so every `/a` link 404s immediately (owner/admin).
+ * Refused with `REVOKE_WOULD_ORPHAN_GATE` while a non-public item carries an access
+ * gate - the token is then the gate's only enforcing surface; clear the gate or go
+ * public first.
+ */
 export async function revokeShareToken(publicId: string): Promise<void> {
   await api.delete(`/api/publish/${publicId}/share-token`);
 }

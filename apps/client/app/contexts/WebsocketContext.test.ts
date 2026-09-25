@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { render, act } from '@testing-library/react';
 
@@ -14,7 +14,8 @@ const h = vi.hoisted(() => ({
   capturedUrl: { current: null as unknown as string | (() => Promise<string>) | null },
   readyState: 1 as number, // ReadyState.OPEN
   probeIdentity: vi.fn(),
-  queryClient: {} as unknown,
+  queryClient: { invalidateQueries: vi.fn() },
+  sendMessage: vi.fn(),
   apiGet: vi.fn(),
   apiPost: vi.fn(),
   accessTokenState: { accessToken: 'tok' as string | null, mfaPending: false },
@@ -29,7 +30,7 @@ vi.mock('react-use-websocket', () => ({
     h.capturedUrl.current = url;
     h.capturedOptions.current = options;
     h.capturedUrls.push(url);
-    return { sendJsonMessage: vi.fn(), readyState: h.readyState, lastJsonMessage: null };
+    return { sendJsonMessage: vi.fn(), sendMessage: h.sendMessage, readyState: h.readyState, lastJsonMessage: null };
   },
 }));
 
@@ -62,7 +63,13 @@ vi.mock('@client/app/hooks/useAccessToken', () => {
   return { useAccessToken };
 });
 
-import { shouldProbeOnFailedWsConnect, WebsocketProvider } from './WebsocketContext';
+import {
+  LIVENESS_PROBE_TIMEOUT_MS,
+  SLEEP_CHECK_INTERVAL_MS,
+  SLEEP_GAP_THRESHOLD_MS,
+  shouldProbeOnFailedWsConnect,
+  WebsocketProvider,
+} from './WebsocketContext';
 
 const base = { openedThisAttempt: false, accessToken: 'tok', mfaPending: false, pathname: '/new' };
 
@@ -337,6 +344,109 @@ describe('WebsocketProvider - reconnect recovery on a token change (no focus eve
   });
 });
 
+describe('WebsocketProvider - self-armed recovery after budget exhaustion', () => {
+  beforeEach(() => {
+    // The watchdog is a real interval, so the fake clock has to be installed BEFORE mount -
+    // an interval armed with the real timer is not the one these tests advance.
+    vi.useFakeTimers();
+    h.probeIdentity.mockReset();
+    h.probeIdentity.mockResolvedValue(undefined);
+    h.capturedOptions.current = null as unknown as Record<string, (arg: unknown) => void>;
+    h.capturedUrls = [];
+    h.readyState = 1;
+    h.accessTokenState.accessToken = 'tok';
+    h.accessTokenState.mfaPending = false;
+    stubVisibility('visible');
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const mount = () => {
+    render(React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div')));
+    return h.capturedOptions.current;
+  };
+
+  // The gap both triggers above leave open: a tab that stays focused AND holds a still-valid
+  // token produces neither a focus/visibilitychange event nor a token change - the exhausting
+  // attempt's own /api/identify probe gets the unchanged token back. Without a third,
+  // self-armed trigger such a tab stayed dead until its token happened to rotate (up to the
+  // 30-minute TTL).
+  it('pulses the url itself once the budget is exhausted, with no focus event and no token change', async () => {
+    const opts = mount();
+    await act(async () => {
+      opts.onReconnectStop(20); // the budget genuinely ran out - no pending backoff timer left
+    });
+    h.capturedUrls = [];
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90_000);
+    });
+
+    expect(h.capturedUrls).toContain(null);
+    expect(typeof h.capturedUrls[h.capturedUrls.length - 1]).toBe('function');
+  });
+
+  it('does not pulse during a healthy backoff (budget not yet exhausted)', async () => {
+    mount(); // no onReconnectStop - a reconnect attempt may still be pending its own backoff
+    h.capturedUrls = [];
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90_000);
+    });
+
+    expect(h.capturedUrls).not.toContain(null);
+  });
+
+  it('does not pulse a healthy open socket (onOpen clears the exhausted flag)', async () => {
+    const opts = mount();
+    await act(async () => {
+      opts.onReconnectStop(20);
+      opts.onOpen({});
+    });
+    h.capturedUrls = [];
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90_000);
+    });
+
+    expect(h.capturedUrls).not.toContain(null);
+  });
+
+  it('does not pulse in a hidden tab (the return to visible pulses instead)', async () => {
+    const opts = mount();
+    await act(async () => {
+      opts.onReconnectStop(20);
+    });
+    h.capturedUrls = [];
+    stubVisibility('hidden');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90_000);
+    });
+
+    expect(h.capturedUrls).not.toContain(null);
+  });
+
+  // One exhaustion buys exactly one pulse: the pulse clears the exhausted flag as it fires, so
+  // the ticks that follow are no-ops until a whole fresh budget has been spent. Without that,
+  // this would re-pulse every tick and cancel the library's own jittered backoff on each one.
+  it('pulses once per exhausted budget, however many intervals elapse', async () => {
+    const opts = mount();
+    await act(async () => {
+      opts.onReconnectStop(20);
+    });
+    h.capturedUrls = [];
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300_000);
+    });
+
+    expect(h.capturedUrls.filter(passedUrl => passedUrl === null)).toHaveLength(1);
+  });
+});
+
 describe('WebsocketProvider - connect URL carries a single-use ticket, never the JWT', () => {
   beforeEach(() => {
     h.apiPost.mockReset();
@@ -358,8 +468,128 @@ describe('WebsocketProvider - connect URL carries a single-use ticket, never the
   it('mints a ticket and returns a URL carrying ?ticket= and no token=', async () => {
     const getUrl = mountAndGetUrlGetter() as () => Promise<string>;
     const resolved = await getUrl();
-    expect(h.apiPost).toHaveBeenCalledWith('/api/websocket/ticket');
+    expect(h.apiPost).toHaveBeenCalledWith('/api/websocket/ticket', undefined, { timeout: 10_000 });
     expect(resolved).toBe('wss://example/ws?ticket=ticket-abc');
     expect(resolved).not.toContain('token=');
+  });
+});
+
+describe('WebsocketProvider - liveness probe for a half-open socket', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    h.sendMessage.mockReset();
+    h.capturedUrls = [];
+    h.readyState = 1;
+    h.accessTokenState.accessToken = 'tok';
+    stubVisibility('visible');
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const mount = () => {
+    render(React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div')));
+    return h.capturedOptions.current;
+  };
+
+  const refocus = async () => {
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+  };
+
+  const advance = async (ms: number) => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  };
+
+  it('keeps the socket when anything answers the probe within the window', async () => {
+    const opts = mount();
+    h.capturedUrls = [];
+
+    await refocus();
+    expect(h.sendMessage).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      opts.onMessage({ data: 'pong' });
+    });
+    await advance(LIVENESS_PROBE_TIMEOUT_MS + 100);
+
+    expect(h.capturedUrls).not.toContain(null);
+  });
+
+  it('drops a socket that stays silent so it reconnects now', async () => {
+    mount();
+    h.capturedUrls = [];
+
+    await refocus();
+    await advance(LIVENESS_PROBE_TIMEOUT_MS + 100);
+
+    expect(h.capturedUrls).toContain(null);
+    expect(typeof h.capturedUrls[h.capturedUrls.length - 1]).toBe('function');
+  });
+
+  it('sends one probe when focus, visibilitychange and online fire together', async () => {
+    mount();
+
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      document.dispatchEvent(new Event('visibilitychange'));
+      window.dispatchEvent(new Event('online'));
+    });
+
+    expect(h.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not probe a socket that is not open', async () => {
+    h.readyState = 0;
+    mount();
+
+    await refocus();
+
+    expect(h.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('probes when a timer gap shows the machine slept, with no focus event', async () => {
+    mount();
+    // Jump the wall clock without running the intervening ticks, as a suspended machine does.
+    vi.setSystemTime(Date.now() + SLEEP_CHECK_INTERVAL_MS + SLEEP_GAP_THRESHOLD_MS + 1_000);
+    await advance(SLEEP_CHECK_INTERVAL_MS);
+
+    expect(h.sendMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('WebsocketProvider - catch-up refetch after a reconnect', () => {
+  beforeEach(() => {
+    h.queryClient.invalidateQueries.mockReset();
+    h.accessTokenState.accessToken = 'tok';
+  });
+
+  const element = () => React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div'));
+
+  it('does not refetch on the first connect', () => {
+    h.readyState = 0;
+    const { rerender } = render(element());
+    h.readyState = 1;
+    rerender(element());
+
+    expect(h.queryClient.invalidateQueries).not.toHaveBeenCalled();
+  });
+
+  it('refetches the quest lists once when the socket comes back', () => {
+    h.readyState = 1;
+    const { rerender } = render(element());
+    h.readyState = 3;
+    rerender(element());
+    h.readyState = 0;
+    rerender(element());
+    h.readyState = 1;
+    rerender(element());
+    rerender(element());
+
+    expect(h.queryClient.invalidateQueries).toHaveBeenCalledTimes(1);
+    expect(h.queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['quests', 'session'] });
   });
 });

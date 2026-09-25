@@ -16,6 +16,7 @@ import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import {
   Box,
+  Button,
   Stack,
   Typography,
   Tabs,
@@ -32,7 +33,8 @@ import {
 import dynamic from 'next/dynamic';
 import { IFabFileDocument, ISessionDocument } from '@bike4mind/common';
 import TextViewer from './TextViewer';
-import MarkdownViewer from './MarkdownViewer';
+import MarkdownViewer, { UnmarkedCitedPassage } from './MarkdownViewer';
+import { citedPassageForFile } from './citedPassage';
 import DocxViewer from './DOCXViewer';
 import CSVViewer from './CSVViewer';
 import QuestMasterReply from '../GenAI/QuestMasterReply';
@@ -47,8 +49,13 @@ import CheckIcon from '@mui/icons-material/Check';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import SendIcon from '@mui/icons-material/Send';
 import { ExpandMore, ExtensionOff, Splitscreen, FormatListNumbered } from '@mui/icons-material';
+import MenuBookIcon from '@mui/icons-material/MenuBook';
 import { create } from 'zustand';
-import { setSessionLayout, clearRecentArtifacts } from '@client/app/hooks/useSessionLayout';
+import {
+  setSessionLayout,
+  clearRecentArtifacts,
+  clearSessionScopedViewerState,
+} from '@client/app/hooks/useSessionLayout';
 import { getContentFromFabfile } from '@client/app/utils/fabFileUtils';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -84,6 +91,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { usePublishShare } from '@client/app/hooks/usePublishShare';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { buildArtifactPublishWiring } from '@client/app/utils/publishApi';
+import { brand } from '@client/app/utils/themes/colors';
 import JSONViewer from './JSONViewer';
 import { api } from '@client/app/contexts/ApiContext';
 import { useQueryClient } from '@tanstack/react-query';
@@ -302,6 +310,54 @@ export const shouldSyncArtifactFromDb = (params: {
   return (params.latestVersion ?? 0) > (params.baselineVersion ?? 0);
 };
 
+/**
+ * Decides whether an empty KnowledgeViewer may push the layout to `hide`.
+ *
+ * An empty pane is only collapse-worthy once it has actually SHOWN items in the current
+ * session - that is the "files were deleted / artifacts cleared" case `autoHideOnEmpty` was
+ * written for. A pane that has been empty since it mounted must stay open: that is an explicit
+ * "Open Knowledge Base" click on an empty session, and it is also every reload or session
+ * switch, where the sources are still loading asynchronously.
+ *
+ * We deliberately do NOT key this on whether a session id is present: `currentSessionId` comes
+ * from SessionsContext and starts null on a cold load, only settling after `changeSession`
+ * resolves, so a hydrating session is indistinguishable from a genuinely session-less page.
+ * Collapsing on a null id re-creates the very reload bug this guards against. Hosts that must
+ * never auto-collapse pass `autoHideOnEmpty={false}` (DataLakeRailViewer, AdminPage).
+ *
+ * Extracted as a pure predicate so the decision is unit-testable without mounting the viewer,
+ * which drags in the websocket/session/artifact chain (the seam established by
+ * shouldSyncArtifactFromDb above).
+ */
+export const shouldAutoHideKnowledgePane = (params: {
+  isEmpty: boolean;
+  hasShownItems: boolean;
+  autoHideOnEmpty: boolean;
+}): boolean => params.autoHideOnEmpty && params.isEmpty && params.hasShownItems;
+
+/**
+ * Whether this render's content may arm the "has shown items" latch.
+ *
+ * `hasSelected` is the pane's own non-empty signal. On the render where `currentSessionId`
+ * flips, the previous session's transient sources (recentArtifacts, previewFile) are still in
+ * hand for one commit - they are cleared a commit later - so they must not arm the latch for
+ * the new session. But rejecting ALL content on that render also throws away the new session's
+ * own cached items: react-query hands a warm session's file list back synchronously, and the
+ * effect only re-runs on a LENGTH change, so a return to an already-cached session would leave
+ * the latch permanently disarmed and its delete-all would no longer auto-collapse.
+ *
+ * Hence the split: `hasTrustedItems` is content that describes the CURRENT render - the
+ * session-keyed workbench/message files, plus the user/global-scoped system prompt files
+ * (which are not session-transient, so a session change cannot make them stale). That is
+ * trusted even on the change render; the transient rest still waits for a session-stable
+ * render.
+ */
+export const shouldArmKnowledgePaneLatch = (params: {
+  hasSelected: boolean;
+  hasTrustedItems: boolean;
+  sessionChanged: boolean;
+}): boolean => params.hasSelected && (params.hasTrustedItems || !params.sessionChanged);
+
 const isMarkdownFile = (item: KnowledgeItem | undefined) => {
   if (!item || item.type !== 'file') return false;
   const mime = item.content.mimeType;
@@ -402,6 +458,11 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
 
   // Track previous session ID to detect actual session changes
   const prevSessionIdRef = useRef(currentSessionId);
+
+  // Auto-hide bookkeeping: whether the pane has shown items since the last session change, and
+  // the session that latch belongs to. See shouldAutoHideKnowledgePane.
+  const hasShownItemsRef = useRef(false);
+  const autoHideSessionRef = useRef(currentSessionId);
 
   // Fetch latest artifact data if it's a Quest 4 artifact
   const isQuest4Artifact = artifactData?.id && artifactData.id.startsWith('artifact_');
@@ -752,11 +813,31 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
     latestArtifact?.artifact.id,
   ]);
 
+  // Content safe to trust on a session-change render: the workbench store is a per-session map
+  // and the message-file react-query key includes the session id (session-keyed), while system
+  // prompt files are user/global-scoped and cannot carry the previous session's data. Kept as a
+  // primitive so the auto-hide effect can depend on it without re-running on every array
+  // identity change. See shouldArmKnowledgePaneLatch.
+  const trustedItemCount = workBenchFiles.length + messageFiles.length + systemFiles.length;
+
   // Effect: Reset view when no selection
   useEffect(() => {
+    // On a session change, drop the "has shown items" latch so the previous session's items -
+    // which can still be in hand for one commit - cannot mark the new session as having shown
+    // items (and therefore as safe to auto-hide when empty).
+    const sessionChanged = autoHideSessionRef.current !== currentSessionId;
+    if (sessionChanged) {
+      autoHideSessionRef.current = currentSessionId;
+      hasShownItemsRef.current = false;
+    }
+
     // Also check recentArtifacts: knowledgeItems is briefly empty during the
     // re-render after clicking a code block, which would otherwise race.
     const hasSelected = knowledgeItems.length > 0 || recentArtifacts.length > 0;
+
+    if (shouldArmKnowledgePaneLatch({ hasSelected, hasTrustedItems: trustedItemCount > 0, sessionChanged })) {
+      hasShownItemsRef.current = true;
+    }
 
     if (!hasSelected) {
       // Functional update, applied only when the value actually changes.
@@ -767,16 +848,22 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
         return state;
       });
 
-      // Only auto-hide if enabled (default). Pages like /opti disable this
-      // to keep their floatingChat layout stable.
-      if (autoHideOnEmpty) {
+      // Only auto-hide if enabled (default) AND the pane was emptied after showing items.
+      // Pages like /opti disable this to keep their floatingChat layout stable.
+      if (
+        shouldAutoHideKnowledgePane({
+          isEmpty: !hasSelected,
+          hasShownItems: hasShownItemsRef.current,
+          autoHideOnEmpty,
+        })
+      ) {
         const currentLayout = useSessionLayout.getState().layout;
         if (currentLayout !== 'hide') {
           setSessionLayout({ layout: 'hide' });
         }
       }
     }
-  }, [knowledgeItems.length, recentArtifacts.length, autoHideOnEmpty]); // Also watch recentArtifacts to prevent hiding during state updates
+  }, [knowledgeItems.length, recentArtifacts.length, trustedItemCount, autoHideOnEmpty, currentSessionId]); // Also watch recentArtifacts to prevent hiding during state updates
 
   // Effect: Auto-switch tab when selectedArtifactId changes.
   useEffect(() => {
@@ -797,9 +884,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       clearRecentArtifacts();
       // The data-lake View preview is just as session-transient: leaving it set would surface a
       // stale "just looking" tab inside a different notebook's viewer.
-      if (useSessionLayout.getState().previewFile) {
-        setSessionLayout({ previewFile: null });
-      }
+      clearSessionScopedViewerState();
       prevSessionIdRef.current = currentSessionId;
     }
   }, [currentSessionId]);
@@ -1262,8 +1347,10 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
         }
         break;
       case 'questmaster':
-        // Use the async export feature for QuestMaster plans
-        questExport.startExport(currentItem.content);
+        // The plan id lives on the item's id, not its content: a streamed quest completion
+        // overwrites the content with a QuestMasterData object (see the streamed_chat_completion
+        // subscription above), and the export route only accepts an id.
+        questExport.startExport(currentItem.id);
         break;
       case 'code':
         downloadFile(
@@ -1293,7 +1380,74 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
     }
   };
 
-  if (knowledgeItems.length === 0) return null;
+  // An open-but-empty pane is still a pane: render it framed with copy and a Close affordance
+  // rather than a blank rectangle. The file Select is intentionally omitted - with no options
+  // and value={selectedTabIndex} it would misbehave.
+  if (knowledgeItems.length === 0) {
+    return (
+      <Stack
+        className="knowledge-viewer-container"
+        data-testid="knowledge-viewer-empty-state"
+        sx={(theme: Theme) => ({
+          height: '100%',
+          border: '1px solid',
+          borderColor: theme.palette.divider,
+          borderRadius: '8px',
+          background: theme.palette.background.body,
+          position: 'relative',
+          overflow: 'hidden', // clips the header and content to the frame's 8px radius
+        })}
+      >
+        <Box
+          className="knowledge-viewer-header"
+          sx={(theme: Theme) => ({
+            borderBottom: '1px solid',
+            borderColor: theme.palette.divider,
+            p: '10px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            // Same 56px app-chrome band as the populated header beside the chat.
+            minHeight: '56px',
+            boxSizing: 'border-box',
+            flexShrink: 0,
+            backgroundColor: theme.palette.background.level1,
+          })}
+        >
+          <Tooltip title="Close Knowledge Preview" disableInteractive>
+            <IconButton
+              size="sm"
+              variant="soft"
+              onClick={() => setSessionLayout({ layout: 'hide' })}
+              data-testid="knowledge-viewer-empty-close"
+              aria-label="Close Knowledge Preview"
+            >
+              <CloseIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </Tooltip>
+        </Box>
+
+        <Box
+          sx={{
+            flexGrow: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px',
+            p: 4,
+            textAlign: 'center',
+          }}
+        >
+          <MenuBookIcon sx={{ fontSize: 40, opacity: 0.4 }} />
+          <Typography level="title-md">No files or artifacts yet</Typography>
+          <Typography level="body-sm" sx={{ color: 'text.tertiary', maxWidth: '36ch' }}>
+            Attach a file or generate an artifact and it will appear here.
+          </Typography>
+        </Box>
+      </Stack>
+    );
+  }
 
   return (
     <Stack
@@ -1540,16 +1694,6 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
                   </IconButton>
                 </span>
               </Tooltip>
-              {knowledgeItems[selectedTabIndex]?.type !== 'file' && (
-                <Tooltip title="Publish to public link" disableInteractive>
-                  <span>
-                    <IconButton size="sm" onClick={handleShareArtifact} data-testid="artifact-viewer-share">
-                      <ShareIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-              )}
-              {artifactShareModal}
               {isMarkdownFile(knowledgeItems[selectedTabIndex]) ? (
                 <DownloadMenu
                   content={markdownContent || ''}
@@ -1578,6 +1722,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
                     sx={(theme: Theme) => ({
                       borderColor: theme.palette.divider,
                     })}
+                    data-testid="knowledgeviewer-download-btn"
                   >
                     {questExport.isExporting ? (
                       <CircularProgress size="sm" sx={{ '--CircularProgress-size': '16px' }} />
@@ -1588,6 +1733,29 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
                 </Tooltip>
               )}
             </ButtonGroup>
+
+            {knowledgeItems[selectedTabIndex]?.type !== 'file' && (
+              <Button
+                size="sm"
+                variant="solid"
+                startDecorator={<ShareIcon sx={{ fontSize: 16 }} />}
+                onClick={handleShareArtifact}
+                data-testid="artifact-viewer-share"
+                sx={{
+                  backgroundColor: brand[800],
+                  color: '#fff',
+                  fontWeight: 600,
+                  // Colour alone on hover, matching the card's Share button.
+                  transition: 'background-color 0.15s ease',
+                  '&:hover': {
+                    backgroundColor: brand[900],
+                  },
+                }}
+              >
+                Share
+              </Button>
+            )}
+            {artifactShareModal}
 
             <Tooltip title="Close Knowledge Preview" disableInteractive>
               <IconButton size="sm" variant={'soft'} onClick={() => setSessionLayout({ layout: 'hide' })}>
@@ -2170,7 +2338,12 @@ const KnowledgeContent: React.FC<{
   }
 };
 
-const FileContent = ({
+/**
+ * Exported for tests, like the pane-latch helpers above: this is the surface a citation chip
+ * actually opens, and its Mermaid branch returns before the MarkdownViewer handoff - so the branch
+ * needs to be reachable on its own rather than only through the whole viewer's provider chain.
+ */
+export const FileContent = ({
   file,
   signedUrl,
   fetching,
@@ -2186,6 +2359,11 @@ const FileContent = ({
   const [content, setContent] = useState<string>('');
   const [isLoading, setIsLoading] = useState(true);
   const [readyToShow, setReadyToShow] = useState(false);
+  // The passage a citation click asked us to mark (#3038), narrowed to THIS file. The anchor is a
+  // single store slot shared by every open tab, so without the id guard a citation into one
+  // document would mark whatever text happens to collide in the others.
+  const citedAnchor = useSessionLayout(s => s.citedPassage);
+  const citedPassage = citedPassageForFile(citedAnchor, file?.id);
 
   // The signed URL takes a while to be ready; wait for it before showing content.
   useEffect(() => {
@@ -2403,12 +2581,22 @@ const FileContent = ({
         const mermaidMatch = content.match(/```mermaid\s*([\s\S]*?)```/);
 
         if (isMermaidDiagram || mermaidMatch) {
-          return <MermaidChart chartDefinition={mermaidMatch ? mermaidMatch[1].trim() : content} />;
+          // This branch returns BEFORE the MarkdownViewer handoff below, and it is the surface a
+          // citation chip actually opens (/opti?mode=datalake&article=<id>), so dropping the anchor
+          // here would lose the passage on the main deep-link path. A diagram has no prose blocks
+          // to mark, so it is shown as a callout rather than highlighted - same contract as
+          // MarkdownViewer's own Mermaid early returns.
+          return (
+            <>
+              {citedPassage && <UnmarkedCitedPassage passage={citedPassage} title="Cited passage" />}
+              <MermaidChart chartDefinition={mermaidMatch ? mermaidMatch[1].trim() : content} />
+            </>
+          );
         }
 
         const wrappedContent = content.includes('```mermaid') ? `\`\`\`mermaid\n${content}\n\`\`\`` : content;
 
-        return <MarkdownViewer content={wrappedContent} />;
+        return <MarkdownViewer content={wrappedContent} citedPassage={citedPassage} />;
       } else {
         return (
           <>

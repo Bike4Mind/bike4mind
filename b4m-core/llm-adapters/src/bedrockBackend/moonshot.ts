@@ -1,4 +1,11 @@
-import { ChatModels, IMessage, ModelBackend, type ModelInfo } from '@bike4mind/common';
+import {
+  ChatModels,
+  createThinkMarkerEscaper,
+  escapeThinkMarkers,
+  IMessage,
+  ModelBackend,
+  type ModelInfo,
+} from '@bike4mind/common';
 import {
   ChoiceEndReason,
   ChoiceStatus,
@@ -8,7 +15,12 @@ import {
   IChoiceEndToolUse,
 } from '../backend';
 import { BaseBedrockBackend } from './base';
-import { hasNativeToolMarker, parseNativeToolSection, KimiNativeToolStream } from './kimiNativeTools';
+import {
+  hasNativeToolMarker,
+  nativeToolCallsBegin,
+  parseNativeToolSection,
+  KimiNativeToolStream,
+} from './kimiNativeTools';
 import { normalizeOpenAIFinishReason } from '../stopReason';
 
 /** The assistant payload Moonshot returns, on `message` or streamed as `delta`. */
@@ -51,6 +63,9 @@ interface MoonshotMessage {
 export default class MoonshotBedrockBackend extends BaseBedrockBackend {
   /** Streaming-only: whether an unclosed `<think>` tag has been emitted. */
   private isInThinkingBlock = false;
+
+  /** Streaming-only: buffers `reasoning_content` deltas so a split marker can't slip through. */
+  private reasoningEscaper = createThinkMarkerEscaper();
 
   /**
    * Streaming-only: extracts Kimi's native `<|tool_call...|>` tokens out of the
@@ -185,6 +200,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
     // A fresh request starts outside any thinking block, with an empty native-tool
     // buffer; see translateStreamChunk.
     this.isInThinkingBlock = false;
+    this.reasoningEscaper = createThinkMarkerEscaper();
     this.nativeToolStream = new KimiNativeToolStream();
 
     return {
@@ -300,6 +316,8 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         continue;
       }
 
+      // Escaped via reasoningEscaper at its use site below (streamed delta by
+      // delta, so a marker-shaped substring split across two deltas needs buffering).
       const reasoning = payload.reasoning_content ?? '';
       const content = payload.content ?? '';
       // Bedrock Kimi does NOT populate `reasoning_content`; it inlines the monologue
@@ -318,7 +336,8 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
       if (opts.streaming) {
         // `reasoning_content` fallback spelling: merge into one <think> block.
         if (reasoning) {
-          const chunkText = this.isInThinkingBlock ? reasoning : `<think>${reasoning}`;
+          const escapedReasoning = this.reasoningEscaper.push(reasoning);
+          const chunkText = this.isInThinkingBlock ? escapedReasoning : `<think>${escapedReasoning}`;
           this.isInThinkingBlock = true;
           choices.push({ status: ChoiceStatus.STREAM, index, chunkText, ...usageForIndex });
           continue;
@@ -327,7 +346,10 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         // Real Bedrock: reasoning inlined as <reasoning> tags, tool calls possibly
         // inside it as native tokens. Filter the reasoning inner text.
         if (content.includes('<reasoning>')) {
-          const inner = content.replace(/<\/?reasoning>/g, '');
+          // Strip the model's own <reasoning> envelope first, then defang any
+          // <think>/</think>-shaped text left in the monologue before it is wrapped
+          // in our real control markers below.
+          const inner = escapeThinkMarkers(content.replace(/<\/?reasoning>/g, ''));
           const { text: safe, toolCalls: nativeCalls } = this.nativeToolStream.push(inner);
           for (const call of nativeCalls) {
             // Same header + plain-argument-delta contract the structured path uses,
@@ -360,7 +382,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
             status: ChoiceStatus.END,
             statusEndReason: endReason,
             index,
-            chunkText: `</think>${content}`,
+            chunkText: `${this.reasoningEscaper.flush()}</think>${content}`,
             ...usageForIndex,
           });
           continue;
@@ -378,10 +400,16 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
       // Non-streaming: the whole message is in hand. Extract a native tool section if
       // present; otherwise convert the inline <reasoning> envelope to <think>.
       if (hasNativeToolMarker(content)) {
-        const inner = content.replace(/<\/?reasoning>/g, '');
-        const begin = inner.indexOf('<|tool_calls_section_begin|>');
+        const inner = escapeThinkMarkers(content.replace(/<\/?reasoning>/g, ''));
+        // Slice to the calls before parsing: parseNativeToolSection caps its input, and
+        // `inner` is the whole message - on a thinking model the monologue precedes the
+        // calls, so an uncapped `inner` can push them past the cap and silently drop every
+        // call (or execute a subset of a parallel call set). Scoping on the section
+        // wrapper alone was not enough: the wrapper is optional, and a bare call fell
+        // straight back to the whole message.
+        const begin = nativeToolCallsBegin(inner);
         const before = (begin >= 0 ? inner.slice(0, begin) : inner).trim();
-        const nativeCalls = parseNativeToolSection(inner);
+        const nativeCalls = begin >= 0 ? parseNativeToolSection(inner.slice(begin)) : [];
         const think = [reasoning, before].filter(Boolean).join(' ').trim();
         let usageAttached = false;
         if (think) {

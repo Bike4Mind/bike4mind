@@ -222,6 +222,43 @@ describe('FabFileChunkSearchIndex.indexChunks', () => {
     });
   });
 
+  it('returns the ids of the chunks actually resident in the index', async () => {
+    mockOsClient.indexDocument.mockResolvedValue(undefined);
+
+    const indexed = await FabFileChunkSearchIndex.indexChunks([
+      chunk({ id: 'c1', fabFileId: 'file-1' }),
+      chunk({ id: 'c2', fabFileId: 'file-1' }),
+    ]);
+
+    expect(indexed.sort()).toEqual(['c1', 'c2']);
+  });
+
+  it('excludes a rolled-back batch from the returned ids, keeping an unrelated file in', async () => {
+    mockOsClient.indexDocument.mockImplementation((_index: string, doc: { metadata: { fabFileId: string } }) =>
+      doc.metadata.fabFileId === 'file-1' ? Promise.reject(new Error('cluster unreachable')) : Promise.resolve()
+    );
+    mockOsClient.deleteDocumentByQuery.mockResolvedValue(undefined);
+
+    const indexed = await FabFileChunkSearchIndex.indexChunks([
+      chunk({ id: 'c1', fabFileId: 'file-1' }),
+      chunk({ id: 'c2', fabFileId: 'file-1' }),
+      chunk({ id: 'c3', fabFileId: 'file-2' }),
+    ]);
+
+    expect(indexed).toEqual(['c3']);
+  });
+
+  it('excludes a chunk no document could be built for', async () => {
+    mockOsClient.indexDocument.mockResolvedValue(undefined);
+
+    const indexed = await FabFileChunkSearchIndex.indexChunks([
+      chunk({ id: 'c1', fabFileId: 'file-1' }),
+      chunk({ id: 'c2', fabFileId: 'file-1', vector: [] }),
+    ]);
+
+    expect(indexed).toEqual(['c1']);
+  });
+
   it("does NOT touch an earlier batch's already-indexed docs for the same file when a later batch fails", async () => {
     // fabFileVectorize.ts calls indexChunks once per vectorize MESSAGE, not once per file - a
     // large file spans several calls. The fix for a partial-index failure must never reach

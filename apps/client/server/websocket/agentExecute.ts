@@ -14,7 +14,7 @@
  */
 
 import { withWebSocketContext } from '@server/websocket/utils';
-import { adminSettingsRepository, agentExecutionRepository } from '@bike4mind/database';
+import { adminSettingsRepository, agentExecutionRepository, sessionToolApprovalRepository } from '@bike4mind/database';
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
@@ -23,8 +23,12 @@ import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
 import { verifyJwtToken, checkRateLimit, verifyApiKey, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
-import { Resource } from 'sst';
-import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import {
+  dispatchAgentExecution,
+  resolveAgentExecutorTarget,
+  AgentExecutorRejectedError,
+  type ExecutorTarget,
+} from '@server/utils/dispatchAgentExecution';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import type { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { z } from 'zod';
@@ -70,6 +74,9 @@ const StartCommandSchema = BaseMessageSchema.extend({
   // dispatches through.
   agentId: z.string().optional(),
   enabledTools: z.array(z.string()).optional(),
+  // See `agentExecutor.schemas.ts`: marks `enabledTools` as ambient chat picks to be unioned
+  // onto the resolved profile rather than a pinned selection that replaces it.
+  enabledToolsAreAmbient: z.boolean().optional(),
   // Bounded ceiling: each iteration is a full LLM round-trip. Without a cap,
   // a client could request enough iterations to span all 5 Lambda handoffs
   // (~65 min total) and inflate cost.
@@ -145,6 +152,11 @@ const PermissionResponseSchema = BaseMessageSchema.extend({
   command: z.literal('permission_response'),
   executionId: z.string(),
   toolName: z.string(),
+  // Echoed from the `permission_request`/`reconnect_result` this card rendered. Optional
+  // for a client that reconnected before this field existed; when present it is what
+  // `handlePermissionResponse` binds the response to instead of `toolName` alone - see
+  // that function's identity check for why a name match is not enough.
+  toolCallId: z.string().optional(),
   approved: z.boolean(),
   rememberForSession: z.boolean().optional().default(false),
 });
@@ -164,8 +176,6 @@ const ReconnectCommandSchema = BaseMessageSchema.extend({
 // ---------------------------------------------------------------------------
 // Cached resources
 // ---------------------------------------------------------------------------
-
-const lambdaClient = new LambdaClient({});
 
 // ---------------------------------------------------------------------------
 // Handler
@@ -272,6 +282,7 @@ async function handleStart(
       organizationId: cmd.organizationId,
       agentId: cmd.agentId,
       enabledTools: cmd.enabledTools,
+      enabledToolsAreAmbient: cmd.enabledToolsAreAmbient,
       maxIterations: cmd.maxIterations,
       messageFileIds: cmd.messageFileIds,
       sessionFabFileIds: cmd.sessionFabFileIds,
@@ -398,7 +409,61 @@ async function handleAbort(
   });
 }
 
-async function handlePermissionResponse(
+/**
+ * Persist an "Allow/Deny for Session" choice beyond this execution.
+ *
+ * `AgentExecution.approvedTools` only lives as long as the run; the next message starts a
+ * fresh document and would re-ask. `startAgentExecution` seeds the new run from this store,
+ * which is what makes "for Session" mean the notebook rather than the execution.
+ *
+ * Best-effort: the run is already resuming on the in-execution approval, so a write failure
+ * here costs the user a repeat prompt next message, not the current turn.
+ */
+async function rememberToolDecision(
+  sessionId: string | undefined,
+  userId: string,
+  toolName: string,
+  decision: 'approved' | 'denied',
+  logger: Logger
+): Promise<void> {
+  if (!sessionId) return;
+  try {
+    await sessionToolApprovalRepository.rememberDecision(userId, sessionId, toolName, decision);
+  } catch (error) {
+    logger.warn('[Permission] Could not persist the remembered decision for this session', {
+      sessionId,
+      toolName,
+      decision,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * Flip the execution to `continuing` and re-dispatch the executor. Idempotent
+ * enough to call twice: `updateStatus` to the same value is a no-op, and a duplicate
+ * dispatch is caught by `processExecution`'s own CAS claim on pickup (see
+ * `agentExecutor.ts`'s "Atomic CAS - prevent duplicate Lambda execution"), so retrying
+ * this after a failed first attempt cannot double-run the resumed work.
+ *
+ * Note: checkpointDepth is not carried here - it lives in the SQS message from the
+ * previous Lambda handoff, not in the AgentExecution document, so this handler cannot
+ * read it. The resumed Lambda starts at depth 0. This is safe on two counts: permission
+ * pauses are user-driven, not loop-driven, so they cannot self-dispatch a runaway on
+ * their own; and the resume runs as status `continuing`, which the executor still
+ * bounds via the persisted `lambdaInvocationCount` guard (MAX_LAMBDA_HANDOFFS) - a
+ * counter the message payload cannot reset.
+ */
+async function dispatchPermissionResume(
+  executionId: string,
+  connectionId: string,
+  target: ExecutorTarget
+): Promise<void> {
+  await agentExecutionRepository.updateStatus(executionId, 'continuing');
+  await dispatchAgentExecution({ executionId, connectionId }, target);
+}
+
+export async function handlePermissionResponse(
   cmd: z.infer<typeof PermissionResponseSchema>,
   userId: string,
   connectionId: string,
@@ -407,10 +472,64 @@ async function handlePermissionResponse(
 ): Promise<void> {
   const execution = await agentExecutionRepository.findById(cmd.executionId);
   if (!execution || execution.userId !== userId) return;
+
+  // Recovery for a stuck `continuing` pause: an earlier call of this handler flipped
+  // the status via `updateStatus` and then threw during the Lambda dispatch that
+  // follows it, leaving the doc `continuing` with `pendingPermission.approved` true
+  // and no Lambda running. The client retries with the same approval; that retry
+  // would otherwise be dropped by the `awaiting_permission` guard below, since this
+  // doc no longer satisfies it - so match it to the stuck pause here first and
+  // re-drive the dispatch instead. `dispatchPermissionResume` is safe to call twice
+  // (see its own docstring).
+  if (
+    execution.status === 'continuing' &&
+    cmd.approved &&
+    execution.pendingPermission?.approved === true &&
+    (!execution.pendingPermission.toolCallId || cmd.toolCallId === execution.pendingPermission.toolCallId)
+  ) {
+    logger.warn('[Permission] Approval landed but the resume dispatch did not - retrying', {
+      executionId: cmd.executionId,
+      toolName: cmd.toolName,
+    });
+    const recoveryTarget = resolveAgentExecutorTarget();
+    if (!recoveryTarget) throw new Error('Agent execution is not configured');
+    await dispatchPermissionResume(cmd.executionId, connectionId, recoveryTarget);
+    logger.info('[Permission] Approved - Lambda re-invoked (recovered retry)', {
+      executionId: cmd.executionId,
+    });
+    return;
+  }
+
   if (execution.status !== 'awaiting_permission') return;
 
-  // Validate toolName matches the pending permission request
-  if (execution.pendingPermission && execution.pendingPermission.toolName !== cmd.toolName) {
+  // Bind the response to the SPECIFIC pause it answers, not just its tool name. One
+  // iteration can withhold two calls to the same tool with different arguments: the
+  // first approval's replay can re-pause on the second under the same `toolName`,
+  // and a still-open card for the first (or a reconnect echoing stale state) would
+  // otherwise still match here and approve/deny the wrong call's arguments.
+  const pendingCallId = execution.pendingPermission?.toolCallId;
+  if (pendingCallId) {
+    if (cmd.toolCallId !== pendingCallId) {
+      logger.warn('[Permission] toolCallId mismatch - ignoring stale response', {
+        executionId: cmd.executionId,
+        expected: pendingCallId,
+        received: cmd.toolCallId,
+      });
+      // A pause created by the current code always carries a toolCallId (see
+      // `PermissionRequestAction`/`settleGatedCall`), so an omitted `cmd.toolCallId`
+      // here is a genuinely stale tab, not just a name collision - and a silent
+      // return would leave it waiting on a reply that never comes. Send the
+      // current status like the "approval did not land" branch below does, so the
+      // UI can leave its spinner instead of hanging until the stale sweep.
+      await sendAgentEvent(connectionId, endpoint, {
+        action: 'progress',
+        executionId: cmd.executionId,
+        status: execution.status,
+      });
+      return;
+    }
+  } else if (execution.pendingPermission && execution.pendingPermission.toolName !== cmd.toolName) {
+    // Fallback for a pause persisted before `toolCallId` existed on `IPendingPermission`.
     logger.warn('[Permission] toolName mismatch — ignoring', {
       expected: execution.pendingPermission.toolName,
       received: cmd.toolName,
@@ -418,27 +537,49 @@ async function handlePermissionResponse(
     return;
   }
 
-  // Deny stops the run. The tool already executed this iteration (Phase 1
-  // post-execution gating), but we must not let the agent keep acting on a
-  // denied action. Mirror the executor's own denied-tool outcome: mark the run
-  // failed and emit `failed`; do NOT resume. (Previously this branch fell
-  // through to the resume below, so a one-time Deny silently let the run
+  // Deny stops the run. The gate withheld the call before it executed, so denying
+  // costs nothing and leaves no side effect behind - clearing `pendingPermission`
+  // discards the withheld calls unrun. Mirror the executor's own denied-tool
+  // outcome: mark the run failed and emit `failed`; do NOT resume. (Previously this
+  // branch fell through to the resume below, so a one-time Deny silently let the run
   // continue - the tool was only recorded when `rememberForSession` was set,
   // which the Deny button never sends.)
   if (!cmd.approved) {
-    await agentExecutionRepository.updatePermissionState(cmd.executionId, {
-      pendingPermission: null,
+    const denialMessage = `Execution stopped: you denied "${cmd.toolName}".`;
+    // CAS-guarded the same way `approvePendingPermission` is (status
+    // `awaiting_permission`, pause not already approved, identity-pinned on
+    // `toolCallId`) - an approval for this exact pause that has already won its own
+    // CAS cannot be undone by a denial racing it from another tab.
+    const denied = await agentExecutionRepository.denyPendingPermission(cmd.executionId, {
+      toolCallId: pendingCallId,
       deniedTool: cmd.rememberForSession ? cmd.toolName : undefined,
+      errorMessage: denialMessage,
     });
-    await agentExecutionRepository.markFailed(cmd.executionId, {
-      message: `Execution stopped: you denied "${cmd.toolName}".`,
-    });
+    if (!denied) {
+      // Lost the CAS - almost certainly to a concurrent approval for the same pause
+      // that already claimed it. Nothing is left here to deny; report current status
+      // like the toolCallId-mismatch branch above so the UI does not hang.
+      const current = await agentExecutionRepository.findById(cmd.executionId);
+      logger.warn('[Permission] Deny lost the CAS - a concurrent response already claimed this pause', {
+        executionId: cmd.executionId,
+        toolName: cmd.toolName,
+      });
+      await sendAgentEvent(connectionId, endpoint, {
+        action: 'progress',
+        executionId: cmd.executionId,
+        status: current?.status ?? execution.status,
+      });
+      return;
+    }
+    if (cmd.rememberForSession) {
+      await rememberToolDecision(execution.sessionId, userId, cmd.toolName, 'denied', logger);
+    }
     await sendAgentEvent(connectionId, endpoint, {
       action: 'failed',
       executionId: cmd.executionId,
       reason: 'tool_denied',
       toolName: cmd.toolName,
-      message: `Execution stopped: you denied "${cmd.toolName}".`,
+      message: denialMessage,
     });
     logger.info('[Permission] Denied — execution stopped', {
       executionId: cmd.executionId,
@@ -447,33 +588,83 @@ async function handlePermissionResponse(
     return;
   }
 
+  const executorTarget = resolveAgentExecutorTarget();
+  if (!executorTarget) throw new Error('Agent execution is not configured');
+
   // Approved: record (optionally remembering it for the session) and resume.
-  await agentExecutionRepository.updatePermissionState(cmd.executionId, {
-    pendingPermission: null,
+  // `pendingPermission` is marked rather than cleared - it still holds the tool calls
+  // the gate withheld, and the resumed executor is what finally runs them. The CAS is
+  // on `awaiting_permission`, so a duplicate approval for a pause already consumed is
+  // dropped here instead of replaying the tool a second time.
+  const marked = await agentExecutionRepository.approvePendingPermission(cmd.executionId, {
     approvedTool: cmd.rememberForSession ? cmd.toolName : undefined,
+    toolCallId: pendingCallId,
   });
+  if (!marked) {
+    // The CAS can lose for two different reasons that need different answers. Tell
+    // them apart by re-reading the doc: if THIS exact pause is already marked
+    // approved, the CAS lost to an earlier call of this same handler (a retry after
+    // `updateStatus`/the Lambda invoke below failed, or the response simply arrived
+    // twice) - the resume dispatch just never happened, so drive it again. Anything
+    // else (a different pause entirely, or one already past `awaiting_permission`) is
+    // a genuinely stale response with nothing left to resume.
+    const current = await agentExecutionRepository.findById(cmd.executionId);
+    // The `continuing` disjunct here covers two concurrent responses to the same
+    // pause both clearing the entry-point `awaiting_permission` read before either
+    // writes: the CAS winner has already flipped the status (and, past it, already
+    // dispatched) by the time the loser re-reads. The invoke-throwing-after-flip
+    // window is caught earlier, by the entry-point `continuing` check above - this
+    // branch is only reachable for the race, so the dispatch below is a safe,
+    // idempotent duplicate rather than the actual recovery for that window.
+    // `claimExecution`'s CAS in agentExecutor.ts (around the "Atomic CAS - prevent
+    // duplicate Lambda execution" comment) de-dupes the actual replay either way.
+    const sameApprovedPauseStuck =
+      (current?.status === 'awaiting_permission' || current?.status === 'continuing') &&
+      current.pendingPermission?.approved === true &&
+      (!pendingCallId || current.pendingPermission?.toolCallId === pendingCallId);
 
-  // Re-invoke Lambda to resume execution.
-  // Note: checkpointDepth is not carried here - it lives in the SQS message from the previous
-  // Lambda handoff, not in the AgentExecution document, so this handler cannot read it.
-  // The resumed Lambda starts at depth 0. This is safe on two counts: permission pauses are
-  // user-driven, not loop-driven, so they cannot self-dispatch a runaway on their own; and the
-  // resume runs as status `continuing`, which the executor still bounds via the persisted
-  // `lambdaInvocationCount` guard (MAX_LAMBDA_HANDOFFS) - a counter the message payload cannot reset.
-  await agentExecutionRepository.updateStatus(cmd.executionId, 'continuing');
+    if (sameApprovedPauseStuck) {
+      logger.warn('[Permission] Approval landed but the resume dispatch did not - retrying', {
+        executionId: cmd.executionId,
+        toolName: cmd.toolName,
+      });
+      await dispatchPermissionResume(cmd.executionId, connectionId, executorTarget);
+      logger.info('[Permission] Approved - Lambda re-invoked (recovered retry)', {
+        executionId: cmd.executionId,
+      });
+      return;
+    }
 
-  await lambdaClient.send(
-    new InvokeCommand({
-      FunctionName: Resource.AgentExecutor.name,
-      InvocationType: 'Event',
-      Payload: Buffer.from(
-        JSON.stringify({
-          executionId: cmd.executionId,
-          connectionId,
-        })
-      ),
-    })
-  );
+    logger.warn('[Permission] Approval did not land - the pause was already settled', {
+      executionId: cmd.executionId,
+      toolName: cmd.toolName,
+    });
+    // The card that sent this approval is waiting on a reply, and no resume is coming.
+    // Send whatever the run's status actually is now so the UI leaves its spinner
+    // instead of hanging until the stale sweep - the deny path always answers too.
+    await sendAgentEvent(connectionId, endpoint, {
+      action: 'progress',
+      executionId: cmd.executionId,
+      status: current?.status ?? execution.status,
+    });
+    return;
+  }
+  if (cmd.rememberForSession) {
+    await rememberToolDecision(execution.sessionId, userId, cmd.toolName, 'approved', logger);
+  }
+
+  try {
+    await dispatchPermissionResume(cmd.executionId, connectionId, executorTarget);
+  } catch (error) {
+    // A lost ACK may still have queued work. Only an explicit rejection permits rollback.
+    if (error instanceof AgentExecutorRejectedError) {
+      await agentExecutionRepository.restoreRejectedResume(cmd.executionId, {
+        status: 'awaiting_permission',
+        pendingPermission: execution.pendingPermission,
+      });
+    }
+    throw error;
+  }
 
   logger.info('[Permission] Approved — Lambda re-invoked', {
     executionId: cmd.executionId,
@@ -494,7 +685,7 @@ async function handlePermissionResponse(
  * gate responses for executions not in `paused` to defend against stale
  * client retries.
  */
-async function handleGateResponse(
+export async function handleGateResponse(
   cmd: z.infer<typeof GateResponseSchema>,
   userId: string,
   connectionId: string,
@@ -560,6 +751,9 @@ async function handleGateResponse(
     return;
   }
 
+  const executorTarget = resolveAgentExecutorTarget();
+  if (!executorTarget) throw new Error('Agent execution is not configured');
+
   // decision === 'continue' - clear the gate and resume.
   const cleared = await agentExecutionRepository.clearPendingGate(cmd.executionId);
   if (!cleared) {
@@ -576,18 +770,18 @@ async function handleGateResponse(
   // Note: checkpointDepth is not carried here - same limitation as the permission_response
   // path above. Gate resumes are user-driven and cannot cause a runaway loop on their own, and
   // are likewise bounded by the persisted `lambdaInvocationCount` guard (MAX_LAMBDA_HANDOFFS).
-  await lambdaClient.send(
-    new InvokeCommand({
-      FunctionName: Resource.AgentExecutor.name,
-      InvocationType: 'Event',
-      Payload: Buffer.from(
-        JSON.stringify({
-          executionId: cmd.executionId,
-          connectionId,
-        })
-      ),
-    })
-  );
+  try {
+    await dispatchAgentExecution({ executionId: cmd.executionId, connectionId }, executorTarget);
+  } catch (error) {
+    // A lost ACK may still have queued work. Only an explicit rejection permits rollback.
+    if (error instanceof AgentExecutorRejectedError) {
+      await agentExecutionRepository.restoreRejectedResume(cmd.executionId, {
+        status: 'paused',
+        pendingGate: execution.pendingGate,
+      });
+    }
+    throw error;
+  }
 
   logger.info('[Gate] Continue — Lambda re-invoked', { executionId: cmd.executionId });
 }
@@ -646,7 +840,18 @@ async function handleReconnect(
     found: true,
     executionId: execution.id,
     status: execution.status,
-    pendingPermission: execution.pendingPermission,
+    // Projected, not passed through: `pendingPermission` also stores the withheld
+    // tool calls the executor replays on approval, and their arguments are
+    // unbounded. Only what the permission card renders belongs in this envelope -
+    // see the steps-budget note above, which assumes the rest of it stays under 1KB.
+    pendingPermission: execution.pendingPermission
+      ? {
+          toolName: execution.pendingPermission.toolName,
+          toolInput: execution.pendingPermission.toolInput,
+          requestedAt: execution.pendingPermission.requestedAt,
+          toolCallId: execution.pendingPermission.toolCallId,
+        }
+      : undefined,
     // Confidence-gate state - clients re-render the gate UI when
     // they reconnect to a `paused` execution. `pendingGate` and `paused`
     // are written atomically by `setPendingGate`, so either both are

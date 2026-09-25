@@ -4,6 +4,8 @@ import {
   CurationOptions,
   IChatHistoryItem,
   mapMimeTypeToArtifactType as mapMimeTypeToSharedArtifactType,
+  SEARCH_RESULT_CARDS_LANGUAGE,
+  LOCATION_MAP_LANGUAGE,
 } from '@bike4mind/common';
 
 /**
@@ -157,6 +159,9 @@ function extractArtifactTags(content: string, messageId: string, timestamp: Date
   return artifacts;
 }
 
+/** Fence languages that exist only to drive inline rendering, never to be curated as artifacts. */
+const PRESENTATION_ONLY_LANGUAGES = new Set<string>([SEARCH_RESULT_CARDS_LANGUAGE, LOCATION_MAP_LANGUAGE]);
+
 /**
  * Extract code blocks from markdown-style fenced code
  */
@@ -181,6 +186,12 @@ function extractCodeBlocks(content: string, messageId: string, timestamp: Date):
 
     // Determine artifact type based on language
     const lang = (language || 'text').toLowerCase();
+
+    // A presentation directive the reply renderer consumes in place (see SearchResultCards) is not
+    // an artifact the user authored, and curating it surfaces raw JSON as a "code" block.
+    if (PRESENTATION_ONLY_LANGUAGES.has(lang)) {
+      continue;
+    }
     let artifactType: ArtifactType;
 
     if (['mermaid'].includes(lang)) {

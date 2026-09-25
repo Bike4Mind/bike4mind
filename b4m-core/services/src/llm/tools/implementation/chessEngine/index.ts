@@ -1,17 +1,13 @@
 import { Chess, Move } from 'chess.js';
 import { ToolDefinition } from '../../base/types';
+import { escapeArtifactBodyJson } from '../../utils/artifactEmission';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 type ChessAction =
-  | 'new_game'
-  | 'play_turn'
-  | 'get_legal_moves'
-  | 'evaluate_position'
-  | 'get_best_move'
-  | 'get_game_status';
+  'new_game' | 'play_turn' | 'get_legal_moves' | 'evaluate_position' | 'get_best_move' | 'get_game_status';
 
 type Difficulty = 'beginner' | 'intermediate' | 'advanced';
 
@@ -165,6 +161,10 @@ function getSearchDepth(difficulty: Difficulty): number {
       return 3;
     case 'advanced':
       return 4;
+    default:
+      // The tool argument is cast, not validated, so an off-list value lands here; without
+      // this the depth is undefined and minimax recurses on NaN until the stack overflows.
+      return 3;
   }
 }
 
@@ -265,7 +265,9 @@ function findBestMove(game: Chess, difficulty: Difficulty): string | null {
 // ---------------------------------------------------------------------------
 
 function wrapWithArtifact(data: Record<string, unknown>): string {
-  const json = JSON.stringify(data);
+  // `difficulty` reaches here straight off the model's tool call (cast, never validated),
+  // so an unescaped "</artifact>" in it would truncate the body and open a second artifact.
+  const json = escapeArtifactBodyJson(JSON.stringify(data));
   const identifier = `chess-${Date.now()}`;
   return `<artifact identifier="${identifier}" type="application/vnd.ant.chess" title="Chess Game">\n${json}\n</artifact>`;
 }
@@ -517,11 +519,9 @@ export const chessEngineTool: ToolDefinition = {
     toolSchema: {
       name: 'chess_engine',
       description:
-        'A chess engine tool for managing chess games. Validates moves, evaluates positions, and suggests best moves. ' +
-        'Use "new_game" to start a game. Use "play_turn" when the player makes a move — it applies the player\'s move, ' +
-        "computes the AI's best response, applies it, and returns the resulting board position after BOTH moves. " +
-        '"get_best_move" suggests a move, "evaluate_position" analyzes the board. ' +
-        'All positions use FEN (Forsyth-Edwards Notation) and moves use SAN (Standard Algebraic Notation) e.g. "e4", "Nf3", "O-O".',
+        'Manage a chess game: validate moves, evaluate positions and suggest moves. ' +
+        'Use "play_turn" for interactive play: it applies the player move AND the engine reply in one call. ' +
+        'Positions use FEN and moves use SAN (e.g. "e4", "Nf3", "O-O"). See "action" for the full operation list.',
       parameters: {
         type: 'object',
         properties: {
@@ -529,7 +529,7 @@ export const chessEngineTool: ToolDefinition = {
             type: 'string',
             description:
               'The action to perform. "new_game" starts a fresh game. ' +
-              '"play_turn" applies the player\'s move AND the AI\'s counter-move in one call — always use this for interactive games. ' +
+              '"play_turn" applies the player\'s move AND the AI\'s counter-move in one call, returning the position after both. Always use this for interactive games. ' +
               '"get_legal_moves" lists all legal moves. "evaluate_position" gives material and positional analysis. ' +
               '"get_best_move" suggests the best move at the given difficulty. "get_game_status" checks check/checkmate/draw.',
             enum: ['new_game', 'play_turn', 'get_legal_moves', 'evaluate_position', 'get_best_move', 'get_game_status'],

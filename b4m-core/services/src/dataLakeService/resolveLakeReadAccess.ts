@@ -3,9 +3,10 @@ import type {
   IAdminSettingsRepository,
   IDataLakeAccessGrantRepository,
   IDataLakeDocument,
+  IDataLakeRepository,
 } from '@bike4mind/common';
 import { classifyLakeAccess, type LakeAccessArm } from './classifyLakeAccess';
-import type { LakeGrant } from './manageRule';
+import { resolveEffectiveOwnerIds, type LakeGrant } from './manageRule';
 import { createScopedAsyncMemo } from './scopedAsyncMemo';
 
 /** The platform kill switch governing whether read-grant resolution is enforced or report-only. */
@@ -154,6 +155,57 @@ export function resolveLakeReadAccess(
   };
 }
 
+/** `resolveEnforceReadGrantsResult`'s answer - see that function's doc for `readSucceeded`'s contract. */
+export interface EnforceReadGrantsResult {
+  /** The ENFORCED decision - identical to what `resolveEnforceReadGrants` returns alone. */
+  enforced: boolean;
+  /**
+   * False only when the underlying flag read THREW and `enforced` is therefore the fail-closed
+   * default, not the platform's real setting - a caller measuring telemetry (not gating retrieval)
+   * off `enforced` needs this to tell "off" from "unknown" (#3155). True for an unwired `settings`
+   * too: an absent adapter has nothing to fail, matching the same "unwired is not degraded" contract
+   * `getDynamicDataLakeAccess`'s `excludedByAccessCountPrerequisitesComplete` already keeps.
+   */
+  readSucceeded: boolean;
+}
+
+/**
+ * `resolveEnforceReadGrants`, plus whether the read that produced it actually succeeded. Exists
+ * because that function's `false` return is ambiguous by design (report-only vs. read-failed), which
+ * every RETRIEVAL caller wants (a failed read must gate exactly like a real OFF) but a caller
+ * measuring gate-EXCLUSION telemetry from the same `includeReaders` value cannot: a failed read here
+ * silently narrows `grantedLakeReachFor`'s reach (reader/org grants excluded), which would make an
+ * exclusion count OVER-count a lake the caller actually holds a grant on. See the two
+ * `getDynamicDataLakeTags.ts` call sites for how `readSucceeded` feeds that count's own
+ * prerequisites-complete gate.
+ */
+export async function resolveEnforceReadGrantsResult(
+  settings: Pick<IAdminSettingsRepository, 'getSettingsValue'> | undefined,
+  logger?: LakeAccessLogger,
+  turnScope?: object
+): Promise<EnforceReadGrantsResult> {
+  if (!settings) return { enforced: false, readSucceeded: true };
+  try {
+    // `getSettingsValue` caches nothing (AdminSettingsModel round-trips to Mongo per call), so a
+    // resolver that runs per TOOL CALL re-reads this flag every time. `turnScope` collapses that to
+    // one read per turn; omitting it keeps the read unmemoized, which is what the once-per-request
+    // browse and manage callers want.
+    //
+    // The MEMO SEES THE RAW READ, deliberately, so the throw below still reaches the catch on every
+    // attempt and the rejection is evicted rather than cached. Memoizing this function's own return
+    // instead would cache the report-only `false` a transient failure produces, holding retrieval
+    // narrowed for the rest of the turn with nothing left to say why.
+    const readFlag = () => settings.getSettingsValue(ENFORCE_LAKE_READ_GRANTS_KEY).then(value => value === true);
+    const enforced = turnScope
+      ? await enforceFlagByTurn(turnScope, ENFORCE_LAKE_READ_GRANTS_KEY, readFlag)
+      : await readFlag();
+    return { enforced, readSucceeded: true };
+  } catch (err) {
+    logger?.warn?.('[lakeReadGrantCutover] enforce-flag read failed; treating as report-only', err);
+    return { enforced: false, readSucceeded: false };
+  }
+}
+
 /**
  * Whether read-grant resolution is ENFORCED right now - the platform setting alone. Two states remain:
  * ENFORCE (the setting is ON, which includes a missing row, since `getSettingsValue` falls back to
@@ -175,29 +227,17 @@ export function resolveLakeReadAccess(
  *
  * Pass `turnScope` from a caller that runs per TOOL CALL to collapse the flag read to one per turn -
  * see the call site for why the memo wraps the raw read rather than this function's answer.
+ *
+ * A caller that also needs to tell "off" apart from "read failed" (telemetry, not gating) wants
+ * `resolveEnforceReadGrantsResult` instead - this is a thin wrapper over it for the callers that
+ * only ever wanted the enforced boolean.
  */
 export async function resolveEnforceReadGrants(
   settings: Pick<IAdminSettingsRepository, 'getSettingsValue'> | undefined,
   logger?: LakeAccessLogger,
   turnScope?: object
 ): Promise<boolean> {
-  if (!settings) return false;
-  try {
-    // `getSettingsValue` caches nothing (AdminSettingsModel round-trips to Mongo per call), so a
-    // resolver that runs per TOOL CALL re-reads this flag every time. `turnScope` collapses that to
-    // one read per turn; omitting it keeps the read unmemoized, which is what the once-per-request
-    // browse and manage callers want.
-    //
-    // The MEMO SEES THE RAW READ, deliberately, so the throw below still reaches the catch on every
-    // attempt and the rejection is evicted rather than cached. Memoizing this function's own return
-    // instead would cache the report-only `false` a transient failure produces, holding retrieval
-    // narrowed for the rest of the turn with nothing left to say why.
-    const readFlag = () => settings.getSettingsValue(ENFORCE_LAKE_READ_GRANTS_KEY).then(value => value === true);
-    return turnScope ? await enforceFlagByTurn(turnScope, ENFORCE_LAKE_READ_GRANTS_KEY, readFlag) : await readFlag();
-  } catch (err) {
-    logger?.warn?.('[lakeReadGrantCutover] enforce-flag read failed; treating as report-only', err);
-    return false;
-  }
+  return (await resolveEnforceReadGrantsResult(settings, logger, turnScope)).enforced;
 }
 
 /** Grant-repo slice the id resolution needs: one principal's active grants. */
@@ -363,3 +403,91 @@ export const manageGrantedLakeIdsFor = async (userId: string, grants?: Principal
   const manageable = rows.filter(row => row.role === 'owner' || row.role === 'curator');
   return Array.from(new Set(manageable.map(row => row.dataLakeId)));
 };
+
+/** The lakes-repo slice `supersededOwnLakeIdsFor` needs: creator provenance, ids only. */
+type CreatedLakeLookup = Pick<IDataLakeRepository, 'findIdsCreatedBy'>;
+
+/** The grants-repo slice it needs: every principal's grants on a known set of lakes. */
+type LakeGrantLookup = Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes'>;
+
+/**
+ * Lakes the caller CREATED but no longer effectively OWNS - the exclusion set for `findAccessible`'s
+ * owner arm, which is otherwise bare creator provenance (see `buildAccessibleQuery`).
+ *
+ * `createdByUserId` is immutable by design: ownership moves by minting an `owner`-role grant that
+ * supersedes it (`transferLakeOwnership`, and `lapseDepartedMemberLakeAccess` phase 2 handing a
+ * departed member's lakes to the org's billing owner), never by rewriting the field. So a creator
+ * who has been transferred off or removed from the org still matches the raw provenance arm long
+ * after the single gate has stopped opening the lake for them by id - the listing was the one
+ * surface still naming it.
+ *
+ * Resolved app-side rather than in the query because the answer lives in a second collection Mongo
+ * cannot join to. Two indexed reads, both scoped to lakes this caller created: usually a handful,
+ * and zero round trips for a caller who has created none.
+ *
+ * The verdict itself is delegated to `resolveEffectiveOwnerIds` rather than re-derived, so "who owns
+ * this lake" keeps exactly one definition. Passing `{ createdByUserId: userId }` is exact, not a
+ * stand-in: every id here came from `findIdsCreatedBy(userId)`, so that IS each lake's creator field.
+ *
+ * DEGRADES OPEN, deliberately and in step with its neighbours: with no grant repo wired there are no
+ * grants to supersede anyone with, so the caller ALSO loses the grant arm and every `canManage`/`isOwn`
+ * label falls back to creator provenance (see `grantsByLakeIdFor`). That host is coherently running
+ * the pre-grant model rather than half of the post-grant one. Every route that serves a lake list
+ * wires the repo.
+ *
+ * Takes the ACTOR rather than a bare userId, unlike its neighbours above: they resolve reach that an
+ * admin has too, while this one narrows a single arm that an admin context does not even emit
+ * (`buildAccessibleQuery` replaces the whole `$or`). Keeping the skip here rather than at each of the
+ * four list paths is what stops the fifth from silently paying two queries for an ignored answer.
+ */
+export const supersededOwnLakeIdsFor = async (
+  actor: Pick<AccessContext, 'userId' | 'isAdmin'>,
+  dataLakes: CreatedLakeLookup,
+  grants?: LakeGrantLookup
+): Promise<string[]> => {
+  const { userId, isAdmin } = actor;
+  if (isAdmin || !userId || !grants) return [];
+  const createdLakeIds = await dataLakes.findIdsCreatedBy(userId);
+  if (createdLakeIds.length === 0) return [];
+
+  const rows = await grants.listActiveByLakes(createdLakeIds, { activeAsOf: new Date() });
+  const grantsByLakeId = new Map<string, LakeGrant[]>();
+  for (const row of rows) {
+    const list = grantsByLakeId.get(row.dataLakeId) ?? [];
+    list.push({ principalType: row.principalType, principalId: row.principalId, role: row.role });
+    grantsByLakeId.set(row.dataLakeId, list);
+  }
+
+  return createdLakeIds.filter(
+    lakeId => !resolveEffectiveOwnerIds({ createdByUserId: userId }, grantsByLakeId.get(lakeId) ?? []).includes(userId)
+  );
+};
+
+/** Backing store for `supersededOwnLakeIdsForTurn` - see its doc for what the key has to cover. */
+const supersededByTurn = createScopedAsyncMemo<string[]>();
+
+/**
+ * `supersededOwnLakeIdsFor`, resolved at most ONCE per turn - the retrieval-path twin of
+ * `grantedLakeReachForTurn`, and for the same reason: the knowledge tools resolve lake access per
+ * TOOL CALL, so a turn that grounds through forced retrieval and then calls `search` and `retrieve`
+ * would otherwise pay these two reads four times over. Same `turnScope` contract: an object whose
+ * lifetime IS the turn (the shared `ToolContext`).
+ *
+ * THE RETURNED ARRAY IS SHARED between every caller that hits the entry - read-only, like the reach.
+ *
+ * THE KEY COVERS `isAdmin` as well as the user, because the admin answer is a hardcoded `[]` rather
+ * than the same query: keying on the user alone would let one arm's short circuit answer the other.
+ * A NEW PARAMETER HERE MUST BE ADDED TO THIS MEMO KEY. Nothing else about the actor is read.
+ *
+ * The lakes repo is NOT in the key - being an object, it cannot be - so `turnScope` has to be the
+ * object that OWNS both repos, exactly as for the reach memo above.
+ */
+export const supersededOwnLakeIdsForTurn = (
+  turnScope: object,
+  actor: Pick<AccessContext, 'userId' | 'isAdmin'>,
+  dataLakes: CreatedLakeLookup,
+  grants?: LakeGrantLookup
+): Promise<string[]> =>
+  supersededByTurn(turnScope, JSON.stringify([actor.userId, actor.isAdmin === true]), () =>
+    supersededOwnLakeIdsFor(actor, dataLakes, grants)
+  );

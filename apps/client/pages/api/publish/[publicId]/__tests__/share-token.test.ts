@@ -16,6 +16,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
       {
         use: () => chain,
+        get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.GET = fns[fns.length - 1]), chain),
         post: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.POST = fns[fns.length - 1]), chain),
         delete: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.DELETE = fns[fns.length - 1]), chain),
       }
@@ -40,7 +41,7 @@ vi.mock('@server/services/publish', () => ({ generateShareToken: () => 'TESTTOKE
 
 import handler from '../share-token';
 
-type RunOpts = { method?: 'POST' | 'DELETE'; user?: unknown; publicId?: string; body?: unknown };
+type RunOpts = { method?: 'GET' | 'POST' | 'DELETE'; user?: unknown; publicId?: string; body?: unknown };
 const run = ({ method = 'POST', user = { id: 'owner1' }, publicId = 'pub1', body = {} }: RunOpts = {}) => {
   const { req, res } = createMocks({ method, query: { publicId }, body: body as Record<string, unknown> });
   (req as Record<string, unknown>).logger = { info: vi.fn(), warn: vi.fn() };
@@ -153,5 +154,130 @@ describe('DELETE /api/publish/[publicId]/share-token', () => {
     const { res, promise } = run({ method: 'DELETE', user: { id: 'intruder' } });
     await promise;
     expect(res._getStatusCode()).toBe(403);
+  });
+
+  // On a NON-public artifact the token is the gate's only enforcing surface: revoking it
+  // would strand a gate nothing honors - the same state PATCH refuses to create.
+  it('refuses to revoke while a gate on a private artifact has no other enforcing surface', async () => {
+    mockLoad.mockResolvedValue({
+      publicId: 'pub1',
+      ownerId: 'owner1',
+      shareToken: 'EXISTING',
+      visibility: 'private',
+      accessGate: { kind: 'passphrase', passphraseHash: 'x' },
+    });
+    const { res, promise } = run({ method: 'DELETE' });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().code).toBe('REVOKE_WOULD_ORPHAN_GATE');
+    expect(mockUpdateOne).not.toHaveBeenCalled();
+  });
+
+  it('allows the revoke when the artifact is public - visibility still enforces the gate', async () => {
+    mockLoad.mockResolvedValue({
+      publicId: 'pub1',
+      ownerId: 'owner1',
+      shareToken: 'EXISTING',
+      visibility: 'public',
+      accessGate: { kind: 'passphrase', passphraseHash: 'x' },
+    });
+    const { res, promise } = run({ method: 'DELETE' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdateOne).toHaveBeenCalled();
+  });
+
+  it('allows the revoke on an ungated private artifact', async () => {
+    mockLoad.mockResolvedValue({
+      publicId: 'pub1',
+      ownerId: 'owner1',
+      shareToken: 'EXISTING',
+      visibility: 'private',
+      accessGate: null,
+    });
+    const { res, promise } = run({ method: 'DELETE' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdateOne).toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/publish/[publicId]/share-token', () => {
+  it('reports a live link without minting one', async () => {
+    mockLoad.mockResolvedValue({
+      publicId: 'pub1',
+      ownerId: 'owner1',
+      shareToken: 'EXISTING',
+      shareTokenUpdatedAt: new Date('2026-09-14T00:00:00.000Z'),
+    });
+    const { res, promise } = run({ method: 'GET' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({
+      hasShareToken: true,
+      shareToken: 'EXISTING',
+      shareUrl: '/a/EXISTING',
+      shareTokenUpdatedAt: '2026-09-14T00:00:00.000Z',
+    });
+    // Soft-deleted artifacts must stay invisible to the read, same as POST/DELETE.
+    expect(mockLoad.mock.calls[0][0]).toEqual({ publicId: 'pub1', deletedAt: null });
+    // The whole point of the route: looking must never create a link.
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+    expect(mockUpdateOne).not.toHaveBeenCalled();
+  });
+
+  it('reports no link when none has been minted', async () => {
+    mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1' });
+    const { res, promise } = run({ method: 'GET' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({
+      hasShareToken: false,
+      shareToken: null,
+      shareUrl: null,
+      shareTokenUpdatedAt: null,
+    });
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('401s an unauthenticated caller', async () => {
+    const { res, promise } = run({ method: 'GET', user: null });
+    await promise;
+    expect(res._getStatusCode()).toBe(401);
+  });
+
+  it('403s a non-owner, non-admin - the token is never disclosed', async () => {
+    mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareToken: 'EXISTING' });
+    const { res, promise } = run({ method: 'GET', user: { id: 'intruder' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(JSON.stringify(res._getJSONData())).not.toContain('EXISTING');
+  });
+
+  it('404s when the artifact does not exist', async () => {
+    mockLoad.mockResolvedValue(null);
+    const { res, promise } = run({ method: 'GET' });
+    await promise;
+    expect(res._getStatusCode()).toBe(404);
+  });
+
+  it('400s a missing publicId without touching the database', async () => {
+    const { res, promise } = run({ method: 'GET', publicId: '' });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockLoad).not.toHaveBeenCalled();
+  });
+
+  // The body carries the capability token, so a shared cache must never hold it. The
+  // header is set before the gate, so it covers the error bodies too.
+  it.each([
+    ['a live link', { publicId: 'pub1', ownerId: 'owner1', shareToken: 'EXISTING' }, { id: 'owner1' }, 200],
+    ['a 403', { publicId: 'pub1', ownerId: 'owner1' }, { id: 'intruder' }, 403],
+  ])('sends private, no-store on %s', async (_label, artifact, user, status) => {
+    mockLoad.mockResolvedValue(artifact);
+    const { res, promise } = run({ method: 'GET', user });
+    await promise;
+    expect(res._getStatusCode()).toBe(status);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
   });
 });

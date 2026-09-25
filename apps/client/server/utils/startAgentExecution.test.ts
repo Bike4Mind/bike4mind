@@ -15,6 +15,7 @@ const {
   mockSettleStrandedQuests,
   mockPersistLinkedQuestId,
   mockResolveExecutorName,
+  mockFindRememberedApprovals,
 } = vi.hoisted(() => ({
   mockSend: vi.fn(),
   mockSessionFindById: vi.fn(),
@@ -27,6 +28,7 @@ const {
   mockSettleStrandedQuests: vi.fn(),
   mockPersistLinkedQuestId: vi.fn(),
   mockResolveExecutorName: vi.fn(),
+  mockFindRememberedApprovals: vi.fn(),
 }));
 
 vi.mock('@aws-sdk/client-lambda', () => ({
@@ -48,6 +50,7 @@ vi.mock('@bike4mind/database', () => ({
     persistLinkedQuestId: mockPersistLinkedQuestId,
   },
   Quest: { create: mockQuestCreate, deleteOne: mockQuestDeleteOne },
+  sessionToolApprovalRepository: { findByUserAndSession: mockFindRememberedApprovals },
 }));
 
 vi.mock('@server/utils/settleStrandedQuests', () => ({
@@ -102,6 +105,7 @@ beforeEach(() => {
   mockSend.mockResolvedValue(undefined);
   mockPersistLinkedQuestId.mockResolvedValue(undefined);
   mockResolveExecutorName.mockReturnValue('agent-executor-fn');
+  mockFindRememberedApprovals.mockResolvedValue(null);
 });
 
 describe('startAgentExecution', () => {
@@ -256,13 +260,91 @@ describe('startAgentExecution', () => {
     );
   });
 
-  it('leaves approvedTools empty for an interactive run, which can approve per-tool instead', async () => {
+  it('forwards enabledToolsAreAmbient to the executor so the union survives the wire', async () => {
+    // The whole refactor rests on this one field arriving. Drop it anywhere between the
+    // composer and the Lambda and the executor reads the user's Smart Tools as a PINNED
+    // selection, replacing the org's agent-mode toolbelt instead of unioning onto it - so
+    // every agentless send would silently lose `web_search` / `recharts` / `mermaid_chart`.
+    await startAgentExecution(
+      input({
+        userId: 'ambient-run',
+        connectionId: 'real-ws-conn',
+        enabledTools: ['deep_research'],
+        enabledToolsAreAmbient: true,
+      }),
+      logger
+    );
+
+    expect(dispatchedPayload()).toMatchObject({
+      enabledTools: ['deep_research'],
+      enabledToolsAreAmbient: true,
+    });
+  });
+
+  it('never lets the ambient marker widen approvedTools on a headless run', async () => {
+    // A headless caller's explicit tool list IS its permission approval, so the public REST
+    // contract has no ambient field at all. Belt: even if one were forged onto the input,
+    // `approvedTools` stays keyed to the raw list and grants nothing extra.
+    await startAgentExecution(
+      input({
+        userId: 'headless-ambient',
+        enabledTools: ['web_search'],
+        enabledToolsAreAmbient: true,
+      }),
+      logger
+    );
+
+    expect(mockCreateExecution).toHaveBeenCalledWith(expect.objectContaining({ approvedTools: ['web_search'] }));
+  });
+
+  it('ignores the dispatch payload on an interactive run, which can approve per-tool instead', async () => {
     await startAgentExecution(
       input({ userId: 'interactive-run', connectionId: 'real-ws-conn', enabledTools: ['web_search'] }),
       logger
     );
 
     expect(mockCreateExecution).toHaveBeenCalledWith(expect.objectContaining({ approvedTools: [] }));
+  });
+
+  it('seeds an interactive run from the decisions the user asked this notebook to remember', async () => {
+    // Without this, "Allow for Session" only survives the one execution and the same tool
+    // re-prompts on the very next message.
+    mockFindRememberedApprovals.mockResolvedValue({
+      approvedTools: ['send_slack_message'],
+      deniedTools: ['image_generation'],
+    });
+
+    await startAgentExecution(input({ userId: 'remembered-run', connectionId: 'real-ws-conn' }), logger);
+
+    expect(mockFindRememberedApprovals).toHaveBeenCalledWith('remembered-run', 's1');
+    expect(mockCreateExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvedTools: ['send_slack_message'],
+        deniedTools: ['image_generation'],
+      })
+    );
+  });
+
+  it('still starts the run when the remembered-approvals lookup fails', async () => {
+    mockFindRememberedApprovals.mockRejectedValue(new Error('mongo down'));
+
+    const result = await startAgentExecution(input({ userId: 'approvals-unreadable' }), logger);
+
+    expect(result).toMatchObject({ ok: true });
+    expect(mockCreateExecution).toHaveBeenCalledWith(expect.objectContaining({ deniedTools: [] }));
+  });
+
+  it('ignores a remembered session denial on a headless run, since there is no user present to ask', async () => {
+    // A REST/API-key/scheduled run cannot answer a permission prompt, so a denial recorded
+    // by an earlier interactive session must not carry over and fail the tool call here.
+    mockFindRememberedApprovals.mockResolvedValue({
+      approvedTools: [],
+      deniedTools: ['image_generation'],
+    });
+
+    await startAgentExecution(input({ userId: 'headless-with-remembered-denial' }), logger);
+
+    expect(mockCreateExecution).toHaveBeenCalledWith(expect.objectContaining({ deniedTools: [] }));
   });
 
   it('refuses before creating anything when the executor is not linked to this deployment', async () => {
@@ -313,5 +395,35 @@ describe('startAgentExecution', () => {
       expect.stringContaining('Failed to persist user prompt Quest'),
       expect.anything()
     );
+  });
+});
+
+describe('container startup transport', () => {
+  it('preserves the prompt and execution ID when a queued ACK is lost', async () => {
+    vi.stubEnv('AGENT_EXECUTOR_SERVICE', 'http://agentexecutor:8080');
+    vi.stubEnv('AGENT_EXECUTOR_INTERNAL_SECRET', 'test-secret');
+    const accepted: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url, request) => {
+        accepted.push(JSON.parse(request.body));
+        throw new TypeError('connection closed after enqueue');
+      })
+    );
+    try {
+      const result = await startAgentExecution(input({ userId: 'lost-ack' }), logger);
+      expect(result).toMatchObject({
+        ok: false,
+        executionId: 'exec1',
+        message: expect.stringContaining('could not be confirmed'),
+      });
+      expect(result).toMatchObject({ message: expect.stringContaining('exec1') });
+      expect(accepted).toHaveLength(1);
+      expect(accepted[0].executionId).toBe('exec1');
+      expect(mockQuestDeleteOne).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    }
   });
 });

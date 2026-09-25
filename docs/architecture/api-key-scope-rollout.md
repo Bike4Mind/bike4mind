@@ -32,6 +32,34 @@ Two generated/declared files trail step 1 and are gated in CI, not locally:
 - `infra/deploy-contract.json` must name any `process.env` that `infra/` reads at deploy
   time. Threading a new lever through `infra/web.ts` alone fails `Core Build`.
 
+## Confined scopes (default-deny)
+
+Three scopes -- `embed:chat`, `cc-bridge:connect` and `overwatch-ingest:write` -- are
+*confined*: each exists to authorize exactly one flow, so a key carrying any of them is
+rejected on every `baseApi` route that does not explicitly name it, rather than falling
+through the opt-in default above. `CONFINED_SCOPES` / `decideScopeGate`
+(`apps/client/server/middlewares/apiKeyScopeGate.ts`) is where that denial lives.
+
+For a confined scope, step 3 is neither optional nor local. Declaring `requiredScopes`
+on *every* route the credential is expected to reach is mandatory, **including routes
+that are not in this repository** -- a downstream deployment can mount additional route
+files into `pages/api` through the same `baseApi` at build time, and one that omits
+`requiredScopes` will 403 a legitimate confined key the minute the gate ships. There is
+no staging lever to soften it: confined scopes are in `UNSTAGEABLE_SCOPES` by design
+(there is no grandfathered population -- each key is minted for its one flow), so a
+missed route is a hard outage with no backfill, only a revert.
+
+The sequence is therefore: land the `requiredScopes` declaration on all routes the
+credential touches -- in this repo and any downstream one, where the declaration is a
+no-op against a `main` that already carries the enum value -- *before* the confinement
+gate deploys. A route that also serves ordinary session or personal-key callers cannot
+declare the scope file-wide (`requiredScopes` is per-`baseApi` chain, not per-method, so
+it would newly deny those callers): split the methods, or check the scope in the handler.
+
+Confined scopes take no staging and no re-mint window; the preflight,
+`API_KEY_SCOPE_STAGING` and the re-mint sequence in the rest of this document govern the
+broad opt-in scopes only.
+
 ## Splitting read from spend
 
 Where a surface both reads state and commissions billable work, give it two scopes,
@@ -141,6 +169,13 @@ in its grace period only while *every* alternative it accepts is staged - if eve
 is already enforced, a key that legitimately needs the route could have been minted
 with it, and holding none of them is a real miss.
 
+`alsoRequiredScopes` (AND semantics - a route requiring two orthogonal scopes together,
+e.g. a feature scope and a separate spend gate) has **no staging path at all**: it
+enforces from the moment it is declared. It exists only for a route adopting the AND
+requirement fresh, so there is no grandfathered population to protect the way OR-list
+staging protects one - size any AND rollout with the scope preflight before declaring
+it, since there is no grace-period log to fall back on.
+
 Unset (the default) means every declared gate enforces. Enforcement is the default
 state; staging is the temporary one.
 
@@ -194,6 +229,20 @@ to a question it cannot see.
    `datalake:write`, not just the callers that explicitly reference a lake.
 
 3. Set `API_KEY_SCOPE_STAGING` to the new scope(s) on the target stage.
+
+   Check first whether the scope already enforces somewhere. Staging is per-scope, not
+   per-route, so adding a scope back to the list to grandfather a late-arriving door also
+   re-opens every door already gating on it - a rollout that reached step 6 months ago is
+   silently un-enforced for the whole window. That is worst at an in-handler assert
+   (`assertScope` in `dataLakeScopes.ts`), which unlike `apiKeyAuth`'s door gate logs
+   nothing on a staged pass, so step 5's cross-check never sees those keys at all.
+
+   When a new route joins a family whose scope has already finished its rollout, weigh
+   that against step 2's population. A handful of keys is usually cheaper to re-mint with
+   their owners before landing the gate than it is to un-enforce the family; a large one
+   is not, and then staging is still the right lever - just know you are trading the
+   existing doors' enforcement for the new one's grace period, and keep the window short.
+
 4. Land `requiredScopes` on the routes. Nothing breaks - misses are logged, not rejected.
 5. Re-mint the keys from step 2 with their owners. Watch
    `API key scope check missed but staged - allowing` as a cross-check that the list was

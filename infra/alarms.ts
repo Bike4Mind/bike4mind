@@ -140,6 +140,14 @@ export const replSandboxUnavailableAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('ReplSandboxUnavailableAlarm')
   : undefined;
 
+export const sessionReuseRevokedAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('SessionReuseRevokedAlarm')
+  : undefined;
+
+export const sessionRecoveredHighRateAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('SessionRecoveredHighRateAlarm')
+  : undefined;
+
 // --- MetricAlarm definitions (only created for monitored stages) ---
 
 if (isMonitoredStage) {
@@ -1307,7 +1315,11 @@ if (isMonitoredStage) {
    *
    * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, wired from
    * server/cron/dataLakeBatchReconcile.ts's rescue sweep.
-   * Namespace: Lumina5/DataLakeBatch / ChunkRescueFailures
+   * Namespace: Lumina5/DataLakeBatch / ChunkRescueFailures, dimension Stage=<this stage>. The
+   * emitter writes both a stage-less and a `{ Stage }`-scoped stream (a dimensioned metric is a
+   * distinct stream in CloudWatch); this alarm reads the scoped one so a dev-stage sweep failure
+   * no longer counts toward production's threshold, matching the `Stage`-dimension pattern
+   * `anthropicRateLimitErrors` above and `feedbackDeliveryFailures` below already use.
    */
   new aws.cloudwatch.MetricAlarm('dataLakeChunkRescueFailuresHigh', {
     name: `${$app.name}-${$app.stage}-data-lake-chunk-rescue-failures-high`,
@@ -1317,6 +1329,7 @@ if (isMonitoredStage) {
     evaluationPeriods: 3, // three consecutive daily runs, so a one-off SQS blip does not page
     metricName: 'ChunkRescueFailures',
     namespace: 'Lumina5/DataLakeBatch',
+    dimensions: { Stage: $app.stage }, // the scoped stream; the stage-less one is every stage at once
     period: 86400, // 1 day - matches the daily cron that emits it
     statistic: 'Sum', // a counter per run, unlike StuckBatches' gauge sample
     threshold: 0, // any failure at all; see the docblock on why a count threshold hides the real case
@@ -1347,7 +1360,10 @@ if (isMonitoredStage) {
    *
    * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, with the 'failed'
    * outcome supplied by server/cron/dataLakeBatchReconcile.ts's catch.
-   * Namespace: Lumina5/DataLakeBatch / ChunkRescueRuns, dimension outcome=failed
+   * Namespace: Lumina5/DataLakeBatch / ChunkRescueRuns, dimensions outcome=failed + Stage=<this
+   * stage>. Unlike the stage rollups elsewhere in this file, the scoped Runs stream keeps
+   * `outcome` alongside `Stage` - a `{ Stage }`-only Runs stream counts every run, healthy ones
+   * included, so `Sum > 0` against it would page daily on a working sweep.
    */
   new aws.cloudwatch.MetricAlarm('dataLakeChunkRescueSweepFailing', {
     name: `${$app.name}-${$app.stage}-data-lake-chunk-rescue-sweep-failing`,
@@ -1357,7 +1373,11 @@ if (isMonitoredStage) {
     evaluationPeriods: 2, // two consecutive daily runs; one throw is a blip, two is a broken sweep
     metricName: 'ChunkRescueRuns',
     namespace: 'Lumina5/DataLakeBatch',
-    dimensions: { outcome: 'failed' }, // 'disabled' and 'swept' share the metric and must not fire
+    // 'disabled' and 'swept' share the metric and must not fire; Stage keeps another stage's
+    // broken sweep from paging this one. Both dimensions must match the emitted stream exactly -
+    // CloudWatch treats each dimension combination as its own stream, so dropping either one here
+    // points the alarm at a stream nothing writes, which reads identically to a healthy sweep.
+    dimensions: { outcome: 'failed', Stage: $app.stage },
     period: 86400, // 1 day - matches the daily cron that emits it
     statistic: 'Sum',
     threshold: 0, // any throw at all
@@ -1475,6 +1495,64 @@ if (isMonitoredStage) {
     tags: {
       Application: 'Quests',
       Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Session Reuse Revoked
+   *
+   * Fires on any occurrence of a refresh token being presented after its rotation window,
+   * which causes the session to be revoked. Each event is a presumed token theft: both
+   * the legitimate user and any attacker are logged out. Any single occurrence warrants
+   * investigation.
+   *
+   * Metric emitted by: server/utils/authAudit.ts -> recordSessionReuseRevoked()
+   * Namespace: Lumina5/AuthSecurity / SessionReuseRevoked
+   */
+  new aws.cloudwatch.MetricAlarm('sessionReuseRevoked', {
+    name: `${$app.name}-${$app.stage}-session-reuse-revoked`,
+    alarmDescription: 'Refresh token reuse detected outside recovery window - presumed token theft; session revoked',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'SessionReuseRevoked',
+    namespace: 'Lumina5/AuthSecurity',
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0, // Any occurrence is worth investigating
+    treatMissingData: 'notBreaching',
+    alarmActions: [sessionReuseRevokedAlarm!.arn],
+    tags: {
+      Application: 'Auth',
+      Severity: 'Critical',
+    },
+  });
+
+  /**
+   * Alarm: Session Recovered High Rate
+   *
+   * Fires when more than 10 benign token-reuse recoveries occur in a 30-minute window.
+   * A small number is normal (lost-response retries on transient network failures); a
+   * sustained spike may indicate a misconfigured client replaying stale tokens or a
+   * broader connectivity issue draining the recovery allowance.
+   *
+   * Metric emitted by: server/utils/authAudit.ts -> recordSessionRecovered()
+   * Namespace: Lumina5/AuthSecurity / SessionRecovered
+   */
+  new aws.cloudwatch.MetricAlarm('sessionRecoveredHighRate', {
+    name: `${$app.name}-${$app.stage}-session-recovered-high-rate`,
+    alarmDescription: 'Unusually high benign session-recovery rate (>10 in 30 min) - possible client misconfiguration',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'SessionRecovered',
+    namespace: 'Lumina5/AuthSecurity',
+    period: 1800, // 30 minutes
+    statistic: 'Sum',
+    threshold: 10,
+    treatMissingData: 'notBreaching',
+    alarmActions: [sessionRecoveredHighRateAlarm!.arn],
+    tags: {
+      Application: 'Auth',
+      Severity: 'Warning',
     },
   });
 }

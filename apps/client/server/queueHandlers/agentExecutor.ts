@@ -53,12 +53,19 @@ import {
   processFabFilesServer,
   attachedContentExtractionBudget,
   safeInputWindow,
+  DEFAULT_OUTPUT_MAX_TOKENS,
 } from '@bike4mind/utils';
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
 import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
 import { defaultEmbeddingModelForEnv, isSupportedEmbeddingModel } from '@bike4mind/common';
 import { toRetrievalFilter } from '@bike4mind/utils/retrievalExclusion';
-import { getLlmByModel, getAvailableModels, resolveDeprecatedModelId, type ApiKeyTable } from '@bike4mind/llm-adapters';
+import {
+  getLlmByModel,
+  getAvailableModels,
+  resolveDeprecatedModelId,
+  resolveOutputMaxTokens,
+  type ApiKeyTable,
+} from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { Permission, OPTI_SURFACE } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
@@ -69,6 +76,7 @@ import {
   ReActAgent,
   type AgentCheckpoint,
   type AgentStep,
+  type GatedToolCall,
   type IterationResult,
   type ServerAgentDefinition,
 } from '@bike4mind/agents';
@@ -91,9 +99,9 @@ import {
   type ChildExecutionStatus,
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
-} from '@bike4mind/services';
+} from '@bike4mind/services/llm';
 import { creditService, apiKeyService, estimateGeneratedMediaUsd } from '@bike4mind/services';
-import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/services';
+import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/services/llm';
 import { createAttachmentLakeAccess } from './agentExecutor.attachmentLakeAccess';
 // Lattice launch-gate. `resolveLatticeTools` owns the `enableLattice` flag
 // resolution and the Lattice tool contribution (names + `externalTools`
@@ -108,7 +116,13 @@ import {
   resolveAgentArtifactGate,
 } from '../utils/artifactGate';
 import { resolveExecutionQuestId } from './agentExecutor.resolveQuestId';
-import { selectGatedAction, resolveGateDisposition } from './agentExecutorUtils/toolPermissions';
+import {
+  shouldWithholdToolCall,
+  resumeApprovedPauseAndGateConfidence,
+  handleWithheldToolCalls,
+  settleGatedCall as settleGatedCallImpl,
+  type GatedAction,
+} from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { resolveDisplayAnswer } from './agentExecutorUtils/truncatedReply';
 import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
@@ -122,7 +136,7 @@ import {
   onDagNodeTerminal,
 } from './agentExecutorDag';
 import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
-import type { DagHandoffSignal } from '@bike4mind/services';
+import type { DagHandoffSignal } from '@bike4mind/services/llm';
 import type { ModelInfo } from '@bike4mind/common';
 // `buildFirstIterationQuery` lives in its own module so it can be
 // unit-tested without dragging in this file's server-only dependency graph
@@ -138,7 +152,12 @@ import {
   attachmentNoticeStrings,
   unmaterializedAttachments,
 } from './agentExecutor.attachmentContent';
-import { applySessionToolPolicy, delegationOffer, runHasAttachments } from './agentExecutor.sessionToolPolicy';
+import {
+  applySessionToolPolicy,
+  delegationOffer,
+  DELEGATION_TOOLS,
+  runHasAttachments,
+} from './agentExecutor.sessionToolPolicy';
 import { toUserFacingFailureMessage } from './agentExecutor.failureMessage';
 import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
 // Per-iteration billing (delta math + #657 context-window guard + tool-internal
@@ -172,6 +191,7 @@ import {
   type SubagentDispatchPayload,
 } from './agentExecutor.schemas';
 import { enforceCheckpointDepth } from './agentExecutor.checkpointDepth';
+import { runIterationWithDeadlineGuard } from './agentExecutor.iterationDeadline';
 import { Config } from '@server/utils/config';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
@@ -692,7 +712,13 @@ const AGENT_SYSTEM_PROMPT_RESERVE = 4000;
  * leave the run behaving exactly as it did before, not kill the turn.
  */
 async function materializeAttachmentsForRun(args: {
-  execution: { userId: string; query: string; messageFileIds?: string[]; sessionFabFileIds?: string[] };
+  execution: {
+    userId: string;
+    query: string;
+    messageFileIds?: string[];
+    sessionFabFileIds?: string[];
+    maxTokens?: number;
+  };
   sessionKnowledgeIds: string[];
   scope: Record<string, unknown>;
   lakeAccess: AttachmentLakeAccess;
@@ -760,8 +786,19 @@ async function materializeAttachmentsForRun(args: {
     }
     const embeddingFactory = new EmbeddingFactory(embeddingConfig);
 
+    // Reserve against the budget the turn will actually send, not the model's raw cap - a
+    // derived cap on a reasoning model resolves to a much larger value (see
+    // resolveOutputMaxTokens), and reserving the smaller raw cap here while the turn sends the
+    // resolved one understates the output reserve and overstates how much attachment content the
+    // input window can actually hold.
+    const resolvedMaxTokens = resolveOutputMaxTokens({
+      requested: execution.maxTokens,
+      fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+      modelInfo,
+      modelMaxOutputTokens: modelInfo.max_tokens,
+    });
     const budget = attachedContentExtractionBudget(
-      safeInputWindow(modelInfo, modelInfo.max_tokens),
+      safeInputWindow(modelInfo, resolvedMaxTokens),
       AGENT_SYSTEM_PROMPT_RESERVE
     );
 
@@ -1146,7 +1183,15 @@ async function processExecution(
       });
       // An exclusive toolset voids the payload's tool selection by design - but silently
       // voiding it is how a "why is the tool I picked missing?" report goes undiagnosable.
-      if (orchestrationProfile.toolsetIsExclusive && startPayload?.enabledTools?.length) {
+      // Only a PINNED payload is worth warning about. Every agentless chat send ships the
+      // user's ambient Smart Tools, which are an offer to union, not a demand to replace, so
+      // warning on those would fire on every single send on an exclusive surface and bury the
+      // pinned case this log exists to surface.
+      if (
+        orchestrationProfile.toolsetIsExclusive &&
+        startPayload?.enabledTools?.length &&
+        !startPayload.enabledToolsAreAmbient
+      ) {
         logger.warn('[Orchestration] Payload enabledTools ignored: profile toolset is exclusive', {
           profileId: orchestrationProfile.id,
           ignoredToolCount: startPayload.enabledTools.length,
@@ -1537,6 +1582,10 @@ async function processExecution(
       // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
       // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
       sessionRetrievalTags: session.retrievalTags,
+      // Its sidecar, and NOT optional to forward: without it an empty scope reads as "no lake
+      // opinion" and the agent searches every lake its owner can reach - the opposite of what a
+      // deliberate no-lake session asked for. See sessionGroundsOnNoLake.
+      sessionLakeScopeExplicit: session.lakeScopeExplicit,
       // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
       // confirmed the session belongs to this run before this ToolBuilderDeps is built.
       sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,
@@ -1724,7 +1773,11 @@ async function processExecution(
     // the agentless path (Agent-mode toggle / `@agent` literal trigger) ends
     // up with a non-empty toolbelt instead of mission-tools only.
     const profileEnabledTools = orchestrationProfile
-      ? pickEffectiveEnabledTools(startPayload?.enabledTools, orchestrationProfile)
+      ? pickEffectiveEnabledTools(
+          startPayload?.enabledTools,
+          orchestrationProfile,
+          startPayload?.enabledToolsAreAmbient
+        )
       : (startPayload?.enabledTools ?? []);
 
     // Lattice parity with chat_completion. Mirrors
@@ -1747,6 +1800,7 @@ async function processExecution(
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: execution.imageConfig,
       audioConfig: execution.audioConfig,
+      imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });
 
     // Lattice opt-in pool for delegated subagents. Built UNCONDITIONALLY (unlike
@@ -1807,6 +1861,15 @@ async function processExecution(
 
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       enabledTools: resolvedToolNames,
+      // applySessionToolPolicy above subtracts these from the NATIVE names only; MCP tools are
+      // merged inside buildSharedTools after that filter, so the denylist has to travel with them
+      // to reach a `server__tool` id. The chat path gets this from its own post-build pass.
+      //
+      // The profile's own denials ride along for the same reason: applySessionToolPolicy applies
+      // them to `toolNames`, which MCP tools never pass through, so a profile that denies
+      // `atlassian__jira_create_issue` could not reach it either. Both sets are pure subtraction,
+      // so unioning them cannot widen what this agent is offered.
+      sessionDisabledTools: [...(session.disabledTools ?? []), ...(orchestrationProfile?.deniedTools ?? [])],
       externalTools: { ...guardedPremiumTools, ...missionChatTools, ...latticeExternalTools },
       config: subagentToolConfig,
       mcpToolsByServer,
@@ -2046,6 +2109,7 @@ async function processExecution(
         totalOutputTokens: number;
         totalCacheReadTokens: number;
         totalCacheWriteTokens: number;
+        finishReason?: string;
       },
       counters: BillingCounters
     ) => {
@@ -2294,6 +2358,126 @@ async function processExecution(
       };
     };
 
+    // See `toolGate` below for why these two are exempt from the pre-execution gate.
+    // Reuses `DELEGATION_TOOLS` so the exemption cannot drift from the tools it names.
+    const HANDOFF_DISPATCH_TOOLS = new Set<string>(DELEGATION_TOOLS);
+
+    // Pre-execution permission gate (the callback the agent consults BEFORE invoking a
+    // tool). Withholding here is what makes a denied or unapproved call cost nothing: the
+    // tool function never runs, so no provider is called, no side effect lands, and no
+    // media USD folds into `pendingToolUsage`. The withheld calls come back on
+    // `IterationResult.gatedToolCalls`, and the branch below turns them into a pause.
+    //
+    // `HANDOFF_DISPATCH_TOOLS` is exempt. Those two set `handoffSignal` /
+    // `dagHandoffSignal` and hand the run to a child Lambda; withholding them would
+    // strand the signal for an iteration and hard-fail every headless delegation at
+    // `no_approver`. The permission check below still runs BEFORE the branches that act
+    // on those signals - a gated tool called in the same turn fails the run explicitly
+    // rather than silently discarding the handoff (see the comment at that check). Their
+    // own denial is enforced earlier, at toolbelt construction, via `profileDeniedTools` /
+    // `delegationOffer`.
+    const toolGate = (call: GatedToolCall) =>
+      !HANDOFF_DISPATCH_TOOLS.has(call.name) && shouldWithholdToolCall(call.name, approvedTools, deniedTools);
+
+    // Act on a withheld call: fail the run, or park it in `awaiting_permission` and ask
+    // the client. Thin wiring over `settleGatedCallImpl` in `toolPermissions.ts`, which
+    // owns the actual state machine and is unit-tested there for all four dispositions
+    // (`denied`, `no_approver`, `unsupported`, `ask`). `withheld` carries the whole
+    // iteration's withheld set so a second gated tool raises its own card once this one
+    // is settled.
+    const settleGatedCall = (gated: GatedAction, withheld: GatedToolCall[]): Promise<void> =>
+      settleGatedCallImpl(
+        { executionId, connectionId, gated, withheld, iterationIndex },
+        {
+          supportsGatedReplay: () => agent.supportsGatedReplay(),
+          updateStatus: (id, status) => agentExecutionRepository.updateStatus(id, status),
+          updatePermissionState: (id, update) => agentExecutionRepository.updatePermissionState(id, update),
+          markFailed: (id, err) => agentExecutionRepository.markFailed(id, err),
+          sendWs,
+          persistRunAsQuest: message => persistRunAsQuest(executionId, message, logger),
+          logger,
+        }
+      ).then(() => undefined);
+
+    // --- Resume after an approved permission pause ---
+    // The approval handler leaves `pendingPermission` in place with `approved: true`
+    // precisely so this runs: the withheld calls are replayed HERE, which is the first
+    // moment their providers are invoked. A one-time approval covers only the tool it
+    // named; anything else the same iteration withheld raises its own card below.
+    // See `resumeApprovedPauseAndGateConfidence` for the state machine itself - this is
+    // only the wiring.
+    const approvedPause = execution.pendingPermission?.approved ? execution.pendingPermission : undefined;
+    if (approvedPause) {
+      const { proceed } = await resumeApprovedPauseAndGateConfidence(
+        {
+          executionId,
+          iterationIndex,
+          withheld: approvedPause.gatedToolCalls ?? [],
+          approvedToolCallId: approvedPause.toolCallId,
+          approvedTools,
+          deniedTools,
+          confidenceGateThreshold: orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD,
+        },
+        {
+          executeGatedToolCall: call => agent.executeGatedToolCall(call),
+          toCheckpoint: () => agent.toCheckpoint(),
+          updatePermissionState: id => agentExecutionRepository.updatePermissionState(id, { pendingPermission: null }),
+          updateCheckpoint: (id, checkpoint) =>
+            agentExecutionRepository.updateCheckpoint(id, checkpoint, ledgerForWrite(optiPlanState)),
+          billIterationIfNeeded: (idx, checkpoint) => billIterationIfNeeded(idx, checkpoint, counters),
+          settleGatedCall,
+          markFailed: (id, err) => agentExecutionRepository.markFailed(id, err),
+          sendWs,
+          persistRunAsQuest: message => persistRunAsQuest(executionId, message, logger),
+          logger,
+          // The replayed calls' confidence never flows through the ordinary
+          // post-iteration gate check below: they ran outside any `runIteration()`
+          // call, and the next one clears `iterationConfidences` at its own start
+          // regardless - see `ReActAgent.takeIterationConfidence`.
+          takeIterationConfidence: () => agent.takeIterationConfidence(),
+          recordIterationConfidence: (id, confidence) =>
+            agentExecutionRepository.recordIterationConfidence(id, confidence),
+          setPendingGate: (id, gate) => agentExecutionRepository.setPendingGate(id, gate),
+          recordGateEmitted: id => agentExecutionRepository.recordGateEmitted(id),
+        }
+      );
+      if (!proceed) return;
+    }
+
+    // Checkpoints the agent's current state as `continuing` and hands the run to a fresh
+    // Lambda via `agentContinuationQueue`. Shared by the between-iteration watchdog below and
+    // the in-flight iteration deadline abort - both are "we're out of time, hand off" and must
+    // reach the same continuation state rather than one of them failing the run outright.
+    const selfDispatchContinuation = async () => {
+      const checkpoint = agent.toCheckpoint();
+      // Atomic write: persisting checkpoint + status separately could leave the
+      // doc in `running` with a fresh checkpoint if Lambda is killed between
+      // calls, which would fail the continuation Lambda's CAS and orphan the
+      // execution. The opti plan ledger (#680) rides the SAME write so the continuation Lambda
+      // rehydrates the latest plan state (decompose-once + solved steps), not a stale one.
+      await agentExecutionRepository.updateCheckpointAndStatus(
+        executionId,
+        checkpoint,
+        'continuing',
+        ledgerForWrite(optiPlanState)
+      );
+
+      // Publish to continuation queue
+      await sqsClient.send(
+        new SendMessageCommand({
+          QueueUrl: Resource.agentContinuationQueue.url,
+          MessageBody: JSON.stringify({
+            kind: 'continuation',
+            executionId,
+            connectionId,
+            checkpointDepth: checkpointDepth + 1,
+          }),
+        })
+      );
+
+      await sendWs('resumed', { executionId, reason: 'timeout_handoff' });
+    };
+
     while (iterationIndex < maxIterations) {
       // Check abort flag
       const isAborted = await agentExecutionRepository.checkAbortFlag(executionId);
@@ -2328,33 +2512,7 @@ async function processExecution(
       // Check timeout watchdog
       if (Date.now() - startTime > deadlineMs) {
         logger.info('[Timeout] Approaching Lambda timeout, triggering self-dispatch');
-        const checkpoint = agent.toCheckpoint();
-        // Atomic write: persisting checkpoint + status separately could leave the
-        // doc in `running` with a fresh checkpoint if Lambda is killed between
-        // calls, which would fail the continuation Lambda's CAS and orphan the
-        // execution. The opti plan ledger (#680) rides the SAME write so the continuation Lambda
-        // rehydrates the latest plan state (decompose-once + solved steps), not a stale one.
-        await agentExecutionRepository.updateCheckpointAndStatus(
-          executionId,
-          checkpoint,
-          'continuing',
-          ledgerForWrite(optiPlanState)
-        );
-
-        // Publish to continuation queue
-        await sqsClient.send(
-          new SendMessageCommand({
-            QueueUrl: Resource.agentContinuationQueue.url,
-            MessageBody: JSON.stringify({
-              kind: 'continuation',
-              executionId,
-              connectionId,
-              checkpointDepth: checkpointDepth + 1,
-            }),
-          })
-        );
-
-        await sendWs('resumed', { executionId, reason: 'timeout_handoff' });
+        await selfDispatchContinuation();
         logger.info('[Timeout] Self-dispatched to continuation queue');
         return;
       }
@@ -2492,18 +2650,42 @@ async function processExecution(
           : firstIterationQuery;
 
       resetLastIterationConfidence();
-      iterationResult = await agent.runIteration(firstIterationMessage, {
-        maxIterations,
-        confidenceGate,
-        previousMessages,
-        // Cache the (large, static) system prompt + tool schemas across iterations. An
-        // agent run is always multi-iteration, and previously this was omitted - so the
-        // full system prompt + tools were re-sent at full input price EVERY iteration
-        // (the chat path already caches via ChatCompletionProcess). Enabling it is the
-        // single biggest cost reduction for multi-iteration runs; cache-read tokens are
-        // priced at ~0.1x (see billIterationIfNeeded passing the cache-token counts).
-        enableCaching: true,
-      });
+      // The watchdog above only checks BETWEEN iterations, so a single iteration whose LLM
+      // call runs longer than the remaining Lambda time would otherwise be hard-killed
+      // mid-flight - skipping every catch block below and leaving the quest silently stuck
+      // in 'running' forever (#3223). runIterationWithDeadlineGuard arms an abort at the same
+      // buffer the watchdog uses, so a deadline hit mid-iteration hands off to a continuation
+      // Lambda the same way the watchdog does, instead of hard-killing or failing the run.
+      const deadlineOutcome = await runIterationWithDeadlineGuard(
+        {
+          remainingMs: context.getRemainingTimeInMillis(),
+          timeoutBufferMs: TIMEOUT_BUFFER_MS,
+          runIteration: signal =>
+            agent.runIteration(firstIterationMessage, {
+              maxIterations,
+              confidenceGate,
+              previousMessages,
+              // Cache the (large, static) system prompt + tool schemas across iterations. An
+              // agent run is always multi-iteration, and previously this was omitted - so the
+              // full system prompt + tools were re-sent at full input price EVERY iteration
+              // (the chat path already caches via ChatCompletionProcess). Enabling it is the
+              // single biggest cost reduction for multi-iteration runs; cache-read tokens are
+              // priced at ~0.1x (see billIterationIfNeeded passing the cache-token counts).
+              enableCaching: true,
+              // Pre-execution permission gate - see `toolGate` above. The agent withholds a
+              // gated call instead of running it, so nothing is spent on a call the user has
+              // not approved yet.
+              toolGate,
+              signal,
+            }),
+        },
+        { selfDispatchContinuation }
+      );
+      if (deadlineOutcome.kind === 'handed-off') {
+        logger.info('[Timeout] Iteration deadline hit mid-call, self-dispatched to continuation queue');
+        return;
+      }
+      iterationResult = deadlineOutcome.result;
 
       iterationIndex = iterationResult.checkpoint.iteration;
 
@@ -2529,6 +2711,44 @@ async function processExecution(
         ledgerForWrite(optiPlanState)
       );
       await billIterationIfNeeded(iterationIndex, iterationResult.checkpoint, counters);
+
+      // Permission check. The calls listed here were withheld BEFORE execution by
+      // `toolGate`, so nothing has run and nothing has been billed for them yet -
+      // denying costs the user nothing, and approving is what finally invokes the
+      // provider (see the resume block above the loop).
+      //
+      // This MUST run before the handoff/DAG branches below: `toolGate` only exempts
+      // `HANDOFF_DISPATCH_TOOLS` themselves, not the rest of the turn, so a turn that
+      // calls `coordinate_task`/`delegate_to_agent` alongside another gated tool sets
+      // both `handoffSignal`/`dagHandoffSignal` AND `iterationResult.gatedToolCalls`.
+      // Handing off first would strand the withheld call - the handoff branches
+      // `return`, so it would never reach a permission card, and the continuation
+      // Lambda would later restore its `GATED_TOOL_OBSERVATION` placeholder as if it
+      // were a real result.
+      // A permission pause cannot coexist with a handoff signal from the SAME turn -
+      // see `resolveHandoffConflict` (inside `handleWithheldToolCalls`) for why.
+      // `delegate_to_agent`/`coordinate_task` already ran (they are exempt from
+      // `toolGate`) and set `handoffSignal`/`dagHandoffSignal`, but nothing durable
+      // about that handoff exists yet - `setWaitingOnChild`/`setDagSpec`/
+      // `setWaitingOnDagChildren` all live in the branches below, which a pause here
+      // would skip. Approval resumes with status `continuing`, not
+      // `awaiting_subagent`/`awaiting_dag_children`, so the signal is NOT re-derived
+      // on resume - continuing would strand the handoff while its already-dispatched
+      // children finish into a parent that never learns about them. Fail loudly
+      // instead of silently discarding it.
+      const withheldCalls = iterationResult.gatedToolCalls ?? [];
+      const hasHandoffSignal = Boolean(handoffSignal.awaitingSubagent || dagHandoffSignal.awaitingDagChildren);
+      const withheldOutcome = await handleWithheldToolCalls(
+        { executionId, withheldCalls, approvedTools, deniedTools, hasHandoffSignal },
+        {
+          settleGatedCall,
+          markFailed: (id, err) => agentExecutionRepository.markFailed(id, err),
+          sendWs,
+          persistRunAsQuest: message => persistRunAsQuest(executionId, message, logger),
+          logger,
+        }
+      );
+      if (withheldOutcome.status !== 'none') return;
 
       // Handoff signal: orchestrator-side polling on a sync Lambda-dispatched
       // subagent ran out of time. The placeholder observation has been appended
@@ -2630,98 +2850,6 @@ async function processExecution(
           executionId,
           pendingNodes: pendingNodeIds,
         });
-        return;
-      }
-
-      // Permission check after iteration - classify tool calls across all steps.
-      //
-      // KNOWN LIMITATION (Phase 1): Permission classification happens AFTER
-      // runIteration() executes the tool. Side effects (e.g., send_slack_message)
-      // have already occurred by this point. Pre-execution gating requires splitting
-      // runIteration() into plan + execute phases - tracked for Phase 2.
-      //
-      // Inspect `allSteps` (not the primary `step`): for tool-calling iterations
-      // the primary step is the trailing `observation`, so the action step lives
-      // only in `allSteps`. See selectGatedAction for multi-tool semantics.
-      const gated = selectGatedAction(iterationResult.allSteps, approvedTools, deniedTools);
-      if (gated) {
-        const { toolName, toolInput, verdict } = gated;
-        const disposition = resolveGateDisposition(verdict, connectionId);
-
-        if (disposition === 'denied') {
-          // Fail the execution - the tool already executed (Phase 1 limitation),
-          // but continuing would let the agent act on the denied tool's result
-          // and potentially retry it indefinitely. Checkpoint persistence and
-          // iteration billing already happened above the branch.
-          logger.warn(`[Permission] Tool "${toolName}" is denied — failing execution`);
-          const deniedMessage = `Execution stopped: tool "${toolName}" is not permitted`;
-          // `callerSafe`: this string names only a tool the caller already knows about, and
-          // the public poll response is documented to name the gated tool - so it is
-          // published verbatim rather than collapsed by the sanitizer.
-          await agentExecutionRepository.markFailed(executionId, { message: deniedMessage, callerSafe: true });
-          await sendWs('failed', {
-            executionId,
-            reason: 'tool_denied',
-            toolName,
-          });
-          // Settle the dispatch-time Quest, as the hard-error path below does. Without
-          // this the prompt bubble stays `pending` with an empty reply forever - the
-          // status is deliberately `pending` at dispatch so Slack pollers don't fire on
-          // an empty `replies`, and only `persistRunAsQuest` ever flips it to `done`.
-          await persistRunAsQuest(executionId, `${deniedMessage}.`, logger);
-          return;
-        }
-
-        // A headless run (REST dispatch) has nobody to ask - see `resolveGateDisposition`
-        // for why that is treated as denial rather than a pause.
-        if (disposition === 'no_approver') {
-          logger.warn(`[Permission] Tool "${toolName}" needs approval but the run is headless - failing`, {
-            executionId,
-            toolName,
-          });
-          const headlessMessage =
-            `Execution stopped: tool "${toolName}" requires approval, and this run was started ` +
-            'without an interactive client to approve it. Re-run with a "tools" allowlist that ' +
-            'excludes approval-gated tools, or start the run over the WebSocket route.';
-          // `callerSafe`: written for the REST caller specifically - it names the gated tool
-          // and the remedy, which is exactly what the contract promises in `error`.
-          await agentExecutionRepository.markFailed(executionId, { message: headlessMessage, callerSafe: true });
-          // Settle the dispatch-time Quest so chat history shows the reason instead of a
-          // permanently `pending` empty bubble - same reasoning as the denied branch above.
-          await persistRunAsQuest(executionId, `${headlessMessage}`, logger);
-          return;
-        }
-
-        // disposition === 'ask' - pause and ask the user. Note: the tool
-        // has already executed (Phase 1 limitation) - approval gates future
-        // iterations, not this one. Checkpoint persistence and iteration
-        // billing already happened above the branch.
-        logger.info(`[Permission] Tool "${toolName}" needs approval, pausing execution`);
-        await agentExecutionRepository.updateStatus(executionId, 'awaiting_permission');
-        await agentExecutionRepository.updatePermissionState(executionId, {
-          pendingPermission: {
-            toolName,
-            toolInput,
-            requestedAt: new Date(),
-          },
-        });
-
-        await sendWs('permission_request', {
-          executionId,
-          toolName,
-          toolInput,
-          // 0-indexed to match per-step `iteration_step` events and the
-          // accordion labels in `IterationStream` (which renders
-          // `Iteration {group.iteration + 1}`). `iterationIndex` is the
-          // agent's 1-indexed `this.iterations` after the iteration ran,
-          // so subtract 1 here so `PermissionCard`'s `pending.iteration + 1`
-          // display lines up with the iteration the user is actually
-          // approving.
-          iteration: Math.max(0, iterationIndex - 1),
-        });
-
-        // Lambda exits - client sends permission_response via WebSocket,
-        // which re-invokes this Lambda with ContinuationSchema
         return;
       }
 
@@ -3262,6 +3390,10 @@ async function processSubagentDispatch(
       // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
       // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
       sessionRetrievalTags: session.retrievalTags,
+      // Its sidecar, and NOT optional to forward: without it an empty scope reads as "no lake
+      // opinion" and the agent searches every lake its owner can reach - the opposite of what a
+      // deliberate no-lake session asked for. See sessionGroundsOnNoLake.
+      sessionLakeScopeExplicit: session.lakeScopeExplicit,
       // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
       // confirmed the session belongs to this run before this ToolBuilderDeps is built.
       sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,
@@ -3361,6 +3493,7 @@ async function processSubagentDispatch(
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: child.imageConfig,
       audioConfig: child.audioConfig,
+      imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });
 
     // Lattice opt-in pool for this subagent (and any grandchildren it delegates
@@ -3382,6 +3515,9 @@ async function processSubagentDispatch(
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       getAbortSignal: () => abortController.signal,
       config: subagentToolConfig,
+      // This site passes no `enabledTools`, so the denylist is the only thing standing between a
+      // session-forbidden MCP tool and a dispatched subagent.
+      sessionDisabledTools: session.disabledTools,
       mcpToolsByServer,
       // Empty on purpose: buildSharedTools RETURNS only `tools` (agent-only MCP
       // tools are excluded from the return), and that return is passed as the

@@ -1,8 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ImageGenerationService } from './ImageGeneration';
 import { SUMMARIZATION_CONFIG } from './ChatCompletionFeatures';
-import { ImageModels, ModelBackend, type ISessionDocument, type ModelInfo } from '@bike4mind/common';
+import {
+  ImageModels,
+  MAX_REFERENCE_IMAGES,
+  ModelBackend,
+  type ISessionDocument,
+  type ModelInfo,
+} from '@bike4mind/common';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
+import { getSettingsMap } from '@bike4mind/utils';
+import { OMITTED_QUALITY_TIER } from './imageCostCalculator/OpenAIImageCostCalculator';
 import type { Logger } from '@bike4mind/observability';
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
@@ -131,6 +139,7 @@ describe('ImageGenerationService.selectInputImage', () => {
       supportsImageVariation: boolean;
       intent?: 'fresh' | 'continuation';
       fabFileIds?: string[];
+      referenceImageFabFileIds?: string[];
       userId?: string;
       userGroups?: string[];
     }
@@ -139,6 +148,7 @@ describe('ImageGenerationService.selectInputImage', () => {
     (service as any).selectInputImage({
       sessionId: 's1',
       fabFileIds: args.fabFileIds ?? [],
+      referenceImageFabFileIds: args.referenceImageFabFileIds,
       userId: args.userId ?? 'u1',
       userGroups: args.userGroups,
       model: args.model,
@@ -274,6 +284,153 @@ describe('ImageGenerationService.selectInputImage', () => {
   });
 });
 
+describe('ImageGenerationService.selectInputImage reference images (#2744)', () => {
+  type FakeFile = { id: string; filePath: string; mimeType: string; moderationStatus: string };
+  const cleanImage = (id: string): FakeFile => ({
+    id,
+    filePath: `fab/${id}.png`,
+    mimeType: 'image/png',
+    moderationStatus: 'clean',
+  });
+
+  const makeService = (fabFilesById: Record<string, Partial<FakeFile>>) => {
+    const findAccessibleInIds = vi.fn(async (ids: string[]) =>
+      (ids || []).map(id => fabFilesById?.[id]).filter(Boolean)
+    );
+    const service = new ImageGenerationService({
+      db: { fabFiles: { findAccessibleInIds }, quests: { getMostRecentChatHistory: vi.fn(async () => []) } },
+    } as any);
+    return { service, findAccessibleInIds };
+  };
+
+  const select = (
+    service: ImageGenerationService,
+    args: { model: string; fabFileIds?: string[]; referenceImageFabFileIds?: string[] }
+  ) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).selectInputImage({
+      sessionId: 's1',
+      fabFileIds: args.fabFileIds ?? [],
+      referenceImageFabFileIds: args.referenceImageFabFileIds,
+      userId: 'u1',
+      userGroups: ['g1'],
+      model: args.model,
+      modelInfo: { supportsImageVariation: true } as ModelInfo,
+      intent: 'fresh',
+      logger: silentLogger,
+    });
+
+  it('returns anchors in the order the caller listed them, not the repo order', async () => {
+    // The repo returns whatever Mongo hands back; order is the caller's contract because
+    // OpenAI binds a mask to element 0 and reads the rest positionally.
+    const { service } = makeService({ a: cleanImage('a'), b: cleanImage('b'), c: cleanImage('c') });
+
+    const result = await select(service, {
+      model: ImageModels.GPT_IMAGE_2,
+      referenceImageFabFileIds: ['c', 'a', 'b'],
+    });
+
+    expect(result.referenceImages.map((f: FakeFile) => f.id)).toEqual(['c', 'a', 'b']);
+  });
+
+  it("looks anchors up as the caller, so another user's file is never presigned", async () => {
+    const { service, findAccessibleInIds } = makeService({ a: cleanImage('a') });
+
+    await select(service, { model: ImageModels.GPT_IMAGE_2, referenceImageFabFileIds: ['a'] });
+
+    expect(findAccessibleInIds).toHaveBeenCalledWith(['a'], { userId: 'u1', userGroups: ['g1'] }, undefined);
+  });
+
+  it('rejects an anchor the caller cannot access rather than silently rendering fewer', async () => {
+    // Silently dropping would bill for an image the user did not describe, with nothing in
+    // the response explaining why it looks wrong.
+    const { service } = makeService({ a: cleanImage('a') });
+
+    await expect(
+      select(service, { model: ImageModels.GPT_IMAGE_2, referenceImageFabFileIds: ['a', 'nope'] })
+    ).rejects.toThrow(/nope/);
+  });
+
+  it('rejects an anchor that is held or blocked by moderation', async () => {
+    const { service } = makeService({ a: { ...cleanImage('a'), moderationStatus: 'blocked' } });
+
+    await expect(select(service, { model: ImageModels.GPT_IMAGE_2, referenceImageFabFileIds: ['a'] })).rejects.toThrow(
+      /moderation/
+    );
+  });
+
+  it('rejects a non-image anchor', async () => {
+    const { service } = makeService({ a: { ...cleanImage('a'), mimeType: 'application/pdf' } });
+
+    await expect(select(service, { model: ImageModels.GPT_IMAGE_2, referenceImageFabFileIds: ['a'] })).rejects.toThrow(
+      /not an image/
+    );
+  });
+
+  it('rejects more anchors than the cap, which is what bounds the unbilled input cost', async () => {
+    const { service } = makeService({});
+    const tooMany = Array.from({ length: MAX_REFERENCE_IMAGES + 1 }, (_, i) => `f${i}`);
+
+    await expect(
+      select(service, { model: ImageModels.GPT_IMAGE_2, referenceImageFabFileIds: tooMany })
+    ).rejects.toThrow(/At most/);
+  });
+
+  it('drops anchors for a non-gpt-image model instead of failing the render', async () => {
+    // Only OpenAI's edit endpoint is wired for a multi-image array; BFL/Gemini would 400.
+    const { service, findAccessibleInIds } = makeService({ a: cleanImage('a') });
+
+    const result = await select(service, {
+      model: ImageModels.FLUX_PRO_1_1,
+      referenceImageFabFileIds: ['a'],
+    });
+
+    expect(result.referenceImages).toEqual([]);
+    expect(findAccessibleInIds).not.toHaveBeenCalledWith(['a'], expect.anything(), expect.anything());
+  });
+
+  it('collapses a repeated anchor id instead of paying for the same image twice', async () => {
+    // OpenAI bills input tokens per image in the array, and a repeat teaches the model
+    // nothing new - so a duplicate is pure cost plus a wasted slot against the cap.
+    const { service, findAccessibleInIds } = makeService({ a: cleanImage('a'), b: cleanImage('b') });
+
+    const result = await select(service, {
+      model: ImageModels.GPT_IMAGE_2,
+      referenceImageFabFileIds: ['a', 'b', 'a'],
+    });
+
+    // First occurrence wins, so de-duplication cannot reorder what the caller asked for.
+    expect(result.referenceImages.map((f: FakeFile) => f.id)).toEqual(['a', 'b']);
+    expect(findAccessibleInIds).toHaveBeenCalledWith(['a', 'b'], expect.anything(), undefined);
+  });
+
+  it('counts the cap against unique ids, not raw array slots', async () => {
+    const { service } = makeService(
+      Object.fromEntries(Array.from({ length: MAX_REFERENCE_IMAGES }, (_, i) => [`f${i}`, cleanImage(`f${i}`)]))
+    );
+    const ids = Array.from({ length: MAX_REFERENCE_IMAGES }, (_, i) => `f${i}`);
+
+    const result = await select(service, {
+      model: ImageModels.GPT_IMAGE_2,
+      // One over the cap by raw length, exactly at it once de-duplicated.
+      referenceImageFabFileIds: [...ids, ids[0]],
+    });
+
+    expect(result.referenceImages).toHaveLength(MAX_REFERENCE_IMAGES);
+  });
+
+  it('makes no extra lookup when no anchors are requested', async () => {
+    const { service, findAccessibleInIds } = makeService({});
+
+    const result = await select(service, { model: ImageModels.GPT_IMAGE_2 });
+
+    expect(result.referenceImages).toEqual([]);
+    // One call only: the workbench lookup. An unconditional second call would add a DB
+    // roundtrip to every image generation.
+    expect(findAccessibleInIds).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('ImageGenerationService.invoke (image-parameter passthrough)', () => {
   // Regression: safety_tolerance, prompt_upsampling, seed, and output_format were undeclared on
   // GenerateImageIvokeParamsSchema, so Zod stripped them from parsedBody before `...rest` ever
@@ -341,6 +498,28 @@ describe('ImageGenerationService.invoke (image-parameter passthrough)', () => {
     const questInput = create.mock.calls[0][0];
     expect(questInput.promptMeta.model.parameters).not.toHaveProperty('seed');
     expect(questInput.promptMeta.model.parameters).not.toHaveProperty('output_format');
+  });
+
+  it('steps a gpt-image-2 selection down to gpt-image-1.5 when background is transparent', async () => {
+    const startImageGenerationProcess = vi.fn(async () => undefined);
+    const { service, create } = makeInvokeService(startImageGenerationProcess);
+
+    await service.invoke({
+      body: {
+        sessionId: 'session1',
+        prompt: 'a cutout icon',
+        model: ImageModels.GPT_IMAGE_2,
+        fabFileIds: [],
+        background: 'transparent',
+      } as any,
+      userId: 'user1',
+    });
+
+    expect(startImageGenerationProcess).toHaveBeenCalledWith(
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5, background: 'transparent' })
+    );
+    const questInput = create.mock.calls[0][0];
+    expect(questInput.promptMeta.model.name).toBe(ImageModels.GPT_IMAGE_1_5);
   });
 });
 
@@ -595,5 +774,178 @@ describe('ImageGenerationService.validateUserCredits (per-member cap)', () => {
       userDetails: [{ id: 'user1', usedCredits: 999_999 }],
     };
     await expect(validate(organization)).resolves.toMatchObject({ requiredCredits: expect.any(Number) });
+  });
+});
+
+describe('ImageGenerationService.process (GPT-Image omitted-quality pin)', () => {
+  // #3007: a GPT-Image request that names no tier used to reach OpenAI with no `quality` at
+  // all, so OpenAI applied its own 'auto' and could render at high effort - while the single,
+  // never-reconciled credit hold had already been taken at the medium price. process() now
+  // forwards the tier it bills. These assert the dispatch half; the billing half (unchanged)
+  // is pinned in OpenAIImageCostCalculator.test.ts.
+  const gptImageModelInfo = {
+    id: ImageModels.GPT_IMAGE_2,
+    type: 'image',
+    name: ImageModels.GPT_IMAGE_2,
+    backend: ModelBackend.OpenAI,
+    contextWindow: 10000,
+    max_tokens: 10000,
+    supportsImageVariation: false,
+    pricing: { 1: { input: 0, output: 0 } },
+  } as unknown as ModelInfo;
+
+  const makeProcessService = () => {
+    const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined };
+    return new ImageGenerationService({
+      db: {
+        quests: { findById: vi.fn(async () => quest as any), update: vi.fn(), updateMany: vi.fn() },
+        users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
+        organizations: { findById: vi.fn(async () => null) },
+        fabFiles: { findAccessibleInIds: vi.fn(async () => []) },
+      },
+      logEvent: vi.fn().mockResolvedValue(undefined),
+      abilityGetter: vi.fn().mockReturnValue({}),
+      storage: {} as any,
+      fabFileStorage: {} as any,
+      wsHttpsUrl: 'https://ws.example.com',
+    } as any);
+  };
+
+  const generateWith = async (quality?: string) => {
+    vi.mocked(getAvailableModels).mockResolvedValue([gptImageModelInfo]);
+    mockGeminiGenerate.mockReset();
+    mockGeminiGenerate.mockResolvedValue([]); // empty images short-circuits storage/moderation
+
+    await makeProcessService().process({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        userId: 'user1',
+        prompt: 'a red bicycle',
+        model: ImageModels.GPT_IMAGE_2,
+        size: '1024x1024',
+        ...(quality ? { quality } : {}),
+      } as any,
+      logger: silentLogger,
+    });
+
+    return mockGeminiGenerate.mock.calls[0]?.[1];
+  };
+
+  it('forwards the billed tier when the request names no quality', async () => {
+    expect(await generateWith()).toMatchObject({ quality: OMITTED_QUALITY_TIER });
+  });
+
+  it('bills and renders an omitted quality at the same tier', async () => {
+    const omitted = await generateWith();
+    const explicit = await generateWith(OMITTED_QUALITY_TIER);
+
+    expect(omitted.quality).toBe(explicit.quality);
+  });
+
+  // 'auto' is the opt-in escape hatch the pin leaves open: it reaches OpenAI unresolved and is
+  // priced at the ceiling (PR #2977). Pinning it here would silently downgrade that render.
+  it('leaves an explicit "auto" unresolved for OpenAI to choose', async () => {
+    expect(await generateWith('auto')).toMatchObject({ quality: 'auto' });
+  });
+
+  it.each(['low', 'high'])('leaves an explicit %s tier alone', async quality => {
+    expect(await generateWith(quality)).toMatchObject({ quality });
+  });
+});
+
+describe('ImageGenerationService.process (size normalization)', () => {
+  const makeProcessService = () => {
+    const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined };
+    return new ImageGenerationService({
+      db: {
+        quests: { findById: vi.fn(async () => quest as any), update: vi.fn(), updateMany: vi.fn() },
+        users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
+        organizations: { findById: vi.fn(async () => null) },
+        fabFiles: { findAccessibleInIds: vi.fn(async () => []) },
+        creditTransactions: {},
+      },
+      logEvent: vi.fn().mockResolvedValue(undefined),
+      abilityGetter: vi.fn().mockReturnValue({}),
+      storage: {} as any,
+      fabFileStorage: {} as any,
+      wsHttpsUrl: 'https://ws.example.com',
+    } as any);
+  };
+
+  const generateWith = async (model: ImageModels, backend: ModelBackend, size?: string) => {
+    vi.mocked(getAvailableModels).mockResolvedValue([
+      {
+        id: model,
+        type: 'image',
+        name: model,
+        backend,
+        contextWindow: 10000,
+        max_tokens: 10000,
+        supportsImageVariation: false,
+        pricing: { 1: { input: 0, output: 0 } },
+      } as unknown as ModelInfo,
+    ]);
+    mockGeminiGenerate.mockReset();
+    mockGeminiGenerate.mockResolvedValue([]); // empty images short-circuits storage/moderation
+
+    const service = makeProcessService();
+    const validateUserCredits = vi
+      .spyOn(service as any, 'validateUserCredits')
+      .mockResolvedValue({ requiredCredits: 0, usdCost: 0 });
+    // Twice: process() reads the settings map once for the credit gate and once for moderation.
+    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' }).mockResolvedValueOnce({});
+
+    await service.process({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        userId: 'user1',
+        prompt: 'a red bicycle',
+        model,
+        ...(size ? { size } : {}),
+      } as any,
+      logger: silentLogger,
+    });
+
+    return {
+      rendered: mockGeminiGenerate.mock.calls[0]?.[1],
+      billed: validateUserCredits.mock.calls[0]?.[3] as { size?: string } | undefined,
+    };
+  };
+
+  it.each([
+    [ImageModels.GPT_IMAGE_1_5, '1440x810', '1024x1024'],
+    [ImageModels.GPT_IMAGE_1_5, '2048x2048', '1024x1024'],
+    [ImageModels.GPT_IMAGE_1_5, '1536x1024', '1536x1024'],
+    [ImageModels.GPT_IMAGE_2, '2048x2048', '2048x2048'],
+    [ImageModels.GPT_IMAGE_2, 'auto', 'auto'],
+  ])('%s asked for %s bills and renders at %s', async (model, size, expected) => {
+    const { rendered, billed } = await generateWith(model, ModelBackend.OpenAI, size);
+    expect(rendered).toMatchObject({ size: expected });
+    expect(billed).toMatchObject({ size: expected });
+  });
+
+  // OpenAIImageService falls an out-of-constraint gpt-image-2 size back before rendering, so
+  // the size recorded and billed here falls back the same way rather than naming a size
+  // that never renders.
+  it('falls an out-of-constraint gpt-image-2 size back to the tier default', async () => {
+    const { rendered, billed } = await generateWith(ImageModels.GPT_IMAGE_2, ModelBackend.OpenAI, '5000x5000');
+    expect(rendered).toMatchObject({ size: '1024x1024' });
+    expect(billed).toMatchObject({ size: '1024x1024' });
+  });
+
+  it('leaves an absent GPT-Image size absent so the renderer picks the tier default', async () => {
+    const { rendered, billed } = await generateWith(ImageModels.GPT_IMAGE_2, ModelBackend.OpenAI);
+    expect(rendered?.size).toBeUndefined();
+    expect(billed?.size).toBeUndefined();
+  });
+
+  // The OpenAI size rule must not be applied to other providers: BFL takes its own
+  // dimensions, which the legacy dall-e list would reject.
+  it('forwards a BFL size to BFL untouched', async () => {
+    const { rendered, billed } = await generateWith(ImageModels.FLUX_PRO_1_1, ModelBackend.BFL, '1440x810');
+    expect(rendered).toMatchObject({ width: 1440, height: 810 });
+    expect(billed).toMatchObject({ size: '1440x810' });
   });
 });

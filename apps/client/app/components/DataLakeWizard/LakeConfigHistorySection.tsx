@@ -34,6 +34,7 @@ const FIELD_LABEL: Record<LakeConfigChangeField, string> = {
   auditQueryTextEnabled: 'Query-text auditing',
   lakeMemoryEnabled: 'Lake memory',
   status: 'Status',
+  origin: 'Origin',
   createdByUserId: 'Created by',
   effectiveOwnerUserId: 'Owner',
   accessGrant: 'Access grant',
@@ -51,9 +52,16 @@ const ACTION_LABEL: Record<LakeConfigChangeAction, string> = {
   // Accept-time wording on purpose: the event is recorded when the purge is ACCEPTED, not when the
   // sweep finishes, so 'Purged' would claim a completion this row cannot vouch for.
   purge: 'Permanent deletion accepted',
+  promote: 'Published',
+  demote: 'Moved back to draft',
+  // Historical only - no code path emits this anymore (see the action's own doc comment).
   'auto-activate': 'Activated automatically',
   'grant-access': 'Access granted',
   'revoke-access': 'Access revoked',
+  // Says WHY ownership moved, not just that it did: nobody requested this one, so wording that
+  // matched 'Ownership transferred' would read as a deliberate handover an owner could go looking
+  // for in vain.
+  'membership-succession': 'Ownership passed on (creator left the org)',
 };
 
 /**

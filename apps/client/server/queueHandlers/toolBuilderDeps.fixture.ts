@@ -21,7 +21,7 @@
  * adapter (or a `vi.fn()`) for the one surface it exercises.
  */
 import { Logger } from '@bike4mind/observability';
-import type { ToolBuilderDeps, ToolBuilderCallbacks } from '@bike4mind/services';
+import type { ToolBuilderDeps, ToolBuilderCallbacks } from '@bike4mind/services/llm';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import type { IUserDocument } from '@bike4mind/common';
 

@@ -62,6 +62,18 @@ export const LAKE_CONFIG_CHANGE_ACTIONS = [
   'delete',
   'restore',
   /**
+   * draft -> active, requested on purpose by an owner or admin through `promoteDataLake` - the
+   * only door onto `activateIfDraft`. Replaces the old implicit flip: `auto-activate`
+   * below is kept for reading events recorded before this existed, but nothing emits it anymore.
+   */
+  'promote',
+  /**
+   * The reverse of `promote`: active -> draft, through `demoteDataLake`. Pulls the lake out of
+   * grounding (checked live on `status === 'active'` at retrieval time, never cached), so this
+   * takes effect on the lake's next lookup rather than needing its own settle window.
+   */
+  'demote',
+  /**
    * The phase-2 hard delete, recorded when the purge is ACCEPTED rather than when the sweep
    * finishes (#1744). Deliberately NOT folded into `delete`: that verb is the recoverable phase-1
    * soft delete, and an audit trail that cannot distinguish the reversible request from the
@@ -73,11 +85,12 @@ export const LAKE_CONFIG_CHANGE_ACTIONS = [
    */
   'purge',
   /**
-   * The draft -> active flip driven by `activateIfDraft` (a tag edit, a file toggle, a batch
-   * completion). Always records under the `system` RUNG, whoever triggered it: nothing authorized
-   * it, because `activateIfDraft` runs no authorization check at all. The PRINCIPAL is a different
-   * question - the tag doors know their operator and name them, while the batch doors do not and
-   * record `system` for that too.
+   * HISTORICAL ONLY: the old implicit draft -> active flip that used to run as a side
+   * effect of a tag edit, a file toggle or a batch completion, always under the `system` rung
+   * because nothing authorized it. No code path emits this anymore - `recomputeLakeStats` no
+   * longer activates a draft lake on its own, and the deliberate replacement (`promote`) is
+   * recorded under the rung that actually authorized it. Kept in the enum so a reader of an
+   * existing event history can still resolve a historical row's action.
    */
   'auto-activate',
   /**
@@ -88,6 +101,20 @@ export const LAKE_CONFIG_CHANGE_ACTIONS = [
    */
   'grant-access',
   'revoke-access',
+  /**
+   * Ownership moved to the lake org's billing owner because the lake's CREATOR left the
+   * organization, and no other owner grant remained to take over. Recorded by the departure path
+   * (`lapseDepartedMemberLakeAccess`), always under the `system` rung: an org membership change
+   * drove it, so no lake-side relationship authorized it.
+   *
+   * Deliberately NOT `transfer-ownership`: that is a door an owner walks through on purpose, under
+   * its own narrower authority ladder and consent guard, and it DEMOTES the prior owner to curator
+   * rather than dropping them. Nobody requested this one, and the prior owner keeps nothing - the
+   * whole point is that their access has lapsed. Also not `grant-access`, which refuses the `owner`
+   * role outright. An audit that could not tell a deliberate handover from an automatic succession
+   * would be hiding the only fact that matters here: why the owner changed without anyone asking.
+   */
+  'membership-succession',
 ] as const;
 export type LakeConfigChangeAction = (typeof LAKE_CONFIG_CHANGE_ACTIONS)[number];
 
@@ -119,6 +146,7 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   auditQueryTextEnabled: 'audited',
   lakeMemoryEnabled: 'audited',
   status: 'audited',
+  origin: 'audited',
   // Immutable by design (it anchors the membership prefix arm), so this is a tripwire rather than
   // an expected row: if it ever moves, the audit says so instead of the change passing unseen.
   createdByUserId: 'audited',
@@ -130,6 +158,10 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   totalChunkedChars: 'excluded',
   embeddingSpendMicroUsd: 'excluded',
   lastSyncAt: 'excluded',
+  // Sweep bookkeeping, not an operator choice - see IDataLake.lastHealthCheckedAt.
+  lastHealthCheckedAt: 'excluded',
+  // Sweep bookkeeping, not an operator choice - see IDataLake.lastInconsistencyScanAt.
+  lastInconsistencyScanAt: 'excluded',
   filesDeletedAt: 'excluded',
   filesArchivedAt: 'excluded',
   lakeMemoryExtractionAt: 'excluded',

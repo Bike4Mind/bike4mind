@@ -29,10 +29,33 @@ export interface IIterationBilling {
 
 // --- Pending Permission ---
 
+/**
+ * A tool call the agent's pre-execution gate withheld: the provider was never
+ * invoked, and a placeholder tool_result holds its slot in the checkpointed
+ * conversation until the user approves and the executor replays it by `id`.
+ */
+export interface IGatedToolCall {
+  id: string;
+  name: string;
+  input: unknown;
+}
+
 export interface IPendingPermission {
   toolName: string;
   toolInput: unknown;
   toolCallId?: string;
+  /**
+   * Every call the gate withheld in the paused iteration, including the one this
+   * request names. Carried here rather than in a top-level field so the pause and
+   * the work it is holding back are written and cleared in one operation.
+   */
+  gatedToolCalls?: IGatedToolCall[];
+  /**
+   * Set by the WebSocket approval handler before it re-invokes the executor. The
+   * resumed executor replays `gatedToolCalls` only when this is true, which is what
+   * keeps a one-time approval from leaking into `approvedTools`.
+   */
+  approved?: boolean;
   requestedAt: Date;
 }
 
@@ -367,6 +390,14 @@ export interface IAgentExecution {
    */
   failureReason?: 'abandoned';
 
+  /**
+   * Set when the abandoned-sweep's post-abandonment quest settlement fails for
+   * this execution. The execution is already terminal at that point, so
+   * `findStaleActiveIds` can never select it again - this is the only way a
+   * later tick can find it and retry. Cleared on a successful settle.
+   */
+  questSettlementFailedAt?: Date;
+
   // Permission state
   approvedTools: string[];
   deniedTools: string[];
@@ -479,11 +510,22 @@ const IterationBillingSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const GatedToolCallSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    name: { type: String, required: true },
+    input: { type: mongoose.Schema.Types.Mixed },
+  },
+  { _id: false, minimize: false }
+);
+
 const PendingPermissionSchema = new mongoose.Schema(
   {
     toolName: { type: String, required: true },
     toolInput: { type: mongoose.Schema.Types.Mixed },
     toolCallId: { type: String },
+    gatedToolCalls: { type: [GatedToolCallSchema], default: undefined },
+    approved: { type: Boolean },
     requestedAt: { type: Date, required: true },
   },
   // A zero-argument tool records `toolInput: {}`; without `minimize: false` that reads back as
@@ -654,6 +696,7 @@ const AgentExecutionSchema = new mongoose.Schema(
           height: { type: Number },
           aspect_ratio: { type: String },
           output_format: { type: String },
+          background: { type: String },
           prompt_upsampling: { type: Boolean },
           seed: { type: Number },
           safety_tolerance: { type: Number },
@@ -723,6 +766,7 @@ const AgentExecutionSchema = new mongoose.Schema(
       required: false,
     },
     failureReason: { type: String },
+    questSettlementFailedAt: { type: Date },
 
     // Permission state
     approvedTools: { type: [String], default: [] },
@@ -793,6 +837,9 @@ AgentExecutionSchema.index({ sessionId: 1, status: 1 }); // Find active executio
 AgentExecutionSchema.index({ questId: 1 }); // Lookup by quest
 AgentExecutionSchema.index({ status: 1, createdAt: 1 }); // Find pending/running
 AgentExecutionSchema.index({ status: 1, updatedAt: 1 }); // listStuck + findStaleActiveIds (abandoned-sweep)
+// findFailedQuestSettlementIds (abandoned-sweep retry pass). Sparse: only executions whose
+// settlement failed carry this field, so a dense index would mostly index nulls.
+AgentExecutionSchema.index({ questSettlementFailedAt: 1 }, { sparse: true });
 // Subagent lookup + child-snapshot replay. `findChildExecutions` does
 // `.find({ parentExecutionId }).sort({ createdAt: 1 })`; the compound index lets
 // MongoDB serve the sort from the index instead of an in-memory sort on every
@@ -1211,7 +1258,8 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * Transition the given executions to `failed` + `failureReason: 'abandoned'`.
    * Only executions still in a sweepable active status are flipped, so a
    * concurrent natural completion / explicit abort wins the race and we
-   * don't clobber its terminal state.
+   * don't clobber its terminal state. A supplied cutoff also preserves active work
+   * that refreshed its heartbeat after candidate selection.
    *
    * Uses per-doc `findOneAndUpdate` (status-guarded) so the returned array
    * reflects only the docs we actually wrote to - callers can safely emit a
@@ -1222,7 +1270,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * thousands of stale docs would otherwise hammer the connection pool on the
    * first sweep.
    */
-  async markAbandoned(ids: string[]): Promise<Array<{ id: string; userId: string }>> {
+  async markAbandoned(ids: string[], olderThan?: Date): Promise<Array<{ id: string; userId: string }>> {
     if (ids.length === 0) return [];
     const CHUNK_SIZE = 200;
     const now = new Date();
@@ -1234,7 +1282,11 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
         chunk.map(id =>
           this.model
             .findOneAndUpdate(
-              { _id: new mongoose.Types.ObjectId(id), status: { $in: this.sweepableStatuses } },
+              {
+                _id: new mongoose.Types.ObjectId(id),
+                status: { $in: this.sweepableStatuses },
+                ...(olderThan ? { updatedAt: { $lt: olderThan } } : {}),
+              },
               {
                 $set: {
                   status: 'failed',
@@ -1253,6 +1305,50 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       }
     }
     return results;
+  }
+
+  /**
+   * Stamp executions whose post-abandonment quest settlement failed, so the
+   * abandoned-sweep's retry pass can find them again by `questSettlementFailedAt`
+   * rather than by status - these executions are already terminal.
+   */
+  async markQuestSettlementFailed(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    await this.model.updateMany(
+      { _id: { $in: ids.map(id => new mongoose.Types.ObjectId(id)) } },
+      { $set: { questSettlementFailedAt: new Date() } }
+    );
+  }
+
+  /** Clear the retry marker once a later pass settles the execution's quest. */
+  async clearQuestSettlementFailed(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    await this.model.updateMany(
+      { _id: { $in: ids.map(id => new mongoose.Types.ObjectId(id)) } },
+      { $unset: { questSettlementFailedAt: '' } }
+    );
+  }
+
+  /**
+   * Executions carrying an unresolved settlement-retry marker, oldest first so
+   * a permanently-failing one surfaces instead of being crowded out by newer
+   * candidates. Bounded by `limit` - the retry pass runs every tick, so a
+   * capped scan self-corrects on the next run rather than needing to be exact.
+   *
+   * `olderThan` excludes markers written by the caller's own current pass, so
+   * a failure only becomes retry-eligible on a later tick - the same
+   * candidate-selection race guard `findStaleActiveIds`/`markAbandoned` use.
+   */
+  async findFailedQuestSettlementIds(opts: {
+    limit: number;
+    olderThan: Date;
+  }): Promise<Array<{ id: string; failedAt: Date }>> {
+    const docs = await this.model
+      .find({ questSettlementFailedAt: { $exists: true, $lt: opts.olderThan } }, { _id: 1, questSettlementFailedAt: 1 })
+      .sort({ questSettlementFailedAt: 1 })
+      .limit(opts.limit)
+      .lean<Array<{ _id: mongoose.Types.ObjectId; questSettlementFailedAt: Date }>>();
+    return docs.map(d => ({ id: d._id.toString(), failedAt: d.questSettlementFailedAt }));
   }
 
   async updateStatus(id: string, status: AgentExecutionStatus): Promise<void> {
@@ -1372,16 +1468,84 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     await this.model.updateOne({ _id: id }, { $set: { resolvedMementoGates: gates } });
   }
 
+  async restoreRejectedResume(
+    id: string,
+    state: {
+      status: 'awaiting_permission' | 'paused';
+      pendingPermission?: IPendingPermission;
+      pendingGate?: IPendingGate;
+    }
+  ): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, status: 'continuing', abortedAt: { $exists: false } },
+      { $set: state }
+    );
+    return result.modifiedCount > 0;
+  }
+
+  /**
+   * Mark the pending permission approved without clearing it, so the resumed
+   * executor can still read the withheld calls it has to replay. CAS-guarded on
+   * `status: 'awaiting_permission'` AND `pendingPermission.approved` not already
+   * `true` - the status alone is not enough: `timestamps: true` bumps `updatedAt`
+   * on every write, so a `$set` to the same `approved: true` value still reports
+   * `modifiedCount > 0` even though nothing changed, and the status does not flip
+   * until the resumed executor processes the pause. The `approved` guard is what
+   * actually makes a second approval for a pause already consumed return `false`.
+   *
+   * `approvedTool`, when given, is added to `approvedTools` (via `$addToSet`, so a
+   * repeat "remember for session" cannot duplicate the entry) in the SAME update as
+   * the CAS - a second write here could land after a process death between the two,
+   * leaving a retry's CAS miss with a "remember for session" that never took.
+   *
+   * `toolCallId`, when given, is filtered on too: a name-only CAS accepts a stale
+   * response for a since-replaced pause on the same tool (two withheld calls to
+   * the same tool with different arguments re-pause one after the other under the
+   * same `toolName`), which would let the wrong call's arguments run unapproved.
+   * Omitted only for a pause persisted before this field existed.
+   */
+  async approvePendingPermission(id: string, opts?: { approvedTool?: string; toolCallId?: string }): Promise<boolean> {
+    const update: Record<string, unknown> = { $set: { 'pendingPermission.approved': true } };
+    if (opts?.approvedTool) {
+      update.$addToSet = { approvedTools: opts.approvedTool };
+    }
+    const filter: Record<string, unknown> = {
+      _id: id,
+      status: 'awaiting_permission',
+      pendingPermission: { $exists: true },
+      'pendingPermission.approved': { $ne: true },
+    };
+    if (opts?.toolCallId) {
+      filter['pendingPermission.toolCallId'] = opts.toolCallId;
+    }
+    const res = await this.model.updateOne(filter, update);
+    return res.modifiedCount > 0;
+  }
+
+  /**
+   * `approvedTool` has no production caller: the only "remember for session" approval
+   * path is `approvePendingPermission`, which folds it into the same CAS write as the
+   * approval itself (see that method's doc comment). Denial goes through
+   * `denyPendingPermission` instead, which is CAS-guarded the same way approval is -
+   * this method's own `matchToolCallId` filter binds a write to a specific pause's
+   * identity, but not to the `awaiting_permission` / not-already-approved state, so it
+   * is not safe against a concurrent approve/deny race on its own.
+   */
   async updatePermissionState(
     id: string,
     update: {
       pendingPermission?: IPendingPermission | null;
-      approvedTool?: string;
-      deniedTool?: string;
+      /**
+       * Filters the write onto the pause the caller actually read, the same
+       * identity guard `approvePendingPermission` applies to approval - without
+       * it, a write against one pause could land after a replay already
+       * re-paused on a different withheld call for the same tool, clearing that
+       * one out from under an approval that was about to land for it.
+       */
+      matchToolCallId?: string;
     }
   ): Promise<void> {
     const setOps: Record<string, unknown> = {};
-    const pushOps: Record<string, unknown> = {};
     const unsetOps: Record<string, unknown> = {};
 
     if (update.pendingPermission === null) {
@@ -1390,21 +1554,55 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       setOps.pendingPermission = update.pendingPermission;
     }
 
-    if (update.approvedTool) {
-      pushOps.approvedTools = update.approvedTool;
-    }
-    if (update.deniedTool) {
-      pushOps.deniedTools = update.deniedTool;
-    }
-
     const ops: Record<string, unknown> = {};
     if (Object.keys(setOps).length > 0) ops.$set = setOps;
-    if (Object.keys(pushOps).length > 0) ops.$addToSet = pushOps;
     if (Object.keys(unsetOps).length > 0) ops.$unset = unsetOps;
 
     if (Object.keys(ops).length > 0) {
-      await this.model.updateOne({ _id: id }, ops);
+      const filter: Record<string, unknown> = { _id: id };
+      if (update.matchToolCallId) {
+        filter['pendingPermission.toolCallId'] = update.matchToolCallId;
+      }
+      await this.model.updateOne(filter, ops);
     }
+  }
+
+  /**
+   * Mirrors `approvePendingPermission`'s CAS, on the deny side. Same filter (status
+   * `awaiting_permission`, pause exists, `pendingPermission.approved` not already
+   * `true`, and identity-pinned on `toolCallId` when given) so an approval that has
+   * already claimed this pause cannot be undone by a denial racing it from another
+   * tab - and clears the pause, records the denied tool, and moves the run to
+   * `failed` in the SAME write, so a process death between "clear the pause" and
+   * "mark failed" can never leave a doc with no pending permission and no terminal
+   * status either.
+   */
+  async denyPendingPermission(
+    id: string,
+    opts: { toolCallId?: string; deniedTool?: string; errorMessage: string }
+  ): Promise<boolean> {
+    const filter: Record<string, unknown> = {
+      _id: id,
+      status: 'awaiting_permission',
+      pendingPermission: { $exists: true },
+      'pendingPermission.approved': { $ne: true },
+    };
+    if (opts.toolCallId) {
+      filter['pendingPermission.toolCallId'] = opts.toolCallId;
+    }
+    const update: Record<string, unknown> = {
+      $set: {
+        status: 'failed',
+        error: { message: opts.errorMessage },
+        completedAt: new Date(),
+      },
+      $unset: { pendingPermission: '' },
+    };
+    if (opts.deniedTool) {
+      update.$addToSet = { deniedTools: opts.deniedTool };
+    }
+    const res = await this.model.updateOne(filter, update);
+    return res.modifiedCount > 0;
   }
 
   /**

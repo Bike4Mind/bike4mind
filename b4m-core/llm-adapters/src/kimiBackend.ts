@@ -1,5 +1,7 @@
 import {
   ChatModels,
+  createThinkMarkerEscaper,
+  escapeThinkMarkers,
   IMessage,
   ModelBackend,
   PermissionDeniedError,
@@ -169,6 +171,17 @@ export class KimiBackend implements ICompletionBackend {
         supportsImageVariation: false,
         releaseDate: '2026-01-01',
         trainingCutoff: '2025-01-01',
+        // Discontinued upstream by Moonshot: api.moonshot.ai no longer serves this
+        // id. A past deprecationDate hides it from the picker, but hiding alone
+        // strands a session whose pinned lastUsedModel still names it - the
+        // lookup misses and the run dies with "Invalid LLM backend specified"
+        // before the fallback loop can rescue it. `replacedBy` is what redirects
+        // that pin, through the catalog overlay in resolveDeprecatedModelId; its
+        // DEPRECATED_MODEL_MAP entry covers the same hop before this row is
+        // seeded. The two Bedrock-served Kimi ids are on AWS's lifecycle and are
+        // unaffected.
+        deprecationDate: '2026-08-31',
+        replacedBy: ChatModels.KIMI_K2_6,
         description:
           'The previous-generation Kimi, still the cheapest of the family. Superseded by K2.6 on quality at a modest price increase.',
       },
@@ -289,6 +302,10 @@ export class KimiBackend implements ICompletionBackend {
 
     if (!(response instanceof Stream)) {
       const streamedText: string[] = [];
+      // The empty guard keys on prose produced, not on streamedText: the monologue
+      // is wrapped into streamedText too, so a guard keyed there cannot tell a
+      // budget-exhausted reasoning turn from an answered one.
+      let sawProse = false;
 
       if (!response.choices || response.choices.length === 0) {
         throw new Error('No choices returned from the Moonshot API');
@@ -439,8 +456,11 @@ export class KimiBackend implements ICompletionBackend {
             return;
           }
         } else {
-          const content = c.message.content || '';
-          streamedText[c.index] = reasoningContent ? `<think>${reasoningContent}</think>${content}` : content;
+          const prose = c.message.content || '';
+          if (prose) sawProse = true;
+          streamedText[c.index] = reasoningContent
+            ? `<think>${escapeThinkMarkers(reasoningContent)}</think>${prose}`
+            : prose;
         }
       }
 
@@ -449,7 +469,7 @@ export class KimiBackend implements ICompletionBackend {
       // spent its whole max_completion_tokens budget thinking. Without this the
       // user gets a silent blank reply. The Bedrock path has the same guard in
       // bedrockBackend/base.ts; the direct path needs its own.
-      if (streamedText.every(text => !text) && toolsUsed.length === 0) {
+      if (!sawProse && toolsUsed.length === 0) {
         const finish = response.choices[0]?.finish_reason;
         throw new Error(
           finish === 'length'
@@ -480,9 +500,12 @@ export class KimiBackend implements ICompletionBackend {
 
     const func: { name?: string; id?: string; parameters?: string }[] = [];
     let isInThinkingBlock = false;
+    const reasoningEscaper = createThinkMarkerEscaper();
     let cachedTokensFromStream = 0;
     let streamFinishReason: string | undefined;
-    let sawAnyText = false;
+    // Prose, not streamedText: the monologue is wrapped into streamedText as well,
+    // so only content deltas count as an answer.
+    let sawProse = false;
 
     for await (const chunk of response) {
       const streamedText: string[] = [];
@@ -498,21 +521,30 @@ export class KimiBackend implements ICompletionBackend {
           streamFinishReason = c.finish_reason;
         }
 
+        const deltaReasoning = (c.delta as { reasoning_content?: string }).reasoning_content;
+
         // Ungated, for the same reason as the non-streaming path: reasoning arrives
         // by default on every current Kimi and is billed either way.
-        if ((c.delta as any).reasoning_content) {
+        if (deltaReasoning) {
+          const escapedReasoning = reasoningEscaper.push(deltaReasoning);
           if (!isInThinkingBlock) {
             isInThinkingBlock = true;
-            streamedText[c.index] = '<think>' + (c.delta as any).reasoning_content;
+            streamedText[c.index] = '<think>' + escapedReasoning;
           } else {
-            streamedText[c.index] = (c.delta as any).reasoning_content;
+            streamedText[c.index] = escapedReasoning;
           }
-          return;
+          // Falls through when the SAME delta also carries prose: Moonshot can end
+          // the monologue and start the answer in one chunk, and returning here
+          // dropped that first prose token. Returning is still right without
+          // prose, or the tool-call branch below would overwrite the monologue.
+          if (!c.delta.content) return;
         }
 
-        if (isInThinkingBlock && c.delta.content && !(c.delta as any).reasoning_content) {
+        if (isInThinkingBlock && c.delta.content) {
           isInThinkingBlock = false;
-          streamedText[c.index] = '</think>' + (c.delta.content || '');
+          sawProse = true;
+          streamedText[c.index] =
+            (streamedText[c.index] ?? '') + reasoningEscaper.flush() + '</think>' + c.delta.content;
           return;
         }
 
@@ -526,10 +558,9 @@ export class KimiBackend implements ICompletionBackend {
 
         if (func.length > 0) return;
 
+        if (c.delta.content) sawProse = true;
         streamedText[c.index] = c.delta.content || '';
       });
-
-      if (streamedText.some(t => t)) sawAnyText = true;
 
       const normalizedFinishReason = normalizeOpenAIFinishReason(streamFinishReason);
       await callback(streamedText, {
@@ -546,7 +577,7 @@ export class KimiBackend implements ICompletionBackend {
     // truncated mid-reasoning. Without this the tag stays open and the monologue
     // bleeds into the answer after the tool recursion.
     if (isInThinkingBlock) {
-      await callback(['</think>'], {
+      await callback([reasoningEscaper.flush() + '</think>'], {
         ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
@@ -555,10 +586,10 @@ export class KimiBackend implements ICompletionBackend {
     }
 
     // Empty-stream guard, mirroring the non-streaming path: a turn that emitted no
-    // text and has no tool call to make produced nothing usable. The most likely
+    // prose and has no tool call to make produced nothing usable. The most likely
     // cause is a reasoning model that spent its whole budget thinking; without this
     // the stream returns silently with zero callbacks and the chat hangs.
-    if (!sawAnyText && func.length === 0 && toolsUsed.length === 0) {
+    if (!sawProse && func.length === 0 && toolsUsed.length === 0) {
       throw new Error(
         streamFinishReason === 'length'
           ? `Moonshot returned no content for ${model}: the output budget was exhausted before any answer was produced (finish_reason: length). Raise maxTokens or lower the reasoning effort.`

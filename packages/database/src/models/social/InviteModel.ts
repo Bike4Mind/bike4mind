@@ -82,6 +82,26 @@ export const InviteSchema = new Schema<IInviteDocument>(
       type: String,
       required: false,
     },
+    // Who minted the invite, distinct from `username` (a display label, not an id).
+    // Absent on invites created before this field existed; accept.ts falls back to
+    // conservative behavior for those.
+    inviterId: {
+      type: String,
+      required: false,
+    },
+    // Names nobody by design (a redeemable share link), as opposed to a named invite whose
+    // recipients did not resolve. Absent on invites created before this field existed.
+    isLinkOnly: {
+      type: Boolean,
+      required: false,
+    },
+    // The share link's bearer secret (see IBaseInvite.token). Uniqueness is the data constraint that
+    // makes it safe to resolve an invite by this field alone, but it is declared at the bottom of the
+    // schema rather than here - see the index for why a plain `sparse` one would not do.
+    token: {
+      type: String,
+      required: false,
+    },
     accepted: {
       type: Number,
       required: true,
@@ -113,6 +133,15 @@ export const InviteSchema = new Schema<IInviteDocument>(
   }
 );
 
+// PARTIAL rather than sparse: DocumentDB honours `unique` on a sparse index but not the sparseness,
+// so every legacy tokenless invite collides on the missing value and the second one fails to save.
+// `$type: 'string'` (not `$exists`) also keeps an explicit null out of the constraint. Built by an
+// `ensure-invite-token-index` migration, because autoIndex is off in the deployed environments.
+InviteSchema.index(
+  { token: 1 },
+  { unique: true, partialFilterExpression: { token: { $type: 'string' } }, name: 'invite_token_unique' }
+);
+
 export const Invite =
   (mongoose.models.Invite as IInviteModel) ?? model<IInviteDocument, IInviteModel>('Invite', InviteSchema);
 
@@ -133,6 +162,17 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
     if (!pendingEmail) return 0;
     const result = await this.inviteModel.countDocuments(pendingEmailMatch(pendingEmail));
     return result;
+  }
+
+  /**
+   * Resolve an invite by its share-link bearer token. The empty-string guard matters: `token` is a
+   * sparse field, so querying it with '' (or any falsy value coerced to one) must not be allowed to
+   * match a row that simply has no token.
+   */
+  async findByToken(token: string): Promise<IInviteDocument | null> {
+    if (!token) return null;
+    const result = await this.inviteModel.findOne({ token });
+    return result ? (result.toJSON() as IInviteDocument) : null;
   }
 
   async findAllByDocumentId(documentId: string): Promise<IInviteDocument[]> {
@@ -211,6 +251,8 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
         documentId: 1,
         remaining: 1,
         recipients: 1,
+        isLinkOnly: 1,
+        expiresAt: 1,
         accepted: 1,
         createdAt: 1,
         updatedAt: 1,

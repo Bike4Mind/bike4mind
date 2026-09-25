@@ -275,6 +275,60 @@ describe('mergeRetrievalSummary', () => {
       });
     });
 
+    describe('postSpreadFloorCandidates', () => {
+      it('sums both counts across surfaces, same as the relative-floor pair', () => {
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 2, chars: 400, postSpreadFloorCandidates: 3 } }),
+          base({ injected: { chunks: 1, chars: 200, postSpreadFloorCandidates: 1 } })
+        );
+        expect(merged?.injected?.postSpreadFloorCandidates).toBe(4);
+      });
+
+      it('passes a one-sided count through without treating the other side as zero', () => {
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 2, chars: 400, postSpreadFloorCandidates: 3 } }),
+          base({ injected: { chunks: 1, chars: 200 } })
+        );
+        expect(merged?.injected?.postSpreadFloorCandidates).toBe(3);
+      });
+
+      it('omits the field entirely when neither side reports one', () => {
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 1, chars: 100 } }),
+          base({ injected: { chunks: 0, chars: 0 } })
+        );
+        expect(merged?.injected && 'postSpreadFloorCandidates' in merged.injected).toBe(false);
+      });
+    });
+
+    describe('backgroundScore', () => {
+      // A median, not a volume - summing two medians is not a meaningful quantity, so this is
+      // existing-wins pass-through rather than the sum-of-completions the counts above use.
+      it('keeps the existing side when both are present', () => {
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 2, chars: 400, backgroundScore: 0.4 } }),
+          base({ injected: { chunks: 1, chars: 200, backgroundScore: 0.9 } })
+        );
+        expect(merged?.injected?.backgroundScore).toBe(0.4);
+      });
+
+      it('passes a one-sided value through without treating the other side as zero', () => {
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 2, chars: 400 } }),
+          base({ injected: { chunks: 1, chars: 200, backgroundScore: 0.6 } })
+        );
+        expect(merged?.injected?.backgroundScore).toBe(0.6);
+      });
+
+      it('omits the field entirely when neither side reports one', () => {
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 1, chars: 100 } }),
+          base({ injected: { chunks: 0, chars: 0 } })
+        );
+        expect(merged?.injected && 'backgroundScore' in merged.injected).toBe(false);
+      });
+    });
+
     it('keeps volume alongside a worse outcome from another surface', () => {
       const merged = mergeRetrievalSummary(
         base({ outcome: 'ok', surfaces: ['forced-retrieval'], injected: { chunks: 12, chars: 4000 } }),
@@ -388,6 +442,67 @@ describe('mergeRetrievalSummary', () => {
 
     it('accepts the probe from either side, since only one writer ever sets it', () => {
       expect(mergeRetrievalSummary(base(), base({ answerability: probe }))?.answerability).toEqual(probe);
+    });
+  });
+
+  describe('lakeScope', () => {
+    it('survives a later surface write, which is what the offline replay reads', () => {
+      const merged = mergeRetrievalSummary(
+        base({ lakeScope: ['datalake:acme:handbook'] }),
+        base({ surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['datalake:acme:handbook'] })
+      );
+      expect(merged?.lakeScope).toEqual(['datalake:acme:handbook']);
+    });
+
+    it('keeps a recorded empty scope rather than falling through to the other side', () => {
+      // Present-and-empty means "the session had no lake", which is a measurement; absent means
+      // the scope was never recorded. A truthy fallthrough would turn the first into the second.
+      const merged = mergeRetrievalSummary(base({ lakeScope: [] }), base({ lakeScope: ['datalake:x'] }));
+      expect(merged?.lakeScope).toEqual([]);
+    });
+
+    it('stays absent on a turn nothing seeded', () => {
+      const merged = mergeRetrievalSummary(base(), base());
+      expect(merged && 'lakeScope' in merged).toBe(false);
+    });
+
+    it('does not union the two sides - a surface must not widen the recorded scope', () => {
+      const merged = mergeRetrievalSummary(base({ lakeScope: ['datalake:a'] }), base({ lakeScope: ['datalake:b'] }));
+      expect(merged?.lakeScope).toEqual(['datalake:a']);
+    });
+  });
+
+  // #3055: same seed and same reasoning as lakeScope - both come off one getAccessibleDataLakeAccess
+  // call, so existing-wins pass-through is correct rather than a sum (a second write would double
+  // the identical exclusion, not report a new one).
+  describe('excludedLakes', () => {
+    it('survives a later surface write that carries none', () => {
+      const merged = mergeRetrievalSummary(
+        base({ excludedLakes: { count: 2, reason: 'access' } }),
+        base({ surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['datalake:acme:handbook'] })
+      );
+      expect(merged?.excludedLakes).toEqual({ count: 2, reason: 'access' });
+    });
+
+    it('stays absent on a turn nothing seeded', () => {
+      const merged = mergeRetrievalSummary(base(), base());
+      expect(merged && 'excludedLakes' in merged).toBe(false);
+    });
+
+    it('does not sum the two sides - a later write must not double the same exclusion', () => {
+      const merged = mergeRetrievalSummary(
+        base({ excludedLakes: { count: 2, reason: 'access' } }),
+        base({ excludedLakes: { count: 5, reason: 'access' } })
+      );
+      expect(merged?.excludedLakes).toEqual({ count: 2, reason: 'access' });
+    });
+
+    // The production direction: ChatCompletionProcess's seed calls this with the seed as
+    // `incoming` onto whatever a tool arm already wrote as `existing`, so "existing absent,
+    // incoming has it" must not be silently dropped.
+    it('picks it up from the incoming side when the existing side never wrote one', () => {
+      const merged = mergeRetrievalSummary(base(), base({ excludedLakes: { count: 2, reason: 'access' } }));
+      expect(merged?.excludedLakes).toEqual({ count: 2, reason: 'access' });
     });
   });
 });

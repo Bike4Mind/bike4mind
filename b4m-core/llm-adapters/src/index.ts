@@ -27,6 +27,7 @@ import MoonshotBedrockBackend from './bedrockBackend/moonshot';
 import TitanBedrockBackend from './bedrockBackend/titan';
 import { UndifferentiatedBedrockBackend } from './bedrockBackend/undifferentiated';
 import { BFLBackend } from './bflBackend';
+import { DeepSeekBackend } from './deepseekBackend';
 import { GeminiBackend } from './geminiBackend';
 import { KimiBackend } from './kimiBackend';
 import { LocalImageBackend } from './localImageBackend';
@@ -158,7 +159,7 @@ export function getLlmByModel(
       break;
     case 'bfl':
       if (apiKeyTable.bfl === 'expired') throw new Error('BFL API key is expired');
-      backend = apiKeyTable.bfl ? new BFLBackend(apiKeyTable.bfl) : new BFLBackend('demo-key');
+      backend = apiKeyTable.bfl ? new BFLBackend(apiKeyTable.bfl) : null;
       break;
     case 'xai':
       if (apiKeyTable.xai === 'expired') throw new Error('xAI API key is expired');
@@ -168,9 +169,21 @@ export function getLlmByModel(
       if (apiKeyTable.kimi === 'expired') throw new Error('Moonshot API key is expired');
       backend = apiKeyTable.kimi ? new KimiBackend(apiKeyTable.kimi, logger) : null;
       break;
+    case 'deepseek':
+      if (apiKeyTable.deepseek === 'expired') throw new Error('DeepSeek API key is expired');
+      backend = apiKeyTable.deepseek ? new DeepSeekBackend(apiKeyTable.deepseek, logger) : null;
+      break;
     case 'aws':
       backend = new AWSBackend();
       break;
+    case 'local-image': {
+      // Discovered at runtime by LocalImageBackend.getModelInfo, which sets no
+      // adapterFamily (see mergeCatalog's DISPATCHABLE_ADAPTER_FAMILIES comment) -
+      // this legacy switch is the only path these records reach.
+      const localImageBaseUrl = apiKeyTable['local-image'];
+      backend = localImageBaseUrl ? new LocalImageBackend(localImageBaseUrl, logger) : null;
+      break;
+    }
     default:
       backend = null;
   }
@@ -341,7 +354,7 @@ export const getAvailableModels = async (
   // Every listing credential comes from resolveListingKey, the same predicate
   // the catalog merge gates catalog-only records with, so the two tiers cannot
   // disagree about which backends this caller can reach. The local-image env
-  // fallback and BFL's demo key live in that predicate for the same reason.
+  // fallback lives in that predicate for the same reason.
   const gateCtx: BackendGateContext = { apiKeys, isSelfHost };
   const openaiKey = resolveListingKey(ModelBackend.OpenAI, gateCtx);
   const anthropicKey = resolveListingKey(ModelBackend.Anthropic, gateCtx);
@@ -350,6 +363,7 @@ export const getAvailableModels = async (
   const bflKey = resolveListingKey(ModelBackend.BFL, gateCtx);
   const xaiKey = resolveListingKey(ModelBackend.XAI, gateCtx);
   const kimiKey = resolveListingKey(ModelBackend.Kimi, gateCtx);
+  const deepseekKey = resolveListingKey(ModelBackend.DeepSeek, gateCtx);
   const localImageBaseUrl = resolveListingKey(ModelBackend.LocalImage, gateCtx);
 
   const backends = {
@@ -366,6 +380,7 @@ export const getAvailableModels = async (
     [ModelBackend.BFL]: bflKey ? new BFLBackend(bflKey) : null,
     [ModelBackend.XAI]: xaiKey ? new XAIBackend(xaiKey) : null,
     [ModelBackend.Kimi]: kimiKey ? new KimiBackend(kimiKey) : null,
+    [ModelBackend.DeepSeek]: deepseekKey ? new DeepSeekBackend(deepseekKey) : null,
     [ModelBackend.AWS]: isBackendUsable(ModelBackend.AWS, gateCtx) ? new AWSBackend() : null,
     [ModelBackend.LocalImage]: localImageBaseUrl
       ? new LocalImageBackend(localImageBaseUrl, Logger.globalInstance)
@@ -472,6 +487,7 @@ export const getSupersededModels = (currentModels: ModelInfo[]): SupersededModel
 
 // Types and core utils:
 export * from './adapterFamilyDispatch';
+export * from './adapterPriceLiterals';
 export * from './backend';
 export * from './backendGate';
 export * from './cacheInclusiveUsage';
@@ -489,6 +505,8 @@ export * from './bedrockBackend/base';
 export * from './bedrockBackend/undifferentiated';
 export * from './bflBackend';
 export * from './geminiBackend';
+export * from './deepseekBackend';
+export * from './deepseekParams';
 export * from './kimiBackend';
 export * from './kimiParams';
 export * from './localImageBackend';
@@ -505,6 +523,12 @@ export {
   TitanBedrockBackend,
 };
 
+export {
+  SemaphoreBusyError,
+  MAX_CONCURRENT_ANTHROPIC_CALLS,
+  MAX_QUEUED_PER_TENANT,
+  DEFAULT_ACQUIRE_TIMEOUT_MS,
+} from './_anthropicSemaphore';
 export * from './PipelineTimer';
 export * from './realtimeVoicePricing';
 export * from './resolveDeprecatedModel';

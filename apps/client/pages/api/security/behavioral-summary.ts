@@ -74,6 +74,12 @@ async function generateSecurityBehavioralSummary(user: {
     })),
   };
 
+  // The suspicious-pattern aggregation buckets by IP, so its `usernames` array carries every
+  // other user targeted from the same IP. This context is sent to a third-party model, so filter
+  // it to the caller - same rule the user-summary and user-recent handlers apply to their bodies.
+  // Email is absent for an emailless OAuth account, so it only joins the set when present.
+  const userIdentifiers = new Set([user.username.toLowerCase(), ...(user.email ? [user.email.toLowerCase()] : [])]);
+
   const context = {
     userId: user.id,
     username: user.username,
@@ -88,7 +94,9 @@ async function generateSecurityBehavioralSummary(user: {
       items: suspiciousPatterns.slice(0, 5).map(pattern => ({
         ip: pattern.ip,
         attempts: pattern.attempts,
-        usernames: pattern.usernames,
+        usernames: pattern.usernames.filter(
+          u => typeof u === 'string' && u.length > 0 && userIdentifiers.has(u.toLowerCase())
+        ),
         lastAttempt: pattern.lastAttempt,
         riskLevel: pattern.riskLevel,
       })),

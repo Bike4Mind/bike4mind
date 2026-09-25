@@ -1,24 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { MementoTier } from '@bike4mind/common';
+import { MEMENTO_EMBEDDING_ID, MementoTier } from '@bike4mind/common';
+
+const { embedMementoQueryMock } = vi.hoisted(() => ({ embedMementoQueryMock: vi.fn() }));
 
 /**
- * Only the embedding plumbing is stubbed. computeCosineSimilarity stays REAL, because two of the
+ * Only the query-embed boundary is stubbed. computeCosineSimilarity stays REAL, because two of the
  * behaviours under test - a zero-magnitude embedding scoring NaN, and a width mismatch scoring 0 -
  * are properties of that function, and a stub would let them pass vacuously.
  */
-vi.mock('@bike4mind/utils', async importOriginal => {
-  const actual = await importOriginal<typeof import('@bike4mind/utils')>();
-  return {
-    ...actual,
-    getProviderFromModel: () => 'openai',
-    resolveEmbeddingConfig: () => ({ config: {}, missing: undefined }),
-    EmbeddingFactory: class {
-      createEmbeddingService() {
-        return { generateEmbedding: async () => [1, 0] };
-      }
-    },
-  };
-});
+vi.mock('./embedMementoQuery', () => ({ embedMementoQuery: embedMementoQueryMock }));
 
 import { getRelevantMementos } from './getRelevantMementos';
 
@@ -33,7 +23,7 @@ const logger = {
   updateMetadata: vi.fn(),
 };
 
-type Row = { id: string; summary: string; embedding: number[] };
+type Row = { id: string; summary: string; embedding: number[]; embeddingModel?: string };
 
 /** Zero-padded ids so lexicographic order matches insertion order, as an ObjectId string does. */
 const mementoRows = (count: number, embedding: (i: number) => number[] = () => [1, 0]): Row[] =>
@@ -41,6 +31,7 @@ const mementoRows = (count: number, embedding: (i: number) => number[] = () => [
     id: `mem-${String(i).padStart(6, '0')}`,
     summary: `fact-${i}`,
     embedding: embedding(i),
+    embeddingModel: MEMENTO_EMBEDDING_ID,
   }));
 
 /** Real keyset arithmetic - a page-keyed stub could not observe a wrong cursor. */
@@ -52,16 +43,14 @@ const pagedMementos = (all: Row[]) =>
       .slice(0, opts.limit ?? all.length)
   );
 
-const run = (findByUserId: ReturnType<typeof pagedMementos>, topK = 5) =>
+const run = (findByUserId: ReturnType<typeof pagedMementos>, topK = 5, minSimilarity: number | undefined = 0.5) =>
   getRelevantMementos(
     'u1',
     'what do you know about me',
     {
       topK,
-      minSimilarity: 0.5,
+      ...(minSimilarity === undefined ? {} : { minSimilarity }),
       tier: MementoTier.HOT,
-      embeddingModel: 'text-embedding-ada-002' as never,
-      apiKeyTable: { openai: 'stub' },
       logger: logger as never,
     },
     {
@@ -75,6 +64,7 @@ const run = (findByUserId: ReturnType<typeof pagedMementos>, topK = 5) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  embedMementoQueryMock.mockResolvedValue({ vector: [1, 0], model: MEMENTO_EMBEDDING_ID });
 });
 
 describe('getRelevantMementos pages instead of loading every memento', () => {
@@ -148,6 +138,7 @@ describe('getRelevantMementos pages instead of loading every memento', () => {
         id: `mem-${String(start + i).padStart(9, '0')}`,
         summary: `fact-${start + i}`,
         embedding: [1, 0],
+        embeddingModel: MEMENTO_EMBEDDING_ID,
       }));
     });
 
@@ -170,9 +161,9 @@ describe('getRelevantMementos pages instead of loading every memento', () => {
 
 describe('getRelevantMementos rejects unusable embeddings', () => {
   it('skips a memento with no embedding', async () => {
-    const all = [
+    const all: Row[] = [
       { id: 'mem-000000', summary: 'no vector', embedding: [] },
-      { id: 'mem-000001', summary: 'has vector', embedding: [1, 0] },
+      { id: 'mem-000001', summary: 'has vector', embedding: [1, 0], embeddingModel: MEMENTO_EMBEDDING_ID },
     ];
 
     const out = await run(pagedMementos(all));
@@ -183,9 +174,9 @@ describe('getRelevantMementos rejects unusable embeddings', () => {
   it('skips a zero-magnitude embedding rather than letting NaN outrank real matches', async () => {
     // cosine of a zero vector is NaN. NaN fails every comparison, so it slips past the similarity
     // floor and then sorts ahead of everything real.
-    const all = [
-      { id: 'mem-000000', summary: 'zero vector', embedding: [0, 0] },
-      { id: 'mem-000001', summary: 'real match', embedding: [1, 0] },
+    const all: Row[] = [
+      { id: 'mem-000000', summary: 'zero vector', embedding: [0, 0], embeddingModel: MEMENTO_EMBEDDING_ID },
+      { id: 'mem-000001', summary: 'real match', embedding: [1, 0], embeddingModel: MEMENTO_EMBEDDING_ID },
     ];
 
     const out = await run(pagedMementos(all));
@@ -195,9 +186,9 @@ describe('getRelevantMementos rejects unusable embeddings', () => {
 
   it('still applies the similarity floor', async () => {
     // Orthogonal to the query, so similarity 0 against a floor of 0.5.
-    const all = [
-      { id: 'mem-000000', summary: 'orthogonal', embedding: [0, 1] },
-      { id: 'mem-000001', summary: 'aligned', embedding: [1, 0] },
+    const all: Row[] = [
+      { id: 'mem-000000', summary: 'orthogonal', embedding: [0, 1], embeddingModel: MEMENTO_EMBEDDING_ID },
+      { id: 'mem-000001', summary: 'aligned', embedding: [1, 0], embeddingModel: MEMENTO_EMBEDDING_ID },
     ];
 
     const out = await run(pagedMementos(all));
@@ -227,10 +218,20 @@ describe('getRelevantMementos keeps the document shape its consumers read', () =
   it('breaks similarity ties on id so the result does not depend on page arrival', async () => {
     // Two identical embeddings across a page boundary: without a total order the winner would be
     // whichever page arrived first.
-    const all = [
+    const all: Row[] = [
       ...mementoRows(PAGE_SIZE - 1, () => [1, 0.9]),
-      { id: `mem-${String(PAGE_SIZE - 1).padStart(6, '0')}`, summary: 'tie-a', embedding: [1, 0] },
-      { id: `mem-${String(PAGE_SIZE).padStart(6, '0')}`, summary: 'tie-b', embedding: [1, 0] },
+      {
+        id: `mem-${String(PAGE_SIZE - 1).padStart(6, '0')}`,
+        summary: 'tie-a',
+        embedding: [1, 0],
+        embeddingModel: MEMENTO_EMBEDDING_ID,
+      },
+      {
+        id: `mem-${String(PAGE_SIZE).padStart(6, '0')}`,
+        summary: 'tie-b',
+        embedding: [1, 0],
+        embeddingModel: MEMENTO_EMBEDDING_ID,
+      },
     ];
 
     const first = await run(pagedMementos(all), 1);
@@ -241,70 +242,52 @@ describe('getRelevantMementos keeps the document shape its consumers read', () =
   });
 });
 
-describe('the topicality floor follows the embedding space, not a literal', () => {
-  /**
-   * Query embedding is stubbed to [1, 0], so a memento at [cos, sin] scores exactly `cos`. These
-   * two straddle the ada-002 floor of 0.75 and nothing else.
-   */
-  const straddlingRows = (): Row[] => [
-    { id: 'mem-000001', summary: 'below the ada-002 floor', embedding: [0.6, 0.8] },
-    { id: 'mem-000002', summary: 'above the ada-002 floor', embedding: [0.8, 0.6] },
-  ];
+describe('getRelevantMementos is pinned to the memento embedding space', () => {
+  it('applies MEMENTO_MIN_SIMILARITY when the caller passes no floor', async () => {
+    // Query embedding is stubbed to [1, 0], so a memento at [cos, sin] scores exactly `cos`.
+    // MEMENTO_MIN_SIMILARITY is 0.25; these two straddle it and nothing else.
+    const all: Row[] = [
+      { id: 'mem-000001', summary: 'below the floor', embedding: [0.2, 0.98], embeddingModel: MEMENTO_EMBEDDING_ID },
+      { id: 'mem-000002', summary: 'above the floor', embedding: [0.8, 0.6], embeddingModel: MEMENTO_EMBEDDING_ID },
+    ];
 
-  const runInSpace = (embeddingModel: string, minSimilarity?: number) =>
-    getRelevantMementos(
-      'u1',
-      'what do you know about me',
-      {
-        topK: 5,
-        ...(minSimilarity === undefined ? {} : { minSimilarity }),
-        tier: MementoTier.HOT,
-        embeddingModel: embeddingModel as never,
-        apiKeyTable: { openai: 'stub' },
-        logger: logger as never,
-      },
-      {
-        db: {
-          mementos: { findByUserId: pagedMementos(straddlingRows()) } as never,
-          apiKeys: {} as never,
-          adminSettings: {} as never,
-        },
-      }
-    );
+    const out = await run(pagedMementos(all), 5, undefined);
 
-  it('applies the measured ada-002 floor when the caller passes none', async () => {
-    const found = await runInSpace('text-embedding-ada-002');
-
-    // Exactly the 0.75 both call sites used to hardcode: recall on today's default model is
-    // unchanged by moving the number into the table.
-    expect(found.map(({ memento }) => memento.summary)).toEqual(['above the ada-002 floor']);
-    expect(logger.error).not.toHaveBeenCalled();
+    expect(out.map(m => m.memento.summary)).toEqual(['above the floor']);
   });
 
-  it('applies no floor in a space nobody has measured, and says so loudly', async () => {
-    const found = await runInSpace('text-embedding-3-small');
+  it('excludes a memento whose embeddingModel does not match the pinned space', async () => {
+    // Cosine across embedding models is meaningless, not just stale - excluded rather than scored.
+    const all: Row[] = [
+      { id: 'mem-000000', summary: 'stale', embedding: [1, 0], embeddingModel: 'text-embedding-ada-002' },
+      { id: 'mem-000001', summary: 'current', embedding: [1, 0], embeddingModel: MEMENTO_EMBEDDING_ID },
+    ];
 
-    // The point of the change. Carrying ada-002's 0.75 into this space would reject BOTH rows -
-    // 3-small's whole measured band tops out at 0.5588 - and the user would read that as the
-    // assistant having forgotten them.
-    expect(found.map(({ memento }) => memento.summary)).toEqual(['above the ada-002 floor', 'below the ada-002 floor']);
-    // warn, not error, and asserted as NOT error on purpose: an unmeasured space is the designed
-    // resolution for any model outside the table, and self-host hits it every turn. At error level
-    // this is per-turn noise in whatever reads error logs for a condition no operator can clear,
-    // which is how a channel gets ignored.
-    expect(logger.warn).toHaveBeenCalledTimes(1);
-    expect(String(logger.warn.mock.calls[0][0])).toContain('text-embedding-3-small');
-    expect(logger.error).not.toHaveBeenCalled();
+    const out = await run(pagedMementos(all));
+
+    expect(out.map(m => m.memento.summary)).toEqual(['current']);
   });
 
-  it('honors an explicit floor without complaining, in any space', async () => {
-    const found = await runInSpace('text-embedding-3-small', 0.7);
+  it('excludes a memento with no embeddingModel stamped (pre-migration)', async () => {
+    const all: Row[] = [
+      { id: 'mem-000000', summary: 'unstamped', embedding: [1, 0] },
+      { id: 'mem-000001', summary: 'current', embedding: [1, 0], embeddingModel: MEMENTO_EMBEDDING_ID },
+    ];
 
-    expect(found.map(({ memento }) => memento.summary)).toEqual(['above the ada-002 floor']);
-    // A caller that passed a floor has asserted it knows the space; nothing is unresolved, so
-    // there is nothing to warn about. `warn` is the channel the unmeasured-space notice now uses,
-    // so assert on that one - checking only `error` would pass no matter what this path logged.
-    expect(logger.warn).not.toHaveBeenCalled();
-    expect(logger.error).not.toHaveBeenCalled();
+    const out = await run(pagedMementos(all));
+
+    expect(out.map(m => m.memento.summary)).toEqual(['current']);
+  });
+
+  it('returns nothing and warns, without throwing, when the query cannot be embedded', async () => {
+    // The empty sentinel embedMementoQuery returns on a missing credential or provider error - fail
+    // open rather than throw, matching a keyless stage's existing quiet behaviour on other recall paths.
+    embedMementoQueryMock.mockResolvedValueOnce({ vector: [], model: '' });
+
+    const out = await run(pagedMementos(mementoRows(2)));
+
+    expect(out).toEqual([]);
+    const warned = logger.warn.mock.calls.map(c => String(c[0])).join('\n');
+    expect(warned).toContain('could not embed the query');
   });
 });

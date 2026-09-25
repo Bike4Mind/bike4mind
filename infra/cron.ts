@@ -1,4 +1,6 @@
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
+import { readFileSync } from 'fs';
+import { computeHelpCorpusHash } from '@bike4mind/infra';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { emailJobQueue } from './emailMarketing';
 import { allSecrets } from './secrets';
@@ -803,9 +805,22 @@ const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {
  * Does NOT bootstrap: with no lake row the handler no-ops, because the lake's `createdByUserId` is
  * the file owner and whose LLM keys embed the chunks.
  *
- * copyFiles carries the corpus into the bundle from the COMMITTED sources - `docs-site/docs` and the
- * generated-but-committed `help-index.json` - so it is present regardless of whether
- * `help:bundle-content` ran during the build. MUST STAY IN SYNC with CORPUS_DIR in the handler.
+ * copyFiles carries the corpus into the bundle as `docs-site/docs` plus `help-index.json`. MUST
+ * STAY IN SYNC with CORPUS_DIR in the handler.
+ *
+ * The index is generated, not committed, and it is generated HERE rather than relied on from
+ * elsewhere. `apps/client`'s prebuild also produces it, but that belongs to the web component's
+ * `next build` and nothing orders that before this function is bundled, so depending on it would
+ * be a race that fails as a missing copyFiles source. Regenerating is keyless, deterministic and
+ * takes about a third of a second, so doing it unconditionally is cheaper than the coupling.
+ *
+ * The cost of putting it at module scope: this file is re-exported from infra/index.ts, so EVERY
+ * SST command that loads the program pays it - `remove` and `diff` included - and `buildHelpIndex`
+ * throws on an empty corpus. A deployer checkout without docs-site, or without the workspace
+ * installed, therefore fails to load the program at all rather than failing only to deploy.
+ * That is the right trade for `deploy` and the wrong one for `remove`; it is accepted here
+ * because the alternative (deriving the index inside the handler and copying only docs-site)
+ * is a larger change than this one.
  *
  * HELP_CORPUS_VERSION exists only to make a docs-only edit redeploy the function: SST does not
  * notice copyFiles CONTENT changes, so without it the bundle keeps the corpus from whenever the
@@ -815,12 +830,15 @@ const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {
  * Schedule: every 6 hours, so a docs change lands in the lake the same day it deploys.
  * Enabled: production + dev
  */
-const HELP_CORPUS_HASH = execSync(
-  "git ls-tree -r HEAD docs-site/docs apps/client/app/generated/help-index.json | awk '{print $3}' | sort | md5sum | awk '{print $1}'"
-)
-  .toString()
-  .trim()
-  .slice(0, 8);
+execSync('pnpm --filter @bike4mind/scripts help:build-index', { stdio: 'inherit' });
+
+// Hashes the index's BYTES, not a git blob: it is no longer tracked, so `git ls-tree` cannot see
+// it. The computation lives in @bike4mind/infra because nothing imports this file, so that is the
+// only place its failure modes can be tested - see helpCorpusHash.ts for which ones and why.
+const HELP_CORPUS_HASH = computeHelpCorpusHash({
+  readDocsTree: () => execFileSync('git', ['ls-tree', '-r', 'HEAD', 'docs-site/docs']).toString(),
+  readIndex: () => readFileSync('apps/client/app/generated/help-index.json'),
+});
 
 const helpDatalakeIngestCron = new sst.aws.Cron('helpDatalakeIngest', {
   schedule: 'rate(6 hours)',
@@ -858,6 +876,79 @@ const helpDatalakeIngestCron = new sst.aws.Cron('helpDatalakeIngest', {
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+/**
+ * Lake Health Sweep - scheduled counterpart to the on-demand GET /api/data-lakes/:id/health.
+ * Computes computeLakeHealth for every active lake and persists one row per lake per day, so a
+ * degrading lake is visible as a trend instead of only when someone opens it.
+ *
+ * Schedule: daily, after dataLakeBatchReconcile (5am UTC) so a batch that reconciler just forced
+ * terminal is reflected in the same day's health.
+ */
+const lakeHealthSweepCron = new sst.aws.Cron('lakeHealthSweep', {
+  schedule: 'cron(0 6 * * ? *)', // Daily at 6am UTC
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/client/server/cron/lakeHealthSweep.handler',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    logging: {
+      retention: '1 week',
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
+/**
+ * Scheduled cross-document inconsistency detection over every active lake.
+ *
+ * Detection used to run only when a curator asked for it, so a contradiction appearing between
+ * visits stayed invisible. This grades every active lake on a schedule and persists each problem as
+ * a finding ROW, keyed so a repeat detection updates the existing row rather than duplicating it.
+ * Detect-only: nothing here gates ingest or removes content.
+ *
+ * Timeout is 15 minutes rather than the health sweep's 10: one pass reads up to 1000 chunk
+ * documents. The handler does not rely on this timeout to stop it - it holds its own wall-clock
+ * budget (RUN_BUDGET_MS) and stops a page short, so a long run reports a deferred remainder rather
+ * than being killed mid-write with only its first metric emitted.
+ *
+ * Schedule: daily at 4am UTC, BEFORE lakeHealthSweep (6am) - health renders the stored
+ * inconsistency summary rather than computing it, so the other order would make every daily health
+ * snapshot report counts a day old.
+ */
+const lakeInconsistencySweepCron = new sst.aws.Cron('lakeInconsistencySweep', {
+  schedule: 'cron(0 4 * * ? *)', // Daily at 4am UTC
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/client/server/cron/lakeInconsistencySweep.handler',
+    runtime: 'nodejs24.x',
+    timeout: '15 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    logging: {
+      retention: '1 week',
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 export {
   dailyUserActivityReport,
   weeklyUserActivityReport,
@@ -888,4 +979,6 @@ export {
   spendReconciliationCron,
   driveLakeResyncPollCron,
   helpDatalakeIngestCron,
+  lakeHealthSweepCron,
+  lakeInconsistencySweepCron,
 };

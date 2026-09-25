@@ -6,6 +6,7 @@ import { assertUniqueOperations } from './assertUniqueOperations';
 import { assertContractConventions } from '../api-contract/assertContractConventions';
 import { ApiKeyScope } from '../types/entities/UserApiKeyTypes';
 import { chatContract, synthesizeSpeechContract } from '../api-contract';
+import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spec doc is loosely typed for traversal
 const doc = buildOpenApiDocument('9.9.9') as any;
@@ -232,6 +233,7 @@ describe('buildOpenApiDocument', () => {
       ['/api/ai/music', 'post'],
       ['/api/ai/sound-effects', 'post'],
       ['/api/sessions/{id}', 'put'],
+      ['/api/v1/me', 'get'],
     ];
     for (const [path, method] of baseApiServed) {
       const headers = doc.paths[path][method].responses['200'].headers;
@@ -254,6 +256,34 @@ describe('buildOpenApiDocument', () => {
     for (const window of ['Minute', 'Day']) {
       expect(tts.responses['401'].headers[`X-RateLimit-Limit-${window}`]).toBeDefined();
     }
+  });
+
+  // The async chat path 200s an ACK and then reports a FAILED turn on the polled
+  // quest - so credit exhaustion arrives as prose in `reply` with no non-2xx
+  // anywhere. `errorCode` is the only machine-readable signal, and it has to be in
+  // the spec or a contract-faithful client has no documented reason to look.
+  it('publishes the chat poll result with the quest error classifier', () => {
+    const pollResult = chat.responses['200']['x-poll-result'];
+    expect(pollResult.schema).toEqual(ref('sendChatMessage200PollResult'));
+
+    const component = doc.components.schemas.sendChatMessage200PollResult;
+    expect(component.properties.type.enum).toContain('error');
+    // The same vocabulary the synchronous 422s classify with, not a chat-local one.
+    expect(component.properties.errorCode.enum).toEqual([...QUEST_ERROR_CODES]);
+    expect(doc.components.schemas.generateMusicResponse422.properties.errorCode.enum).toContain('insufficient_credits');
+  });
+
+  it('tells a caller that type, not errorCode, is the failure signal', () => {
+    // The failure text lands in `reply`, the same field an answer uses, so the
+    // instruction is the difference between a handled failure and a consumed one.
+    // errorCode is reachable for only ONE failure class (billing), so the contract
+    // must say `type` is checked first and `errorCode`'s absence is not success.
+    expect(chat.description).toContain('insufficient_credits');
+    expect(chat.description).toMatch(/type.*is the failure signal/i);
+    expect(chat.responses['200'].description).toMatch(/errorCode/);
+    const pollResultDescription = doc.components.schemas.sendChatMessage200PollResult.description;
+    expect(pollResultDescription).toMatch(/optional refinement/i);
+    expect(pollResultDescription).toMatch(/absence does not mean success/i);
   });
 
   it('emits no orphaned component schemas (every schema is $ref-ed somewhere)', () => {

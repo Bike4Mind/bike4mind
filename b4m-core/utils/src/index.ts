@@ -52,6 +52,10 @@ export * from './registrableDomain';
 // Also available via the lightweight `@bike4mind/utils/escapeRegex` subpath -
 // prefer that in server modules covered by client vitest suites.
 export * from './escapeRegex';
+// Also available via the lightweight `@bike4mind/utils/safeObjectKey` subpath.
+export * from './safeObjectKey';
+// Also available via the lightweight `@bike4mind/utils/globMatches` subpath.
+export * from './globMatches';
 export * from './normalizeId';
 // Also available via the lightweight `@bike4mind/utils/retrievalExclusion` subpath -
 // prefer that in server modules covered by client vitest suites.

@@ -17,6 +17,8 @@ export * from './zod';
 export * from './promptMeta';
 export * from './analytics';
 export * from './llm';
+export * from './me';
+export * from './toolSideEffects';
 export * from './bfl';
 export * from './embedding';
 export * from './team';

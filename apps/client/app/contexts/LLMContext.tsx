@@ -4,7 +4,6 @@ import {
   OpenAIImageStyle,
   ModelInfo,
   B4MLLMTools,
-  IMAGE_MODELS,
   ImageModels,
   ChatModels,
   LLMModelConfig,
@@ -12,6 +11,8 @@ import {
   IImageGenerationTemplateDocument,
   LEGACY_IMAGE_MODEL_MAP,
   isImageModel,
+  isModelDeprecated,
+  requiresImageInput,
 } from '@bike4mind/common';
 import React, { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 
@@ -87,6 +88,13 @@ export interface LLMContextProps {
   isLatticeEnabled: boolean;
   toolMode: 'fast' | 'smart';
   tools: Array<B4MLLMTools>;
+  /**
+   * "Only tools I pick" - suppresses tools added automatically rather than selected above
+   * (the server's own offers, and the client's Smart-mode recommendations). Withholds the
+   * OFFER, not knowledge already in scope: forced retrieval and already-attached files are
+   * unaffected. Persisted, unlike `disableAutoRouteForThisSession` below.
+   */
+  skipAutoOffers: boolean;
   researchMode: ResearchModeState;
   setResearchMode: (mode: Partial<ResearchModeState>) => void;
   addResearchConfiguration: (config: ResearchModeConfiguration) => void;
@@ -171,6 +179,7 @@ const DEFAULTS = {
   isLatticeEnabled: false, // Default controlled by user settings
   toolMode: 'smart' as const,
   tools: [],
+  skipAutoOffers: false,
   researchMode: {
     enabled: false,
     configurations: [],
@@ -627,20 +636,24 @@ export const LLMProvider: React.FC = () => {
         const isCurrentAccessible = currentImageModel && stableIsModelAccessible(currentImageModel);
 
         if (!currentImageModel || !isCurrentAccessible) {
-          // Prefer a known default if accessible, otherwise first accessible IMAGE_MODELS entry
-          const preferred = ImageModels.FLUX_PRO_ULTRA as string;
-          const preferredAccessible = preferred && stableIsModelAccessible(preferred);
+          // Candidates come from the accessible catalog, which only lists backends this
+          // deployment actually holds a credential for - that is what keeps the resolved
+          // default from being a model whose first generation dies on a provider 403.
+          // Kontext and Fill are excluded: they mandate an input image, so neither can
+          // serve a text-to-image default.
+          //
+          // Ordered by the catalog's own `rank` (lower is better), NOT by the IMAGE_MODELS
+          // enum. The enum carries no entry for a discovered id - the local-image
+          // checkpoints a self-host install serves from IMAGE_GEN_BASE_URL, for one - so
+          // ranging over it would leave such a deployment with no candidate at all and
+          // strand it on the unreachable store default. Id breaks a rank tie so the
+          // resolved default does not depend on backend fan-out order.
+          const candidates = models
+            .filter(m => m.type === 'image' && !isModelDeprecated(m) && !requiresImageInput(m.id))
+            .sort((a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER) || a.id.localeCompare(b.id));
 
-          let imageModelToUse: string | null = preferredAccessible ? preferred : null;
-          if (!imageModelToUse) {
-            // Find the first IMAGE_MODELS item that is accessible
-            for (const imgId of IMAGE_MODELS as unknown as string[]) {
-              if (stableIsModelAccessible(imgId)) {
-                imageModelToUse = imgId;
-                break;
-              }
-            }
-          }
+          const preferred = candidates.find(m => m.id === ImageModels.FLUX_PRO_ULTRA);
+          const imageModelToUse: string | null = (preferred ?? candidates[0])?.id ?? null;
 
           if (imageModelToUse) {
             return {

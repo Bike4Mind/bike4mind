@@ -53,12 +53,22 @@ function mergeInjected(
   // The pre/post pair is written and absent together at every write site, so they merge identically.
   const preFloor = sumDefined(existing.preRelativeFloorCandidates, incoming.preRelativeFloorCandidates);
   const postFloor = sumDefined(existing.postRelativeFloorCandidates, incoming.postRelativeFloorCandidates);
+  // Same volume treatment as postRelativeFloorCandidates: a candidate count sums like chunks.
+  const postSpreadFloor = sumDefined(existing.postSpreadFloorCandidates, incoming.postSpreadFloorCandidates);
+  // NOT summed like the counts above: backgroundScore is a median, and summing two medians is not
+  // a meaningful quantity. Existing-wins pass-through instead, same convention as forcedSkipReason
+  // and lakeScope. A genuine two-sided merge is not reachable today - only the forced arm computes
+  // a backgroundScore, and it writes `injected` at most once per turn - so this only decides which
+  // side survives a seeded/re-merged turn, not how to combine two real measurements.
+  const backgroundScore = existing.backgroundScore ?? incoming.backgroundScore;
   return {
     chunks: existing.chunks + incoming.chunks,
     chars: existing.chars + incoming.chars,
     ...(scores.length ? { topScore: Math.max(...scores) } : {}),
     ...(preFloor !== undefined ? { preRelativeFloorCandidates: preFloor } : {}),
     ...(postFloor !== undefined ? { postRelativeFloorCandidates: postFloor } : {}),
+    ...(postSpreadFloor !== undefined ? { postSpreadFloorCandidates: postSpreadFloor } : {}),
+    ...(backgroundScore !== undefined ? { backgroundScore } : {}),
   };
 }
 
@@ -87,6 +97,19 @@ function mergeInjected(
  * - knowledgeBaseGuidanceInjected: first-writer-wins pass-through. Only the seed writes it, and
  *   `??` rather than `||` because an explicit `false` is a real value (the A/B control arm) that
  *   a boolean OR against an absent incoming side would silently discard.
+ * - lakeScope: first-writer-wins pass-through, and like `answerability` it is here to PRESERVE
+ *   rather than to combine. Only the seed writes it, so a two-sided merge is not reachable; what
+ *   IS reachable is a later surface write on a seeded turn, and since this function returns an
+ *   explicit object literal, a field with no case here is DROPPED. Not unioned: a surface
+ *   asserting its own narrower scope must not widen the recorded one. `??` rather than `||` so a
+ *   recorded empty scope - "the session had no lake" - survives instead of falling through to the
+ *   other side.
+ * - excludedLakes: first-writer-wins pass-through, same reasoning and same seed as lakeScope. Only
+ *   the seed writes it, from EITHER the account-wide `excludedByAccessCount` (a session with no
+ *   real narrowing) or the per-turn-targeted `measureIdentityNamedExclusion` (a session narrowed
+ *   to a specific lake, #3055 review) - never both, and never combined, so which one ran is not
+ *   this merge's concern. Not summed: whichever ran is this turn's one measurement, so a second
+ *   write would double-count the identical exclusion rather than report a new one.
  * - answerability: existing-wins pass-through, and it is here to PRESERVE rather than to combine.
  *   Nothing in a turn writes it - the offline replay backfills it straight to Mongo - so a
  *   two-sided merge is not reachable. What IS reachable is a later runtime write on a quest that
@@ -97,9 +120,11 @@ function mergeInjected(
  *   union, deduped.
  *   injectedLakePromptCount is derived from the merged injectedLakePromptIds, not merged
  *   independently, so a two-sided merge can never leave the two disagreeing.
- * - injected: chunks and chars SUM, topScore is the max, and the pre/post relative-floor candidate
- *   counts SUM like chunks (only over the sides that have one - see mergeInjected). NOTE that the
- *   pair is forced-retrieval-only while chunks/chars sum across every surface, so on a mixed turn
+ * - injected: chunks and chars SUM, topScore is the max, and the pre/post relative-floor and
+ *   post-spread-floor candidate counts SUM like chunks (only over the sides that have one - see
+ *   mergeInjected). backgroundScore is existing-wins, NOT summed - it is a median, and summing two
+ *   medians is not a meaningful quantity (see mergeInjected). NOTE that the floor-candidate counts
+ *   are forced-retrieval-only while chunks/chars sum across every surface, so on a mixed turn
  *   chunks can exceed preRelativeFloorCandidates - compare the pair to itself, never to chunks.
  *   See the pair's comment on RetrievalSummarySchema. The only NON-IDEMPOTENT rule
  *   here, and safe only because every write site emits a delta once per completed search - merging
@@ -130,6 +155,8 @@ export function mergeRetrievalSummary(
   const knowledgeBaseGuidanceInjected =
     existing.knowledgeBaseGuidanceInjected ?? incoming.knowledgeBaseGuidanceInjected;
   const answerability = existing.answerability ?? incoming.answerability;
+  const lakeScope = existing.lakeScope ?? incoming.lakeScope;
+  const excludedLakes = existing.excludedLakes ?? incoming.excludedLakes;
   const injectedLakePromptIds =
     existing.injectedLakePromptIds || incoming.injectedLakePromptIds
       ? [...new Set([...(existing.injectedLakePromptIds ?? []), ...(incoming.injectedLakePromptIds ?? [])])]
@@ -153,8 +180,22 @@ export function mergeRetrievalSummary(
     ...(forcedSkipReason !== undefined ? { forcedSkipReason } : {}),
     ...(knowledgeBaseGuidanceInjected !== undefined ? { knowledgeBaseGuidanceInjected } : {}),
     ...(answerability !== undefined ? { answerability } : {}),
+    ...(lakeScope !== undefined ? { lakeScope } : {}),
+    ...(excludedLakes !== undefined ? { excludedLakes } : {}),
     surfaces: [...new Set([...existing.surfaces, ...incoming.surfaces])],
     dataLakeTags: [...new Set([...existing.dataLakeTags, ...incoming.dataLakeTags])],
+    // Union of the two ARMS' contributing lakes, and absent only when neither arm could attribute
+    // - merging an absent side as empty would turn "unknown" into "contributed nothing".
+    ...(existing.dataLakeTagsWithCandidates || incoming.dataLakeTagsWithCandidates
+      ? {
+          dataLakeTagsWithCandidates: [
+            ...new Set([
+              ...(existing.dataLakeTagsWithCandidates ?? []),
+              ...(incoming.dataLakeTagsWithCandidates ?? []),
+            ]),
+          ],
+        }
+      : {}),
     ...(injectedLakePromptIds ? { injectedLakePromptIds, injectedLakePromptCount: injectedLakePromptIds.length } : {}),
     ...(injected ? { injected } : {}),
     ...(preauthorizedLakeIdsUsed ? { preauthorizedLakeIdsUsed } : {}),

@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { IAgent, detectAgentMentions } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { SEND_REQUEST_TIMEOUT_MS } from '@client/app/utils/requestTimeouts';
 import { useQueryClient } from '@tanstack/react-query';
 import perfLogger from '@client/app/utils/performanceLogger';
 
@@ -69,7 +70,13 @@ export function useAttachAgentsToSession({
         if (agentsToAttach.length === 0) return;
 
         await Promise.all(
-          agentsToAttach.map(agent => api.post(`/api/sessions/${currentSessionId}/agents`, { agentId: agent.id }))
+          agentsToAttach.map(agent =>
+            api.post(
+              `/api/sessions/${currentSessionId}/agents`,
+              { agentId: agent.id },
+              { timeout: SEND_REQUEST_TIMEOUT_MS }
+            )
+          )
         );
 
         perfLogger.log(

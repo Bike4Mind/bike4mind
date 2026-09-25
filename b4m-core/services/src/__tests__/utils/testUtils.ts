@@ -15,6 +15,8 @@ import {
   ICreditTransactionDocument,
   IAuthSessionRepository,
   IAuthSessionDocument,
+  ISessionAgentConfigRepository,
+  ISessionAgentConfigDocument,
 } from '@bike4mind/common';
 import {
   IResearchTask,
@@ -56,10 +58,22 @@ export const createMockProjectRepository = (): IProjectRepository => ({
   findAllBySessionId: vi.fn(),
 });
 
+export const createMockSessionAgentConfigRepository = (): ISessionAgentConfigRepository => ({
+  ...createMockRepository<ISessionAgentConfigDocument>(),
+  findBySessionAndAgent: vi.fn(),
+  findBySessionId: vi.fn(),
+  findAllWithProactiveMessagingEnabled: vi.fn(),
+  updateLastProactiveMessageAt: vi.fn(),
+  deleteBySessionId: vi.fn(),
+  deleteBySessionAndAgent: vi.fn(),
+});
+
 export const createMockFabFileRepository = (): IFabFileRepository => ({
   ...createMockRepository<IFabFileDocument>(),
   shareable: createMockShareableRepository<IFabFileDocument>(),
   getAccessibleFiles: vi.fn(),
+  setLakeSupersession: vi.fn(),
+  clearLakeSupersession: vi.fn(),
   // Default true ("I still own my claim") rather than the vi.fn() default of undefined/falsy,
   // which would otherwise silently read as "claim lost" for any test that reaches this guard
   // through the shared mock without overriding it.
@@ -74,6 +88,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   findAllByIds: vi.fn(),
   findExistingIdsByIds: vi.fn(),
   findCitableFieldsByIds: vi.fn(),
+  findCitableFieldsWithTagsByIds: vi.fn(),
   findByBatchId: vi.fn(),
   claimIndexNotification: vi.fn(),
   search: vi.fn(),
@@ -83,11 +98,13 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   countDataLakeTagsByPrefix: vi.fn(),
   countDataLakeUniqueFilesByPrefix: vi.fn(),
   countUniqueFilesByNamespaceForUser: vi.fn(),
+  claimTagRewriteByUserId: vi.fn().mockResolvedValue(null),
   removeTagByUserId: vi.fn(),
   updateTagsByUserId: vi.fn(),
   dedupeTagByUserId: vi.fn(),
   pullTagsByFabFileId: vi.fn(),
   pushTagsByFabFileId: vi.fn(),
+  pushTagReturningPriorState: vi.fn().mockResolvedValue(null),
   bulkUpdateTags: vi.fn(),
   findByContentHashes: vi.fn(),
   findByContentHashesInDataLake: vi.fn(),
@@ -98,6 +115,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   findDriveFileIdsByBatchId: vi.fn(),
   markUploaded: vi.fn(),
   markFailedIfNotAlready: vi.fn(),
+  supersedeFailureError: vi.fn(),
   advanceVectorizeProgress: vi.fn(),
   setChunkPolicyConflict: vi.fn(),
   computeDataLakeStats: vi.fn(),
@@ -123,6 +141,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   setChunkRollups: vi.fn(),
   findFileIdsWithPositiveVectorizedCount: vi.fn(),
   findChunkedFilesByScope: vi.fn(),
+  findFilesOutsideEmbeddingSpaceByScope: vi.fn(),
   findConvergencePausedFilesByScope: vi.fn(),
   resetChunkStateByIds: vi.fn(),
   markConvergencePaused: vi.fn(),
@@ -244,6 +263,7 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     ensureUserDetails: vi.fn(),
     updateUserDetails: vi.fn(),
     findMembershipOrgIds: vi.fn(),
+    findMemberUserIds: vi.fn(),
   });
 
 export const createMockCreditTransactionRepository = (): MockedObject<ICreditTransactionRepository> =>

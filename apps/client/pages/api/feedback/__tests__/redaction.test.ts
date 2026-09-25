@@ -123,9 +123,23 @@ const adminAbility = () => {
   return build();
 };
 
+/**
+ * Carries BOTH owner-only promptMeta shapes. `citables[].metadata.fullContext` is here because a
+ * fixture with only `functionCalls` is what let the passage text reach the bug-report email: the
+ * route redacted one field by hand instead of going through redactPromptMetaForViewer, and no
+ * assertion could see the difference. A new owner-only field belongs in this fixture too.
+ */
 const PROMPT_META_WITH_TOOL_OUTPUT = {
   functionCalls: [
     { name: 'web_search', parameters: {}, id: 'call_1', returnValue: 'PRIVATE TOOL OUTPUT', success: true },
+  ],
+  citables: [
+    {
+      id: 'file-1',
+      type: 'document',
+      title: 'Handbook.md',
+      metadata: { chunkId: 'chunk-7', fullContext: 'PRIVATE CORPUS PASSAGE' },
+    },
   ],
 };
 
@@ -157,6 +171,9 @@ describe('POST /api/feedback - redacts tool output before third-party egress', (
     expect(mockSave).toHaveBeenCalled();
     const saved = mockSave.mock.instances[0] as unknown as { promptMeta: typeof PROMPT_META_WITH_TOOL_OUTPUT };
     expect(JSON.stringify(saved.promptMeta)).toContain('PRIVATE TOOL OUTPUT');
+    // The stored record is deliberately unredacted - the admin read path redacts on the way out
+    // (server/utils/redactedFeedback.ts). Only the two external egress channels lose it.
+    expect(JSON.stringify(saved.promptMeta)).toContain('PRIVATE CORPUS PASSAGE');
   });
 
   it('does not send returnValue to Slack', async () => {
@@ -164,9 +181,13 @@ describe('POST /api/feedback - redacts tool output before third-party egress', (
     await mockRefs.postHandler!(req, res);
 
     expect(mockPostFeedbackToSlack).toHaveBeenCalled();
-    const slackPromptMetaArg = mockPostFeedbackToSlack.mock.calls[0][6];
+    const slackPromptMetaArg = mockPostFeedbackToSlack.mock.calls[0][0].promptMeta;
     expect(JSON.stringify(slackPromptMetaArg)).not.toContain('PRIVATE TOOL OUTPUT');
+    expect(JSON.stringify(slackPromptMetaArg)).not.toContain('PRIVATE CORPUS PASSAGE');
     expect(JSON.stringify(slackPromptMetaArg)).toContain('web_search');
+    // The chip itself survives - only the passage text is owner-only. An opaque chunk id and the
+    // file id/title are what the recipient needs to identify the citation at all.
+    expect(JSON.stringify(slackPromptMetaArg)).toContain('chunk-7');
   });
 
   it('does not send returnValue to email', async () => {
@@ -176,6 +197,31 @@ describe('POST /api/feedback - redacts tool output before third-party egress', (
     expect(mockEmailPublish).toHaveBeenCalled();
     const emailBody = mockEmailPublish.mock.calls[0][0].body as string;
     expect(emailBody).not.toContain('PRIVATE TOOL OUTPUT');
+    expect(emailBody).not.toContain('PRIVATE CORPUS PASSAGE');
+  });
+
+  it('does not send citables[].metadata.fullContext to email', async () => {
+    // Separated from the returnValue case because they failed independently: the email is an
+    // unencrypted send to a static recipient list, and this field is verbatim owner-corpus text.
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: {
+        userId: 'user-1',
+        content: 'it broke',
+        tags: [],
+        username: 'reporter',
+        userEmail: 'reporter@example.com',
+        promptMeta: { citables: PROMPT_META_WITH_TOOL_OUTPUT.citables },
+      },
+    });
+    (req as unknown as { isAuthenticated: () => boolean }).isAuthenticated = () => false;
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(mockEmailPublish).toHaveBeenCalled();
+    const emailBody = mockEmailPublish.mock.calls[0][0].body as string;
+    expect(emailBody).not.toContain('PRIVATE CORPUS PASSAGE');
+    expect(emailBody).toContain('chunk-7');
   });
 });
 
@@ -195,6 +241,7 @@ describe('GET /api/feedback - redacts tool output before returning it to an admi
 
     const body = JSON.stringify(res._getJSONData());
     expect(body).not.toContain('PRIVATE TOOL OUTPUT');
+    expect(body).not.toContain('PRIVATE CORPUS PASSAGE');
     expect(body).toContain('web_search');
   });
 });

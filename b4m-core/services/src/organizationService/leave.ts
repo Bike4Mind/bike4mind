@@ -2,7 +2,7 @@ import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { IGroupRepository, IOrganizationRepository, IUserDocument, IUserRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { purgeOrgMembershipArtifacts } from './purgeOrgMembership';
+import { purgeOrgMembershipArtifacts, type PurgeOrgMembershipAdapters } from './purgeOrgMembership';
 
 const organizationLeaveSchema = z.object({
   id: z.string(),
@@ -10,8 +10,8 @@ const organizationLeaveSchema = z.object({
 
 type OrganizationLeaveParameters = z.infer<typeof organizationLeaveSchema>;
 
-interface OrganizationLeaveAdapters {
-  db: {
+interface OrganizationLeaveAdapters extends PurgeOrgMembershipAdapters {
+  db: PurgeOrgMembershipAdapters['db'] & {
     organizations: IOrganizationRepository;
     users: Pick<IUserRepository, 'update' | 'removeGroupsFromUser'>;
     groups: Pick<IGroupRepository, 'findByOrganization'>;
@@ -40,11 +40,16 @@ export const leave = async (
   organization.users = organization.users.filter(u => u.userId !== user.id);
   organization.userDetails = organization.userDetails?.filter(u => u.id !== user.id) ?? [];
 
-  // Strip this org's group ids from the departing user and drop them from adminUserIds (the org
-  // doc, persisted just below). `user.groups[]`/`adminUserIds` carry no org qualifier, so leaving
-  // must clear them or the user keeps group-shared data access (the data-lake membership leak
-  // class) and org-admin authority. Idempotent, so safe under a withTransaction retry.
-  organization.adminUserIds = await purgeOrgMembershipArtifacts(user.id, organization, adapters);
+  // Strip this org's group ids from the departing user, end their data-lake access on this org's
+  // lakes, and drop them from adminUserIds and from the manager appointment (the org doc, persisted
+  // just below). None of `user.groups[]`, the grant rows, `adminUserIds` or `managerId` carries an
+  // org qualifier, so leaving must clear them or the user keeps group-shared data access, direct
+  // lake access and org-admin authority. Idempotent, so safe under a withTransaction retry.
+  // Self-service, so the departing member is themselves the attributed principal - and the org's
+  // own owner can never reach here, since leaving your own organization is refused above.
+  const purged = await purgeOrgMembershipArtifacts(user.id, organization, { userId: user.id }, adapters);
+  organization.adminUserIds = purged.adminUserIds;
+  organization.managerId = purged.managerId;
 
   await adapters.db.organizations.update(organization);
 
@@ -56,7 +61,13 @@ export const leave = async (
   // retry (leave never re-fetches `user`) recomputes it identically and re-issues the same
   // idempotent set-to-null - the earlier version mutated `user` in memory here, which flipped the
   // guard false on a commit-time retry and silently skipped the write, leaving a stale org.
-  if (user.organizationId === id) {
+  //
+  // Compare via toString(): `IUserDocument.organizationId` is TYPED as a string but production
+  // hands us a hydrated Mongoose doc where it is an ObjectId (UserModel declares
+  // Schema.Types.ObjectId with no stringifying transform), so a strict `===` against the route
+  // param is ALWAYS false and the pointer never cleared. The type does not catch this; every other
+  // reader of this field normalizes the same way (revokeAccess.ts, orgAccess.ts).
+  if (user.organizationId?.toString() === id) {
     await adapters.db.users.update({ id: user.id, organizationId: null });
   }
 

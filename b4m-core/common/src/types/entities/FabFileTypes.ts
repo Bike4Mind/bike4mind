@@ -90,8 +90,24 @@ export interface IFabFileChunk {
    *
    * Written just BEFORE the OpenSearch write, not after: the write is fail-open, and a removal for
    * an index that holds nothing is a harmless no-op, whereas a missed one orphans documents.
+   *
+   * Because it is written before, it OVER-claims: set on a chunk whose index write then threw.
+   * Retrieval needs the opposite bias, which is what `retrievalIndexConfirmedModel` below is for.
    */
   retrievalIndexModel?: string;
+  /**
+   * The retrieval index this chunk's document is CONFIRMED to be resident in, written only after
+   * the index write for it came back successful (and survived indexChunks' per-batch rollback).
+   *
+   * The read-side counterpart to `retrievalIndexModel`, and necessarily a separate field: removal
+   * needs an over-approximation (miss one and documents are orphaned forever), retrieval needs an
+   * under-approximation (claim one that is not there and the file silently contributes nothing).
+   * One field cannot be written both before and after the same call.
+   *
+   * Absent on every chunk whose file predates self-host OpenSearch being enabled - there is no
+   * backfill (see SELF_HOST.md), so those files are ANN-ineligible and stay on the scan path.
+   */
+  retrievalIndexConfirmedModel?: string;
 }
 
 /**
@@ -139,6 +155,21 @@ export interface FabFileChunkPolicyConflict {
   /** Member lakes whose required policy this file's chunks do not satisfy. */
   lakes: FabFileChunkPolicyConflictLake[];
   detectedAt: Date;
+}
+
+/**
+ * One curator ruling that a lake member has been superseded by a sibling in the same lake.
+ *
+ * Carries who and when because it is the audit trail's anchor on the FILE: the corpus-action
+ * event names the ruling as it was made, this names the ruling as it now stands, and a reader
+ * comparing them can tell a stale event from the live state.
+ */
+export interface LakeSupersession {
+  dataLakeId: string;
+  /** The sibling that displaces this file in ranking. Must be a member of the same lake. */
+  supersededByFabFileId: string;
+  decidedByUserId: string;
+  decidedAt: Date;
 }
 
 export interface IFabFile {
@@ -291,7 +322,15 @@ export interface IFabFile {
 
   /** Whether this FabFile is currently being vectorized. */
   isVectorizing?: boolean;
-  /** Whether this FabFile has completed vectorization. */
+  /**
+   * NOT a completion marker, despite the name: every chunk write sets it (see
+   * fabFileService/vectorize.ts and FabFileModel.advanceVectorizeProgress), so a file one chunk
+   * into a fifty-chunk batch already reads true. `vectorized: true` + `isVectorizing: false` is
+   * also what chunking leaves behind at count 0 - see FabFileModel's advanceVectorizeProgress
+   * comment, which names the consequence: the terminal marker is `chunkEmbeddingModelStampedAt`,
+   * not this field. Read that one to mean "finished"; read this one as "has at least one
+   * vectorized chunk".
+   */
   vectorized?: boolean;
   /**
    * The embedding model used to generate the vectors, as a FILE-level claim about the whole corpus.
@@ -365,6 +404,23 @@ export interface IFabFile {
   moderationClaimedAt?: Date;
 
   /**
+   * How many moderation scan attempts have been made on this row and failed without reaching a
+   * terminal verdict - incremented by the rescue sweep's stale-claim reclaim and by a transient
+   * release. The rescue sweep orders its selection by this ascending, so a never-attempted
+   * stranded row always wins a bounded window over a cluster of repeatedly-failing siblings
+   * (see server/s3/moderationRescueSweep.ts). Absent on a row that has never failed.
+   */
+  moderationAttempts?: number;
+
+  /**
+   * When the last failed moderation attempt released this row back to `pending`. The rescue sweep
+   * backs off on it, so a row whose scan just failed transiently (AccessDenied, a Rekognition
+   * 5xx/throttle, a storage 503) is not re-selected at full cap on the very next run. Absent until
+   * an attempt fails, and a missing value is always eligible.
+   */
+  moderationLastAttemptAt?: Date;
+
+  /**
    * Error message for the file.
    * This is set when the file is not processed successfully, such as when the file is corrupted or unsupported.
    */
@@ -426,6 +482,26 @@ export interface IFabFile {
   sourceLakeId?: string;
   /** The OrgGoogleDriveConnection that ingested this file (provenance). */
   driveConnectionId?: string;
+
+  /**
+   * Curator rulings that this file is an older generation of some sibling, one per lake.
+   *
+   * The explicit half of the retrieval-time supersession collapse (see
+   * `dataLakeService/supersession.ts`). That collapse derives supersession from a tiered PATH
+   * identity key plus recency, which can only ever relate two files that already look like the
+   * same source document - a curator looking at two documents that flatly contradict each other
+   * has no way to say so, because they share no key. This is where that judgement lands, and
+   * `partitionBySupersession` reads it as a tier above every derived one.
+   *
+   * Lake-scoped, because membership is: a file can belong to two lakes and a ruling made by one
+   * lake's curator must not suppress it in the other. Keyed on `dataLakeId` - a later ruling in
+   * the same lake replaces the earlier one rather than stacking.
+   *
+   * SUPPRESSION, NOT DELETION, exactly like the derived collapse: the member leaves ranking, not
+   * the corpus, and `retrieve_knowledge_content` still reaches it by id or name. That is what
+   * makes the ruling recoverable when a curator gets it wrong.
+   */
+  supersededInLakes?: LakeSupersession[];
 
   sessionId?: string; // For session summaries
 
@@ -541,6 +617,43 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
    * a two-model lake doubles its removal traffic and most of it matches nothing.
    */
   retrievalIndexModelsByFabFileIds(fabFileIds: string[]): Promise<Record<string, string[]>>;
+  /** Record `retrievalIndexConfirmedModel` on chunks whose index write has come back successful. */
+  confirmRetrievalIndexed(chunkIds: string[], model: string): Promise<void>;
+  /**
+   * Clear a stale `retrievalIndexConfirmedModel` for the given chunks under `model`. Needed
+   * because a redelivered vectorize message can hit `indexChunks`' own per-batch rollback, which
+   * deletes an OpenSearch document a PRIOR delivery already confirmed - without this, that chunk
+   * would keep claiming residency for a document that no longer exists. Called with exactly the
+   * chunks a delivery dispatched but did NOT get back as indexed.
+   */
+  clearRetrievalIndexConfirmed(chunkIds: string[], model: string): Promise<void>;
+  /**
+   * Clear `retrievalIndexConfirmedModel` for every chunk of the given files, under ANY model.
+   * Called after a best-effort or strict index removal (archive, delete) actually drops the
+   * files' documents from the external index - without this, a file's confirmed-resident stamp
+   * survives the removal and `annResidentFabFileIds` keeps reporting it resident for documents
+   * that are gone. Unlike `clearRetrievalIndexConfirmed`, this is keyed on the FILE, not on the
+   * chunks a specific vectorize delivery dispatched, and clears every model at once because index
+   * removal drops the file's documents wherever they were ever indexed.
+   */
+  clearRetrievalIndexConfirmedByFabFileIds(fabFileIds: string[]): Promise<void>;
+  /**
+   * The subset of `fabFileIds` whose chunks are confirmed RESIDENT in `model`'s external retrieval
+   * index: every chunk EMBEDDED under that model carries a matching `retrievalIndexConfirmedModel`.
+   *
+   * All-or-nothing per file, and deliberately so - a file half of whose chunks are missing from
+   * the index would serve half its content with no error anywhere, which is the failure this
+   * answers. Files with no chunk embedded under `model` at all (they predate the feature, or were
+   * never embedded with it) are simply absent.
+   *
+   * Denominator is `embeddingModel`, NOT `retrievalIndexModel`, despite the latter being the
+   * smaller indexable field: `retrievalIndexModel` is only written when the self-host flag was
+   * ALREADY on at write time, so a file straddling a rolling enable has chunks with neither field -
+   * invisible to that count, and falsely reported fully resident. `embeddingModel` is stamped
+   * unconditionally in the same transaction for every embeddable chunk (fabFileVectorize.ts), so it
+   * cannot be skipped by the flag and is the true set this model was asked to cover.
+   */
+  annResidentFabFileIds(fabFileIds: string[], model: string): Promise<string[]>;
   bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]): Promise<IFabFileChunkDocument[]>;
   findByFabFileId(fabFileId: string): Promise<IFabFileChunkDocument[]>;
   /**
@@ -738,6 +851,18 @@ export type DataLakeMembershipScope =
     };
 
 /**
+ * A file a delete/restore lifecycle sweep flipped in or out of the counted set, carrying just
+ * enough to attribute the storage-quota delta to its own owner: lake membership has no ownership
+ * conjunct on the meta-tag arm (a contributor's file is a full member of someone else's lake), so
+ * a sweep spanning several owners' files cannot be billed to one user.
+ */
+export interface DataLakeSweptFile {
+  id: string;
+  userId: string;
+  fileSize: number;
+}
+
+/**
  * The lake arms an attachment resolution may add to its CASL scope. Server-supplied only - a
  * `creatorUserId` inside a membership scope widens what the query matches, so a value reaching this
  * from request input would let a caller name any user and read their files. Same contract as
@@ -817,6 +942,18 @@ export type CitableFabFileFields = Pick<
   | 'vectorized'
 > &
   Partial<Pick<IFabFileDocument, 'createdAt'>>;
+
+/**
+ * The citability projection plus `tags`, for a reader that must decide reachability AND identify
+ * which lake document a file is - the embedding-comparison capture joins its corpus to ground truth
+ * by a tag on the file, so it cannot answer with the scalars alone.
+ *
+ * Deliberately NOT folded into `CitableFabFileFields`. `tags` is the array of arbitrary objects that
+ * projection exists to leave behind, and its caller is the lake-memory recall path, which reads a row
+ * per cited source on every chat turn that touches a lake. Widening it to serve a script that runs
+ * once per capture would move that cost onto the hot path.
+ */
+export type CitableFabFileFieldsWithTags = CitableFabFileFields & Pick<IFabFileDocument, 'tags'>;
 
 export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   shareable: IShareableStaticMethods<IFabFileDocument>;
@@ -946,6 +1083,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   findExistingIdsByIds(ids: string[]): Promise<string[]>;
   /** Just the projected lake-memory fields - the citability predicate's, plus the date - see `CitableFabFileFields`. */
   findCitableFieldsByIds(ids: string[]): Promise<CitableFabFileFields[]>;
+  /** The same projection plus `tags`, for a caller that also needs lake identity - see `CitableFabFileFieldsWithTags`. */
+  findCitableFieldsWithTagsByIds(ids: string[]): Promise<CitableFabFileFieldsWithTags[]>;
 
   /** Find every non-deleted file belonging to a data-lake ingest batch (source for the post-upload taxonomy analysis job). */
   findByBatchId(batchId: string): Promise<IFabFileDocument[]>;
@@ -1004,6 +1143,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
        * See buildFabFileSearchQuery.options.lacksContentPrefixTags.
        */
       lacksContentPrefixTags?: string[];
+      /**
+       * Opts back into `supersededInLakes`, `select: false` on the schema by default. Only the
+       * curator-supersession collapse's own callers should pass this - see
+       * buildFabFileSearchQuery.options.includeSupersessionRulings.
+       */
+      includeSupersessionRulings?: boolean;
     }
   ) => Promise<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>;
 
@@ -1022,6 +1167,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       skip: number;
       limit: number;
       excludeContent?: boolean;
+      includeSupersessionRulings?: boolean;
     },
     pageSize: number
   ) => Promise<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>;
@@ -1097,6 +1243,33 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ): Promise<{ namespace: string; fileCount: number }[]>;
 
   /**
+   * Claim ONE live file a user owns that still carries `tag`, rewrite that tag on it (renamed to
+   * `newTag`, or stripped when `newTag` is null), and return the file as it looked BEFORE the
+   * rewrite. Null when no unclaimed file is left.
+   *
+   * The claim shape the bulk tag doors need to keep their membership audit honest. `removeTagByUserId`
+   * and `updateTagsByUserId` report one aggregate count for the whole user, so two concurrent
+   * rename/delete requests reading the same snapshot would each mint the same per-file membership
+   * events even though only one of them moved anything. Here the write itself picks the file, so a
+   * returned pre-image is a transition this caller actually caused.
+   *
+   * Matches the WHOLE name case-insensitively, by the SAME anchored/escaped regex those two writes
+   * use, so a claim loop and the bulk mop-up behind it cannot act on different file sets. Excludes
+   * soft-deleted files, unlike those writes: one is already outside every lake read, so an event for
+   * it would double-report against the delete door's own.
+   *
+   * `excludeIds` is what bounds the caller's loop - a case-only rename (`foo:` -> `Foo:`) still
+   * matches the case-insensitive filter after the rewrite, so the caller must exclude what it has
+   * already claimed. Projected to the fields the membership predicate reads.
+   */
+  claimTagRewriteByUserId(
+    userId: string,
+    tag: string,
+    newTag: string | null,
+    excludeIds?: readonly string[]
+  ): Promise<Pick<IFabFileDocument, 'id' | 'userId' | 'tags'> | null>;
+
+  /**
    * Strip one tag name off every file a user owns, so deleting a tag document cannot leave the
    * name orphaned on the files that carried it. Matches the WHOLE name, case-insensitively, and
    * removes every occurrence - including a name a file carries twice.
@@ -1150,8 +1323,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Passing a user's `foo` against a stored `Foo` removes nothing and reports no error.
    * @param fabFileId - The ID of the file.
    * @param tagNames - The exact tag names to remove. Empty is a no-op.
-   * @returns Documents modified by the pull. The schema has timestamps, so this can be 1
-   * even when no tag matched - do not read it as "a tag was removed".
+   * @returns 1 when a named tag was actually present and removed, 0 otherwise - the write is
+   * filtered on the tag being there, so an unmatched pull neither reports a modification nor
+   * moves `updatedAt`. Callers may read this as "a tag was removed"; the lake membership audit
+   * trail does, to tell a real removal from the losing half of two concurrent ones.
    */
   pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number>;
 
@@ -1176,6 +1351,52 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * name already present fails its filter, so it neither counts nor bumps updatedAt.
    */
   pushTagsByFabFileId(fabFileId: string, tagNames: string[], strength?: number): Promise<number>;
+
+  /**
+   * Record, or replace, one lake's curator ruling that `fabFileId` is superseded by a sibling.
+   *
+   * Keyed on `(fabFileId, dataLakeId)` and idempotent on it: re-ruling in the same lake overwrites
+   * in place, so the array holds at most one entry per lake and a double-click cannot mint two.
+   * Returns false when no file matched.
+   *
+   * Nothing here validates that the winner is a member of the lake, or that it even exists - the
+   * door (`applyCorpusAction`) does, and `partitionBySupersession` independently declines to honor
+   * a ruling whose winner is not in the scoped set. Both matter: the door refuses a bad ruling at
+   * write time, the collapse refuses to act on one that went bad afterwards.
+   */
+  // Optional, unlike the rest of this interface's mutation methods: IFabFileRepository is
+  // exported, and an external implementer written before #3046 has no reason to have these two.
+  // Marking them optional keeps that implementer source-compatible - every internal caller that
+  // actually needs them (applyCorpusAction) requires them locally via `Required<Pick<...>>`
+  // instead of leaning on this interface being universally implemented.
+  setLakeSupersession?(fabFileId: string, entry: LakeSupersession): Promise<boolean>;
+  /** Drop one lake's ruling, restoring the file to ranking. Returns whether a ruling was removed. */
+  clearLakeSupersession?(fabFileId: string, dataLakeId: string): Promise<boolean>;
+  /**
+   * The id `fabFileId` is ruled superseded-by, for `dataLakeId` only, or null when there is no such
+   * file or no such ruling. `supersededInLakes` is `select: false` on the schema, so this is the
+   * write-time cycle-detection walk's own explicit opt-in - `findById` alone no longer surfaces it.
+   */
+  getLakeSupersessionWinner?(fabFileId: string, dataLakeId: string): Promise<string | null>;
+
+  /**
+   * The single-name variant of `pushTagsByFabFileId` that returns the PRE-IMAGE of the file the
+   * push landed on, or null when the name was already present (the filtered push matched nothing).
+   *
+   * Exists because a count cannot answer the question the lake membership audit asks. `1` says the
+   * lake's meta-tag was absent and is now there; it does NOT say the file joined the lake, because
+   * a creator-owned file carrying a tag under the lake's `fileTagPrefix` is already a member
+   * through that arm. Only the document the winning write saw settles that, and reading it in a
+   * separate query would race a concurrent writer.
+   *
+   * Same exact-name, case-SENSITIVE presence test and the same non-lowercasing store as the
+   * multi-name half - read its note on why case-insensitivity here would be wrong.
+   */
+  pushTagReturningPriorState(
+    fabFileId: string,
+    tagName: string,
+    strength?: number
+  ): Promise<Pick<IFabFileDocument, 'userId' | 'tags'> | null>;
 
   /**
    * Bulk-writes each file's full tags array in a single round trip via bulkWrite, instead of
@@ -1274,6 +1495,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   markUploaded(fabFileId: string): Promise<void>;
   markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean>;
+  /**
+   * Unconditional counterpart to markFailedIfNotAlready, for a PERMANENT verdict that outranks
+   * whatever error the file already carries. Returns the error it replaced (null if there was
+   * none) so the caller can log the text this write destroys.
+   */
+  supersedeFailureError(fabFileId: string, errorMessage: string): Promise<string | null>;
   /**
    * Guarded partial-progress write for the multi-message vectorize fan-out: applies only if the
    * stored count is not already higher and the file has not been stamped terminal, so a stale
@@ -1498,6 +1725,29 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findChunkedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]>;
   /**
+   * The lake's members PROVEN to sit in a foreign embedding space: file label present, non-empty,
+   * and different from `embeddingModel`. Same {id, userId} shape and same in-flight exclusion as
+   * `findChunkedFilesByScope`, so the two feed the same rebuild wave.
+   *
+   * Keys on the FILE label because that is what the retrieval majority vote withholds on, so this
+   * returns exactly the population being withheld. The label is DERIVED from the chunks
+   * (stampChunkEmbeddingModel), which makes it a summary rather than an independent fact - a
+   * re-embed is therefore verified against the passages, never against this.
+   *
+   * A BLANK label is deliberately NOT selected. Blank is unattributable, not foreign: the vectors
+   * may already be current, and `null` is written ON PURPOSE for a file whose chunks span two
+   * spaces. Re-deriving those belongs to a label-repair pass; selecting them here would
+   * re-embed files that need none while still hiding the ones that do.
+   *
+   * Bounded to files that HAVE vectors, which has a second effect worth relying on: a file drops
+   * out of this set the moment a wave resets it, so a falling count is progress - and a zero means
+   * "none still labelled foreign", NOT "the re-embed finished".
+   */
+  findFilesOutsideEmbeddingSpaceByScope(
+    scope: DataLakeMembershipScope,
+    embeddingModel: string
+  ): Promise<{ id: string; userId: string }[]>;
+  /**
    * The lake's files whose passages a HALTED convergence wave deleted, as {id, userId}. Chunkless
    * with no error, so they match neither `findChunkedFilesByScope` (needs chunked:true) nor
    * `countFailedFilesByScope` (needs a non-empty error) - which is how they stayed invisible to
@@ -1631,16 +1881,32 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Reverse soft-delete for member files stamped `stampedAt`, minus `excludeIds` (discarded
    * duplicates). When `archiveStampToClear` is given, also clears `archivedAt` on the subset of
    * the restored batch whose archivedAt equals it (the batch this lake's own archive wrote) -
-   * everything else keeps its archive marker untouched. Returns count restored.
+   * everything else keeps its archive marker untouched.
+   *
+   * Returns the files it actually flipped, not a count: each row moves under its own conditional
+   * write, so the restore door can record one membership `added` per file it genuinely revived
+   * rather than per file it hoped to. Two restores re-entering the transitional 'restoring' state
+   * concurrently therefore split the batch between them instead of both claiming all of it.
+   * Carries `userId`/`fileSize` alongside `id` so the caller can credit each file's OWN owner's
+   * storage quota - lake membership carries no ownership conjunct (a contributor's file is a
+   * member of someone else's lake), so this cannot be collapsed to one owner per call.
    */
   undeleteByDataLakeTag(
     scope: DataLakeMembershipScope,
     excludeIds?: string[],
     stampedAt?: Date,
     archiveStampToClear?: Date
-  ): Promise<number>;
-  /** Soft-delete (phase 1) all member files, stamped `at`. Returns affected file ids. */
-  softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at?: Date): Promise<string[]>;
+  ): Promise<DataLakeSweptFile[]>;
+  /**
+   * Soft-delete (phase 1) all member files, stamped `at`.
+   *
+   * Returns the files this call itself stamped, matched back by stamp equality - not the ids it
+   * selected. A row another delete door claimed in between carries a different stamp and is left
+   * out, so the teardown records one membership departure per file it genuinely took out of the
+   * lake rather than one per file it hoped to. Carries `userId`/`fileSize` alongside `id` for the
+   * same reason as `undeleteByDataLakeTag` above - see its note.
+   */
+  softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at?: Date): Promise<DataLakeSweptFile[]>;
   /**
    * Hard-delete (phase 2) all member files, including soft-deleted. Returns purged ids. Idempotent.
    *

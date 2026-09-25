@@ -55,6 +55,14 @@ const handler = baseApi().post(
       delete body.corpusGroundingMode;
     }
 
+    // Summary provenance is copy metadata, never client input: it is stamped by the summarization
+    // handler and carried from a source by fork/snip/clone, and a session created here has no
+    // summary to have been triggered. createSessionParametersSchema must declare it for those copy
+    // paths, and declaring it is exactly what makes it reachable from this raw, unparsed body - so
+    // strip it unconditionally here, the same way corpusGroundingMode is stripped above. Without
+    // this a caller could persist trusted-looking provenance on a notebook nothing ever summarized.
+    delete body.summaryTrigger;
+
     // Manage-but-not-member admission: a lake maintainer who is not a member of the lake's org (or
     // does not otherwise pass the ordinary tag/entitlement gate) can still test it, for exactly this
     // session, if they manage it. Authorize here - never let it ride through createSession's own
@@ -100,7 +108,14 @@ const handler = baseApi().post(
         // key binding narrows what the underlying user's authority may be used for, it never grants
         // authority the user lacks.
         if (req.apiKeyInfo && !req.apiKeyInfo.preauthorizedLakeIds?.includes(lakeId)) {
-          throw new ForbiddenError(`This API key is not bound to data lake ${lakeId}`);
+          // Names where the binding comes from: it is set at mint time by an administrator and
+          // cannot be added to an existing key, so a caller reading only "not bound" has no way to
+          // tell whether they are meant to fix it themselves (#2945).
+          throw new ForbiddenError(
+            `This API key is not bound to data lake ${lakeId}. Lake bindings are set when the key is ` +
+              `minted, by an administrator, and cannot be added to an existing key - ask an admin to ` +
+              `issue a key bound to this lake.`
+          );
         }
         const lake = await dataLakeRepository.findById(lakeId);
         if (!lake || lake.status !== 'active') {

@@ -17,6 +17,7 @@ import {
   MAX_LAKE_FILE_TAG_NAME_LENGTH,
 } from '../constants/dataLakes';
 import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '../constants/chunking';
+import { DATA_LAKE_ORIGINS } from '../types/entities/DataLakeTypes';
 import type { LakeConfigAuditCoversEveryUpdatableField } from '../types/entities/LakeConfigChangeEventTypes';
 
 // Hash validation
@@ -24,6 +25,20 @@ import type { LakeConfigAuditCoversEveryUpdatableField } from '../types/entities
 const sha256Regex = /^[a-f0-9]{64}$/;
 
 // Data Lake CRUD
+
+// Both write paths (create wizard, settings modal) share one definition so the two can never
+// drift. Trimmed at parse time (like fileTagPrefix) rather than relying on a client-side trim,
+// and refused when it is not a single tag: lakeMatchesAccess does an exact, whole-string
+// membership test with no comma-splitting, so a multi-value string saves as a gate nobody holds.
+const requiredUserTagValue = z
+  .string()
+  .trim()
+  .min(1)
+  .max(100)
+  .refine(
+    s => !/[,;]/.test(s),
+    'User tag must be a single tag with no commas or semicolons (e.g. "vip" or "Sales Team")'
+  );
 
 export const CreateDataLakeRequestInput = z.object({
   name: z.string().min(1).max(200),
@@ -52,7 +67,7 @@ export const CreateDataLakeRequestInput = z.object({
     // mirrors this via tagPrefixIssue / hasBlankTagPrefixSegment so the rules cannot drift.
     .refine(s => !hasBlankTagPrefixSegment(s), 'Tag prefix segments must be non-empty (e.g. "acme:" or "acme:legal:")')
     .refine(s => !isReservedTagPrefix(s), `Tag prefix cannot use the reserved "${DATALAKE_TAG_PREFIX}" namespace`),
-  requiredUserTag: z.string().min(1).max(100).optional(),
+  requiredUserTag: requiredUserTagValue.optional(),
   // Entitlement keys are namespaced (must contain ":") so a bare user-tag value can never
   // be a requiredEntitlement - tags pass through 1:1 as entitlement keys, so an un-namespaced
   // value would be self-grantable. Stored normalized (lowercase) by the service.
@@ -70,6 +85,10 @@ export const CreateDataLakeRequestInput = z.object({
   // before scoping the lake, so a user still can't plant a lake into an org they don't
   // belong to. Omitted (or empty) means personal scope.
   organizationId: z.string().optional(),
+  // Who fills this lake (see IDataLake.origin). At CREATE time this is the user's own action, not
+  // an inferred flip: picking a Drive folder in the wizard IS the declaration, made in the same
+  // request that creates the lake. Omitted means the Mongoose schema default ('curated') applies.
+  origin: z.enum(DATA_LAKE_ORIGINS).optional(),
 });
 export type CreateDataLakeRequestInputType = z.infer<typeof CreateDataLakeRequestInput>;
 
@@ -94,7 +113,7 @@ export const UpdateDataLakeRequestInput = z.object({
   // already treats '' as ungated - the access queries in DataLakeModel carry explicit
   // `requiredUserTag: ''` arms, and lakeMatchesAccess/canAccessLake test truthiness.
   // Omitting the field still means "leave unchanged" (Mongo $set strips undefined).
-  requiredUserTag: z.union([z.literal(''), z.string().min(1).max(100)]).optional(),
+  requiredUserTag: z.union([z.literal(''), requiredUserTagValue]).optional(),
   requiredEntitlement: z
     .union([
       z.literal(''),
@@ -132,6 +151,11 @@ export const UpdateDataLakeRequestInput = z.object({
     .max(OVERSIZED_PASSAGE_TOKEN_THRESHOLD)
     .nullable()
     .optional(),
+  // Who fills this lake (see IDataLake.origin). Flipping to 'curated' makes unattended ingest
+  // refuse; flipping to 'connector-fed' is the consent a Drive connect door requires. Omitting it
+  // leaves it unchanged (Mongo $set strips undefined). Also on the CREATE schema above, where the
+  // wizard declares connector-fed when the user already picked a Drive folder.
+  origin: z.enum(DATA_LAKE_ORIGINS).optional(),
   // NOTE: status is intentionally NOT updatable here. Lifecycle transitions
   // (archive/unarchive/delete/cleanup) go through their dedicated endpoints so the
   // required side effects (cancel in-flight batch, archive/soft-delete files, stat

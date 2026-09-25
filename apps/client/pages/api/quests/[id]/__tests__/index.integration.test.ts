@@ -154,6 +154,25 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     expect(res._getJSONData()).toMatchObject({ id: 'quest-1', status: 'completed' });
   });
 
+  it('carries type unconditionally on a successful quest, matching the wait:true chat body', async () => {
+    validateWithScopes([ApiKeyScope.READ_NOTEBOOKS]);
+    mockQuestFindById.mockResolvedValue({
+      id: 'quest-1',
+      sessionId: 'sess-1',
+      status: 'done',
+      type: 'message',
+      reply: 'hi',
+      replies: ['hi'],
+      promptMeta: {},
+    });
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    // Same field, same value POST /api/chat's wait:true body carries for a successful turn
+    // (see the chat integration suite) - a caller uses one branch for both surfaces.
+    expect(res._getJSONData().type).toBe('message');
+  });
+
   it('accepts an ai:chat-only key (200) — the chat→poll happy path (OR widening)', async () => {
     validateWithScopes([ApiKeyScope.AI_CHAT]);
     const { req, res } = fire();
@@ -202,6 +221,57 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ images: [], files: [] });
+  });
+
+  describe('errorCode (why the turn failed)', () => {
+    // A credit-exhausted turn is status done with the credit copy in `reply` - the
+    // same field an answer uses - so without the classifier a polling caller can
+    // only pattern-match prose.
+    it('reports the classifier on a failed turn alongside the failure prose', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'done',
+        type: 'error',
+        errorCode: 'insufficient_credits',
+        reply: "You're out of credits. This request needs about 12 credits, but only 3 are available.",
+        promptMeta: {},
+      });
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toMatchObject({ type: 'error', errorCode: 'insufficient_credits' });
+    });
+
+    // ChatQuestPollResultSchema (b4m-core/common/src/schemas/chat.ts) is hand-maintained
+    // against this handler's res.json shape rather than imported by it - nothing else
+    // catches the two drifting apart, so parse the real response through it here.
+    it('parses against the published ChatQuestPollResultSchema', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'done',
+        type: 'error',
+        errorCode: 'insufficient_credits',
+        reply: "You're out of credits. This request needs about 12 credits, but only 3 are available.",
+        promptMeta: {},
+      });
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      const { ChatQuestPollResultSchema } = await import('@bike4mind/common');
+      expect(() => ChatQuestPollResultSchema.parse(res._getJSONData())).not.toThrow();
+    });
+
+    it('omits it on a successful turn', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      // res.json() drops undefined properties, so `.errorCode` being undefined would
+      // pass whether the handler emits the field or not - the field's absence is the point.
+      expect('errorCode' in res._getJSONData()).toBe(false);
+    });
   });
 
   describe('attachment report (#1576 ask 1: a caller can tell whether the corpus contributed)', () => {
@@ -504,6 +574,87 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getStatusCode()).toBe(200);
       const body = res._getJSONData();
       expect(JSON.stringify(body.promptMeta.functionCalls)).toContain('PRIVATE TOOL OUTPUT');
+    });
+  });
+
+  describe('errorCode classifier (a poller must be able to tell a credit failure from a real answer)', () => {
+    it('is not echoed on a type: "message" quest, even when a stale errorCode is still on the document', async () => {
+      // A retry does not necessarily clear errorCode at the storage layer in every path this
+      // test's fixture models directly on the returned document - this is the negative control
+      // for the gate itself: without `quest.type === 'error'` gating the field, this fixture
+      // would report a credit failure on a turn that succeeded.
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'done',
+        type: 'message',
+        errorCode: 'insufficient_credits',
+        reply: 'hi',
+        replies: ['hi'],
+        promptMeta: {},
+      });
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).not.toHaveProperty('errorCode');
+    });
+
+    it('surfaces errorCode alongside type: "error" and the credit-copy reply, still as 200', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'done',
+        type: 'error',
+        errorCode: 'insufficient_credits',
+        reply: "You're out of credits. This request needs about 10 credits, but only 2 are available.",
+        replies: [],
+        promptMeta: {},
+      });
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const body = res._getJSONData();
+      expect(body.type).toBe('error');
+      expect(body.errorCode).toBe('insufficient_credits');
+      expect(body.reply).toMatch(/out of credits/i);
+    });
+
+    // No current throw site raises spend_cap_exceeded onto a quest on this endpoint (only
+    // embedRoute's pre-flight 422 does, outside this process path) - this only confirms the
+    // pass-through is not hardcoded to insufficient_credits, should that ever change.
+    it('passes through errorCode: "spend_cap_exceeded" the same way, if the quest ever carried it', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'done',
+        type: 'error',
+        errorCode: 'spend_cap_exceeded',
+        reply: 'This request would exceed the configured spend cap.',
+        replies: [],
+        promptMeta: {},
+      });
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().errorCode).toBe('spend_cap_exceeded');
+    });
+
+    it('is a failure with no errorCode at all - never read its absence as success', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'done',
+        type: 'error',
+        reply: 'The provider timed out.',
+        replies: [],
+        promptMeta: {},
+      });
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const body = res._getJSONData();
+      expect(body.type).toBe('error');
+      expect(body).not.toHaveProperty('errorCode');
     });
   });
 });

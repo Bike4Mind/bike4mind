@@ -9,6 +9,7 @@ import {
   Group,
   Organization,
   Invite,
+  User,
   inviteRepository,
   organizationRepository,
   fabFileRepository,
@@ -35,6 +36,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 let mongoServer: MongoMemoryServer;
 
 const GROUP_NAME = 'Confidential Group';
+const RECIPIENT_EMAIL = 'x@y.com';
 
 const db = {
   fabFiles: fabFileRepository,
@@ -54,6 +56,9 @@ const platformAdminUser = { id: 'platform-1', username: 'padmin', groups: [], is
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
+  // createInvite refuses an invite whose recipients all fail to resolve, so the address the mint
+  // cases below name has to belong to a real account. Seeded once: the per-test cleanup leaves it.
+  await User.create({ name: 'Recipient', email: RECIPIENT_EMAIL, username: 'recipient' });
 });
 afterAll(async () => {
   await mongoose.disconnect();
@@ -67,13 +72,15 @@ afterEach(async () => {
   await Promise.all([Organization.deleteMany({}), Group.deleteMany({}), Invite.deleteMany({})]);
 });
 
-// Seeds an org with a users[]-share grant for memberUser, a group under it, and a
+// Seeds an org with a users[]-read grant for memberUser, a group under it, and a
 // pending Group invite on that group. Returns the group + invite ids.
+// read (not share): orgAclRowConfersMembership requires read or write; share-only users
+// are not counted as members and are denied by authorizeByInviteType.
 const seedGroupInvite = async () => {
   const org = await Organization.create({
     name: 'Org',
     userId: 'owner-1',
-    users: [{ userId: memberUser.id, permissions: ['share'] }],
+    users: [{ userId: memberUser.id, permissions: ['read'] }],
   });
   const group = await Group.create({ name: 'G', description: 'd', type: 'sales', organizationId: String(org._id) });
   const invite = await Invite.create({
@@ -86,11 +93,13 @@ const seedGroupInvite = async () => {
 };
 
 // Same org + group shape, but no pre-existing invite: the create path mints its own.
+// memberUser has read (not share): passes isOrgMember disclosure guard but not
+// assertCanManageOrgGroups, so create correctly throws ForbiddenError.
 const seedOrgAndGroup = async () => {
   const org = await Organization.create({
     name: 'Org',
     userId: ownerUser.id,
-    users: [{ userId: memberUser.id, permissions: ['share'] }],
+    users: [{ userId: memberUser.id, permissions: ['read'] }],
   });
   const group = await Group.create({
     name: GROUP_NAME,
@@ -104,12 +113,12 @@ const seedOrgAndGroup = async () => {
 const createGroupInvite = (user: unknown, groupId: string) =>
   sharingService.createInvite(
     user as any,
-    { id: groupId, type: InviteType.Group, permissions: [Permission.read], recipients: ['x@y.com'] } as any,
+    { id: groupId, type: InviteType.Group, permissions: [Permission.read], recipients: [RECIPIENT_EMAIL] } as any,
     { db } as any
   );
 
 describe('group-invite authorization (end-to-end, real repos + Mongo)', () => {
-  it('lists group invites for a caller with an org share grant', async () => {
+  it('lists group invites for an org member (read permission)', async () => {
     const { groupId } = await seedGroupInvite();
 
     const result = await sharingService.listInvitesForDocument(
@@ -132,13 +141,25 @@ describe('group-invite authorization (end-to-end, real repos + Mongo)', () => {
     ).rejects.toThrow(UnauthorizedError);
   });
 
-  it('cancels a group invite for an authorized caller (remaining -> 0)', async () => {
+  it('lets the billing owner cancel a group invite by id (remaining -> 0)', async () => {
     const { inviteId } = await seedGroupInvite();
 
-    await sharingService.cancelInviteById(memberUser, { id: inviteId }, { db } as any);
+    // seedGroupInvite sets userId: 'owner-1', so ownerUser is the billing owner.
+    await sharingService.cancelInviteById(ownerUser, { id: inviteId }, { db } as any);
 
     const reloaded = await Invite.findById(inviteId);
     expect(reloaded?.remaining).toBe(0);
+  });
+
+  it('denies a plain org member from cancelling a group invite by id', async () => {
+    const { inviteId } = await seedGroupInvite();
+
+    await expect(
+      sharingService.cancelInviteById(memberUser, { id: inviteId }, { db } as any)
+    ).rejects.toThrow(ForbiddenError);
+
+    const reloaded = await Invite.findById(inviteId);
+    expect(reloaded?.remaining).toBe(1);
   });
 
   it('lets the billing owner create a group invite', async () => {
@@ -159,9 +180,10 @@ describe('group-invite authorization (end-to-end, real repos + Mongo)', () => {
     expect(invite.name).toBe(GROUP_NAME);
   });
 
-  it('rejects a group invite created by a member holding only an org share grant', async () => {
-    // memberUser has permissions: ['share'], which is enough to LIST invites (first test above)
-    // but not to mint one - creating a group invite is a membership grant, not a share action.
+  it('rejects a group invite created by an org member lacking manage-groups authority', async () => {
+    // memberUser has permissions: ['read'] -- enough to be recognized as an org member
+    // (passes isOrgMember) but assertCanManageOrgGroups then denies: only the billing
+    // owner, adminUserIds org admin, or platform admin may mint a group invite.
     const { groupId } = await seedOrgAndGroup();
 
     await expect(createGroupInvite(memberUser, groupId)).rejects.toThrow(ForbiddenError);

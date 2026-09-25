@@ -46,7 +46,7 @@ registerLambdaErrorHandlers();
 import { Config } from '@server/utils/config';
 import { getUserEntitlements } from '@server/entitlements';
 import { z } from 'zod';
-import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services';
+import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services/llm';
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from './latticeChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
@@ -55,7 +55,7 @@ import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage
 import { logEvent } from '@server/utils/analyticsLog';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { accessibleBy } from '@casl/mongoose';
-import { IUserDocument, Permission } from '@bike4mind/common';
+import { IUserDocument, Permission, stripSearchResultCardFences } from '@bike4mind/common';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
 import { withEventContext } from '@server/events/utils';
@@ -471,7 +471,13 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
-  const aiResponse = quest.reply || quest.replies?.[0] || 'Processing complete.';
+  // The `text` field below (unlike `blocks`) is what Slack uses for push/desktop notifications,
+  // so it must be stripped independently rather than relying on formatSimpleAgentResponse's own
+  // stripping of its blocks output.
+  const aiResponse = stripSearchResultCardFences(
+    quest.reply || quest.replies?.[0] || 'Processing complete.',
+    quest.promptMeta?.citables
+  );
   let formatted = formatSimpleAgentResponse(aiResponse);
 
   let displayText = aiResponse;

@@ -1,18 +1,23 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
+import { computeMcpContentHash } from '@bike4mind/infra';
 import { lambdaVpc } from './vpc';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { router, appUrlForLambdaEnv } from './router';
 import { secrets } from './secrets';
 
-// Calculate content hash from git tree - changes immediately when MCP/Common/Hearth code changes
-// Matches the content hash pattern used in ci.yml for caching
-// This is a workaround for SST not detecting copyFiles content changes
-const MCP_CONTENT_HASH = execSync(
-  "git ls-tree -r HEAD b4m-core/mcp b4m-core/common b4m-core/hearth | awk '{print $3}' | sort | md5sum | awk '{print $1}'"
-)
-  .toString()
-  .trim()
-  .slice(0, 8);
+// Workspace code the bundle carries, hashed into MCP_VERSION so a code-only change redeploys the
+// handler: SST does not notice copyFiles CONTENT changes. Keep in sync with the b4m-core/* entries
+// in copyFiles below - a package copied but not listed here stops moving the version. The tiktoken
+// wasm is not one of them: it lives under node_modules, so it is untracked and `git ls-tree` has no
+// blob to hash, which means MCP_VERSION does not cover it.
+// infra/__tests__/contentHashCoverage.test.ts asserts that correspondence in both directions, and
+// holds the exclusion to being genuinely untracked. Read one path at a time and hashed in
+// @bike4mind/infra, where the ways it can go quietly constant are testable; nothing imports this
+// file. See mcpContentHash.ts for which ways and why.
+const MCP_CONTENT_HASH = computeMcpContentHash({
+  paths: ['b4m-core/mcp', 'b4m-core/common', 'b4m-core/hearth'],
+  readTree: path => execFileSync('git', ['ls-tree', '-r', 'HEAD', path]).toString(),
+});
 
 export const mcpHandler = new sst.aws.Function('mcpHandler', {
   handler: 'apps/client/server/utils/mcpCall.handler',

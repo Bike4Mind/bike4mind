@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/slack",
-  "version": "0.4.2",
+  "version": "2.0.6",
   "publishConfig": {
     "access": "restricted"
   },
@@ -51,10 +51,10 @@
     "@slack/web-api": "^7.19.0",
     "axios": "1.18.0",
     "cheerio": "1.2.0",
-    "chrono-node": "^2.10.0",
-    "dayjs": "^1.11.21",
+    "chrono-node": "^2.10.1",
+    "dayjs": "^1.11.23",
     "mongoose": "^8.24.1",
-    "remark-gfm": "^4.0.0",
+    "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
     "remark-stringify": "^11.0.0",
     "unified": "^11.0.5"

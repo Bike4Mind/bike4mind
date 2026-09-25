@@ -8,6 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
+import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   fabFileStore: [] as Record<string, unknown>[],
@@ -16,6 +17,7 @@ const h = vi.hoisted(() => ({
   createFabFile: vi.fn(),
   sessionUpdate: vi.fn(),
   publishTag: vi.fn(),
+  recordSessionOperationalUsage: vi.fn(),
   logEvent: vi.fn(),
   upload: vi.fn(),
   findPrefixArmLakes: vi.fn(
@@ -109,10 +111,11 @@ vi.mock('@server/utils/storage', () => ({
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
 vi.mock('@server/events/recordSessionOperationalUsage', () => ({
-  recordSessionOperationalUsage: vi.fn(),
+  recordSessionOperationalUsage: h.recordSessionOperationalUsage,
 }));
 
 import { handler } from './sessionSummarization';
+import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@server/utils/sessionOperationCounts';
 
 const OWNER = 'user-owner';
 const STRANGER = 'user-stranger';
@@ -120,9 +123,9 @@ const SESSION_ID = 'session-1';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
 
-const run = () =>
+const run = (properties: Record<string, unknown> = {}) =>
   (handler as unknown as (event: unknown, logger: unknown) => Promise<void>)(
-    { event: 'session.summarize', properties: { sessionId: SESSION_ID, trigger: 'manual' } },
+    { event: 'session.summarize', properties: { sessionId: SESSION_ID, trigger: 'manual', ...properties } },
     logger
   );
 
@@ -369,5 +372,87 @@ describe('sessionSummarization summary-file lookup', () => {
       expect(data.tags.map(t => t.name)).toEqual(['datalake:opti-knowledge', 'plain']);
       expect(logger.warn).not.toHaveBeenCalled();
     });
+  });
+});
+
+// The credit pre-flight prices a callTagging summarize at OPERATIONS_PER_SUMMARIZE_WITH_TAGGING
+// operational model calls (sessions/[id]/summary.ts, projects/[id]/sessions.ts). Nothing but this
+// cascade justifies that number, so it is asserted against the real constant on BOTH legs: the
+// summary's own settlement call and the Tag it publishes. Asserting only the Tag would leave the
+// summary leg encoded in arithmetic (`constant - 1`) and let a handler that stopped settling its
+// own call keep passing.
+describe('sessionSummarization operational cascade', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.assertLakeAdmission.mockReset();
+    h.fabFileStore.length = 0;
+    h.session = { id: SESSION_ID, _id: SESSION_ID, userId: OWNER, name: 'Notebook', tags: [] };
+    h.findOne.mockResolvedValue(null);
+    h.createFabFile.mockResolvedValue({ filePath: 'summary.txt', mimeType: 'text/plain' });
+  });
+
+  it('queues exactly the cascaded operations the pre-flight charges for', async () => {
+    await run({ callTagging: true });
+
+    // The summary settles one operational call of its own; every Tag it publishes is another.
+    // Both counted, then summed against the constant, so a change to either leg fails here.
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledTimes(1);
+    expect(h.publishTag).toHaveBeenCalledTimes(1);
+    expect(h.recordSessionOperationalUsage.mock.calls.length + h.publishTag.mock.calls.length).toBe(
+      OPERATIONS_PER_SUMMARIZE_WITH_TAGGING
+    );
+  });
+
+  it('cascades nothing without callTagging, which is why tag.ts prices itself at one', async () => {
+    await run();
+
+    // One settled call and no cascade, so a plain Summarize is worth exactly one operation.
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledTimes(1);
+    expect(h.publishTag).not.toHaveBeenCalled();
+  });
+});
+
+// `summaryAt` records WHEN a summary was made; `summaryTrigger` records WHY, and it is the only
+// thing separating a summarization the engine decided to run from one a user asked for - the
+// question apps/client/pages/api/admin/sessions/[id]/index.ts exists to answer when someone
+// queries summarization spend. The handler assigns it to the in-memory document and there is no
+// `.save()` on this path, so unless the repository update names it the field is never stored.
+describe('sessionSummarization provenance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.assertLakeAdmission.mockReset();
+    h.fabFileStore.length = 0;
+    h.session = { id: SESSION_ID, _id: SESSION_ID, userId: OWNER, name: 'Notebook', tags: [] };
+    h.findOne.mockResolvedValue(null);
+    h.createFabFile.mockResolvedValue({ filePath: 'summary.txt', mimeType: 'text/plain' });
+  });
+
+  // Derived from the persisted list, so a new reason-it-happened picks up handler coverage for free
+  // and a decision-only reason like 'throttling' is excluded by construction rather than by a filter
+  // this test has to remember to keep.
+  it.each([...PERSISTED_SESSION_SUMMARY_TRIGGERS])('writes the %s trigger alongside the summary', async trigger => {
+    await run({ trigger });
+
+    expect(h.sessionUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: SESSION_ID,
+        summary: 'A summary of the session.',
+        summaryAt: expect.any(Date),
+        summaryTrigger: trigger,
+      })
+    );
+  });
+
+  // The event schema makes `trigger` optional, and Mongoose strips an undefined value out of the
+  // `$set` rather than clearing the path - so a re-summarization published without one would
+  // leave the PREVIOUS trigger next to a fresh `summaryAt`. No in-repo publisher omits it
+  // (summary.ts sends 'manual', spider 'spider', projects 'project', persistRunAsQuest 'earlyMilestone',
+  // and the completion + image paths only publish when shouldSummarizeSession returned one).
+  it('sends the key as undefined rather than inventing a trigger when the event omits it', async () => {
+    await run({ trigger: undefined });
+
+    const [update] = h.sessionUpdate.mock.calls[0] as [Record<string, unknown>];
+    expect(update).toHaveProperty('summaryTrigger');
+    expect(update.summaryTrigger).toBeUndefined();
   });
 });

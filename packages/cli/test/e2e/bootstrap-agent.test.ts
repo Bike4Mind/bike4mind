@@ -29,7 +29,7 @@ function makeInput(over: Partial<BuildAgentInput> = {}): BuildAgentInput {
     initialInteractionMode: 'normal',
     contextContent: 'PROJECT CONTEXT',
     agentStore: { getDirectoryContext: () => '' } as never,
-    customCommandStore: { getAllCommands: () => [] } as never,
+    customCommandStore: { getAllCommands: () => [], getModelReachableCommands: () => [] } as never,
     enableSkillTool: true,
     additionalDirectories: [],
     featureModulePrompts: '',

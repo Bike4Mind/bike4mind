@@ -1,7 +1,7 @@
-import { organizationRepository } from '@bike4mind/database/infra';
 import { BadRequestError } from '@bike4mind/utils';
 import { ISubscription, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { baseApi } from '@server/middlewares/baseApi';
+import { verifyOrgMembership } from '@server/utils/orgAccess';
 import { subscriptionRepository } from '@server/models/Subscription';
 
 const handler = baseApi().get(async (req, res) => {
@@ -11,12 +11,17 @@ const handler = baseApi().get(async (req, res) => {
 
   switch (ownerType) {
     case SubscriptionOwnerType.Organization: {
-      const organization = await organizationRepository.findById(ownerId as string);
-      if (!organization) {
-        throw new BadRequestError('Organization not found');
-      }
+      // Membership, not management: the org list and the org detail header fetch this for every
+      // member, so an owner/manager gate would blank the plan on a screen plain members use. The
+      // caller-supplied ownerId was previously looked up with a bare findById, which handed any
+      // authenticated user any organization's active subscriptions. verifyOrgMembership answers
+      // NotFoundError identically for a missing org and one the caller does not belong to.
+      const organization = await verifyOrgMembership(req.user, ownerId as string);
 
-      subscriptions = await subscriptionRepository.findActiveSubscriptionsByOwner(
+      // Non-terminal, not active-only: an org whose subscription is past_due must still
+      // see it here, or the billing screen loses the Stripe portal - the only route to
+      // fix the card or cancel. Entitlement checks read the active-only lookup instead.
+      subscriptions = await subscriptionRepository.findNonTerminalSubscriptionsByOwner(
         SubscriptionOwnerType.Organization,
         organization.id
       );

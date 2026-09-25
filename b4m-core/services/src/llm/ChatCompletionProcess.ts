@@ -35,6 +35,10 @@ import {
   resolveHistoryFetchLimit,
   QuestErrorCode,
   getQuestErrorCode,
+  DEGENERATE_FINISH_REASON,
+  TRUNCATED_FINISH_REASON,
+  isEarlyStop,
+  visibleReplyText,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -95,18 +99,21 @@ import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
-import { settleToolCallCredits } from './settleToolCredits';
+import { resolveAggregateToolModel, settleToolCallCredits } from './settleToolCredits';
 import { resolvePersonalCorpusOnly } from './resolvePersonalCorpusOnly';
 import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
 import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedReplyAccumulator';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
+import { resolveCorrectionContext } from './buildCorrectionContext';
 import { LATTICE_TOOL_NAMES } from './tools';
 import {
   getDynamicDataLakeAccess,
   lakeMembershipsFrom,
+  measureIdentityNamedExclusion,
   warnIfManyLakeMemberships,
-  type ResolvedLakeAccess,
+  type DataLakeAccessContext,
 } from '../dataLakeService/getDynamicDataLakeTags';
+import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
 import {
   buildElisionStamp,
   truncateElisionText,
@@ -114,6 +121,7 @@ import {
   ELISION_MATCH_MAX,
   ELISION_NAME_MAX,
 } from './elisionStamp';
+import { buildEarlyStopStamp, buildIncompleteAnswerNotice } from './earlyStopStamp';
 import type { SubagentTelemetryData } from './tools/implementation/delegateToAgent';
 import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
@@ -157,12 +165,21 @@ import {
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
   resolveSkipAutoOffers,
+  lakeContentTokens,
   toPromptDetails,
   type PromptSourceId,
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
 import { vetPreauthorizedLakeIds } from './vetPreauthorizedLakeIds';
-import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
+import {
+  unionPreauthorizedLakeAccess,
+  type ResolvedLakeAccessSetWithAdmissions,
+} from '../dataLakeService/unionPreauthorizedLakeAccess';
+import {
+  narrowLakeAccessToSession,
+  sessionGroundsOnNoLake,
+  sessionNamesALake,
+} from '../dataLakeService/narrowLakeAccessToSession';
 import { renderCallerPromptMessages } from './renderCallerPromptBlock';
 import { buildInsufficientCreditsMessage, buildMemberCreditCapMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
@@ -599,8 +616,11 @@ export interface ResolveEnabledToolsInput {
    * a mode-driven eval, above all `raw` (the bare-model control arm), must not get surprise tools.
    * The request field is that same suppression without a mode, for an arm that must not be OFFERED
    * knowledge while keeping the authored prompts a mode would strip - it withholds the tool, not
-   * knowledge (same caveat as ChatCompletionInvokeParamsSchema.skipAutoOffers). Caller-selected and
-   * session-forced tools are unaffected; only step 2 is gated.
+   * knowledge (same caveat as ChatCompletionInvokeParamsSchema.skipAutoOffers). Caller-selected
+   * (native) and session-forced tools are unaffected. The same field also gates
+   * `buildSharedTools`' MCP merge (`offerOnlyNamedTools`, fed from here below): MCP tools merged
+   * past the `enabledTools` filter are withheld too, since an MCP tool the caller didn't name by
+   * its `server__tool` id was never subject to `enabledTools` in the first place.
    */
   skipAutoOffers?: boolean;
 }
@@ -845,17 +865,44 @@ export class ChatCompletionProcess {
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
   /**
-   * Per-turn memo for the caller's resolved data-lake access. Shared by the tool-offer check
-   * (userHasAccessibleKnowledgeLake) and the corpus inline-defer plan (resolveCorpusInlinePlan) so
-   * the two can never disagree - it is the SAME access the knowledge tool resolves with.
+   * Set only in `resolveEntitlementKeys()`'s catch branch; read by `getDataLakeAccessContext()` to
+   * set `DataLakeAccessContext.entitlementKeysResolved` - see that field's own doc for the "THREW
+   * vs. legitimately empty" distinction this exists to carry (#3155).
+   *
+   * NOT the same axis as `entitlementsResolved` above (review: the two names read as near-synonyms
+   * but answer different questions) - that one means "an attempt has been made this process, so the
+   * memo is populated" and is `true` in BOTH the success and the failure branch of
+   * `resolveEntitlementKeys()`. This one means "that attempt actually succeeded." Never read
+   * `entitlementsResolved: true` as proof the keys are trustworthy - check this field instead.
    */
-  private accessibleDataLakeAccessMemo:
-    | {
-        dataLakeTags: string[];
-        dataLakeTagPrefixes: string[];
-        lakes: ResolvedLakeAccess[];
-      }
-    | undefined;
+  private entitlementResolutionFailed = false;
+  /**
+   * Single-flight guard for `resolveEntitlementKeys()` (review, #3155): the resolution check
+   * (`entitlementsResolved`) only flips to `true` AFTER the `await`, so two callers racing before
+   * it settles previously both re-entered the try/catch and both wrote the shared
+   * `entitlementKeys`/`entitlementResolutionFailed` fields - whichever settled LAST won, so a
+   * failure racing behind a success could overwrite healthy keys with the fail-safe `[]` and
+   * suppress a healthy turn's telemetry. Caching the in-flight PROMISE (set synchronously, before
+   * any `await`) closes the window: every racing caller awaits the same one settlement.
+   */
+  private entitlementKeysPromise?: Promise<string[]>;
+  /**
+   * Per-turn memo for the caller's resolved data-lake access. Shared by the tool-offer check
+   * (userHasAccessibleKnowledgeLake), the corpus inline-defer plan (resolveCorpusInlinePlan) and
+   * the retrieval seed's `lakeScope`, so none of them can disagree - it is the SAME access the
+   * knowledge tool resolves with.
+   */
+  private accessibleDataLakeAccessMemo: ResolvedLakeAccessSetWithAdmissions | undefined;
+  /**
+   * The SAME `DataLakeAccessContext` object for the whole turn (#3055), so every call into
+   * `getDynamicDataLakeTags.ts`'s per-turn memos (membershipOrgIdsForTurn, grantedLakeReachForTurn,
+   * supersededOwnLakeIdsForTurn - see scopedAsyncMemo's WeakMap-on-identity doc) shares one
+   * membership/grant/supersession snapshot. A second call site building its own object literal with
+   * the same field VALUES still misses every one of those memos on object IDENTITY, forcing a second
+   * read that can observe a different snapshot (e.g. a grant revoked between the two reads) and
+   * disagree with the first about what this caller can reach.
+   */
+  private dataLakeAccessContextMemo: DataLakeAccessContext | undefined;
   /**
    * This turn's VETTED `session.preauthorizedLakeIds` (see vetPreauthorizedLakeIds), captured on a
    * field because `getAccessibleDataLakeAccess` is a session-less private method and its consumers
@@ -892,6 +939,10 @@ export class ChatCompletionProcess {
   // ToolBuilder.reserveToolCredits). Settled per-call below so a tool invoked more
   // than once in a turn bills the sum of every call.
   private toolCreditsMap: Map<string, number[]> = new Map();
+  // Distinct models that charged tool credits this turn (see ToolBuilder.reserveToolCredits).
+  // The quest writes ONE aggregate tool_usage ledger row, so it can only name a model
+  // honestly when this holds exactly one - see the settlement block below.
+  private toolCreditModels: Set<string> = new Set();
   private subagentTelemetryData: SubagentTelemetryData[] = [];
   // Credit reservation tracking (pre-reserve/reconcile pattern)
   private reservedCredits: number = 0;
@@ -947,25 +998,35 @@ export class ChatCompletionProcess {
    * memoizing the result (an empty list is a valid, memoizable result). Both the forced
    * retrieval feature and the tool path read these keys to gate entitlement-scoped lakes.
    * No injection => empty keys => tag-only matching (the neutral default).
+   *
+   * SINGLE-FLIGHT (review, #3155): `entitlementKeysPromise` is cached synchronously, before the
+   * first `await`, so two callers racing before resolution settles converge on the SAME promise
+   * instead of each running the try/catch independently - see that field's own doc for the race
+   * this closes.
    */
   public async resolveEntitlementKeys(): Promise<string[]> {
-    if (!this.entitlementsResolved) {
-      try {
-        this.entitlementKeys = (await this.getEntitlements?.(this.user)) ?? [];
-      } catch (err) {
-        // Fail-safe: an entitlement-resolution failure (e.g. a subscription DB read error)
-        // must NEVER break the chat turn. Degrade to tag-only matching - exactly the pre-Q3b
-        // behavior. Entitlement-gated lakes (libonc) fail closed; tag-gated lakes (Opti)
-        // and the entire main-app chat path are unaffected. This is what keeps wiring
-        // getEntitlements into the shared chat defaults a non-regression for every surface.
-        this.logger.warn(
-          `Entitlement resolution failed; falling back to tag-only lake access: ${(err as Error)?.message}`
-        );
-        this.entitlementKeys = [];
-      }
-      this.entitlementsResolved = true;
+    if (this.entitlementsResolved) return this.entitlementKeys;
+    if (!this.entitlementKeysPromise) {
+      this.entitlementKeysPromise = (async () => {
+        try {
+          this.entitlementKeys = (await this.getEntitlements?.(this.user)) ?? [];
+        } catch (err) {
+          // Fail-safe: an entitlement-resolution failure (e.g. a subscription DB read error)
+          // must NEVER break the chat turn. Degrade to tag-only matching - exactly the pre-Q3b
+          // behavior. Entitlement-gated lakes (libonc) fail closed; tag-gated lakes (Opti)
+          // and the entire main-app chat path are unaffected. This is what keeps wiring
+          // getEntitlements into the shared chat defaults a non-regression for every surface.
+          this.logger.warn(
+            `Entitlement resolution failed; falling back to tag-only lake access: ${(err as Error)?.message}`
+          );
+          this.entitlementKeys = [];
+          this.entitlementResolutionFailed = true;
+        }
+        this.entitlementsResolved = true;
+        return this.entitlementKeys;
+      })();
     }
-    return this.entitlementKeys;
+    return this.entitlementKeysPromise;
   }
 
   /**
@@ -985,24 +1046,39 @@ export class ChatCompletionProcess {
   }
 
   /**
+   * The one `DataLakeAccessContext` object for the turn (#3055) - built once, reused by every
+   * caller that needs to share `getDynamicDataLakeTags.ts`'s per-turn memos with
+   * `getAccessibleDataLakeAccess`'s own resolution. See `dataLakeAccessContextMemo`'s doc for why
+   * identity, not field equality, is what those memos key on.
+   */
+  private async getDataLakeAccessContext(): Promise<DataLakeAccessContext> {
+    if (this.dataLakeAccessContextMemo === undefined) {
+      const entitlementKeys = await this.resolveEntitlementKeys();
+      this.dataLakeAccessContextMemo = {
+        db: this.db,
+        user: this.user,
+        entitlementKeys,
+        // #3155: lets the exclusion-telemetry count tell a legitimately empty entitlement list
+        // apart from a failed lookup - see `entitlementResolutionFailed`'s own doc.
+        entitlementKeysResolved: !this.entitlementResolutionFailed,
+        // Without this, a countGateExcludedLakes failure warns into a void: the resolver
+        // swallows it internally (never throws), so this call's own try/catch never sees it.
+        logger: this.logger,
+      };
+    }
+    return this.dataLakeAccessContextMemo;
+  }
+
+  /**
    * The caller's resolved data-lake access (owned + org + shared/entitlement-gated lakes they can
    * reach), memoized per turn. This is the SAME resolver the knowledge tool executes with, so the
    * tool-offer and the inline-defer decisions can never disagree. Fail-safe: any error degrades to
    * empty access (treated as "no lake"), never breaks the turn.
    */
-  private async getAccessibleDataLakeAccess(): Promise<{
-    dataLakeTags: string[];
-    dataLakeTagPrefixes: string[];
-    lakes: ResolvedLakeAccess[];
-  }> {
+  private async getAccessibleDataLakeAccess(): Promise<ResolvedLakeAccessSetWithAdmissions> {
     if (this.accessibleDataLakeAccessMemo === undefined) {
       try {
-        const entitlementKeys = await this.resolveEntitlementKeys();
-        const resolved = await getDynamicDataLakeAccess({
-          db: this.db,
-          user: this.user,
-          entitlementKeys,
-        });
+        const resolved = await getDynamicDataLakeAccess(await this.getDataLakeAccessContext());
         // Same union the retrieval and tool doors run, so all three agree on what this session can
         // reach; it re-derives the manage gate per call, so a revoked maintainer's memo comes back
         // un-widened exactly as it would have before the admission.
@@ -1019,7 +1095,11 @@ export class ChatCompletionProcess {
         this.accessibleDataLakeAccessMemo = {
           dataLakeTags: [],
           dataLakeTagPrefixes: [],
+          scopedTagPrefixes: [],
           lakes: [],
+          // excludedByAccessCount omitted, not 0: resolution failed outright, so whether access
+          // shaped anything is unknown, not "nothing was excluded" (#3055).
+          admittedPreauthorizedTags: new Set(),
         };
       }
     }
@@ -1764,6 +1844,16 @@ export class ChatCompletionProcess {
         await saveQuest(quest);
         return;
       }
+      // A stop can land between invoke creating the quest and this point (the client defers a
+      // first-turn Stop until the quest exists). The save below would write 'running' back over
+      // it and the cancel watcher would never see it, so honour it here. The finally block sends
+      // the terminal 'stopped' frame.
+      const latestQuestStatus = await this.db.quests.findByIdWithStatus(questId);
+      if (latestQuestStatus?.status === 'stopped') {
+        logger.info(`Quest ${questId} was stopped before processing started`);
+        quest.status = 'stopped';
+        return;
+      }
       quest.status = 'running';
 
       // Captured HERE, ahead of every consumer, because getAccessibleDataLakeAccess memoizes per
@@ -2379,7 +2469,7 @@ export class ChatCompletionProcess {
       // buildAndSortMessages return nothing and the empty-prompt guard fire on a misconfigured
       // model (a context window smaller than its own reserved output). Clamping there would
       // silently restore the empty payload that guard exists to catch.
-      const modelMaxOutput = modelInfo.max_tokens ?? 16384;
+      const modelMaxOutput = modelInfo.max_tokens;
       // Resolved here, above its first use, because BOTH safeInputWindow callers have to
       // reserve the same output or the window drifts - which is exactly what the note
       // above promises cannot happen. Falling back to the model's full output cap was
@@ -2494,6 +2584,11 @@ export class ChatCompletionProcess {
           `📨 [EXTRA_CONTEXT] Received ${extraContextMessages.length} extra context messages from external source`
         );
       }
+
+      // Correct-and-retry framing, including the session re-check that keeps a link copied into
+      // another session from dereferencing here. See resolveCorrectionContext for why the read side
+      // owns that check rather than trusting the writers.
+      const correctionContextMessages = await resolveCorrectionContext(quest, this.db.quests, logger);
 
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Previous messages loaded in ${
@@ -2666,6 +2761,7 @@ export class ChatCompletionProcess {
         suppressLakeArms: this.personalCorpusOnly,
         // Narrows the knowledge tools' lake access to the lake this session is FOR.
         sessionRetrievalTags: session.retrievalTags,
+        sessionLakeScopeExplicit: session.lakeScopeExplicit,
         sessionPreauthorizedLakeIds: vetPreauthorizedLakeIds(session, this.user.id),
         logger: this.logger,
         storage: this.storage,
@@ -2673,6 +2769,7 @@ export class ChatCompletionProcess {
         imageProcessorLambdaName: this.imageProcessorLambdaName,
         getMcpClient: this.getMcpClient,
         toolCreditsMap: this.toolCreditsMap,
+        toolCreditModels: this.toolCreditModels,
         subagentTelemetryData: this.subagentTelemetryData,
         sendStatusUpdate: (q, status, options) => this.sendStatusUpdate(q, status, options),
         onToolPreamble: this.onToolPreamble,
@@ -2772,6 +2869,15 @@ export class ChatCompletionProcess {
 
       let allTools = toolBuilder.buildTools({
         enabledTools,
+        // Auto-offers are OUR additions, not the caller's, and MCP tools are merged past the
+        // `enabledTools` filter without ever being named - so a caller that suppressed our
+        // additions gets them suppressed here too. This is what makes an empty tool profile
+        // reachable at all for a caller with a server connected (#2960).
+        offerOnlyNamedTools: skipAutoOffers,
+        // Also enforced over the returned list below; passed here as well because two things the
+        // builder produces never appear in that list - MCP tools and the delegate tool's captured
+        // parentTools.
+        sessionDisabledTools: session.disabledTools,
         mcpToolsByServer,
         quest,
         saveQuest,
@@ -2785,6 +2891,7 @@ export class ChatCompletionProcess {
           image_generation: imageConfig,
           edit_image: imageConfig,
           audio_generation: audioConfig,
+          web_search: { imageUrlSigningSecret: this.telemetryHmacSecret },
         },
         model,
         organization,
@@ -2871,11 +2978,67 @@ export class ChatCompletionProcess {
       const knowledgeBaseGuidanceInjected =
         toolPromptAdmitted && knowledgeToolOffered && Boolean(knowledgeBaseGuidance);
       if (quest.promptMeta && (forcedRetrievalEnabled || knowledgeToolOffered)) {
+        // The scope a retrieval surface WOULD have searched this turn, recorded whether or not one
+        // ran - the point of the seed. `dataLakeTags` below stays empty because it means "what
+        // retrieval used", and on a not-attempted turn that is nothing; `lakeScope` is the other
+        // question, and recording it here is what lets the offline answerability replay probe the
+        // turn's real corpus instead of rebuilding one from the session's tags as they stand at
+        // replay time (see RetrievalSummarySchema.lakeScope).
+        //
+        // Mirrors resolveSessionLakeAccess, the one implementation every knowledge tool runs on:
+        // owner-wide access narrowed to the session, and nothing at all where the corpus is
+        // personal or the session grounds on no lake. Both of those are invisible to the narrowing
+        // itself, which reads an empty scope as "no opinion". Fail direction is inherited from
+        // getAccessibleDataLakeAccess, which degrades to empty access rather than throwing, so a
+        // lake-resolution outage records an empty scope and the replay skips the turn.
+        const accessForSeed =
+          this.personalCorpusOnly || sessionGroundsOnNoLake(session.retrievalTags, session.lakeScopeExplicit)
+            ? undefined
+            : await this.getAccessibleDataLakeAccess();
+        const narrowedAccess =
+          accessForSeed === undefined ? undefined : narrowLakeAccessToSession(accessForSeed, session.retrievalTags);
+        const lakeScope = narrowedAccess?.dataLakeTags ?? [];
+        // Access-excluded count travels with the same resolution as lakeScope (#3055), but a REAL
+        // narrowing (the session named a specific lake) cannot reuse the account-wide count
+        // narrowLakeAccessToSession deliberately clears in that case: the account-wide number can
+        // describe an unrelated lake outside this turn's selection. Instead, measure precisely
+        // which of the session's OWN identity-named lakes (if any) are gate-excluded - see
+        // measureIdentityNamedExclusion's own doc for why this is a separate, targeted query
+        // rather than something narrowLakeAccessToSession itself can answer. The no-op path
+        // (session names no lake) skips the targeted query entirely and keeps the account-wide
+        // number, since nothing was narrowed away from it.
+        //
+        // Passes the SAME `DataLakeAccessContext` object `getAccessibleDataLakeAccess` (called just
+        // above, via `accessForSeed`) already resolved with, not a fresh literal - the two calls
+        // share getDynamicDataLakeTags.ts's per-turn membership/grant/supersession memos only on
+        // object identity, so a second object here would silently re-read on a second snapshot.
+        //
+        // Excludes any tag THIS TURN successfully admitted via preauthorization
+        // (`admittedPreauthorizedTags`, #3055 review) - never the raw session-named tags. A
+        // preauthorized "Test this lake" session names its own lake by identity, and
+        // `measureIdentityNamedExclusion`'s underlying gate query has no notion of that admission,
+        // so left unfiltered it reports a lake the turn actually searched as excluded.
+        const identityTagsToMeasure = datalakeTagsFrom(session.retrievalTags ?? []).filter(
+          tag => !accessForSeed?.admittedPreauthorizedTags.has(tag)
+        );
+        const excludedByAccessCount =
+          accessForSeed !== undefined && sessionNamesALake(accessForSeed, session.retrievalTags)
+            ? await measureIdentityNamedExclusion(await this.getDataLakeAccessContext(), identityTagsToMeasure)
+            : narrowedAccess?.excludedByAccessCount;
+        // Written whenever the count was actually measured - INCLUDING a genuine zero, per this
+        // field's own absence contract (RetrievalSummarySchema.excludedLakes: absent means not
+        // recorded, never "nothing excluded"). A personal-corpus turn, a turn that grounds on no
+        // lake, or a failed count query (excludedByAccessCount undefined) all correctly stay
+        // unrecorded rather than reporting a zero that was never measured.
+        const excludedLakes =
+          excludedByAccessCount !== undefined ? { count: excludedByAccessCount, reason: 'access' as const } : undefined;
         quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
           attempted: false,
           mode: forcedRetrievalEnabled ? 'forced' : 'optional',
           surfaces: [],
           dataLakeTags: [],
+          lakeScope,
+          ...(excludedLakes ? { excludedLakes } : {}),
           // Recorded only when the tool was offered: a forced-only turn never had a section to
           // ship, and writing `false` there would pad the A/B's control arm with turns that were
           // never in the experiment.
@@ -2921,10 +3084,17 @@ export class ChatCompletionProcess {
       }
 
       // For tool prompt guidance, only include MCP tools given directly to the main LLM
-      // (agent-only tools like Atlassian are excluded - they're accessed via delegate_to_agent)
+      // (agent-only tools are excluded - they're accessed via delegate_to_agent).
+      //
+      // Intersected with what actually survived into `allTools`: the raw server cache is what the
+      // user connected, not what the model was offered, and everything that narrows the built list
+      // (offerOnlyNamedTools, the session denylist, the local-model trim) happens after this map is
+      // read. Describing a withheld tool in the prompt invites a call the model has no schema for.
+      const offeredToolNameSet = new Set(offeredToolNames);
       const directMcpTools = Object.entries(mcpToolsByServer)
         .filter(([serverName]) => !agentOnlyMcpServers.includes(serverName))
-        .flatMap(([, tools]) => tools);
+        .flatMap(([, tools]) => tools)
+        .filter(tool => offeredToolNameSet.has(tool.toolSchema.name));
 
       // Gate the blog workflow prompt on blog_draft surviving into the final tool set.
       // The auto-add flag alone is not enough: local (Ollama) models have blog_draft
@@ -3041,6 +3211,7 @@ export class ChatCompletionProcess {
       const taggedContextMessages = buildTaggedContextMessages({
         dateContext: [dateTimeContext], // Always provide current date/time awareness
         extraContext: extraContextMessages, // Extra context messages from external sources, at the top
+        ...correctionContextMessages,
         // Artifact emission guidance. Without this, correct <artifact> usage
         // is left to the model's defaults and large HTML/code can leak into the chat
         // body as raw markup. Gated on the same effective flag as extraction, so a turn is
@@ -3246,6 +3417,7 @@ export class ChatCompletionProcess {
             urlContent: number;
             toolSchemas: number;
             userPrompt: number;
+            lakeRetrieval?: number;
           }
         | undefined;
 
@@ -3393,6 +3565,8 @@ export class ChatCompletionProcess {
         // captures all other system content (dateTimeContext, toolPrompt, agentDetection, etc.).
         // Derived from totalTokens, NOT inputTokens, so the tool-schema count never inflates it.
         // Uses the post-recovery effective totals so a shed turn isn't double-counted as history.
+        // Lake content is still inside this residual HERE. It is promoted to its own bucket below,
+        // once systemPromptDetails has been derived, so what gets persisted is net of the lake layers.
         const knownSourceTokens = fabTokens + effectiveHistoryTokens + mementoTokens + urlTokens + userPromptTokens;
         const systemPromptTokens = Math.max(0, effectiveTotalTokens - knownSourceTokens);
 
@@ -3510,6 +3684,23 @@ export class ChatCompletionProcess {
         // model sees the blocks rather than the order the three helpers happened to run.
         systemPromptDetails = sortDetailsByDeliveryOrder(systemPromptDetails);
         quest.promptMeta!.context!.systemPromptDetails = systemPromptDetails;
+      }
+
+      // Promote the lake layers out of the residual. `tokensBySource.systemPrompts` above is gross -
+      // it still contains the forced-retrieval and lake-memory content - so move exactly the tokens
+      // the layer rows recorded as delivered into a bucket of their own, conserving the sum rather
+      // than counting the lake messages a second time. One counter, and a lake block the budget
+      // dropped is not billed (the rows carry `wasIncluded`). `undefined` means the details never
+      // derived, so the volume is unknown and the residual stays gross rather than claiming zero.
+      if (tokensBySource) {
+        const lakeTokens = lakeContentTokens(systemPromptDetails);
+        if (lakeTokens !== undefined) {
+          tokensBySource = {
+            ...tokensBySource,
+            systemPrompts: Math.max(0, tokensBySource.systemPrompts - lakeTokens),
+            lakeRetrieval: lakeTokens,
+          };
+        }
       }
 
       // Opt-in only, and built from the same tagged stack the breakdown above is derived from, so
@@ -3956,6 +4147,11 @@ export class ChatCompletionProcess {
         }
       };
 
+      // A user Stop has already persisted 'stopped' (sessionOperations.ts), and an aborted
+      // backend resolves rather than throws, so the success path must not overwrite it.
+      const successStatus = (): 'done' | 'stopped' =>
+        stopSignalSent || abortController.signal.aborted ? 'stopped' : 'done';
+
       // Set up a dedicated cancellation watcher that checks more frequently
       // than the regular status updates
       const startCancellationWatcher = () => {
@@ -4026,6 +4222,22 @@ export class ChatCompletionProcess {
       let toolPairingRetried = false;
       let requestTimeoutRetried = false;
       let streamIdleTimeoutRetried = false;
+      // Where the last tool call landed in the visible reply, so the end of the turn can tell
+      // an answer written after the tools ran from a preamble written before them. The slots
+      // themselves can't say this: every iteration appends into the same indices.
+      let toolCallsSeen = 0;
+      let visibleCharsAtLastToolCall = 0;
+      // Generating tools deliver through statusUpdate({ images }), which applyQuestStatusChanges
+      // (tools/ToolBuilder.ts) merges into quest.images with dedup, so growth means a new file.
+      const imageCountAtTurnStart = quest.images?.length ?? 0;
+      // Tools set pendingAction to a fresh object (imageGeneration's model picker, MCP confirm
+      // tokens via ToolBuilder onPendingAction), so a changed reference means this turn set one.
+      const pendingActionAtTurnStart = quest.pendingAction;
+      const countVisibleChars = (slots: readonly string[] | undefined) =>
+        (slots ?? [])
+          .map(slot => visibleReplyText(slot))
+          .join('')
+          .trim().length;
 
       // Rapid reply handoff: initialize handoff variables outside streaming callback
       let handOff = false;
@@ -4050,6 +4262,8 @@ export class ChatCompletionProcess {
             actualTokenUsage.cacheReadInputTokens = undefined;
             actualTokenUsage.cacheCreationInputTokens = undefined;
             actualTokenUsage.stopReason = undefined;
+            toolCallsSeen = 0;
+            visibleCharsAtLastToolCall = 0;
 
             // Same reasoning for tool-credit reservations: quest.promptMeta.functionCalls
             // is reassigned (not appended) per attempt, but toolCreditsMap is instance
@@ -4058,6 +4272,7 @@ export class ChatCompletionProcess {
             // settleToolCallCredits and billed as its cost. Clear it so only the surviving
             // attempt's delivered tools settle.
             this.toolCreditsMap.clear();
+            this.toolCreditModels.clear();
 
             logger.info(
               `⏱️ [${Date.now() - processStartTime}ms] === ${
@@ -4133,7 +4348,7 @@ export class ChatCompletionProcess {
             // prompt contains FORCE_FALLBACK_TEST_MARKER, simulate a provider-wide Anthropic
             // outage: fail every Bedrock- and Anthropic-backed hop so the real loop multi-hops
             // off the Anthropic path entirely and degrades to a cross-provider model (OpenAI/
-            // Gemini), rendering the "Fallback Model Used" badge with the provider-path switch.
+            // Gemini), rendering the "Fallback: <model>" badge with the provider-path switch.
             // Double-gated (E2E-only, never production) and confined to the Anthropic family, so
             // a normal request can never trigger it and the surviving cross-provider hop runs for
             // real. The error mimics a Bedrock capacity outage (ServiceUnavailableException) so it
@@ -4264,6 +4479,13 @@ export class ChatCompletionProcess {
                   // Note: 'enhance' mode would be more complex and could be implemented later
                 }
 
+                // Snapshot before this chunk lands: backends grow toolsUsed only after the
+                // tool-calling stream ends, so this chunk already belongs to the next iteration.
+                if (toolsUsed.length > toolCallsSeen) {
+                  toolCallsSeen = toolsUsed.length;
+                  visibleCharsAtLastToolCall = countVisibleChars(quest.replies);
+                }
+
                 streamedTexts.forEach((text, index) => {
                   if (!text) return;
                   appendStreamedChunk(replies, text, index, transitionMode);
@@ -4314,8 +4536,9 @@ export class ChatCompletionProcess {
                 // stopReason follows the same preserve-last-non-null contract as token
                 // counts. Previously this field was overwritten by every callback (via
                 // the whole-object replace), so a tail callback emitting undefined would
-                // clobber a real value. Only the telemetry consumer at line ~3080 reads
-                // this, and it benefits from sticky last-known semantics.
+                // clobber a real value. Read downstream for telemetry, the usage-event
+                // status, and promptMeta.finishReason, all of which benefit from sticky
+                // last-known semantics.
                 if (completionInfo?.stopReason != null) actualTokenUsage.stopReason = completionInfo.stopReason;
               }
             );
@@ -4472,6 +4695,7 @@ export class ChatCompletionProcess {
                   forceSwitch: overloadRetriesExhausted,
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
+                  endUserId: this.user.id,
                 }
               );
 
@@ -4498,6 +4722,11 @@ export class ChatCompletionProcess {
                 primaryModelName: modelInfo.name,
                 fallbackModel: currentModel.id,
                 fallbackModelName: currentModel.name,
+                // The badge cannot infer the provider path from the id alone: a
+                // bare vendor slug is the direct API on a hosted deployment and
+                // an Ollama pull on a self-hosted one.
+                primaryModelBackend: modelInfo.backend,
+                fallbackModelBackend: currentModel.backend,
                 timestamp: Date.now(),
               };
 
@@ -4546,7 +4775,32 @@ export class ChatCompletionProcess {
         }
 
         // Mark quest as done when all the replies are received
-        quest.status = 'done';
+        quest.status = successStatus();
+
+        const incompleteAnswerNotice = buildIncompleteAnswerNotice({
+          stopped: quest.status === 'stopped',
+          toolCallCount: toolCallsSeen,
+          visibleCharsAfterLastToolCall: countVisibleChars(quest.replies) - visibleCharsAtLastToolCall,
+          stopReason: actualTokenUsage.stopReason,
+          producedNonTextDeliverable:
+            (quest.images?.length ?? 0) > imageCountAtTurnStart ||
+            (quest.pendingAction != null && quest.pendingAction !== pendingActionAtTurnStart),
+        });
+        if (incompleteAnswerNotice) {
+          logger.warn('[IncompleteAnswer] Turn ended without an answer after its last tool call', {
+            questId,
+            model: currentModel.id,
+            stopReason: actualTokenUsage.stopReason,
+            toolCallCount: toolCallsSeen,
+          });
+          // Same shape as setErrorReply in the catch below: the notice is its own slot and
+          // quest.reply carries the visible text. Visible only, because the client's
+          // extractThinking reads reply AND replies, so raw slots here would show the
+          // reasoning twice. The leading break keeps it off the preamble's line, since
+          // extractReplies joins slots with ''.
+          quest.replies = [...(quest.replies ?? []), `\n\n${incompleteAnswerNotice}`];
+          quest.reply = quest.replies.map(slot => visibleReplyText(slot)).join('');
+        }
 
         const modelInferenceTime = Date.now() - modelInferenceStartTime;
         quest.promptMeta!.performance!.modelInferenceTime = modelInferenceTime;
@@ -4758,7 +5012,7 @@ export class ChatCompletionProcess {
           try {
             const stamp = quest.promptMeta
               ? buildElisionStamp(elisionHits, {
-                  wasTruncated: actualTokenUsage?.stopReason === 'max_tokens',
+                  stoppedEarly: isEarlyStop(actualTokenUsage?.stopReason),
                   priorWarnings: quest.promptMeta.warnings ?? [],
                 })
               : null;
@@ -5033,9 +5287,23 @@ export class ChatCompletionProcess {
           `🔍 [DEBUG] Individual feature durations: ability=${abilityDuration}ms, data=${essentialDataDuration}ms, model=${modelSetupDuration}ms, history=${historyDuration}ms, artifact=${artifactDuration}ms, onComplete=${onCompleteDuration}ms`
         );
 
+        // How generation ended. Computed here rather than at the promptMeta stamping
+        // below because the settlement/usage-event write is the first consumer: a turn we
+        // aborted ourselves still costs the provider tokens, so the billing row has to say
+        // so a future refund sweep could find it.
+        const providerStopReason = actualTokenUsage?.stopReason;
+        const wasTruncated = providerStopReason === TRUNCATED_FINISH_REASON;
+        const wasDegenerate = providerStopReason === DEGENERATE_FINISH_REASON;
+        const earlyStopStamp = buildEarlyStopStamp(providerStopReason);
+
         // P6: Credits reconciliation - settle the pre-reserved credits against actual usage.
         // The balance was already adjusted atomically at pre-reservation time; this step
         // handles the delta and records audit-trail transactions.
+        //
+        // NOTE: the usage-event write below (including the degenerate/truncated status)
+        // only fires when credit enforcement is on. A tenant with enforcement off gets no
+        // row for a degenerate turn at all, so the Degenerate Rate KPI under-reports there
+        // and there is nothing for a future refund sweep to find on that tenant.
         if (adminSettingsEnforceCredits) {
           if (!this.db.creditTransactions) {
             throw new BadRequestError('Enforce credits is enabled but credit transactions are not available');
@@ -5100,7 +5368,9 @@ export class ChatCompletionProcess {
               // tools included), recorded on the chat settlement event so
               // collected revenue = sum(creditsCharged) - sum(writtenOffCredits).
               writtenOffCredits: writtenOffCredits > 0 ? writtenOffCredits : undefined,
-              status: 'ok',
+              // Not always 'ok': a turn we aborted as degenerate is priced like any other
+              // (the provider tokens were really spent) but has to be findable for a refund.
+              status: earlyStopStamp?.usageEventStatus ?? 'ok',
               latencyMs: Date.now() - processStartTime,
             })
             .catch((usageEventError: unknown) => {
@@ -5130,10 +5400,14 @@ export class ChatCompletionProcess {
                 .filter(fc => fc.creditsUsed && fc.creditsUsed > 0)
                 .map(fc => fc.name)
                 .join(', ');
+              // NOT currentModel.id: the charge belongs to whatever model the tools ran
+              // on. One aggregate row can only name it when a single model charged (see
+              // resolveAggregateToolModel).
+              const toolUsageModel = resolveAggregateToolModel(this.toolCreditModels);
               await subtractCredits(
                 {
                   type: 'tool_usage',
-                  model: currentModel.id,
+                  model: toolUsageModel,
                   sessionId: quest.sessionId,
                   questId: quest.id,
                   ownerId: this.reservedCreditsOwnerId || this.user.id,
@@ -5236,15 +5510,18 @@ export class ChatCompletionProcess {
           }));
         }
 
-        // Surface the provider's stop reason so truncated responses are no longer
-        // silent. 'max_tokens' means generation was cut off against the
-        // output-token ceiling - which is what leaves a large artifact unclosed.
-        // Persisted on promptMeta so the client can render a truncation/recovery
-        // affordance instead of falling through to raw HTML.
-        const providerStopReason = actualTokenUsage?.stopReason;
-        const wasTruncated = providerStopReason === 'max_tokens';
+        // Surface the stop reason so a reply that ended early is no longer silent:
+        // 'max_tokens' (cut off against the output-token ceiling, which is what leaves a
+        // large artifact unclosed) or 'degenerate_repetition' (we aborted a stream that
+        // had started repeating itself). Persisted on promptMeta so the client can render
+        // the matching notice instead of falling through to raw HTML.
         if (quest.promptMeta) {
           quest.promptMeta.finishReason = providerStopReason;
+        }
+        if (wasDegenerate) {
+          logger.warn(
+            `⚠️ [Degeneration] Stream aborted after the output began repeating itself (model=${currentModel.id}, outputTokens=${outputTokens}, requestedMaxTokens=${safeMaxTokens}). Reply is the partial prefix.`
+          );
         }
         if (wasTruncated) {
           logger.warn(
@@ -5254,24 +5531,25 @@ export class ChatCompletionProcess {
             // this number - hence "requested" rather than the actual ceiling.
             `⚠️ [Truncation] Response hit max_tokens ceiling (model=${currentModel.id}, outputTokens=${outputTokens}, requestedMaxTokens=${safeMaxTokens}). Output may be truncated mid-artifact.`
           );
-          if (quest.promptMeta) {
-            quest.promptMeta.warnings = [
-              ...(quest.promptMeta.warnings ?? []),
-              'Response was truncated against the output-token limit (max_tokens). Large artifacts may be incomplete.',
-            ];
-          }
+        }
+        // Membership-checked for the same reason buildElisionStamp takes priorWarnings: if this
+        // block ever runs twice over a preserved promptMeta, the user must not see the warning
+        // twice.
+        if (earlyStopStamp && quest.promptMeta && !(quest.promptMeta.warnings ?? []).includes(earlyStopStamp.warning)) {
+          quest.promptMeta.warnings = [...(quest.promptMeta.warnings ?? []), earlyStopStamp.warning];
         }
 
-        quest.status = 'done';
+        quest.status = successStatus();
 
         // Context Telemetry: Finalize and attach to promptMeta
         if (telemetryBuilder) {
           try {
-            // Determine finish reason based on completion state. A max_tokens stop
-            // takes precedence - it maps to the telemetry 'length' bucket so
-            // truncation is observable in dashboards.
+            // Determine finish reason based on completion state. An early stop takes
+            // precedence - both the max_tokens ceiling and a degeneration abort map to
+            // the telemetry 'length' bucket (generation cut short against the output
+            // budget) so neither is counted as a clean 'stop' in dashboards.
             const hasToolCalls = (quest.promptMeta?.functionCalls?.length ?? 0) > 0;
-            const finishReason = wasTruncated ? 'length' : hasToolCalls ? 'tool_use' : 'stop';
+            const finishReason = wasTruncated || wasDegenerate ? 'length' : hasToolCalls ? 'tool_use' : 'stop';
 
             telemetryBuilder.setFinishReason(finishReason);
             telemetryBuilder.setUsedTools(hasToolCalls);
@@ -5516,7 +5794,7 @@ export class ChatCompletionProcess {
           }
         }
 
-        quest.status = 'done';
+        quest.status = successStatus();
 
         timer.phase('save');
 
@@ -5621,7 +5899,7 @@ export class ChatCompletionProcess {
         // Post-streaming processing failed, but the reply is already streamed.
         // Do NOT overwrite quest.reply, quest.replies, or quest.status - keep status as 'done'.
         logger.error(`❌ [POST_PROCESS] Error in post-streaming processing for quest ${questId}:`, postProcessError);
-        quest.status = 'done';
+        quest.status = successStatus();
         // Ensure quest is persisted as 'done' even if the error occurred before the normal save
         await saveQuest(quest);
       }
@@ -5647,7 +5925,44 @@ export class ChatCompletionProcess {
 
       quest.promptMeta!.performance!.totalResponseTime = totalResponseTime;
       quest.promptMeta!.generatedAt = new Date().toISOString();
-      quest.reply = (err as Error).message;
+      // extractReplies (client) prefers a non-empty replies[] over reply, so a stale partial
+      // replies array left behind by the failed run (e.g. an unclosed '<think>' block) would
+      // otherwise outrank this error message and the user sees a blank turn instead of the
+      // error (#3223). Every branch below that overrides quest.reply must go through this so
+      // the two never drift apart across the extra saveQuest calls those branches make.
+      //
+      // A slot that already has real visible text (an answer that streamed before the failure
+      // hit) is kept ahead of the error rather than discarded, joined with no separator to match
+      // extractReplies' own join rule. `quest.reply` mirrors the same joined text rather than
+      // just the error - search indexing, export/curation and the public /api/chat response all
+      // read `.reply` alone and expect the full answer, not a truncated error-only string.
+      //
+      // Snapshotted once, before any call: this catch block calls setErrorReply more than once
+      // on some paths (an unconditional raw-message call up front, then a friendlier message in
+      // the branch below) - reading quest.replies live would pick up the FIRST call's own error
+      // text as if it were streamed content and stack every subsequent message on top of it.
+      const streamedRepliesBeforeError = quest.replies;
+      // The cancel watcher aborting before the first chunk throws here. That is the user's own
+      // Stop, not a failure: end as stopped with whatever streamed rather than an error reply
+      // (the error save below would also overwrite the 'stopped' status).
+      // A failed lookup falls through to the error path below rather than escaping this handler.
+      const stoppedByUser =
+        isAbortError(err) && (await this.db.quests.findByIdWithStatus(questId).catch(() => null))?.status === 'stopped';
+      if (stoppedByUser) {
+        logger.log(`Chat completion was stopped by user for quest ${questId}`);
+        quest.status = 'stopped';
+        finalQuest = await saveQuest(quest);
+        return;
+      }
+      const setErrorReply = (message: string) => {
+        const visiblePartial = (streamedRepliesBeforeError ?? [])
+          .map(r => visibleReplyText(r))
+          .filter(text => text.length > 0);
+        const combined = [...visiblePartial, message];
+        quest.replies = combined;
+        quest.reply = combined.join('');
+      };
+      setErrorReply((err as Error).message);
       quest.type = 'error';
       quest.status = 'done';
       // Classifier for the client's "Add Credits" CTA. Chat reservation throws
@@ -5671,7 +5986,7 @@ export class ChatCompletionProcess {
         return;
       } else if (err instanceof Error && (err.message.toLowerCase().includes('aborted') || err.name === 'AbortError')) {
         logger.log(`Chat completion was stopped by user for quest ${questId}: ${err.message}`);
-        quest.reply = 'The request was interrupted. Please try sending your message again.';
+        setErrorReply('The request was interrupted. Please try sending your message again.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);
@@ -5686,7 +6001,7 @@ export class ChatCompletionProcess {
         // CloudWatch ERROR to LiveOps/Slack alert path that the backend WARN downgrade
         // was meant to avoid.
         logger.warn(`[Timeout] Quest ${questId}: ${err.message}`);
-        quest.reply = 'The AI service is currently experiencing high demand. Please try again in a few minutes.';
+        setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);
@@ -5694,14 +6009,14 @@ export class ChatCompletionProcess {
       } else if (err instanceof Error && isToolPairingError(err)) {
         // User-friendly error message instead of stuck spinner
         logger.error(`[Tool Pairing Error] Quest ${questId}: ${err.message}`);
-        quest.reply = 'I encountered an issue with the conversation history. Please try again or start a new session.';
+        setErrorReply('I encountered an issue with the conversation history. Please try again or start a new session.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && isOverloadedError(err)) {
         logger.error(`[Overloaded Error] Quest ${questId}: ${err.message}`);
-        quest.reply = 'The AI service is currently experiencing high demand. Please try again in a few minutes.';
+        setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);
@@ -5943,6 +6258,8 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       geminiDemoKey: '',
       bflApiKey: '',
       xaiApiKey: '',
+      moonshotApiKey: '',
+      deepseekApiKey: '',
       ollamaBackend: '',
       EnableOllama: 'false',
     };
@@ -6108,7 +6425,14 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.logger.log('  - Enabling KnowledgeRetrieval (forced) feature');
       this.features.set(
         'knowledgeRetrieval',
-        new KnowledgeRetrievalFeature(this, retrievalTags, citationStyle, retrievalFilter, preauthorizedLakeIds)
+        new KnowledgeRetrievalFeature(
+          this,
+          retrievalTags,
+          citationStyle,
+          retrievalFilter,
+          preauthorizedLakeIds,
+          lakeScopeExplicit
+        )
       );
 
       // Lake memory hot-card (#1440) rides the same Data-Lake toggle: a durable identity/context layer

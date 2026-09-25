@@ -17,8 +17,10 @@ import {
 import { ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
-import { apiKeyService, agentProactiveMessagingService } from '@bike4mind/services';
+import { apiKeyService } from '@bike4mind/services';
+import * as agentProactiveMessagingService from '@bike4mind/services/agentProactiveMessagingService';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { canAccessSession } from '@server/utils/sessionAccess';
 
 const agentProactiveMessageQueuePayload = z.object({
   sessionAgentConfigId: z.string(),
@@ -38,12 +40,6 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
       return;
     }
 
-    const agent = await agentRepository.findById(config.agentId);
-    if (!agent) {
-      logger.error(`Agent ${config.agentId} not found`);
-      return;
-    }
-
     const session = await sessionRepository.findById(config.sessionId);
     if (!session || session.deletedAt) {
       logger.error(`Session ${config.sessionId} not found or deleted`);
@@ -59,6 +55,22 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
     const user = await userRepository.findById(config.userId);
     if (!user) {
       logger.error(`User ${config.userId} not found`);
+      return;
+    }
+
+    // Revalidate config.userId's access immediately before resolving keys/executing: PUT
+    // re-stamps this config's userId to whoever last edited it (config.ts), so a queued job can
+    // race with the owner revoking that editor's session-write or agent-share grant. Without this
+    // check a revoked collaborator's keys and tool access would keep executing on schedule -
+    // this is the enforcement point since the job may already be queued when access is revoked.
+    if (!canAccessSession(session, config.userId, 'write', user.groups ?? [])) {
+      logger.info(`User ${config.userId} no longer has write access to session ${config.sessionId}, skipping`);
+      return;
+    }
+
+    const agent = await agentRepository.shareable.findAccessibleById(user, config.agentId);
+    if (!agent) {
+      logger.info(`User ${config.userId} no longer has access to agent ${config.agentId}, skipping`);
       return;
     }
 
@@ -110,6 +122,7 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
       apiKeyTable,
       storage: getFilesStorage(),
       imageGenerateStorage: getGeneratedImageStorage(),
+      imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });
 
     await clientMessageSender.sendToClient(config.userId, Resource.websocket.managementEndpoint, {

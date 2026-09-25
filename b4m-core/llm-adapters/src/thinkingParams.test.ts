@@ -184,6 +184,60 @@ describe('resolveOutputMaxTokens', () => {
   });
 
   /**
+   * A cap toModelInfo DERIVED (the 4096 default for a row that declares none) is not the
+   * model's real ceiling. Clamping to it produces min(64000, 4096) for a model that reasons
+   * inside its output budget - the same starvation the floor above exists to prevent, arrived
+   * at from a default rather than from data.
+   */
+  describe('a derived cap does not clamp a model that reasons inside its budget', () => {
+    const derived = (info: ModelInfo, max_tokens = 4096): ModelInfo => ({
+      ...info,
+      max_tokens,
+      maxOutputTokensDerived: true,
+    });
+
+    it('keeps the adaptive floor', () => {
+      expect(resolve(undefined, derived(adaptiveModel))).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    });
+
+    it('keeps the floor for a catalog-only reasoning-shaped model', () => {
+      expect(resolve(undefined, derived(catalogOnlyReasoningModel))).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    });
+
+    it('honors an explicit budget above the derived cap', () => {
+      expect(resolve(32_000, derived(adaptiveModel))).toBe(32_000);
+    });
+
+    // Still a clamp, just a defensible one: an over-request would 400 the turn, and the value
+    // also sizes the credit pre-reservation.
+    it('clamps an over-large explicit budget to the stand-in ceiling', () => {
+      expect(resolve(500_000, derived(adaptiveModel))).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    });
+
+    // contextWindow is the input+output budget, so the stand-in ceiling may claim at most half
+    // of what is left after the safety buffer - otherwise the prompt has nowhere to go.
+    it('leaves the prompt room on a window too small to fund the floor', () => {
+      expect(resolve(undefined, derived({ ...adaptiveModel, contextWindow: 60_000 }))).toBe(29_500);
+    });
+
+    // Never shrinks: on a window too small even for that share, the derived cap still stands.
+    it('never resolves below the derived cap itself', () => {
+      expect(resolve(undefined, derived({ ...adaptiveModel, contextWindow: 8_000 }))).toBe(4096);
+    });
+
+    // Nothing changes for a model that does not reason inside its budget: 4096 was never a
+    // starving default there, and the derived value is the most conservative thing known.
+    it('still clamps a non-reasoning model', () => {
+      expect(resolve(500_000, derived(legacyModel))).toBe(4096);
+    });
+
+    // A declared cap is data about the model and keeps clamping, adaptive or not.
+    it('still clamps an adaptive model to a declared cap', () => {
+      expect(resolve(undefined, { ...adaptiveModel, max_tokens: 8192 })).toBe(8192);
+    });
+  });
+
+  /**
    * The resolver has to be total. It sizes a credit reservation two call sites downstream,
    * and `Math.min(n, undefined)` is NaN - which reached a Mongoose `currentCredits` write as
    * an opaque mid-stream cast error, and slipped past the org per-member cap on the way
@@ -266,6 +320,83 @@ describe('resolveOutputMaxTokens', () => {
       expect(reasonsWithinOutputBudget(kimiThinking)).toBe(true);
       expect(reasonsWithinOutputBudget(kimiK25)).toBe(true);
       expect(reasonsWithinOutputBudget(legacyModel)).toBe(false);
+    });
+
+    // DeepSeek Flash misses every shape check for a different reason than Kimi: the
+    // dispatch profile says `max_tokens` (which is what DeepSeek takes) rather than
+    // `max_completion_tokens`, so the catalog-only clause cannot see it either. Left on
+    // the 4096 fallback it reasons at effort 'high' inside that budget, returns
+    // finish_reason 'length' with no content, and deepseekBackend throws.
+    const deepseekFlash: ModelInfo = {
+      ...baseModelInfo,
+      id: ChatModels.DEEPSEEK_FLASH,
+      name: 'DeepSeek Flash',
+      backend: ModelBackend.DeepSeek,
+      can_think: true,
+      max_tokens: 393_216,
+      dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'chat' },
+    };
+
+    it('reports DeepSeek Flash as reasoning within the output budget', () => {
+      expect(reasonsWithinOutputBudget(deepseekFlash)).toBe(true);
+    });
+
+    it('defaults DeepSeek Flash to the reasoning floor, not the 4096 fallback', () => {
+      // Its own cap is far above the floor, so the floor is what applies.
+      expect(resolve(undefined, deepseekFlash)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    });
+
+    it('still honors an explicit budget on DeepSeek Flash', () => {
+      expect(resolve(8192, deepseekFlash)).toBe(8192);
+    });
+
+    const deepseekV4Pro: ModelInfo = {
+      ...baseModelInfo,
+      id: ChatModels.DEEPSEEK_V4_PRO,
+      name: 'DeepSeek V4 Pro',
+      backend: ModelBackend.DeepSeek,
+      can_think: true,
+      max_tokens: 393_216,
+      dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'chat' },
+    };
+
+    it('reports DeepSeek V4 Pro as reasoning within the output budget', () => {
+      expect(reasonsWithinOutputBudget(deepseekV4Pro)).toBe(true);
+    });
+
+    it('defaults DeepSeek V4 Pro to the reasoning floor, not the 4096 fallback', () => {
+      expect(resolve(undefined, deepseekV4Pro)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    });
+
+    it('still honors an explicit budget on DeepSeek V4 Pro', () => {
+      expect(resolve(8192, deepseekV4Pro)).toBe(8192);
+    });
+
+    // Bedrock DeepSeek R1 also inlines its monologue into the output budget
+    // (bedrockBackend/deepseek.ts) and matches no shape check either: no
+    // thinkingStyle, absent from REASONING_SUPPORTED_MODELS, and its profile
+    // declares plain max_tokens. Its cap is 32K, so the floor resolves to that cap -
+    // the value that actually leaves room for an answer after a long trace.
+    const deepseekR1Bedrock: ModelInfo = {
+      ...baseModelInfo,
+      id: ChatModels.DEEPSEEK_R1_BEDROCK,
+      name: 'DeepSeek R1',
+      backend: ModelBackend.Bedrock,
+      max_tokens: 32_768,
+      can_stream: true,
+      supportsVision: false,
+    };
+
+    it('reports Bedrock DeepSeek R1 as reasoning within the output budget', () => {
+      expect(reasonsWithinOutputBudget(deepseekR1Bedrock)).toBe(true);
+    });
+
+    it('defaults Bedrock DeepSeek R1 to its own cap rather than the 4096 fallback', () => {
+      expect(resolve(undefined, deepseekR1Bedrock)).toBe(32_768);
+    });
+
+    it('still honors an explicit budget on Bedrock DeepSeek R1', () => {
+      expect(resolve(8192, deepseekR1Bedrock)).toBe(8192);
     });
   });
 });

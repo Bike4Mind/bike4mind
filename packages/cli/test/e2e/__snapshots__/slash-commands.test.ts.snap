@@ -42,6 +42,7 @@ exports[`e2e — slash-command surface > exposes a stable name list (sorted, inc
   "sandbox:domains",
   "sandbox:enable",
   "sandbox:mode",
+  "sandbox:network",
   "sandbox:trust-domain",
   "sandbox:violations",
   "sandbox:violations:clear",
@@ -289,6 +290,12 @@ exports[`e2e — slash-command surface > matches the canonical built-in command 
   },
   {
     "aliases": [],
+    "args": "<on|off>",
+    "description": "Toggle sandbox network egress (off is fail-closed default)",
+    "name": "sandbox:network",
+  },
+  {
+    "aliases": [],
     "args": "<domain> [...]",
     "description": "Add domain(s) to the network proxy allowlist",
     "name": "sandbox:trust-domain",
@@ -325,14 +332,14 @@ exports[`e2e — slash-command surface > matches the canonical built-in command 
   },
   {
     "aliases": [],
-    "args": "<tool-name>",
-    "description": "Trust a tool (won't ask permission again)",
+    "args": "<tool-name|folder>",
+    "description": "Trust a tool, or \`folder\` to trust this project's repo config/agents/skills/MCP",
     "name": "trust",
   },
   {
     "aliases": [],
     "args": null,
-    "description": "List all trusted tools",
+    "description": "Show folder-trust status and list all trusted tools",
     "name": "trusted",
   },
   {
@@ -343,8 +350,8 @@ exports[`e2e — slash-command surface > matches the canonical built-in command 
   },
   {
     "aliases": [],
-    "args": "<tool-name>",
-    "description": "Remove tool from trusted list",
+    "args": "<tool-name|folder>",
+    "description": "Remove a tool from the trusted list, or \`folder\` to revoke project trust",
     "name": "untrust",
   },
   {

@@ -107,6 +107,10 @@ export interface ToolContext {
       // The models a corpus was ACTUALLY embedded with (describe_knowledge_base). Optional like
       // the rest of this repo: absent, that tool reports the platform default alone and says so.
       | 'distinctRetrievalIndexModelsByFabFileIds'
+      // Kept a superset match with ChatCompletionFeatures.ts's DatabaseAdapters.fabfilechunks
+      // (which feeds this via ToolBuilder), so a future literal here cannot silently drop the
+      // method semanticDataLakeSearch's residency gate depends on with no type error.
+      | 'annResidentFabFileIds'
     >;
     users?: Pick<IUserRepository, 'findById'>;
     projects?: IProjectRepository;
@@ -114,7 +118,18 @@ export interface ToolContext {
     // fallback tagger's prefix-overlap check.
     dataLakes?: Pick<
       IDataLakeRepository,
-      'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag' | 'findById' | 'find'
+      | 'findActiveByUserTags'
+      | 'findActiveByUserTagsAndEntitlements'
+      // #3055's count-only companion query - see getDynamicDataLakeTags.ts's DataLakeAccessContext,
+      // which this type must satisfy at every knowledge-tool call site.
+      | 'countGateExcludedLakes'
+      | 'findByDatalakeTag'
+      | 'findById'
+      | 'find'
+      // Required, not optional, and that is the point: it is the anchor for the ownership-supersession
+      // read that narrows the retrieval creator arm, so every host that can retrieve has to wire it
+      // rather than silently degrade to bare creator provenance.
+      | 'findIdsCreatedBy'
     >;
     /**
      * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
@@ -216,9 +231,19 @@ export interface ToolContext {
    * The session's lake scope (`session.retrievalTags`). Narrows the knowledge tools' owner-wide lake
    * access to the lake(s) this session is FOR, so a session created for one lake stops searching
    * every lake its owner can reach. Purely subtractive - see narrowLakeAccessToSession, which also
-   * documents why the prefix buckets are filtered rather than rebuilt. Absent/empty = unscoped.
+   * documents why the prefix buckets are filtered rather than rebuilt. Absent = unscoped; EMPTY is
+   * decided by the sidecar below, not by this field.
    */
   sessionRetrievalTags?: string[];
+  /**
+   * `session.lakeScopeExplicit` - the sidecar that makes an EMPTY `sessionRetrievalTags` above
+   * mean "grounds on no lake" rather than "expressed no lake opinion". Without it the two are the
+   * same value here and the tools fall back to the caller's whole owner-wide lake access, which is
+   * the opposite of what the session asked for. See sessionGroundsOnNoLake, which
+   * resolveSessionLakeAccess consults before the narrowing. Travels WITH `sessionRetrievalTags`:
+   * a surface that forwards one and not the other re-creates exactly that ambiguity.
+   */
+  sessionLakeScopeExplicit?: boolean;
   /**
    * Lake ids this session was pre-authorized for at session-create time (a manager admitted to a
    * lake they can manage but are not a member of - see canManageLake, checked once at

@@ -7,8 +7,8 @@ import { archiveDataLake } from './archiveDataLake';
 import { deleteDataLake } from './deleteDataLake';
 import { unarchiveDataLake } from './unarchiveDataLake';
 import { restoreDeletedDataLake } from './restoreDeletedDataLake';
-import { recomputeLakeStats } from './recomputeLakeStats';
-import { removeFileFromDataLake } from './removeFileFromDataLake';
+import { promoteDataLake } from './promoteDataLake';
+import { demoteDataLake } from './demoteDataLake';
 
 /**
  * The config-change event, from the SERVICE side: which write paths emit one, what they put in it,
@@ -215,10 +215,11 @@ describe('updateDataLake', () => {
       expect(audit.record).not.toHaveBeenCalled();
     });
 
-    // The regression this separation exists to prevent. ' ' is accepted by the request schema and
-    // is TRUTHY, so it really does gate the lake - but the audit diff trims it to "unset", exactly
-    // like ''. When the diff was the write gate, the clearing PUT looked like a no-op and the lake
-    // stayed gated to a tag nobody can hold, with no API path left to clear it.
+    // The regression this separation exists to prevent. ' ' is TRUTHY, so a stored whitespace-only
+    // tag really does gate the lake - the request schema now trims and refuses one, but rows
+    // written before that still exist - while the audit diff trims it to "unset", exactly like ''.
+    // When the diff was the write gate, the clearing PUT looked like a no-op and the lake stayed
+    // gated to a tag nobody can hold, with no API path left to clear it.
     it('clears a whitespace-only gate instead of mistaking the clear for a no-op', async () => {
       const existing = lake({ requiredUserTag: ' ' });
       const update = echoUpdate(existing);
@@ -560,7 +561,7 @@ describe('lifecycle services', () => {
     batches: { findActiveByDataLakeId: vi.fn().mockResolvedValue([]), markTerminalIfActive: vi.fn() },
     fabFiles: {
       archiveByDataLakeTag: vi.fn().mockResolvedValue(0),
-      softDeleteByDataLakeTag: vi.fn().mockResolvedValue(0),
+      softDeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
       computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
       findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
       hasArchivedMemberExclusiveToDataLakeTag: vi.fn().mockResolvedValue(false),
@@ -568,7 +569,7 @@ describe('lifecycle services', () => {
       findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
       findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
       unarchiveByDataLakeTag: vi.fn().mockResolvedValue(0),
-      undeleteByDataLakeTag: vi.fn().mockResolvedValue(0),
+      undeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
       deleteManyInIds: vi.fn().mockResolvedValue(0),
     },
   });
@@ -744,140 +745,122 @@ describe('lifecycle services', () => {
   });
 });
 
-describe('recomputeLakeStats - the unattributed draft -> active flip', () => {
-  const statsDb = (activated: boolean) => ({
-    dataLakes: { setStats: vi.fn(), activateIfDraft: vi.fn().mockResolvedValue(activated) },
-    fabFiles: {
-      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 3, totalSizeBytes: 10, totalChunkedChars: 5 }),
-    },
-  });
-
-  it('records the status move when activateIfDraft actually flipped the lake', async () => {
-    const audit = auditSpy();
-    await recomputeLakeStats(lake({ status: 'draft' }), { db: { ...statsDb(true), ...audit.db } });
-    expect(audit.only()).toMatchObject({
-      action: 'auto-activate',
-      // Nothing AUTHORIZED this - activateIfDraft runs no authorization check at all - so the rung
-      // is `system` even though a lake creator is sitting right there on the document.
-      manageRung: 'system',
-      principalKind: 'system',
-      changes: [{ field: 'status', kind: 'literal', before: 'draft', after: 'active' }],
-    });
-  });
-
-  // Every recompute on an already-active lake calls activateIfDraft, so recording unconditionally
-  // would put a status row in the history on every single file upload.
-  it('records nothing when the lake was already active', async () => {
-    const audit = auditSpy();
-    await recomputeLakeStats(lake(), { db: { ...statsDb(false), ...audit.db } });
-    expect(audit.record).not.toHaveBeenCalled();
-  });
-
-  it('records nothing when activation was skipped entirely', async () => {
-    const audit = auditSpy();
-    const db = { ...statsDb(true), ...audit.db };
-    await recomputeLakeStats(lake(), { db }, { skipActivation: true });
-    expect(db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
-    expect(audit.record).not.toHaveBeenCalled();
-  });
-
-  it('names the actor as principal when a caller threaded one, while the rung stays system', async () => {
-    const audit = auditSpy();
-    await recomputeLakeStats(lake({ status: 'draft' }), { db: { ...statsDb(true), ...audit.db } }, { actor: owner });
-    expect(audit.only()).toMatchObject({ principalKind: 'user', principalId: 'owner', manageRung: 'system' });
-  });
-
-  // activateIfDraft matches `status: { $in: ['draft', null] }`, so it also flips a lake written
-  // before the field existed. Asserting `before: 'draft'` for one of those would put a value in the
-  // audit that was never on the document - an absent `before` reads as "unset", which is the truth.
-  it('does not invent a prior status for a legacy lake whose status was never set', async () => {
-    const audit = auditSpy();
-    const legacy = lake();
-    delete (legacy as { status?: string }).status;
-    await recomputeLakeStats(legacy, { db: { ...statsDb(true), ...audit.db } });
-
-    const [change] = audit.only().changes;
-    expect(change).toMatchObject({ field: 'status', after: 'active' });
-    expect('before' in change).toBe(false);
-  });
-});
-/**
- * The FOURTH `recomputeLakeStats` call site. The audit-loss-logging fix originally reached
- * archive/unarchive/restore and stopped there, which is the same fix-completeness miss this series
- * has hit before: the bug is not in the call that was fixed, it is in the siblings nobody swept.
- *
- * This one is not mere parity either - removing a file still runs `activateIfDraft`, so it really
- * can emit an `auto-activate` row, and an audit-write failure here without a logger falls all the
- * way through to a bare console.error that no alert is keyed on.
- */
-describe('removeFileFromDataLake - audit-loss logging on the stats recompute', () => {
-  const removeDb = (audit: ReturnType<typeof auditSpy>) => ({
+describe('promote/demote services', () => {
+  const promoteDb = (existing: IDataLakeDocument, activated = true) => ({
     dataLakes: {
-      findById: vi.fn().mockResolvedValue(lake({ status: 'draft' })),
-      setStats: vi.fn(),
-      activateIfDraft: vi.fn().mockResolvedValue(true),
-    },
-    fabFiles: {
-      // tags are {name} objects, and userId must equal the LAKE'S creator - removeFileFromLake
-      // anchors membership on the lake's owner, not on the acting user.
-      findById: vi.fn().mockResolvedValue({ id: 'f1', tags: [{ name: 'datalake:lake' }], userId: 'owner' }),
-      pullTagsByFabFileId: vi.fn().mockResolvedValue(undefined),
-      // Non-zero on purpose: recomputeLakeStats only reaches activateIfDraft when files REMAIN,
-      // so a lake emptied by the removal would never exercise the audit path this pins.
-      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 2, totalSizeBytes: 10, totalChunkedChars: 5 }),
+      findById: vi.fn().mockResolvedValue(existing),
+      activateIfDraft: vi.fn().mockResolvedValue(activated),
     },
     dataLakeAccessGrants: noGrants,
-    ...audit.db,
   });
 
-  it('forwards its logger, so a failed audit write is reported at error rather than swallowed', async () => {
-    const audit = auditSpy();
-    audit.record.mockRejectedValueOnce(new Error('mongo is down'));
-    const error = vi.fn();
-
-    await removeFileFromDataLake(owner, 'lake1', 'f1', { db: removeDb(audit), logger: { error } });
-
-    // The write still succeeds - audit loss must never fail the user's action - but it is now LOUD.
-    expect(audit.record).toHaveBeenCalledTimes(1);
-    expect(error).toHaveBeenCalled();
+  const demoteDb = (existing: IDataLakeDocument, demoted = true) => ({
+    dataLakes: {
+      findById: vi.fn().mockResolvedValue(existing),
+      demoteToDraft: vi.fn().mockResolvedValue(demoted),
+    },
+    dataLakeAccessGrants: noGrants,
   });
 
-  /**
-   * The actor is threaded, not dropped: `removeFileFromDataLake` already holds one for the
-   * membership write, so an `auto-activate` row it emits must name that person. The rung stays
-   * `system` - `activateIfDraft` authorizes nothing.
-   */
-  it('names the removing actor as the principal on the auto-activate row it emits', async () => {
+  it('promote records exactly one event: draft -> active', async () => {
+    const existing = lake({ status: 'draft' });
     const audit = auditSpy();
-    await removeFileFromDataLake(owner, 'lake1', 'f1', { db: removeDb(audit) });
-    expect(audit.only()).toMatchObject({
-      action: 'auto-activate',
-      principalKind: 'user',
-      principalId: 'owner',
-      manageRung: 'system',
-    });
+    await promoteDataLake(owner, 'lake1', { db: { ...promoteDb(existing), ...audit.db } });
+
+    const event = audit.only();
+    expect(event.action).toBe('promote');
+    const statusChange = event.changes.find(c => c.field === 'status');
+    expect(statusChange).toMatchObject({ before: 'draft', after: 'active' });
   });
 
-  it('carries an actor auditPrincipal through, so a key-driven removal names the KEY', async () => {
+  it('demote records exactly one event: active -> draft', async () => {
+    const existing = lake({ status: 'active' });
     const audit = auditSpy();
-    await removeFileFromDataLake(
-      { ...owner, auditPrincipal: { principalKind: 'apiKey', principalId: 'key-abc', onBehalfOfUserId: 'owner' } },
-      'lake1',
-      'f1',
-      { db: removeDb(audit) }
+    await demoteDataLake(owner, 'lake1', { db: { ...demoteDb(existing), ...audit.db } });
+
+    const event = audit.only();
+    expect(event.action).toBe('demote');
+    const statusChange = event.changes.find(c => c.field === 'status');
+    expect(statusChange).toMatchObject({ before: 'active', after: 'draft' });
+  });
+
+  it('promote records nothing when it short-circuits on an already-active lake', async () => {
+    const existing = lake({ status: 'active' });
+    const audit = auditSpy();
+    await promoteDataLake(owner, 'lake1', { db: { ...promoteDb(existing), ...audit.db } });
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('demote records nothing when it short-circuits on an already-draft lake', async () => {
+    const existing = lake({ status: 'draft' });
+    const audit = auditSpy();
+    await demoteDataLake(owner, 'lake1', { db: { ...demoteDb(existing), ...audit.db } });
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('promote does not fail the write when the audit write throws', async () => {
+    const existing = lake({ status: 'draft' });
+    const warn = vi.fn();
+    const db = {
+      ...promoteDb(existing),
+      lakeConfigChangeEvents: { record: vi.fn().mockRejectedValue(new Error('mongo down')) },
+    };
+
+    await expect(promoteDataLake(owner, 'lake1', { db, logger: { warn } })).resolves.toBeTruthy();
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it('demote does not fail the write when the audit write throws', async () => {
+    const existing = lake({ status: 'active' });
+    const warn = vi.fn();
+    const db = {
+      ...demoteDb(existing),
+      lakeConfigChangeEvents: { record: vi.fn().mockRejectedValue(new Error('mongo down')) },
+    };
+
+    await expect(demoteDataLake(owner, 'lake1', { db, logger: { warn } })).resolves.toBeTruthy();
+    expect(warn).toHaveBeenCalled();
+  });
+
+  // Not an authorization hole: both doors gate on canManageLake exactly like every other
+  // lifecycle door, so a principal with no relationship to the lake is refused before any write.
+  it.each([
+    ['promote', promoteDataLake, lake({ status: 'draft', createdByUserId: 'someone-else' })],
+    ['demote', demoteDataLake, lake({ status: 'active', createdByUserId: 'someone-else' })],
+  ] as const)(
+    '%s refuses an actor who does not manage the lake, without writing anything',
+    async (_n, service, existing) => {
+      const audit = auditSpy();
+      const db = {
+        dataLakes: {
+          findById: vi.fn().mockResolvedValue(existing),
+          activateIfDraft: vi.fn(),
+          demoteToDraft: vi.fn(),
+        },
+        dataLakeAccessGrants: noGrants,
+        ...audit.db,
+      };
+
+      await expect(service({ userId: 'intruder', isAdmin: false }, 'lake1', { db })).rejects.toThrow(
+        /do not have permission/i
+      );
+      expect(db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
+      expect(db.dataLakes.demoteToDraft).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    }
+  );
+
+  it('promote refuses a lake in a status other than draft/active', async () => {
+    const existing = lake({ status: 'archived' });
+    await expect(promoteDataLake(owner, 'lake1', { db: { ...promoteDb(existing), ...auditSpy().db } })).rejects.toThrow(
+      /Cannot promote/
     );
-    expect(audit.only()).toMatchObject({
-      principalKind: 'apiKey',
-      principalId: 'key-abc',
-      onBehalfOfUserId: 'owner',
-    });
   });
 
-  it('still completes the removal when no logger is wired at all', async () => {
-    // The adapter field is optional, so a caller that has not threaded one must not crash.
-    const audit = auditSpy();
-    await expect(removeFileFromDataLake(owner, 'lake1', 'f1', { db: removeDb(audit) })).resolves.toMatchObject({
-      success: true,
-    });
+  it('demote refuses a lake in a status other than active', async () => {
+    const existing = lake({ status: 'archived' });
+    await expect(demoteDataLake(owner, 'lake1', { db: { ...demoteDb(existing), ...auditSpy().db } })).rejects.toThrow(
+      /Cannot move/
+    );
   });
 });

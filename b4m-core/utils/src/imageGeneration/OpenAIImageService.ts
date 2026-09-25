@@ -3,12 +3,15 @@ import OpenAI from 'openai';
 import { ImageGenerateParams } from 'openai/resources/images';
 import { Logger } from '@bike4mind/observability';
 import {
+  fallbackImageSize,
   IMAGE_SIZE_CONSTRAINTS,
   ImageModels,
   isGPTImageModel,
   isGPTImage2Model,
-  OPENAI_GPT_IMAGE_1_IMAGE_SIZES,
-  OPENAI_GPT_IMAGE_2_IMAGE_SIZES,
+  isSupportedImageSize,
+  resolveGptImageGenerateSize,
+  type ImageOutputFormat,
+  type OpenAIImageBackground,
 } from '@bike4mind/common';
 import { invokeImageProcessor, downloadImageAsBuffer } from './imageProcessorUtils';
 
@@ -25,6 +28,43 @@ const OPENAI_IMAGE_CLIENT_OPTS = { timeout: 8 * 60 * 1000, maxRetries: 0 } as co
 // whose prompt is blocked by OpenAI's safety system. Flux Pro in
 // particular handles a broader range of prompts than gpt-image-*.
 const ALTERNATIVE_IMAGE_MODELS = 'Flux Pro, Flux Dev, or Grok';
+
+// GPT-Image models accept these quality values on both the generate and edit endpoints -
+// not the raw ImageGenerateParams/ImageEditParams `quality` union, which spans every model
+// (dall-e-2/3's 'standard'/'hd' included), but the SDK's own per-model prose on that field
+// ("high, medium and low are supported for the GPT image models") plus the live
+// /images/edits behavior. DALL-E's legacy 'standard'/'hd' pair is mapped away by
+// mapQualityForModel upstream before it reaches here.
+const GPT_IMAGE_QUALITY_VALUES = ['low', 'medium', 'high', 'auto'] as const;
+type GptImageQuality = (typeof GPT_IMAGE_QUALITY_VALUES)[number];
+
+function isGptImageQuality(value: unknown): value is GptImageQuality {
+  return typeof value === 'string' && (GPT_IMAGE_QUALITY_VALUES as readonly string[]).includes(value);
+}
+
+/**
+ * Normalizes a requested quality to the tier a GPT-Image model actually accepts, or
+ * undefined when it maps to nothing usable. The 'standard'/'hd' translation must stay
+ * in step with OpenAIImageCostCalculator.normalizeInput (services) and
+ * ImageGeneration's mapQualityForModel, which bill against the mapped tier - if they
+ * diverge, the user is charged one tier and rendered another.
+ *
+ * 'auto' is the one value deliberately forwarded unresolved: OpenAI picks the effort per
+ * request, so the services-side calculator prices it at the highest tier it could render
+ * rather than pretending to know the tier. Do not "fix" that by pinning 'auto' here without
+ * repricing it there. (Named symbols are left out on purpose - services depends on utils, not
+ * the reverse, so nothing in this package can import or rename-track them.)
+ *
+ * An absent quality still maps to undefined here, which drops the parameter and lets OpenAI
+ * apply its own 'auto'. On the generation path that state is no longer reachable: both
+ * dispatch sites in services pin an omitted tier to the tier they bill before calling in, so
+ * the render matches the charge. The edit path does not pin, and is priced separately.
+ * Keep this a pure mapper - the pin belongs with the code that also holds the credits.
+ */
+export function toGptImageQuality(quality?: string | null): GptImageQuality | undefined {
+  const mapped = quality === 'standard' ? 'medium' : quality === 'hd' ? 'high' : quality;
+  return isGptImageQuality(mapped) ? mapped : undefined;
+}
 
 // Only appends "..." when the prompt is actually cut, so a short prompt in a log line
 // doesn't misleadingly read as truncated.
@@ -63,104 +103,131 @@ export function buildModerationBlockedError(error: InstanceType<typeof OpenAI.AP
   );
 }
 
-/**
- * Splits a WIDTHxHEIGHT size into its two edges, or null when the value is not a
- * pair of non-zero numbers (e.g. 'auto', '', 'wide'). Null means "not a custom
- * resolution" rather than "invalid": generate() has always left such values
- * untouched, and that behaviour is preserved.
- */
-function parseSizeEdges(size?: string | null): { width: number; height: number } | null {
-  if (typeof size !== 'string') {
-    return null;
-  }
-  const [width, height] = size.split('x').map(Number);
-  if (!width || !height) {
-    return null;
-  }
-  return { width, height };
-}
-
-/**
- * True when a custom gpt-image-2 resolution meets OpenAI's documented limits.
- * gpt-image-2 accepts any resolution satisfying these, not only the presets in
- * OPENAI_GPT_IMAGE_2_IMAGE_SIZES, so a flat preset check would reject valid
- * custom sizes. Must stay the single source of this rule for generate() and edit().
- */
-function satisfiesGptImage2Constraints({ width, height }: { width: number; height: number }): boolean {
-  const { maxEdge, minTotalPixels, maxTotalPixels, edgeMultiple, maxAspectRatio } =
-    IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.constraints;
-  const longEdge = Math.max(width, height);
-  const shortEdge = Math.min(width, height);
-  const totalPixels = width * height;
-
-  return (
-    longEdge <= maxEdge &&
-    width % edgeMultiple === 0 &&
-    height % edgeMultiple === 0 &&
-    longEdge / shortEdge <= maxAspectRatio &&
-    totalPixels >= minTotalPixels &&
-    totalPixels <= maxTotalPixels
-  );
-}
-
-/**
- * True when `size` may be forwarded to images.edit for `model`. gpt-image-2 takes
- * its presets (including 'auto') or any custom WIDTHxHEIGHT meeting the same
- * constraints generate() enforces; the gpt-image-1 family is limited to its three
- * fixed sizes. An unsupported size is dropped by the caller so OpenAI applies its
- * own default instead of rejecting the whole request with a 400.
- *
- * GPT-Image tiers only: dall-e-2 has its own size list and passes size through
- * untouched, so do not route that model here.
- */
-export function isSupportedEditSize(model?: string | null, size?: string | null): boolean {
-  if (typeof size !== 'string') {
-    return false;
-  }
-
-  if (isGPTImage2Model(model)) {
-    if ((OPENAI_GPT_IMAGE_2_IMAGE_SIZES as readonly string[]).includes(size)) {
-      return true;
-    }
-    const edges = parseSizeEdges(size);
-    return edges !== null && satisfiesGptImage2Constraints(edges);
-  }
-
-  return (OPENAI_GPT_IMAGE_1_IMAGE_SIZES as readonly string[]).includes(size);
-}
-
 export type OpenAIImageGenerationOptions = Omit<ImageGenerateParams, 'prompt'> & {
   safety_tolerance?: number;
   prompt_upsampling?: boolean;
   seed?: number | null;
-  output_format?: 'jpeg' | 'png' | null;
+  output_format?: ImageOutputFormat | null;
   imagePrompt?: string;
+  /**
+   * Extra gpt-image style-anchor images, appended after `imagePrompt` in the order given.
+   * Only the gpt-image edit endpoint reads them; the dall-e-2 variation endpoint takes a
+   * single image and drops them with a warning. Callers cap the count (MAX_REFERENCE_IMAGES).
+   */
+  referenceImages?: string[];
+  /**
+   * Asserts that `imagePrompt`/`referenceImages` (when URLs, not data URLs) were freshly produced
+   * by `BaseStorage.getSignedUrl` in this same request - never set from a caller- or
+   * provider-supplied string. Lets those URLs through the self-host storage-origin exemption in
+   * `downloadImageAsBuffer`. See that function's doc comment.
+   */
+  trustConfiguredStorageOrigin?: boolean;
 };
 
+/**
+ * Resolve the alpha/container pair gpt-image accepts. OpenAI rejects
+ * `background: 'transparent'` together with jpeg (no alpha channel), so a transparent
+ * request promotes the container to png rather than failing the whole render.
+ * gpt-image-2 rejects `background: 'transparent'` outright, so it is dropped there
+ * (falling back to OpenAI's own default) with a warning instead of 400-ing the whole
+ * request - this is the single backstop for every call site (generate/edit, tool call
+ * or queue handler, explicit model selection or default), so `model` must be the
+ * fully-resolved model actually sent to OpenAI, not a pre-fallback value.
+ * Returns the fields to spread onto the request; absent keys mean "let OpenAI default".
+ */
+export function resolveGptImageOutputOptions(
+  background: OpenAIImageBackground | null | undefined,
+  outputFormat: ImageOutputFormat | null | undefined,
+  warnings: string[],
+  model?: string | null
+): { background?: OpenAIImageBackground; output_format?: ImageOutputFormat } {
+  const resolved: { background?: OpenAIImageBackground; output_format?: ImageOutputFormat } = {};
+  if (background) {
+    resolved.background = background;
+  }
+  if (outputFormat) {
+    resolved.output_format = outputFormat;
+  }
+  if (background === 'transparent' && isGPTImage2Model(model)) {
+    delete resolved.background;
+    warnings.push("gpt-image-2 does not support background: 'transparent'; background parameter removed");
+  }
+  if (resolved.background === 'transparent' && outputFormat === 'jpeg') {
+    resolved.output_format = 'png';
+    warnings.push(
+      "Transparent background requires an alpha-capable format; output_format changed from 'jpeg' to 'png'"
+    );
+  }
+  return resolved;
+}
+
 export class OpenAIImageService extends AIImageService {
+  /**
+   * Fetches an image (URL or data URL) and normalizes it to the PNG-under-4MB form every
+   * OpenAI image endpoint accepts. The 4MB/PNG coercion is dall-e-2's constraint, not
+   * gpt-image's (which takes png/webp/jpg up to 50MB) - kept as-is so this refactor does
+   * not change what reaches the provider.
+   */
+  private async toImageFile(source: string, fileName: string, trustConfiguredStorageOrigin = false): Promise<File> {
+    if (!this.imageProcessorLambdaName) {
+      throw new Error(
+        'ImageProcessor Lambda name is required for image processing. Please provide it when creating the image service.'
+      );
+    }
+    const buffer = await downloadImageAsBuffer(source, { trustConfiguredStorageOrigin });
+    const pngBuffer = await invokeImageProcessor(buffer, this.imageProcessorLambdaName, 4); // 4MB max for OpenAI
+    return new File([pngBuffer], fileName, { type: 'image/png' });
+  }
+
+  /**
+   * Converts style-anchor sources into files, in the order given. Parallel on purpose: each
+   * source costs a download plus an ImageProcessor Lambda round trip, and serialized those
+   * would eat a meaningful share of the 8-minute client budget (OPENAI_IMAGE_CLIENT_OPTS).
+   */
+  private async toReferenceImageFiles(
+    sources: string[] | undefined,
+    trustConfiguredStorageOrigin = false
+  ): Promise<File[]> {
+    if (!sources?.length) {
+      return [];
+    }
+    return Promise.all(
+      sources.map((source, i) => this.toImageFile(source, `reference-${i + 1}.png`, trustConfiguredStorageOrigin))
+    );
+  }
+
   async generate(prompt: string, options: OpenAIImageGenerationOptions): Promise<string[]> {
     const openai = new OpenAI({ apiKey: this.apiKey, ...OPENAI_IMAGE_CLIENT_OPTS });
     Logger.log('Generating image... with these params: ', options);
 
     try {
-      // Remove BFL-specific parameters since OpenAI doesn't use them
+      // Remove BFL-specific parameters since OpenAI doesn't use them. `background` and
+      // `output_format` are pulled out here and re-applied only on the gpt-image branch,
+      // which is the only family that accepts them.
       const {
         safety_tolerance,
         prompt_upsampling,
         seed: bflSeed,
         output_format,
+        background,
         imagePrompt,
+        referenceImages,
+        trustConfiguredStorageOrigin = false,
         stream,
         ...openaiOptions
       } = options;
 
       const parameterWarnings: string[] = [];
+      let gptImageOutputOptions: ReturnType<typeof resolveGptImageOutputOptions> = {};
+      // Declared here (not inside the if-block below) so the debug-log flush after the
+      // if/else can report it for both branches.
+      const modelName = options.model || ImageModels.GPT_IMAGE_1_5;
 
       // GPT-Image specific parameter validation and graceful fallback
       if (isGPTImageModel(options.model)) {
-        const modelName = options.model || ImageModels.GPT_IMAGE_1_5;
-
         openaiOptions.model = modelName;
+
+        gptImageOutputOptions = resolveGptImageOutputOptions(background, output_format, parameterWarnings, modelName);
 
         // Remove unsupported parameters with warnings
         if (openaiOptions.style) {
@@ -174,38 +241,28 @@ export class OpenAIImageService extends AIImageService {
           delete openaiOptions.response_format;
         }
 
-        // GPT-Image models don't support quality parameter for text-to-image generation
+        // GPT-Image models bill by quality tier (see validateUserCredits upstream), so an
+        // accepted value must actually reach OpenAI - only an unmappable value is dropped.
         if (openaiOptions.quality) {
-          parameterWarnings.push(
-            `Quality parameter ('${openaiOptions.quality}') is not supported by ${modelName} text-to-image generation and was removed`
-          );
-          delete openaiOptions.quality;
+          const mappedQuality = toGptImageQuality(openaiOptions.quality);
+          if (mappedQuality) {
+            openaiOptions.quality = mappedQuality;
+          } else {
+            parameterWarnings.push(
+              `Quality parameter ('${openaiOptions.quality}') is not supported by ${modelName} and was removed`
+            );
+            delete openaiOptions.quality;
+          }
         }
 
-        if (isGPTImage2Model(options.model)) {
-          // gpt-image-2 supports flexible sizes - validate constraints instead of fixed list
-          if (openaiOptions.size && openaiOptions.size !== 'auto') {
-            const edges = parseSizeEdges(openaiOptions.size);
-            if (edges && !satisfiesGptImage2Constraints(edges)) {
-              const originalSize = openaiOptions.size;
-              openaiOptions.size = '1024x1024';
-              parameterWarnings.push(`Size '${originalSize}' violates gpt-image-2 constraints, changed to '1024x1024'`);
-            }
-          } else if (!openaiOptions.size) {
-            // gpt-image-2 defaults to 'auto' if no size provided
-            openaiOptions.size = 'auto';
-          }
-        } else {
-          const validGPTSizes = ['1024x1024', '1536x1024', '1024x1536'];
+        const resolvedSize = resolveGptImageGenerateSize(modelName, openaiOptions.size);
+        if (resolvedSize !== openaiOptions.size) {
           if (openaiOptions.size) {
-            if (!validGPTSizes.includes(openaiOptions.size)) {
-              const originalSize = openaiOptions.size;
-              openaiOptions.size = '1024x1024';
-              parameterWarnings.push(`Size '${originalSize}' is not supported by ${modelName}, changed to '1024x1024'`);
-            }
-          } else {
-            openaiOptions.size = '1024x1024';
+            parameterWarnings.push(
+              `Size '${openaiOptions.size}' is not supported by ${modelName}, changed to '${resolvedSize}'`
+            );
           }
+          openaiOptions.size = resolvedSize;
         }
 
         // Remove any custom dimensions (width/height) as GPT-Image models use fixed sizes
@@ -215,14 +272,21 @@ export class OpenAIImageService extends AIImageService {
           delete dims.height;
           parameterWarnings.push(`Custom width/height not supported by ${modelName}, using standard sizes`);
         }
-
-        if (parameterWarnings.length > 0) {
-          Logger.globalInstance.debug(`[DEBUG] ⚠️ ${modelName} parameter adjustments:`, parameterWarnings);
-          // These warnings could be sent to the client via WebSocket for user notification
-        }
       } else {
         // For other OpenAI models (legacy support)
         openaiOptions.response_format = 'url';
+
+        if (background) {
+          parameterWarnings.push(
+            `Background parameter ('${background}') is only supported by gpt-image models and was removed`
+          );
+        }
+
+        if (output_format) {
+          parameterWarnings.push(
+            `Output format parameter ('${output_format}') is only supported by gpt-image models and was removed`
+          );
+        }
 
         if (openaiOptions.quality && !['standard', 'hd'].includes(openaiOptions.quality)) {
           const originalQuality = openaiOptions.quality;
@@ -232,12 +296,18 @@ export class OpenAIImageService extends AIImageService {
           );
         }
 
-        const validLegacySizes = ['256x256', '512x512', '1024x1024', '1792x1024', '1024x1792'];
-        if (openaiOptions.size && !validLegacySizes.includes(openaiOptions.size)) {
+        if (openaiOptions.size && !isSupportedImageSize(openaiOptions.model, openaiOptions.size)) {
           const originalSize = openaiOptions.size;
-          openaiOptions.size = '1024x1024';
-          parameterWarnings.push(`Size '${originalSize}' is not supported by legacy models, changed to '1024x1024'`);
+          openaiOptions.size = fallbackImageSize(openaiOptions.model);
+          parameterWarnings.push(
+            `Size '${originalSize}' is not supported by legacy models, changed to '${openaiOptions.size}'`
+          );
         }
+      }
+
+      if (parameterWarnings.length > 0) {
+        Logger.globalInstance.debug(`[DEBUG] ⚠️ ${modelName} parameter adjustments:`, parameterWarnings);
+        // These warnings could be sent to the client via WebSocket for user notification
       }
 
       // Map seed parameter if provided (OpenAI uses 'seed' directly)
@@ -249,17 +319,7 @@ export class OpenAIImageService extends AIImageService {
       let result;
 
       if (imagePrompt) {
-        // Download the image; invokeImageProcessor converts it to PNG and enforces
-        // OpenAI's size limit.
-        const imageBuffer = await downloadImageAsBuffer(imagePrompt);
-        if (!this.imageProcessorLambdaName) {
-          throw new Error(
-            'ImageProcessor Lambda name is required for image processing. Please provide it when creating the image service.'
-          );
-        }
-        const pngBuffer = await invokeImageProcessor(imageBuffer, this.imageProcessorLambdaName, 4); // 4MB max for OpenAI
-
-        const imageFile = new File([pngBuffer], 'image.png', { type: 'image/png' });
+        const imageFile = await this.toImageFile(imagePrompt, 'image.png', trustConfiguredStorageOrigin);
 
         // GPT-Image models use the edit endpoint for image-to-image generation
         if (isGPTImageModel(options.model)) {
@@ -267,23 +327,52 @@ export class OpenAIImageService extends AIImageService {
           // NOTE: DALL-E 3 does NOT support image editing at all
           const editModel = options.model || ImageModels.GPT_IMAGE_2;
 
-          // IMPORTANT: GPT-Image models edit endpoint only supports: model, image (array), prompt
-          // Do not pass any other parameters (size, response_format, etc.)
+          // quality/size are already validated for this model above (same block that
+          // handles the text-to-image branch); forward them, plus n, because generate()'s
+          // credit reservation is per requested image at the requested tier (validateUserCredits
+          // charges usdCost * n) - dropping any of the three bills for output OpenAI is
+          // never asked to produce. (edit() below has its own, narrower n handling - see its
+          // own comment - this invariant does not extend to that method.) The background/output_format
+          // alpha controls are resolved above alongside the other gpt-image parameter validation.
+          const editQuality = toGptImageQuality(openaiOptions.quality);
+          const editSize = isSupportedImageSize(editModel, openaiOptions.size) ? openaiOptions.size : undefined;
+
+          // Style anchors follow the primary image; a mask (not sent on this path) would
+          // bind to element 0, so the primary must stay first.
+          const imageFiles = [
+            imageFile,
+            ...(await this.toReferenceImageFiles(referenceImages, trustConfiguredStorageOrigin)),
+          ];
+
           this.logger.log('OpenAI image generation request (edit endpoint, image-to-image):', {
             model: editModel,
             prompt: truncatePromptForLog(prompt),
+            quality: editQuality,
+            size: editSize,
+            n: openaiOptions.n,
+            referenceImageCount: imageFiles.length - 1,
+            ...gptImageOutputOptions,
           });
           result = await openai.images.edit({
             model: editModel as 'gpt-image-1' | 'gpt-image-1.5' | 'gpt-image-1-mini' | 'gpt-image-2',
-            image: [imageFile],
+            image: imageFiles,
             prompt,
+            ...(editQuality ? { quality: editQuality } : {}),
+            ...(editSize ? { size: editSize } : {}),
+            ...(openaiOptions.n ? { n: openaiOptions.n } : {}),
+            ...gptImageOutputOptions,
           });
         } else {
-          // Legacy models (DALL-E 2) use the variation endpoint
+          // Legacy models (DALL-E 2) use the variation endpoint, which takes exactly one
+          // image - reference anchors have nowhere to go, so say so rather than silently
+          // rendering from the primary alone.
+          if (referenceImages?.length) {
+            Logger.globalInstance.debug(`[DEBUG] Reference images are not supported by ${modelName} and were removed`);
+          }
 
           const { style, quality, model, ...opts } = openaiOptions; // Remove unsupported params for variations
-          const variationSize = ['256x256', '512x512', '1024x1024'].find(s => s === openaiOptions.size) as
-            '256x256' | '512x512' | '1024x1024';
+          // Unmatched stays undefined so the size is omitted and OpenAI applies its own default.
+          const variationSize = IMAGE_SIZE_CONSTRAINTS.DALL_E_2.sizes.find(s => s === openaiOptions.size);
 
           this.logger.log('OpenAI image generation request (variation endpoint):', { ...opts, size: variationSize });
           result = await openai.images.createVariation({
@@ -297,6 +386,7 @@ export class OpenAIImageService extends AIImageService {
         result = await openai.images.generate({
           prompt,
           ...openaiOptions,
+          ...gptImageOutputOptions,
         });
       }
 
@@ -348,11 +438,15 @@ export class OpenAIImageService extends AIImageService {
   }
 
   private imageResponseToUrl(response: OpenAI.Images.ImagesResponse): string[] {
+    // The container is only reported on the envelope, so read it here rather than
+    // labelling every base64 payload image/png - a webp or jpeg render would otherwise
+    // reach storage with a data URL that contradicts its own bytes.
+    const mimeType = `image/${response?.output_format ?? 'png'}`;
     return (response?.data ?? []).map(imageData => {
       // GPT-Image-1 returns b64_json instead of url
       if (imageData.b64_json) {
         // Convert base64 to data URL for processing
-        return `data:image/png;base64,${imageData.b64_json}`;
+        return `data:${mimeType};base64,${imageData.b64_json}`;
       }
 
       // GPT-Image-1 and other OpenAI models return url
@@ -367,7 +461,19 @@ export class OpenAIImageService extends AIImageService {
   async edit(
     image: string,
     prompt: string,
-    { mask = null, model = ImageModels.GPT_IMAGE_2, n = 1, size, response_format = 'url', user }: ImageEditOptions
+    {
+      mask = null,
+      model = ImageModels.GPT_IMAGE_2,
+      n = 1,
+      quality,
+      size,
+      response_format = 'url',
+      user,
+      background,
+      output_format,
+      referenceImages,
+      trustConfiguredStorageOrigin = false,
+    }: ImageEditOptions
   ): Promise<ImageEditResponse> {
     try {
       const openai = new OpenAI({ apiKey: this.apiKey, ...OPENAI_IMAGE_CLIENT_OPTS });
@@ -407,20 +513,46 @@ export class OpenAIImageService extends AIImageService {
         editModel = ImageModels.GPT_IMAGE_2;
       }
 
-      // GPT-Image models (1, 1.5, 1-mini, 2) also accept `size` and `mask`, but only a size
-      // their own tier supports - a dall-e-2 size (e.g. 256x256/512x512) or an out-of-range
-      // resolution is a 400 from OpenAI. gpt-image-2 also takes any custom WIDTHxHEIGHT
+      // Anchors trail the edit source. OpenAI binds the mask to element 0, so `imageFile`
+      // has to stay first or an inpainting request would mask a style reference instead.
+      // Gated on the model that will actually receive them: dall-e-2's edit endpoint takes a
+      // single image, and each anchor costs a download plus an ImageProcessor round trip, so
+      // fetching them for a model that cannot use them is pure latency.
+      const editModelCarriesReferences = isGPTImageModel(editModel);
+      if (referenceImages?.length && !editModelCarriesReferences) {
+        Logger.globalInstance.debug(`[DEBUG] Reference images are not supported by ${editModel} and were removed`);
+      }
+      const referenceImageFiles = editModelCarriesReferences
+        ? await this.toReferenceImageFiles(referenceImages, trustConfiguredStorageOrigin)
+        : [];
+
+      const editWarnings: string[] = [];
+      const gptImageOutputOptions = resolveGptImageOutputOptions(background, output_format, editWarnings, editModel);
+      if (editWarnings.length > 0) {
+        Logger.globalInstance.debug(`[DEBUG] ⚠️ ${editModel} parameter adjustments:`, editWarnings);
+      }
+
+      // Gates `size` on the GPT-Image arm of the request below, and only there: the dall-e-2
+      // arm still passes `size` straight through under a cast. A GPT-Image tier accepts only
+      // its own sizes - a dall-e-2 size (e.g. 256x256/512x512) or an out-of-range resolution
+      // is a 400 from OpenAI - while gpt-image-2 additionally takes any custom WIDTHxHEIGHT
       // meeting its constraints, so this must not be a flat preset check. An unsupported or
       // absent size is omitted so OpenAI's own default sizing applies, as it did before.
-      // dall-e-2 supports: model, image (single), prompt, mask, n, size, response_format, user
-      const forwardSize = isSupportedEditSize(editModel, size);
+      // The background/output_format alpha controls are resolved above via gptImageOutputOptions.
+      const forwardSize = isSupportedImageSize(editModel, size);
+      // Callers bill against the requested tier before getting here, so it has to reach
+      // OpenAI; an unmappable value is dropped rather than 400-ing the whole request.
+      const editQuality = toGptImageQuality(quality);
 
       this.logger.log('OpenAI image edit request:', {
         model: editModel,
         prompt: truncatePromptForLog(prompt),
         hasMask: !!maskFile,
-        n,
+        // What the caller asked for, not what renders: this path always returns one image.
+        requestedN: n,
         size,
+        quality: editQuality,
+        referenceImageCount: referenceImageFiles.length,
         response_format,
       });
 
@@ -428,17 +560,22 @@ export class OpenAIImageService extends AIImageService {
         isGPTImageModel(editModel)
           ? {
               model: editModel as 'gpt-image-1' | 'gpt-image-1.5' | 'gpt-image-1-mini' | 'gpt-image-2',
-              image: [imageFile],
+              image: [imageFile, ...referenceImageFiles],
               prompt,
               ...(forwardSize ? { size } : {}),
               ...(maskFile ? { mask: maskFile } : {}),
+              ...(editQuality ? { quality: editQuality } : {}),
+              ...gptImageOutputOptions,
             }
-          : {
+          : // dall-e-2 supports: model, image (single), prompt, mask, n, size, response_format, user
+            {
               model: editModel as 'dall-e-2',
               image: imageFile,
               prompt,
               mask: maskFile,
-              n,
+              // Pinned, not forwarded from `n`: only data[0] is returned below, so asking
+              // OpenAI for more renders images we pay for and then discard.
+              n: 1,
               size: size as '1024x1024' | '1024x1536' | '1536x1024' | '256x256' | '512x512' | 'auto' | undefined,
               response_format,
               user,
@@ -450,7 +587,9 @@ export class OpenAIImageService extends AIImageService {
         const result = response.data[0];
         // Check what the response actually contains, not what we requested
         // gpt-image-1 returns b64_json by default, dall-e-2 returns based on response_format
-        const dataUrl = result.b64_json ? `data:image/png;base64,${result.b64_json}` : result.url;
+        const dataUrl = result.b64_json
+          ? `data:image/${response.output_format ?? 'png'};base64,${result.b64_json}`
+          : result.url;
 
         if (!dataUrl) {
           throw new Error(`Image response contains neither url nor b64_json: ${JSON.stringify(Object.keys(result))}`);

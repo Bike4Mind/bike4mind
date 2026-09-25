@@ -6,6 +6,7 @@ import {
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
   type DataLakeMembershipFileCounts,
+  type DataLakeSweptFile,
   effectiveTagPrefixArm,
   FabFileChunkPolicyConflict,
   IFabFileChunkDocument,
@@ -14,12 +15,14 @@ import {
   IFabFileRepository,
   IFabFileVersion,
   type LakeMembershipMemberRow,
+  type LakeSupersession,
   FabFileSourceType,
   KnowledgeType,
   normalizeTagPrefix,
   REBUILD_PENDING_STALE_MS,
   UNCATEGORIZED_TAG_SUFFIX,
   type CitableFabFileFields,
+  type CitableFabFileFieldsWithTags,
 } from '@bike4mind/common';
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
@@ -180,6 +183,53 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
       if (models.length > 0) byFile[String(row._id)] = models;
     }
     return byFile;
+  }
+
+  async confirmRetrievalIndexed(chunkIds: string[], model: string): Promise<void> {
+    if (chunkIds.length === 0) return;
+    await this.fabFileChunkModel.updateMany(
+      { _id: { $in: chunkIds } },
+      { $set: { retrievalIndexConfirmedModel: model } }
+    );
+  }
+
+  async clearRetrievalIndexConfirmed(chunkIds: string[], model: string): Promise<void> {
+    if (chunkIds.length === 0) return;
+    await this.fabFileChunkModel.updateMany(
+      { _id: { $in: chunkIds }, retrievalIndexConfirmedModel: model },
+      { $unset: { retrievalIndexConfirmedModel: '' } }
+    );
+  }
+
+  async clearRetrievalIndexConfirmedByFabFileIds(fabFileIds: string[]): Promise<void> {
+    if (fabFileIds.length === 0) return;
+    // Every model, not one: archive/delete removes a file's documents from whatever index they were
+    // ever dispatched to, so any confirmation the file carries is stale afterward.
+    await this.fabFileChunkModel.updateMany(
+      { fabFileId: { $in: fabFileIds }, retrievalIndexConfirmedModel: { $ne: null } },
+      { $unset: { retrievalIndexConfirmedModel: '' } }
+    );
+  }
+
+  async annResidentFabFileIds(fabFileIds: string[], model: string): Promise<string[]> {
+    if (fabFileIds.length === 0) return [];
+    // Denominator is `embeddingModel`, not `retrievalIndexModel` - see the interface docblock for
+    // why the latter can be skipped by a rolling self-host enable. Rides the new
+    // { fabFileId: 1, embeddingModel: 1, retrievalIndexConfirmedModel: 1 } index below for both the
+    // filter and the $cond projection, and touches no `vector` field - this runs on the retrieval
+    // hot path, unlike the removal resolver above.
+    const rows = await this.fabFileChunkModel.aggregate<{ _id: string; dispatched: number; confirmed: number }>([
+      { $match: { fabFileId: { $in: fabFileIds }, embeddingModel: model } },
+      {
+        $group: {
+          _id: '$fabFileId',
+          dispatched: { $sum: 1 },
+          confirmed: { $sum: { $cond: [{ $eq: ['$retrievalIndexConfirmedModel', model] }, 1, 0] } },
+        },
+      },
+      { $match: { $expr: { $eq: ['$confirmed', '$dispatched'] } } },
+    ]);
+    return rows.map(row => String(row._id));
   }
 
   async bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]) {
@@ -648,6 +698,8 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
     // Index residency, NOT readiness - see IFabFileChunk.retrievalIndexModel for why the two
     // cannot be the same field.
     retrievalIndexModel: { type: String, required: false },
+    // Confirmed residency, written after the index write - see IFabFileChunk.retrievalIndexConfirmedModel.
+    retrievalIndexConfirmedModel: { type: String, required: false },
   },
   {
     timestamps: true,
@@ -669,14 +721,21 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
 
 // Equality on the prefix + sort on `_id` lets the planner SORT_MERGE the per-file index scans
 // instead of collecting and sorting them, which is what keeps findVectorsByFabFileIds' keyset
-// paging non-blocking. Deliberately the only declaration: this compound's leftmost prefix already
-// serves the bare `fabFileId` reads (findByFabFileId, findTextsByFabFileId, countByFabFileId,
-// deleteManyByFabFileId, computeChunkVectorRollup),
-// and a `{ _id: 1, fabFileId: 1 }` buys nothing over `_id_` since `vector` is in neither index, so
-// both plans fetch anyway. Environments deployed before this still held those two as orphans;
-// 20260810000000_drop-legacy-fabfilechunk-indexes.ts drops them. Nothing recreates them, because
-// autoIndex only builds what is declared here. fabFileChunkIndexes.test.ts pins the set.
+// paging non-blocking. This compound's leftmost prefix already serves the bare `fabFileId` reads
+// (findByFabFileId, findTextsByFabFileId, countByFabFileId, deleteManyByFabFileId,
+// computeChunkVectorRollup), and a `{ _id: 1, fabFileId: 1 }` buys nothing over `_id_` since
+// `vector` is in neither index, so both plans fetch anyway. Environments deployed before this
+// still held those two as orphans; 20260810000000_drop-legacy-fabfilechunk-indexes.ts drops them.
+// Nothing recreates them, because autoIndex only builds what is declared here.
+// fabFileChunkIndexes.test.ts pins the set (now the two below it, not just this one).
 FabFileChunkSchema.index({ fabFileId: 1, _id: 1 });
+
+// Covers annResidentFabFileIds' aggregate: without it, `retrievalIndexConfirmedModel` is not part
+// of any index, so the { fabFileId: 1, _id: 1 } compound above serves only the `fabFileId` filter
+// and every matching chunk row is FETCHED in full - including `vector`, on the retrieval hot path -
+// before the aggregation ever applies. With this index the match, group and projection are all
+// covered from the index alone.
+FabFileChunkSchema.index({ fabFileId: 1, embeddingModel: 1, retrievalIndexConfirmedModel: 1 });
 
 export const FabFileChunk =
   (mongoose.models.FabFileChunk as IFabFileChunkModel) ??
@@ -691,6 +750,33 @@ export const fabFileChunkRepository = new FabFileChunkRepository(FabFileChunk);
  * forwards the document verbatim.
  */
 const METADATA_ONLY_PROJECTION = { content: 0, chunks: 0, vector: 0, presignedUrl: 0, fileUrl: 0 } as const;
+
+/**
+ * The citability projection, shared by the two readers that return it so their field lists cannot
+ * drift - `findCitableFieldsWithTagsByIds` is this plus `tags`, and the difference between them is
+ * meant to be exactly that one field.
+ *
+ * KNOWN GAP, pre-existing and NOT closed here. `isRetrievalExcluded` reads five fields; three of them
+ * - `chunkStallReason`, `notes`, `chunkRebuildRequestedAt` - are not projected, and all three are
+ * optional, so a row from here type-checks against that predicate and simply reads them as absent.
+ * On a `vectorizedOnly` filter that makes `stalledByConvergence` unconditionally false, so the
+ * convergence-stall exemption that arm documents as load-bearing cannot fire, and a stalled file is
+ * dropped upstream of the withhold that exists to name it.
+ *
+ * Reachable, not theoretical: `findCitableFieldsByIds` backs `createReachableSourcesResolver`
+ * (apps/client/server/memory/lakeSourceReachability.ts), which passes a session-derived filter, and
+ * `retrievalVectorizedOnly` is settable per session through the session-create schema. No in-tree
+ * path sets it by default, which is the only reason this is latent rather than live - do not read
+ * that as a guarantee.
+ *
+ * Not widened here because the fix is not free and this projection is not this change's to rewrite:
+ * `notes` is owner-authored free text and the tagless reader runs once per cited source on every chat
+ * turn that touches a lake. No caller narrows its way around the gap either - excluding
+ * `vectorizedOnly` from an options type would make it unrepresentable, and nothing does - so the live
+ * reader is the only shape it has. Widen this projection before relying on a `vectorizedOnly` verdict.
+ */
+const CITABLE_PROJECTION =
+  '_id deletedAt archivedAt chunkCount vectorizedChunkCount embeddingModel fileName vectorized createdAt';
 
 /** Row cap for unbounded metadata listings. */
 const METADATA_PAGE_CAP = 500;
@@ -730,6 +816,17 @@ const mapBounded = async <T, R>(items: T[], limit: number, task: (item: T) => Pr
   return results;
 };
 
+/**
+ * The write that puts a file into the failed state, shared by the first-failure CAS
+ * (markFailedIfNotAlready) and the superseding write (supersedeFailureError) so the two can never
+ * drift. `isVectorizing: false` beside the error is the load-bearing half: without it a file that
+ * failed mid-vectorize reads as in-flight forever to lakeConvergence.
+ */
+const failedFileFields = (errorMessage: string): { error: string; isVectorizing: boolean } => ({
+  error: errorMessage,
+  isVectorizing: false,
+});
+
 export class FabFileRepository extends BaseRepository<IFabFileDocument> implements IFabFileRepository {
   shareable: IFabFileRepository['shareable'];
   constructor(
@@ -766,6 +863,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       excludeContent?: boolean;
       excludeFilenameMarkers?: string[];
       vectorizedOnly?: boolean;
+      /** See executeSearch - opts a lake-scoped search back into curator ruling metadata. */
+      includeSupersessionRulings?: boolean;
     }
   ) {
     const query = buildFabFileSearchQuery({ userId, search, filters, pagination, order, options });
@@ -780,6 +879,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       skip: number;
       limit: number;
       excludeContent?: boolean;
+      includeSupersessionRulings?: boolean;
     },
     pageSize: number
   ) {
@@ -791,6 +891,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
 
     if (query.excludeContent) {
       findQuery.select({ content: 0, chunks: 0, vector: 0 });
+    }
+
+    // supersededInLakes is `select: false` on the schema (see FabFileSchema) - a plain search never
+    // returns it. The curator-supersession collapse (partitionBySupersession) is the one consumer
+    // that needs it, so its callers opt in explicitly rather than every search exposing curator
+    // ruling metadata by default.
+    if (query.includeSupersessionRulings) {
+      findQuery.select('+supersededInLakes');
     }
 
     // Mirror collation on the count query so total can never diverge from the
@@ -972,10 +1080,19 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async findCitableFieldsByIds(ids: string[]): Promise<CitableFabFileFields[]> {
     const docs = await this.fabFileModel
       .find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findCitableFieldsByIds') } })
-      .select('_id deletedAt archivedAt chunkCount vectorizedChunkCount embeddingModel fileName vectorized createdAt')
+      .select(CITABLE_PROJECTION)
       .lean<({ _id: unknown } & Omit<CitableFabFileFields, 'id'>)[]>();
     // `.lean()` skips the `id` virtual, so map it explicitly rather than leaning on toJSON (which
     // would defeat the projection by hydrating the document first).
+    return docs.map(({ _id, ...rest }) => ({ ...rest, id: String(_id) }));
+  }
+
+  /** The citability projection plus tags - see IFabFileRepository.findCitableFieldsWithTagsByIds. */
+  async findCitableFieldsWithTagsByIds(ids: string[]): Promise<CitableFabFileFieldsWithTags[]> {
+    const docs = await this.fabFileModel
+      .find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findCitableFieldsWithTagsByIds') } })
+      .select(`${CITABLE_PROJECTION} tags`)
+      .lean<({ _id: unknown } & Omit<CitableFabFileFieldsWithTags, 'id'>)[]>();
     return docs.map(({ _id, ...rest }) => ({ ...rest, id: String(_id) }));
   }
 
@@ -1345,6 +1462,50 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result;
   }
 
+  async claimTagRewriteByUserId(
+    userId: string,
+    tag: string,
+    newTag: string | null,
+    excludeIds: readonly string[] = []
+  ): Promise<Pick<IFabFileDocument, 'id' | 'userId' | 'tags'> | null> {
+    if (!tag) return null;
+    // The SAME anchored, escaped, case-insensitive match removeTagByUserId/updateTagsByUserId run,
+    // so a claim and the bulk mop-up behind it can never act on different file sets.
+    const nameRegex = new RegExp(`^${escapeRegex(tag)}$`, 'i');
+    // One file per call, claimed by the write itself: the returned pre-image is the state THIS
+    // write saw, so a caller minting a durable per-file fact from a bulk tag rewrite describes a
+    // transition it actually caused. A snapshot read plus updateMany cannot do that - updateMany
+    // reports one aggregate count, and two concurrent requests reading the same snapshot would
+    // both claim to have moved every file.
+    //
+    // `excludeIds` is what terminates the caller's loop: a case-only rename still matches
+    // nameRegex after the rewrite, so the caller excludes what it has already claimed rather than
+    // relying on the filter no longer matching.
+    //
+    // deletedAt conjunct, unlike those writes: a soft-deleted file is already out of every lake
+    // read, so a membership event for it would double-report against the delete door's own.
+    const filter: Record<string, unknown> = {
+      userId,
+      deletedAt: null,
+      tags: { $elemMatch: { name: nameRegex } },
+    };
+    if (excludeIds.length > 0) filter._id = { $nin: convertIds([...excludeIds]) };
+    // `$[elem]` and not `$`, matching updateTagsByUserId: the first-positional operator rewrites
+    // only the first matching element, leaving a stale copy on a file carrying the name twice.
+    const prior = newTag
+      ? await this.fabFileModel.findOneAndUpdate(
+          filter,
+          { $set: { 'tags.$[elem].name': newTag } },
+          { new: false, projection: 'userId tags', arrayFilters: [{ 'elem.name': nameRegex }] }
+        )
+      : await this.fabFileModel.findOneAndUpdate(
+          filter,
+          { $pull: { tags: { name: nameRegex } } },
+          { new: false, projection: 'userId tags' }
+        );
+    return prior ? prior.toJSON() : null;
+  }
+
   async removeTagByUserId(userId: string, tag: string): Promise<number> {
     if (!tag) return 0;
     // Anchored, not a substring match: unanchored, removing `test` also stripped `testing` and
@@ -1428,10 +1589,25 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean> {
     const result = await this.fabFileModel.findOneAndUpdate(
       { _id: fabFileId, $or: [{ error: null }, { error: { $exists: false } }, { error: '' }] },
-      { $set: { error: errorMessage, isVectorizing: false } },
+      { $set: failedFileFields(errorMessage) },
       { new: false }
     );
     return result !== null;
+  }
+
+  /**
+   * Unconditional counterpart to markFailedIfNotAlready, for a caller holding a PERMANENT verdict
+   * that outranks whatever error the file already carries. Returns the error it replaced (null if
+   * there was none, or the file is gone) so the caller can keep that text in the log - this write
+   * is the only thing that destroys it.
+   */
+  async supersedeFailureError(fabFileId: string, errorMessage: string): Promise<string | null> {
+    const previous = await this.fabFileModel.findOneAndUpdate(
+      { _id: fabFileId },
+      { $set: failedFileFields(errorMessage) },
+      { new: false }
+    );
+    return previous?.error ?? null;
   }
 
   /**
@@ -2316,6 +2492,48 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
   }
 
+  /** Ceiling on one stale-space read. Far above any real lake; see the note in the docblock
+   *  below for why a lake at the cap loses nothing. */
+  private static readonly STALE_EMBEDDING_SPACE_SCAN_LIMIT = 10_000;
+
+  /**
+   * The lake's members still carrying a DIFFERENT file-level embedding space than `embeddingModel`.
+   *
+   * `$nin: [null, '', embeddingModel]` rather than `$ne` plus blank arms, for two reasons. A missing
+   * path reads as null for `$in`, so one operator covers all three blank shapes - which this
+   * deliberately leaves alone, since blank is unattributable rather than foreign. And it keeps every
+   * condition here free of a top-level `$or`: `buildDataLakeMembershipFilter`'s prefix arm IS one,
+   * so spreading it beside an `$or` of our own would silently drop the membership predicate and
+   * offer every file in the install for this lake's re-embed.
+   *
+   * `vectorizedChunkCount: {$gt: 0}` is what makes this a stale-SPACE read rather than a
+   * not-yet-embedded one: a file with no vectors has no space to leave and will be embedded in the
+   * current one unaided. It also drops a file the instant a wave resets it (the reset zeroes this
+   * count), which is what lets a caller read the count falling as progress - and is also what makes
+   * the cap below safe: a lake larger than one read re-offers its remainder on the next wave, so a
+   * capped result reads as "at least this many" rather than losing anything.
+   */
+  async findFilesOutsideEmbeddingSpaceByScope(
+    scope: DataLakeMembershipScope,
+    embeddingModel: string
+  ): Promise<{ id: string; userId: string }[]> {
+    const docs = await this.fabFileModel
+      .find(
+        {
+          ...buildDataLakeMembershipFilter(scope),
+          deletedAt: null,
+          archivedAt: null,
+          isChunking: { $ne: true },
+          vectorizedChunkCount: { $gt: 0 },
+          embeddingModel: { $nin: [null, '', embeddingModel] },
+        },
+        { _id: 1, userId: 1 }
+      )
+      .limit(FabFileRepository.STALE_EMBEDDING_SPACE_SCAN_LIMIT)
+      .lean();
+    return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
+  }
+
   /**
    * The lake's convergence-stranded files: everything the kill switch left with NO searchable
    * passage, by either arm. `error:null` on both, so countFailedFilesByScope cannot see them.
@@ -2781,50 +2999,72 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     excludeIds: string[] = [],
     stampedAt?: Date,
     archiveStampToClear?: Date
-  ): Promise<number> {
+  ): Promise<DataLakeSweptFile[]> {
     const base: Record<string, unknown> = {
       ...buildDataLakeMembershipFilter(scope),
       deletedAt: stampedAt ?? { $ne: null },
     };
     if (excludeIds.length > 0) base._id = { $nin: excludeIds };
 
-    if (!archiveStampToClear) {
-      const result = await this.fabFileModel.updateMany(base, { $set: { deletedAt: null } });
-      return result.modifiedCount;
+    // Enumerate, then flip each row under its own conditional write, and report the rows that
+    // actually moved. A single updateMany is cheaper but reports one aggregate count, and the
+    // restore door mints a durable per-file membership fact from this - two restores re-entering
+    // the 'restoring' state concurrently would otherwise both claim to have revived every row.
+    // includeDeleted: the soft-delete plugin's pre('find') hook otherwise ANDs `deletedAt: null`
+    // onto the filter, which contradicts the stamp bound and matches nothing.
+    // userId/fileSize are carried through so the caller can credit each file's own owner's quota.
+    const candidates = await this.fabFileModel.find(base, null, { includeDeleted: true }).select('_id userId fileSize');
+    const restored: DataLakeSweptFile[] = [];
+    for (const candidate of candidates) {
+      // An aggregation-pipeline $set so one atomic write covers both fields: a row stamped by THIS
+      // lake's own archive gets both cleared, any other value (a different lake's stamp, or none)
+      // only un-deletes and keeps its archive marker - the equality bound that stops this freeing
+      // a prefix-sharing sibling's independently-archived files.
+      const result = await this.fabFileModel.updateOne({ ...base, _id: candidate._id }, [
+        {
+          $set: {
+            deletedAt: null,
+            ...(archiveStampToClear
+              ? { archivedAt: { $cond: [{ $eq: ['$archivedAt', archiveStampToClear] }, null, '$archivedAt'] } }
+              : {}),
+          },
+        },
+      ]);
+      if (result.modifiedCount === 1) {
+        restored.push({
+          id: candidate._id.toString(),
+          userId: String(candidate.userId),
+          fileSize: candidate.fileSize ?? 0,
+        });
+      }
     }
-
-    // Two parallel queries partitioned on `archivedAt`, not one update followed by another - not
-    // for snapshot isolation (Mongo gives none across separate updateMany calls), but because the
-    // shared `deletedAt: stampedAt` base filter is a barrier: once either query flips a row's
-    // `deletedAt` to null, that row no longer matches EITHER filter, so it cannot be picked up
-    // twice. A row stamped by THIS lake's own archive gets both fields cleared; any other value (a
-    // different lake's stamp, or none) only un-deletes, leaving its archive marker exactly as it
-    // was - the equality bound that keeps this from freeing a prefix-sharing sibling's
-    // independently-archived files.
-    const [ownStamp, otherStamp] = await Promise.all([
-      this.fabFileModel.updateMany(
-        { ...base, archivedAt: archiveStampToClear },
-        { $set: { deletedAt: null, archivedAt: null } }
-      ),
-      this.fabFileModel.updateMany(
-        { ...base, archivedAt: { $ne: archiveStampToClear } },
-        { $set: { deletedAt: null } }
-      ),
-    ]);
-    return ownStamp.modifiedCount + otherStamp.modifiedCount;
+    return restored;
   }
 
-  async softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<string[]> {
-    const docs = await this.fabFileModel.find({ ...buildDataLakeMembershipFilter(scope), deletedAt: null }, { _id: 1 });
-    const ids = docs.map(d => d._id.toString());
-    if (ids.length === 0) return [];
-    // `deletedAt: null` is re-asserted in the UPDATE, not just the read above, so this is write-once
-    // the way archiveByDataLakeTag already is. Without it the read-modify-write is racy: two sweeps
-    // overlapping in time both select the same rows, and the loser's stamp overwrites the winner's.
-    // Harmless while both carry the same stamp, unrecoverable the moment they do not - and the
-    // return stays the ids this call selected, which is what the index removal and its re-run want.
-    await this.fabFileModel.updateMany({ _id: { $in: ids }, deletedAt: null }, { $set: { deletedAt: at } });
-    return ids;
+  async softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<DataLakeSweptFile[]> {
+    const docs = await this.fabFileModel.find(
+      { ...buildDataLakeMembershipFilter(scope), deletedAt: null },
+      { _id: 1, userId: 1, fileSize: 1 }
+    );
+    if (docs.length === 0) return [];
+    // Per-row conditional write, not a bulk updateMany + read-back-by-stamp-equality: a bulk write
+    // can't say which caller's write actually landed, and reading back "every row now carrying this
+    // stamp" answers a DIFFERENT question - "who else shares it" - not "did THIS call flip it".
+    // Those used to be the same answer because the only consumer was a membership-audit log, where
+    // two overlapping sweeps sharing a stamp both reporting the full set was harmless (a duplicate
+    // `removed` row). It stopped being harmless the moment a second consumer - the owner's storage
+    // debit - started reading the same return value: two concurrent deletes on one lake (a
+    // double-click, a retried request) legitimately share a stamp via claimFilesDeletedAt's
+    // set-if-unset read-back, and the bulk form let both compute and apply the same debit. Mirrors
+    // undeleteByDataLakeTag's own per-row modifiedCount gate for the identical reason.
+    const flipped: DataLakeSweptFile[] = [];
+    for (const doc of docs) {
+      const result = await this.fabFileModel.updateOne({ _id: doc._id, deletedAt: null }, { $set: { deletedAt: at } });
+      if (result.modifiedCount === 1) {
+        flipped.push({ id: doc._id.toString(), userId: String(doc.userId), fileSize: doc.fileSize ?? 0 });
+      }
+    }
+    return flipped;
   }
 
   async hardDeleteByIds(fabFileIds: string[]): Promise<string[]> {
@@ -2978,6 +3218,25 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.modifiedCount;
   }
 
+  async pushTagReturningPriorState(
+    fabFileId: string,
+    tagName: string,
+    strength = 0
+  ): Promise<Pick<IFabFileDocument, 'userId' | 'tags'> | null> {
+    if (!tagName) return null;
+    // Same filtered-push semantics and exact-name matching as pushTagsByFabFileId (read its note
+    // on why case-insensitivity here would be wrong), but returning the PRE-IMAGE instead of a
+    // count. The count only says the name was absent; a caller deciding whether the file was
+    // already a data lake member through some OTHER signal needs the document the winning write
+    // saw, and reading it separately would race with a concurrent writer.
+    const prior = await this.fabFileModel.findOneAndUpdate(
+      { _id: fabFileId, 'tags.name': { $ne: tagName } },
+      { $push: { tags: { name: tagName, strength } } },
+      { new: false, projection: 'userId tags' }
+    );
+    return prior ? prior.toJSON() : null;
+  }
+
   async pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number> {
     // The schema has timestamps, so an empty $in would still rewrite updatedAt and report a
     // modification for a write that removes nothing.
@@ -2986,8 +3245,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // removals of different tags on the same file can't clobber each other. Idempotent -
     // absent names are a no-op. Exact names only, deliberately: a prefix pattern here would
     // mean building a regex from a user-chosen prefix, and an empty one matches every tag.
+    //
+    // The `tags.name` conjunct is what makes the returned count mean "a tag was removed": the
+    // schema has timestamps, so without it an unmatched $pull still rewrites updatedAt and
+    // reports modifiedCount 1. Callers that mint a durable fact from a removal (the lake
+    // membership audit trail) read this count to tell a real removal from the losing half of
+    // two concurrent removals, so an unmatched pull has to report 0.
     const result = await this.fabFileModel.updateOne(
-      { _id: fabFileId },
+      { _id: fabFileId, 'tags.name': { $in: tagNames } },
       { $pull: { tags: { name: { $in: tagNames } } } }
     );
     // A primaryTag naming a tag the file no longer carries later fails the data-lake write
@@ -2999,16 +3264,93 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // concurrency $pull buys. The cost of two writes is that a crash between them leaves a
     // primaryTag pointing at a removed tag, which the gate above then rejects until it is set
     // again. A stale label that blocks one edit beats a lost concurrent removal.
-    await this.fabFileModel.updateOne(
-      { _id: fabFileId, primaryTag: { $in: tagNames } },
-      { $unset: { primaryTag: '' } }
-    );
+    //
+    // Best-effort: the $pull above has already committed by this point, so letting this reject
+    // propagate would throw out of a membership removal that in fact happened - every caller
+    // (removeFileFromLake, the corpus-action merge door) has no compensating action for a
+    // "removal partially failed" state, only for "removal did not happen." A stale primaryTag
+    // is self-correcting the next time the file's tags are written through setDataLakeFileTags.
+    try {
+      await this.fabFileModel.updateOne(
+        { _id: fabFileId, primaryTag: { $in: tagNames } },
+        { $unset: { primaryTag: '' } }
+      );
+    } catch {
+      // swallowed - see the best-effort note above.
+    }
     return result.modifiedCount;
+  }
+
+  async setLakeSupersession(fabFileId: string, entry: LakeSupersession): Promise<boolean> {
+    // UPDATE-then-INSERT, never pull-then-push. Both orderings need two writes - the array has no
+    // upsert-an-element op - but they fail differently, and only one of them fails safe:
+    //
+    //   pull-then-push leaves the file UNRULED between the two, so a concurrent re-rule of the
+    //   same lake can have its own push refused by the `$ne` guard and report failure for a file
+    //   that exists, having already destroyed the ruling that was there.
+    //
+    //   this ordering never removes anything. The positional `$set` replaces an existing ruling
+    //   in one atomic write; the `$push` only runs when there was none, and its `$ne` filter is
+    //   what keeps two racing first-rulings from stacking two entries. A loser of that race
+    //   simply re-reads on the second pass and takes the `$set` path.
+    //
+    // Both ops are filtered on the lake id, so a ruling in a DIFFERENT lake is never touched.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const replaced = await this.fabFileModel.updateOne(
+        { _id: fabFileId, 'supersededInLakes.dataLakeId': entry.dataLakeId },
+        { $set: { 'supersededInLakes.$': entry } }
+      );
+      if (replaced.matchedCount > 0) return true;
+
+      const inserted = await this.fabFileModel.updateOne(
+        { _id: fabFileId, 'supersededInLakes.dataLakeId': { $ne: entry.dataLakeId } },
+        { $push: { supersededInLakes: entry } }
+      );
+      if (inserted.matchedCount > 0) return true;
+      // Neither matched: either the file is gone, or a concurrent writer inserted this lake's
+      // entry between the two filters. One more pass distinguishes them - the `$set` above now
+      // matches if it was the race.
+    }
+    return false;
+  }
+
+  async clearLakeSupersession(fabFileId: string, dataLakeId: string): Promise<boolean> {
+    // The lake term is in the FILTER, and `matchedCount` is what the answer reads - not
+    // `modifiedCount`. The schema has timestamps, so a `$pull` that removes nothing still rewrites
+    // `updatedAt` and reports a modification: keyed on `_id` alone this returned true for every
+    // call, including "clear a ruling that was never made". Same trap as `pullTagsByFabFileId`'s
+    // empty-`$in` guard next door.
+    const result = await this.fabFileModel.updateOne(
+      { _id: fabFileId, 'supersededInLakes.dataLakeId': dataLakeId },
+      { $pull: { supersededInLakes: { dataLakeId } } }
+    );
+    return result.matchedCount > 0;
+  }
+
+  async getLakeSupersessionWinner(fabFileId: string, dataLakeId: string): Promise<string | null> {
+    // supersededInLakes is select:false - a plain findById would no longer see it, and the
+    // write-time cycle walk (applyCorpusAction.wouldCloseSupersessionCycle) is the one internal
+    // caller that needs it outside the collapse's own search. `+supersededInLakes`, the same
+    // explicit opt-in executeSearch uses, is what actually overrides the schema default here - an
+    // object-style inclusion projection on a sub-path does not.
+    const doc = await this.fabFileModel.findById(fabFileId).select('+supersededInLakes').lean();
+    return doc?.supersededInLakes?.find(r => r.dataLakeId === dataLakeId)?.supersededByFabFileId ?? null;
   }
 }
 
 // Non-destructive AI-edit history for binary Office documents. `_id: false` keeps entries
 // as plain sub-objects (they are addressed by `version`, not ObjectId).
+/** See IFabFile.supersededInLakes. `_id: false` - the lake id is the key and nothing references a row. */
+const LakeSupersessionSchema = new Schema(
+  {
+    dataLakeId: { type: String, required: true },
+    supersededByFabFileId: { type: String, required: true },
+    decidedByUserId: { type: String, required: true },
+    decidedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 const FabFileVersionSchema = new Schema<IFabFileVersion>(
   {
     version: { type: Number, required: true },
@@ -3101,6 +3443,11 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // bumps it on any write, so an unrelated edit would reset the staleness clock. Only meaningful
     // while moderationStatus === 'scanning'.
     moderationClaimedAt: { type: Date, required: false },
+    // Failed-attempt bookkeeping for the rescue sweep's fairness ordering and backoff - see
+    // IFabFile.moderationAttempts / .moderationLastAttemptAt. Left unset (not defaulted to 0) so
+    // "never failed" sorts ahead of any attempted row without a backfill.
+    moderationAttempts: { type: Number, required: false },
+    moderationLastAttemptAt: { type: Date, required: false },
     error: { type: String, required: false },
     presignedUrl: { type: String },
     fileUrl: { type: String },
@@ -3136,6 +3483,15 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     driveMd5Checksum: { type: String },
     sourceLakeId: { type: String },
     driveConnectionId: { type: String },
+    // Curator supersession rulings, one per lake - see IFabFile.supersededInLakes. `default:
+    // undefined` so an unruled file stores no empty array, matching `versions` above.
+    // `select: false`: this is control-plane data (who ruled, when, which lake), never something a
+    // client renders, and toJSON is not a boundary (see the comment there) - a schema-level default
+    // exclusion is what actually keeps every PLAIN read/update from round-tripping it, rather than
+    // relying on every caller to remember to strip it. The two readers the curator-supersession
+    // collapse depends on (FabFileRepository.executeSearch, via `search`) opt back in explicitly
+    // with `includeSupersessionRulings` - see fabFileSearchQuery.ts.
+    supersededInLakes: { type: [LakeSupersessionSchema], select: false, default: undefined },
     archivedAt: { type: Date },
     // Absent until the first AI edit of a docx/xlsx; each edit appends an entry.
     versions: { type: [FabFileVersionSchema], default: undefined },
@@ -3155,6 +3511,13 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
         if (ret.mimeType === 'application/pdf') {
           delete ret.content;
         }
+        // supersededInLakes is deliberately NOT stripped here. toJSON is not a client boundary -
+        // BaseRepository.findById and FabFileRepository.executeSearch both return doc.toJSON(), and
+        // executeSearch is one of the two reads the curator-supersession collapse
+        // (partitionBySupersession) depends on. Stripping it here made every ruling invisible to
+        // retrieval too. The real boundary is the schema's `select: false` on the field itself (see
+        // its own comment): every plain read/update omits it by default, and only the collapse's own
+        // `search` calls opt back in via `includeSupersessionRulings`.
       },
     },
     toObject: {
@@ -3256,9 +3619,14 @@ FabFileSchema.index({ batchId: 1 });
 // Moderation queue / audit lookups
 FabFileSchema.index({ userId: 1, moderationStatus: 1 });
 
-// Serves the moderation rescue sweep's stale-'pending' scan (moderationRescueSweep.ts): seeks the
-// status + deletedAt equality and the createdAt range without touching every non-deleted row.
-FabFileSchema.index({ moderationStatus: 1, deletedAt: 1, createdAt: 1 });
+// Serves both moderation rescue sweep queries (moderationRescueSweep.ts): the stale-'pending'
+// selection and the stale-'scanning' reclaim. The status + deletedAt equality prefix is what keeps
+// either off a collection scan - load-bearing on self-host, where the worker runs both every 60s.
+// moderationAttempts sits third so it also SUPPLIES the selection's fairness sort, letting the
+// planner stream in sort order and stop at `limit` instead of a blocking top-K over every pending
+// row; createdAt trails as the tiebreaker. The sweep's remaining predicates (the createdAt age
+// floor, the two $ors) ride along as residual filters. Pinned by fabFileModerationSweep.test.ts.
+FabFileSchema.index({ moderationStatus: 1, deletedAt: 1, moderationAttempts: 1, createdAt: 1 });
 
 // No index currently serves the `fileName` sort's `_id` tiebreaker (buildFabFileSearchQuery).
 // Two things to know before adding one: (a) any future `fileName` sort index would need

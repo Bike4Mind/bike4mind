@@ -94,6 +94,15 @@ const handler = baseApi({
     // A recovered timeout is `status: 'done'` carrying an error message, so a headless client
     // needs `type` to machine-distinguish it from a genuine success.
     type: quest.type,
+    // Why the turn failed, for the `type: 'error'` cases that have one (credit exhaustion
+    // today). The WebSocket quest payload has always carried this; without it here a polling
+    // caller can only pattern-match the failure prose in `reply`. Modelled on the chat
+    // contract as sendChatMessage200PollResult.
+    //
+    // Gated on `type` (mirrors chat.ts): the field is persisted on the quest, and while the
+    // retry path now clears it (ChatCompletionInvoke), rows written before that fix still
+    // carry a code from an attempt that has since succeeded. Reading it ungated resurfaces one.
+    ...(quest.type === 'error' && { errorCode: quest.errorCode }),
     sessionId: quest.sessionId,
     reply: quest.reply,
     replies: quest.replies,

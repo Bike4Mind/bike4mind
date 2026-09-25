@@ -28,6 +28,7 @@ import {
   fetchAndConvertFabFiles,
 } from '@bike4mind/utils';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
+import { measureIdentityNamedExclusion } from '../dataLakeService/getDynamicDataLakeTags';
 import type { FabFileNotice } from '@bike4mind/utils';
 import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
 import {
@@ -40,12 +41,18 @@ import {
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   type IMessage,
 } from '@bike4mind/common';
-import { ToolBuilder, applyQuestStatusChanges } from './tools/ToolBuilder';
+import {
+  ToolBuilder,
+  applyQuestStatusChanges,
+  type BuildToolPromptArgs,
+  type BuildToolsArgs,
+} from './tools/ToolBuilder';
 import { SYSTEM_PROMPT_PRIORITY } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
 import { LakeMemoryFeature } from './ChatCompletionFeatures';
 import type { ISkill, IDataLakeDocument } from '@bike4mind/common';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
+import { INCOMPLETE_ANSWER_NOTICE, TRUNCATED_ANSWER_NOTICE } from './earlyStopStamp';
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
@@ -329,6 +336,25 @@ describe('ChatCompletionProcess', () => {
       (service as any).entitlementKeys = [];
       expect(await service.resolveEntitlementKeys()).toEqual([]);
     });
+
+    // #3155 (review): `entitlementsResolved` only flips AFTER the await, so two callers racing
+    // before it settles previously both re-entered the try/catch independently and both wrote the
+    // shared fields - whichever settled last won, so a slow success racing behind a fast failure
+    // (or vice versa) could leave a healthy turn's keys stamped as failed. Single-flight closes
+    // the window: both callers must resolve to the SAME single settlement, and the resolver runs
+    // exactly once.
+    it('is single-flight: concurrent callers converge on one resolution, not a last-write-wins race', async () => {
+      const getEnt = vi.fn().mockResolvedValue(['product:pro']);
+      (service as any).getEntitlements = getEnt;
+      (service as any).entitlementsResolved = false;
+      (service as any).entitlementKeys = [];
+
+      const [first, second] = await Promise.all([service.resolveEntitlementKeys(), service.resolveEntitlementKeys()]);
+
+      expect(first).toEqual(['product:pro']);
+      expect(second).toEqual(['product:pro']);
+      expect(getEnt).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('userHasAccessibleKnowledgeLake (offering signal)', () => {
@@ -414,41 +440,118 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  // #3055 (review): getAccessibleDataLakeAccess and the promptMeta seed's targeted measurement
+  // (measureIdentityNamedExclusion) must resolve against the SAME DataLakeAccessContext object,
+  // or getDynamicDataLakeTags.ts's per-turn membership/grant/supersession memos (WeakMap keyed on
+  // object identity) miss and re-read on a second snapshot - see dataLakeAccessContextMemo's own
+  // doc on the field.
+  describe('getDataLakeAccessContext (#3055 review - shared per-turn identity)', () => {
+    it('returns the same object across repeated calls within a turn', async () => {
+      (service as any).dataLakeAccessContextMemo = undefined;
+      (service as any).getEntitlements = vi.fn().mockResolvedValue([]);
+      (service as any).entitlementsResolved = false;
+      (service as any).entitlementKeys = [];
+      (service as any).db = { organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) } };
+
+      const first = await (service as any).getDataLakeAccessContext();
+      const second = await (service as any).getDataLakeAccessContext();
+
+      expect(first).toBe(second);
+    });
+
+    it('is the object getAccessibleDataLakeAccess already resolved with, so a later targeted measurement reads membership/grants only once total', async () => {
+      const listByPrincipal = vi.fn().mockResolvedValue([]);
+      (service as any).accessibleDataLakeAccessMemo = undefined;
+      (service as any).dataLakeAccessContextMemo = undefined;
+      (service as any).db = {
+        dataLakes: {
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+          countGateExcludedLakes: vi.fn().mockResolvedValue(0),
+        },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        dataLakeAccessGrants: { listByPrincipal, listActiveByLakes: vi.fn().mockResolvedValue([]) },
+      };
+      (service as any).user = { ...(service as any).user, id: 'alice', tags: [] };
+      (service as any).getEntitlements = vi.fn().mockResolvedValue([]);
+      (service as any).entitlementsResolved = false;
+      (service as any).entitlementKeys = [];
+
+      await (service as any).getAccessibleDataLakeAccess();
+      const contextAfter = await (service as any).getDataLakeAccessContext();
+      await measureIdentityNamedExclusion(contextAfter, ['datalake:x']);
+
+      // One call, not two: had the second call built its own context object, this memo
+      // (keyed on object identity) would miss and read a second time.
+      expect(listByPrincipal).toHaveBeenCalledTimes(1);
+    });
+
+    // #3155 (review): pins the producer, not just the consumer - the existing
+    // getDynamicDataLakeTags.ts tests hand `entitlementKeysResolved` in directly, so nothing
+    // asserted that a real `resolveEntitlementKeys()` failure actually reaches it through
+    // `entitlementResolutionFailed`. Deleting that private-field assignment must fail these.
+    it('sets entitlementKeysResolved: false only when the entitlement lookup actually failed', async () => {
+      (service as any).dataLakeAccessContextMemo = undefined;
+      (service as any).entitlementsResolved = false;
+      (service as any).entitlementKeys = [];
+      (service as any).entitlementResolutionFailed = false;
+      (service as any).getEntitlements = vi.fn().mockRejectedValue(new Error('subscription DB down'));
+      (service as any).logger = { warn: vi.fn() };
+      (service as any).db = { organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) } };
+
+      const context = await (service as any).getDataLakeAccessContext();
+
+      expect(context.entitlementKeysResolved).toBe(false);
+    });
+
+    it('sets entitlementKeysResolved: true when the entitlement lookup succeeds, including a legitimately empty list', async () => {
+      (service as any).dataLakeAccessContextMemo = undefined;
+      (service as any).entitlementsResolved = false;
+      (service as any).entitlementKeys = [];
+      (service as any).entitlementResolutionFailed = false;
+      (service as any).getEntitlements = vi.fn().mockResolvedValue([]);
+      (service as any).db = { organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) } };
+
+      const context = await (service as any).getDataLakeAccessContext();
+
+      expect(context.entitlementKeysResolved).toBe(true);
+    });
+  });
+
   // The assignment that makes the admission visible to the turn at all. It is an ORDERING
   // invariant, not just an assignment: getAccessibleDataLakeAccess memoizes per turn, so a capture
   // that ran after the first consumer would freeze an access set with the lake missing - and the
   // whole re-check below it would then be pinning behaviour nothing reaches.
-  describe('per-turn pre-authorized capture', () => {
-    const wireMinimalTurn = () => {
-      mockedGetLlmByModel.mockReturnValue({
-        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
-          await cb(['Hi!']);
-        }),
-        getModelInfo: vi.fn().mockResolvedValue([]),
-        currentModel: ChatModels.GPT4,
-      } as any); // any: minimal backend shape, as elsewhere in this file
-      mockedGetAvailableModels.mockResolvedValue([
-        {
-          id: ChatModels.GPT4,
-          type: 'text',
-          name: 'GPT-4',
-          backend: ModelBackend.OpenAI,
-          max_tokens: 100,
-          contextWindow: 1000,
-          can_stream: false,
-          pricing: {},
-          supportsImageVariation: false,
-        },
-      ] as any); // any: minimal model shape, as elsewhere in this file
-      mockedBuildAndSortMessages.mockResolvedValue({
-        messages: [{ role: 'user', content: 'Hello' }],
-        messageTruncation: null,
-      } as any); // any: minimal message shape, as elsewhere in this file
-      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
-      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
-      return { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
-    };
+  const wireMinimalTurn = () => {
+    mockedGetLlmByModel.mockReturnValue({
+      complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+        await cb(['Hi!']);
+      }),
+      getModelInfo: vi.fn().mockResolvedValue([]),
+      currentModel: ChatModels.GPT4,
+    } as any); // any: minimal backend shape, as elsewhere in this file
+    mockedGetAvailableModels.mockResolvedValue([
+      {
+        id: ChatModels.GPT4,
+        type: 'text',
+        name: 'GPT-4',
+        backend: ModelBackend.OpenAI,
+        max_tokens: 100,
+        contextWindow: 1000,
+        can_stream: false,
+        pricing: {},
+        supportsImageVariation: false,
+      },
+    ] as any); // any: minimal model shape, as elsewhere in this file
+    mockedBuildAndSortMessages.mockResolvedValue({
+      messages: [{ role: 'user', content: 'Hello' }],
+      messageTruncation: null,
+    } as any); // any: minimal message shape, as elsewhere in this file
+    mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+    mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+    return { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+  };
 
+  describe('per-turn pre-authorized capture', () => {
     it('captures the session ids onto the turn', async () => {
       mockSession.userId = 'user1';
       mockSession.preauthorizedLakeIds = ['managed'];
@@ -485,6 +588,65 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body, logger: mockLogger });
 
       expect((service as any).turnPreauthorizedLakeIds).toBeUndefined();
+    });
+  });
+
+  describe('a user stop', () => {
+    it('landing before processing starts is honoured instead of saving running over it', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      const complete = vi.fn();
+      mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: ChatModels.GPT4 } as any); // any: minimal backend shape
+      mockDb.quests.findByIdWithStatus.mockResolvedValue({ id: 'quest1', status: 'stopped' });
+      const sendStatusUpdate = vi.spyOn(service as any, 'sendStatusUpdate');
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(complete).not.toHaveBeenCalled();
+      expect(mockDb.quests.update).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'running' }));
+      expect(sendStatusUpdate).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: 'stopped' }),
+        null,
+        expect.anything()
+      );
+    });
+
+    it('that aborts the request before the first chunk ends the quest stopped, not with an error reply', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      const abort = Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(abort),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any); // any: minimal backend shape
+      mockDb.quests.findByIdWithStatus
+        .mockResolvedValueOnce({ id: 'quest1', status: 'running' })
+        .mockResolvedValue({ id: 'quest1', status: 'stopped' });
+
+      await service.process({ body, logger: mockLogger });
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave).toMatchObject({ status: 'stopped', type: 'message' });
+      expect(JSON.stringify(lastSave.replies ?? [])).not.toContain('interrupted');
+    });
+
+    it('does not apply to an abort the user did not ask for', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      const abort = Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(abort),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any); // any: minimal backend shape
+      mockDb.quests.findByIdWithStatus.mockResolvedValue({ id: 'quest1', status: 'running' });
+
+      await service.process({ body, logger: mockLogger });
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave).toMatchObject({ status: 'done', type: 'error' });
+      expect(lastSave.replies.join('')).toContain('The request was interrupted');
     });
   });
 
@@ -1006,6 +1168,33 @@ describe('ChatCompletionProcess', () => {
       expect(access).toEqual({ lakeMemberships: [], dataLakeTags: [], dataLakeTagPrefixes: [] });
     });
 
+    it('#3055: a countGateExcludedLakes rejection warns via the process logger, and excludedByAccessCount stays absent', async () => {
+      // Distinct from the resolver-wide failure above: findMembershipOrgIds and
+      // findActiveByUserTagsAndEntitlements both succeed here - only the count query rejects.
+      // getDynamicDataLakeAccess catches that internally and warns via its OWN `logger` param;
+      // without wiring `this.logger` through at this call site, the warn went nowhere and the
+      // count failure was indistinguishable from success.
+      (service as any).accessibleDataLakeAccessMemo = undefined;
+      (service as any).user = { ...(service as any).user, id: 'user-1' };
+      (service as any).logger = { warn: vi.fn() };
+      (service as any).db = {
+        ...(service as any).db,
+        dataLakes: {
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+          countGateExcludedLakes: vi.fn().mockRejectedValue(new Error('count query timed out')),
+        },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      };
+
+      const access = await (service as any).getAccessibleDataLakeAccess();
+
+      expect(access.excludedByAccessCount).toBeUndefined();
+      expect((service as any).logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('gate-excluded-lake count failed'),
+        expect.any(Error)
+      );
+    });
+
     it('getAttachedKnowledgeFiles forwards the resolved lakeAccess as the getAccessibleFiles third argument', async () => {
       (service as any).accessibleDataLakeAccessMemo = {
         dataLakeTags: ['datalake:acme'],
@@ -1071,6 +1260,197 @@ describe('ChatCompletionProcess', () => {
           type: 'message',
         })
       );
+    });
+
+    it('keeps a user-stopped quest as stopped when the aborted backend resolves normally', async () => {
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, opts, cb) => {
+          await cb(['Partial']);
+          // A user Stop persists 'stopped'; the cancellation watcher sees it and aborts.
+          mockDb.quests.findByIdWithStatus.mockResolvedValue({ ...mockQuest, status: 'stopped' });
+          await new Promise<void>(resolve => {
+            if (opts.abortSignal.aborted) return resolve();
+            opts.abortSignal.addEventListener('abort', () => resolve());
+            setTimeout(resolve, 3000);
+          });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      const statuses = mockDb.quests.update.mock.calls.map(([arg]: [{ status?: string } | undefined]) => arg?.status);
+      expect(statuses.length).toBeGreaterThan(0);
+      expect(statuses.at(-1)).toBe('stopped');
+      expect(mockQuest.status).toBe('stopped');
+    });
+
+    describe('incomplete answer notice', () => {
+      type Emit = (chunks: string[], info?: Record<string, unknown>) => Promise<void>;
+
+      function setupTurn(run: (cb: Emit, opts: { abortSignal: AbortSignal }) => Promise<void>) {
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async (_model, _messages, opts, cb) => run(cb, opts)),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'GPT-4',
+            backend: ModelBackend.OpenAI,
+            max_tokens: 100,
+            contextWindow: 1000,
+            can_stream: false,
+            pricing: {},
+            supportsImageVariation: false,
+          },
+        ]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+      }
+
+      const runTurn = () =>
+        service.process({
+          body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+          logger: mockLogger,
+        });
+
+      // Mirrors the Anthropic backend: the preamble streams, toolsUsed grows once the
+      // tool-calling stream ends, and the next iteration streams against the grown array.
+      async function toolLoop(cb: Emit, finalIteration: string[], stopReason = 'end_turn') {
+        const toolsUsed: Array<Record<string, unknown>> = [];
+        await cb(["I'll pull current figures first."], { toolsUsed });
+        toolsUsed.push({ name: 'web_search', arguments: '{"q":"figures"}', id: 't1' });
+        await cb(['<think>checking results</think>'], { toolsUsed });
+        toolsUsed.push({ name: 'web_fetch', arguments: '{"url":"x"}', id: 't2' });
+        for (const chunk of finalIteration) await cb([chunk], { toolsUsed });
+        await cb([], { toolsUsed, stopReason });
+      }
+
+      it('appends a notice when the final tool-loop iteration emits only thinking', async () => {
+        setupTurn(cb => toolLoop(cb, ['<think>', 'more reasoning', '</think>']));
+
+        await runTurn();
+
+        expect(mockQuest.status).toBe('done');
+        expect(mockQuest.replies.at(-1)).toBe(`\n\n${INCOMPLETE_ANSWER_NOTICE}`);
+        // Visible text only: the client reads thinking from reply as well as replies.
+        expect(mockQuest.reply).toBe(`I'll pull current figures first.\n\n${INCOMPLETE_ANSWER_NOTICE}`);
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('[IncompleteAnswer]'),
+          expect.objectContaining({ questId: 'quest1', stopReason: 'end_turn' })
+        );
+      });
+
+      it('adds no notice when the tool loop ends with a real answer', async () => {
+        setupTurn(cb => toolLoop(cb, ['<think>ok</think>', 'Here are the figures.']));
+
+        await runTurn();
+
+        expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+        expect(mockQuest.replies.join('')).toContain('Here are the figures.');
+      });
+
+      it('adds no notice when a tool delivered an attachment and the model wrote no caption', async () => {
+        setupTurn(async cb => {
+          const toolsUsed = [{ name: 'image_generation', arguments: '{"prompt":"a cat"}', id: 't1' }];
+          // What applyQuestStatusChanges does when the tool calls statusUpdate({ images }).
+          mockQuest.images = [...(mockQuest.images ?? []), 'generated/cat.png'];
+          await cb(['<think>done</think>'], { toolsUsed });
+          await cb([], { toolsUsed, stopReason: 'end_turn' });
+        });
+
+        await runTurn();
+
+        expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+      });
+
+      it('adds no notice when a tool left a pendingAction for the user and wrote no text', async () => {
+        setupTurn(async cb => {
+          const toolsUsed = [{ name: 'image_generation', arguments: '{"prompt":"a cat"}', id: 't1' }];
+          // What the image tool's model-picker statusUpdate({ pendingAction }) does.
+          mockQuest.pendingAction = { tool: 'image_generation', params: { prompt: 'a cat' }, ts: Date.now() };
+          await cb(['<think>picker shown</think>'], { toolsUsed });
+          await cb([], { toolsUsed, stopReason: 'end_turn' });
+        });
+
+        await runTurn();
+
+        expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+      });
+
+      it('still adds the notice when the pendingAction is left over from an earlier turn', async () => {
+        mockQuest.pendingAction = { tool: 'image_generation', params: { prompt: 'old' }, ts: 1 };
+        setupTurn(cb => toolLoop(cb, ['<think>', 'more reasoning', '</think>']));
+
+        await runTurn();
+
+        expect(mockQuest.replies.at(-1)).toBe(`\n\n${INCOMPLETE_ANSWER_NOTICE}`);
+      });
+
+      it('adds no notice to a stopped turn', async () => {
+        setupTurn(async (cb, opts) => {
+          const toolsUsed = [{ name: 'web_search', arguments: '{}', id: 't1' }];
+          await cb(['<think>thinking</think>'], { toolsUsed });
+          mockDb.quests.findByIdWithStatus.mockResolvedValue({ ...mockQuest, status: 'stopped' });
+          await new Promise<void>(resolve => {
+            if (opts.abortSignal.aborted) return resolve();
+            opts.abortSignal.addEventListener('abort', () => resolve());
+            setTimeout(resolve, 3000);
+          });
+        });
+
+        await runTurn();
+
+        expect(mockQuest.status).toBe('stopped');
+        expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+      });
+
+      it('appends the truncation notice on max_tokens with no final text', async () => {
+        setupTurn(cb => toolLoop(cb, ['<think>', 'long reasoning'], 'max_tokens'));
+
+        await runTurn();
+
+        expect(mockQuest.replies.at(-1)).toBe(`\n\n${TRUNCATED_ANSWER_NOTICE}`);
+      });
+
+      it('adds no notice to a plain answer with no tool calls', async () => {
+        setupTurn(async cb => {
+          await cb(['Hi!'], { toolsUsed: [] });
+          await cb([], { toolsUsed: [], stopReason: 'end_turn' });
+        });
+
+        await runTurn();
+
+        expect(mockQuest.replies).toEqual(['Hi!']);
+      });
     });
 
     // Every other test in this file mocks messageTruncation: null, which never exercises the
@@ -2901,17 +3281,40 @@ describe('ChatCompletionProcess', () => {
       files?: Array<Partial<{ id: string; fileName: string; vectorized: boolean; chunkCount: number }>>;
       getAccessibleFilesImpl?: () => Promise<unknown>;
       dataLakeTags?: string[];
+      retrievalTags?: string[];
+      // #3055: undefined (the default) means "not seeded here" - distinct from 0, which asserts a
+      // genuine measured zero. Mirrors excludedByAccessCount's own contract on the resolver.
+      excludedByAccessCount?: number;
+      // #3055 (review): wires mockDb.dataLakes.countGateExcludedLakes so a test can drive the
+      // targeted, session-scoped measurement (measureIdentityNamedExclusion) that fires when
+      // retrievalTags names a lake by identity - distinct from excludedByAccessCount above, which
+      // only ever feeds the ACCOUNT-WIDE, no-op-path number.
+      countGateExcludedLakesImpl?: (
+        userTags: string[],
+        entitlementKeys: string[],
+        organizationIds: string[] | undefined,
+        userId: string | undefined,
+        opts?: { restrictToTags?: string[] }
+      ) => number;
       promptMode?: 'raw' | 'grounded' | 'surface';
       requestTools?: string[];
       skipAutoOffers?: boolean;
       fabPromptMessages?: IMessage[];
       fabFileNotices?: FabFileNotice[];
+      // #3055 (review): datalake tags this turn admitted via preauthorization (the manage-recheck
+      // widening), so a test can pin that the targeted exclusion measurement excludes exactly
+      // these tags rather than the raw session-named list - see admittedPreauthorizedTags's own doc.
+      admittedPreauthorizedTags?: string[];
     }) => {
       mockSession.knowledgeIds = opts.knowledgeIds ?? [];
+      mockSession.retrievalTags = opts.retrievalTags ?? [];
       const getAccessibleFiles = opts.getAccessibleFilesImpl
         ? vi.fn().mockImplementation(opts.getAccessibleFilesImpl)
         : vi.fn().mockResolvedValue(opts.files ?? []);
       mockDb.fabfiles = { getAccessibleFiles };
+      if (opts.countGateExcludedLakesImpl) {
+        mockDb.dataLakes = { countGateExcludedLakes: vi.fn().mockImplementation(opts.countGateExcludedLakesImpl) };
+      }
       // Seed the lake-access memo directly (same pattern as the resolveCorpusInlinePlan suite)
       // so this test controls the lake signal without exercising the DB-backed resolver.
       (service as any).accessibleDataLakeAccessMemo = {
@@ -2919,6 +3322,8 @@ describe('ChatCompletionProcess', () => {
         dataLakeTagPrefixes: [],
         scopedTagPrefixes: [],
         lakes: [],
+        admittedPreauthorizedTags: new Set(opts.admittedPreauthorizedTags ?? []),
+        ...(opts.excludedByAccessCount !== undefined ? { excludedByAccessCount: opts.excludedByAccessCount } : {}),
       };
       (service as any).getScopeFilter = vi.fn().mockReturnValue({});
 
@@ -3213,6 +3618,10 @@ describe('ChatCompletionProcess', () => {
           mode: 'optional',
           surfaces: [],
           dataLakeTags: [],
+          // Present-and-empty, not absent: the seed resolved a scope and this caller's corpus is
+          // attachments only, so there was no lake in it. Absence would mean "never recorded",
+          // which is what makes the offline replay skip a turn instead of probing it.
+          lakeScope: [],
           // false: this suite stubs getSettingsValue to undefined, so no guidance string resolves
           // and the section does not ship. The populated case is its own test below.
           knowledgeBaseGuidanceInjected: false,
@@ -3275,6 +3684,138 @@ describe('ChatCompletionProcess', () => {
         });
       });
 
+      /**
+       * The scope the offline answerability replay probes. Before this the seed wrote nothing, and
+       * the replay rebuilt a scope from the session's tags as they stood at replay time - so a
+       * session whose lake selection had since changed was scored against a corpus its turn never
+       * had. These pin that the recorded value is the turn's own resolved scope, not a constant.
+       */
+      describe("records the turn's resolved lake scope", () => {
+        it('records the accessible lakes when the session expresses no lake opinion', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:acme:handbook'],
+            retrievalTags: [],
+          });
+          expect(retrieval).toMatchObject({ mode: 'optional', lakeScope: ['datalake:acme:handbook'] });
+        });
+
+        it('records nothing when the session names a lake this caller cannot reach', async () => {
+          // narrowLakeAccessToSession's narrow-to-nothing, which is a different state from its
+          // no-op above: the session asked for a lake and retained none of it, so the turn had no
+          // corpus - and the replay must skip it rather than probe the owner's whole library.
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:acme:handbook'],
+            retrievalTags: ['datalake:not-mine'],
+          });
+          expect(retrieval).toMatchObject({ mode: 'optional', lakeScope: [] });
+        });
+
+        // #3055: excludedLakes travels with the same seed as lakeScope. These pin the presence
+        // contract (RetrievalSummarySchema.excludedLakes) that a hand-rolled unit fixture cannot -
+        // this is the one real writer, and its own memo fixture used to omit the field entirely
+        // (`as any`), which let the seed's `> 0` guard ship untested against a false 0-vs-absent
+        // conflation (see promptMeta.ts's own doc on this field).
+        it('records the count explicitly, including a genuine zero', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:acme:handbook'],
+            excludedByAccessCount: 0,
+          });
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 0, reason: 'access' } });
+        });
+
+        it('records a nonzero count', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:acme:handbook'],
+            excludedByAccessCount: 2,
+          });
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 2, reason: 'access' } });
+        });
+
+        it('leaves excludedLakes absent - not a false zero - when the count was never measured', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:acme:handbook'],
+          });
+          expect(retrieval && 'excludedLakes' in retrieval).toBe(false);
+        });
+
+        // #3055 (review): a REAL narrowing (the session names a lake by identity) must measure
+        // exclusion against exactly the requested lake(s), not the account-wide number - which
+        // can describe a lake outside this turn's selection entirely in either direction. Both
+        // cases share one simulated world (lake 'b' is gate-excluded, 'a' is not) and differ only
+        // in which lake the session names, proving restrictToTags is what separates them - a
+        // version that ignored the restriction would return the SAME count for both.
+        const countExcludingOnlyLakeB = vi
+          .fn()
+          .mockImplementation(
+            (
+              _userTags: string[],
+              _entitlementKeys: string[],
+              _orgIds: string[] | undefined,
+              _userId: string | undefined,
+              opts?: { restrictToTags?: string[] }
+            ) => (opts?.restrictToTags?.includes('datalake:b') ? 1 : 0)
+          );
+
+        it('ignores an unrelated excluded lake when the session narrows to a different, accessible one', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:a'],
+            retrievalTags: ['datalake:a'],
+            countGateExcludedLakesImpl: countExcludingOnlyLakeB,
+          });
+          // Account-wide, lake b's exclusion would report `excluded: 1` - the whole point is that
+          // THIS turn (narrowed to a) must not carry that number forward.
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 0, reason: 'access' } });
+        });
+
+        it('counts the specific excluded lake the session narrows to, not an unrelated one', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:a'],
+            retrievalTags: ['datalake:b'],
+            countGateExcludedLakesImpl: countExcludingOnlyLakeB,
+          });
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 1, reason: 'access' } });
+        });
+
+        // #3055 (review): a preauthorized "Test this lake" session names its own admitted lake by
+        // identity, so it would otherwise take the SAME branch as an ordinary narrowing above and
+        // ask the underlying gate query about a lake it has no notion was admitted. Both cases
+        // share the same gate-excludes-everything-named world and differ only in whether this
+        // turn's admission covers the named lake.
+        const countExcludingEverythingNamed = vi
+          .fn()
+          .mockImplementation(
+            (
+              _userTags: string[],
+              _entitlementKeys: string[],
+              _orgIds: string[] | undefined,
+              _userId: string | undefined,
+              opts?: { restrictToTags?: string[] }
+            ) => (opts?.restrictToTags?.length ? 1 : 0)
+          );
+
+        it('does not count a preauthorized lake this turn successfully admitted, even though the underlying gate excludes it', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:managed'],
+            retrievalTags: ['datalake:managed'],
+            admittedPreauthorizedTags: ['datalake:managed'],
+            countGateExcludedLakesImpl: countExcludingEverythingNamed,
+          });
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 0, reason: 'access' } });
+        });
+
+        it('counts a preauthorized lake whose admission was not renewed this turn', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            // A non-empty, unrelated dataLakeTags keeps the knowledge tool offered - this turn's
+            // OWN access is fine, it is only the named lake's admission that lapsed.
+            dataLakeTags: ['datalake:other'],
+            retrievalTags: ['datalake:managed'],
+            admittedPreauthorizedTags: [],
+            countGateExcludedLakesImpl: countExcludingEverythingNamed,
+          });
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 1, reason: 'access' } });
+        });
+      });
+
       it('writes no retrieval record at all when there was nothing to retrieve from', async () => {
         // A turn with no knowledge in scope belongs in NO denominator. If it were seeded, every
         // ordinary chat turn would dilute the rate toward zero.
@@ -3315,6 +3856,10 @@ describe('ChatCompletionProcess', () => {
           mode: 'optional',
           surfaces: ['knowledgeBaseSearch'],
           dataLakeTags: [],
+          // Survives the same way, and for a sharper reason: the replay reads it off a turn whose
+          // `retrieval` a surface has since rewritten, so a merge that dropped it would leave the
+          // measurement with no corpus to probe.
+          lakeScope: [],
           // Survives the tool arm's later write, which never sets it - the flag is seeded once
           // and must reach the fold intact or the A/B loses the turn. False here for the same
           // stubbed-settings reason as above; what this pins is survival, not the value.
@@ -3763,6 +4308,144 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  // MCP tools are merged into buildSharedTools' outgoing list AFTER its native `enabledTools`
+  // filter, so `offerOnlyNamedTools`/`sessionDisabledTools` are the only levers that reach them -
+  // and sharedToolBuilder.mcpNarrowing.test.ts only exercises buildSharedTools directly. It cannot
+  // prove ChatCompletionProcess actually passes these options on a real turn; deleting the four
+  // lines that wire them at this call site would leave that suite green.
+  describe('MCP narrowing options threaded into buildTools', () => {
+    const runWithOptions = async (opts: {
+      promptMode?: 'raw' | 'grounded' | 'surface';
+      skipAutoOffers?: boolean;
+      disabledTools?: string[];
+      connectedMcpTools?: boolean;
+      /** Have the buildTools stub apply `sessionDisabledTools`, the way buildSharedTools does. */
+      deniedFromBuild?: boolean;
+    }) => {
+      const previousDisabledTools = mockSession.disabledTools;
+      mockSession.disabledTools = opts.disabledTools;
+      const mcpTools = ['notion__search', 'notion__create_page'].map(name => ({
+        name,
+        toolFn: vi.fn(),
+        toolSchema: { name, description: name, parameters: { type: 'object', properties: {} } },
+        _isMcpTool: true,
+      }));
+      const buildMcpToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildMcpTools').mockResolvedValue({
+        mcpToolsByServer: opts.connectedMcpTools ? { notion: mcpTools } : {},
+        serverAgentConfig: {},
+      });
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockImplementation(options => {
+        if (!opts.connectedMcpTools) return [];
+        // Stands in for the real narrowing this spy replaces: buildSharedTools subtracts
+        // `sessionDisabledTools` by namespaced name (sharedToolBuilder.ts) before returning.
+        const denied = new Set(options.sessionDisabledTools ?? []);
+        const survived = opts.deniedFromBuild ? mcpTools.filter(tool => !denied.has(tool.name)) : mcpTools;
+        return options.offerOnlyNamedTools ? survived.slice(0, 1) : survived;
+      });
+      buildToolsSpy.mockClear();
+      const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!'])),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      const body = {
+        ...startQuestParams,
+        ...(opts.promptMode ? { promptMode: opts.promptMode } : {}),
+        ...(opts.skipAutoOffers ? { skipAutoOffers: true } : {}),
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
+
+      try {
+        await service.process({ body, logger: mockLogger });
+
+        return {
+          passedOptions: buildToolsSpy.mock.calls[0]?.[0] as BuildToolsArgs | undefined,
+          toolPromptOptions: buildToolPromptSpy.mock.calls[0]?.[0] as BuildToolPromptArgs | undefined,
+        };
+      } finally {
+        // In a finally because these three spies live on ToolBuilder.prototype and
+        // `mockSession` is shared: a throw here used to leak both into every later test in the
+        // file, where the symptom is an unrelated failure far from the cause.
+        buildMcpToolsSpy.mockRestore();
+        buildToolsSpy.mockRestore();
+        buildToolPromptSpy.mockRestore();
+        mockSession.disabledTools = previousDisabledTools;
+      }
+    };
+
+    it('passes offerOnlyNamedTools: true on a promptMode turn', async () => {
+      const { passedOptions } = await runWithOptions({ promptMode: 'raw' });
+      expect(passedOptions?.offerOnlyNamedTools).toBe(true);
+    });
+
+    it('passes offerOnlyNamedTools: true on an explicit skipAutoOffers turn', async () => {
+      const { passedOptions } = await runWithOptions({ skipAutoOffers: true });
+      expect(passedOptions?.offerOnlyNamedTools).toBe(true);
+    });
+
+    // The default web payload (no promptMode, no skipAutoOffers) must keep reaching MCP tools -
+    // this is the regression sharedToolBuilder.mcpNarrowing.test.ts guards from the pure-function
+    // side; this pins that ChatCompletionProcess never flips the flag on for an ordinary turn.
+    it('passes offerOnlyNamedTools: false on a default turn', async () => {
+      const { passedOptions } = await runWithOptions({});
+      expect(passedOptions?.offerOnlyNamedTools).toBe(false);
+    });
+
+    it('threads session.disabledTools through as sessionDisabledTools', async () => {
+      const { passedOptions } = await runWithOptions({ disabledTools: ['notion__notion_search'] });
+      expect(passedOptions?.sessionDisabledTools).toEqual(['notion__notion_search']);
+    });
+
+    it('passes only offered MCP tools into the tool prompt after narrowing', async () => {
+      const { toolPromptOptions } = await runWithOptions({ skipAutoOffers: true, connectedMcpTools: true });
+      expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual(['notion__search']);
+    });
+
+    it('passes every offered MCP tool into the tool prompt on a default turn', async () => {
+      const { toolPromptOptions } = await runWithOptions({ connectedMcpTools: true });
+      expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual([
+        'notion__search',
+        'notion__create_page',
+      ]);
+    });
+
+    // The intersection is against what SURVIVED the build, so it has to hold for the denylist too
+    // and not just for offerOnlyNamedTools - both narrow the same list, and the two cases above
+    // would stay green if the filter were re-derived from the flag instead of the built tools.
+    it('keeps a session-denied MCP tool out of the tool prompt', async () => {
+      const { toolPromptOptions } = await runWithOptions({
+        connectedMcpTools: true,
+        disabledTools: ['notion__create_page'],
+        deniedFromBuild: true,
+      });
+      expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual(['notion__search']);
+    });
+  });
+
   // SkillsFeature computes a catalog + expanded `/skill-name` body, but the drop (#1344) was in the
   // ASSEMBLY: the `skills` key was never spread into contextAndSystemMessages, so the model never saw
   // it. A unit test on getContextMessages passes without the spread, so this asserts against the
@@ -4190,6 +4873,9 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
+        // The seed's resolved scope, which survives the feature's later write - see the field's
+        // own comment in promptMeta.ts for why it is recorded separately from dataLakeTags.
+        lakeScope: ['datalake:corpus'],
         // One belief recalled and rendered. No `topScore`: belief relevance is a different scale
         // from the cosine similarities the other surfaces report, so a max across the two would
         // be a number that looks like a similarity and is not one.
@@ -4228,6 +4914,7 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
+        lakeScope: ['datalake:corpus'],
         // Recall completed, so the zero is RECORDED rather than unknown - the same distinction
         // 'ok' draws for the outcome, now drawn for the volume.
         injected: { chunks: 0, chars: 0 },
@@ -4253,6 +4940,8 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
+        // Survives a surface that broke: the scope was in scope whether or not recall reached it.
+        lakeScope: ['datalake:corpus'],
         knowledgeBaseGuidanceInjected: false,
       });
     });
@@ -4276,6 +4965,9 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: [],
+        // The pair pulling apart, which is the point of recording both: the feature searched no
+        // lake, and a lake was nonetheless in scope for the turn.
+        lakeScope: ['datalake:corpus'],
         knowledgeBaseGuidanceInjected: false,
       });
     });
@@ -4514,6 +5206,108 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  // The write site promotes the lake layers out of the `systemPrompts` residual into a bucket of
+  // their own. The property that matters is conservation: the bucket is rebuilt from the layer
+  // counts already computed, so the old residual still equals `systemPrompts + lakeRetrieval` -
+  // no second count, and a lake block the budget dropped bills nothing.
+  describe('lake retrieval promoted out of the system-prompt residual', () => {
+    const chunk = { role: 'system' as const, content: 'RETRIEVED-LAKE-CHUNK' };
+    const fact = { role: 'system' as const, content: 'LAKE-MEMORY-FACT' };
+
+    // Content-keyed so a message counts the same way in the six source totals and in
+    // toPromptDetails' per-source pass; that consistency is what makes conservation checkable.
+    const tokenLengthImpl = async (messages: any[]) =>
+      (messages ?? []).reduce((sum: number, message: any) => {
+        const content = typeof message?.content === 'string' ? message.content : '';
+        if (content.includes('RETRIEVED-LAKE-CHUNK')) return sum + 25;
+        if (content.includes('LAKE-MEMORY-FACT')) return sum + 40;
+        return sum + 1;
+      }, 0);
+
+    const runWithLakeSources = async (opts: { withLakes: boolean }) => {
+      mockedCalculateTotalTokenLength.mockReset().mockImplementation(tokenLengthImpl as any);
+      mockTokenizer.countTokens.mockReset().mockResolvedValue(1);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
+          await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      // Return the admitted system messages BY REFERENCE, so the delivery set the write site
+      // derives from this payload actually contains them - a fixed two-message stub would report
+      // every system row as budget-excluded and the bucket would be a meaningless zero.
+      let builtMessages: IMessage[] = [];
+      mockedBuildAndSortMessages.mockImplementation(
+        async (_prev: any, contextAndSystemMessages: any[], currentUserPromptMessages: any[]) => {
+          builtMessages = [...contextAndSystemMessages, ...currentUserPromptMessages];
+          return { messages: builtMessages, messageTruncation: null } as any;
+        }
+      );
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      if (opts.withLakes) {
+        service.features.set('knowledgeRetrieval', { getContextMessages: async () => [chunk] } as any);
+        service.features.set('lakeMemory', { getContextMessages: async () => [fact] } as any);
+      }
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      const call = mockDb.quests.update.mock.calls.find(
+        ([arg]: [any]) => arg?.promptMeta?.context?.tokensBySource !== undefined
+      );
+      // Re-derive the residual the way the write site does, independently of the promotion:
+      // total over the payload it counted, less the user prompt (the only known non-system source).
+      const grossResidual = (await tokenLengthImpl(builtMessages)) - 1;
+      return { promptMeta: call?.[0]?.promptMeta, grossResidual };
+    };
+
+    it('moves exactly the delivered lake layer tokens into lakeRetrieval, conserving the residual', async () => {
+      const { promptMeta, grossResidual } = await runWithLakeSources({ withLakes: true });
+      const tokens = promptMeta.context.tokensBySource;
+
+      // 25 (forced-retrieval chunk) + 40 (lake-memory card), read off the layer rows.
+      expect(tokens.lakeRetrieval).toBe(65);
+      // The two buckets still sum to the residual the turn was billed on: nothing was lost or
+      // counted twice, which is the only way a promote-don't-remeasure change can be wrong.
+      expect(tokens.systemPrompts + tokens.lakeRetrieval).toBe(grossResidual);
+      expect(tokens.systemPrompts).toBe(grossResidual - 65);
+
+      const layer = (name: string) =>
+        promptMeta.context.systemPromptDetails.find((detail: any) => detail.name === name);
+      expect(layer('knowledge_retrieval')).toMatchObject({ tokenCount: 25, wasIncluded: true });
+      expect(layer('lake_memory')).toMatchObject({ tokenCount: 40, wasIncluded: true });
+    });
+
+    it('records a real zero when the turn carried no lake layers, leaving the residual gross', async () => {
+      const { promptMeta, grossResidual } = await runWithLakeSources({ withLakes: false });
+      const tokens = promptMeta.context.tokensBySource;
+
+      // A real zero, not unknown: the layer derivation ran and found no lake content.
+      expect(tokens.lakeRetrieval).toBe(0);
+      // No lake rows, so nothing moved and the residual is the whole billed system-prompt total.
+      expect(tokens.systemPrompts).toBe(grossResidual);
+    });
+  });
+
   describe('isRequestTimeoutError', () => {
     it('should match lowercase "request timeout"', () => {
       expect(isRequestTimeoutError(new Error('Anthropic API request timeout after 60000ms'))).toBe(true);
@@ -4717,6 +5511,67 @@ describe('ChatCompletionProcess', () => {
       expect(mockDb.quests.update).toHaveBeenCalledWith(
         expect.objectContaining({
           reply: 'The AI service is currently experiencing high demand. Please try again in a few minutes.',
+          type: 'error',
+          status: 'done',
+        })
+      );
+    });
+
+    it('overwrites a stale partial replies[] with the error message, not just reply (#3223)', async () => {
+      setupTimeoutMocks();
+      mockedShouldTriggerFallback.mockReturnValue(false);
+      // extractReplies (client) prefers a non-empty replies[] over reply, so a lingering
+      // partial entry from before the failure (e.g. an unclosed '<think>' left by a killed
+      // stream) would otherwise outrank this error message and render a blank turn.
+      mockQuest.replies = ['<think>'];
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async () => {
+          throw new Error('stream timeout - idle for too long, overloaded backend');
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reply: 'The AI service is currently experiencing high demand. Please try again in a few minutes.',
+          replies: ['The AI service is currently experiencing high demand. Please try again in a few minutes.'],
+          type: 'error',
+          status: 'done',
+        })
+      );
+    });
+
+    it('keeps visible partial answer text ahead of the error instead of discarding it', async () => {
+      setupTimeoutMocks();
+      mockedShouldTriggerFallback.mockReturnValue(false);
+      // A real answer streamed before the failure - must survive alongside the error, not be
+      // replaced by it, so the user doesn't lose text they already watched arrive.
+      mockQuest.replies = ['Here is what I found so far'];
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async () => {
+          throw new Error('stream timeout - idle for too long, overloaded backend');
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reply:
+            'Here is what I found so farThe AI service is currently experiencing high demand. Please try again in a few minutes.',
+          replies: [
+            'Here is what I found so far',
+            'The AI service is currently experiencing high demand. Please try again in a few minutes.',
+          ],
           type: 'error',
           status: 'done',
         })

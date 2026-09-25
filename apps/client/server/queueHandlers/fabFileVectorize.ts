@@ -23,6 +23,8 @@ import {
   EmbeddingFactory,
   resolveEmbeddingWithKeylessFallback,
   isEmbeddingAuthError,
+  EmbeddingSpaceConflictError,
+  isEmbeddingSpaceConflictError,
   getAtlasIndexForModel,
   FabFileChunkSearchIndex,
 } from '@bike4mind/fab-pipeline';
@@ -207,6 +209,34 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     );
     if (embeddingModel !== requestedEmbeddingModel) {
       logger.warn(`No credential for ${requestedEmbeddingModel}; embedding with keyless ${embeddingModel} instead`);
+    }
+
+    // Refuse to open a SECOND vector space in a file that already holds one (#2791). The
+    // substitution above is resolved independently per message and a file's chunks fan out across
+    // many of them, so a credential appearing or lapsing mid-ingest otherwise splits one file
+    // across two spaces at two widths - each message individually doing the most useful thing
+    // available to it. Placed upstream of the cache, the spend gate and every embed call: the harm
+    // is the spend, not just the write, and redelivery is far cheaper than a full re-embed.
+    //
+    // Checked UNCONDITIONALLY, not just when the substitution fired: in the credential-APPEARING
+    // direction a message resolves exactly the model it requested and is still the one that would
+    // open a second space, because the file's existing vectors are the substituted ones.
+    //
+    // An empty result means no LABELED vectors - NOT necessarily an unembedded file. Chunks written
+    // before per-chunk labeling carry a vector and no model, so a fully embedded file of that
+    // vintage reads empty here and is waved through into a second space. The guard inherits that
+    // blind spot from the read rather than introducing it (this handler checked nothing before),
+    // and cannot separate it from the normal first-message case, which also reads empty and must
+    // proceed. A file that already spans two spaces may likewise continue in either one: that
+    // damage predates this guard and blocking it would only strand the file short of the stamp
+    // that reports it.
+    //
+    // This closes the sequential window a rotation actually lands in. Messages running concurrently
+    // on a file with no vectors yet can all read empty and still split it; resolveFileLabel remains
+    // the backstop that refuses to label what slips through.
+    const existingEmbeddingSpaces = await fabFileChunkRepository.distinctEmbeddingModelsByFabFileId(fabFileId);
+    if (existingEmbeddingSpaces.length > 0 && !existingEmbeddingSpaces.includes(embeddingModel)) {
+      throw new EmbeddingSpaceConflictError(embeddingModel, existingEmbeddingSpaces);
     }
 
     const requiredProvider = getProviderFromModel(embeddingModel);
@@ -459,14 +489,46 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // rolled back with Mongo) and fail-open (an indexing failure leaves the chunk scan-only, not
     // failed - the Mongo write above already succeeded and is the source of truth).
     if (indexesToOpenSearch) {
+      // Two separate fail-open steps, each logged under its own message: an index failure and a
+      // confirm failure are different root causes (a broken index write vs. a broken Mongo write
+      // for a document that IS in the index) and a shared log line would send whoever is on call
+      // to the wrong system.
+      let indexedChunkIds: string[] | null = null;
       try {
         // `embeddingModel` is already set on these chunks by the transaction above, which is also
         // what mapDocument reads to build the right per-model index document.
-        await FabFileChunkSearchIndex.indexChunks(embeddableChunks);
+        indexedChunkIds = await FabFileChunkSearchIndex.indexChunks(embeddableChunks);
       } catch (error) {
         logger.warn(`Self-host OpenSearch indexing failed for FabFile ${fabFileId}, chunks remain scan-only`, {
           error: error instanceof Error ? error.message : String(error),
         });
+      }
+      if (indexedChunkIds) {
+        try {
+          // Confirmed residency, the read path's ANN eligibility signal - written only for the
+          // chunks the index actually accepted. Cannot be folded into the pre-write
+          // `retrievalIndexModel` above: see IFabFileChunk.retrievalIndexConfirmedModel. Retried
+          // once: an index write that just succeeded should not leave a file permanently
+          // ANN-ineligible over one transient Mongo blip, and the write is idempotent.
+          try {
+            await fabFileChunkRepository.confirmRetrievalIndexed(indexedChunkIds, embeddingModel);
+          } catch {
+            await fabFileChunkRepository.confirmRetrievalIndexed(indexedChunkIds, embeddingModel);
+          }
+          // A chunk dispatched but NOT confirmed (rejected by mapDocument, or rolled back by
+          // indexChunks' own per-batch cleanup) must not keep a stale confirm from an earlier
+          // delivery of this same message.
+          const notIndexed = embeddableChunks.map(chunk => chunk.id).filter(id => !indexedChunkIds.includes(id));
+          if (notIndexed.length > 0) {
+            await fabFileChunkRepository.clearRetrievalIndexConfirmed(notIndexed, embeddingModel);
+          }
+        } catch (error) {
+          logger.warn(
+            `Self-host OpenSearch residency confirmation failed for FabFile ${fabFileId} despite a ` +
+              `successful index write; chunks remain scan-only`,
+            { error: error instanceof Error ? error.message : String(error) }
+          );
+        }
       }
     }
 
@@ -613,15 +675,23 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // it is still usable there; a data-lake file (batchId set) is retrieved only by cosine search
     // over its chunks, so with no vectors it is simply unfindable until re-indexed. The full
     // operator detail still goes to the logs below. Other failures (e.g. oversized chunk) keep
-    // their specific, user-actionable message.
+    // their specific, user-actionable message. A refused second embedding space is the same shape:
+    // its message names both models, which tells a user nothing they can act on, and re-indexing is
+    // the one action that does resolve it.
     const isAuthFailure = isEmbeddingAuthError(err);
-    const storedError = isAuthFailure
-      ? existingFabFile.batchId
-        ? 'This file could not be indexed for semantic search because the embedding service was unavailable. It will not be found by knowledge search until it is re-indexed.'
-        : 'This file could not be indexed for semantic search because the embedding service was unavailable. You can still ask about it directly in chat.'
-      : errorMessage;
+    const isEmbeddingSpaceConflict = isEmbeddingSpaceConflictError(err);
+    const storedError = isEmbeddingSpaceConflict
+      ? 'This file could not be finished indexing for semantic search because the embedding service changed while it was being indexed. Re-index the file to complete it.'
+      : isAuthFailure
+        ? existingFabFile.batchId
+          ? 'This file could not be indexed for semantic search because the embedding service was unavailable. It will not be found by knowledge search until it is re-indexed.'
+          : 'This file could not be indexed for semantic search because the embedding service was unavailable. You can still ask about it directly in chat.'
+        : errorMessage;
     if (isAuthFailure) {
       logger.warn(`Vectorization failed for ${fabFileId} (embedding auth): ${errorMessage}`);
+    }
+    if (isEmbeddingSpaceConflict) {
+      logger.warn(`Vectorization refused for ${fabFileId} (embedding space conflict): ${errorMessage}`);
     }
 
     // A non-retryable spend-gate denial is deterministic (a budget does not regrow, the
@@ -648,6 +718,18 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // markFailedIfNotAlready is the file-level idempotency guard: only the first
     // failure increments the counter, so SQS redelivery of a failed message is a no-op.
     const isFirstFailure = await fabFileRepository.markFailedIfNotAlready(fabFileId, storedError);
+    if (isFirstFailure) {
+      // Best-effort, mirrors the vectorize-complete push above: FilesSection's
+      // update_file_chunk_vector_status subscriber needs this to reconcile a stuck row, and unlike
+      // the data_lake_batch_progress push below this one applies to a non-batch (single-file
+      // reprocess) failure too, so it fires regardless of batchId.
+      await sendToClient(userId, Resource.websocket.managementEndpoint, {
+        action: 'update_file_chunk_vector_status',
+        fabFileId,
+        vectorizeStatus: 'failed',
+        failedMessage: storedError,
+      }).catch(err => logger.error(`Error notifying vectorize failure for ${fabFileId}: ${err}`));
+    }
     if (existingFabFile.batchId && isFirstFailure) {
       try {
         await dataLakeBatchRepository.updateFileStatus(existingFabFile.batchId, fabFileId, 'failed', storedError);

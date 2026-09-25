@@ -59,6 +59,32 @@ export const isRenderableModelType = (type: string): type is ModelInfoType =>
 export const isMediaModelType = (type: ModelInfo['type']): boolean => type === 'image' || type === 'video';
 
 /**
+ * The modalities promptMeta.model.type is allowed to record. Deliberately NARROWER than
+ * MODEL_INFO_TYPES: 'speech-to-text' is served by its own transcription route, never by a
+ * completion, so recording it would put a value in the field that no reader narrows on.
+ * PromptMetaModelSchema.type (schemas/promptMeta) builds its z.enum from this const, and
+ * QuestModelType (apps/client admin reporting) is an alias of the type - one source, three uses.
+ */
+export const PROMPT_META_MODEL_TYPES = ['text', 'image', 'video'] as const;
+
+export type PromptMetaModelType = (typeof PROMPT_META_MODEL_TYPES)[number];
+
+/**
+ * Compile-time guard: every member must be a real ModelInfo type, so the completion write path can
+ * NARROW a catalog type into this union rather than cast into it. Breaks the build if the two
+ * unions drift apart - which is how the unchecked cast went unnoticed in the first place.
+ */
+export type PromptMetaModelTypesAreModelInfoTypes = Expect<PromptMetaModelType extends ModelInfoType ? true : false>;
+
+/**
+ * Whether a type is one a completion may record. Takes a bare string, like isRenderableModelType:
+ * the write path narrows a ModelInfo['type'] with it, and the read path screens a value that came
+ * back from Mongo, where the subschema is an unconstrained String.
+ */
+export const isPromptMetaModelType = (type: string): type is PromptMetaModelType =>
+  (PROMPT_META_MODEL_TYPES as readonly string[]).includes(type);
+
+/**
  * Compile-time guard (T1): toModelInfo must turn a record carrying only the
  * required fields into a complete ModelInfo. If ModelInfo gains a required field
  * that no default covers, this stops compiling until someone decides where the
@@ -99,6 +125,11 @@ export function toModelInfo(record: RenderableModelRecord): ModelInfo {
     backend: record.backend,
     contextWindow: record.contextWindow,
     max_tokens: record.maxOutputTokens ?? Math.min(record.contextWindow, DEFAULT_MAX_OUTPUT_TOKENS),
+    // Stamped only on the substituted cap, so an absent flag keeps meaning "declared" for
+    // every ModelInfo built outside this adapter. Downstream sizing needs the two apart:
+    // a derived cap is a placeholder, and clamping to it re-pins a model that reasons
+    // inside its output budget at the value that truncates the answer.
+    ...(record.maxOutputTokens === undefined ? { maxOutputTokensDerived: true } : {}),
     pricing: {},
     can_stream: record.canStream,
     can_think: record.reasoning?.supported ?? false,
@@ -120,6 +151,7 @@ export function toModelInfo(record: RenderableModelRecord): ModelInfo {
       record.disabledReason ?? record.autoDisabledReason ?? (retired ? 'retired by the provider' : undefined),
     // Absent means "not filtered": deprecation is never inferred by the adapter.
     deprecationDate: record.lifecycle?.deprecationDate,
+    replacedBy: record.lifecycle?.replacedBy,
     trainingCutoff: record.trainingCutoff,
     releaseDate: record.releaseDate,
     logoFile: record.logoFile,
@@ -164,6 +196,9 @@ const VENDOR_BY_BACKEND: Record<ModelBackend, string> = {
   // Vendor, not backend: Bedrock-served Kimi carries the same 'moonshotai'
   // vendor while routing through ModelBackend.Bedrock.
   [ModelBackend.Kimi]: 'moonshotai',
+  // Matches the `deepseek.` prefix the Bedrock-served rows resolve to, so both
+  // tiers file under one vendor in the admin dashboard.
+  [ModelBackend.DeepSeek]: 'deepseek',
   [ModelBackend.BFL]: 'black-forest-labs',
   [ModelBackend.AWS]: 'amazon',
   [ModelBackend.VoyageAI]: 'voyageai',
@@ -226,7 +261,9 @@ export function toModelRecord(info: ModelInfo): RenderableModelRecord {
     type: info.type,
     name: info.name,
     contextWindow: info.contextWindow,
-    maxOutputTokens: info.max_tokens,
+    // A derived cap is not the model's belief about itself, so it must not be written back
+    // as though the row declared it - that would launder the default into catalog data.
+    maxOutputTokens: info.maxOutputTokensDerived === true ? undefined : info.max_tokens,
     canStream: info.can_stream,
     // Omitted when the source said nothing about thinking: asserting
     // `supported: false` would claim the reasoning group and turn every silent
@@ -241,9 +278,12 @@ export function toModelRecord(info: ModelInfo): RenderableModelRecord {
     supportsTools: info.supportsTools,
     supportsImageVariation: info.supportsImageVariation,
     supportsSafetyTolerance: info.supportsSafetyTolerance,
-    lifecycle: info.deprecationDate
-      ? { status: 'deprecated', deprecationDate: info.deprecationDate }
-      : { status: 'active' },
+    lifecycle: {
+      ...(info.deprecationDate
+        ? { status: 'deprecated' as const, deprecationDate: info.deprecationDate }
+        : { status: 'active' as const }),
+      ...(info.replacedBy ? { replacedBy: info.replacedBy } : {}),
+    },
     description: info.description,
     logoFile: info.logoFile,
     rank: info.rank,

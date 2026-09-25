@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { AbilityBuilder, createMongoAbility } from '@casl/ability';
 import { accessibleBy } from '@casl/mongoose';
@@ -192,24 +192,53 @@ describe('GET /api/feedback', () => {
     expect(selected).not.toContain('promptMeta');
   });
 
-  it('returns exactly items/total/page/limit/organizations, sourced from countDocuments and distinct', async () => {
+  it('returns exactly items/total/page/limit, sourced from countDocuments', async () => {
     mockListDocs.mockReturnValue([]);
     mockCountDocuments.mockResolvedValue(7);
-    mockDistinct.mockResolvedValue(['Acme', 'Beta']);
 
     const { req, res } = buildRequest({ page: '2', limit: '5' }, adminAbility());
     await runHandler(req, res);
 
     const body = res._getJSONData();
-    expect(Object.keys(body).sort()).toEqual(['items', 'limit', 'organizations', 'page', 'total']);
+    expect(Object.keys(body).sort()).toEqual(['items', 'limit', 'page', 'total']);
     expect(body.total).toBe(7);
     expect(body.page).toBe(2);
     expect(body.limit).toBe(5);
-    expect(body.organizations).toEqual(['Acme', 'Beta']);
+  });
+
+  it('skips the organization facet entirely unless the caller asks for it', async () => {
+    const { req, res } = buildRequest({ page: '1', limit: '5' }, adminAbility());
+    await runHandler(req, res);
+
+    // `readable` is {} for an admin, so this distinct is a full-collection scan on an unindexed
+    // field. It must not ride along on the paged list, the export loop, or the per-session read.
+    expect(mockDistinct).not.toHaveBeenCalled();
+    expect(res._getJSONData()).not.toHaveProperty('organizations');
+  });
+
+  it('returns the organization facet when includeOrganizations is requested', async () => {
+    mockDistinct.mockResolvedValue(['Beta', 'Acme']);
+
+    const { req, res } = buildRequest({ includeOrganizations: 'true' }, adminAbility());
+    await runHandler(req, res);
+
+    expect(mockDistinct).toHaveBeenCalledTimes(1);
+    expect(res._getJSONData().organizations).toEqual(['Acme', 'Beta']);
+  });
+
+  it('treats includeOrganizations=false as off rather than as a truthy string', async () => {
+    const { req, res } = buildRequest({ includeOrganizations: 'false' }, adminAbility());
+    await runHandler(req, res);
+
+    // The param crosses the wire as a string, so a coercing boolean schema would read "false" as
+    // true and reinstate the scan for exactly the caller that opted out of it.
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockDistinct).not.toHaveBeenCalled();
+    expect(res._getJSONData()).not.toHaveProperty('organizations');
   });
 
   it('computes the organization facet over the accessible set, not the org-filtered set', async () => {
-    const { req, res } = buildRequest({ organization: 'acme' }, adminAbility());
+    const { req, res } = buildRequest({ organization: 'acme', includeOrganizations: 'true' }, adminAbility());
     await runHandler(req, res);
 
     // Selecting an org must not prune the dropdown that selected it: distinct() has to see every
@@ -232,6 +261,40 @@ describe('GET /api/feedback', () => {
     const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
     expect(findFilter.$and[0]).toEqual(expectedReadable);
     expect(JSON.stringify(expectedReadable)).toContain('user-1');
+  });
+
+  it('ANDs sessionId, subject and userId into the filter - the clause set the in-thread chip reads', async () => {
+    const { req, res } = buildRequest({ sessionId: 'session-1', subject: 'turn', userId: 'user-1' }, adminAbility());
+    await runHandler(req, res);
+
+    const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
+    expect(findFilter.$and).toContainEqual({ sessionId: 'session-1' });
+    expect(findFilter.$and).toContainEqual({ subject: 'turn' });
+    expect(findFilter.$and).toContainEqual({ userId: 'user-1' });
+  });
+
+  it('does NOT narrow to the caller without an explicit userId, even for an admin', async () => {
+    const { req, res } = buildRequest({ sessionId: 'session-1', subject: 'turn' }, adminAbility());
+    await runHandler(req, res);
+
+    // An admin's CASL clause is {}, so ownership scoping is the caller's job, not the route's.
+    // This is why the in-thread annotation read sends userId (app/hooks/data/feedback.ts) - without
+    // it an admin opening a shared session sees someone else's report as "You reported this".
+    const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
+    expect(JSON.stringify(findFilter.$and)).not.toContain('userId');
+  });
+
+  // Drives the real errorHandler: an untyped throw here would be a 500 logged at `error`.
+  it('reports a missing ability as a typed 404 logged at warn, not an untyped 500', async () => {
+    const { req, res } = buildRequest({}, undefined);
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(res._getJSONData().error).toBe('Ability not found');
+
+    const { logger } = req as unknown as { logger: Record<string, Mock> };
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('404'));
+    expect(logger.error).not.toHaveBeenCalled();
   });
 
   it('resolves free-text search through the FeedbackText sibling and filters by matching ids', async () => {

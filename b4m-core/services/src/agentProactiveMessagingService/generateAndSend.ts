@@ -24,7 +24,7 @@ import {
   IOrganizationRepository,
   IScopedSettingsRepository,
 } from '@bike4mind/common';
-import { b4mTools, generateTools } from '../llm';
+import { b4mTools, generateTools } from '../llm/tools';
 
 interface GenerateAndSendProactiveMessageAdapters {
   config: ISessionAgentConfigDocument;
@@ -73,6 +73,14 @@ interface GenerateAndSendProactiveMessageAdapters {
    */
   storage: BaseStorage;
   imageGenerateStorage: BaseStorage;
+  /**
+   * Threaded into `web_search`'s tool config so `/api/search-image` can verify a proactive
+   * message's card images the same way an interactive chat's can - see
+   * WebSearchToolConfig.imageUrlSigningSecret and ChatCompletionFeatures.telemetryHmacSecret for
+   * the same SECRET_ENCRYPTION_KEY reuse pattern. Left unset, every card tile a proactive message
+   * emits fails verification and renders "Image unavailable" rather than an insecure fallback.
+   */
+  imageUrlSigningSecret?: string;
 }
 
 /**
@@ -90,6 +98,7 @@ export async function generateAndSendProactiveMessage({
   apiKeyTable,
   storage,
   imageGenerateStorage,
+  imageUrlSigningSecret,
 }: GenerateAndSendProactiveMessageAdapters): Promise<void> {
   try {
     logger.info(`Generating proactive message for agent ${agent.name} in session ${session.id}`);
@@ -143,7 +152,7 @@ export async function generateAndSendProactiveMessage({
       async () => {},
       async () => {},
       llm,
-      {},
+      { web_search: { imageUrlSigningSecret } },
       model,
       undefined, // imageProcessorLambdaName
       b4mTools, // tools: full server-side tool set

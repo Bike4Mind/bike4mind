@@ -2,6 +2,7 @@ import type {
   DataLakeDocumentPurgeReceipt,
   IAdminSettingsRepository,
   IDataLakeAccessGrantRepository,
+  IDataLakeFindingRepository,
   IDataLakeRepository,
   IFabFileChunkRepository,
   IFabFileRepository,
@@ -23,7 +24,10 @@ interface PurgeDataLakeDocumentAdapters {
     fabFiles: Pick<IFabFileRepository, 'findById' | 'hardDeleteOneById' | 'computeDataLakeStats'>;
     fabFileChunks: Pick<
       IFabFileChunkRepository,
-      'countByFabFileId' | 'deleteManyByFabFileId' | 'distinctRetrievalIndexModelsByFabFileIds'
+      | 'countByFabFileId'
+      | 'deleteManyByFabFileId'
+      | 'distinctRetrievalIndexModelsByFabFileIds'
+      | 'clearRetrievalIndexConfirmedByFabFileIds'
     >;
     /** Chats keep the document in `knowledgeIds`; the purge unlinks it there like file deletion does. */
     sessions: Pick<ISessionRepository, 'findAllWithKnowledgeId' | 'update'>;
@@ -41,6 +45,12 @@ interface PurgeDataLakeDocumentAdapters {
      */
     lakeConfigChangeEvents?: Pick<ILakeConfigChangeEventRepository, 'record'>;
     adminSettings?: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
+    /**
+     * Optional, like the sweeps on `cleanupDeletedDataLake`: a host that never ran detection has no
+     * findings to sweep. Wire it at the purge door, though - a finding quotes its sources, so a row
+     * left behind keeps a 240-char excerpt of the document this call was paid to destroy.
+     */
+    dataLakeFindings?: Pick<IDataLakeFindingRepository, 'deleteForPurgedDocument'>;
   };
   retrievalIndex?: RetrievalIndexPort;
   /**
@@ -109,6 +119,7 @@ interface PurgeDataLakeDocumentAdapters {
   logger?: {
     info: (msg: string, ...args: unknown[]) => void;
     error: (msg: string, ...args: unknown[]) => void;
+    warn: (msg: string, ...args: unknown[]) => void;
   };
 }
 
@@ -201,7 +212,7 @@ export const purgeDataLakeDocument = async (
   const embeddingModels = await db.fabFileChunks.distinctRetrievalIndexModelsByFabFileIds([file.id]);
 
   const scope = lakeMembershipScope(lake);
-  await strictIndexRemove(retrievalIndex, { scope, fabFileIds: [file.id] });
+  await strictIndexRemove(retrievalIndex, { scope, fabFileIds: [file.id] }, db.fabFileChunks, logger);
 
   // EVERY stored key, not just the current one. An AI-edited file keeps its earlier revisions in
   // `versions[]`, each under its own object key (see appendEditedVersion), and `filePath` names only
@@ -292,6 +303,39 @@ export const purgeDataLakeDocument = async (
       });
     }
 
+    // Detected findings quote their sources, so a row citing this document would keep a 240-char
+    // excerpt of text this call was paid to destroy - and nothing else would ever sweep it, since a
+    // finding whose document is gone can never be re-detected. Global, like the destruction itself.
+    // Caught for the same reason as the chunk sweep above: past the row delete there is no retry
+    // door, and a throw here would skip the quota refund below.
+    //
+    // DELIBERATELY THE OPPOSITE POSTURE TO `cleanupDeletedDataLake`, which sweeps BEFORE the row
+    // delete and lets a rejection abort. The difference is which recoverable direction exists at
+    // each door. The teardown runs in a queue consumer whose DLQ retry re-resolves its ids from the
+    // surviving rows, so aborting early costs nothing and keeps the sweep replayable. This door
+    // runs inside the owner's request and owes them a quota refund that only `deletedByThisCall`
+    // can authorize; there is no retry, and ordering the sweep first would trade a stranded excerpt
+    // for a silently unrefunded purge. A stranded excerpt is loggable and sweepable later - see
+    // #3040, which carries the stored-report cleanup this door also does not do. A lost refund is
+    // neither. Do not "make the two doors consistent" without answering the refund.
+    if (db.dataLakeFindings) {
+      try {
+        await db.dataLakeFindings.deleteForPurgedDocument(file.id);
+      } catch (error) {
+        logger?.error('[dataLake] permanent deletion removed the row but could not sweep its findings', {
+          fabFileId: file.id,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    } else {
+      // An unwired host destroys the document with no sweep, no error and no symptom -
+      // indistinguishable from a document that never carried a finding. One document per call
+      // here, so unlike the teardown this needs no per-run rate limiting.
+      logger?.warn('[dataLake] permanent deletion destroyed a document with no findings repo wired', {
+        fabFileId: file.id,
+      });
+    }
+
     // Same unlink `deleteFabFile` performs: a chat holding the id in `knowledgeIds` would
     // otherwise keep pointing at a row that no longer exists, and the confirmation copy promises
     // otherwise. Its OWN try, not the chunk delete's: a failure here leaves no trace in the
@@ -325,9 +369,8 @@ export const purgeDataLakeDocument = async (
 
   // The purged lake only. Every OTHER lake the document belonged to is the caller's to rebuild
   // through `onPurged` - resolving a tag back to its lake needs repositories this service does
-  // not take. `actor` threaded so a draft-lake auto-activation this purge triggers is attributed
-  // to whoever (or whatever key) authorized the destruction, not filed as `system`.
-  const { fileCount, totalSizeBytes } = await recomputeLakeStats(lake, { db, logger }, { actor });
+  // not take.
+  const { fileCount, totalSizeBytes } = await recomputeLakeStats(lake, { db, logger });
 
   // Captured once and shared by shredDocumentMemory and onPurged below: both need the tags the row
   // carried pre-delete to resolve the file's OTHER member lakes.

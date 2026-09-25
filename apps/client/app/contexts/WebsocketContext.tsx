@@ -7,6 +7,7 @@ import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { api, isPublicPath } from '@client/app/contexts/ApiContext';
 import { probeIdentity } from '@client/app/utils/sessionBootstrap';
+import { WEBSOCKET_TICKET_TIMEOUT_MS } from '@client/app/utils/requestTimeouts';
 
 export { ReadyState };
 
@@ -78,6 +79,22 @@ export const useWebsocket = () => {
   );
 };
 
+/** How often the self-armed retry below checks whether a dead socket should be handed a fresh
+ *  reconnect budget. Any value comfortably under the access-token TTL (30 minutes) closes the
+ *  gap; it does not translate into reconnect rate, because a single pulse grants a whole new
+ *  20-attempt budget (~6 minutes) that has to be spent before the retry can fire again. */
+const EXHAUSTED_RETRY_INTERVAL_MS = 30_000;
+
+const HEARTBEAT_MESSAGE = JSON.stringify(HeartbeatAction?.parse({ action: 'heartbeat' }));
+
+/** How long a liveness probe waits for any inbound message before declaring the socket dead. */
+export const LIVENESS_PROBE_TIMEOUT_MS = 5_000;
+/** Focus, visibilitychange and online often fire together; they share one probe. */
+export const LIVENESS_PROBE_DEBOUNCE_MS = 2_000;
+/** Cadence of the sleep detector, and how far past it the wall clock must jump to count. */
+export const SLEEP_CHECK_INTERVAL_MS = 10_000;
+export const SLEEP_GAP_THRESHOLD_MS = 30_000;
+
 interface Props {
   children: React.ReactNode;
   url?: string;
@@ -92,9 +109,14 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   // Mirrors the same flag in the CLI's WebSocketConnectionManager.
   const openedThisAttemptRef = useRef(false);
   // True once `onReconnectStop` has fired (the reconnect budget below is exhausted, no pending
-  // backoff timer left); reset on the next successful open. Gates the refocus pulse so it only
-  // fires once there is genuinely nothing left running - see the pulse effect below for why.
+  // backoff timer left); reset on the next successful open. Gates every reconnect pulse below
+  // so one only fires once there is genuinely nothing left running - see the pulse effect
+  // below for why, and its three triggers for what can wake a sleeping socket.
   const reconnectExhaustedRef = useRef(false);
+  // Wall-clock time of the last inbound frame (pong included); the liveness probe's evidence.
+  const lastMessageAtRef = useRef(0);
+  const probeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastProbeAtRef = useRef(0);
 
   // Map the action being listened for to the callbacks that want to hear about it
   const listeners = useRef(new Map<string, ((message: IMessageDataToClient) => Promise<void>)[]>());
@@ -119,18 +141,21 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   // Mint a fresh single-use connect ticket per (re)connect and carry it in the
   // URL instead of the session JWT, so the long-lived credential never lands in
   // proxy/CDN/access logs. `getUrl` re-invokes this on every reconnect and
-  // retries on its own backoff if the mint throws.
+  // retries on its own backoff if the mint throws - which is why it needs a timeout: a
+  // mint that never settles holds readyState at CONNECTING with no retry ever scheduled.
   const getWebsocketUrl = useCallback(async () => {
-    const { data } = await api.post<{ ticket: string }>('/api/websocket/ticket');
+    const { data } = await api.post<{ ticket: string }>('/api/websocket/ticket', undefined, {
+      timeout: WEBSOCKET_TICKET_TIMEOUT_MS,
+    });
     return `${url}?ticket=${encodeURIComponent(data.ticket)}`;
   }, [url]);
 
-  const { sendJsonMessage, readyState } = useBaseWebsocket(shouldConnect ? getWebsocketUrl : null, {
+  const { sendJsonMessage, sendMessage, readyState } = useBaseWebsocket(shouldConnect ? getWebsocketUrl : null, {
     shouldReconnect: () => !didUnmount.current,
     retryOnError: true,
     share: true,
     heartbeat: {
-      message: JSON.stringify(HeartbeatAction?.parse({ action: 'heartbeat' })),
+      message: HEARTBEAT_MESSAGE,
       returnMessage: 'pong',
       timeout: 60000, // 1 minute, if no response is received, the connection will be closed
       interval: 15000, // every 15 seconds, a ping message will be sent
@@ -184,6 +209,7 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     },
 
     onMessage: event => {
+      lastMessageAtRef.current = Date.now();
       try {
         // Ignore empty messages
         if (!event.data) return;
@@ -260,8 +286,12 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   // that on every trigger would defeat it - plus the library never clears its own pending
   // reconnect timer on a url change, so a mid-backoff pulse leaves a second, stale reconnect
   // attempt to fire later. Once genuinely exhausted there is no such timer left, so this has
-  // neither problem. Shared by both triggers below (refocus, and a post-exhaustion token
-  // refresh) - see each effect's own comment for why a single trigger isn't enough.
+  // neither problem. Shared by all three triggers below (refocus, a post-exhaustion token
+  // refresh, and the self-armed retry) - see each effect's own comment for why one trigger
+  // isn't enough. The exhausted flag alone is the gate: onReconnectStop is the only thing that
+  // sets it and it fires with the socket already closed, while onOpen is the only thing that
+  // clears it - so it cannot be true behind a live connection, and no separate readyState
+  // check (which would read a render-stale value) can add anything.
   const pulseReconnect = useCallback(() => {
     if (!reconnectExhaustedRef.current) return;
     // Clear it now, not on the next onOpen: the fresh budget this pulse grants means the
@@ -273,18 +303,83 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     setForceDisconnected(true);
   }, []);
 
+  const readyStateRef = useRef(readyState);
+  useEffect(() => {
+    readyStateRef.current = readyState;
+  }, [readyState]);
+
+  // A socket can read OPEN while the connection underneath is dead (laptop sleep, network
+  // change): the library's heartbeat only notices a full timeout window later, so Send looks
+  // ready for up to ~2 minutes while frames go nowhere. On a wake-up signal, ping now and, if
+  // nothing at all comes back, drop the connection so it reconnects immediately. The gate is
+  // untouched while the probe is out - readyState only moves if the socket is actually dropped.
+  // A dead OPEN socket has no pending backoff timer, so this pulse can't cancel one; and it
+  // doesn't touch reconnectExhaustedRef, which only describes a closed socket.
+  const probeLiveness = useCallback(() => {
+    if (readyStateRef.current !== ReadyState.OPEN || probeTimerRef.current) return;
+    const sentAt = Date.now();
+    if (sentAt - lastProbeAtRef.current < LIVENESS_PROBE_DEBOUNCE_MS) return;
+    lastProbeAtRef.current = sentAt;
+    sendMessage(HEARTBEAT_MESSAGE, false);
+    probeTimerRef.current = setTimeout(() => {
+      probeTimerRef.current = null;
+      if (lastMessageAtRef.current >= sentAt || readyStateRef.current !== ReadyState.OPEN) return;
+      console.log('ws liveness probe got no reply; reconnecting');
+      // share: true hands out a proxy that refuses close(), so drop it the same way the
+      // reconnect pulse does: a momentary null url tears the shared socket down.
+      setForceDisconnected(true);
+    }, LIVENESS_PROBE_TIMEOUT_MS);
+  }, [sendMessage]);
+
+  useEffect(() => {
+    return () => {
+      if (probeTimerRef.current) clearTimeout(probeTimerRef.current);
+    };
+  }, []);
+
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState !== 'visible') return;
       pulseReconnect();
+      probeLiveness();
     };
     document.addEventListener('visibilitychange', handleVisibility);
     window.addEventListener('focus', handleVisibility);
+    window.addEventListener('online', handleVisibility);
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('focus', handleVisibility);
+      window.removeEventListener('online', handleVisibility);
     };
-  }, []);
+  }, [pulseReconnect, probeLiveness]);
+
+  // Sleep detector: timers freeze while the machine sleeps, so a tick landing far later than
+  // scheduled means it woke - which fires no focus event when the tab was already focused.
+  useEffect(() => {
+    let lastTickAt = Date.now();
+    const id = setInterval(() => {
+      const now = Date.now();
+      const slept = now - lastTickAt > SLEEP_CHECK_INTERVAL_MS + SLEEP_GAP_THRESHOLD_MS;
+      lastTickAt = now;
+      if (slept) probeLiveness();
+    }, SLEEP_CHECK_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [probeLiveness]);
+
+  // Catch-up after a reconnect: frames sent while the socket was down are gone for good, so
+  // refetch the quest lists on screen once (active queries only). An incomplete turn then
+  // resolves from the refreshed cache via useStreamingMessageMerge, which works even for a new
+  // notebook's first turn. Skipped for the first connect, which has nothing to catch up.
+  const hasOpenedRef = useRef(false);
+  const wasOpenRef = useRef(false);
+  useEffect(() => {
+    const isOpen = readyState === ReadyState.OPEN;
+    if (isOpen && !wasOpenRef.current && hasOpenedRef.current) {
+      void queryClient.invalidateQueries({ queryKey: ['quests', 'session'] });
+    }
+    if (isOpen) hasOpenedRef.current = true;
+    wasOpenRef.current = isOpen;
+  }, [readyState, queryClient]);
 
   // A token refresh alone changes the socket's queryParams (a new url -> a brand new
   // WebSocket, per create-or-join.ts's per-url sharedWebSockets map) but never resets the
@@ -300,6 +395,25 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     if (!changed) return;
     pulseReconnect();
   }, [accessToken, pulseReconnect]);
+
+  // Third trigger, and the only self-armed one. Both triggers above are external events, and a
+  // tab that stays focused while its access token is still valid produces neither: no
+  // focus/visibilitychange ever fires, and the exhausting attempt's own /api/identify probe
+  // returns the SAME token, which changes nothing for the effect above. Such a tab's socket
+  // stayed dead until its token happened to rotate - up to 30 minutes of failed pushes after a
+  // ~6-minute budget ran out. This tick closes that gap by re-running the same pulse on a
+  // timer, inheriting both of its safety properties: the flag is only set once nothing is
+  // pending (so a healthy jittered backoff is never cancelled) and is cleared as the pulse
+  // fires (so one exhaustion yields one pulse, never a herd). Hidden tabs are skipped because
+  // a return to visible already pulses - no reason to spend the one pulse per budget on a tab
+  // nobody is looking at.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      pulseReconnect();
+    }, EXHAUSTED_RETRY_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [pulseReconnect]);
 
   // The other half of the pulse: flip back on the next commit so shouldConnect's dip to
   // false was only momentary - enough for react-use-websocket to see url turn null (see

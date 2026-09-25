@@ -14,7 +14,10 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 }));
 
 // The bundler pulls brand config + the elision detector; neither is under test here.
-vi.mock('@client/app/utils/shareFooter', () => ({ buildShareFooterHtml: () => '<footer/>' }));
+vi.mock('@client/app/utils/shareFooter', () => ({
+  buildShareFooterHtml: () => '<footer/>',
+  buildSignupGateHtml: () => ({ styles: '', html: '' }),
+}));
 
 import { canRefreshFromSource, refreshPublishedFromSource } from './publishApi';
 import type { ManagedArtifact } from './publishApi';

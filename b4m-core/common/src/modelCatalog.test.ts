@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_MAX_OUTPUT_TOKENS,
   inferVendor,
+  isPromptMetaModelType,
   isRenderableModelType,
+  MODEL_INFO_TYPES,
+  PROMPT_META_MODEL_TYPES,
   toModelInfo,
   toModelRecord,
 } from './modelCatalog';
@@ -28,6 +31,7 @@ describe('toModelInfo', () => {
       backend: ModelBackend.OpenAI,
       contextWindow: 128_000,
       max_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+      maxOutputTokensDerived: true,
       pricing: {},
       can_stream: undefined,
       can_think: false,
@@ -53,6 +57,11 @@ describe('toModelInfo', () => {
   it('never caps max_tokens above the context window', () => {
     expect(toModelInfo({ ...minimal, contextWindow: 2048 }).max_tokens).toBe(2048);
     expect(toModelInfo({ ...minimal, maxOutputTokens: 64_000 }).max_tokens).toBe(64_000);
+  });
+
+  it('marks a substituted cap derived and leaves a declared one unmarked', () => {
+    expect(toModelInfo(minimal).maxOutputTokensDerived).toBe(true);
+    expect(toModelInfo({ ...minimal, maxOutputTokens: 64_000 }).maxOutputTokensDerived).toBeUndefined();
   });
 
   it('derives can_think and thinkingStyle from the unified reasoning field', () => {
@@ -123,6 +132,16 @@ describe('toModelRecord', () => {
     expect(toModelInfo(toModelRecord(info))).toEqual({ ...info, pricing: {}, private: false, disabled: false });
   });
 
+  it('does not write a derived cap back as a declared one', () => {
+    const derived: ModelInfo = { ...info, max_tokens: DEFAULT_MAX_OUTPUT_TOKENS, maxOutputTokensDerived: true };
+    expect(toModelRecord(derived).maxOutputTokens).toBeUndefined();
+    // And the round trip re-derives the same value rather than losing the model's shape.
+    expect(toModelInfo(toModelRecord(derived))).toMatchObject({
+      max_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+      maxOutputTokensDerived: true,
+    });
+  });
+
   it('never guesses dispatch data, which no ModelInfo field can supply', () => {
     const record = toModelRecord(info);
     expect(record.adapterFamily).toBeUndefined();
@@ -165,5 +184,35 @@ describe('isRenderableModelType', () => {
     expect(isRenderableModelType('video')).toBe(true);
     expect(isRenderableModelType('embedding')).toBe(false);
     expect(isRenderableModelType('realtime-voice')).toBe(false);
+  });
+});
+
+describe('isPromptMetaModelType', () => {
+  it('accepts the modalities a completion may record', () => {
+    expect(isPromptMetaModelType('text')).toBe(true);
+    expect(isPromptMetaModelType('image')).toBe(true);
+    expect(isPromptMetaModelType('video')).toBe(true);
+  });
+
+  // The whole point of the predicate: speech-to-text is a real ModelInfo type, so it reaches the
+  // completion path as a catalog value, and it is the one member promptMeta must never persist.
+  it('rejects speech-to-text, the catalog type promptMeta does not declare', () => {
+    expect(isPromptMetaModelType('speech-to-text')).toBe(false);
+  });
+
+  it('rejects a value that is not a model type at all, which is what a legacy row can hold', () => {
+    expect(isPromptMetaModelType('')).toBe(false);
+    expect(isPromptMetaModelType('embedding')).toBe(false);
+  });
+
+  // A new ModelInfo type must be classified deliberately: either promptMeta records it (add it to
+  // PROMPT_META_MODEL_TYPES) or the completion path rejects it. This fails until someone chooses.
+  it('classifies every ModelInfo type', () => {
+    const unclassified = MODEL_INFO_TYPES.filter(type => !isPromptMetaModelType(type) && type !== 'speech-to-text');
+    expect(unclassified).toEqual([]);
+  });
+
+  it('declares only types that are real ModelInfo types', () => {
+    expect(PROMPT_META_MODEL_TYPES.every(type => isRenderableModelType(type))).toBe(true);
   });
 });

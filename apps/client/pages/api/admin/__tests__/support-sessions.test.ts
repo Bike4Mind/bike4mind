@@ -72,6 +72,7 @@ const session = {
   summary: 'The user is frustrated about their tax documents.',
   summaryAt: new Date('2026-01-02T00:00:00.000Z'),
   summaryModelId: 'summariser-model',
+  summaryTrigger: 'manual',
   contextSummary: 'Earlier turns concerned the Q3 filing.',
   conversationContext: { jira: { issues: [{ key: 'FIN-12', summary: 'Q3 filing blocked' }], projects: [] } },
 };
@@ -233,6 +234,9 @@ describe('GET /api/admin/sessions/[id] - support read gate', () => {
     expect(served.hasSummary).toBe(true);
     expect(served.hasContextSummary).toBe(true);
     expect(served.summaryModelId).toBe('summariser-model');
+    // WHY the summary was made is metadata too, and the only thing separating a run the user asked
+    // for from one the engine decided on - the question this endpoint answers about summary spend.
+    expect(served.summaryTrigger).toBe('manual');
 
     const serialized = JSON.stringify(res._getJSONData().session);
     expect(serialized).not.toContain('frustrated');

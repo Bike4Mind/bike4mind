@@ -1,12 +1,8 @@
-import { ImageModels } from '@bike4mind/common';
+import { GPTImage1Size, IMAGE_SIZE_CONSTRAINTS, ImageModels } from '@bike4mind/common';
 import { CostCalculator } from './types';
 
 export type OpenAIModel =
-  | ImageModels.GPT_IMAGE_1
-  | ImageModels.GPT_IMAGE_1_5
-  | ImageModels.GPT_IMAGE_1_MINI
-  | ImageModels.GPT_IMAGE_2
-  | string;
+  ImageModels.GPT_IMAGE_1 | ImageModels.GPT_IMAGE_1_5 | ImageModels.GPT_IMAGE_1_MINI | ImageModels.GPT_IMAGE_2 | string;
 
 export interface BaseOpenAIInput {
   model: OpenAIModel;
@@ -18,19 +14,48 @@ export interface BaseOpenAIInput {
 export interface OpenAIGPTImageInput extends BaseOpenAIInput {
   model: OpenAIModel;
   quality?: 'standard' | 'hd' | 'low' | 'medium' | 'high' | 'auto';
-  size?: '1024x1024' | '1024x1536' | '1536x1024' | (string & {}) | null;
+  size?: GPTImage1Size | (string & {}) | null;
 }
 
 export type OpenAICostInput = OpenAIGPTImageInput;
 
 type Tier = 'low' | 'medium' | 'high';
-type KnownSize = '1024x1024' | '1024x1536' | '1536x1024';
+// The priced sizes are exactly the gpt-image-1 tier's. Widening that list breaks the
+// PriceKey-keyed tables below until a price is supplied for each new size, which is the point.
+type KnownSize = GPTImage1Size;
 type PriceKey = `${Tier}_${KnownSize}`;
 
-const DEFAULT_TIER: Tier = 'medium';
-const DEFAULT_SIZE: KnownSize = '1024x1024';
+/**
+ * The tier a GPT-Image request that names no quality is billed at - and, since #3007, the
+ * tier it is also rendered at: both generation dispatch seams pin an omitted quality to this
+ * value before the request reaches OpenAI (ImageGeneration.mapQualityForModel for the
+ * generate-image route/queue, resolveImageArgs for the agent tool). Exported so the pin and
+ * the price can never be edited apart. See normalizeInput's doc comment for the policy.
+ */
+export const OMITTED_QUALITY_TIER: Tier = 'medium';
+// OpenAI picks the render effort for `quality: 'auto'` per request and never tells us which
+// tier it used, so we bill the ceiling it could have rendered. The prose counterpart of this
+// constant lives in OpenAIImageService.toGptImageQuality (utils), which cannot import it. Under-billing is unrecoverable
+// (the credit hold is set once, before the call, and never reconciled); over-billing an
+// 'auto' request the user opted into is the survivable side of that trade.
+const AUTO_TIER: Tier = 'high';
+const DEFAULT_SIZE: KnownSize = IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.defaultSize;
 
-const KNOWN_SIZES: readonly KnownSize[] = ['1024x1024', '1024x1536', '1536x1024'] as const;
+/**
+ * The only sizes with a real price row; anything else is estimated at DEFAULT_SIZE.
+ * The image_generation tool schema advertises exactly this set to the model so the
+ * ledger is never asked to price a size it does not know - must stay in sync with
+ * `resolveImageArgs` / the tool's `size` enum, which import it from here.
+ *
+ * Read from the gpt-image-1 tier rather than retyped, so that sync is enforced rather than
+ * just asked for: a size added to the tier widens PriceKey, and GPT_IMAGE_1_PRICES stops
+ * type-checking until it gets a price.
+ */
+export const PRICEABLE_IMAGE_SIZES: readonly KnownSize[] = IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes;
+
+export function isPriceableImageSize(size: unknown): size is KnownSize {
+  return typeof size === 'string' && PRICEABLE_IMAGE_SIZES.includes(size as KnownSize);
+}
 
 const GPT_IMAGE_1_PRICES: Record<PriceKey, number> = {
   low_1024x1024: 0.011,
@@ -105,9 +130,25 @@ function normalizeModelId(modelId: string): ImageModels | null {
 /**
  * Map any Zod-permitted quality/size into the tier+size pair used for price lookup.
  *
- * Pricing is a credit *estimate* - the actual quality/size sent to OpenAI may be 'auto' or a
- * flexible size, in which case OpenAI picks its own defaults. We estimate against 'medium' /
- * 1024x1024 so the credit hold is reasonable; the actual charge is reconciled separately.
+ * There is NO reconciliation step for image credits: ImageGeneration.process() calls getCost()
+ * once, before the OpenAI call, and sets quest.creditsUsed from it. Whatever this returns is
+ * what the user pays, so an input that leaves the render effort up to OpenAI ('auto') is priced
+ * at the ceiling rather than at a guess - see AUTO_TIER.
+ *
+ * An OMITTED quality reaches the same dynamic OpenAI selection but is answered the other way
+ * round (#3007): rather than reprice it, the generation dispatch sites pin the forwarded
+ * quality to OMITTED_QUALITY_TIER, so the render matches the charge and no caller's bill moves.
+ * Omitting the field is the most common shape of a minimal API call and is not an opt-in the
+ * way an explicit 'auto' is, so a ~4x increase there would punish callers who never asked for
+ * high effort; pinning costs them nothing and still closes the gap. Dynamic effort stays
+ * available by asking for it - 'auto', priced at the ceiling. Keep this branch on
+ * OMITTED_QUALITY_TIER: it is what the pin forwards, so changing one without the other
+ * re-opens the mismatch in whichever direction it was moved.
+ *
+ * Every other under-specified input still defaults leniently (unknown/flexible size -> 1024x1024,
+ * unrecognized quality -> OMITTED_QUALITY_TIER): throwing here would cascade into a Quest
+ * validation failure, because the partial-update path in ImageGeneration.process omits the
+ * prompt field.
  */
 function normalizeInput(input: OpenAIGPTImageInput): { tier: Tier; size: KnownSize } {
   const tier: Tier = (() => {
@@ -116,17 +157,19 @@ function normalizeInput(input: OpenAIGPTImageInput): { tier: Tier; size: KnownSi
         return 'medium';
       case 'hd':
         return 'high';
+      case 'auto':
+        return AUTO_TIER;
       case 'low':
       case 'medium':
       case 'high':
         return input.quality;
       default:
-        // undefined, 'auto', or any unrecognized value
-        return DEFAULT_TIER;
+        // undefined or any unrecognized value
+        return OMITTED_QUALITY_TIER;
     }
   })();
 
-  const size: KnownSize = KNOWN_SIZES.includes(input.size as KnownSize) ? (input.size as KnownSize) : DEFAULT_SIZE;
+  const size: KnownSize = isPriceableImageSize(input.size) ? input.size : DEFAULT_SIZE;
 
   return { tier, size };
 }

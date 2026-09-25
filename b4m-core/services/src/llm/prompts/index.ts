@@ -1,3 +1,5 @@
+import { LOCATION_MAP_LANGUAGE, SEARCH_RESULT_CARDS_LANGUAGE } from '@bike4mind/common';
+
 /**
  * Anti-fabrication clause for the grounded/data-lake retrieval path, shared byte-identically by the
  * surfaces that put retrieved knowledge-base content in front of the model:
@@ -40,6 +42,11 @@
  * name that case directly. It is the worst-travelling form of the failure: it reads as adjudicated
  * rather than merely unknown, and a rep repeats it to the prospect it was about.
  *
+ * A further failure sits inside "leave the claim open" itself: a model that avoids a yes/no verdict
+ * can still answer the named gap with an invented figure or name, which passes as compliant since it
+ * never denies the premise. The clause below binds the licence at the point it is granted: leaving a
+ * claim open means declining to answer it, not only declining to rule on it.
+ *
  * DO NOT REPAIR THIS BY EXTENDING THE WORD LIST. The first fix for the shape above did exactly that,
  * adding "false, fabricated, invented, made up" - and measured against the full retrieval stack the
  * model simply answered "No, it is not accurate to say <vendor> saw <N>%", reaching the same verdict
@@ -56,6 +63,20 @@
  * user. Nor do they suppress CONFIRMING a claim the retrieved content does support - they are scoped
  * to a result the content does not contain, and evals/groundedNoInvention has a case for each of those
  * two over-corrections (`derive/`, `grounded-answer/confirm-supported-claim`).
+ *
+ * A THIRD direction was not anticipated, and a paired measurement found it: told to leave the claim
+ * open, the model stopped adjudicating and started ELABORATING instead - asserting a mechanism, citing
+ * benchmarks, inventing percentages and a comparison baseline for a result the corpus never contained.
+ * Same instruction, opposite half. The two anticipated over-corrections held; this one was simply not
+ * named, because "leave the claim open" says nothing about what fills the space that leaves. Hence the
+ * sentences defining the act and naming the licensed alternative - what the content DOES cover, and
+ * where the claim could be confirmed - on the same reasoning as the clauses above: a ban with nowhere
+ * to go is what sends the model looking for a workaround.
+ *
+ * That addition is a CHARACTERISATION AND ELABORATION ban, not a computation ban, and it is scoped to
+ * the absent claim: explaining a mechanism the retrieved content itself supplies is still wanted, and
+ * `grounded-answer/explain-supported-mechanism` is the case that catches a model that stopped.
+ * NOT another entry on the word list - see the paragraph above for why that road is closed.
  *
  * A MEASURED BEHAVIOUR DEPENDS ON THIS RULE'S SCOPE. `triage_router` STEP 1 (apps/client/server/utils/
  * systemPrompts/defaults.ts) tells the model to DERIVE figures the request supplies the inputs for -
@@ -83,7 +104,12 @@ export const GROUNDED_NO_INVENTION_RULE =
   'retrieved content (and, where useful, where it might be confirmed) rather than denying it. ' +
   'That holds for a claim the question itself asserts. When the user asks about a specific result, ' +
   'engagement, or event the retrieved content does not contain, report that it is not in the retrieved ' +
-  'content and leave the claim itself open. If they ask whether such a claim is accurate, true, or ' +
+  'content and leave the claim itself open, and leaving it open means not answering it, including not ' +
+  'answering it from general knowledge, inference, or a plausible-sounding estimate; do not explain how ' +
+  'the asserted result was reached, what it was measured against, or what figures it involved, and do ' +
+  'not supply any of that from general knowledge, published results, or what is typically the case. ' +
+  'What you may offer instead is what the retrieved content does cover and where the claim could be ' +
+  'confirmed. If they ask whether such a claim is accurate, true, or ' +
   'correct, do not answer yes or no. Report what the retrieved content does and does not show: you ' +
   'may say the claim is unsupported, uncited, or not approved for external use, but never that it is ' +
   'false, inaccurate, fabricated, invented, or made up, and do not reach that verdict in other words. ' +
@@ -112,3 +138,60 @@ ${tools.map(t => `\`${t}\``).join(', ')}
 3. DO NOT show the \`_confirmToken\` value — it is internal only.
 The system will automatically add Confirm/Cancel buttons and format the preview.`;
 }
+
+/**
+ * Teaches the `b4m_cards` fence, appended to a web_search result ONLY when that search actually
+ * returned images (see shouldIncludeImages). Delivering it with the results rather than in the system
+ * prompt costs nothing on the turns that will never use it, and arrives exactly when it is actionable.
+ *
+ * The field names must stay in sync with the parser in
+ * apps/client/app/components/Session/parseSearchResultCards.ts; the fence language is shared.
+ */
+export const WEB_SEARCH_CARDS_PROMPT = [
+  'The results above include images, so illustrate your answer - do not wait to be asked. When you name specific',
+  `things the user would want to SEE, emit a \`\`\`${SEARCH_RESULT_CARDS_LANGUAGE} fenced block inline in your reply, placed`,
+  'exactly where the pictures belong - right after the sentence that introduces them, not at the end.',
+  'The block is a single JSON object:',
+  '',
+  `\`\`\`${SEARCH_RESULT_CARDS_LANGUAGE}`,
+  '{"cards":[{"name":"Orient Bambino","note":"Your own description of this thing, in your voice.",',
+  '"meta":"~$200","url":"https://orientwatch.co/bambino","images":[',
+  '{"url":"https://example.com/a.jpg","source":"orientwatch.co"},',
+  '{"url":"https://example.com/b.jpg","source":"jomashop"}]}]}',
+  '```',
+  '',
+  'Rules: `name` and at least one `images` entry are required. Every image `url` must be copied verbatim',
+  "from an `image:` or Images line above, never invented or guessed, and `source` is that entry's own",
+  '`source`/hostname, so each picture is attributed. Prefer the "Images found for this search" pool:',
+  'those carry their own page and publisher. `note` is YOUR prose about the thing, not the',
+  'search snippet. `meta` is a short footer such as a price or key spec. `url` is where the card links.',
+  'Two to six cards is the useful range. Keep writing normally around the block - it replaces neither',
+  'your explanation nor your citations. Omit the block only if the results genuinely have no images',
+  'worth showing; never tell the user you could show pictures if they asked - just show them.',
+].join('\n');
+
+/**
+ * Teaches the `b4m_map` fence, appended to a web_search result ONLY when that search returned places
+ * with provider coordinates (see shouldIncludePlaces). The fence names places by id alone, so the
+ * model never writes a coordinate - the client resolves each id against the stored place citables.
+ *
+ * The field names must stay in sync with parseLocationMapFence in
+ * b4m-core/common/src/constants/locationMap.ts.
+ */
+export const WEB_SEARCH_MAP_PROMPT = [
+  'The results above include places with map locations, so show them on a map - do not wait to be asked.',
+  `Emit one \`\`\`${LOCATION_MAP_LANGUAGE} fenced block inline in your reply, placed where the map belongs - right`,
+  'after the sentence that introduces the places. The block is a single JSON object:',
+  '',
+  `\`\`\`${LOCATION_MAP_LANGUAGE}`,
+  '{"anchor":{"id":"<anchor id>","name":"citizenM Copenhagen","label":"Your hotel"},',
+  '"places":[{"id":"<place id>","name":"Barr","note":"Your own one-line take on this place."}]}',
+  '```',
+  '',
+  'Rules: every `id` must be copied verbatim from an `id:` line above - never invent one, and never write',
+  'coordinates; the map locates each place from its id. `name` is the place name as listed. `note` is',
+  'YOUR short line about why it fits the request. Include `anchor` only when an "Anchor location" is listed',
+  'above, with a short `label` for what it is to the user ("Your hotel", "Your office"). List the places',
+  'worth recommending, three to ten. Keep writing normally around the block - it does not replace your',
+  'explanation or citations. Omit it only if none of the places actually answer the question.',
+].join('\n');

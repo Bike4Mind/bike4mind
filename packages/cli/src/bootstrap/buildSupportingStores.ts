@@ -6,15 +6,16 @@ import type { ConfigStore } from '../storage';
 import type { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import type { ApiClient } from '../auth/ApiClient';
 import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
-import { generateCliTools, loadContextFiles, type AgentContext, type PermissionManager } from '../utils';
+import { generateCliTools, wrapTools, loadContextFiles, type AgentContext, type PermissionManager } from '../utils';
 import { McpManager } from '../utils/mcpAdapter';
 import { AgentStore } from '../agents/AgentStore.js';
+import { buildProjectAgentStore, loadProjectContext } from './projectStores.js';
 import { SubagentOrchestrator, type SubagentUsageCallback } from '../agents/SubagentOrchestrator.js';
 import { BackgroundAgentManager } from '../agents/BackgroundAgentManager.js';
 import { AgentHistoryStore } from '../agents/AgentHistoryStore.js';
 import { DEFAULT_SUBAGENT_HISTORY_TTL_MS } from '../config/constants.js';
 import { deferredToolRegistry } from '../tools/deferredToolRegistry.js';
-import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services';
+import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 import type { PermissionResponse } from '../components';
 import type { SilentLogger } from './types.js';
 
@@ -119,18 +120,34 @@ export async function buildSupportingStores(input: BuildSupportingStoresInput): 
   // Supports both Claude Code convention (.claude/agents/) and B4M convention (.bike4mind/agents/)
   // Global dirs: ~/.claude/agents/, ~/.bike4mind/agents/
   // Project dirs: .claude/agents/, .bike4mind/agents/
+  // Folder-trust gate: an untrusted project contributes no agents and no context
+  // file. (MCP is already gated - config.mcpServers is global-only when the
+  // project is untrusted, so no repo server reaches the manager to spawn.)
   const mcpManager = new McpManager(config);
   const builtinAgentsDir = new URL('../agents/defaults/', import.meta.url).pathname;
-  const agentProjectDir = configStore.getProjectConfigDir();
-  const agentStore = new AgentStore(builtinAgentsDir, agentProjectDir || process.cwd());
+  // Folder-trust gate (shared with the headless path via projectStores): an
+  // untrusted project contributes no agents/skills and no context file.
+  const agentStore = buildProjectAgentStore(builtinAgentsDir, configStore);
 
   const [, , contextResult] = await Promise.all([
     mcpManager.initialize(),
     agentStore.loadAgents(),
-    loadContextFiles(agentProjectDir),
+    loadProjectContext(configStore),
   ]);
 
-  const mcpTools = mcpManager.getTools();
+  // MCP tools arrive raw from their servers - route them through the ONE
+  // permission wrapper (prompt/plan-mode block/risk gate/sandbox/directory grant)
+  // so they are gated exactly like B4M tools. The host allowlist short-circuit
+  // (e.g. mcp__manifold__*) still auto-approves inside the wrapper.
+  const mcpTools = wrapTools(mcpManager.getTools(), {
+    permissionManager,
+    showPermissionPrompt: promptFn,
+    agentContext,
+    configStore,
+    apiClient,
+    sandboxOrchestrator,
+    allowedDirectories: additionalDirectories,
+  });
   // Partition B4M tools into "always loaded" (touched in most sessions)
   // and "deferred" (rarely used - load on demand via tool_search). The
   // deferred set saves ~500-800 tokens of schema per turn for sessions
@@ -192,6 +209,9 @@ export async function buildSupportingStores(input: BuildSupportingStoresInput): 
     checkpointStore,
     onSubagentUsage,
     historyStore,
+    // Subagent bash_execute is sandboxed and directory-scoped like the main agent.
+    sandboxOrchestrator,
+    additionalDirectories,
   });
 
   // Create background agent manager

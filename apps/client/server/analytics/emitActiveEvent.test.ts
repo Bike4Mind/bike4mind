@@ -11,7 +11,8 @@ vi.mock('@server/utils/config', () => ({
   },
 }));
 
-import { isAnalyticsConfigured, sanitizeReferrer, emitActiveEvent } from './emitActiveEvent';
+import { isAnalyticsConfigured, sanitizeReferrer, emitActiveEvent, emitVisitEvent } from './emitActiveEvent';
+import { OVERWATCH_ANONYMOUS_USER_ID } from '@bike4mind/common';
 import { Config } from '@server/utils/config';
 
 const CONFIGURED = {
@@ -180,6 +181,55 @@ describe('emitActiveEvent', () => {
   it('omits referrer and utm when not provided', async () => {
     resetConfig();
     await emitActiveEvent({ pseudoUserId: 'p', sessionId: 's', userType: 'free' });
+
+    const body = JSON.parse((mockFetch.mock.calls[0] as [string, RequestInit])[1].body as string) as {
+      event: Record<string, unknown>;
+    };
+    expect('referrer' in body.event).toBe(false);
+    expect('utm' in body.event).toBe(false);
+  });
+});
+
+describe('emitVisitEvent', () => {
+  const mockFetch = vi.fn();
+
+  beforeEach(() => {
+    mockFetch.mockClear();
+    vi.stubGlobal('fetch', mockFetch);
+    mockFetch.mockResolvedValue({ status: 200 });
+  });
+
+  it('is a no-op when not configured (fail-open)', async () => {
+    await expect(emitVisitEvent({ sessionId: 'visit-1' })).resolves.toBeUndefined();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('sends a visit with no user identity on it', async () => {
+    resetConfig();
+    await emitVisitEvent({
+      sessionId: 'visit-1',
+      referrer: 'https://news.example.com/story',
+      utm: { source: 'email' },
+    });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const body = JSON.parse((mockFetch.mock.calls[0] as [string, RequestInit])[1].body as string) as {
+      event: Record<string, unknown>;
+    };
+    expect(body.event.event).toBe('visit');
+    expect(body.event.sessionId).toBe('visit-1');
+    expect(body.event.referrer).toBe('https://news.example.com/story');
+    expect(body.event.utm).toEqual({ source: 'email' });
+    // Anonymous even for a signed-in visitor: a visit count needs an identifier per visit,
+    // not a person per visit, and the person is reported by emitActiveEvent instead.
+    expect(body.event.userId).toBe(OVERWATCH_ANONYMOUS_USER_ID);
+    // No userType either - it is a property of a user, and there is no user here.
+    expect('metadata' in body.event).toBe(false);
+  });
+
+  it('omits referrer and utm when there are none', async () => {
+    resetConfig();
+    await emitVisitEvent({ sessionId: 'visit-2' });
 
     const body = JSON.parse((mockFetch.mock.calls[0] as [string, RequestInit])[1].body as string) as {
       event: Record<string, unknown>;

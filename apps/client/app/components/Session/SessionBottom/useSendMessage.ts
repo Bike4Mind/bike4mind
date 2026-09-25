@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { useShallow } from 'zustand/react/shallow';
@@ -31,7 +31,6 @@ import { handleLLMCommand } from '@client/app/components/commands/LLMCommand';
 import { commandHandlers } from './sessionBottomConstants';
 import { pickRoutingSource } from './pickRoutingSource';
 import { resolveDispatchTools } from './resolveDispatchTools';
-import { agentModeDefaultToolNames } from '@client/app/utils/agentOrchestration';
 import { useSessionCacheMigration } from '../hooks/useSessionCacheMigration';
 import { useLLMSettingsAssembly } from '../hooks/useLLMSettingsAssembly';
 import { useRecordImageTemplateUse, isTemplateUseEligiblePrompt } from '../ImageTemplates/useRecordImageTemplateUse';
@@ -44,7 +43,13 @@ import useSessionLayout, {
   setPendingMessageFiles,
   getSendableMessageFileIds,
 } from '@client/app/hooks/useSessionLayout';
-import type { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
+import type { IChatCompletion, useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
+import {
+  OPTIMISTIC_GENERATING_STATUS,
+  adoptSentQuest,
+  rollbackOptimisticGenerating,
+} from '@client/app/hooks/chatCompletionState';
+import { DeferredStop, canStopNow, stopChatCompletion } from './stopChatCompletion';
 import {
   detectAgentMentions,
   findAgentsByMentions,
@@ -72,23 +77,12 @@ import perfLogger from '../../../utils/performanceLogger';
 import { consumeQuestLaunchIntent } from '../../../utils/questLaunchIntent';
 import { LexicalChatInputRef } from '../LexicalChatInput';
 
-// Sentinel statusMessage written by the send path to render the Stop
-// affordance the instant the user clicks Send, masking backend cold-start
-// latency before the WS handler has emitted a real stream event. The real
-// stream overwrites this on first event; the error path detects it via strict
-// equality and clears so the Send button reappears.
-//
-// Load-bearing: the character is U+2026 (HORIZONTAL ELLIPSIS), not three ASCII
-// dots. Server-emitted status messages (`'Cancelling generation...'`,
-// `'Running...'`, etc.) use ASCII `...`, so the strict-equality rollback below
-// can't accidentally clobber a real WS event.
-const OPTIMISTIC_GENERATING_STATUS = 'Generating…';
-
 interface UseSendMessageParams {
   lexicalInputRef: React.RefObject<LexicalChatInputRef | null>;
   chatInputRef: React.RefObject<HTMLTextAreaElement | null>;
   clearFiles: () => void;
   stream: boolean;
+  chatCompletion: ReturnType<typeof useSubscribeChatCompletion>['chatCompletion'];
   setChatCompletion: ReturnType<typeof useSubscribeChatCompletion>['setChatCompletion'];
   onAgentsAttached?: () => void;
 }
@@ -122,6 +116,7 @@ export function useSendMessage({
   chatInputRef,
   clearFiles,
   stream,
+  chatCompletion,
   setChatCompletion,
   onAgentsAttached,
 }: UseSendMessageParams): UseSendMessageResult {
@@ -172,21 +167,17 @@ export function useSendMessage({
   // `currentUser.preferences`) so optimistic writes via `updatePreferences`
   // take effect on the very next send instead of waiting for the server echo.
   const agentModeDefault = userSettings.agentModeDefault ?? 'off';
-  const { getSettingObject } = useAdminSettings();
+  const { getSettingObject, authedSettingsLoaded } = useAdminSettings();
   // Admin-level kill switch. Default to enabled so the classifier runs unless
   // an admin explicitly turns it off; matches `IntentClassifierConfigSchema`.
+  // Gated on `authedSettingsLoaded`: `orchestrationDefaults` is not `publicSafe`, yet
+  // `mergeIntoDefaults` seeds it with the compiled-in schema default for BOTH the public and
+  // the authed query. So before the authed fetch resolves this would read the seed's
+  // `intentClassifier.enabled: true` even for an org that explicitly disabled the classifier.
   const intentClassifierAdminEnabled =
+    authedSettingsLoaded &&
     getSettingObject<{ intentClassifier?: { enabled?: boolean } }>('orchestrationDefaults', {})?.intentClassifier
       ?.enabled !== false;
-  // Union base for an agentless agent-executor dispatch. Read from admin
-  // settings rather than the schema seed because a non-empty `enabledTools`
-  // payload REPLACES `profile.allowedTools` server-side - see
-  // `agentModeDefaultToolNames`. Memoized so the set identity is stable.
-  const orchestrationDefaultsSetting = getSettingObject<unknown>('orchestrationDefaults', undefined);
-  const agentModeDefaultTools = useMemo(
-    () => agentModeDefaultToolNames(orchestrationDefaultsSetting),
-    [orchestrationDefaultsSetting]
-  );
   const classifyIntent = useIntentClassifier();
   const liveAI = useAdvancedAISettings(state => state.liveAI);
   const { data: availableAgents = [] } = useGetAgents();
@@ -211,6 +202,7 @@ export function useSendMessage({
     seed,
     output_format,
     researchMode,
+    skipAutoOffers,
     thinking,
     enabledMcpServers,
     deepResearchConfig,
@@ -237,6 +229,7 @@ export function useSendMessage({
       s.seed,
       s.output_format,
       s.researchMode,
+      s.skipAutoOffers,
       s.thinking,
       s.enabledMcpServers,
       s.deepResearchConfig,
@@ -288,8 +281,11 @@ export function useSendMessage({
 
   // Consume a quest launch intent from the /quests page (auto-submit).
   // The /new route records it in a useLayoutEffect, which runs before this
-  // effect; consume-once semantics prevent replay on refresh or remount.
+  // effect; consume-once semantics prevent replay on refresh or remount. Re-run on entering
+  // /new too: the notebook shell keeps this composer mounted when a notebook navigates there.
+  const isOnNewNotebookRoute = location.pathname === '/new';
   useEffect(() => {
+    if (!isOnNewNotebookRoute) return;
     const intent = consumeQuestLaunchIntent();
     if (intent) {
       setChatInputValue(intent.goal);
@@ -302,42 +298,49 @@ export function useSendMessage({
         }
       }
     }
-  }, [setChatInputValue]);
+  }, [setChatInputValue, isOnNewNotebookRoute]);
+
+  const sendStop = useCallback(
+    async (sessionId: string, restoreTo?: IChatCompletion): Promise<void> => {
+      setStoppingMessage(true);
+      try {
+        // No success toast: the inline statusMessage already surfaces the cancellation, and a
+        // bottom-right toast covers the whole prompt area on narrow layouts (e.g. chat docked
+        // to the right). A failed cancel has no inline surface, so it does toast.
+        const stopped = await stopChatCompletion({
+          sessionId,
+          setChatCompletion,
+          stop: stopChatMessage,
+          getCachedQuestStatus: questId =>
+            queryClient
+              .getQueryData<{ pages?: { data: IChatHistoryItemDocument[] }[] }>(['quests', 'session', sessionId])
+              ?.pages?.flatMap(page => page.data)
+              .find(quest => quest?.id === questId)?.status,
+          restoreTo,
+        });
+        if (!stopped) toast.error('Error cancelling generation');
+      } finally {
+        setStoppingMessage(false);
+      }
+    },
+    [setChatCompletion, queryClient]
+  );
+
+  // Survives the optimistic -> real id switch: the notebook shell keeps this composer mounted.
+  const [deferredStop] = useState(() => new DeferredStop(setChatCompletion));
+  useEffect(() => () => deferredStop.drop(), [deferredStop]);
+  useEffect(() => {
+    const held = deferredStop.resolve(chatCompletion);
+    if (held) void sendStop(held.sessionId, held.beforeStop);
+  }, [deferredStop, chatCompletion, sendStop]);
 
   const handleStopMessage = async (): Promise<void> => {
-    if (!currentSessionId) return;
-
-    setStoppingMessage(true);
-    setChatCompletion(prev => ({
-      ...prev,
-      quest: { ...prev.quest, sessionId: currentSessionId },
-      stopped: true,
-      statusMessage: 'Cancelling generation...',
-    }));
-
-    try {
-      await stopChatMessage(currentSessionId);
-      // No success toast here: the inline statusMessage below already surfaces the
-      // cancellation, and a bottom-right toast covers the whole prompt area on
-      // narrow layouts (e.g. chat docked to the right).
-      setChatCompletion(prev => ({
-        ...prev,
-        completed: true,
-        statusMessage: 'Generation cancelled by user',
-        // Same reason as the send-time reset: a cancelled turn keeps the streaming
-        // slot, so its acknowledgement would outlive it.
-        rapidReply: undefined,
-      }));
-    } catch (error) {
-      console.error('Error stopping chat message:', error);
-      toast.error('Error cancelling generation');
-      setChatCompletion(prev => ({
-        ...prev,
-        stopped: false,
-      }));
-    } finally {
-      setStoppingMessage(false);
+    if (!canStopNow(currentSessionId, chatCompletion)) {
+      // Too early for stop-reply (no real session id or no quest yet): hold it until both exist.
+      if (!chatCompletion.completed) deferredStop.request(chatCompletion);
+      return;
     }
+    await sendStop(currentSessionId);
   };
 
   // Body of the send. Always call it through `handleSendClick` below, never
@@ -416,7 +419,13 @@ export function useSendMessage({
       }
     }
 
-    setSessionLayout({ selectedArtifactId: undefined, artifactData: undefined });
+    // A client-created session is known before anything is posted, so the stream gate can hold
+    // the still-null view to it; a server-minted one is recorded on session.created.
+    setSessionLayout({
+      selectedArtifactId: undefined,
+      artifactData: undefined,
+      pendingRealSessionId: dataLakeCreated?.id ?? null,
+    });
     const session = currentSession;
     let sessionToSend = session;
     if (dataLakeCreated) sessionToSend = dataLakeCreated;
@@ -680,6 +689,7 @@ export function useSendMessage({
       prompt,
       supportsTools: !!currentModelInfo?.supportsTools,
       toolsOverride: options?.toolsOverride,
+      skipAutoOffers,
     });
     if (refused) {
       setSubmitting(false);
@@ -732,6 +742,8 @@ export function useSendMessage({
 
         return await handleCommand(commandHandlers, {
           userId,
+          username: currentUser?.username,
+          userEmail: currentUser?.email ?? undefined,
           command,
           params,
           currentSession: notebook,
@@ -751,6 +763,7 @@ export function useSendMessage({
           projectId,
           organizationId,
           researchMode,
+          skipAutoOffers,
           deepResearchConfig,
           imageConfig: imageSettings,
           audioConfig: audioSettings,
@@ -794,6 +807,7 @@ export function useSendMessage({
           projectId,
           organizationId,
           researchMode,
+          skipAutoOffers,
           deepResearchConfig,
           imageConfig: imageSettings,
           audioConfig: audioSettings,
@@ -886,6 +900,9 @@ export function useSendMessage({
             dispatchModel
           );
           dispatchSessionId = realSession.id;
+          // Adopted here, so a later session.created (possibly another tab's) must not be read
+          // as this tab's own mint - only a set pendingOptimisticId makes a tab switch to it.
+          setSessionLayout({ pendingOptimisticId: null, pendingRealSessionId: realSession.id });
           setCurrentSession(realSession);
           setCurrentSessionId(realSession.id);
           // Insert into the sessions list cache so the new notebook appears
@@ -937,12 +954,13 @@ export function useSendMessage({
         const thoroughness = orchestrationAgent?.defaultThoroughness ?? 'medium';
         const maxIters = orchestrationAgent?.maxIterations?.[thoroughness];
         // A briefcase `toolsOverride` wins the whitelist so an `@`-mention can't
-        // drop the tools the prompt needs (see `resolveDispatchTools`).
-        const enabledTools = resolveDispatchTools(
+        // drop the tools the prompt needs (see `resolveDispatchTools`). An agentless send
+        // ships the user's Smart Tools marked ambient; the server unions them onto the
+        // profile it resolves rather than replacing it.
+        const { enabledTools, enabledToolsAreAmbient } = resolveDispatchTools(
           options?.toolsOverride,
           effectiveTools,
-          orchestrationAgent?.allowedTools,
-          agentModeDefaultTools
+          orchestrationAgent?.allowedTools
         );
         // Per-message file attachments - dedupe against the session-level set
         // so the same fabFileId isn't materialized twice into the first
@@ -968,6 +986,7 @@ export function useSendMessage({
           // triggers the synthetic-profile path on the executor.
           agentId: orchestrationAgent?.id ?? mentionedAgent?.id,
           enabledTools,
+          enabledToolsAreAmbient,
           maxIterations: maxIters,
           // Knowledge / file context. Session-level knowledge is re-read from
           // the session document server-side; we forward the workbench snapshot
@@ -1041,7 +1060,7 @@ export function useSendMessage({
         toast.error(error instanceof Error ? error.message : 'Failed to start agent execution');
         if (isNewSession && optimisticTmpId) {
           cleanupOptimistic(optimisticTmpId);
-          setSessionLayout({ pendingFirstMessage: null, pendingOptimisticId: null });
+          setSessionLayout({ pendingFirstMessage: null, pendingOptimisticId: null, pendingRealSessionId: null });
           setCurrentSession(null);
           setCurrentSessionId(null);
           navigate({ to: '/new', search: projectId ? { projectId } : {}, replace: true });
@@ -1120,11 +1139,9 @@ export function useSendMessage({
       // rollback leaves `completed: false` with the generating sentinel, so
       // `shouldShowStopButton` stays true and the composer renders Stop and
       // swallows Enter for good - dead in a way releasing the mutex cannot fix.
-      setChatCompletion(prev =>
-        prev.statusMessage === OPTIMISTIC_GENERATING_STATUS
-          ? { ...prev, completed: true, statusMessage: undefined }
-          : prev
-      );
+      // A held Stop is dropped first so the placeholder reads as unreplaced again.
+      deferredStop.cancel();
+      setChatCompletion(rollbackOptimisticGenerating);
       setWorkBenchAgents([]);
       setSubmitting(false);
       return;
@@ -1133,19 +1150,32 @@ export function useSendMessage({
     setWorkBenchAgents([]);
     setSubmitting(false);
 
+    // If the websocket never delivers this quest's stream, the placeholder would have no
+    // quest id for the recovery poll (useStreamingMessageMerge) to reconcile against.
+    if (!isRealSlashCommand && data?.quest?.id) {
+      const sentQuest = data.quest;
+      setChatCompletion(prev => adoptSentQuest(prev, sentQuest));
+    }
+
     // Fallback migration: if session.created websocket was missed (e.g. WS not yet
     // connected in a fresh session), the optimistic ID is still set. Use the API
     // response to perform the same cache migration that session.created would have.
     if (isNewSession && optimisticTmpId && data?.session?.id) {
-      const { pendingOptimisticId } = useSessionLayout.getState();
-      if (pendingOptimisticId && pendingOptimisticId !== data.session.id) {
+      const { pendingOptimisticId, pendingRealSessionId } = useSessionLayout.getState();
+      // A recorded real id means session.created is already migrating and navigating; a second
+      // copy from the tmp entry it keeps until then would overwrite frames written since.
+      if (pendingOptimisticId && pendingOptimisticId !== data.session.id && pendingRealSessionId !== data.session.id) {
         const realId = data.session.id;
-        migrateQuests(optimisticTmpId, realId);
-        migrateSession(optimisticTmpId, realId, data.session);
+        const tmpId = optimisticTmpId;
+        migrateQuests(tmpId, realId, { keepTmp: true });
+        migrateSession(tmpId, realId, data.session);
         setCurrentSessionId(realId);
         setCurrentSession(data.session);
-        setSessionLayout({ pendingFirstMessage: null, pendingOptimisticId: null });
-        navigate({ to: '/notebooks/$id', params: { id: realId }, replace: true });
+        // pendingRealSessionId keeps this session's frames flowing until the navigation commits.
+        setSessionLayout({ pendingFirstMessage: null, pendingOptimisticId: null, pendingRealSessionId: realId });
+        void navigate({ to: '/notebooks/$id', params: { id: realId }, replace: true }).then(() =>
+          cleanupOptimistic(tmpId)
+        );
       }
     }
 

@@ -41,6 +41,7 @@ const h = vi.hoisted(() => {
         .filter(id => id === SESSION_ID)
         .map(id => ({ id, _id: id, userId: OWNER_ID, users: [{ userId: COLLABORATOR_ID }] }))
     ),
+    runOrgFeedbackSummary: vi.fn(async () => undefined),
     planFindById: vi.fn(),
     questFind: vi.fn(() => ({
       lean: async () => [{ _id: 'q1', sessionId: SESSION_ID, reply: `![fig](${OWNER_IMAGE_URL})`, images: [] }],
@@ -79,15 +80,27 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
 }));
 
+// The real parse, not an identity stub: this queue now carries two message shapes and the union
+// that tells them apart is what these tests drive.
 vi.mock('@bike4mind/utils', () => ({
-  secureParameters: <T>(obj: T) => obj,
+  secureParameters: (obj: unknown, schema: { parse: (value: unknown) => unknown }) => schema.parse(obj),
   getSettingsByNames: vi.fn(),
 }));
 
-vi.mock('@bike4mind/common', () => ({
-  ChatModels: { CLAUDE_4_5_HAIKU_BEDROCK: 'claude-haiku' },
-  isImageServeable: (f: { moderationStatus?: string } | null) => f?.moderationStatus === 'clean',
-}));
+// The thinking-tag exports come through real: reply extraction runs on them, and a hand-rolled
+// stub here would assert against the stub instead of the rule the chat transcript renders by.
+vi.mock('@bike4mind/common', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+  return {
+    ChatModels: { CLAUDE_4_5_HAIKU_BEDROCK: 'claude-haiku' },
+    ORG_FEEDBACK_SUMMARY_JOB_TYPE: 'orgFeedbackSummary',
+    isImageServeable: (f: { moderationStatus?: string } | null) => f?.moderationStatus === 'clean',
+    THINK_OPEN_TAG: actual.THINK_OPEN_TAG,
+    THINK_CLOSE_TAG: actual.THINK_CLOSE_TAG,
+    visibleReplyText: actual.visibleReplyText,
+    stripSearchResultCardFences: actual.stripSearchResultCardFences,
+  };
+});
 
 // No summary model available -> generateSummary short-circuits to null (no LLM call).
 vi.mock('@bike4mind/llm-adapters', () => ({
@@ -119,6 +132,23 @@ vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
 vi.mock('@client/app/utils/subQuestStatusPresentation', () => ({ getSubQuestStatusIcon: () => '' }));
 
 vi.mock('./createZipBuffer', () => ({ createZipBuffer: h.createZipBuffer }));
+
+// The summary worker is exercised in its own file; here only the routing matters. The payload
+// schema is real because the dispatch's union is built from it at module load.
+vi.mock('@server/queueHandlers/orgFeedbackSummary', async () => {
+  const { z } = await import('zod');
+  return {
+    OrgFeedbackSummaryPayload: z.object({
+      jobType: z.literal('orgFeedbackSummary'),
+      summaryJobId: z.string(),
+      organizationId: z.string(),
+      startDate: z.string(),
+      endDate: z.string(),
+      userId: z.string(),
+    }),
+    runOrgFeedbackSummary: h.runOrgFeedbackSummary,
+  };
+});
 
 import { dispatch } from './questExport';
 
@@ -229,5 +259,160 @@ describe('questExport owner-arm readability', () => {
     const markdown = exportedMarkdown();
     expect(markdown).toContain(SECRET_REPLY);
     expect(markdown).not.toContain('_Response content unavailable._');
+  });
+});
+
+/**
+ * Regression guard for the empty sub-task bodies: the chat pipeline streams the assistant answer
+ * into `replies[]` and leaves the scalar `reply` null on a successful turn, so reading `reply`
+ * alone emitted a heading followed by nothing for every completed task. Extraction must match the
+ * chat transcript - prefer the array, keep hidden reasoning out, and still honour a legacy
+ * `reply`-only document.
+ */
+describe('questExport reply extraction', () => {
+  const REPLY_SESSION_ID = '507f191e810c19729de860eb';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.sessionFindAllByIds.mockImplementation(async (ids: string[]) =>
+      ids.filter(id => id === REPLY_SESSION_ID).map(id => ({ id, _id: id, userId: h.OWNER_ID, users: [] }))
+    );
+  });
+
+  const exportQuest = async (quest: Record<string, unknown>) => {
+    h.questFind.mockReturnValue({
+      lean: async () => [{ _id: 'q-reply', sessionId: REPLY_SESSION_ID, images: [], ...quest }],
+    });
+    h.planFindById.mockResolvedValue({
+      userId: h.OWNER_ID,
+      sharedWith: [],
+      goal: 'Reply Plan',
+      state: 'active',
+      quests: [
+        {
+          title: 'Q',
+          description: 'd',
+          complexity: 'simple',
+          subQuests: [{ title: 'sq', status: 'completed', questId: 'q-reply' }],
+        },
+      ],
+    });
+    const event = {
+      Records: [{ body: JSON.stringify({ exportJobId: 'job-3', planId: 'plan-3', userId: h.OWNER_ID }) }],
+    };
+    await dispatch(event as never, {} as never, makeLogger() as never);
+    expect(h.createZipBuffer).toHaveBeenCalledTimes(1);
+    const [markdown] = h.createZipBuffer.mock.calls[0] as unknown as [string];
+    return markdown;
+  };
+
+  it('exports the streamed answer from replies[] when the scalar reply is null', async () => {
+    const markdown = await exportQuest({ reply: null, replies: ['The streamed answer.'] });
+    expect(markdown).toContain('The streamed answer.');
+  });
+
+  it('exports the answer slot of a multi-slot replies array without the hidden reasoning', async () => {
+    const markdown = await exportQuest({
+      reply: null,
+      replies: ['<think>weighing the options</think>', 'The answer is 42.'],
+    });
+    expect(markdown).toContain('The answer is 42.');
+    expect(markdown).not.toContain('weighing the options');
+  });
+
+  it('prefers replies[] over the stale prefix the rapid-reply handoff leaves in the scalar', async () => {
+    const markdown = await exportQuest({
+      reply: 'Rapid prefix. ',
+      replies: ['Rapid prefix. The rest of the streamed answer.'],
+    });
+    expect(markdown).toContain('Rapid prefix. The rest of the streamed answer.');
+    expect(markdown.match(/Rapid prefix\./g)).toHaveLength(1);
+  });
+
+  it('still exports a legacy quest that only populated the scalar reply', async () => {
+    const markdown = await exportQuest({ reply: 'Legacy flat reply.', replies: [] });
+    expect(markdown).toContain('Legacy flat reply.');
+  });
+
+  it('marks a turn with no visible text instead of emitting a blank section', async () => {
+    const markdown = await exportQuest({ reply: null, replies: ['<think>still thinking</think>'] });
+    expect(markdown).toContain('_No response content._');
+    expect(markdown).not.toContain('still thinking');
+  });
+
+  it('strips a b4m_cards fence out of the exported reply rather than leaking raw card JSON into the ZIP', async () => {
+    const markdown = await exportQuest({
+      reply: null,
+      replies: ['Here are some watches.\n\n```b4m_cards\n{"cards":[{"name":"Leaked"}]}\n```\n\nHope that helps.'],
+    });
+    expect(markdown).toContain('Here are some watches.');
+    expect(markdown).toContain('Hope that helps.');
+    expect(markdown).not.toContain('b4m_cards');
+    expect(markdown).not.toContain('"cards"');
+  });
+
+  it('resolves a b4m_map fence using the quest promptMeta citables, dropping an unresolved id', async () => {
+    const markdown = await exportQuest({
+      reply: null,
+      replies: [
+        'Here are some options.\n\n```b4m_map\n{"places":[{"id":"place-1","name":"Barr"},{"id":"invented","name":"Fake"}]}\n```\n',
+      ],
+      promptMeta: {
+        citables: [
+          {
+            id: 'place:place-1',
+            type: 'web_url',
+            title: 'Barr',
+            metadata: { place: { id: 'place-1', name: 'Barr', lat: 55.67, lng: 12.57 } },
+          },
+        ],
+      },
+    });
+    expect(markdown).toContain('Barr');
+    expect(markdown).toContain('Open in Google Maps');
+    expect(markdown).not.toContain('Fake');
+    expect(markdown).not.toContain('invented');
+    expect(markdown).not.toContain('b4m_map');
+  });
+});
+
+/**
+ * This queue carries the org feedback summary too - see `orgFeedbackSummary.ts` for why it rides
+ * here rather than on a queue of its own. Both arms are asserted because the untagged shape is
+ * what every message already in flight looks like.
+ */
+describe('questExport queue multiplex', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('routes a tagged summary message to the summary worker', async () => {
+    const event = {
+      Records: [
+        {
+          body: JSON.stringify({
+            jobType: 'orgFeedbackSummary',
+            summaryJobId: 'sum-1',
+            organizationId: 'org-1',
+            startDate: '2026-08-01T00:00:00.000Z',
+            endDate: '2026-08-31T00:00:00.000Z',
+            userId: 'requester-1',
+          }),
+        },
+      ],
+    };
+
+    await dispatch(event as never, {} as never, makeLogger() as never);
+
+    expect(h.runOrgFeedbackSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ summaryJobId: 'sum-1' }),
+      expect.anything()
+    );
+    expect(h.planFindById).not.toHaveBeenCalled();
+  });
+
+  it('still exports an untagged legacy message', async () => {
+    await runExport(h.OWNER_ID);
+
+    expect(h.runOrgFeedbackSummary).not.toHaveBeenCalled();
+    expect(h.createZipBuffer).toHaveBeenCalledTimes(1);
   });
 });

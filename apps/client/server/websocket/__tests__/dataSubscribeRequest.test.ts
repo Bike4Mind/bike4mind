@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { OWNER_ONLY_PROMPT_META_PROJECTION_PATHS } from '@bike4mind/common';
 
 /**
  * Regression test for the WS subscribe handler's rotation-grace wiring: this path
@@ -20,6 +21,14 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/common')>()),
   DataSubscribeRequestAction: { parse: (x: unknown) => x },
 }));
+
+/**
+ * Derived, never hand-listed: this is the second place the quest exclusion is asserted
+ * (dataSubscribeFieldLimits.test.ts is the first), and a literal copy here is what made this file
+ * go red when the projection grew citables.metadata.fullContext. A new owner-only path now lands
+ * in both expectations for free.
+ */
+const expectedQuestExclusions = Object.fromEntries(OWNER_ONLY_PROMPT_META_PROJECTION_PATHS.map(path => [path, false]));
 
 const mockFindModelByCollectionName = vi.fn();
 const mockQuerySubscriptionFindOneAndUpdate = vi.fn();
@@ -79,7 +88,7 @@ vi.mock('../../auth/ability', () => ({
 
 const mockFindByKeyName = vi.fn();
 vi.mock('@bike4mind/database/infra', () => ({
-  secretRotationRepository: { findByKeyName: (...args: unknown[]) => mockFindByKeyName(...args) },
+  secretRotationRepository: { findByKeyNameWithSecret: (...args: unknown[]) => mockFindByKeyName(...args) },
 }));
 
 const mockIsWithinGraceWindow = vi.fn();
@@ -213,10 +222,7 @@ describe('dataSubscribeRequest WS handler - quest field scoping', () => {
     await func(questEvent() as any, {} as any, noopLogger as any);
 
     const scopedFields = collection.find.mock.calls[0][1];
-    expect(scopedFields).toMatchObject({
-      'promptMeta.functionCalls.returnValue': false,
-      'promptMeta.functionCalls.error': false,
-    });
+    expect(scopedFields).toMatchObject(expectedQuestExclusions);
   });
 
   it('drops inclusion fields and keeps the exclusion instead of throwing, when a caller mixes the two', async () => {
@@ -227,10 +233,7 @@ describe('dataSubscribeRequest WS handler - quest field scoping', () => {
     await func(questEvent({ fields: { reply: 1 } }) as any, {} as any, noopLogger as any);
 
     const scopedFields = collection.find.mock.calls[0][1];
-    expect(scopedFields).toEqual({
-      'promptMeta.functionCalls.returnValue': false,
-      'promptMeta.functionCalls.error': false,
-    });
+    expect(scopedFields).toEqual(expectedQuestExclusions);
     expect(noopLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Dropping inclusion fields'), {
       fields: { reply: 1 },
     });

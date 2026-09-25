@@ -21,6 +21,8 @@ import perfLogger from '../../utils/performanceLogger';
 import { CommandArgExtra } from '@client/app/utils/commands';
 import { classifyQueryComplexity } from '@bike4mind/common';
 import { createOptimisticSessionId } from '@client/app/utils/llm';
+import { SEND_REQUEST_TIMEOUT_MS } from '@client/app/utils/requestTimeouts';
+import { blankRapidReplies, terminalQuests } from '@client/app/hooks/chatCompletionState';
 import { getSurfaceChatContext } from '@client/app/utils/surfaceChatContext';
 
 export type LLMCommandArgs = {
@@ -32,6 +34,8 @@ export type LLMCommandArgs = {
   promptFileIds: string[];
   dashboardParams?: LLMApiRequestBody['dashboardParams'];
   questId?: string;
+  /** Correct-and-retry target: the quest whose answer the user says was wrong. */
+  correctsQuestId?: string;
   enableQuestMaster?: boolean;
   enableMementos?: boolean;
   enableArtifacts?: boolean;
@@ -43,6 +47,8 @@ export type LLMCommandArgs = {
   organizationId?: string | null;
   questMaster?: LLMApiRequestBody['questMaster'];
   researchMode?: LLMApiRequestBody['researchMode'];
+  /** Suppresses the server's own tool auto-offers for this turn. See LLMContext.skipAutoOffers. */
+  skipAutoOffers?: LLMApiRequestBody['skipAutoOffers'];
   imageConfig?: GenerateImageToolCall;
   audioConfig?: AudioGenerationToolCall;
   deepResearchConfig?: {
@@ -108,6 +114,7 @@ export async function handleLLMCommand(
       dashboardParams,
       promptFileIds,
       questId,
+      correctsQuestId,
       enableQuestMaster,
       queryClient,
       tools,
@@ -117,6 +124,7 @@ export async function handleLLMCommand(
       enableAgents,
       questMaster,
       researchMode,
+      skipAutoOffers,
       imageConfig,
       audioConfig,
       deepResearchConfig,
@@ -139,6 +147,9 @@ export async function handleLLMCommand(
     const fabFileIds = workBenchFiles.map(file => file.id);
 
     const tmpSessionId = optimisticSessionId || createOptimisticSessionId();
+    // Re-running an existing quest restarts it: its earlier terminal frame must not
+    // mark the new run's chunks stale.
+    if (questId) terminalQuests.forget(questId);
 
     const optimisticOperation = questId
       ? (cb: () => Promise<{ quest: IChatHistoryItemDocument; session: ISessionDocument }>) =>
@@ -166,9 +177,14 @@ export async function handleLLMCommand(
       modelConfigurations: _omitModelConfigurations,
       deepResearchConfig: _omitDeepResearchConfig,
       researchMode: _omitResearchMode,
+      skipAutoOffers: _omitSkipAutoOffers,
       imageConfig: _omitImageConfig,
       audioConfig: _omitAudioConfig,
       agentMode: _omitAgentMode,
+      // Both are sent as top-level request fields above; without these they would also ride
+      // `params`, which is the same duplication every other field in this list exists to avoid.
+      questId: _omitQuestId,
+      correctsQuestId: _omitCorrectsQuestId,
       ...payload
     } = args;
 
@@ -209,6 +225,7 @@ export async function handleLLMCommand(
 
       const requestPayload: LLMApiRequestBody = {
         questId,
+        ...(correctsQuestId ? { correctsQuestId } : {}),
         sessionId: currentSession?.id,
         historyCount,
         clientSubmittedAt: clientPromptSentTime,
@@ -231,6 +248,7 @@ export async function handleLLMCommand(
         organizationId,
         ...(questMaster ? { questMaster } : {}),
         ...(researchMode ? { researchMode } : {}),
+        ...(skipAutoOffers ? { skipAutoOffers: true } : {}),
         // Include mcpServers if it's an array (even empty - means user disabled all)
         ...(Array.isArray(mcpServers) ? { mcpServers } : {}),
         ...(deepResearchConfig ? { deepResearchConfig } : {}),
@@ -272,6 +290,8 @@ export async function handleLLMCommand(
         // session on every call carrying a sessionId or questId, and skips only the id-less blank
         // ack (a brand-new session with neither), so a forbidden session surfaces as a 404 here
         // (swallowed by the .catch) rather than being silently skipped.
+        // With neither id the ack comes back id-less, so the stream gate needs this to know it's ours.
+        const releaseBlank = !questId && !currentSession?.id ? blankRapidReplies.begin() : undefined;
         api
           .post('/api/ai/rapid-reply', {
             questId: questId,
@@ -287,7 +307,8 @@ export async function handleLLMCommand(
           .catch(err => {
             perfLogger.log(`🚀 [RapidReply] Fire-and-forget failed (non-blocking): ${err.message}`);
             // Don't throw - rapid reply failures shouldn't break main flow
-          });
+          })
+          .finally(() => releaseBlank?.());
       } else {
         perfLogger.log(`🚀 [RapidReply] Skipped (complexity: ${queryComplexity}, no files)`);
       }
@@ -299,7 +320,11 @@ export async function handleLLMCommand(
           quest: IChatHistoryItemDocument;
         }>,
         LLMApiRequestBody
-      >('/api/ai/llm', requestPayload);
+      >('/api/ai/llm', requestPayload, {
+        // The route only creates the quest and enqueues it (the answer streams over the
+        // websocket), so a request this slow has stalled and must release the composer.
+        timeout: SEND_REQUEST_TIMEOUT_MS,
+      });
 
       // Store the sent time in the quest data for later calculation
       if (data && data.quest.id) {

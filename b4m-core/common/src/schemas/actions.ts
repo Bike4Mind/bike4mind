@@ -8,8 +8,9 @@ import {
 } from '@bike4mind/hearth';
 import { FallbackInfoSchema } from './llm';
 import { supportedChatModels } from '../models';
-import { shareableDocumentSchema, QUEST_ERROR_CODES } from '../types';
+import { shareableDocumentSchema, QUEST_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
 import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constants/agentExecutionStatus';
+import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '../constants/sessionSummary';
 import { findDisallowedSubscriptionFilterKeys } from './subscriptionQueryFilter';
 
 // Schemas for actions sent over the WebSocket connection.
@@ -244,6 +245,20 @@ export const QuestExportProgressAction = z.object({
 });
 export type IQuestExportProgressAction = z.infer<typeof QuestExportProgressAction>;
 
+export const OrgFeedbackSummaryProgressAction = z.object({
+  action: z.literal('org_feedback_summary_progress'),
+  summaryJobId: z.string(),
+  organizationId: z.string(),
+  status: z.enum(['processing', 'completed', 'failed']),
+  progress: z.number(),
+  // No summary content or artifact location rides this frame on purpose: the client re-reads
+  // GET /api/organizations/:id/feedback-summary, which re-checks the org gate before it hands the
+  // artifact over. Anything pushed down the socket would skip that check.
+  errorMessage: z.string().optional(),
+  clientId: z.string().optional(),
+});
+export type IOrgFeedbackSummaryProgressAction = z.infer<typeof OrgFeedbackSummaryProgressAction>;
+
 export const SpiderProgressUpdateAction = z.object({
   action: z.literal('spider_progress'),
   spiderJobId: z.string(),
@@ -342,7 +357,9 @@ export const StreamedChatCompletionAction = z.object({
       replies: z.array(z.string()).optional(),
       images: z.array(z.string()).optional(),
       videos: z.array(z.string()).optional(),
-      type: z.enum(['message', 'oob', 'error', 'system', 'voice_transcript']),
+      // Derived from CHAT_HISTORY_ITEM_TYPES so the WebSocket payload cannot publish a
+      // narrower quest-type vocabulary than the REST surfaces (schemas/chat.ts) do.
+      type: z.enum(CHAT_HISTORY_ITEM_TYPES),
       status: z.enum(['stopped', 'running', 'done']).optional(),
       // Machine-readable classifier for `type: 'error'` quests so the client can render a
       // targeted error state (e.g. the inline "Add Credits" CTA) rather than raw `reply` text.
@@ -1165,9 +1182,10 @@ export const SessionCreatedAction = shareableDocumentSchema.extend({
   claudeConversationId: z.string().optional(),
   summary: z.string().optional(),
   summaryAt: z.date().optional(),
-  summaryTrigger: z.enum(['manual', 'project', 'earlyMilestone', 'contentGrowth', 'throttling']).optional(),
+  summaryTrigger: z.enum(PERSISTED_SESSION_SUMMARY_TRIGGERS).optional(),
   deletedAt: z.date().optional(),
   tags: z.array(z.object({ name: z.string(), strength: z.number() })).optional(),
+  taggedAt: z.date().optional(),
   clonedSourceId: z.string().nullable().optional(),
   forkedSourceId: z.string().nullable().optional(),
   isAutoNamed: z.boolean().optional(),
@@ -1405,6 +1423,13 @@ export const PermissionRequestAction = z.object({
   toolName: z.string(),
   toolInput: z.unknown(),
   iteration: z.number(),
+  /**
+   * Provider tool_use id of the specific gated call this card is asking about.
+   * The client echoes it back on `permission_response` so the server can bind
+   * the answer to THIS pause rather than the latest one that happens to share
+   * a tool name - see `handlePermissionResponse`'s toolCallId check.
+   */
+  toolCallId: z.string().optional(),
 });
 
 /**
@@ -1476,6 +1501,9 @@ export const ReconnectResultAction = z.object({
       toolName: z.string(),
       toolInput: z.unknown(),
       requestedAt: z.union([z.string(), z.date()]),
+      // Carried through reconnect so a client that refreshes mid-pause still
+      // has the identity `permission_response` needs - see `PermissionRequestAction`.
+      toolCallId: z.string().optional(),
     })
     .optional(),
   totalCreditsUsed: z.number().optional(),
@@ -1541,6 +1569,7 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   ResearchTaskStatusUpdateAction,
   NotebookCurationProgressUpdateAction,
   QuestExportProgressAction,
+  OrgFeedbackSummaryProgressAction,
   SpiderProgressUpdateAction,
   SpiderCompleteAction,
   SpiderErrorAction,

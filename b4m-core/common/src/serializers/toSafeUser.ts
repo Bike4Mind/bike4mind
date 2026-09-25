@@ -59,6 +59,7 @@ export const USER_SECRET_FIELDS = [
  * `USER_SECRET_FIELDS`.
  */
 export const USER_SUBFIELD_REDACTED_FIELDS = [
+  'authProviders',
   'mfa',
   'googleDrive',
   'atlassianConnect',
@@ -202,15 +203,39 @@ export function redactUserSecretsForSelf(
       writeEnabled: n.writeEnabled,
       accessMode: n.accessMode,
       allowedPages: n.allowedPages,
+      excludedPageIds: n.excludedPageIds,
       rootPageId: n.rootPageId,
       connectedAt: n.connectedAt,
       disconnectReason: n.disconnectReason,
     };
   }
-  // Slack -> keep everything except the user token.
+  // Slack -> allowlist, like every other block here, so a field added to the
+  // settings type (it already carries slackUserToken/slackUserScopes/lastUsedAgent)
+  // does not reach the browser until named on purpose. These are exactly the fields
+  // the settings UI reads, and exactly the ones SlackSettingsSchema accepts on write
+  // (pages/api/users/[id]/slack-settings.ts) -- keep the two in sync, or the UI saves
+  // a value it can never read back and drops it on the next round-trip.
   if (user.slackSettings) {
-    const { slackUserToken: _drop, ...rest } = user.slackSettings;
-    u.slackSettings = rest;
+    const s = user.slackSettings;
+    u.slackSettings = {
+      slackUserId: s.slackUserId,
+      defaultNotebookId: s.defaultNotebookId,
+      autoCreateNotebook: s.autoCreateNotebook,
+      notebookNamePrefix: s.notebookNamePrefix,
+      defaultProjectId: s.defaultProjectId,
+      agentNotebookRouting: s.agentNotebookRouting,
+      keywordRouting: s.keywordRouting,
+      customAgentId: s.customAgentId,
+      githubNotifications: s.githubNotifications,
+    };
+  }
+  // Auth providers -> allowlist, like every other block here, so a field added to the
+  // provider type (it already carries samlNameId/samlSessionIndex/oktaIdentityProviderId/
+  // encrypted) does not reach the browser until named on purpose. The settings UI
+  // (ConnectedAppsSection) reads only `strategy`; `id` is kept as a stable identity.
+  // An array, unlike every other entry here, so map rather than reshape once.
+  if (user.authProviders) {
+    u.authProviders = user.authProviders.map(provider => ({ id: provider.id, strategy: provider.strategy }));
   }
   // Blog -> keep display/config, drop the API key.
   if (user.blogIntegration) {

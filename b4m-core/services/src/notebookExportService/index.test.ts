@@ -122,6 +122,37 @@ describe('notebook export', () => {
     expect(promptMeta.context.contextWindowUsage.actualInputTokens).toBe(900);
   });
 
+  it('keeps citables even with "Include Usage Metadata" off, so a b4m_map fence still resolves', async () => {
+    // citables resolve b4m_map place ids in reply text this export always includes, unlike the
+    // rest of promptMeta which is opt-in metadata about the reply - so it must not vanish along
+    // with the rest of promptMeta when the user unchecks that toggle.
+    const citables = [{ id: 'place:abc', type: 'place', metadata: { place: { name: 'A Place' } } }];
+    const { adapters, uploaded } = makeAdapters({
+      chatHistoryRepository: {
+        find: vi
+          .fn()
+          .mockResolvedValueOnce([
+            {
+              id: 'msg-1',
+              timestamp: new Date('2026-01-01T00:00:00Z'),
+              reply: 'See places\n```b4m_map\n{"places":[{"id":"place:abc"}]}\n```',
+              promptMeta: { ...PROMPT_META, citables },
+            },
+          ])
+          .mockResolvedValue([]),
+      },
+    });
+    await new NotebookExportService(adapters).exportNotebooks('user-1', {
+      ...OPTIONS,
+      includeMetadata: false,
+    } as unknown as Parameters<NotebookExportService['exportNotebooks']>[1]);
+    const payload = JSON.parse(uploaded[0]);
+    const message = payload.notebooks[0].chatHistory[0];
+
+    expect(message.promptMeta.model).toBeUndefined();
+    expect(message.promptMeta.citables).toEqual(citables);
+  });
+
   it('skips a message with no id rather than emitting one that cannot be re-imported', async () => {
     // Re-import keys updateOne on this id; a missing one casts the filter to {} and upserts over
     // an arbitrary quest, so the row must not reach the file.
@@ -662,10 +693,12 @@ describe('notebook export - knowledge file bytes', () => {
       toolRepository: { create: vi.fn(), find: vi.fn(), findById: vi.fn() },
       agentRepository: { create: vi.fn() },
       userRepository: { findById: vi.fn().mockResolvedValue({ id: 'user-2' }) },
+      adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
       fileStorageService: {
         uploadFile: vi.fn(async (_path: string, content: Buffer) => {
           uploads.push(content);
         }),
+        deleteFile: vi.fn(),
       },
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
       generateId: () => 'generated-id',
@@ -682,6 +715,74 @@ describe('notebook export - knowledge file bytes', () => {
     expect(result.warnings).toEqual([]);
     expect(uploads).toHaveLength(1);
     expect(uploads[0].equals(PDF_BYTES)).toBe(true);
+  });
+});
+
+describe('notebook export - the tags stamp', () => {
+  const STAMP = new Date('2026-05-06T07:08:09Z');
+
+  /**
+   * Runs the real import over an exported payload and returns the session-create payload. The
+   * round trip is the point: `taggedAt` is only useful if the field the exporter emits is the field
+   * the importer reads, and both are named independently on either side.
+   */
+  async function importCreatePayload(payload: unknown) {
+    const create = vi.fn(async (data: Record<string, unknown>) => ({ ...data, id: 'new-session-id' }));
+    const importAdapters = {
+      sessionRepository: { find: vi.fn().mockResolvedValue([]), create, updateById: vi.fn() },
+      chatHistoryRepository: { bulkCreate: vi.fn(), deleteMany: vi.fn() },
+      knowledgeRepository: { create: vi.fn() },
+      artifactRepository: { create: vi.fn() },
+      toolRepository: { create: vi.fn(), find: vi.fn(), findById: vi.fn() },
+      agentRepository: { create: vi.fn() },
+      userRepository: { findById: vi.fn().mockResolvedValue({ id: 'user-2' }) },
+      fileStorageService: { uploadFile: vi.fn(), deleteFile: vi.fn() },
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      generateId: () => 'generated-id',
+    } as unknown as NotebookImportAdapters;
+
+    await new NotebookImportService(importAdapters).importNotebooks(
+      'user-2',
+      payload as never,
+      {
+        conflictResolution: 'rename',
+        importKnowledge: false,
+        importArtifacts: false,
+        importTools: false,
+        importAgents: false,
+      } as never
+    );
+
+    return create.mock.calls[0][0] as Record<string, unknown>;
+  }
+
+  it('emits taggedAt as ISO beside the tags it belongs to', async () => {
+    const payload = await exportOnce({
+      sessionRepository: {
+        find: vi.fn().mockResolvedValue([{ ...SESSION, tags: [{ name: 'emitted', strength: 4 }], taggedAt: STAMP }]),
+      },
+    });
+
+    expect(payload.notebooks[0].tags).toEqual([{ name: 'emitted', strength: 4 }]);
+    expect(payload.notebooks[0].taggedAt).toBe('2026-05-06T07:08:09.000Z');
+  });
+
+  it('omits taggedAt for a session that carries none, rather than stamping it', async () => {
+    const payload = await exportOnce();
+
+    // Absence is the signal the importer reads as "clear the target's stamp". Emitting a value here
+    // would claim tags were derived from this notebook when none were.
+    expect('taggedAt' in payload.notebooks[0]).toBe(false);
+  });
+
+  it('carries the emitted stamp back through the import create payload', async () => {
+    const payload = await exportOnce({
+      sessionRepository: { find: vi.fn().mockResolvedValue([{ ...SESSION, taggedAt: STAMP }]) },
+    });
+
+    const created = await importCreatePayload(payload);
+
+    expect(created.taggedAt).toEqual(STAMP);
   });
 });
 

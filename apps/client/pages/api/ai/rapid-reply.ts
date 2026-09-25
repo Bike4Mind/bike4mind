@@ -9,7 +9,7 @@ import {
   Connection,
 } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
-import { StatusManager } from '@bike4mind/services';
+import { StatusManager } from '@bike4mind/services/llm';
 import { ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
 import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
 import { resolveRapidModel } from '@server/rapidReply/resolveRapidModel';
@@ -18,14 +18,16 @@ import { ChatModels, NotFoundError } from '@bike4mind/common';
 import { Resource } from 'sst';
 
 // OptiHashi sessions get the instant ack even when RapidReply is globally off. When no DB
-// mapping is configured for the main model, fall back to a fast Haiku + this
-// prompt so the user sees "digging into the data lake" while the full briefing loads.
+// mapping is configured for the main model, fall back to a fast Haiku + this prompt so the
+// user sees a quick, request-specific ack while the full briefing loads.
 const OPTI_RAPID_SYSTEM_PROMPT =
-  'You are a helpful data-lake assistant. The user just sent a message. ' +
-  'Reply with ONE short, warm sentence acknowledging it and saying you are digging into the ' +
-  'knowledge base / data lake to pull the details together — you have tools for that. ' +
-  'Do NOT answer the question itself; the full briefing is loading separately. ' +
-  'Example tone: "Sure — let me dig into the data lake and pull that together for you."';
+  'You are a helpful assistant. The user just sent a message. ' +
+  'Reply with ONE short sentence that acknowledges their specific request - refer to its actual ' +
+  'subject rather than a generic greeting. Vary the phrasing and sentence structure each time; ' +
+  'do not reuse the same wording across replies. ' +
+  'Do NOT mention searching, the knowledge base, or the data lake unless the user message is ' +
+  'explicitly about their own files, documents, or data. ' +
+  'Do NOT answer the question itself; the full response is loading separately.';
 
 /**
  * Rapid reply endpoint - generates rapid replies using fast mini models,

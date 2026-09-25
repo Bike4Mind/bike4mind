@@ -16,6 +16,8 @@ import AddIcon from '@mui/icons-material/Add';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import PeopleOutlineIcon from '@mui/icons-material/PeopleOutline';
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
+import PublishOutlinedIcon from '@mui/icons-material/PublishOutlined';
+import UnpublishedOutlinedIcon from '@mui/icons-material/UnpublishedOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
@@ -26,6 +28,8 @@ import { TREE_SCROLL_SX } from '@client/app/components/datalake/treeChrome';
 import {
   useArchiveDataLake,
   usePermanentDeleteDataLake,
+  usePromoteDataLake,
+  useDemoteDataLake,
   useUnderChunkedCount,
   useRechunkDataLake,
   useLakeConvergencePlan,
@@ -41,6 +45,7 @@ import useStartChatWithLake from '@client/app/hooks/useStartChatWithLake';
 import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptyState';
 import LakeHealthBadge from '@client/app/components/datalake/LakeHealthBadge';
 import DuplicateAdmissionsChip from '@client/app/components/datalake/DuplicateAdmissionDialog';
+import LakeFindingsChip from '@client/app/components/datalake/LakeFindingsDialog';
 import LakeDriveStatusChip from '@client/app/components/datalake/LakeDriveStatusChip';
 import { lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
 import type { IDataLakeBatchSummary } from '@bike4mind/common';
@@ -85,6 +90,8 @@ export function LakeInfoPanel({
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   const archiveLake = useArchiveDataLake();
   const deleteLake = usePermanentDeleteDataLake();
+  const promoteLake = usePromoteDataLake();
+  const demoteLake = useDemoteDataLake();
   const startChatWithLake = useStartChatWithLake();
   const [startingChat, setStartingChat] = useState(false);
   const visibility = lakeVisibilityLabel(lake);
@@ -99,6 +106,20 @@ export function LakeInfoPanel({
   const { data: rebuildStatus } = useUnderChunkedCount(lake.id, !!lake.canRebuild);
   const underChunkedCount = rebuildStatus?.underChunkedCount ?? 0;
   const failedCount = rebuildStatus?.failedCount ?? 0;
+  // Members embedded in a PREVIOUS embedding space, which retrieval withholds wholesale rather than
+  // ranking badly - so this is the one lake defect with no symptom an owner can see in search
+  // results, and the reason it gets its own affordance instead of folding into Rebuild passages.
+  //
+  // `?? 0` collapses the server's `null` ("no space to compare against") into "nothing to offer",
+  // which is the right direction: null covers both an unconfigured embedding model and a
+  // rolling-deploy skew against an older server, and an advisory chip would be wrong in the second
+  // case - it would tell every owner their lake might be stale during any deploy window.
+  //
+  // The cost, taken knowingly: only the skew case is transient. On a self-host whose configured
+  // provider credential is missing or a placeholder there is no keyless fallback, so the first case
+  // persists until an operator changes configuration - and nothing else reports it, because the
+  // route's 409 naming the remedy is only reachable from the button this hides.
+  const staleEmbeddingSpaceCount = rebuildStatus?.staleEmbeddingSpaceCount ?? 0;
   const rechunk = useRechunkDataLake(lake.id);
 
   // Convergence toward the lake's OWN declared chunk policy (#1681). Distinct from "Rebuild
@@ -121,6 +142,13 @@ export function LakeInfoPanel({
   // absence of a button is explained rather than read as "healthy".
   const showConvergeBlocked =
     !!lake.canRebuild && convergencePlan?.refusal === null && convergeWaveSize === 0 && convergeBlockedCount > 0;
+
+  // The other half of the `?? 0` above: collapsing "no answer" into "no button" is right for an
+  // action and silent for a diagnosis, and every sibling surface guards on the same falsy value, so
+  // an owner in this state currently hears nothing from anywhere. `=== false`, never `!` - a server
+  // that did not answer at all is the deploy-skew window, and firing on it would tell every owner
+  // their lake might be stale during any deploy.
+  const showEmbeddingSpaceUnknown = !!lake.canRebuild && rebuildStatus?.embeddingSpaceResolved === false;
 
   // Lake memory: the manual build/rebuild door + purge, manage-gated like Settings/Access -
   // only an editor can spend the daily build cap or erase the profile.
@@ -224,6 +252,43 @@ export function LakeInfoPanel({
                   Access
                 </Button>
               </Tooltip>
+              {/* Draft is excluded from grounding until an owner or admin explicitly publishes it
+                  - adding files no longer does this as a side effect. An ABSENT status counts as
+                  draft here, matching promoteDataLake and activateIfDraft's `$in: ['draft', null]`:
+                  a lake written before the field existed is just as invisible to retrieval, so it
+                  must still get the affordance. */}
+              {(!lake.status || lake.status === 'draft') && (
+                <Tooltip title="Publish this lake so it starts grounding answers" size="sm">
+                  <Button
+                    size="sm"
+                    variant="soft"
+                    color="success"
+                    startDecorator={<PublishOutlinedIcon sx={{ fontSize: 16 }} />}
+                    data-testid={`datalake-promote-btn-${lake.id}`}
+                    loading={promoteLake.isPending}
+                    onClick={() => promoteLake.mutate(lake.id)}
+                    sx={{ flexShrink: 0, fontSize: '13px' }}
+                  >
+                    Publish
+                  </Button>
+                </Tooltip>
+              )}
+              {lake.status === 'active' && (
+                <Tooltip title="Move back to draft - stops this lake from grounding answers" size="sm">
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    color="neutral"
+                    startDecorator={<UnpublishedOutlinedIcon sx={{ fontSize: 16 }} />}
+                    data-testid={`datalake-demote-btn-${lake.id}`}
+                    loading={demoteLake.isPending}
+                    onClick={() => demoteLake.mutate(lake.id)}
+                    sx={{ flexShrink: 0, fontSize: '13px' }}
+                  >
+                    Move to draft
+                  </Button>
+                </Tooltip>
+              )}
               <Tooltip title="Archive (restorable from the manager home)" size="sm">
                 <Button
                   size="sm"
@@ -282,6 +347,35 @@ export function LakeInfoPanel({
               </Button>
             </Tooltip>
           )}
+          {/* Re-embed for search. Same `canRebuild` gate and same bounded-wave door as Rebuild
+              passages, and shown for the same reason the sibling is: there is something to repair.
+              Its own button rather than a mode of that one because the two repair unrelated
+              defects - passage SIZE versus vector SPACE - and a lake can need one without the
+              other. This is the only lake defect that is completely silent: the files are healthy
+              on every chip, and retrieval drops them with no error and no low score. */}
+          {lake.canRebuild && staleEmbeddingSpaceCount > 0 && (
+            <Tooltip
+              title={
+                `${staleEmbeddingSpaceCount} file(s) in this lake were embedded with a previous model, so search ` +
+                'cannot compare them against anything and leaves them out entirely. Re-embedding puts them back ' +
+                'in reach; they are unsearchable while it runs. Bounded waves, safe to repeat until zero.'
+              }
+              size="sm"
+            >
+              <Button
+                size="sm"
+                variant="outlined"
+                color="warning"
+                startDecorator={<AutoFixHighIcon sx={{ fontSize: 16 }} />}
+                data-testid={`datalake-reembed-space-btn-${lake.id}`}
+                loading={rechunk.isPending}
+                onClick={() => rechunk.mutate({ select: 'stale-embedding-space' })}
+                sx={{ flexShrink: 0, fontSize: '13px' }}
+              >
+                Re-embed for search ({staleEmbeddingSpaceCount})
+              </Button>
+            </Tooltip>
+          )}
           {/* Converge to policy (#1681). Only shown for a lake with an EXPLICIT chunk policy and
               something measurably off it - an `inherited` lake is measured and reported by health
               but never repaired (epic decision 5), so there is nothing to offer. */}
@@ -327,6 +421,26 @@ export function LakeInfoPanel({
                 sx={{ flexShrink: 0 }}
               >
                 {convergeBlockedCount} blocked by another lake
+              </Chip>
+            </Tooltip>
+          )}
+          {showEmbeddingSpaceUnknown && (
+            <Tooltip
+              title={
+                'This deployment has no resolvable embedding model, so there is no way to tell which files ' +
+                'sit in the current vector space and re-embedding is unavailable. Set a supported default ' +
+                'embedding model and check that its provider credential is present.'
+              }
+              size="sm"
+            >
+              <Chip
+                size="sm"
+                variant="soft"
+                color="neutral"
+                data-testid={`datalake-embedding-space-unknown-chip-${lake.id}`}
+                sx={{ flexShrink: 0 }}
+              >
+                Embedding space unknown
               </Chip>
             </Tooltip>
           )}
@@ -436,6 +550,20 @@ export function LakeInfoPanel({
               {armCounts.metaCount} by lake tag, {armCounts.prefixOnlyCount} by content prefix
             </Chip>
           )}
+          {/* The DECLARATION (who may fill this lake), distinct from the Drive chip below it, which
+              reports whether a folder is actually attached. A lake can be connector-fed with no
+              connection yet. */}
+          {lake.origin === 'connector-fed' && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="neutral"
+              sx={{ fontSize: '11px' }}
+              data-testid={`datalake-origin-chip-${lake.id}`}
+            >
+              Connector-fed
+            </Chip>
+          )}
           {/* Attached-source marker: this panel is where a user comes to inspect or delete a lake,
               and it previously gave no sign a Drive folder was feeding it (#1645). */}
           <LakeDriveStatusChip lakeId={lake.id} organizationId={lake.organizationId} />
@@ -447,6 +575,10 @@ export function LakeInfoPanel({
               is blind to what the owner already decided; this reads the ruling-aware door and is the
               affordance that acts. Gated on canManage to match that door, which refuses a reader. */}
           <DuplicateAdmissionsChip lakeId={lake.id} lakeName={lake.name} canManage={!!lake.canManage} />
+          {/* Cross-document contradictions (#3044): the lake retrieves perfectly and still answers
+              wrongly, because two of its documents disagree. A different axis from the duplicate
+              chip beside it - those are two copies of ONE document, these are two documents. */}
+          <LakeFindingsChip lakeId={lake.id} lakeName={lake.name} canManage={!!lake.canManage} />
           {/* Lake memory: manage-gated state chip + build/rebuild trigger, next to the
               retrievability badge above - a different axis of "can this lake answer well" (extracted
               facts vs raw passages). Hidden entirely while off (no chip for a state nobody can act on). */}

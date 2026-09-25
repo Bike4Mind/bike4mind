@@ -7,7 +7,6 @@ import {
   shouldSummarizeSession,
   SUMMARIZATION_CONFIG,
   LakeMemoryFeature,
-  FORCED_RETRIEVAL_SETTING_KEYS,
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
@@ -15,6 +14,7 @@ import {
   UNLIMITED_HISTORY_COUNT,
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+  FORCED_RETRIEVAL_SETTING_KEYS,
   LAKE_RECALL_K_DEFAULT,
   SettingScopeLevel,
 } from '@bike4mind/common';
@@ -414,19 +414,20 @@ describe('shouldSummarizeSession', () => {
 describe('KnowledgeRetrievalFeature citation styles', () => {
   // Two source documents; file A contributes two chunks (both ranked above file B's)
   // so the indexed style must give both A-sections the SAME number and B the next.
-  const makeRetrievalContext = () => {
-    // fileA carries a date and fileB deliberately does not, so the passage-date test (#2236) covers
-    // both the present and the absent case on one run.
+  const makeRetrievalContext = (overrides: { chunkText?: Record<string, string>; charBudget?: number } = {}) => {
+    // fileA deliberately carries a `createdAt` (its upload time) and fileB does not, so the
+    // undated-heading test below proves the heading ignores it rather than merely lacking one.
     const files = [
       { id: 'fileA', fileName: 'NCCN NSCLC v3.2026.pdf', tags: [], createdAt: new Date('2026-08-14T09:30:00.000Z') },
       { id: 'fileB', fileName: 'Cortes NEJM 2024.pdf', tags: [] },
     ];
+    const textOf = (chunkId: string, fallback: string) => overrides.chunkText?.[chunkId] ?? fallback;
     const chunksByFile: Record<string, unknown[]> = {
       fileA: [
-        { id: 'chA1', fabFileId: 'fileA', text: 'chunk A1', vector: [1, 0] },
-        { id: 'chA2', fabFileId: 'fileA', text: 'chunk A2', vector: [0.95, 0.05] },
+        { id: 'chA1', fabFileId: 'fileA', text: textOf('chA1', 'chunk A1'), vector: [1, 0] },
+        { id: 'chA2', fabFileId: 'fileA', text: textOf('chA2', 'chunk A2'), vector: [0.95, 0.05] },
       ],
-      fileB: [{ id: 'chB1', fabFileId: 'fileB', text: 'chunk B1', vector: [0.9, 0.1] }],
+      fileB: [{ id: 'chB1', fabFileId: 'fileB', text: textOf('chB1', 'chunk B1'), vector: [0.9, 0.1] }],
     };
     return {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
@@ -438,7 +439,11 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
           findByFabFileId: vi.fn(),
           findVectorsByFabFileIds: vi.fn((ids: string[]) => Promise.resolve(ids.flatMap(id => chunksByFile[id] ?? []))),
         },
-        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
+        adminSettings: {
+          getSettingsValue: vi.fn((setting: string) =>
+            Promise.resolve(setting === 'forcedRetrievalCharBudget' ? overrides.charBudget : undefined)
+          ),
+        },
       },
       // Resolver injected by ChatCompletionProcess; no entitlements in these citation tests.
       resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
@@ -476,29 +481,23 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
   });
 
   /**
-   * #2236. Without a date in the heading a model asked to prefer the newer of two conflicting
-   * passages has nothing to prefer on. Asserted on the forced arm specifically because it is the
-   * always-on injection site - a `forceKnowledgeRetrieval` session uses this one every turn.
+   * `fileA` carries a `createdAt`, which is the upload time and NOT when the guideline it holds was
+   * published. Asserted on the forced arm specifically because it is the always-on injection site -
+   * a `forceKnowledgeRetrieval` session uses this one every turn, so a date reinstated here reaches
+   * the model on every grounded turn. The `\n` pins the end of the heading, so a clause appended
+   * after the parenthetical fails this rather than slipping past a bare substring match.
    */
-  it('heads a dated document with its date, and omits the clause entirely when there is none', async () => {
+  it('heads a document undated even when the file carries an upload timestamp', async () => {
     const { content } = await runRetrieval('indexed');
-    expect(content).toContain('### [1] NCCN NSCLC v3.2026.pdf (ID: fileA) - dated 2026-08-14');
-    // fileB has no createdAt: no empty clause, no "dated undefined", no trailing separator.
+    expect(content).toContain('### [1] NCCN NSCLC v3.2026.pdf (ID: fileA)\n');
     expect(content).toContain('### [2] Cortes NEJM 2024.pdf (ID: fileB)\n');
-    expect(content).not.toContain('dated undefined');
-    expect(content).not.toContain('dated null');
+    expect(content).not.toMatch(/dated|2026-08-14/);
   });
 
-  it('carries the date on the named style too, so the two citation styles cannot drift', async () => {
+  it('heads the named style undated too, so the two citation styles cannot drift', async () => {
     const { content } = await runRetrieval();
-    expect(content).toContain('### NCCN NSCLC v3.2026.pdf (ID: fileA) - dated 2026-08-14');
-  });
-
-  it('leaves the date outside toContentLabel, which would be a no-op on it anyway', async () => {
-    const { content } = await runRetrieval('indexed');
-    // The date is digits and separators only, so it survives verbatim - and the `[N]` the indexed
-    // citation contract depends on is still intact beside it.
-    expect(content).toMatch(/### \[1\] .*\(ID: fileA\) - dated \d{4}-\d{2}-\d{2}/);
+    expect(content).toContain('### NCCN NSCLC v3.2026.pdf (ID: fileA)\n');
+    expect(content).not.toMatch(/dated|2026-08-14/);
   });
 
   it('both styles carry the anti-invention rule so a grounded turn cannot volunteer an unsourced customer/deal/figure', async () => {
@@ -524,6 +523,46 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     // Citables order IS the index order: [N] maps to citables[N-1].
     const citables = (quest.promptMeta as { citables?: Array<{ id: string }> }).citables ?? [];
     expect(citables.map(c => c.id)).toEqual(['fileA', 'fileB']);
+  });
+
+  it("anchors each citable at its file's best chunk, with the injected passage text (#3038)", async () => {
+    const { quest } = await runRetrieval('indexed');
+    const citables =
+      (quest.promptMeta as { citables?: Array<{ id: string; metadata?: Record<string, unknown> }> }).citables ?? [];
+    // fileA contributes chA1 and chA2, both ranked above fileB's. The file-level dedup keeps the
+    // FIRST appearance, and the walk is score-descending, so chA1 is the cited passage - asserting
+    // the text as well as the id, because an id-only assertion would pass on either chunk if the
+    // dedup ever kept the last one instead.
+    expect(citables.map(c => c.metadata?.chunkId)).toEqual(['chA1', 'chB1']);
+    expect(citables.map(c => c.metadata?.fullContext)).toEqual(['chunk A1', 'chunk B1']);
+  });
+
+  it('clips the stored passage on a code-point boundary, not mid-surrogate-pair (#3038)', async () => {
+    // Asserted HERE and not only at clipToCodePointBoundary's own test: the shared fixture text is
+    // ASCII, so reverting this call site to `.slice(0, remaining)` would still pass every other
+    // case in this file. A lone surrogate would break the viewer's match against the document as
+    // well as the injected prompt, since neither half is a character the source contains.
+    const budget = 10;
+    const ctx = makeRetrievalContext({ chunkText: { chA1: 'abcdefghi\u{1F600}' }, charBudget: budget });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'indexed'
+    );
+    const quest = makeQuest();
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'stage III NSCLC treatment'
+    );
+
+    const citables =
+      (quest.promptMeta as { citables?: Array<{ id: string; metadata?: Record<string, unknown> }> }).citables ?? [];
+    const passage = citables[0]?.metadata?.fullContext as string;
+    // The emoji is 2 UTF-16 units, so a raw slice at 10 keeps its HIGH half and drops the low one.
+    expect(passage).toBe('abcdefghi');
+    expect(passage.length).toBeLessThanOrEqual(budget);
+    expect([...passage].every(char => !/[\uD800-\uDFFF]/.test(char))).toBe(true);
   });
 
   it('indexed: fresh quest keeps forced-retrieval citables as the index-aligned array prefix (no warn)', async () => {
@@ -1072,7 +1111,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
   });
 
   it('grades a text-embedding-3-small corpus against its own floor, not the ada-002 default', async () => {
-    // 0.707 cosine clears 3-small's 35% floor but sits under the 75% ada-002 default - if the
+    // 0.707 cosine clears 3-small's 58% floor but sits under the 75% ada-002 default - if the
     // absolute floor were still hardcoded, this chunk would be rejected and the turn would abstain.
     const ctx = makeCtx({
       files: [
@@ -1094,7 +1133,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       files: [
         { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-3-large', vectorizedChunkCount: 1 },
       ],
-      // cosine([1,4],[1,0]) = 1/sqrt(17) = 0.243 - well under both the 75% default and 3-small's 35%.
+      // cosine([1,4],[1,0]) = 1/sqrt(17) = 0.243 - well under both the 75% default and 3-small's 58%.
       rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'weakly related content', vector: [1, 4] }],
     });
     const { content } = await run(ctx);
@@ -1110,9 +1149,9 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
   });
 
   it('an operator-configured absolute floor is honored verbatim, not replaced by the by-space table', async () => {
-    // 3-small's table entry is 35%, which this chunk's 0.707 cosine clears easily. But the operator
+    // 3-small's table entry is 58%, which this chunk's 0.707 cosine clears easily. But the operator
     // explicitly dialed the setting to 90%, and that value must win outright - substituting the
-    // table's 35% here would silently discard a value someone deliberately tuned.
+    // table's 58% here would silently discard a value someone deliberately tuned.
     const ctx = makeCtx({
       files: [
         { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-3-small', vectorizedChunkCount: 1 },
@@ -1762,7 +1801,7 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
     const { quest } = await run(makeCtx(twoGenerations, true));
     const reasons =
       (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
-    const line = reasons.find(r => r.includes('older document version'));
+    const line = reasons.find(r => r.includes('were not ranked because this lake holds a version'));
     expect(line).toBeDefined();
     expect(line).toContain('old');
     expect(line).toContain('new');
@@ -1794,7 +1833,7 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
     const reasons =
       (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
     expect(reasons.some(r => r.includes('re-indexed right now'))).toBe(true);
-    expect(reasons.some(r => r.includes('older document version'))).toBe(false);
+    expect(reasons.some(r => r.includes('were not ranked because this lake holds a version'))).toBe(false);
   });
 
   it('collapses AFTER the embedding-model partition: a foreign-model newest generation cannot suppress the older one', async () => {
@@ -1813,7 +1852,7 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
     const reasons =
       (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
     expect(reasons.some(r => r.includes('embedded with a different model'))).toBe(true);
-    expect(reasons.some(r => r.includes('older document version'))).toBe(false);
+    expect(reasons.some(r => r.includes('were not ranked because this lake holds a version'))).toBe(false);
   });
 });
 
@@ -2352,7 +2391,9 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
       user: { id: 'u1', organizationId: opts.scoped ? 'org1' : undefined, tags: [], groups: [] },
       db: {
-        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        // #2769: readForcedRetrievalSettings now verifies organizationId against membership before
+        // trusting it - a verified member of 'org1' whenever the fixture claims that pointer.
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(opts.scoped ? ['org1'] : []) },
         fabfiles: {
           search: vi
             .fn()
@@ -2481,6 +2522,19 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
     expect(bodyLen(content)).toBe(9_000);
   });
 
+  it('falls back to the platform value, without throwing, when the membership lookup itself fails (#2769)', async () => {
+    // A transient org-repo outage must not fail the whole turn over a budget that's tolerable to
+    // get wrong - it degrades exactly like a non-member: the org override must not apply.
+    const ctx = makeCtx({
+      getSettingsValue: platformBudgetOnly('2000'),
+      chunkText: 'z'.repeat(30_000),
+      scoped: { orgOverride: '9000' },
+    });
+    ctx.db.organizations.findMembershipOrgIds = vi.fn().mockRejectedValue(new Error('org repo unavailable'));
+    const content = await run(ctx);
+    expect(bodyLen(content)).toBe(2_000);
+  });
+
   it('falls through to the platform value when the overlay holds no override (#2572)', async () => {
     // The common case on a scoped-overlay host: an org with nothing overridden must not lose the
     // platform value, which is what a resolver bug that treated "no override" as "unset" would do.
@@ -2527,7 +2581,9 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
       user: { id: 'u1', organizationId: 'org1', tags: [], groups: [] },
       db: {
-        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        // #2769: readForcedRetrievalSettings now verifies organizationId against membership before
+        // trusting it - every fixture here claims 'org1', so a verified member of it.
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']) },
         fabfiles: {
           search: vi
             .fn()
@@ -2602,6 +2658,79 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     // 85% of 1.0, so the 0.80 and 0.76 tail is dropped while the head is kept.
     const { injected } = await run(makeCtx({ scores: [1.0, 0.9, 0.8, 0.76] }));
     expect(injected).toEqual([0, 1]);
+  });
+
+  it('leaves the spread floor off by default, so the shipped behavior is the two floors alone', async () => {
+    // The mechanism ships inert: no magnitude has been measured for it yet, and an unmeasured
+    // default on the always-on retrieval path is the failure the floor constants warn about.
+    const { injected } = await run(makeCtx({ scores: [0.914, 0.9, 0.85, 0.8025] }));
+    expect(injected).toEqual([0, 1, 2, 3]);
+  });
+
+  it('cuts on the spread floor where the other two admit the whole collapsed band', async () => {
+    // THE case this ticket is about. All four scores clear the 0.75 absolute floor, and 85% of the
+    // 0.914 top is 0.777 - below the whole band - so both shipped floors admit everything and the
+    // char budget is the only thing that could stop. The median of the four is 0.875, so the span
+    // is 0.039 and a 50% spread floor cuts at 0.8945, keeping the two leaders.
+    const { injected } = await run(
+      makeCtx({ scores: [0.914, 0.9, 0.85, 0.8025], platform: { forcedRetrievalSpreadFloorPct: '50' } })
+    );
+    expect(injected).toEqual([0, 1]);
+  });
+
+  it('admits a different count for a different score shape at one spread floor', async () => {
+    // The acceptance criterion in one assertion: same floors, same corpus size, different question.
+    // A question whose answer stands out admits one passage; a question the corpus answers
+    // diffusely admits three. Neither of the other two floors can produce this - both are functions
+    // of the top score alone, so at a fixed setting they cut the same fraction of any band.
+    //
+    // The other two floors are turned off here so the difference cannot be attributed to them, and
+    // both fixtures carry the same three low scores: a real scan reaches mostly-irrelevant chunks,
+    // which is what puts the median below the hits rather than among them.
+    const floorsOff = {
+      forcedRetrievalMinSimilarityPct: '20',
+      forcedRetrievalRelativeFloorPct: '0',
+      forcedRetrievalSpreadFloorPct: '50',
+    };
+    // Median 0.285, span 0.629, cutoff 0.5995: the standout alone.
+    const sharp = await run(makeCtx({ scores: [0.914, 0.3, 0.29, 0.28, 0.27, 0.26], platform: floorsOff }));
+    expect(sharp.injected).toEqual([0]);
+
+    // The settings cache is process-wide and keyed per scope, so the second run would otherwise
+    // resolve the first run's map - see the low-band test below for the same hazard.
+    invalidateSettingsCache();
+    invalidateScopedSettingsCache();
+
+    // Median 0.58, span 0.334, cutoff 0.747: the whole near-equal cluster survives together.
+    const diffuse = await run(makeCtx({ scores: [0.914, 0.9, 0.88, 0.28, 0.27, 0.26], platform: floorsOff }));
+    expect(diffuse.injected).toEqual([0, 1, 2]);
+  });
+
+  it('never starves a turn at any spread floor, because the cutoff cannot exceed the top score', async () => {
+    // The bound that lets this gate be applied without adding an empty-handed exit, and the reason
+    // it is safe at a value nobody has measured: its worst case is one passage, never none.
+    for (const pct of ['1', '50', '100']) {
+      invalidateSettingsCache();
+      invalidateScopedSettingsCache();
+      const { injected } = await run(
+        makeCtx({ scores: [0.914, 0.9, 0.85, 0.8025], platform: { forcedRetrievalSpreadFloorPct: pct } })
+      );
+      expect(injected.length).toBeGreaterThanOrEqual(1);
+      expect(injected[0]).toBe(0);
+    }
+  });
+
+  it('records the spread floor own effect and the background it measured against', async () => {
+    // `post - postSpread` has to be the spread floor and nothing else, and `backgroundScore` has to
+    // be recorded even where the floor is off - that distribution is what a value is chosen from.
+    const { quest } = await run(
+      makeCtx({ scores: [0.914, 0.9, 0.85, 0.8025], platform: { forcedRetrievalSpreadFloorPct: '50' } })
+    );
+    const injected = quest.promptMeta?.retrieval?.injected;
+    expect(injected?.preRelativeFloorCandidates).toBe(4);
+    expect(injected?.postRelativeFloorCandidates).toBe(4);
+    expect(injected?.postSpreadFloorCandidates).toBe(2);
+    expect(injected?.backgroundScore).toBeCloseTo(0.875, 5);
   });
 
   it('changes nothing at its shipped default on the band this issue was measured against', async () => {
@@ -2748,6 +2877,26 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     });
     const { injected } = await run(ctx);
     // Degrades to FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT rather than to "no floor" or a throw.
+    expect(FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT).toBe(85);
+    expect(injected).toEqual([0, 1]);
+  });
+
+  it('reads a whitespace-only relative floor as unset rather than as a floor of 0', async () => {
+    // An admin who clears the field can leave '   ' behind, and `Number('   ')` is 0 - the
+    // DISABLED value for this floor - so without the trim in `nonNegativeIntOr` a cleared row
+    // removes the floor instead of restoring the default, keeping all four passages rather than the
+    // two that clear 85.
+    //
+    // `withScopedOverlay: false` is load-bearing, not incidental: this pins the PLATFORM read path,
+    // the only one the trim can defend. On the scoped path `z.coerce.number()` has already turned
+    // '   ' into the number 0 before the helper sees it, so no string-level fix reaches that case.
+    const { injected } = await run(
+      makeCtx({
+        scores: [1.0, 0.9, 0.8, 0.76],
+        platform: { forcedRetrievalRelativeFloorPct: '   ' },
+        withScopedOverlay: false,
+      })
+    );
     expect(FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT).toBe(85);
     expect(injected).toEqual([0, 1]);
   });
@@ -3049,6 +3198,45 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
 
   it('records 0, not absence, when the collapse ran over a corpus with nothing to suppress', async () => {
     await run(makeCtx({ files: [generation('only', '2025-01-01')], collapseEnabled: true }));
+    expect(recordedInput()?.filesSupersededCollapsed).toBe(0);
+  });
+
+  it('applies a curator ruling with the derived collapse switched off, and leaves the count absent', async () => {
+    // Two facts at once, and they are deliberately different facts (#3046). The ruling is honored
+    // whatever the admin setting says - a human read both documents, which is not what that
+    // setting exists to be cautious about - so `old` leaves the ranking. But the DERIVED collapse
+    // still did not run, so `filesSupersededCollapsed` must stay absent rather than report 1: the
+    // field's contract is about older GENERATIONS this pass looked for, and it looked for none.
+    // The curator half is recorded by DataLakeCorpusActionModel instead.
+    const ruled = {
+      ...generation('old', '2024-01-01'),
+      supersededInLakes: [
+        { dataLakeId: 'lakeZ', supersededByFabFileId: 'new', decidedByUserId: 'curator-1', decidedAt: new Date() },
+      ],
+    };
+    await run(makeCtx({ files: [ruled, generation('new', '2025-01-01')], collapseEnabled: false }));
+
+    expect(recordedInput()?.fileIds).toEqual(['new']);
+    expect(recordedInput()?.filesSupersededCollapsed).toBeUndefined();
+  });
+
+  it('excludes a curator suppression from the DERIVED count even while the collapse is running', async () => {
+    // The one combination the test above cannot show: with the setting ON, `collapseRan` is true
+    // and `auditSupersededCollapsed` is a NUMBER rather than `undefined` - so this is the only case
+    // that can catch the filter silently dropping (`e.tier !== CURATOR_SUPERSESSION_TIER` deleted
+    // would make this suite pass under `collapseEnabled: false` alone, since that path never
+    // evaluates the filter at all).
+    const ruled = {
+      ...generation('old', '2024-01-01'),
+      supersededInLakes: [
+        { dataLakeId: 'lakeZ', supersededByFabFileId: 'new', decidedByUserId: 'curator-1', decidedAt: new Date() },
+      ],
+    };
+    await run(makeCtx({ files: [ruled, generation('new', '2025-01-01')], collapseEnabled: true }));
+
+    expect(recordedInput()?.fileIds).toEqual(['new']);
+    // 0, not 1: the collapse ran and found nothing of its OWN (a curator ruling is not a derived
+    // generation match), so the field reports what it actually looked for and found.
     expect(recordedInput()?.filesSupersededCollapsed).toBe(0);
   });
 
@@ -3694,13 +3882,16 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     // A recorded zero, not an unknown: the scan ran to completion, so nothing was injected and
     // that is a fact. `topScore` must be ABSENT - it is still the -1 sentinel here, and persisting
     // it would read as a real (terrible) similarity rather than as no comparison at all.
-    // Both candidate counts are 0 too - nothing was ever scored, so nothing entered the pool, and
-    // a relative floor over an empty pool leaves it empty.
+    // All three candidate counts are 0 too - nothing was ever scored, so nothing entered the pool,
+    // and a per-turn floor over an empty pool leaves it empty. `backgroundScore` is absent for the
+    // same reason as `topScore`: no score was computed, so there is no distribution to take a
+    // median of, and a 0 there would read as a measured background.
     expect(retrieval?.injected).toEqual({
       chunks: 0,
       chars: 0,
       preRelativeFloorCandidates: 0,
       postRelativeFloorCandidates: 0,
+      postSpreadFloorCandidates: 0,
     });
   });
 
@@ -3715,15 +3906,19 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     // THE case this field exists for: 'ok' alone made a fully-starved turn byte-identical to one
     // that injected its whole budget. `topScore: 0` is the diagnostic - the best candidate was
     // compared and scored 0, i.e. it missed the floor rather than never being looked at.
-    // Both counts 0 - the score missed the ABSOLUTE floor, so it never reached the ranked pool at
-    // all and the relative floor never got a candidate to trim. This is the exit whose comment
+    // All counts 0 - the score missed the ABSOLUTE floor, so it never reached the ranked pool at
+    // all and neither per-turn floor got a candidate to trim. This is the exit whose comment
     // used to claim it was the trimmed-pool case; a zero pre-count is what proves it is not.
+    // `backgroundScore` IS present, unlike the not_indexed case above: a chunk was compared and
+    // scored, so the median of the scored set exists even though nothing survived the floor.
     expect(retrieval?.injected).toEqual({
       chunks: 0,
       chars: 0,
       topScore: 0,
       preRelativeFloorCandidates: 0,
       postRelativeFloorCandidates: 0,
+      postSpreadFloorCandidates: 0,
+      backgroundScore: 0,
     });
     // Still abstains to the user; 'ok' describes the retrieval, not the answer.
     expect(messages[0]?.content).toContain('does not cover this');
@@ -3740,14 +3935,17 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     // The other half of the pair: a grounded turn reports the volume it grounded on. `chars` is
     // the chunk text only ('text fileA'), never the heading, so it is comparable to the knowledge
     // tools' number. Query and chunk vectors are identical here, hence a topScore of 1.
-    // Both counts 1 - the single candidate cleared both floors, so nothing was trimmed and the
-    // pre-count, post-count and `chunks` all agree.
+    // All counts 1 - the single candidate cleared every floor, so nothing was trimmed and the
+    // pre-counts, post-counts and `chunks` all agree. `backgroundScore` is 1 for the same reason
+    // `topScore` is: one chunk was scored, and the median of a single score is that score.
     expect(retrieval?.injected).toEqual({
       chunks: 1,
       chars: 'text fileA'.length,
       topScore: 1,
       preRelativeFloorCandidates: 1,
       postRelativeFloorCandidates: 1,
+      postSpreadFloorCandidates: 1,
+      backgroundScore: 1,
     });
     expect(messages[0]?.content).toContain('### A.pdf (ID: fileA)');
   });
@@ -3820,6 +4018,52 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
         surfaces: [],
         dataLakeTags: [],
       });
+    });
+
+    // Not a variant of the personal-corpus case above: that one keys on what the session's
+    // ATTACHMENTS are, this one on what its scope SAYS. The fixture is the discriminating pair -
+    // identical empty `retrievalTags`, differing only by the sidecar - because without the sidecar
+    // an empty scope reads as "no opinion" and forced retrieval ran against every entitled lake.
+    it('records the no-lake-scope skip without claiming retrieval ran', async () => {
+      const scopedFeature = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        [],
+        undefined,
+        undefined,
+        undefined,
+        true
+      );
+      const noLake = makeQuest();
+      await scopedFeature.getContextMessages(
+        noLake,
+        embeddingFactory as unknown as Parameters<typeof scopedFeature.getContextMessages>[1],
+        'what do the docs say'
+      );
+      expect(retrievalOf(noLake)).toEqual({
+        attempted: false,
+        mode: 'forced',
+        forcedSkipReason: 'no_lake_scope',
+        surfaces: [],
+        dataLakeTags: [],
+      });
+    });
+
+    it('keeps grounding when an empty scope carries no explicit marker', async () => {
+      const unmarked = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined
+      );
+      const quest = makeQuest();
+      await unmarked.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof unmarked.getContextMessages>[1],
+        'what do the docs say'
+      );
+      expect(retrievalOf(quest)?.forcedSkipReason).toBeUndefined();
     });
 
     it('does not let the skip record mask a tool retrieval later in the same turn', async () => {
@@ -3962,18 +4206,50 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
     getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
   };
 
-  const run = async (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) => {
+  const runWithQuest = async (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) => {
     const ctx = makeCtx(chunks, hasMore);
     const feature = new KnowledgeRetrievalFeature(
       ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
     );
+    // Held rather than inlined: the citation chips this arm writes land on the quest, so the
+    // reader's half of the conflict signal is only observable through it.
+    const quest = makeQuest();
     const messages = await feature.getContextMessages(
-      makeQuest(),
+      quest,
       embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
       'uptime'
     );
-    return messages[0]?.content ?? '';
+    return { content: messages[0]?.content ?? '', quest };
   };
+
+  const run = async (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) =>
+    (await runWithQuest(chunks, hasMore)).content;
+
+  // The note warns the MODEL; these pin that the same turn marks the chips the READER sees, so a
+  // change that keeps one channel and drops the other fails here rather than shipping silently.
+  it('marks both conflicting documents on the citation chips (#3041)', async () => {
+    const { quest } = await runWithQuest([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 95%.' },
+    ]);
+
+    const citables = quest.promptMeta?.citables ?? [];
+    expect(citables.map(c => c.id)).toEqual(['fileA', 'fileB']);
+    expect(citables.find(c => c.id === 'fileA')?.metadata?.conflictsWith).toEqual(['fileB']);
+    expect(citables.find(c => c.id === 'fileB')?.metadata?.conflictsWith).toEqual(['fileA']);
+  });
+
+  it('leaves the chips unmarked when the documents agree', async () => {
+    const { quest } = await runWithQuest([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 99.9%.' },
+    ]);
+
+    // Absent, not an empty array: a chip carrying `conflictsWith: []` would badge with no partner.
+    for (const citable of quest.promptMeta?.citables ?? []) {
+      expect(citable.metadata?.conflictsWith).toBeUndefined();
+    }
+  });
 
   it('keeps the note at column 0, outside the untrusted block', async () => {
     const content = await run([

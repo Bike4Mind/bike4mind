@@ -15,12 +15,30 @@ const DEMO_KEY_MAP: Partial<Record<ApiKeyType, IAdminSettings['settingName']>> =
   [ApiKeyType.gemini]: 'geminiDemoKey',
   [ApiKeyType.xai]: 'xaiApiKey',
   [ApiKeyType.kimi]: 'moonshotApiKey',
+  [ApiKeyType.deepseek]: 'deepseekApiKey',
   [ApiKeyType.bfl]: 'bflApiKey',
   [ApiKeyType.voyageai]: 'voyageApiKey',
   // Admin-provisioned ElevenLabs key powers TTS for all users (same key the
   // Voice v2 sessions use), so no per-user key is required - matching how every
   // other provider falls back to its admin key.
   [ApiKeyType.elevenlabs]: 'elevenLabsServerApiKey',
+};
+
+/**
+ * Self-host .env fallback per provider, mirroring the one getEffectiveLLMApiKeys applies
+ * below. MUST STAY IN SYNC with it: the two resolvers answer for the same provider on
+ * different paths - listing and the image queue handler read getEffectiveLLMApiKeys, the
+ * chat image_generation tool reads getEffectiveApiKey - so a provider only one of them
+ * resolves shows its models in the picker and then refuses to run them.
+ */
+const ENV_KEY_MAP: Partial<Record<ApiKeyType, string>> = {
+  [ApiKeyType.openai]: 'OPENAI_API_KEY',
+  [ApiKeyType.anthropic]: 'ANTHROPIC_API_KEY',
+  [ApiKeyType.gemini]: 'GEMINI_API_KEY',
+  [ApiKeyType.bfl]: 'BFL_API_KEY',
+  [ApiKeyType.xai]: 'XAI_API_KEY',
+  [ApiKeyType.kimi]: 'MOONSHOT_API_KEY',
+  [ApiKeyType.deepseek]: 'DEEPSEEK_API_KEY',
 };
 
 // Base type - used by getEffectiveApiKey (~15 callers, unchanged contract)
@@ -125,6 +143,12 @@ export const getEffectiveApiKey = async (
     }
   }
 
+  // envKey only answers under B4M_SELF_HOST, so hosted resolution is unchanged.
+  if (!key) {
+    const envName = ENV_KEY_MAP[params.type as keyof typeof ENV_KEY_MAP];
+    if (envName) key = envKey(envName) ?? undefined;
+  }
+
   return key;
 };
 
@@ -133,6 +157,8 @@ export const getEffectiveLLMApiKeys = async (
   adapters: GetEffectiveLLMApiKeysAdapters,
   options?: {
     logger?: Logger;
+    /** Read admin settings past the process-wide settings cache (see getSettingsByNames). */
+    skipCache?: boolean;
   }
 ) => {
   const { db } = adapters;
@@ -148,6 +174,7 @@ export const getEffectiveLLMApiKeys = async (
     'bflApiKey',
     'xaiApiKey',
     'moonshotApiKey',
+    'deepseekApiKey',
     'voyageApiKey',
     'ollamaBackend',
     'EnableOllama',
@@ -167,12 +194,17 @@ export const getEffectiveLLMApiKeys = async (
             ApiKeyType.bfl,
             ApiKeyType.xai,
             ApiKeyType.kimi,
+            ApiKeyType.deepseek,
             ApiKeyType.voyageai,
           ],
           adapters
         )
       : Promise.resolve<IApiKeyDocument[]>([]),
-    adapters.getSettingsByNames(adminSettingNames, { adminSettings: db.adminSettings }, { logger }),
+    adapters.getSettingsByNames(
+      adminSettingNames,
+      { adminSettings: db.adminSettings },
+      { logger, skipCache: options?.skipCache }
+    ),
   ]);
 
   const userKeyMap = new Map<ApiKeyType, IApiKeyDocument>();
@@ -185,6 +217,7 @@ export const getEffectiveLLMApiKeys = async (
   const bflUserKey = userKeyMap.get(ApiKeyType.bfl) || null;
   const xaiUserKey = userKeyMap.get(ApiKeyType.xai) || null;
   const kimiUserKey = userKeyMap.get(ApiKeyType.kimi) || null;
+  const deepseekUserKey = userKeyMap.get(ApiKeyType.deepseek) || null;
   const voyageaiUserKey = userKeyMap.get(ApiKeyType.voyageai) || null;
 
   // Extract individual settings for backward compatibility
@@ -194,6 +227,7 @@ export const getEffectiveLLMApiKeys = async (
   const bflDemoKey = adminSettings['bflApiKey'];
   const xaiDemoKey = adminSettings['xaiApiKey'];
   const kimiDemoKey = adminSettings['moonshotApiKey'];
+  const deepseekDemoKey = adminSettings['deepseekApiKey'];
   const voyageaiDemoKey = adminSettings['voyageApiKey'];
   const ollamaBackend = adminSettings['ollamaBackend'];
   const enableOllama = adminSettings['EnableOllama'];
@@ -217,11 +251,12 @@ export const getEffectiveLLMApiKeys = async (
     openai: keyOrExpired(openaiUserKey) || openaiDemoKey || envKey('OPENAI_API_KEY'),
     anthropic: keyOrExpired(anthropicUserKey) || anthropicDemoKey || envKey('ANTHROPIC_API_KEY'),
     gemini: keyOrExpired(geminiUserKey) || geminiDemoKey || envKey('GEMINI_API_KEY'),
-    bfl: keyOrExpired(bflUserKey) || bflDemoKey || null,
+    bfl: keyOrExpired(bflUserKey) || bflDemoKey || envKey('BFL_API_KEY'),
     xai: keyOrExpired(xaiUserKey) || xaiDemoKey || envKey('XAI_API_KEY'),
     // MOONSHOT_API_KEY is the name Moonshot's own docs and SDK examples use, so a
     // self-hoster who followed their quickstart already has it exported.
     kimi: keyOrExpired(kimiUserKey) || kimiDemoKey || envKey('MOONSHOT_API_KEY'),
+    deepseek: keyOrExpired(deepseekUserKey) || deepseekDemoKey || envKey('DEEPSEEK_API_KEY'),
     voyageai: keyOrExpired(voyageaiUserKey) || voyageaiDemoKey || null,
     // Self-host: when OLLAMA_BASE_URL is set in the environment, enable Ollama
     // pointed at that endpoint without requiring the DB admin settings

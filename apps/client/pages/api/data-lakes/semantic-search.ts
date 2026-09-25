@@ -15,8 +15,16 @@ import {
   usageEventRepository,
   userRepository,
   lakeAccessEventRepository,
+  scopedSettingsRepository,
 } from '@bike4mind/database';
-import { apiKeyService, creditService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
+import {
+  apiKeyService,
+  creditService,
+  dataLakeService,
+  isOperationalBillingEnabled,
+  recordOperationalUsage,
+  scopedSettingsService,
+} from '@bike4mind/services';
 import {
   getProviderFromModel,
   resolveEmbeddingConfig,
@@ -30,25 +38,52 @@ import {
   isSupportedEmbeddingModel,
   insufficientCreditsError,
   usdToCredits,
+  type SettingScope,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import {
-  createTokenizer,
-  getSettingsByNames,
-  getSettingsMap,
-  getSettingsValue,
-  normalizeId,
-  type ITokenizer,
-} from '@bike4mind/utils';
+import { createTokenizer, getSettingsByNames, normalizeId, type ITokenizer } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { resolveRetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
+import { getRequestMembershipOrgIds } from '@server/dataLakes/requestMembership';
 
 // Reused across requests so the tiktoken encoder is resolved once, not per search.
 let sharedTokenizer: ITokenizer | undefined;
 function getSharedTokenizer(logger: Logger): ITokenizer {
   if (!sharedTokenizer) sharedTokenizer = createTokenizer({ logger });
   return sharedTokenizer;
+}
+
+/**
+ * The scope this route resolves its search budgets on (#2709).
+ *
+ * `scopeForCaller`'s own caveat says a consumer that needs more than the selected-org display
+ * pointer "must resolve membership first and pass the result here" - so that is what this does.
+ * `user.organizationId` SELECTS among the caller's orgs; `getRequestMembershipOrgIds` (#1674) is
+ * what PROVES one. The access gate resolves the same memo earlier in the request (it reaches
+ * `getDynamicDataLakeAccess`, which resolves membership whenever a lakes repo is wired - always,
+ * here), so this reads it rather than paying for a second lookup. Call it AFTER that gate. A
+ * pointer at an org the caller is not a member of resolves to no org rung at all rather than to
+ * that org's ceiling - and, since `scopeForCaller` makes the OWNER rung the ORG when one is present
+ * and the USER when it is not, that caller's personal owner override governs here instead of the
+ * org's. Owner outranks Organization, so it is the rung that decides.
+ *
+ * Budgets are read-only, so this is a tighter standard than the rung strictly needs. It is the
+ * cheap one here, and it keeps the route from being the precedent that a looser derivation is fine.
+ *
+ * Deliberately diverges from the billing block further down (`billingOrg`, via
+ * `organizationRepository.shareable.findAccessibleById`), which also grants on a `groups[]`
+ * share. A caller with only group-share access is therefore not a member here but is billed
+ * against and capped by that org there, in the same request - both checks are individually
+ * correct for their own purpose; see #2857 for why that disagreement is accepted as-is rather
+ * than reconciled.
+ */
+async function resolveBudgetScope(req: Request): Promise<SettingScope> {
+  const userId = req.user.id;
+  const selectedOrgId = normalizeId(req.user.organizationId);
+  const memberOrgIds = await getRequestMembershipOrgIds(req);
+  const verifiedOrgId = selectedOrgId && memberOrgIds.includes(selectedOrgId) ? selectedOrgId : undefined;
+  return scopedSettingsService.scopeForCaller({ userId, organizationId: verifiedOrgId });
 }
 
 /**
@@ -194,6 +229,11 @@ const toScanPayload = (scan: dataLakeService.SemanticSearchScanAccounting) => ({
   ann_files_queried: scan.annFilesQueried,
   ann_hits: scan.annHits,
   ann_models_queried: scan.annModelsQueried,
+  // Scoped files per lake. Without it `files_scoped` is a single number over the union and a
+  // caller cannot tell a lake that contributed nothing from one that contributed most of the
+  // scope - the gap that let a multi-lake search report every lake as searched. The empty-string
+  // key holds files attributable to no lake (the caller's own and shared files).
+  files_by_lake: scan.filesByLake,
   // The ANN share of latency_ms, so a slow search can be attributed from the response itself
   // rather than from CloudWatch minutes later. The counters above cannot tell a 49s search from a
   // 2s one, and this route runs under a 60s Lambda ceiling - a first production search spent 45.4s
@@ -275,13 +315,18 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       // --- Resolve accessible data lakes (this IS the access gate) ---
       const { dataLakeTags, dataLakeTagPrefixes, lakes } = await resolveRetrievalLakeScope(req);
 
+      // After the gate on purpose: it populates the membership memo this reads, so the org
+      // verification below is free. Both budget reads share it, so one search resolves one scope.
+      const budgetScope = await resolveBudgetScope(req);
+
       // Every lake contributes exactly one meta-tag, so an empty tag list means zero
       // accessible lakes. Gating on the prefixes instead would be wrong: a caller can
       // legitimately hold only dynamic lakes, whose prefixes are all in the SCOPED bucket.
       if (dataLakeTags.length === 0) {
         const budgets = await dataLakeService.resolveSearchBudgets(
-          { adminSettings: adminSettingsRepository },
-          req.logger
+          { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
+          req.logger,
+          budgetScope
         );
         return res.json({
           results: [],
@@ -304,26 +349,40 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       // Gated on the exact pair recordOperationalUsage requires to debit; a deployment that
       // never bills must not start rejecting searches.
       const queryTokens = await countQueryTokens();
-      const billingSettings = await getSettingsMap(
-        { adminSettings: adminSettingsRepository },
-        { names: ['billOperationalUsage', 'enforceCredits'], logger: req.logger }
-      );
-      const shouldBill =
-        (getSettingsValue('billOperationalUsage', billingSettings) ?? false) &&
-        (getSettingsValue('enforceCredits', billingSettings) ?? false);
+      // Shared with the settlement in recordOperationalUsage, so the two cannot drift on
+      // "does operational spend actually debit here".
+      //
+      // Deliberately NOT inside a fail-open try, unlike both the holder read below and the same
+      // helper's use in sessionOperationalCreditPreflight.ts. The philosophies differ because
+      // what a fallback costs differs: there, `shouldBill` gates only the pre-flight and
+      // settlement re-reads the setting in the SessionEvents process, so failing open skips a
+      // check and still charges. Here it gates the check AND the charge in this one request
+      // (see the `shouldBill &&` guard on the settlement below), so falling back to `false`
+      // would hand out an unbilled search. A throw is the safer failure for that shape.
+      const shouldBill = await isOperationalBillingEnabled({ adminSettings: adminSettingsRepository }, req.logger);
 
       // Resolved once and reused by the settlement below, so the pre-flight and the charge
       // can never disagree about which holder pays. Best-effort: a billing-store failure leaves
       // both the check and the charge undone, which is the pre-existing behaviour - it must not
       // turn a working search into a 500.
       let billingUser: Awaited<ReturnType<typeof userRepository.findById>> | null = null;
-      let billingOrg: Awaited<ReturnType<typeof organizationRepository.findById>> | null = null;
+      let billingOrg: Awaited<ReturnType<typeof organizationRepository.shareable.findAccessibleById>> | null = null;
       try {
         // Both assigned only after both reads succeed: a half-resolved pair (user set, org
         // null) would skip the member cap and bill the member personally for org usage.
         const resolvedUser = await userRepository.findById(req.user.id);
+        // ACL-checked, not the plain accessor: a stale organizationId pointer (the roster no
+        // longer carries this user, #2607) must fall back to personal billing rather than
+        // billing/capping against an org they've left. Same shareable ACL resolveActiveOrg
+        // uses (#2769), deliberately WITHOUT its isAdmin arm - platform admin rights are not
+        // a billing relationship, so an admin's own stale pointer bills personally too.
+        // Deliberately diverges from resolveBudgetScope above (#2709), which does not grant on a
+        // groups[] share: a caller with only group-share access is billed/capped here but resolves
+        // at their personal owner rung there (no org rung at all), so their own override governs
+        // instead of the org's - see #2857 for why that disagreement is accepted as-is rather than
+        // reconciled.
         const resolvedOrg = resolvedUser?.organizationId
-          ? await organizationRepository.findById(resolvedUser.organizationId)
+          ? await organizationRepository.shareable.findAccessibleById(req.user, resolvedUser.organizationId)
           : null;
         billingUser = resolvedUser;
         billingOrg = resolvedOrg;
@@ -492,7 +551,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
           dataLakeTags,
           dataLakeTagPrefixes,
           lakeMemberships,
-          budgets: await dataLakeService.resolveSearchBudgets({ adminSettings: adminSettingsRepository }, req.logger),
+          budgets: await dataLakeService.resolveSearchBudgets(
+            { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
+            req.logger,
+            budgetScope
+          ),
           vectorSearchEnabled: (await adminSettingsRepository.getSettingsValue('EnableDataLakeVectorSearch')) ?? false,
           // Per-lake supersession collapse - `lakes` is only ever an attribution source here, never
           // a second way to resolve access (the scope is still the tags above).

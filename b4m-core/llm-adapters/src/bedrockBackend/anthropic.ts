@@ -1,6 +1,7 @@
 import {
   BEDROCK_NO_PROMPT_CACHING_MODELS,
   ChatModels,
+  createThinkMarkerEscaper,
   IMessage,
   MessageContentText,
   ModelBackend,
@@ -19,11 +20,13 @@ import {
   replaceLastToolResultObservationCanonical,
   getLatestToolCallIdCanonical,
 } from '../backend';
+import { Logger } from '@bike4mind/observability';
 import { BaseBedrockBackend } from './base';
 import { getCachingAdapter } from '../caching/adapters';
 import { systemContentToText } from '../systemContent';
 import { DispatchModel } from '../dispatchModel';
 import { buildThinkingParams } from '../thinkingParams';
+import { toAnthropicContent } from '../anthropicContent';
 
 enum ClaudeChunkTypes {
   MESSAGE_START = 'message_start',
@@ -238,6 +241,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
   // Track thinking block state
   private isInThinkingBlock = false;
+  private reasoningEscaper = createThinkMarkerEscaper();
   /**
    * Reasoning blocks of the assistant turn currently being translated, indexed by the
    * stream's content-block index. Reset at `message_start` and consumed by
@@ -707,25 +711,31 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
         // Handle array content - filter out empty text blocks
         if (Array.isArray(m.content)) {
-          const sanitizedContent = m.content
-            .map(block => {
-              // For text blocks, check if text is empty/whitespace-only
-              if (isRecord(block) && block.type === 'text') {
-                const text = typeof block.text === 'string' ? block.text : '';
-                if (!text.trim()) {
-                  return null; // Mark for removal
-                }
-              }
-              return block;
-            })
-            .filter(block => block !== null);
+          // Empty text blocks are filtered BEFORE translation (matching
+          // anthropicBackend.ts's sanitizeMessageContent -> toAnthropicContent order),
+          // so an image-only array reaches toAnthropicContent's own placeholder guard
+          // instead of being padded out with a blank text block that later survives
+          // as `content.length === 1` and masks a fully-dropped image.
+          const textFiltered = m.content.filter(block => {
+            if (isRecord(block) && block.type === 'text') {
+              const text = typeof block.text === 'string' ? block.text : '';
+              return !!text.trim();
+            }
+            return true;
+          });
+
+          // This body takes the native Anthropic request shape (image/source blocks),
+          // so a canonical `image_url` block (guaranteed by normalizeMultimodalMessages
+          // upstream, or forwarded as-is by any caller that skips it) needs the same
+          // translation anthropicBackend.ts applies to the direct API.
+          const translatedContent = toAnthropicContent(textFiltered, Logger.globalInstance) as unknown[];
 
           // If array is now empty, mark message for removal
-          if (sanitizedContent.length === 0) {
+          if (translatedContent.length === 0) {
             return { ...m, content: '' };
           }
 
-          return { ...m, content: sanitizedContent };
+          return { ...m, content: translatedContent };
         }
 
         // Convert non-string/non-array content to empty string
@@ -1117,6 +1127,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       if (isMessageStart(chunk)) {
         // Reset thinking block state at the start of a new message
         this.isInThinkingBlock = false;
+        this.reasoningEscaper = createThinkMarkerEscaper();
         this.assistantReasoningBlocks = [];
         choice = {
           chunkText: '',
@@ -1164,7 +1175,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         } else if (isInputJsonDelta(delta)) {
           choice.chunkText = delta.partial_json;
         } else if (isThinkingDelta(delta)) {
-          choice.chunkText = delta.thinking;
+          // Escaped for the transcript; the replay copy in assistantReasoningBlocks stays
+          // raw since it is resent to the API verbatim in tool-use loops.
+          choice.chunkText = this.reasoningEscaper.push(delta.thinking);
           const block = this.assistantReasoningBlocks[chunk.index];
           if (block?.type === 'thinking') block.thinking += delta.thinking;
         } else if (isSignatureDelta(delta)) {
@@ -1178,7 +1191,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         choice = {
           status: ChoiceStatus.STREAM,
           index: chunk.index,
-          chunkText: this.isInThinkingBlock ? '</think>' : '',
+          chunkText: this.isInThinkingBlock ? this.reasoningEscaper.flush() + '</think>' : '',
         } as IChoice;
 
         // Reset thinking block state

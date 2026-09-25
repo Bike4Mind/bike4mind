@@ -1,4 +1,9 @@
-import { ChatCompletionFeature, ChatCompletionInvoke, ChatCompletionProcess, featureNames } from '@bike4mind/services';
+import {
+  ChatCompletionFeature,
+  ChatCompletionInvoke,
+  ChatCompletionProcess,
+  featureNames,
+} from '@bike4mind/services/llm';
 import { BadRequestError, getSettingsMap, getSettingsValue, NotFoundError, SQSService } from '@bike4mind/utils';
 import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@server/middlewares/rateLimit';
@@ -218,6 +223,11 @@ const handler = nextRouteForContract(chatContract, {
       model: internalRequest.params.model,
       response: completedQuest.reply,
       responses: completedQuest.replies,
+      // Terminal-failure classifier (see chatContract's 200 description). `type` is present
+      // unconditionally, matching the polled quest (GET /api/quests/{id}); `errorCode` stays
+      // conditional since only the billing failures set it.
+      type: completedQuest.type,
+      ...(completedQuest.type === 'error' && { errorCode: completedQuest.errorCode }),
       // Additive twin of `response`: the machine-readable state the turn's tools produced, which
       // otherwise survives only on the quest (the model sees a terse displayMessage instead). The
       // prose above is unchanged - a caller reads one, the other, or both.

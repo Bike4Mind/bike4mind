@@ -6,6 +6,8 @@ import {
   userRepository,
   fabFileRepository,
   cacheRepository,
+  sessionAgentConfigRepository,
+  withTransaction,
 } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
@@ -41,16 +43,25 @@ const getAndDeleteHandler = baseApi()
     if (!req.query.id) throw new NotFoundError('Session not found');
 
     const userId = req.user?.id;
-    const newLastNotebook = await sessionService.deleteSession(
-      userId,
-      { id: req.query.id },
-      {
-        db: {
-          sessions: sessionRepository,
-          projects: projectRepository,
-          fabFiles: fabFileRepository,
-        },
-      }
+    // deleteSession rewrites grant rows across every file this session touched before it tombstones
+    // anything, and takes a version-guarded write on each. Without a transaction a
+    // ConcurrencyConflictError partway through leaves some files rewritten and some not, with the
+    // session still live. Matches the revokeSharing route, which wraps the sibling cascade for the
+    // same reason; the service's own ordering comment already assumes a retry sees an all-or-nothing
+    // state.
+    const newLastNotebook = await withTransaction(() =>
+      sessionService.deleteSession(
+        userId,
+        { id: req.query.id as string },
+        {
+          db: {
+            sessions: sessionRepository,
+            projects: projectRepository,
+            fabFiles: fabFileRepository,
+            sessionAgentConfigs: sessionAgentConfigRepository,
+          },
+        }
+      )
     );
 
     await logEvent(

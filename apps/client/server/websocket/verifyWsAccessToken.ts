@@ -2,6 +2,7 @@ import { User } from '@bike4mind/database';
 import { secretRotationRepository } from '@bike4mind/database/infra';
 import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/services';
 import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
+import { decryptAtRest } from '@bike4mind/utils/security';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { NotFoundError, UnauthorizedError } from '@server/utils/errors';
 import jwt from 'jsonwebtoken';
@@ -15,17 +16,27 @@ import jwt from 'jsonwebtoken';
  * missing here lets a revoked or wrong-type token ride the socket after REST already refused it.
  */
 export async function verifyWsAccessToken(accessToken: string | undefined) {
-  const secretRotation = await secretRotationRepository.findByKeyName('JWT_SECRET');
+  const secretRotation = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
   let previousSecret = undefined;
-  // Accept the previous key only within the shared rotation grace window.
-  if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt)) {
-    previousSecret = secretRotation?.previousKey;
+  // Accept the previous key only within the shared rotation grace window. `previousKey`
+  // is stored encrypted at rest (see secret-rotations/renewed.ts); decrypt before
+  // verifying. Legacy plaintext rows pass through unchanged.
+  if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt) && secretRotation?.previousKey) {
+    previousSecret = decryptAtRest(secretRotation.previousKey) || undefined;
   }
   const decoded = authTokenGenerator.verifyToken(accessToken!, previousSecret) as jwt.JwtPayload;
 
   // Missing typ = legacy pre-claim token, accepted (self-expiring grace). See the helper.
   if (!isTokenTypeAcceptable(decoded.typ, 'access')) {
     throw new UnauthorizedError('Invalid token type');
+  }
+
+  // A relying-party OAuth access token is scope/audience-bound to OAuth-reachable REST routes
+  // (see oauthRouteGate); it is NOT a session credential for the realtime socket. Default-deny it
+  // here - the route gate does not cover this surface, so without this check the token would ride
+  // the socket as a full session.
+  if ((decoded as { kind?: string }).kind === 'oauth') {
+    throw new UnauthorizedError('OAuth access tokens are not accepted on the realtime socket');
   }
 
   const user = await User.findById(decoded.id);

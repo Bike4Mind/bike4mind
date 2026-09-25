@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Dropdown, MenuButton, Menu, MenuItem, ListDivider, IconButton, Tooltip } from '@mui/joy';
+import type { SxProps } from '@mui/joy/styles/types';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import SaveAltIcon from '@mui/icons-material/SaveAlt';
 import { toast } from 'react-hot-toast';
@@ -7,6 +8,7 @@ import { marked } from 'marked';
 import { Document, Paragraph, TextRun, Packer, Table, TableRow, TableCell, WidthType } from 'docx';
 import { renderMarkdownToStyledHtml } from '@client/app/utils/markdownToStyledHtml';
 import { buildReplyDownloads, type ReplyDownload } from '@client/app/utils/replyDownloads';
+import { stripSearchResultCardFences } from '@bike4mind/common';
 
 // Utility: Download a file
 export const downloadFile = (content: string, fileName: string, mimeType: string) => {
@@ -215,7 +217,14 @@ const DownloadMenu: React.FC<{
   content: string;
   fileName: string;
   onClose?: () => void;
-}> = ({ content, fileName, onClose }) => {
+  /** Trigger variant. The chat action rows use 'plain'; toolbars keep the outline. */
+  variant?: 'outlined' | 'plain';
+  /** Extra styles for the trigger, so a row can size it with its siblings. */
+  triggerSx?: SxProps;
+}> = ({ content: rawContent, fileName, onClose, variant = 'outlined', triggerSx }) => {
+  // The Markdown/DOCX/HTML paths below have no way to render a b4m_cards fence, so they'd
+  // otherwise download raw model-authored card JSON as if it were reply text.
+  const content = stripSearchResultCardFences(rawContent);
   const handleClose = onClose || (() => {});
   const isMobile = useIsMobile();
   // Scanned on open rather than on render: this mounts once per message in a session, and a
@@ -232,7 +241,7 @@ const DownloadMenu: React.FC<{
         <MenuButton
           className="download-menu-button"
           slots={{ root: IconButton }}
-          slotProps={{ root: { variant: 'outlined', color: 'neutral', size: 'sm' } }}
+          slotProps={{ root: { variant, color: 'neutral', size: 'sm', sx: triggerSx } }}
         >
           <SaveAltIcon className="download-menu-icon" />
         </MenuButton>

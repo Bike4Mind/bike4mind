@@ -30,6 +30,9 @@ export const fabFileKeys = {
    *  the pre-registry literals (those hooks are `enabled`-gated, never fetched). */
   doc: (id: string | null | undefined) => ['fabFiles', id] as const,
   content: (id: string | undefined) => ['fabFiles', id, 'content'] as const,
+  /** Content fetch keyed by `strict`, since strict and lenient reads cache different results;
+   *  `content(id)` stays its invalidation prefix. */
+  contentRead: (id: string | undefined, strict: boolean) => ['fabFiles', id, 'content', strict] as const,
   name: (id: string) => ['fabFiles', 'name', id] as const,
   /** Invalidation prefix covering ownList and ownBySession. */
   own: ['fabFiles', 'own'] as const,

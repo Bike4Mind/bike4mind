@@ -23,7 +23,13 @@ function getHttpStatus(error: Error): number | undefined {
     return error.response?.status;
   }
   const metadata = (error as { $metadata?: { httpStatusCode?: number } }).$metadata;
-  return metadata?.httpStatusCode;
+  if (metadata?.httpStatusCode !== undefined) {
+    return metadata.httpStatusCode;
+  }
+  // Bare `status`: the shape used by the provider SDKs' own error classes and by
+  // SemaphoreBusyError, neither of which wraps the code in Axios or AWS metadata.
+  const { status } = error as { status?: unknown };
+  return typeof status === 'number' ? status : undefined;
 }
 
 /**
@@ -186,10 +192,19 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
   'gemini-1.5-pro': ['claude-sonnet-4-6', 'gpt-4o', 'claude-opus-4-6'],
   'gemini-1.5-flash': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
 
-  // Top tier (Fable 5 / Opus 4.7-5) degrades within the Opus tier before dropping to Sonnet.
+  // Top tier (Fable 5 / Opus 4.7-5.5) degrades within the Opus tier before dropping to Sonnet.
   // Fable 5 leads with Opus 5: same price as 4.8, near-Fable capability, and its safety
   // classifiers intervene far less often - so a Fable refusal is most likely to succeed there.
   'claude-fable-5': [
+    'claude-opus-5',
+    'claude-opus-4-8',
+    'claude-opus-4-7',
+    'claude-opus-4-6',
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+    'gpt-5',
+  ],
+  'claude-opus-5-5': [
     'claude-opus-5',
     'claude-opus-4-8',
     'claude-opus-4-7',
@@ -392,6 +407,13 @@ export type LlmWithFallbackOptions = {
    * selection (no frontend fallback id).
    */
   preferUntriedBackend?: boolean;
+  /**
+   * Forwarded so provider abuse enforcement AND the Anthropic concurrency pool's per-tenant
+   * fair scheduling stay scoped to the user across the hop. Omitting it collapses every
+   * fallen-back request into the shared anonymous tenant - which bites hardest during the
+   * provider overload that triggered the fallback in the first place.
+   */
+  endUserId?: string | null;
 };
 
 /**
@@ -411,7 +433,11 @@ export async function getLlmWithFallback(
   // exhausted) or the original was already tried this request (a multi-hop fallback passes the
   // just-failed model as `originalModel`, which must never be re-selected).
   if (!options.forceSwitch && !excludeModelIds?.has(originalModel.id)) {
-    const originalBackend = getLlmByModel(apiKeyTable, { modelInfo: originalModel, logger });
+    const originalBackend = getLlmByModel(apiKeyTable, {
+      modelInfo: originalModel,
+      logger,
+      endUserId: options.endUserId,
+    });
     if (originalBackend) {
       return { model: originalModel, backend: originalBackend, attempt: 0 };
     }
@@ -441,7 +467,11 @@ export async function getLlmWithFallback(
     }
 
     // Use the automatic fallback
-    const backend = getLlmByModel(apiKeyTable, { modelInfo: automaticFallback, logger });
+    const backend = getLlmByModel(apiKeyTable, {
+      modelInfo: automaticFallback,
+      logger,
+      endUserId: options.endUserId,
+    });
     if (backend) {
       logger.info(`✅ Using automatic fallback: ${automaticFallback.id}`);
       return { model: automaticFallback, backend, attempt: 1 };
@@ -460,7 +490,11 @@ export async function getLlmWithFallback(
   }
 
   // Try the fallback model
-  const backend = getLlmByModel(apiKeyTable, { modelInfo: fallbackModel, logger });
+  const backend = getLlmByModel(apiKeyTable, {
+    modelInfo: fallbackModel,
+    logger,
+    endUserId: options.endUserId,
+  });
 
   if (backend) {
     logger.info(`✅ Fallback successful: Using ${fallbackModel.id}`, {

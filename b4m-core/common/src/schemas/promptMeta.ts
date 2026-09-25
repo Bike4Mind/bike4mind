@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ContextTelemetrySchema, SystemPromptDetailSchema } from './contextTelemetry';
+import { PROMPT_META_MODEL_TYPES } from '../modelCatalog';
 
 /**
  * A Date that also accepts its own JSON form. promptMeta makes a round trip through the client:
@@ -31,6 +32,7 @@ const PromptMetaModelParametersSchema = z.object({
   prompt_upsampling: z.boolean().optional(), // BFL prompt upsampling
   seed: z.number().optional(),
   output_format: z.string().optional(), // Output format (jpeg/png)
+  background: z.string().optional(), // Background handling (transparent/opaque/auto), gpt-image only
   response_format: z.string().optional(), // Response format (url/b64_json)
 
   // Video generation parameters (Sora)
@@ -43,7 +45,7 @@ const PromptMetaModelSchema = z.object({
   // or other public sources
   name: z.string(),
   parameters: PromptMetaModelParametersSchema.optional(),
-  type: z.enum(['text', 'image', 'video']).optional(),
+  type: z.enum(PROMPT_META_MODEL_TYPES).optional(),
   backend: z.string().optional(),
   contextWindow: z.number().optional(),
   maxTokens: z.number().optional(),
@@ -107,6 +109,15 @@ const PromptMetaTokensBySourceSchema = z.object({
   urlContent: z.number(),
   toolSchemas: z.number(),
   userPrompt: z.number(),
+  /**
+   * Lake-sourced content injected this turn - forced retrieval (`knowledge_retrieval`) plus the
+   * lake-memory hot card (`lake_memory`) - moved out of the `systemPrompts` residual so the
+   * breakdown can price the lake separately. Optional, and absent means UNKNOWN, never zero: turns
+   * recorded before this field existed carry no value and none can be backfilled, because the only
+   * evidence was the residual this split had not yet made. Same absent-is-unknown rule as
+   * `retrieval.injected` below.
+   */
+  lakeRetrieval: z.number().optional(),
 });
 
 const PromptMetaContextSchema = z.object({
@@ -319,6 +330,29 @@ export const CitableSourceSchema = z.object({
       chunkId: z.string().optional(),
       relevanceScore: z.number().optional(),
       fullContext: z.string().optional(),
+      /** web_search's own thumbnail/image cluster for this source, gated on `withImages`. */
+      thumbnail: z.string().optional(),
+      images: z.array(z.string()).optional(),
+      /**
+       * Ids of the other cited sources this one provably disagrees with (#3041). Declared rather
+       * than left to the loose object, for the same reason chunkId/fullContext are: a writer that
+       * stamps the wrong shape should fail here, not render a badge that silently names nobody.
+       */
+      conflictsWith: z.array(z.string()).optional(),
+      /** web_search's provider-located place (WebSearchPlace), the only source of map coordinates. */
+      place: z
+        .object({
+          id: z.string(),
+          name: z.string(),
+          lat: z.number(),
+          lng: z.number(),
+          rating: z.number().optional(),
+          reviews: z.number().optional(),
+          category: z.string().optional(),
+          address: z.string().optional(),
+          thumbnail: z.string().optional(),
+        })
+        .optional(),
     }) // Allow additional properties
     .optional(),
 });
@@ -453,11 +487,48 @@ export const RetrievalSummarySchema = z.object({
    * the per-turn routing question is about, and before this it was indistinguishable from a turn
    * where forced retrieval was never configured at all.
    */
-  forcedSkipReason: z.enum(['attached_files', 'personal_corpus']).optional(),
+  forcedSkipReason: z.enum(['attached_files', 'personal_corpus', 'no_lake_scope']).optional(),
   /** Which retrieval-capable surface(s) ran this turn, e.g. 'lake-memory', 'knowledgeBaseSearch'. */
   surfaces: z.array(z.string()),
   /** Lakes resolved at the moment retrieval ran, stamped point-in-time (not read live from the session). */
   dataLakeTags: z.array(z.string()),
+  /**
+   * The subset of `dataLakeTags` that actually put files into the ranked scope. `dataLakeTags`
+   * alone says which lakes were REQUESTED, which read as "searched" while a lake could contribute
+   * nothing - the retrieval budget used to be spent in file order and starved whichever lake
+   * sorted last.
+   *
+   * Optional because attribution is best-effort: a file matched by a lake's prefix/membership arm
+   * can carry no reversible `datalake:` tag (see attributeAccessedLakes), and the producer omits
+   * this rather than reporting an inconclusive scope as "no lake contributed". Absent means
+   * unknown, NOT none.
+   */
+  dataLakeTagsWithCandidates: z.array(z.string()).optional(),
+  /**
+   * The lake scope the turn's retrieval surfaces WOULD have searched, resolved at the seed site
+   * whether or not any of them ran: the caller's accessible lakes narrowed to the session
+   * (narrowLakeAccessToSession), or empty where the corpus is personal and the lake arms are
+   * suppressed. `dataLakeTags` is the other half of the pair and answers a different question -
+   * which lakes retrieval ACTUALLY used - so on a turn where retrieval never ran that one is empty
+   * while this one still names whatever was in scope.
+   *
+   * EXISTS FOR THE OFFLINE REPLAY. `answerability` is reconstructed after the fact, and without a
+   * recorded scope the replay had to rebuild one from the session's `retrievalTags` as they stand
+   * at replay time - a session whose lake selection had since changed was replayed against a
+   * corpus its turn never had, with nothing to flag it. Recording it here removes that drift for
+   * every turn seeded after this landed; `probedAt` still discloses the content drift, which no
+   * amount of recording can fix.
+   *
+   * Absence means NOT RECORDED (a turn predating this, or one whose `retrieval` was written only
+   * by a surface rather than by the seed) - never "no lakes in scope", which is present-and-empty.
+   * The replay must keep those apart: probing an unrecorded turn would mean inventing a scope,
+   * which is the approximation this field exists to end.
+   *
+   * Only the seed writes it, so mergeRetrievalSummary carries it first-writer-wins rather than
+   * unioning: a later surface write asserting a narrower scope must not be able to widen the
+   * recorded one, and a union across the two would mean neither.
+   */
+  lakeScope: z.array(z.string()).optional(),
   /**
    * Ids of the lakes whose `systemPrompt` was injected this turn (getAccessibleDataLakePrompts),
    * across every injection site (forced retrieval and the model-driven knowledge tools). NOT the
@@ -520,16 +591,25 @@ export const RetrievalSummarySchema = z.object({
    * not "what reached the model": `ranked.length` and `scored.length` in KnowledgeRetrievalFeature
    * - the candidates left after the absolute similarity floor, and after the relative floor
    * trims them. `chunks` is what survived the char budget on top of that, so the three
-   * numbers bracket two independent trimmers:
+   * numbers bracket three independent trimmers:
    *
-   *   pre -> [relative floor] -> post -> [char budget] -> chunks
+   *   pre -> [relative floor] -> post -> [spread floor] -> postSpread -> [char budget] -> chunks
    *
    * They exist so a low `chunks` is diagnosable - a small corpus and a floor that trimmed a large
-   * pool end in the same `chunks`. `pre - post` is the floor's own effect and nothing else;
+   * pool end in the same `chunks`. `pre - post` is the relative floor's own effect and nothing
+   * else, and `post - postSpread` the spread floor's;
    * `pre - chunks` is NOT, because the budget trims the same walk. Both optional: only forced
    * retrieval computes a ranked pool, a surface without one (lake memory, the knowledge tools)
-   * never writes either, and absence must not read as zero candidates. SUMMED like `chunks`, with
-   * the same absent-is-not-zero handling as `topScore`.
+   * never writes any of them, and absence must not read as zero candidates. SUMMED like `chunks`,
+   * with the same absent-is-not-zero handling as `topScore`.
+   *
+   * `backgroundScore` is the median of every score the turn compared, and `postSpreadFloorCandidates`
+   * what is left once the spread floor cuts against it. Recorded even while that floor is OFF (its
+   * shipped default), in which case `postSpread` equals `post` and the pair degenerates to a
+   * diagnostic: `topScore - backgroundScore` is the turn's signal spread, and the distribution of
+   * that quantity over production traffic is what a value for `forcedRetrievalSpreadFloorPct` has to
+   * be chosen from. NOT comparable across embedding spaces as an absolute number, for the same
+   * reason `topScore` is not; the RATIO of the two floors' cuts is.
    *
    * COMPARE THE PAIR ONLY TO ITSELF, never to `chunks`, unless `surfaces` is forced retrieval
    * alone. `chunks` and `chars` sum across ALL surfaces while this pair is forced-only, so a mixed
@@ -553,6 +633,8 @@ export const RetrievalSummarySchema = z.object({
       topScore: z.number().optional(),
       preRelativeFloorCandidates: z.number().optional(),
       postRelativeFloorCandidates: z.number().optional(),
+      postSpreadFloorCandidates: z.number().optional(),
+      backgroundScore: z.number().optional(),
     })
     .optional(),
   /**
@@ -572,15 +654,15 @@ export const RetrievalSummarySchema = z.object({
    * (ChatCompletionFeatures' forced path, which has no ANN index) to exactly the turns that pay
    * nothing for retrieval today. The measurement is not worth that latency on live traffic.
    *
-   * BEING A RECONSTRUCTION, IT CARRIES TWO DRIFTS THE OTHER FIELDS DO NOT:
+   * BEING A RECONSTRUCTION, IT CARRIES DRIFTS THE OTHER FIELDS DO NOT:
    * 1. Corpus CONTENT moves. A document added or reindexed between the turn and the replay is
    *    scored as though it had been there. `probedAt` discloses the gap; a replay run long after
    *    the window is weak evidence, not strong.
-   * 2. Corpus SCOPE is inferred, not recorded. The seed writes `dataLakeTags: []` on a turn where
-   *    retrieval never ran (ChatCompletionProcess), so the replay reconstructs scope from the
-   *    session's lakes as they stand at replay time. A session whose lake selection changed is
-   *    replayed against a corpus the turn never had, and NOTHING here flags that. Recording real
-   *    scope at seed time would fix it for future turns and is not done yet.
+   * 2. Corpus SCOPE no longer drifts: the seed records the turn's resolved scope in `lakeScope`
+   *    and the replay probes that, so a session whose lake selection has since changed is still
+   *    scored against the lakes its turn actually had. The cost is coverage rather than accuracy -
+   *    a turn with no recorded scope is skipped instead of approximated, so every turn predating
+   *    the field is outside the measurement.
    * 3. The QUESTION can move out from under it. The probe is keyed to the quest, not to the
    *    prompt text it scored, so a turn whose prompt is later rewritten in place keeps a probe
    *    describing the question it used to ask. mergeRetrievalSummary preserves the probe across
@@ -655,6 +737,47 @@ export const RetrievalSummarySchema = z.object({
    * carry nothing, and no backfill is possible - a past turn's grant rows have moved on.
    */
   grantedLakeIdsUsed: z.array(z.string()).optional(),
+  /**
+   * How many lakes were excluded from this turn's scope because the caller lacks the access to
+   * search them, and why (#3055). Resolved at the seed alongside `lakeScope`, from a dedicated
+   * count-only query (see excludedByAccessCount on getDynamicDataLakeAccess - NOT derived from
+   * the candidate set `lakeScope` comes from, which already has the gate enforced datastore-side
+   * and so cannot see this population).
+   *
+   * ABSENT MEANS NOT RECORDED, never "nothing was excluded" - a turn with nothing excluded records
+   * `count: 0` explicitly. Three distinct causes collapse into this one absent state and are not
+   * distinguishable from it: a turn predating this field, a turn whose `retrieval` was written
+   * only by a tool arm rather than by the seed, and the count-only query itself failing or not
+   * being wired on this host (mirrors `lakeViewComplete`'s contract on the access resolver: a
+   * failure must report unknown, never a false zero).
+   *
+   * COUNT AND REASON ONLY, DELIBERATELY. Never a lake id, name, or tag: the caller may not be
+   * permitted to know a given excluded lake exists at all, and this field must stay safe to show
+   * them regardless of which specific lake(s) it is counting. `reason` is a closed enum, not free
+   * text - prose could leak a lake's identity through phrasing - so a future exclusion cause (e.g.
+   * an archived or quota-limited lake) adds an enum value here rather than a description.
+   *
+   * 'access' is the only reason today: the caller's org membership or the lake's public listing
+   * surfaced it as a candidate (they could see it exists) but they hold neither its own
+   * gate/entitlement nor an ownership or grant exception for it.
+   *
+   * A session-preauthorized lake (unionPreauthorizedLakeAccess) that is ALSO gate-dropped from
+   * this account-wide count is corrected, not merely narrow: the seed's targeted measurement
+   * (measureIdentityNamedExclusion, ChatCompletionProcess's promptMeta seed) excludes exactly the
+   * tags this turn successfully admitted via preauthorization before running the gate query, so an
+   * admitted-and-searched lake never reports here as excluded. This account-wide number itself
+   * (excludedByAccessCount on getDynamicDataLakeAccess) is still computed before that union and is
+   * NOT corrected the same way - only the per-turn targeted measurement is, which is what a
+   * preauthorized session's own narrowing always uses (see sessionNamesALake's call site).
+   */
+  excludedLakes: z
+    .object({
+      // Not negative by construction (a `countDocuments` result, never a subtraction of two set
+      // sizes) rather than by any relationship between two derived lists.
+      count: z.number().int().nonnegative(),
+      reason: z.enum(['access']),
+    })
+    .optional(),
 });
 
 /**

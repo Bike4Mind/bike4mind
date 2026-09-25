@@ -1,10 +1,10 @@
 import { Resource } from 'sst';
 import {
-  buildSharedTools,
   resolveToolAvailability,
+  buildSharedTools,
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
-} from '@bike4mind/services';
+} from '@bike4mind/services/llm';
 import {
   adminSettingsRepository,
   apiKeyRepository,
@@ -125,7 +125,10 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
     return (
       buildSharedTools(toolDeps, toolCallbacks, {
         enabledTools: enabledToolNames,
-        config: { deep_research: true },
+        config: {
+          deep_research: true,
+          web_search: { imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value },
+        },
         toolAvailability,
       }) ?? []
     );

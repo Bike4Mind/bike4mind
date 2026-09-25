@@ -26,7 +26,7 @@ import {
   type PipelineTaskResult,
   type PipelineTaskStatus,
 } from '@bike4mind/agents';
-import type { DagDispatcher, DagNodeHandle } from '@bike4mind/services';
+import type { DagDispatcher, DagNodeHandle } from '@bike4mind/services/llm';
 import { agentExecutionRepository, type AgentExecutionStatus, type IDagSpec } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { inheritedArtifactFields } from '../utils/artifactGate';

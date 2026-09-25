@@ -4,6 +4,7 @@ import {
   ISessionRepository,
   IUserRepository,
   rebindPromptMetaSession,
+  toPersistedSummaryTrigger,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -49,6 +50,11 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
       tags: session.tags,
       summary: session.summary,
       summaryAt: session.summaryAt,
+      summaryTrigger: toPersistedSummaryTrigger(session.summaryTrigger),
+      // taggedAt is deliberately NOT carried: a snip keeps only the quests AFTER the snip point, so
+      // the source tags may describe a quest the copy no longer holds. Leaving it unset lets the
+      // groom re-derive tags from what the snip actually has.
+
       // Carried from the source, not re-derived: the parent's scope is already correct and explicit,
       // and re-deriving it here would go through the OWNERSHIP arm alone (no resolveLakeAccess is
       // threaded to this path), which cannot see a teammate-authored organization-lake file. That
@@ -57,6 +63,12 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
       // takes createSession's "explicit wins" arm, so it costs no DB read.
       retrievalTags: session.retrievalTags,
       lakeScopeExplicit: session.lakeScopeExplicit,
+      // Carried so a persisted opt-out (`false`) survives the copy: createSession reads an explicit
+      // lake scope as forced retrieval, and omitting this would turn that opt-out back ON here.
+      // An ABSENT flag is deliberately left to that implication rather than pinned to `false`, so a
+      // copy of a lake session predating it picks up the corrected behavior; the copy then forces
+      // retrieval where its source does not, until the source is itself updated.
+      forceKnowledgeRetrieval: session.forceKnowledgeRetrieval,
     },
     adapters
   );
@@ -67,7 +79,12 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
   );
 
   await Promise.all(
-    messagesToSnip.map(async ({ id, promptMeta, ...messageData }) => {
+    messagesToSnip.map(async ({ id, promptMeta, correctsQuestId, ...messageData }) => {
+      // `correctsQuestId` names a quest in the SOURCE session, so it is dropped rather than copied:
+      // a copied chain link would dereference across the session boundary, and the access that
+      // authorized this copy is not rechecked when the pointer is later read. Remap it through an
+      // old-id to new-id table if preserving copied correction chains is ever wanted. Paired with
+      // the session re-check in resolveCorrectionContext (llm/buildCorrectionContext.ts).
       await db.chatHistories.create({
         ...messageData,
         sessionId: newSession.id,

@@ -5,6 +5,7 @@ import {
 } from '@bike4mind/utils/retrievalExclusion';
 import {
   DATA_LAKE_GROUNDING_MODES,
+  PERSISTED_SESSION_SUMMARY_TRIGGERS,
   IAgentRepository,
   IFabFileRepository,
   IProjectRepository,
@@ -15,8 +16,9 @@ import {
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
 import { usableSessionIds } from '../utils/objectIds';
-import { projectService } from '..';
+import * as projectService from '../projectService';
 import { deriveRetrievalTagsFromFiles, type DeriveRetrievalTagsAdapters } from './deriveRetrievalTags';
+import { resolveLakeScopeForcedRetrieval } from './resolveLakeScopeForcedRetrieval';
 
 const createSessionParametersSchema = z.object({
   name: z.string(),
@@ -55,6 +57,21 @@ const createSessionParametersSchema = z.object({
   tags: z.array(z.object({ name: z.string(), strength: z.number() })).optional(),
   summary: z.string().optional(),
   summaryAt: z.date().optional(),
+  // Provenance of the summary above, carried by clone/fork/snip so a copy does not land with
+  // summary text and a real summaryAt but blank WHY. Declared here because secureParameters strips
+  // unknown keys, and validated here because the Mongoose write runs no validators - this schema is
+  // the only check between a caller and a stored value. NOTE: declaring it makes it reachable from
+  // the create route's raw body, which is why that route deletes it (see the strip there); this
+  // schema is the copy paths' channel, not a client input.
+  // Persisted list, not the full union - a decision-only reason names no run to have provenance for.
+  // Copy paths pass their source value through toPersistedSummaryTrigger, so a document that somehow
+  // holds one loses the provenance instead of failing the copy.
+  summaryTrigger: z.enum(PERSISTED_SESSION_SUMMARY_TRIGGERS).optional(),
+  // Companion of `tags` the way `summaryAt` is of `summary`, so clone/fork must carry it or the
+  // spider gate at apps/client/server/events/spider.ts pays to re-tag every copy; snip deliberately
+  // does not. Declared here because secureParameters strips unknown keys; still not a client input,
+  // since z.date() rejects the string a JSON body would carry.
+  taggedAt: z.date().optional(),
   clonedSourceId: z.string().optional().nullable(),
   forkedSourceId: z.string().optional().nullable(),
   projectId: z.string().optional(),
@@ -121,6 +138,15 @@ export const createSession = async (
       ? rest.retrievalTags
       : await deriveRetrievalTagsFromFiles(user, knowledgeIds, adapters);
 
+  // A declared lake scope implies forced retrieval unless the caller opted out. Reads the RESOLVED
+  // tags, not the request's: the derivation arm above only runs when the scope is not explicit, so
+  // the two agree wherever this can fire, and resolving first keeps that independent of arm order.
+  const forceKnowledgeRetrieval = resolveLakeScopeForcedRetrieval({
+    forceKnowledgeRetrieval: rest.forceKnowledgeRetrieval,
+    retrievalTags,
+    lakeScopeExplicit: rest.lakeScopeExplicit,
+  });
+
   // Object-level authz: only attach agents the caller can actually access (owner +
   // user-shares + group-shares). Foreign ids are filtered out (not replaced by the query
   // result) so the caller's original order and duplicates are preserved.
@@ -142,6 +168,9 @@ export const createSession = async (
 
     // After ...rest so the derived value wins over the (absent) request value it stands in for.
     ...(retrievalTags?.length ? { retrievalTags } : {}),
+    ...(forceKnowledgeRetrieval !== undefined ? { forceKnowledgeRetrieval } : {}),
+    // A taggedAt with no tags would close the spider's gate on a notebook with nothing to show.
+    taggedAt: rest.tags?.length ? rest.taggedAt : undefined,
     userId: user.id,
     knowledgeIds,
     artifactIds,

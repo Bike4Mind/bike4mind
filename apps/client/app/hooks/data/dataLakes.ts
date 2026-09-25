@@ -11,11 +11,16 @@ import type {
   ResearchRunTrigger,
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
+  IDataLakeFindingDocument,
+  InconsistencyKind,
+  LakeFindingStatus,
   IDataLakeSpendResponse,
   IFabFileDocument,
   DataLakePrincipalType,
   LakeAccessView,
   LakeOwnershipCandidateList,
+  LakeOwnershipOfferSummary,
+  LakePendingOwnershipOffer,
   LakeHealthApiResponse,
   LakeMemoryHealth,
   LakeConfigHistoryView,
@@ -38,7 +43,7 @@ import type {
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
@@ -118,6 +123,31 @@ export function useGetDataLakes(
     },
     refetchOnWindowFocus: opts?.refetchOnWindowFocus ?? false,
     staleTime: opts?.staleTime ?? 1000 * 60 * 2,
+  });
+}
+
+/**
+ * The lake list with `canPreauthorize` resolved against `userId` instead of the caller (#2945).
+ * Admin-only server-side; the route 403s a non-admin that asks.
+ *
+ * For the admin key-mint picker: `POST /api/admin/users/[userId]/generate-api-key` screens a
+ * requested binding against the TARGET user's manage rung, so a picker built on the caller's own
+ * labels offers lakes that route then rejects with a 400. Filter the result on `canPreauthorize`,
+ * never on `canManage` - platform admin is `canManage: true` on every lake and a rung on none.
+ */
+export function useGetPreauthorizableDataLakes(userId: string, enabled = true) {
+  return useQuery({
+    queryKey: dataLakeKeys.preauthorizableFor(userId),
+    enabled: enabled && !!userId,
+    retry: false,
+    queryFn: async () => {
+      const response = await api.get<{ data: ManageableDataLakeConfig[] }>(
+        `/api/data-lakes?preauthorizableFor=${encodeURIComponent(userId)}`
+      );
+      return response.data.data;
+    },
+    refetchOnWindowFocus: false,
+    staleTime: 1000 * 60 * 2,
   });
 }
 
@@ -248,9 +278,90 @@ export function useLakeOwnershipCandidates(dataLakeId: string | null, enabled = 
     enabled: enabled && !!dataLakeId,
     retry: false,
     queryFn: async () => {
-      const response = await api.get<{ data: LakeOwnershipCandidateList }>(
-        `/api/data-lakes/${dataLakeId}/transfer-ownership`
-      );
+      const response = await api.get<{
+        data: LakeOwnershipCandidateList;
+        pendingOffer: LakePendingOwnershipOffer | null;
+      }>(`/api/data-lakes/${dataLakeId}/transfer-ownership`);
+      // The pending offer arrives beside the candidate list, not inside it (the server keeps them
+      // separate facts); merge it here so the dialog reads one object.
+      return { ...response.data.data, pendingOffer: response.data.pendingOffer ?? null };
+    },
+    staleTime: 1000 * 30,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * Offer a lake's ownership to another user. BREAKING: this no longer transfers anything - it opens a
+ * PENDING OFFER the recipient must accept, and ownership is unchanged until they do. The prior owner
+ * therefore keeps every owner power in the meantime.
+ *
+ * Invalidates the picker's own query (the pending offer is read from it) and the access view, so the
+ * dialog that just sent the offer re-renders in its "waiting on X" state.
+ */
+export function useTransferLakeOwnership() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ id, newOwnerUserId }: { id: string; newOwnerUserId: string }) => {
+      const response = await api.post<{ offer: unknown }>(`/api/data-lakes/${id}/transfer-ownership`, {
+        newOwnerUserId,
+      });
+      return response.data;
+    },
+    onSuccess: (_data, { id }) => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipCandidates(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
+      toast.success('Ownership offer sent');
+    },
+    onError: (error: Error, { id }) => {
+      // A refusal can be the stale-state kind ("already has a pending offer", "the member list
+      // changed"): refetch so the dialog shows what the server sees instead of dead controls.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipCandidates(id) });
+      // This endpoint's rejections are the actionable kind ("name another member", "must belong to
+      // the organization that owns this data lake").
+      const refusal = serverRefusalMessage(error);
+      toast.error(refusal || error.message || 'Failed to send the ownership offer');
+    },
+  });
+}
+
+/** Cancel a pending offer before the recipient answers. Nothing was transferred, so nothing unwinds. */
+export function useCancelLakeOwnershipOffer() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ id }: { id: string }) => {
+      const response = await api.delete<{ offer: unknown }>(`/api/data-lakes/${id}/transfer-ownership`);
+      return response.data;
+    },
+    onSuccess: (_data, { id }) => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipCandidates(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
+      toast.success('Ownership offer cancelled');
+    },
+    onError: (error: Error, { id }) => {
+      // A cancel that loses a race (the recipient already accepted) 404s; refetch so a stale "Cancel
+      // offer" button that can never succeed is replaced by the real state.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipCandidates(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
+      const refusal = serverRefusalMessage(error);
+      toast.error(refusal || error.message || 'Failed to cancel the ownership offer');
+    },
+  });
+}
+
+/**
+ * The caller's own pending ownership offers - the recipient's banner. No id to pass: the server scopes
+ * the query to the authenticated user.
+ */
+export function useOwnLakeOwnershipOffers(enabled = true) {
+  return useQuery({
+    queryKey: dataLakeKeys.ownershipOffers,
+    enabled,
+    retry: false,
+    queryFn: async () => {
+      const response = await api.get<{ data: LakeOwnershipOfferSummary[] }>('/api/data-lakes/ownership-offers');
       return response.data.data;
     },
     staleTime: 1000 * 30,
@@ -259,38 +370,61 @@ export function useLakeOwnershipCandidates(dataLakeId: string | null, enabled = 
 }
 
 /**
- * Hand a lake's ownership to another user. The prior owner is demoted to curator rather than removed,
- * so they keep management access and the transfer is reversible by the new owner.
- *
- * Invalidates the lake list as well as the access view: ownership decides `canManage`, so the panel's
- * own controls (Access included) may legitimately disappear for the actor once they are no longer the
- * owner - refetching is what keeps the UI honest about what the actor can still do. The config
- * history goes too: this door records a `transfer-ownership` event, and the History tab that renders
- * it sits in the same modal that submitted the transfer.
+ * Accept an offer and take ownership. Invalidate the lake list and the access view as well as the
+ * offers themselves: the accept changes what the caller can MANAGE, and records a config-change row,
+ * so the panel's own controls and the History tab must both refetch.
  */
-export function useTransferLakeOwnership() {
+export function useAcceptLakeOwnershipOffer() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ id, newOwnerUserId }: { id: string; newOwnerUserId: string }) => {
-      const response = await api.post<{ newOwnerUserId: string; demotedUserIds: string[] }>(
-        `/api/data-lakes/${id}/transfer-ownership`,
-        { newOwnerUserId }
+    mutationFn: async ({ offerId }: { offerId: string; dataLakeId: string }) => {
+      const response = await api.post<{ data: { newOwnerUserId: string; demotedUserIds: string[] } }>(
+        `/api/data-lakes/ownership-offers/${offerId}/accept`
       );
-      return response.data;
+      return response.data.data;
     },
-    onSuccess: (_data, { id }) => {
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipCandidates(id) });
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
+    onSuccess: (_data, { dataLakeId }) => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipOffers });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(dataLakeId) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
       toast.success('Data lake ownership transferred');
     },
-    onError: (error: Error) => {
-      // This endpoint's rejections are the actionable kind ("name another member", "must belong to
-      // the organization that owns this data lake").
+    onError: (error: Error, { dataLakeId }) => {
+      // A failed accept (expired, stale, withdrawn) means the banner's list is out of date; refetch it
+      // and the lake so the recipient is not left staring at an offer the server has already closed.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipOffers });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(dataLakeId) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
       const refusal = serverRefusalMessage(error);
-      toast.error(refusal || error.message || 'Failed to transfer ownership');
+      toast.error(refusal || error.message || 'Failed to accept the ownership offer');
+    },
+  });
+}
+
+/** Decline an offer. Touches no grants, so only the offers list needs refreshing. */
+export function useDeclineLakeOwnershipOffer() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ offerId }: { offerId: string }) => {
+      const response = await api.post<{ data: { id: string; status: string } }>(
+        `/api/data-lakes/ownership-offers/${offerId}/decline`
+      );
+      return response.data.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipOffers });
+      toast.success('Ownership offer declined');
+    },
+    onError: (error: Error) => {
+      // The offer may already be gone (cancelled, or accepted elsewhere); refresh the banner so it
+      // stops showing an offer the server will refuse.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipOffers });
+      const refusal = serverRefusalMessage(error);
+      toast.error(refusal || error.message || 'Failed to decline the ownership offer');
     },
   });
 }
@@ -598,7 +732,7 @@ export function useBrowsePublicDataLakes(search: string) {
   });
 }
 
-type LifecycleAction = 'archive' | 'unarchive' | 'restore' | 'delete' | 'cleanup';
+type LifecycleAction = 'archive' | 'unarchive' | 'restore' | 'delete' | 'cleanup' | 'promote' | 'demote';
 
 async function postLifecycle(id: string, action: LifecycleAction) {
   const response = await api.post(`/api/data-lakes/${id}/lifecycle`, { action });
@@ -655,6 +789,19 @@ export function useUnarchiveDataLake() {
 /** Recovers a soft-deleted (phase-1) data lake back to active (with dedup pass). */
 export function useRestoreDeletedDataLake() {
   return useLifecycleMutation('restore', 'Data lake restored', 'Failed to restore data lake');
+}
+
+/**
+ * Publishes a draft lake - the explicit, owner/admin-only replacement for the old implicit
+ * draft -> active flip. A draft lake is excluded from grounding until this runs.
+ */
+export function usePromoteDataLake() {
+  return useLifecycleMutation('promote', 'Data lake published', 'Failed to publish data lake');
+}
+
+/** Moves an active lake back to draft, pulling it out of grounding. Reverses promote. */
+export function useDemoteDataLake() {
+  return useLifecycleMutation('demote', 'Data lake moved back to draft', 'Failed to move data lake back to draft');
 }
 
 /** Phase 1 of permanent delete: soft-delete (recoverable). */
@@ -996,12 +1143,21 @@ export function useDataLakeFiles(dataLakeId: string | null, params?: { limit?: n
 /**
  * Hook: Re-run chunking + vectorization for a single fabFile in a data lake.
  * Useful for files that landed with 0 chunks (failed/partial extraction).
+ *
+ * Sends `dataLakeId` so a lake manager who is not the file's uploader is authorized on their manage
+ * rights over THIS lake rather than on ownership of the file (#3167). The route falls back to the
+ * caller's own rights when it is absent, so this is additive: it never narrows what an owner can do.
  */
 export function useReprocessFabFile(dataLakeId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (fabFileId: string) => {
-      const res = await api.post<{ messageId: string }>('/api/files/reprocess', { fabFileId });
+      const res = await api.post<{ messageId: string }>('/api/files/reprocess', {
+        fabFileId,
+        // Omitted rather than sent as null: the server reads its presence as "act under this lake's
+        // authority", and a null would have to be special-cased at every read of it.
+        ...(dataLakeId ? { dataLakeId } : {}),
+      });
       return res.data;
     },
     onSuccess: () => {
@@ -1044,11 +1200,9 @@ export function invalidateLakeFileMembershipQueries(
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.membershipDuplicates(dataLakeId) });
   // A membership change can move the lake's under-chunked count, so refresh the rebuild badge.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
-  // A membership write can reach activateIfDraft's draft -> active flip (see
-  // removeFileFromDataLake / addFileToDataLake), which records a `system`-principal
-  // config-history row. Inert today because these hooks fire from the file wizard, where the
-  // History observer is unmounted - invalidated anyway for the same reason the lifecycle hook
-  // does it: the cost is nothing, and reasoning about which paths qualify is what rots.
+  // A membership write records no config-history row of its own any more (publishing moved to
+  // the explicit promote door), but it is invalidated anyway for the same reason the lifecycle
+  // hook does it: the cost is nothing, and reasoning about which paths qualify is what rots.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
   // Refresh the lake list to pick up the recomputed stats. fileCount counts meta-tagged
   // files only, so a membership change scoped to a prefix-only file moves rows without
@@ -1329,7 +1483,24 @@ export function usePurgeDataLakeDocument(dataLakeId: string | null) {
   });
 }
 
-export type LakeRebuildStatus = { underChunkedCount: number; failedCount: number };
+export type LakeRebuildStatus = {
+  underChunkedCount: number;
+  failedCount: number;
+  /**
+   * Members retrieval is withholding for being embedded in a previous embedding space, or `null`
+   * when the server could not resolve the space to compare against. Null is deliberately NOT 0: it
+   * covers a deployment with no usable embedding model AND a rolling-deploy skew against a server
+   * that predates this field, and in both the honest answer is "no count", not "nothing to do".
+   */
+  staleEmbeddingSpaceCount: number | null;
+  /**
+   * Whether the server could resolve an embedding space at all, or `null` when it did not say - an
+   * older server omits the field, which is the rolling-deploy skew and must stay silent. `false` is
+   * a configuration state that persists until an operator changes it (a self-host with no usable
+   * provider credential has no keyless fallback), not a window that closes on its own.
+   */
+  embeddingSpaceResolved: boolean | null;
+};
 
 /** Extra polls after the backlog clears, at SETTLE_MS each - about three minutes of cover. */
 const REBUILD_SETTLE_POLLS = 18;
@@ -1339,23 +1510,37 @@ export type RebuildPollState = { sawBacklog: boolean; settlePolls: number };
 export const INITIAL_REBUILD_POLL_STATE: RebuildPollState = { sawBacklog: false, settlePolls: 0 };
 
 /**
+ * The REPAIRABLE work outstanding on a lake: both counts that drain to zero as waves complete.
+ * Pure and exported for the same reason `nextRebuildPoll` is - it decides when the badge stops
+ * polling, and a closure inside the hook is not executed by anything.
+ *
+ * A re-embed is normally run on a lake whose under-chunked count is already zero, so summing is
+ * what keeps the badge alive for that wave rather than going quiet the moment it starts. A `null`
+ * stale count contributes nothing: unknown is not a backlog, and polling on it would never end.
+ */
+export const rebuildBacklog = (
+  status?: Pick<LakeRebuildStatus, 'underChunkedCount' | 'staleEmbeddingSpaceCount'>
+): number => (status?.underChunkedCount ?? 0) + (status?.staleEmbeddingSpaceCount ?? 0);
+
+/**
  * Poll cadence for the rebuild badge, as a pure function so it can be tested without mounting the
  * hook (the two defects this logic has carried both shipped because nothing executed it).
  *
- * `underChunkedCount` is the loop condition and `failedCount` deliberately is NOT: a failed file
- * never retries on its own (see countFailedFilesByScope - it is invisible to both the detection
- * query and the rescue sweep), so summing the two gives a term that can never reach zero and the
- * badge polls forever on any lake holding one. But the count alone stops too early: it drops the
- * instant a wave is RESET, minutes before those chunk jobs finish, and a job that then fails
+ * `backlog` is the sum of the two REPAIRABLE counts - under-chunked and stale-embedding-space -
+ * because each drains to zero on its own as waves complete. `failedCount` deliberately is NOT in
+ * it: a failed file never retries (see countFailedFilesByScope - it is invisible to both the
+ * detection query and the rescue sweep), so including it gives a term that can never reach zero and
+ * the badge polls forever on any lake holding one. But the counts alone stop too early: they drop
+ * the instant a wave is RESET, minutes before those chunk jobs finish, and a job that then fails
  * surfaces only in failedCount. So once the backlog clears we keep polling a bounded number of
  * extra times to catch that, then stop for good.
  */
 export function nextRebuildPoll(
-  underChunkedCount: number,
+  backlog: number,
   prev: RebuildPollState
 ): { interval: number | false; next: RebuildPollState } {
-  if (underChunkedCount > 0) {
-    const interval = underChunkedCount > 200 ? 30_000 : underChunkedCount > 50 ? 15_000 : 5_000;
+  if (backlog > 0) {
+    const interval = backlog > 200 ? 30_000 : backlog > 50 ? 15_000 : 5_000;
     return { interval, next: { sawBacklog: true, settlePolls: 0 } };
   }
   // Never had anything to rebuild in this session - nothing to settle for.
@@ -1379,39 +1564,57 @@ export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) 
     queryKey: dataLakeKeys.rebuildStatus(dataLakeId ?? ''),
     queryFn: async (): Promise<LakeRebuildStatus> => {
       const res = await api.get<LakeRebuildStatus>(`/api/data-lakes/${dataLakeId}/rechunk`);
-      return { underChunkedCount: res.data.underChunkedCount, failedCount: res.data.failedCount ?? 0 };
+      return {
+        underChunkedCount: res.data.underChunkedCount,
+        failedCount: res.data.failedCount ?? 0,
+        // `?? null`, not `?? 0`: an older server omits the field entirely, and defaulting that to a
+        // zero would advertise "no stale files" on a lake nobody has measured.
+        staleEmbeddingSpaceCount: res.data.staleEmbeddingSpaceCount ?? null,
+        // Same reason, and `?? null` is load-bearing here too: absent is not `false`.
+        embeddingSpaceResolved: res.data.embeddingSpaceResolved ?? null,
+      };
     },
     enabled: enabled && !!dataLakeId,
     // Tick down as waves complete; coarser cadence while the backlog is large (each poll is a full
     // lake rescan), then a bounded settle window before going quiet. See nextRebuildPoll.
     refetchInterval: query => {
-      const { interval, next } = nextRebuildPoll(query.state.data?.underChunkedCount ?? 0, pollState.current);
+      const { interval, next } = nextRebuildPoll(rebuildBacklog(query.state.data), pollState.current);
       pollState.current = next;
       return interval;
     },
   });
 }
 
+/** Which population a rebuild wave drains. Absent means the under-chunked default, matching the
+ *  server's own default so an older caller keeps its behaviour. */
+export type LakeRebuildSelector = 'under-chunked' | 'stale-embedding-space';
+
+export type RechunkVariables = { limit?: number; select?: LakeRebuildSelector } | undefined;
+
 /**
- * Hook: re-chunk a bounded wave of the lake's under-chunked files. Server picks the worst
- * offenders first and caps the wave; call again (the badge shows `remaining`) to drain the rest.
+ * Hook: re-chunk a bounded wave of the lake's files. `select` chooses the population - the legacy
+ * oversized passages, or the members still embedded in a previous embedding space, which retrieval
+ * withholds entirely. Server picks worst-first and caps the wave; call again (the badge shows
+ * `remaining`) to drain the rest.
  */
 export function useRechunkDataLake(dataLakeId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (limit?: number) => {
+    mutationFn: async (vars: RechunkVariables) => {
+      const body = { ...(vars?.limit ? { limit: vars.limit } : {}), ...(vars?.select ? { select: vars.select } : {}) };
       const res = await api.post<{
         detected: number;
         enqueued: number;
         remaining: number;
         // Present only on the refusal arm. Typed optional because the success arm omits it entirely,
         // and read FIRST below: a paused run also returns `enqueued: 0`, which is indistinguishable
-        // from "nothing to do" on the counts alone.
+        // from "nothing to do" on the counts alone. The other refusal, an unresolvable embedding
+        // space, is a 409 and so arrives in onError instead.
         outcome?: 'paused';
-      }>(`/api/data-lakes/${dataLakeId}/rechunk`, limit ? { limit } : {});
+      }>(`/api/data-lakes/${dataLakeId}/rechunk`, body);
       return res.data;
     },
-    onSuccess: data => {
+    onSuccess: (data, vars) => {
       if (data.outcome === 'paused') {
         // A warning, not a success: the server refused and changed nothing. Without this arm the
         // refusal fell through to "All files are already chunked into passages" as a GREEN success -
@@ -1421,12 +1624,40 @@ export function useRechunkDataLake(dataLakeId: string | null) {
           'Background lake work is paused, so nothing was rebuilt. No files were changed - re-run this ' +
             'once an administrator turns convergence back on.'
         );
-      } else {
-        toast.success(
-          data.enqueued > 0
-            ? `Rebuilding ${data.enqueued} file(s) into passages - ${data.remaining} remaining.`
-            : 'All files are already chunked into passages.'
+      } else if (vars?.select === 'stale-embedding-space') {
+        // Worded for what this wave actually does. "Rebuilding into passages" would be wrong here:
+        // the files are already correctly chunked, and what changes is the vector space they are
+        // searchable in - which is also why the unsearchable window is stated.
+        //
+        // Three arms, not two, and the reassuring one keys on `detected` rather than `enqueued`.
+        // `enqueued` is the wave MINUS the sends that failed and the files a worker already held,
+        // and the reset drops a wave's passages before any send can fail - so a run whose sends all
+        // failed answers 200 with `enqueued: 0` on a non-empty `detected`, and the two-arm form told
+        // the owner the lake was clean at the one moment it had just been emptied. Only
+        // `detected === 0` means there was nothing to do.
+        if (data.enqueued > 0) {
+          toast.success(
+            `Re-embedding ${data.enqueued} file(s) into the current embedding space - ${data.remaining} ` +
+              'remaining. They are unsearchable until re-indexing completes.'
+          );
+        } else if (data.detected > 0) {
+          toast.warning(
+            `${data.detected} file(s) need re-embedding but none were queued - either a worker already ` +
+              'has them, or the queue rejected them. Any the queue rejected are unsearchable until a ' +
+              're-run succeeds.'
+          );
+        } else {
+          toast.success('Every file in this lake is already in the current embedding space.');
+        }
+      } else if (data.enqueued > 0) {
+        toast.success(`Rebuilding ${data.enqueued} file(s) into passages - ${data.remaining} remaining.`);
+      } else if (data.detected > 0) {
+        toast.warning(
+          `${data.detected} file(s) need rebuilding but none were queued - either a worker already has ` +
+            'them, or the queue rejected them. Re-run this if the count does not fall.'
         );
+      } else {
+        toast.success('All files are already chunked into passages.');
       }
       if (dataLakeId) {
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
@@ -2065,6 +2296,67 @@ export type ResearchConfigInput = {
   costCeilingMicroUsd?: number;
   proposedTags?: string[];
 };
+
+// -- Detected corpus problems (#3039) ---------------------------------------
+
+/**
+ * How a curator narrows one lake's findings. Every field is optional and independent, and the whole
+ * object is passed to the route as-is - so it doubles as the cache key, and two surfaces asking the
+ * same question share one fetch.
+ */
+export type LakeFindingFilters = { status?: LakeFindingStatus; kind?: InconsistencyKind; limit?: number };
+
+/**
+ * One lake's detected corpus problems. Manage-gated server-side - the rows carry document EXCERPTS
+ * - so a mere reader gets a 4xx, surfaced as `isForbidden` and never retried, matching
+ * `useDataLakeProposals`.
+ *
+ * Filtering is server-side rather than a client-side pass over one fetched page: the route bounds
+ * what it returns, so narrowing a page here would silently hide rows that never crossed the wire.
+ *
+ * No polling. Findings only change when a detection run is triggered, and a list that reshuffles
+ * under a curator comparing two passages is worse than one a few minutes stale.
+ */
+export function useDataLakeFindings(
+  dataLakeId: string | null,
+  filters?: LakeFindingFilters,
+  opts?: { enabled?: boolean }
+) {
+  const query = useInfiniteQuery({
+    queryKey: dataLakeKeys.findings(dataLakeId, filters),
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) => {
+      const { data } = await api.get<{ data: IDataLakeFindingDocument[]; hasMore: boolean }>(
+        `/api/data-lakes/${dataLakeId}/findings`,
+        { params: { ...filters, offset: pageParam } }
+      );
+      return data;
+    },
+    // Next offset = how many rows are loaded so far; undefined once the route says there is
+    // nothing left, so a queue that ends exactly on a page boundary does not draw a phantom
+    // "load more".
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.hasMore ? allPages.reduce((n, page) => n + page.data.length, 0) : undefined,
+    enabled: !!dataLakeId && (opts?.enabled ?? true),
+    retry: false,
+    staleTime: 1000 * 60,
+    // Switching a filter re-keys the query, and without this the list blanks to a spinner on every
+    // switch - the rows are a queue a curator is scanning, not a page they navigated away from.
+    // Scoped to the same lake: `LakeInfoPanel` reuses this hook across lake selections, and an
+    // unscoped `keepPreviousData` would carry lake A's rows over while lake B's page is loading.
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === dataLakeId ? previousData : undefined,
+  });
+  const findings = useMemo(() => query.data?.pages.flatMap(page => page.data), [query.data]);
+  return {
+    ...query,
+    data: findings,
+    isForbidden: isPermissionRejection(query.error),
+    hasMore: query.hasNextPage,
+    loadMore: query.fetchNextPage,
+    isLoadingMore: query.isFetchingNextPage,
+  };
+}
 
 /** How often the run list re-reads while a run is queued or running. */
 const RESEARCH_RUN_POLL_MS = 1000 * 5;

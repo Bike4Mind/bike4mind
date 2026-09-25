@@ -5,13 +5,14 @@ import {
   fabFileChunkRepository,
   fabFileRepository,
 } from '@bike4mind/database';
-import { LAKE_MEMORY_EXTRACTION_LEASE_MS, MEMENTO_EMBEDDING_MODEL, toMementoVector } from '@bike4mind/common';
-import { apiKeyService, dataLakeService, LakeMemoryExtractionService } from '@bike4mind/services';
-import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
+import { LAKE_MEMORY_EXTRACTION_LEASE_MS } from '@bike4mind/common';
+import { apiKeyService, dataLakeService } from '@bike4mind/services';
+import { LakeMemoryExtractionService } from '@bike4mind/services/llm';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { EvidenceTier } from '@bike4mind/memory';
 import type { Logger } from '@bike4mind/observability';
 import { createLedgerAppendSession } from '@server/memory/mementoLedgerMirror';
+import { createMementoEmbedder } from '@server/memory/mementoEmbedder';
 
 /**
  * Reserved curator-tag markers that promote a lake document's facts to the `human-reviewed` tier. A
@@ -99,7 +100,10 @@ const CHUNK_PAGE_LIMIT = 1_000;
  * incremental scan is a later cost optimization).
  *
  * Best-effort throughout: a doc that will not read or extract simply contributes no beliefs. Embeddings
- * are best-effort too - a vectorless write stays lexically recallable and can be re-embedded later.
+ * are best-effort too - a vectorless write stays lexically recallable, though PERMANENTLY so: nothing
+ * backfills a vector onto an event written without one (`reembedMementos` re-encodes existing vectors
+ * into a new space and skips vectorless events outright), so such a fact ranks on lexical overlap for
+ * good. A re-scan is the only thing that gives it another chance at a vector.
  *
  * Interruptible by an erase: the run re-reads the lake's purge fence (IDataLake.lakeMemoryPurgedAt)
  * at every document boundary and stops without recording a continuation, so a purge issued while a
@@ -164,18 +168,9 @@ export async function extractLakeMemoryForBatch(
       { logger }
     );
 
-    // Embed each fact in the MEMENTO space (the ledger's own corpus, pinned to MEMENTO_EMBEDDING_MODEL).
-    // Best-effort: with no key we write facts WITHOUT a vector - they stay lexically recallable and the
-    // re-embed backfill vectorizes them once a key is present (mirrors createMemento's V2 write).
-    let embed: (text: string) => Promise<number[] | undefined> = async () => undefined;
-    const provider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);
-    const { config, missing } = resolveEmbeddingConfig(provider, apiKeyTable);
-    if (missing) {
-      logger.warn(`[lakeMemory] no ${provider} key for ${MEMENTO_EMBEDDING_MODEL}; writing facts without vectors`);
-    } else {
-      const svc = new EmbeddingFactory(config).createEmbeddingService(MEMENTO_EMBEDDING_MODEL);
-      embed = async text => toMementoVector(await svc.generateEmbedding(text));
-    }
+    // Embed each fact in the MEMENTO space (the ledger's own corpus). Best-effort: with no key we
+    // write facts WITHOUT a vector, which stay lexically recallable.
+    const embed = createMementoEmbedder(apiKeyTable, logger);
 
     const extractor = new LakeMemoryExtractionService(logger);
 

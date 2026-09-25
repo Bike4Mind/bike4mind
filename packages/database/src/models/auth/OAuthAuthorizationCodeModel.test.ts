@@ -23,6 +23,12 @@ describe('OAuthAuthorizationCodeModel repository', () => {
     expect(await oauthAuthorizationCodeRepository.consumeValidCode('once')).toBeFalsy();
   });
 
+  it('returns the post-update document, so the caller sees used: true', async () => {
+    await oauthAuthorizationCodeRepository.create(base({ code: 'fresh' }));
+    const consumed = await oauthAuthorizationCodeRepository.consumeValidCode('fresh');
+    expect(consumed?.used).toBe(true);
+  });
+
   it('rejects an expired or unknown code', async () => {
     await oauthAuthorizationCodeRepository.create(base({ code: 'stale', expiresAt: new Date(Date.now() - 1000) }));
     expect(await oauthAuthorizationCodeRepository.consumeValidCode('stale')).toBeFalsy();

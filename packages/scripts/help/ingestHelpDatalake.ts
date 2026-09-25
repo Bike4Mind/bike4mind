@@ -167,6 +167,9 @@ async function ensureLake(deps: HelpDatalakeIngestDeps, opts: HelpDatalakeIngest
       datalakeTag: HELP_DATALAKE_TAG,
       createdByUserId: opts.userId,
       status: 'active',
+      // Machine-fed: a production cron runs this ingest unattended on a schedule (see
+      // infra/cron.ts), which is exactly what 'curated' declares this lake does NOT accept.
+      origin: 'connector-fed',
     });
     return created?.id ?? null;
   }
@@ -176,6 +179,14 @@ async function ensureLake(deps: HelpDatalakeIngestDeps, opts: HelpDatalakeIngest
     // Update only the field we're changing; spreading the whole doc would $set
     // every field (timestamps, counters) and risk clobbering on a shape change.
     if (!opts.dryRun) await deps.db.dataLakes.update({ id: existing.id, status: 'active' });
+  }
+  if (existing.origin !== 'connector-fed') {
+    deps.logger.info(`Repairing data lake "${HELP_DATALAKE_SLUG}" origin (was ${existing.origin})`);
+    // This script owns this lake's origin the same way it owns its status: the cron
+    // (infra/cron.ts) writes here unattended, so a row that predates this field - or one an
+    // admin manually flipped to 'curated' - must not stay that way. That flip not sticking is
+    // intended, not a bug.
+    if (!opts.dryRun) await deps.db.dataLakes.update({ id: existing.id, origin: 'connector-fed' });
   }
   return existing.id;
 }
@@ -349,6 +360,10 @@ export async function ingestHelpDatalake(
     // API door, so no reconciler runs here - the `help:<slug>` tag is what satisfies it, and
     // dropping it would silently reproduce the bug this invariant exists to prevent. The
     // `help:<slug>` tag is also how a re-run identifies this member, so it is load-bearing twice.
+    //
+    // No admin MaxFileSize check and no per-user storage quota here, and that is deliberate: the
+    // body is the repo-shipped help corpus, not a user upload, and no `filePath` is set, so no S3
+    // object is ever created for this row and objectCreated.ts's quota charge never fires for it.
     const fabFile = await deps.db.fabFiles.create({
       userId: opts.userId,
       fileName: entry.title,

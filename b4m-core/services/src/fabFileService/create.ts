@@ -10,14 +10,15 @@ import {
   KnowledgeType,
   SupportedFabFileMimeTypes,
   isStorableFabFileMimeType,
+  settingsMap,
 } from '@bike4mind/common';
 import {
   BadRequestError,
   checkStorageLimitForFile,
   getFileExtension,
-  getMimeTypeByExtension,
   getSettingsMap,
   getSettingsValue,
+  resolveSupportedMimeType,
   secureParameters,
 } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -111,14 +112,26 @@ export interface CreateFabFileAdapters {
    * that door's write gate ends up strictly narrower than the route gate in front of it.
    */
   administeredOrgIds?: string[];
+  /**
+   * Which of the filename extension and the claimed `mimeType` wins; defaults to 'extension-first'.
+   * An adapter rather than a `createFabFileSchema` field for the same reason as `provenance`: that
+   * schema is parsed from a caller-controlled HTTP body, so only a server-side caller that vouches
+   * for the claim (it read it off the stored object, not off the request) may let it outrank the name.
+   */
+  mimeTypePrecedence?: 'extension-first' | 'claim-first';
 }
 
-// Only reached when the `MaxFileSize` settings row exists but fails the schema (a non-numeric
-// stored value, or a cleared field - stored as '', which coerces to 0 and fails the schema's
-// `min: 1`) - a missing row never gets here, since the schema's own `.prefault(30)` already
-// resolves `getSettingsValue` to 30 before this default arg is consulted. Matches that prefault
-// value so the two cases can't diverge if the schema changes.
-const DEFAULT_MAX_FILE_SIZE = 30;
+/**
+ * MB. Only reached when the `MaxFileSize` settings row exists but fails the schema (a non-numeric
+ * stored value, or a cleared field - stored as '', which coerces to 0 and fails the schema's
+ * `min: 1`) - a missing row never gets here, since the schema's own prefault already resolves
+ * `getSettingsValue` before this default arg is consulted. Read from the setting rather than
+ * re-spelled so the two cases cannot diverge; the literal is only the never-taken arm of
+ * makeNumberSetting's optional `defaultValue`, and an undefined here would make a door's byte
+ * limit NaN, which admits every file. Shared with the notebook-import door, which gates on the
+ * same setting.
+ */
+export const MAX_FILE_SIZE_DEFAULT_MB = settingsMap.MaxFileSize.defaultValue ?? 30;
 const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
 
 /**
@@ -140,7 +153,7 @@ const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
 export const createFabFile = async (
   userId: string,
   parameters: CreateFabFileParameters,
-  { db, storage, provenance, administeredOrgIds, logger }: CreateFabFileAdapters
+  { db, storage, provenance, administeredOrgIds, logger, mimeTypePrecedence }: CreateFabFileAdapters
 ) => {
   const params = secureParameters(parameters, createFabFileSchema);
   const user = await db.users.findById(userId);
@@ -163,26 +176,22 @@ export const createFabFile = async (
   const tags = params.tags === undefined ? undefined : await reconcileDataLakeFallbackTags(params.tags, { db, logger });
 
   const ext = getFileExtension(params.fileName);
-  let mimeType = params.mimeType || getMimeTypeByExtension(ext);
-
-  // Only assume plain text for genuinely extension-less files (e.g. LICENSE,
-  // Dockerfile). A file that HAS an extension but doesn't resolve to a
-  // supported type must be rejected below - never silently coerced to
-  // text/plain, which let unsupported binaries like .exe through.
-  if (!mimeType && !ext) {
-    mimeType = SupportedFabFileMimeTypes.TXT_PLAIN;
-  }
-
   // Storable is a superset of ingestable: audio (TTS / sound effects) is kept
   // and browsable but never chunked/vectorized or attached to an LLM.
-  if (!isStorableFabFileMimeType(mimeType)) {
+  const { mimeType, supported } = resolveSupportedMimeType(params.fileName, params.mimeType, {
+    isAcceptable: isStorableFabFileMimeType,
+    precedence: mimeTypePrecedence,
+    extensionlessFallback: SupportedFabFileMimeTypes.TXT_PLAIN,
+  });
+
+  if (!supported) {
     throw new BadRequestError(`File type ${mimeType || (ext ? `.${ext}` : 'unknown')} is not supported`);
   }
 
   let filePath = params.prefix ? `${params.prefix}/` : '';
   filePath += `${uuidv4()}${ext ? `.${ext}` : '.txt'}`; // Ensure file has an extension for storage
 
-  const maxFileSize = getSettingsValue('MaxFileSize', await getSettingsMap(db), DEFAULT_MAX_FILE_SIZE) * 1024 * 1024;
+  const maxFileSize = getSettingsValue('MaxFileSize', await getSettingsMap(db), MAX_FILE_SIZE_DEFAULT_MB) * 1024 * 1024;
 
   if (params.fileSize >= maxFileSize) throw new BadRequestError('File size exceeds maximum file size');
 

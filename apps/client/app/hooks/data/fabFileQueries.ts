@@ -141,9 +141,10 @@ export function useGetProjectFiles(projectId: string) {
   });
 }
 
-export function useGetFabFileContent(fabFile: IFabFileDocument | null | undefined) {
+export function useGetFabFileContent(fabFile: IFabFileDocument | null | undefined, options: { strict?: boolean } = {}) {
+  const { strict = false } = options;
   return useQuery({
-    queryKey: fabFileKeys.content(fabFile?.id),
+    queryKey: fabFileKeys.contentRead(fabFile?.id, strict),
     queryFn: async () => {
       if (!fabFile) return '';
 
@@ -159,12 +160,14 @@ export function useGetFabFileContent(fabFile: IFabFileDocument | null | undefine
           fileUrl = response.data.urls?.[0] ?? undefined;
         } catch (err) {
           console.error('Failed to fetch signed URL for fab file content', err);
+          if (strict) throw err instanceof Error ? err : new Error('Failed to fetch signed URL for fab file content');
         }
       }
 
       return getContentFromFabfileInString({
         mimeType: fabFile.mimeType,
         fileUrl,
+        strict,
       });
     },
     enabled: !!fabFile,
