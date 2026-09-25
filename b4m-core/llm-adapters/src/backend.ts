@@ -230,6 +230,7 @@ export interface ICompletionOptions {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see comment above
       callback: (text: (string | null | undefined)[], info: any) => Promise<void>;
       emitArtifact: (results: string[], info: CompletionInfo) => Promise<void>;
+      markDelivered: (markup: string) => void;
       flush: () => Promise<void>;
     };
   };
