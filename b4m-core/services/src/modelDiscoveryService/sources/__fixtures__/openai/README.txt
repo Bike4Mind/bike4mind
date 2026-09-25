@@ -24,6 +24,11 @@ reasoning bullet, and a page whose title, id or window bullet is gone - are
 written as literals in openaiDocs.test.ts rather than captured, because a page
 OpenAI does not publish cannot be captured from OpenAI.
 
+model-gpt-6-sol.md is a LIVE CAPTURE fetched 2026-09-24 from
+developers.openai.com, trimmed after the pricing bullets and with the same
+curly-apostrophe paragraph dropped. It carries the spelled-out breakpoint
+bullet ("Prompts with more than 272K input tokens").
+
 parser-broke-pricing.md is CONSTRUCTED: the page restructured so the Standard
 heading and the "Short context" column names are gone. It must parse to a
 failure, never to a partial table.

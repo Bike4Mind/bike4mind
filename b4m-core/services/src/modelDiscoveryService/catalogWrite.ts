@@ -435,8 +435,8 @@ function planOne(
   }
 
   const probedAnswer = input.probedProfiles?.get(candidate.modelId);
-  // A probe that reached /v1/responses through a 400 verified the transport and
-  // NOT maxTokensParam, which is still predictMaxTokensParam's guess. The
+  // A probe whose tool-free chat check could not confirm maxTokensParam verified
+  // the transport only; the parameter is still predictMaxTokensParam's guess. The
   // terminal no-tools turn of a responses model sends that parameter on the chat
   // path (openaiBackend), so the guess is never written: the verified family
   // stands, the profile waits, and the model stays a probe candidate for the

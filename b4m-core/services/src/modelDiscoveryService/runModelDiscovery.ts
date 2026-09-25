@@ -587,9 +587,9 @@ async function runDispatchProbeLeg(input: ProbeLegInput): Promise<ReadonlyMap<st
     .slice(0, PROBE_MAX_MODELS_PER_RUN);
 
   // Clamped to the run's deadline, because the budget is checked only BETWEEN
-  // models: the last one could start just inside it and then run three live
-  // calls (chat, the wrong-token-param retry, then responses), so the overshoot
-  // is 3 x PROBE_CALL_TIMEOUT_MS.
+  // models: the last one could start just inside it and then run four live
+  // calls (chat, one wrong-token-param retry, responses, then the tool-free chat
+  // check), so the overshoot is 4 x PROBE_CALL_TIMEOUT_MS.
   const until = Math.min(ctx.now().getTime() + PROBE_BUDGET_MS, ctx.startedAt.getTime() + ctx.globalDeadlineMs);
   for (const [index, modelId] of queue.entries()) {
     if (ctx.now().getTime() >= until) {
