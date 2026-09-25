@@ -1946,10 +1946,15 @@ export function useConvergeDataLake(dataLakeId: string | null) {
  * content-prefix tags with it, unrecoverably). The caller (Files browser) filters the selection
  * down first; `skippedCount` is purely for the success toast's wording.
  */
+// Exported so a caller can gate on `useIsMutating({ mutationKey: addFilesToLakeMutationKey })`
+// while this mutation is in flight, e.g. to keep a submit button disabled across an unmount.
+export const addFilesToLakeMutationKey = ['addFilesToLake'] as const;
+
 export function useAddFilesToLake() {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
   return useMutation({
+    mutationKey: addFilesToLakeMutationKey,
     mutationFn: async ({
       fileIds,
       lake,
