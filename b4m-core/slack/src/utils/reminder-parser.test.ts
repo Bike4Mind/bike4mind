@@ -367,6 +367,7 @@ describe('reminder pattern scanners', () => {
     ['trailing, spaces', matchTrailingTime, n => 'a' + ' '.repeat(n) + 'x'],
     ['trailing, keyword run', matchTrailingTime, n => 'a' + ' in 5'.repeat(n) + '\nx'],
     ['trailing, space-newlines', matchTrailingTime, n => 'a' + ' \n'.repeat(n) + 'x'],
+    ['trailing, repeated words', matchTrailingTime, n => 'a '.repeat(n) + '\nx'],
   ];
   it.each(SHAPES)('stays linear: %s', (_name, scan, build) => {
     assertLinearGrowth(scan, build, 20_000);

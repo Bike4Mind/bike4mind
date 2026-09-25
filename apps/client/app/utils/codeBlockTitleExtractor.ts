@@ -277,9 +277,9 @@ const LINE_TERMINATOR = /[\n\r\u2028\u2029]/;
 const FROM_TABLE = /FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)/iy;
 
 /**
- * Linear-time equivalent of /SELECT\s+\S(?:.*?\S)?\s+FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)/i, returning
- * the table name. Any regex form rescans a line from every SELECT on it, so this precomputes, right
- * to left, the first position at or after i where a whitespace run leads into FROM <table>.
+ * Linear-time equivalent of /SELECT\s+.+?\s+FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)/i, returning the table
+ * name. Any regex form rescans a line from every SELECT on it, so this precomputes, right to left,
+ * the first position at or after i where a whitespace run leads into FROM <table>.
  */
 export function findSelectFromTable(code: string): string | null {
   const n = code.length;
@@ -302,16 +302,21 @@ export function findSelectFromTable(code: string): string | null {
     gapAt[i] = tableAfterRun.get(runEnd) ? i : gapAt[i + 1];
   }
   for (const select of code.matchAll(/SELECT/gi)) {
-    let first = select.index + 6;
-    if (first >= n || !WS.test(code[first])) continue;
-    while (first < n && WS.test(code[first])) first++;
-    if (first >= n) continue;
-    // The body runs from `first` to the gap and may not cross a line break; the gap itself may.
-    const gap = gapAt[first + 1];
-    if (gap === -1 || gap > nextBreak[first]) continue;
-    let end = gap;
-    while (WS.test(code[end])) end++;
-    return tableAfterRun.get(end) ?? null;
+    const afterSelect = select.index + 6;
+    if (afterSelect >= n || !WS.test(code[afterSelect])) continue;
+    let runEnd = afterSelect;
+    while (runEnd < n && WS.test(code[runEnd])) runEnd++;
+    // Like the backtracking \s+, try the body from the end of the run back to its second character,
+    // so `SELECT   FROM t` still reads t with a one-space body. Each run belongs to one SELECT.
+    for (let body = runEnd; body > afterSelect; body--) {
+      if (body >= n || LINE_TERMINATOR.test(code[body])) continue;
+      // The body runs from `body` to the gap and may not cross a line break; the gap itself may.
+      const gap = gapAt[body + 1];
+      if (gap === -1 || gap > nextBreak[body]) continue;
+      let end = gap;
+      while (WS.test(code[end])) end++;
+      return tableAfterRun.get(end) ?? null;
+    }
   }
   return null;
 }

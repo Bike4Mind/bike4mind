@@ -85,10 +85,29 @@ function resultMarkdown(result: string): string {
  * the outcome.
  */
 export function extractResultDigest(result: string): string | null {
-  const winner = resultMarkdown(result)
-    .match(/Winner:\s*([^\s#][^\n#]*?)(?:###|\n|$)/i)?.[1]
-    ?.trim();
+  const winner = matchWinner(resultMarkdown(result))?.trim();
   return winner || null;
+}
+
+/**
+ * Group 1 of /Winner:\s*([^\s#][^\n#]*?)(?:###|\n|$)/i, or null. That regex rescans to the next
+ * `\n` or `#` from every repeated `Winner:`, so this reuses the stop across labels.
+ */
+function matchWinner(md: string): string | null {
+  let stopFrom = md.length + 1;
+  let stop = md.length;
+  for (const label of md.matchAll(/Winner:/gi)) {
+    let i = label.index + label[0].length;
+    while (i < md.length && /\s/.test(md[i])) i++;
+    if (i >= md.length || md[i] === '#') continue;
+    if (i + 1 < stopFrom || i + 1 > stop) {
+      stopFrom = i + 1;
+      stop = stopFrom;
+      while (stop < md.length && md[stop] !== '\n' && md[stop] !== '#') stop++;
+    }
+    if (md[stop] !== '#' || md.startsWith('###', stop)) return md.slice(i, stop);
+  }
+  return null;
 }
 
 /**

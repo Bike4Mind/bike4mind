@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseTransformationResult } from './index';
+import { matchNewlineFence, parseTransformationResult } from './index';
 import {
   FENCE_PIECES,
   GROWTH_RATIO_CEILING,
@@ -31,7 +31,21 @@ describe('parseTransformationResult - fence regexes', () => {
     expect(() => parseTransformationResult(input)).toThrow();
   });
 
-  it('stays linear on an unclosed fence followed by whitespace', () => {
+  it.each([
+    [PAIRS[0][1], 'json'],
+    [PAIRS[1][1], ''],
+  ] as const)('matchNewlineFence captures exactly what %s did', (re, lang) => {
+    const corpus = seededCorpus(2998, 8000, FENCE_PIECES, 16);
+    expect(corpus.filter(s => re.test(s)).length).toBeGreaterThan(50);
+    expect(corpus.filter(s => matchNewlineFence(s, lang) !== (s.match(re)?.[1] ?? null))).toEqual([]);
+  });
+
+  it.each([
+    ['an unclosed fence followed by whitespace', (n: number) => '```json' + ' \n'.repeat(n) + 'x', 64000],
+    ['repeated json openers with no newline closer', (n: number) => '```json\nx'.repeat(n), 40000],
+    ['repeated bare openers with no newline closer', (n: number) => '```\nx'.repeat(n), 40000],
+    ['a whitespace run before a missing closer', (n: number) => 'a' + ' '.repeat(n) + 'b', 40000],
+  ])('stays linear on %s', (_label, build, small) => {
     const run = (s: string) => {
       try {
         parseTransformationResult(s);
@@ -39,7 +53,7 @@ describe('parseTransformationResult - fence regexes', () => {
         // Unparseable by design; only the time matters.
       }
     };
-    const { baselineMs, ratio } = measureGrowth(run, n => '```json' + ' \n'.repeat(n) + 'x', 64000);
+    const { baselineMs, ratio } = measureGrowth(run, build, small);
     expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
     expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
   });

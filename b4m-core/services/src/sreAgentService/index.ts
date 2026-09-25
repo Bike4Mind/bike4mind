@@ -87,11 +87,11 @@ const DANGEROUS_PATTERNS = [
   /\bnew\s+Proxy\s*\(/,
 ];
 
-/** Max tool-use rounds before forcing final output */
 // No `\s*` ahead of the lazy bodies: every consumer trims, and the overlap was quadratic on an unclosed fence.
 export const DIAGNOSIS_BLOCK_REGEX = /```diagnosis([\s\S]*?)```/;
 export const TOOL_BLOCK_REGEX = /```tool([\s\S]*?)```/g;
 
+/** Max tool-use rounds before forcing final output */
 const MAX_TOOL_ROUNDS = 8;
 
 /** Max tool call blocks to parse from a single LLM response - defense against LLM spam */

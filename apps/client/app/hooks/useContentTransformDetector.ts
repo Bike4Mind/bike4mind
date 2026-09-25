@@ -85,11 +85,10 @@ export const useContentTransformDetector = (sessionId: string | null) => {
 export function parseContentTransformResponse(response: string): TransformedContent | null {
   try {
     // Try to extract JSON from code blocks first (in case tool response format changes)
-    const jsonMatch =
-      response.match(/```json[^\S\n]*\n([\s\S]*?)\n```/) || response.match(/```[^\S\n]*\n([\s\S]*?)\n```/);
+    const jsonBody = matchNewlineFence(response, 'json') ?? matchNewlineFence(response, '');
 
-    if (jsonMatch) {
-      const jsonStr = jsonMatch[1].trim();
+    if (jsonBody !== null) {
+      const jsonStr = jsonBody.trim();
       const parsed = JSON.parse(jsonStr);
       return {
         title: parsed.title || '',
@@ -99,16 +98,14 @@ export function parseContentTransformResponse(response: string): TransformedCont
       };
     }
 
-    // Fallback: Parse the formatted text response. (?=(\s*))\1 is an atomic \s*: a backtracking one
-    // is quadratic on spaces that end in \r or U+2028, which `.` cannot match. Value is group 2.
-    const titleMatch = response.match(/\*\*Title:\*\*(?=(\s*))\1(.+?)(?:\n|$)/);
-    const summaryMatch = response.match(/\*\*Summary:\*\*(?=(\s*))\1(.+?)(?:\n|$)/);
-    const tagsMatch = response.match(/\*\*Suggested Tags:\*\*(?=(\s*))\1(.+?)(?:\n|$)/);
+    // Fallback: Parse the formatted text response
+    const title = matchLabelValue(response, '**Title:**');
+    const summary = matchLabelValue(response, '**Summary:**');
+    const tagsValue = matchLabelValue(response, '**Suggested Tags:**');
 
     // Extract content - everything after "Content Preview" or the full content section
-    let contentMatch = response.match(
-      /\*\*Content Preview[^:]*:\*\*[^\S\n]*\n([\s\S]+?)(?:\n---|\n\*\*Next Steps|\n$)/
-    );
+    const preview = matchContentPreview(response);
+    let contentMatch: string[] | null = preview === null ? null : ['', preview];
 
     // If no content preview found, try to find the actual full content from the tool's internal result
     // This is a bit hacky but works for the current tool implementation
@@ -119,24 +116,96 @@ export function parseContentTransformResponse(response: string): TransformedCont
       }
     }
 
-    if (!titleMatch || !contentMatch) {
+    if (title === null || !contentMatch) {
       return null;
     }
 
-    const tags = tagsMatch
-      ? tagsMatch[2]
-          .split(',')
-          .map(tag => tag.trim())
-          .filter(Boolean)
-      : [];
+    const tags =
+      tagsValue !== null
+        ? tagsValue
+            .split(',')
+            .map(tag => tag.trim())
+            .filter(Boolean)
+        : [];
 
     return {
-      title: titleMatch[2].trim(),
+      title: title.trim(),
       content: contentMatch[1].trim(),
-      summary: summaryMatch ? summaryMatch[2].trim() : '',
+      summary: summary !== null ? summary.trim() : '',
       suggestedTags: tags,
     };
   } catch (error) {
     return null;
   }
+}
+
+// These three helpers replace regexes that rescanned the rest of the input from every repeated
+// opener or label; each returns what the old regex's first match captured, in linear time.
+const WHITESPACE = /\s/;
+const isLineTerminator = (c: string | undefined) => c === '\n' || c === '\r' || c === '\u2028' || c === '\u2029';
+
+/** Group 1 of /```LANG[^\S\n]*\n([\s\S]*?)\n```/, or null. */
+export function matchNewlineFence(text: string, lang: string): string | null {
+  const opener = '```' + lang;
+  for (let at = text.indexOf(opener); at !== -1; at = text.indexOf(opener, at + 1)) {
+    let i = at + opener.length;
+    while (i < text.length && text[i] !== '\n' && WHITESPACE.test(text[i])) i++;
+    if (text[i] !== '\n') continue;
+    // A later opener's body starts later, so it cannot find a closer this one missed.
+    const close = text.indexOf('\n```', i + 1);
+    return close === -1 ? null : text.slice(i + 1, close);
+  }
+  return null;
+}
+
+/** Group 1 of new RegExp(escape(label) + '\\s*(.+?)(?:\\n|$)'), backtracking \s* included, or null. */
+export function matchLabelValue(text: string, label: string): string | null {
+  const n = text.length;
+  // breakAt is the first line terminator (or n) at or after every index in [breakFrom, breakAt].
+  let breakFrom = n + 1;
+  let breakAt = n;
+  for (let at = text.indexOf(label); at !== -1; at = text.indexOf(label, at + 1)) {
+    const start = at + label.length;
+    let i = start;
+    while (i < n && WHITESPACE.test(text[i])) i++;
+    if (i < breakFrom || i > breakAt) {
+      breakFrom = i;
+      breakAt = i;
+      while (breakAt < n && !isLineTerminator(text[breakAt])) breakAt++;
+    }
+    // Try the value start from the longest whitespace run down, as the backtracking \s* does.
+    for (let lineEnd = breakAt; i >= start; i--) {
+      if (isLineTerminator(text[i])) lineEnd = i;
+      if (i < n && !isLineTerminator(text[i]) && (lineEnd === n || text[lineEnd] === '\n')) {
+        return text.slice(i, lineEnd);
+      }
+    }
+  }
+  return null;
+}
+
+/** Group 1 of /\*\*Content Preview[^:]*:\*\*[^\S\n]*\n([\s\S]+?)(?:\n---|\n\*\*Next Steps|\n$)/, or null. */
+export function matchContentPreview(text: string): string | null {
+  const opener = '**Content Preview';
+  let colon = -1;
+  let failedColon = -1;
+  for (let at = text.indexOf(opener); at !== -1; at = text.indexOf(opener, at + 1)) {
+    if (colon < at) colon = text.indexOf(':', at + opener.length);
+    if (colon === -1) return null;
+    if (colon === failedColon) continue;
+    let i = colon + 3;
+    while (i < text.length && text[i] !== '\n' && WHITESPACE.test(text[i])) i++;
+    if (!text.startsWith(':**', colon) || text[i] !== '\n') {
+      failedColon = colon;
+      continue;
+    }
+    // A later opener's body starts no earlier, so it cannot find an end this one missed.
+    for (let end = text.indexOf('\n', i + 2); end !== -1; end = text.indexOf('\n', end + 1)) {
+      if (end === text.length - 1 || text.startsWith('\n---', end) || text.startsWith('\n**Next Steps', end)) {
+        return text.slice(i + 1, end);
+      }
+    }
+    return null;
+  }
+  return null;
 }

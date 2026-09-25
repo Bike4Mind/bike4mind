@@ -108,6 +108,9 @@ describe('lattice intent scanners', () => {
     ['formula, operator run', matchFormula, n => 'a' + '= '.repeat(n) + '\nx'],
     ['formula, space-newlines', matchFormula, n => 'a' + ' \n'.repeat(n) + 'x'],
     ['explain, spaces', matchExplain, n => 'explain a' + ' '.repeat(n) + 'x'],
+    ['set, repeated openers', matchSetValue, n => 'set a '.repeat(n) + '\nx'],
+    ['formula, repeated equations', matchFormula, n => 'a=b '.repeat(n) + '\nx'],
+    ['explain, repeated openers', matchExplain, n => 'explain a '.repeat(n) + '\nx'],
   ];
   it.each(SHAPES)('stays linear: %s', (_name, scan, build) => {
     assertLinearGrowth(scan, build, 20_000);

@@ -232,15 +232,24 @@ describe('extractResultDigest - winner regex', () => {
     expect(extractResultDigest('### Winner:   \n')).toBeNull();
   });
 
-  // The old regex is cubic on a run of spaces that never reaches a line end: about 1s at 500.
-  it.each([['spaces before a lone #', (n: number) => 'Winner:' + ' '.repeat(n) + '#', 500]])(
-    'stays linear on %s',
-    (_label, build, small) => {
-      const { baselineMs, ratio } = measureGrowth(extractResultDigest, build, small);
-      expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
-      expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
-    }
-  );
+  it('reads exactly what the single-regex form did', () => {
+    const regexForm = (md: string) => md.match(/Winner:\s*([^\s#][^\n#]*?)(?:###|\n|$)/i)?.[1]?.trim() || null;
+    const pieces = ['Winner:', 'WINNER:', '###', '##', '#', ' ', '\t', '\n', '\r', 'cp-sat', 'x'];
+    const corpus = seededCorpus(2998, 8000, pieces, 16);
+    expect(corpus.filter(s => regexForm(s) !== null).length).toBeGreaterThan(300);
+    expect(corpus.filter(s => extractResultDigest(s) !== regexForm(s))).toEqual([]);
+  });
+
+  // The original regex is cubic on the space run (about 1s at 500); the single-regex rewrite was
+  // still quadratic on repeated labels.
+  it.each([
+    ['spaces before a lone #', (n: number) => 'Winner:' + ' '.repeat(n) + '#', 500],
+    ['repeated labels before a lone #', (n: number) => 'Winner: a'.repeat(n) + '#', 16000],
+  ])('stays linear on %s', (_label, build, small) => {
+    const { baselineMs, ratio } = measureGrowth(extractResultDigest, build, small);
+    expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
+    expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
+  });
 
   it('agrees with the old regex except where a blank winner precedes a later one', () => {
     const pieces = ['Winner:', 'winner:', '###', '#', ' ', '\t', '\n', '\r', 'cp-sat', '(obj: 1)', 'x'];

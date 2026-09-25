@@ -115,11 +115,26 @@ IMPORTANT:
  * the embedded JSON object can be parsed instead of throwing on a stray backtick.
  */
 function stripCodeFences(raw: string): string {
-  return raw
-    .trim()
-    .replace(/^```[a-zA-Z]*[ \t]*\r?\n?/, '') // leading ``` / ```json opener
-    .replace(/\r?\n?[ \t]*```$/, '') // trailing closer
-    .trim();
+  const body = raw.trim().replace(/^```[a-zA-Z]*[ \t]*\r?\n?/, ''); // leading ``` / ```json opener
+  // endsWith, not /[ \t]*```$/: that regex rescans a whitespace run from each of its positions.
+  return (body.endsWith('```') ? body.slice(0, -3) : body).trim();
+}
+
+/**
+ * Group 1 of /```LANG[^\S\n]*\n([\s\S]*?)\n```/, or null, in linear time. The regex rescans the rest
+ * of the input from every opener when no newline-led closer follows.
+ */
+function matchNewlineFence(text: string, lang: string): string | null {
+  const opener = '```' + lang;
+  for (let at = text.indexOf(opener); at !== -1; at = text.indexOf(opener, at + 1)) {
+    let i = at + opener.length;
+    while (i < text.length && text[i] !== '\n' && /\s/.test(text[i])) i++;
+    if (text[i] !== '\n') continue;
+    // A later opener's body starts later, so it cannot find a closer this one missed.
+    const close = text.indexOf('\n```', i + 1);
+    return close === -1 ? null : text.slice(i + 1, close);
+  }
+  return null;
 }
 
 /**
@@ -140,10 +155,9 @@ function parseTransformationResult(llmResponse: string): TransformResult {
   // responses - in those cases the paired regex fails and the raw "```json..."
   // string would reach JSON.parse. Fall back to stripping a leading opener
   // fence and a trailing closer fence independently.
-  const jsonMatch =
-    llmResponse.match(/```json[^\S\n]*\n([\s\S]*?)\n```/) || llmResponse.match(/```[^\S\n]*\n([\s\S]*?)\n```/);
+  const fenced = matchNewlineFence(llmResponse, 'json') ?? matchNewlineFence(llmResponse, '');
 
-  let jsonStr = jsonMatch ? jsonMatch[1] : stripCodeFences(llmResponse);
+  let jsonStr = fenced ?? stripCodeFences(llmResponse);
   jsonStr = jsonStr.trim();
 
   // Check if extracted JSON is empty
@@ -204,7 +218,7 @@ ${artifactBody}
 }
 
 // Export for testing
-export { sanitizeJsonString, parseTransformationResult, wrapDraftAsArtifact, sanitizeArtifactTitle };
+export { sanitizeJsonString, parseTransformationResult, wrapDraftAsArtifact, sanitizeArtifactTitle, matchNewlineFence };
 
 export const blogDraftTool: ToolDefinition = {
   name: 'blog_draft',

@@ -58,7 +58,8 @@ describe('codeBlockTitleExtractor - comment and SELECT regexes', () => {
     expect(titleOf('html')('<div><!--  Pricing table  --></div>')).toBe('Pricing table');
     expect(titleOf('css')('/*  Card styles  */ .x {}')).toBe('Card styles');
     expect(titleOf('sql')('SELECT id, name\n  FROM users')).toBe('Query users');
-    expect(findSelectFromTable('select   from t')).toBeNull();
+    expect(findSelectFromTable('select   from t')).toBe('t');
+    expect(findSelectFromTable('SELECT \t FROM users')).toBe('users');
   });
 
   // The old regexes took about 0.2-2s per call at these sizes (inputs stay under the 8192 scan cap).
@@ -68,10 +69,18 @@ describe('codeBlockTitleExtractor - comment and SELECT regexes', () => {
     ['css', 'newlines in an unclosed comment', (n: number) => '/*' + '\n'.repeat(n) + 'x', 2000],
     ['css', 'space-newline pairs in an unclosed comment', (n: number) => '/*' + ' \n'.repeat(n) + 'x', 1000],
     ['sql', 'spaces after SELECT with no FROM', (n: number) => 'SELECT' + ' '.repeat(n) + 'x', 2000],
-    // The scan cap kept this one fast before the fix too; it pins the scanner across SELECT starts.
-    ['sql', 'repeated SELECT openers on one line', (n: number) => 'SELECT a '.repeat(n), 400],
   ])('%s: stays linear on %s', (language, _label, build, small) => {
     const { baselineMs, ratio } = measureGrowth(titleOf(language), build, small);
+    expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
+    expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
+  });
+
+  // Called directly: extractSQLTitle's 8192-char scan cap kept the old regex fast on this input.
+  it.each([
+    ['repeated SELECT openers on one line', (n: number) => 'SELECT a '.repeat(n), 4000],
+    ['repeated SELECT openers with whitespace-only bodies', (n: number) => 'SELECT  \t'.repeat(n) + '\r', 4000],
+  ])('findSelectFromTable stays linear on %s', (_label, build, small) => {
+    const { baselineMs, ratio } = measureGrowth(findSelectFromTable, build, small);
     expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
     expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
   });
@@ -87,14 +96,11 @@ describe('codeBlockTitleExtractor - comment and SELECT regexes', () => {
     expect(regexDivergences(oldRe, control, corpus).length).toBeGreaterThan(0);
   });
 
-  it('finds the table the old SELECT regex found, except after a whitespace-only column list', () => {
+  it('finds exactly the table the old SELECT regex found', () => {
     const OLD = /SELECT\s+.+?\s+FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)/i;
     const pieces = ['SELECT ', 'select', ' FROM ', 'from', ' ', '\n', '\t', '\r', '\u2028', 'a', 'users', '*', ','];
     const corpus = seededCorpus(2998, 4000, pieces, 14);
     expect(corpus.filter(s => findSelectFromTable(s) !== null).length).toBeGreaterThan(100);
-    const diverged = corpus.filter(s => findSelectFromTable(s) !== (s.match(OLD)?.[1] ?? null));
-    // Pinned: old matched SELECT<ws>FROM with only whitespace between; the scanner requires a column.
-    expect(diverged.length).toBeGreaterThan(0);
-    for (const s of diverged) expect(s.match(OLD)![0]).toMatch(/^SELECT\s+FROM\s/i);
+    expect(corpus.filter(s => findSelectFromTable(s) !== (s.match(OLD)?.[1] ?? null))).toEqual([]);
   });
 });

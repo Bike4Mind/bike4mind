@@ -272,10 +272,6 @@ export interface LLMTriageResponse {
 export type LLMErrorCategory =
   'TIMEOUT' | 'SIZE_LIMIT' | 'RATE_LIMIT' | 'AUTH_ERROR' | 'SERVICE_UNAVAILABLE' | 'API_ERROR' | 'PARSE_ERROR';
 
-/**
- * Custom error class for categorized LLM errors
- */
-
 const JSON_START = '<<<B4M_JSON_START>>>';
 const JSON_END = '<<<B4M_JSON_END>>>';
 
@@ -295,6 +291,9 @@ export function extractTriageJson(responseText: string): string {
   return responseText;
 }
 
+/**
+ * Custom error class for categorized LLM errors
+ */
 export class LLMError extends Error {
   constructor(
     public readonly category: LLMErrorCategory,

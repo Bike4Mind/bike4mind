@@ -9,13 +9,12 @@ import {
 
 vi.mock('./data/sessions', () => ({ useGetSessionQuests: vi.fn() }));
 
-import { parseContentTransformResponse } from './useContentTransformDetector';
-
-/** Index, end and trimmed value of group `g`, or null: what the parser can observe. */
-const observe = (re: RegExp, s: string, g: number) => {
-  const m = s.match(re);
-  return m ? JSON.stringify([m.index, (m.index ?? 0) + m[0].length, (m[g] ?? '').trim()]) : null;
-};
+import {
+  matchContentPreview,
+  matchLabelValue,
+  matchNewlineFence,
+  parseContentTransformResponse,
+} from './useContentTransformDetector';
 
 describe('parseContentTransformResponse', () => {
   it('parses a fenced JSON response and the formatted fallback', () => {
@@ -35,9 +34,14 @@ describe('parseContentTransformResponse', () => {
     });
   });
 
-  it('now rejects a title line that is blank to the end of input', () => {
-    // Old: the backtracking \s* left one space for (.+?), so the title parsed as ''. New: no title.
-    expect(parseContentTransformResponse('**Content Preview:**\nBody\n---\n**Title:**   ')).toBeNull();
+  it.each(['**Title:**   ', '**Title:** \n'])('parses a blank title line %j as an empty title', titleLine => {
+    // The backtracking \s* leaves one space for (.+?), so a blank title still counts as present.
+    expect(parseContentTransformResponse('**Content Preview:**\nBody\n---\n' + titleLine)).toEqual({
+      title: '',
+      content: 'Body',
+      summary: '',
+      suggestedTags: [],
+    });
   });
 
   // The old regexes took about 1s per call at these sizes.
@@ -55,6 +59,12 @@ describe('parseContentTransformResponse', () => {
       (n: number) => '**Content Preview:**' + ' \n'.repeat(n) + 'x',
       40000,
     ],
+    ['repeated json openers with no newline closer', (n: number) => '```json\nx'.repeat(n), 40000],
+    ['repeated bare openers with no newline closer', (n: number) => '```\nx'.repeat(n), 40000],
+    ['repeated title labels on a CR-terminated line', (n: number) => '**Title:** '.repeat(n) + '\r', 16000],
+    ['repeated title labels with values on a CR-terminated line', (n: number) => '**Title:**a'.repeat(n) + '\r', 16000],
+    ['repeated content preview labels with no end', (n: number) => '**Content Preview:**\n'.repeat(n) + 'x', 16000],
+    ['repeated content preview openers with no colon', (n: number) => '**Content Preview'.repeat(n), 16000],
   ])('stays linear on %s', (_label, build, small) => {
     const { baselineMs, ratio } = measureGrowth(parseContentTransformResponse, build, small);
     expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
@@ -81,15 +91,39 @@ describe('parseContentTransformResponse', () => {
     expect(regexDivergences(oldRe, new RegExp(newRe.source.replace('*?', '*')), corpus).length).toBeGreaterThan(0);
   });
 
-  it.each(['Title', 'Summary', 'Suggested Tags'])('matches the old %s regex except on blank values', label => {
+  it.each(['Title', 'Summary', 'Suggested Tags'])('captures exactly what the old %s regex did', label => {
     const oldRe = new RegExp(`\\*\\*${label}:\\*\\*\\s*(.+?)(?:\\n|$)`);
-    const newRe = new RegExp(`\\*\\*${label}:\\*\\*(?=(\\s*))\\1(.+?)(?:\\n|$)`);
-    const corpus = seededCorpus(2998, 3000, [`**${label}:**`, ' ', '\n', '\t', '\r', '\u2028', 'x', 'My doc']);
-    expect(corpus.filter(s => newRe.test(s)).length).toBeGreaterThan(300);
-    const diverged = corpus.filter(s => observe(oldRe, s, 1) !== observe(newRe, s, 2));
-    // Old let (.+?) take whitespace when nothing else was left on the line; new never does.
-    expect(diverged.length).toBeGreaterThan(0);
-    for (const s of diverged) expect(s.match(oldRe)![1].trim()).toBe('');
+    const corpus = seededCorpus(2998, 6000, [`**${label}:**`, ' ', '\n', '\t', '\r', '\u2028', 'x', 'My doc']);
+    expect(corpus.filter(s => oldRe.test(s)).length).toBeGreaterThan(300);
+    expect(corpus.filter(s => matchLabelValue(s, `**${label}:**`) !== (s.match(oldRe)?.[1] ?? null))).toEqual([]);
+  });
+
+  it('scanners capture exactly what the fence and content preview regexes did', () => {
+    const previewPieces = [
+      '**Content Preview:**',
+      '**Content Preview',
+      ':**',
+      ':',
+      '\n---',
+      '\n**Next Steps',
+      ' ',
+      '\n',
+      'x',
+    ];
+    const cases: Array<[RegExp, (s: string) => string | null, string[]]> = [
+      [/```json[^\S\n]*\n([\s\S]*?)\n```/, s => matchNewlineFence(s, 'json'), pieces],
+      [/```[^\S\n]*\n([\s\S]*?)\n```/, s => matchNewlineFence(s, ''), pieces],
+      [
+        /\*\*Content Preview[^:]*:\*\*[^\S\n]*\n([\s\S]+?)(?:\n---|\n\*\*Next Steps|\n$)/,
+        matchContentPreview,
+        previewPieces,
+      ],
+    ];
+    for (const [re, scan, corpusPieces] of cases) {
+      const corpus = seededCorpus(2998, 8000, corpusPieces, 16);
+      expect(corpus.filter(s => re.test(s)).length).toBeGreaterThan(30);
+      expect(corpus.filter(s => scan(s) !== (s.match(re)?.[1] ?? null))).toEqual([]);
+    }
   });
 
   it('matches the old content preview regex except where blank lines precede the separator', () => {

@@ -46,10 +46,10 @@ interface IResearchTaskProcessDiscoveredLinksAdapters {
 
 // TODO: move BATCH_SIZE / CONCURRENCY_LIMIT to admin settings so they're adjustable.
 const BATCH_SIZE = 50;
+const CONCURRENCY_LIMIT = 3;
 
 // No whitespace consumers around the lazy body: the caller trims, and `\s*` there is quadratic on an unclosed fence.
 export const FENCED_JSON_REGEX = /```(?:json)?([\s\S]*?)```/;
-const CONCURRENCY_LIMIT = 3;
 
 export const processDiscoveredLinks = async (
   parameters: IResearchTaskProcessDiscoveredLinks,
