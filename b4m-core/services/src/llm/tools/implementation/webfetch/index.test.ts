@@ -410,22 +410,43 @@ describe('firecrawlFetch Firecrawl config threading', () => {
 });
 
 describe('firecrawlFetch onlyMainContent', () => {
+  // The params object scrapeUrl was called with on the nth call.
+  const paramsOfCall = (n: number) => (scrapeUrl.mock.calls[n] as unknown[])[1];
+
   it("leaves Firecrawl's default in place when the caller does not set it", async () => {
     scrapeMarkdown = 'x'.repeat(100);
     await firecrawlFetch(adapters, 'https://example.com/doc');
-    expect(scrapeUrl).toHaveBeenCalledWith('https://example.com/doc', expect.not.objectContaining({ onlyMainContent: expect.anything() }));
+    // Assert the key is absent rather than not.objectContaining, which also passes for an explicit
+    // onlyMainContent: undefined - not the same thing to send Firecrawl as omitting the key.
+    expect(paramsOfCall(0)).not.toHaveProperty('onlyMainContent');
   });
 
   it('passes onlyMainContent: false through so headers, navs and footers are kept', async () => {
     scrapeMarkdown = 'x'.repeat(100);
     await firecrawlFetch(adapters, 'https://example.com/doc', { onlyMainContent: false });
-    expect(scrapeUrl).toHaveBeenCalledWith('https://example.com/doc', expect.objectContaining({ onlyMainContent: false }));
+    expect(scrapeUrl).toHaveBeenCalledWith(
+      'https://example.com/doc',
+      expect.objectContaining({ onlyMainContent: false })
+    );
+  });
+
+  it('keeps the option on the no-actions retry', async () => {
+    scrapeMarkdown = 'x'.repeat(100);
+    scrapeUrl.mockRejectedValueOnce(new Error('Actions are not supported'));
+    await firecrawlFetch(adapters, 'https://example.com/doc', { onlyMainContent: false });
+    expect(scrapeUrl).toHaveBeenCalledTimes(2);
+    // Retrying is what drops the wait action, so this is the retry call and not the first attempt.
+    expect(paramsOfCall(1)).not.toHaveProperty('actions');
+    expect(paramsOfCall(1)).toMatchObject({ onlyMainContent: false });
   });
 
   it('keeps the option on the PDF path too', async () => {
     scrapeMarkdown = 'x'.repeat(100);
     await firecrawlFetch(adapters, 'https://example.com/doc.pdf', { onlyMainContent: false });
-    expect(scrapeUrl).toHaveBeenCalledWith('https://example.com/doc.pdf', expect.objectContaining({ onlyMainContent: false }));
+    expect(scrapeUrl).toHaveBeenCalledWith(
+      'https://example.com/doc.pdf',
+      expect.objectContaining({ onlyMainContent: false })
+    );
   });
 });
 
