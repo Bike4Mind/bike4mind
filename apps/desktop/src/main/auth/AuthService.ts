@@ -370,7 +370,7 @@ export class AuthService {
       this.refreshAttempt = 0;
       await this.scheduleProactiveRefresh();
     } catch (err) {
-      const status = refreshRejectionStatus(err);
+      const status = httpStatus(err);
       if (status === 400 || status === 401) {
         // The refresh token itself was rejected: genuinely revoked, not a blip.
         await this.deps.vault.clearTokens(this.endpointUrl());
@@ -476,13 +476,24 @@ function toDesktopUser(raw: Record<string, unknown> | null | undefined, fallback
 
 /** The device grant's error codes are opaque slugs; translate the ones a user can act on. */
 function signInErrorMessage(err: unknown): string {
+  const status = httpStatus(err);
+
+  // `client_id` is validated against a server-side allowlist, so a schema rejection at initiate
+  // means that backend does not know this client - in practice one older than desktop support,
+  // not anything the user did. The raw axios "status code 422" gives them nothing to act on.
+  if (status === 400 || status === 422) {
+    return 'This server did not accept the desktop client. It may be running a version that predates desktop support.';
+  }
+
+  if (status === 429) return 'Too many sign-in attempts. Wait a few minutes and try again.';
+
   const message = err instanceof Error ? err.message : '';
   if (message === 'User denied the authorization request') return 'The sign-in request was denied in the browser.';
   if (message === 'Authorization code has expired') return 'The sign-in code expired. Start again.';
   return message || 'Sign-in failed. Try again.';
 }
 
-function refreshRejectionStatus(err: unknown): number | undefined {
+function httpStatus(err: unknown): number | undefined {
   if (typeof err !== 'object' || err === null) return undefined;
   const response = (err as { response?: { status?: number } }).response;
   return typeof response?.status === 'number' ? response.status : undefined;
