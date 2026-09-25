@@ -173,6 +173,11 @@ export class VideoGenerationService {
     if (questId) {
       quest = await this.db.quests.findById(questId);
       if (!quest) throw new NotFoundError('Quest not found');
+      // See ImageEdit's retry guard: bind the retried quest to the access-checked session.
+      if (quest.sessionId !== sessionId) {
+        Logger.globalInstance.warn(`Quest ${questId} does not belong to session ${sessionId}; refusing retry.`);
+        throw new NotFoundError('Quest not found');
+      }
       // If the quest is a retry, clear out the previous state
       quest.videos = [];
       quest.replies = [];

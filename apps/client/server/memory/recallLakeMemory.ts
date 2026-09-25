@@ -29,11 +29,12 @@ export interface LakeBeliefRecall {
   /** Source FabFile ids the fact was extracted from, for citation. Always at least one (reachable). */
   sources: string[];
   /**
-   * `YYYY-MM-DD` of the source document, when it is known. Always absent today: nothing captures a
-   * document's own date, and production wires no dates resolver (see `resolveSourceDates`). With no
-   * resolver wired no belief carries a date, so `buildLakeMemoryContext` omits the date line
-   * altogether - its `dated` gate gives the "unknown" rendering only once some fact in the batch
-   * does carry one.
+   * `YYYY-MM-DD` of the source document, when it is known. Still absent today, but no longer for
+   * want of the data: ingest now captures `FabFile.documentDate` (#3048), and what keeps every
+   * lake-memory card undated is that production wires no dates resolver (see `resolveSourceDates`).
+   * With no resolver wired no belief carries a date, so `buildLakeMemoryContext` omits the date
+   * line altogether - its `dated` gate gives the "unknown" rendering only once some fact in the
+   * batch does carry one.
    */
   sourceDate?: string;
 }
@@ -68,12 +69,17 @@ export interface RecallLakeMemoryOptions {
    * the budget cut, so it reads only the slice that will actually be rendered rather than every
    * source the reachability gate scans.
    *
-   * UNWIRED in production, and must stay that way until a field captures a document's own date. The
-   * resolver this once received answered with the FabFile's `createdAt`, which dated a belief by
-   * when its source was uploaded - so a claim from a decade-old report rendered on the card as
-   * this month's reading, and the model weighed it against a genuinely newer one accordingly. An
-   * undated card is the honest output; see formatDocumentDate in renderRetrievedContentBlock.ts
-   * (b4m-core/services) for the same rule on the retrieval headers.
+   * UNWIRED in production. The resolver this once received answered with the FabFile's `createdAt`,
+   * which dated a belief by when its source was uploaded - so a claim from a decade-old report
+   * rendered on the card as this month's reading, and the model weighed it against a genuinely
+   * newer one accordingly. An undated card is the honest output; see formatDocumentDate in
+   * renderRetrievedContentBlock.ts (b4m-core/services) for the same rule on the retrieval headers.
+   *
+   * `FabFile.documentDate` (#3048) now supplies a real authored date, so a correct resolver is
+   * finally possible - but wiring one is NOT just a field swap. A belief cites `sources` as a set,
+   * those sources can carry different vintages, and collapsing them to one card date is a judgement
+   * about which source speaks for the belief. That judgement belongs with the reader (#2688), so it
+   * needs deciding on its own rather than inheriting whatever a resolver happens to pick first.
    */
   resolveSourceDates?: (sourceIds: string[]) => Promise<Map<string, string>>;
 }

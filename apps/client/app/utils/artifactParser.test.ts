@@ -124,6 +124,37 @@ describe('parseArtifactsWithFallback', () => {
     expect(result.cleanedContent).not.toContain('<!DOCTYPE html>');
   });
 
+  it('sanitizes < > and " from the title of a promoted bare HTML document', () => {
+    const dangerous =
+      '<!DOCTYPE html><html><head><title>Attack <script>"xss"</title></head><body></body></html>';
+    const result = parseArtifactsWithFallback(dangerous);
+    expect(result.artifacts).toHaveLength(1);
+    // All three problem characters must be gone from the title attribute.
+    expect(result.artifacts[0].title).toBe('Attack scriptxss');
+  });
+
+  it('sanitizes < > and " from the title of a fenced full HTML document', () => {
+    const fence =
+      '```html\n<!DOCTYPE html><html><head><title>A "test" <page></title></head><body></body></html>\n```';
+    const result = parseArtifactsWithFallback(fence);
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe('A test page');
+  });
+
+  it('falls back to HTML Snippet when a fenced fragment has no title tag', () => {
+    const fence = '```html\n<div><h1>Hi</h1></div>\n<!-- title tag is in a comment -->\n```';
+    const result = parseArtifactsWithFallback(fence);
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe('HTML Snippet');
+  });
+
+  it('sanitizes < > and " from the title of a fenced HTML fragment', () => {
+    const fence = '```html\n<div><h1>Hi</h1></div>\n<title>Bad<>Title"</title>\n```';
+    const result = parseArtifactsWithFallback(fence);
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe('BadTitle');
+  });
+
   it('promotes a bare HTML document even when an explicit artifact is also present', () => {
     const explicit = '<artifact identifier="notes" type="text/markdown" title="Notes">some notes</artifact>';
     const result = parseArtifactsWithFallback(`${explicit}\n\nAnd the article:\n\n${htmlDoc}`);

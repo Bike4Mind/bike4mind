@@ -480,8 +480,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
             });
             emittedTextChars += streamedText.reduce((n, t) => n + (t?.length ?? 0), 0);
 
+            // Reasoning arrives on its own chunk, so the tag is frame-wide.
+            const channel = chunk?.choices.find(c => c.channel)?.channel;
+
             // Send streamed text from chunk text data
-            await callback(streamedText, buildCompletionInfo());
+            await callback(streamedText, { ...buildCompletionInfo(), ...(channel ? { channel } : {}) });
           }
         }
 
@@ -622,8 +625,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
             for (const outcome of outcomes) {
               if (outcome.ok) {
                 // For tools that return artifacts (like recharts), stream the result directly
-                await handleToolResultStreaming(outcome.name, outcome.result, async results => {
-                  await callback(results, buildCompletionInfo());
+                await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
+                  await callback(results, { ...buildCompletionInfo(), ...artifactInfo });
                 });
 
                 const resultStr = outcome.result.toString();
@@ -755,8 +758,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 }
 
                 // For tools that return artifacts (like recharts), stream the result directly
-                await handleToolResultStreaming(name, result, async results => {
-                  await callback(results, buildCompletionInfo());
+                await handleToolResultStreaming(name, result, async (results, artifactInfo) => {
+                  await callback(results, { ...buildCompletionInfo(), ...artifactInfo });
                 });
 
                 recordToolResult(toolsUsed, { id, name }, result.toString(), succeeded);

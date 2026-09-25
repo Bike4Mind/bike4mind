@@ -16,6 +16,7 @@ import {
   IFabFileVersion,
   type LakeMembershipMemberRow,
   type LakeSupersession,
+  DocumentDateSource,
   FabFileSourceType,
   KnowledgeType,
   normalizeTagPrefix,
@@ -936,6 +937,13 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // through data-lake membership must resolve here too, or this predicate would be narrower than
     // the door that admitted the file and silently drop lake-only images. Same builder, same
     // `archivedAt: null` post-processing on each arm - so the two doors can never disagree.
+    //
+    // They still disagree on DRAFT lakes, and not because of anything here: the arms are only as
+    // wide as the `lakeAccess` a caller passes, and every attachment door resolves that through
+    // `findActiveByUserTagsAndEntitlements` (`status: 'active'`), while browse - `GET
+    // /api/files/byIds`, which is what admits the file to the workbench - selects draft AND active.
+    // So an unpublished lake's file is attachable and readable there, and absent here. Pinned by
+    // `queries/dataLakeDraftAttachmentScope.integration.test.ts`.
     const lakeArms = buildLakeArms({
       lakeMemberships: lakeAccess?.lakeMemberships,
       dataLakeTags: lakeAccess?.dataLakeTags,
@@ -3098,6 +3106,20 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => d._id.toString());
   }
 
+  async findStorageKeysByIds(fabFileIds: string[]) {
+    if (fabFileIds.length === 0) return [];
+    // includeDeleted is the whole point: every caller's ids are soft-deleted rows (see the interface).
+    const docs = await this.fabFileModel
+      .find({ _id: { $in: convertIds(fabFileIds) } }, { filePath: 1, 'versions.filePath': 1 })
+      .setOptions({ includeDeleted: true })
+      .lean();
+    return docs.map(d => ({
+      id: d._id.toString(),
+      filePath: d.filePath ?? undefined,
+      versions: (d.versions ?? []).map(v => ({ filePath: v.filePath })),
+    }));
+  }
+
   async updateTagsByUserId(userId: string, tag: string, newTag: string): Promise<number> {
     if (!tag || !newTag) return 0;
     // Anchored and escaped for the same reason as removeTagByUserId: unanchored, renaming `q1`
@@ -3477,6 +3499,10 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // per-source origin (for Slack: channel + message ts) that makes an ingested file auditable.
     sourceType: { type: String, enum: Object.values(FabFileSourceType), required: false },
     sourceMetadata: { type: Schema.Types.Mixed, required: false },
+    // The document's own vintage plus where it came from (#3048) - see IFabFile's field docs. Both
+    // stay unset unless a source actually offered one; there is deliberately no createdAt fallback.
+    documentDate: { type: Date },
+    documentDateSource: { type: String, enum: Object.values(DocumentDateSource), required: false },
     // Google Drive ingest provenance (#1589). Populated when sourceType === GOOGLE_DRIVE.
     driveFileId: { type: String },
     driveModifiedTime: { type: Date },

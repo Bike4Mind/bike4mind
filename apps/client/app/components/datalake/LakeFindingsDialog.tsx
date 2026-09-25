@@ -17,6 +17,7 @@ import {
 } from '@mui/joy';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import RuleFolderOutlinedIcon from '@mui/icons-material/RuleFolderOutlined';
+import RadarIcon from '@mui/icons-material/Radar';
 import type {
   IDataLakeFindingDocument,
   InconsistencyKind,
@@ -24,7 +25,7 @@ import type {
   LakeHealthApiResponse,
 } from '@bike4mind/common';
 import { INCONSISTENCY_KINDS, LAKE_FINDING_STATUSES } from '@bike4mind/common';
-import { useDataLakeFindings, useGetDataLakeHealth } from '@client/app/hooks/data/dataLakes';
+import { useDataLakeFindings, useGetDataLakeHealth, useScanDataLakeFindings } from '@client/app/hooks/data/dataLakes';
 import FindingSourcePane from './FindingSourcePane';
 import {
   FINDING_DETECTOR_LABEL,
@@ -39,9 +40,9 @@ import {
  * The curator's read of one lake's detected corpus problems (#3044): a filterable list, and the
  * conflicting passages of one finding side by side in the documents they came from.
  *
- * READ-ONLY, deliberately and not by omission. Recording what a curator decided is #3045 and
- * changing the corpus is #3046; this surface exists so that a curator can LOOK at a problem, which
- * until now they could not do at all. Nothing here writes.
+ * Read-only over the findings themselves: recording what a curator decided is #3045 and changing
+ * the corpus is #3046. The one write is "Scan now", which runs detection on demand so a curator who
+ * just uploaded a conflicting document need not wait for the nightly sweep to see it here.
  */
 
 /**
@@ -201,6 +202,7 @@ export function LakeFindingsDialog({
     loadMore,
     isLoadingMore,
   } = useDataLakeFindings(dataLakeId, { status, kind, limit: FINDINGS_PAGE_LIMIT }, { enabled: open });
+  const scan = useScanDataLakeFindings(dataLakeId);
 
   // Derived from the live list rather than held as a snapshot, so a refetch that drops or updates
   // the open finding takes the curator back to the list instead of leaving stale passages on screen.
@@ -257,6 +259,21 @@ export function LakeFindingsDialog({
                     </Option>
                   ))}
                 </Select>
+                {/* Hidden when the read was refused: the run is gated on the same manage right. */}
+                {!isForbidden && (
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    color="neutral"
+                    startDecorator={<RadarIcon sx={{ fontSize: 16 }} />}
+                    loading={scan.isPending}
+                    onClick={() => scan.mutate()}
+                    sx={{ ml: 'auto' }}
+                    data-testid="lake-findings-scan-btn"
+                  >
+                    Scan now
+                  </Button>
+                )}
               </Box>
 
               {isLoading ? (
@@ -276,9 +293,10 @@ export function LakeFindingsDialog({
                 </Alert>
               ) : !findings?.length ? (
                 <Typography level="body-sm" textColor="text.secondary" data-testid="lake-findings-empty">
-                  {/* Never "this lake is clean": detection is an owner-triggered pass, so an empty
-                      list means nothing was found by the runs that happened, not that none exist. */}
-                  Nothing matches these filters. Findings appear here after a detection run.
+                  {/* Never "this lake is clean": detection is a pattern pass over a bounded sample, so
+                      an empty list means the runs that happened found nothing, not that none exist. */}
+                  Nothing matches these filters. Findings appear after a scan, which runs nightly or when you choose
+                  Scan now.
                 </Typography>
               ) : (
                 <Box

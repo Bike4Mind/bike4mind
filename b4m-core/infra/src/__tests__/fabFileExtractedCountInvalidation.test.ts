@@ -107,4 +107,13 @@ describe('every FabFile content rewrite clears the cached extracted length', () 
     const source = read('b4m-core/common/src/types/entities/FabFileTypes.ts');
     expect(source).toMatch(/FAB_FILE_CONTENT_REWRITE_PATCH\s*=\s*\{[^}]*noExtractableTextAt:\s*null[^}]*\}/);
   });
+
+  // The inverse pin: a rewrite leaves the old chunks served, and the vintage describes those chunks,
+  // so clearing it would render still-accurate passages undated. Re-derived by the next re-chunk.
+  it('the shared patch deliberately leaves the document vintage alone', () => {
+    const source = read('b4m-core/common/src/types/entities/FabFileTypes.ts');
+    const patch = source.match(/FAB_FILE_CONTENT_REWRITE_PATCH\s*=\s*\{[^}]*\}/)?.[0] ?? '';
+    expect(patch).toContain('noExtractableTextAt');
+    expect(patch).not.toMatch(/documentDate/);
+  });
 });
