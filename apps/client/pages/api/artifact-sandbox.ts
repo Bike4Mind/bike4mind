@@ -82,13 +82,18 @@ const SANDBOX_HTML = `<!DOCTYPE html>
   // so the measurement has to originate here. Set up AFTER document.write, which replaces
   // the document (and with it the old body) wholesale.
   var lastReportedHeight = 0;
+  var lastViewport = 0;
+  // Once the page is known to track the frame, the constant distance between its measurement
+  // and the viewport. Null until an echo proves it.
+  var trackedDelta = null;
   // Measure how far the content reaches, NOT scrollHeight. documentElement.scrollHeight is
   // never smaller than the viewport, and the viewport is the frame the parent sizes from
   // this number - so a body with min-height 100vh reports frame height + margins, the parent
-  // grows the frame, the body grows with it, and the ResizeObserver below reports again,
-  // without end. The bottom edge of the body's children carries no viewport term, so it is
+  // grows the frame, the body grows with it, and the ResizeObserver below reports again.
+  // The bottom edge of the body's children carries no viewport term for that shape, so it is
   // stable under a resize. Fixed-position children are skipped for the same reason: their
-  // rects are viewport-anchored.
+  // rects are viewport-anchored. A viewport-tall CHILD still tracks the frame - see the echo
+  // check in reportHeight, which catches every such shape without enumerating them.
   function contentHeight() {
     var body = document.body;
     if (!body) return 0;
@@ -121,9 +126,56 @@ const SANDBOX_HTML = `<!DOCTYPE html>
     }
     return bottom;
   }
+  // The body's own vertical margin and padding. A child's rect sits inside this, so it is
+  // space the page reserves around its content rather than content to scroll to.
+  function bodyBoxSlack() {
+    var style;
+    try {
+      style = window.getComputedStyle(document.body);
+    } catch (e) {
+      return 0;
+    }
+    if (!style) return 0;
+    return (
+      (parseFloat(style.marginTop) || 0) +
+      (parseFloat(style.marginBottom) || 0) +
+      (parseFloat(style.paddingTop) || 0) +
+      (parseFloat(style.paddingBottom) || 0)
+    );
+  }
   function reportHeight() {
-    var height = Math.ceil(contentHeight());
-    if (!height || Math.abs(height - lastReportedHeight) < 2) return;
+    var viewport = window.innerHeight || 0;
+    var measured = Math.ceil(contentHeight());
+    if (!measured) return;
+
+    // Echo check. Measuring the children holds still for a viewport-tall <body>, but not for
+    // a viewport-tall CHILD - a div with min-height 100vh is the standard full-screen
+    // wrapper, and its rect grows with the frame this number sizes. Whatever the shape, a
+    // measurement whose distance from the viewport is unchanged while the viewport itself
+    // HAS changed is the frame's own growth arriving back here, not new content. Ending the
+    // loop needs that distance REMEMBERED, not just compared against the previous tick:
+    // after one drop the viewport stops changing, so the next tick would otherwise look
+    // like an ordinary measurement and report the same inflated number.
+    var delta = measured - viewport;
+    if (trackedDelta !== null) {
+      if (delta === trackedDelta) return;
+      // The distance moved, so the content itself changed. Measure it afresh.
+      trackedDelta = null;
+    } else if (lastReportedHeight && viewport !== lastViewport && delta === lastReportedHeight - lastViewport) {
+      trackedDelta = delta;
+      lastViewport = viewport;
+      return;
+    }
+
+    // A page that clears the viewport only by the body's own margin and padding has nothing
+    // further to show. Reporting the overshoot puts a "Show more" on a page that fits, and
+    // the reader gets blank space for the click. Only ever clamps DOWN: a short page keeps
+    // its own height so its card stays snug.
+    var overshootsWithinBodyBox = measured > viewport && measured <= viewport + bodyBoxSlack();
+    var height = viewport && overshootsWithinBodyBox ? viewport : measured;
+
+    lastViewport = viewport;
+    if (Math.abs(height - lastReportedHeight) < 2) return;
     lastReportedHeight = height;
     window.parent.postMessage({ type: 'artifact-sandbox-height', height: height }, '*');
   }
