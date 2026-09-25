@@ -56,9 +56,9 @@ export async function buildSlackModelOptionsFromDashboard(): Promise<{
     };
     const coreKeys = await apiKeyService.getEffectiveLLMApiKeys('system', dbAdapters);
 
-    // Deprecated models are already filtered inside getAvailableModels. The picker's
-    // per-backend deadline also keeps views.open inside Slack's 3s trigger_id window:
-    // a slow backend contributes nothing instead of failing the modal.
+    // Deprecated models are already filtered inside getAvailableModels. A cold cache
+    // can take several seconds here (per-backend and catalog deadlines), so the modal
+    // handlers open first and fill the view afterwards; see openModalThenLoad.
     let allModels = await getAvailableModels(buildApiKeyTable(coreKeys), PICKER_LISTING_OPTIONS);
 
     // Filter to text models only (Slack chat uses text models)
