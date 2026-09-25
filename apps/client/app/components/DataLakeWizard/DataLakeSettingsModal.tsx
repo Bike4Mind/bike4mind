@@ -41,6 +41,8 @@ import {
 } from '@client/app/hooks/data/dataLakes';
 import { useActivatablePrompts } from '@client/app/hooks/data/useActivatablePrompts';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { useConfirmation } from '@client/app/hooks/useConfirmation';
+import { researchDefaultModelLabel, researchJudgeModelOptions } from '@client/app/utils/researchJudgeModels';
 import { useFeatureFlags } from '@client/app/hooks/useAdminSettingsCache';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
 import {
@@ -198,12 +200,19 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   // CREATED, so hiding it while there are none would hide the only way to make one.
   const showResearchTab = !!lake?.canManage && !researchConfigs.isForbidden;
   const { data: modelCatalog } = useModelInfo();
-  // Text models only - the judge reads a title and a snippet and answers with a number.
-  const researchModelOptions = useMemo(
-    () =>
-      (modelCatalog ?? []).filter(model => model.type === 'text').map(model => ({ id: model.id, name: model.name })),
-    [modelCatalog]
-  );
+  const researchModelOptions = useMemo(() => researchJudgeModelOptions(modelCatalog ?? []), [modelCatalog]);
+  const researchDefaultModel = useMemo(() => researchDefaultModelLabel(modelCatalog ?? []), [modelCatalog]);
+  const confirm = useConfirmation();
+  const confirmDeleteResearchConfig = (configId: string) => {
+    const name = researchConfigs.data?.find(config => config.id === configId)?.name;
+    confirm({
+      type: 'danger',
+      title: 'Delete research configuration',
+      description: `${name ? `"${name}"` : 'This configuration'} will be deleted. Its past runs stay in the history.`,
+      okLabel: 'Delete',
+      onOk: () => deleteResearchConfig.mutate(configId),
+    });
+  };
   // A tab that has just been retracted must not stay selected, or the panel renders blank.
   const activeTab: DataLakeSettingsTab =
     (tab === 'spend' && !showSpendTab) ||
@@ -745,13 +754,14 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     isLoading={researchConfigs.isLoading}
                     error={researchConfigs.isForbidden ? null : (researchConfigs.error ?? researchRuns.error)}
                     modelOptions={researchModelOptions}
+                    defaultModelLabel={researchDefaultModel}
                     isCreating={createResearchConfig.isPending}
                     savingConfigId={updateResearchConfig.isPending ? updateResearchConfig.variables?.configId : null}
                     deletingConfigId={deleteResearchConfig.isPending ? deleteResearchConfig.variables : null}
                     startingConfigId={startResearchRun.isPending ? startResearchRun.variables : null}
                     onCreate={input => createResearchConfig.mutate(input)}
                     onUpdate={(configId, input) => updateResearchConfig.mutate({ configId, ...input })}
-                    onDelete={configId => deleteResearchConfig.mutate(configId)}
+                    onDelete={confirmDeleteResearchConfig}
                     onStartRun={configId => startResearchRun.mutate(configId)}
                   />
                 </TabPanel>
