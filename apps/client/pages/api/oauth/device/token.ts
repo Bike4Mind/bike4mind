@@ -5,11 +5,12 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
+import { LEGACY_DEVICE_CLIENT_ID, OAUTH_DEVICE_CLIENT_IDS } from '@bike4mind/common';
 
 const TokenRequestSchema = z.object({
   grant_type: z.literal('urn:ietf:params:oauth:grant-type:device_code'),
   device_code: z.string(),
-  client_id: z.literal('b4m-cli'),
+  client_id: z.enum(OAUTH_DEVICE_CLIENT_IDS),
 });
 
 const handler = baseApi({ auth: false })
@@ -20,7 +21,7 @@ const handler = baseApi({ auth: false })
     })
   )
   .post(async (req, res) => {
-    const { device_code } = TokenRequestSchema.parse(req.body);
+    const { device_code, client_id } = TokenRequestSchema.parse(req.body);
 
     const authorization = await deviceAuthorizationRepository.findByDeviceCode(device_code);
 
@@ -28,6 +29,16 @@ const handler = baseApi({ auth: false })
       return res.status(400).json({
         error: 'invalid_grant',
         error_description: 'Invalid device code',
+      });
+    }
+
+    // RFC 8628 s3.4: the code may only be redeemed by the client it was issued to. The approval
+    // screen names that client, so letting another one redeem would spend consent given for someone
+    // else. Checked before the poll bookkeeping so a mismatched client cannot advance any state.
+    if ((authorization.clientId ?? LEGACY_DEVICE_CLIENT_ID) !== client_id) {
+      return res.status(400).json({
+        error: 'invalid_grant',
+        error_description: 'Device code was issued to a different client',
       });
     }
 
