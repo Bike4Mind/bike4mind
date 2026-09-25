@@ -593,10 +593,16 @@ export interface IFabFileDocument extends IFabFile, IShareableDocument {}
  *
  * Also clears the chunk-derived rollups (`chunkedCharCount`, `maxChunkCharLength`, `embeddedChunkCount`,
  * `embeddedCharCount`) and `serverTextHash`, the admission contract's fingerprint of the extracted text
- * (#1679): each is derived from the file's content, so a byte rewrite invalidates them, and the
- * re-chunk / re-vectorize that follows re-stamps them. Leaving the rollups would grade lake health
- * (#1666) against the PREVIOUS content's chunks - reporting a reachability the current bytes do not
- * have; leaving the hash would let a stale fingerprint claim text the file no longer holds.
+ * (#1679): each is derived from the file's content, so a byte rewrite invalidates them. Nothing here
+ * re-chunks: no rewrite site resets `chunked`, so they are re-stamped only by the next Reprocess /
+ * Rebuild / converge pass. Leaving the rollups would grade lake health (#1666) against the PREVIOUS
+ * content's chunks - reporting a reachability the current bytes do not have; leaving the hash would
+ * let a stale fingerprint claim text the file no longer holds.
+ *
+ * `documentDate` / `documentDateSource` are deliberately NOT cleared: they describe the chunks still
+ * being served, which a rewrite leaves in place, and the re-chunk that replaces those chunks
+ * re-derives the pair (prepareFabFileChunks). Clearing them here would only render the old, still
+ * accurately-dated passages undated. Pinned in fabFileExtractedCountInvalidation.test.ts.
  */
 export const FAB_FILE_CONTENT_REWRITE_PATCH = {
   extractedCharCount: null,

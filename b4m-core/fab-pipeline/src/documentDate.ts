@@ -163,14 +163,33 @@ export function parseOoxmlCoreCreated(xml: string): Date | null {
 
 /**
  * A line the block regex's `---`...`---` pair could plausibly hold if it really is YAML: a
- * top-level `key:` (with or without a value on the same line), an indented continuation of one, or
- * a `-` list item. A markdown thematic break also opens and closes on a bare `---`, so without this
- * a `key: value`-shaped line sitting anywhere between two unrelated breaks (a heading, a quote, a
- * paragraph) would be read as frontmatter. Deliberately permissive about VALUE shape - value
- * plausibility is `parseIsoDatePrefix`'s job - and about which key matches, since only the date
- * keys matter below; this only rules out lines that could not be a YAML mapping's own syntax.
+ * top-level `key:` (bare or quoted, with or without a value on the same line), an indented
+ * continuation of one, a `-` list item, or a `#` comment. A markdown thematic break also opens and
+ * closes on a bare `---`, so without this a `key: value`-shaped line sitting anywhere between two
+ * unrelated breaks (a quote, a paragraph) would be read as frontmatter. Deliberately permissive
+ * about VALUE shape - value plausibility is FRONTMATTER_TIMESTAMP's job - and about which key
+ * matches, since only the date keys matter below; this only rules out lines that could not be a
+ * YAML mapping's own syntax. A `# Heading` is indistinguishable from a comment and is admitted.
  */
-const FRONTMATTER_LINE_SHAPE = /^(?:[ \t]+\S|-[ \t]|[A-Za-z_][\w-]*[ \t]*:)/;
+const FRONTMATTER_LINE_SHAPE = /^(?:[ \t]+\S|-[ \t]|#|(?:[A-Za-z_][\w-]*|"[^"]*"|'[^']*')[ \t]*:)/;
+
+/** A top-level `key: value` pair, the key bare or quoted. Groups: double-, single-, bare-quoted key; value. */
+const FRONTMATTER_PAIR = /^(?:"([^"]*)"|'([^']*)'|([A-Za-z_][\w-]*))[ \t]*:[ \t]*(.+?)[ \t]*$/;
+
+/**
+ * The WHOLE scalar must be a YAML timestamp (a date, optionally a time and zone), not merely start
+ * with one: `created: 2016-02-02 was the day we shipped` in a prose span between two thematic
+ * breaks is key-shaped enough to pass FRONTMATTER_LINE_SHAPE, and parseIsoDatePrefix alone would
+ * read its leading date as the document's vintage.
+ */
+const FRONTMATTER_TIMESTAMP =
+  /^\d{4}-\d{2}-\d{2}(?:[Tt ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?[ \t]*(?:Z|[+-]\d{1,2}(?::?\d{2})?)?)?$/;
+
+/** A YAML scalar's content: the inside of a quoted value, or a plain value minus any trailing comment. */
+function frontmatterScalar(rawValue: string): string {
+  const quoted = /^(["'])(.*)\1$/.exec(rawValue);
+  return quoted ? quoted[2] : rawValue.replace(/[ \t]+#.*$/, '');
+}
 
 /**
  * Pull a document date out of a leading YAML frontmatter block.
@@ -192,11 +211,13 @@ export function parseFrontmatterDate(text: string): Date | null {
   for (const line of lines) {
     // Top-level keys only: an indented line belongs to a nested mapping, where `date` means
     // something else (a nested object's own field), not the document's vintage.
-    const pair = /^([A-Za-z_][\w-]*)[ \t]*:[ \t]*(.+?)[ \t]*$/.exec(line);
+    const pair = FRONTMATTER_PAIR.exec(line);
     if (!pair) continue;
-    const key = FRONTMATTER_DATE_KEY_SPELLINGS.get(pair[1].toLowerCase());
+    const [, doubleQuotedKey, singleQuotedKey, bareKey, rawValue] = pair;
+    const key = FRONTMATTER_DATE_KEY_SPELLINGS.get((doubleQuotedKey ?? singleQuotedKey ?? bareKey).toLowerCase());
     if (!key || found.has(key)) continue;
-    const parsed = parseIsoDatePrefix(pair[2].replace(/^['"]|['"]$/g, ''));
+    const scalar = frontmatterScalar(rawValue);
+    const parsed = FRONTMATTER_TIMESTAMP.test(scalar) ? parseIsoDatePrefix(scalar) : null;
     if (parsed) found.set(key, parsed);
   }
 

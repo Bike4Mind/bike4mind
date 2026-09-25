@@ -747,7 +747,10 @@ describe('chunkFile captures a document date', () => {
    * `_rels/.rels`, so the relationship and content-type parts have to be present even though only
    * `word/document.xml` and `docProps/core.xml` carry anything this test reads.
    */
-  async function buildDatedDocx(coreXmlBody: string | null): Promise<Buffer> {
+  async function buildDatedDocx(
+    coreXmlBody: string | null,
+    compression: 'STORE' | 'DEFLATE' = 'STORE'
+  ): Promise<Buffer> {
     const zip = new JSZip();
     zip.file(
       '[Content_Types].xml',
@@ -776,7 +779,7 @@ describe('chunkFile captures a document date', () => {
         `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties>${coreXmlBody}</cp:coreProperties>`
       );
     }
-    return Buffer.from(await zip.generateAsync({ type: 'nodebuffer' }));
+    return Buffer.from(await zip.generateAsync({ type: 'nodebuffer', compression }));
   }
 
   // DOCX reaches readOoxmlDocumentDate through its own container open (mammoth exposes no metadata
@@ -810,6 +813,24 @@ describe('chunkFile captures a document date', () => {
         '<dcterms:created xsi:type="dcterms:W3CDTF">2019-03-04T09:15:00Z</dcterms:created>'
       );
       jsZipLoadFailure.message = 'zip end of central directory not found';
+      const chunks = await chunker.chunkFile(docx, DOCX_MIME);
+      expect(chunks.map(c => c.text).join(' ')).toContain('Quarterly revenue report');
+      expect(chunker.getDocumentDate()).toBeUndefined();
+    });
+
+    // Mirrors the PPTX case below: openOoxmlContainerForDate opens fine (the zip headers are
+    // intact), but readOoxmlDocumentDate's own readZipEntryBounded call fails to inflate the
+    // damaged entry. Text extraction goes through mammoth's own, separate zip read, so it must
+    // survive even though the date read does not.
+    it('leaves the slot empty for a DOCX whose core.xml cannot be decompressed', async () => {
+      const docx = corruptZipEntryPayload(
+        await buildDatedDocx(
+          '<dcterms:created>2019-03-04T09:15:00Z</dcterms:created>' +
+            `<cp:keywords>${'quarterly revenue '.repeat(40)}</cp:keywords>`,
+          'DEFLATE'
+        ),
+        'docProps/core.xml'
+      );
       const chunks = await chunker.chunkFile(docx, DOCX_MIME);
       expect(chunks.map(c => c.text).join(' ')).toContain('Quarterly revenue report');
       expect(chunker.getDocumentDate()).toBeUndefined();
@@ -989,6 +1010,35 @@ describe('chunkFile captures a document date', () => {
     // Props path this split exists to keep it off.
     it('leaves a .xlsx undated when its core.xml carries no date', async () => {
       const xlsx = await xlsxWithCoreXml('<dc:title>Quarterly review</dc:title>');
+      const chunks = await chunker.chunkFile(xlsx, XLSX_MIME);
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunker.getDocumentDate()).toBeUndefined();
+    });
+
+    // The comment on readWorkbookDocumentDate explains why this is tried unconditionally rather
+    // than gated on isZipContainer's position-0 sniff: JSZip locates the central directory by
+    // scanning from the END of the buffer, so bytes prepended ahead of the PK signature - a stray
+    // BOM, a mangled preamble some upload path left behind - do not stop it finding core.xml, even
+    // though those same leading bytes fail isZipContainer's own byte sniff.
+    it('reads docProps/core.xml when junk bytes are prepended before the zip signature', async () => {
+      const xlsx = await xlsxWithCoreXml('<dcterms:created>2019-03-04T09:15:00Z</dcterms:created>');
+      const withPrependedBytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), xlsx]);
+      const chunks = await chunker.chunkFile(withPrependedBytes, XLSX_MIME);
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunker.getDocumentDate()).toEqual({
+        date: new Date('2019-03-04T09:15:00.000Z'),
+        source: DocumentDateSource.DOCUMENT_PROPERTIES,
+      });
+    });
+
+    // Distinct from the "no date" case above: here the entry itself is absent, not merely
+    // empty, so readOoxmlDocumentDate's `zip.files[...]` lookup - not its parse of the XML -
+    // is what returns undefined.
+    it('leaves a .xlsx undated when its zip has no docProps/core.xml entry at all', async () => {
+      const zip = await JSZip.loadAsync(await buildDatedWorkbook('xlsx', new Date('2019-03-04T00:00:00Z')));
+      zip.remove('docProps/core.xml');
+      const xlsx = Buffer.from(await zip.generateAsync({ type: 'nodebuffer' }));
+
       const chunks = await chunker.chunkFile(xlsx, XLSX_MIME);
       expect(chunks.length).toBeGreaterThan(0);
       expect(chunker.getDocumentDate()).toBeUndefined();
