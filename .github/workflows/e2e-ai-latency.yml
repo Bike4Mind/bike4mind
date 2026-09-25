@@ -694,6 +694,10 @@ jobs:
               if [ -n "$LATENCY_JSON" ]; then
                 THRESHOLD="$(jq -r '.thresholdSec // empty' "$LATENCY_JSON")"
                 AVG="$(jq -r '.averageResponseTimeSec // 0' "$LATENCY_JSON")"
+                # A prompt abandoned at its budget has no upper bound, so averaging it in understates
+                # the cell: two fast prompts drag the mean back under thresholdSec and the breach
+                # disappears into it. Count any abandoned gated prompt as a breach in its own right.
+                ABANDONED="$(jq -r '[.results[]? | select(.incomplete == true) | select(.measuresDeliverable != true)] | length' "$LATENCY_JSON")"
 
                 if [ -z "$THRESHOLD" ] || [ "$THRESHOLD" = "null" ]; then
                   LATENCY_STR="$(printf '%.2fs' "$AVG") / <=N/A FAIL"
@@ -706,8 +710,10 @@ jobs:
                     LATENCY_STR="No Data"
                     LATENCY_NO_DATA=$((LATENCY_NO_DATA + 1))
                     HAS_NO_DATA=true
-                  elif [ "$IS_OVER" = "1" ]; then
-                    LATENCY_STR="$(printf '%.2fs' "$AVG") / <=${THRESHOLD}s FAIL"
+                  elif [ "$IS_OVER" = "1" ] || [ "${ABANDONED:-0}" -gt 0 ]; then
+                    REASON="$(printf '%.2fs' "$AVG") / <=${THRESHOLD}s FAIL"
+                    [ "${ABANDONED:-0}" -gt 0 ] && REASON="${REASON} (${ABANDONED} prompt(s) never finished)"
+                    LATENCY_STR="$REASON"
                     LATENCY_EXCEEDED_COUNT=$((LATENCY_EXCEEDED_COUNT + 1))
                     EXCEEDED=true
                   else
@@ -726,14 +732,18 @@ jobs:
             done
           done
 
-          # Average latency exceeding threshold is a real failure — downgrade overall status.
-          # Never over a skip: no cell produced latency data, so a breach here could only be
-          # stale, and the skip is the honest verdict either way.
+          # Average latency exceeding threshold is a real failure - downgrade overall status, and
+          # publish the verdict as ONE output. Never over a skip: no cell produced latency data, so
+          # a breach could only be stale there and the skip is the honest verdict either way. Every
+          # consumer (Slack page, run gate) reads latency_breach rather than re-deriving
+          # "exceeded and not skipped", so that rule cannot drift between them.
+          LATENCY_BREACH=false
           if [ "$EXCEEDED" = "true" ] && [ "${PREVIEW_SKIPPED:-}" != "true" ]; then
             OVERALL_STATUS=":x: Failed"
+            LATENCY_BREACH=true
           fi
 
-          echo "exceeded=$EXCEEDED" >> $GITHUB_OUTPUT
+          echo "latency_breach=$LATENCY_BREACH" >> $GITHUB_OUTPUT
           echo "has_no_data=$HAS_NO_DATA" >> $GITHUB_OUTPUT
           echo "overall_status=$OVERALL_STATUS" >> $GITHUB_OUTPUT
 
@@ -788,10 +798,16 @@ jobs:
 
       - name: Send Slack alert for latency threshold breach
         # A skip trips has_no_data (no cell produced results), but paging #slow-responses for a
-        # missing repo secret sends people after a latency problem that does not exist. The
-        # parens matter: `&&` binds tighter than `||`, so without them the skip guard would
-        # apply only to the has_no_data arm.
-        if: ${{ (steps.aggregate.outputs.exceeded == 'true' || steps.aggregate.outputs.has_no_data == 'true') && needs.e2e-ai-latency.outputs.preview_skipped != 'true' }}
+        # missing repo secret sends people after a latency problem that does not exist, so the
+        # has_no_data arm keeps its own skip guard while the breach arm reads the already
+        # skip-aware latency_breach.
+        #
+        # The two arms page alike but end differently, on purpose: a breach is a latency verdict
+        # and fails the run below, whereas no-data is the ABSENCE of a verdict - the cell produced
+        # nothing to judge - so it pages for a human to look and leaves the run's outcome to the
+        # matrix job, which already went red if the cell genuinely broke. Failing on no-data here
+        # would red the run twice for one fault and red it for an artifact-upload hiccup too.
+        if: ${{ steps.aggregate.outputs.latency_breach == 'true' || (steps.aggregate.outputs.has_no_data == 'true' && needs.e2e-ai-latency.outputs.preview_skipped != 'true') }}
         uses: slackapi/slack-github-action@v2.1.0
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL_SLOW_RESPONSES }}
@@ -800,3 +816,15 @@ jobs:
             {
               "text": ":warning: One or more Bike4Mind AI responses exceeded latency thresholds or encountered failures! Please investigate. <#C08QZ42L9KM|b4m-automation-results>."
             }
+
+      - name: Fail the run on a latency breach
+        # The aggregate step already prints ":x: Failed" and pages #slow-responses for a breach, but
+        # the job still exited 0, so the only thing that could turn the run red was a Playwright
+        # timeout. That made the per-response streaming cap the de-facto latency gate by accident,
+        # while thresholdSec - the number that exists to measure this - decorated a report column.
+        # Exiting non-zero here makes the declared budget the gate, so raising a streaming cap can
+        # no longer silently retire the slowness signal.
+        if: ${{ always() && steps.aggregate.outputs.latency_breach == 'true' }}
+        run: |
+          echo "::error::Latency gate: a suite/model cell averaged over its declared threshold, or abandoned a prompt at the streaming cap. The summary table in the aggregate step says which cell and which cause."
+          exit 1
