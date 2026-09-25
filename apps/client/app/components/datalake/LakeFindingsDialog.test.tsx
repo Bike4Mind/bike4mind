@@ -2,10 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { IDataLakeFindingDocument } from '@bike4mind/common';
+import type { IDataLakeFindingDocument, LakeHealthApiResponse } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   findings: vi.fn(),
+  health: vi.fn(),
   scan: vi.fn(),
   scanLakeId: vi.fn(),
   scanPending: { value: false },
@@ -13,6 +14,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useDataLakeFindings: (lakeId: string | null, filters?: unknown, opts?: unknown) => h.findings(lakeId, filters, opts),
+  useGetDataLakeHealth: (lakeId: string | null, enabled?: boolean) => h.health(lakeId, enabled),
   useScanDataLakeFindings: (lakeId: string) => {
     h.scanLakeId(lakeId);
     return { mutate: h.scan, isPending: h.scanPending.value };
@@ -28,6 +30,7 @@ vi.mock('./FindingSourcePane', () => ({
 }));
 
 import LakeFindingsChip, { LakeFindingsDialog } from './LakeFindingsDialog';
+import { formatFindingDate } from './findingCopy';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -65,10 +68,26 @@ const listing = (rows: IDataLakeFindingDocument[], over: Record<string, unknown>
   ...over,
 });
 
+const scanned = (over: Partial<NonNullable<LakeHealthApiResponse['inconsistency']>> = {}) => ({
+  data: {
+    inconsistency: {
+      computedAt: '2026-03-08T12:00:00Z',
+      sampled: true,
+      memberSampled: false,
+      memberCount: 4,
+      findingCount: 0,
+      truncated: false,
+      countsByKind: {},
+      ...over,
+    },
+  },
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   h.scanPending.value = false;
   h.findings.mockReturnValue(listing([finding()]));
+  h.health.mockReturnValue({ data: undefined });
 });
 
 const renderDialog = () =>
@@ -297,6 +316,62 @@ describe('LakeFindingsChip', () => {
 
     expect(screen.queryByTestId('datalake-findings-chip-lake-1')).not.toBeInTheDocument();
     expect(h.findings).toHaveBeenCalledWith('lake-1', { status: 'open', limit: 50 }, { enabled: false });
+    expect(h.health).toHaveBeenCalledWith('lake-1', false);
+  });
+
+  const renderChip = () =>
+    render(
+      <TestWrapper>
+        <LakeFindingsChip lakeId="lake-1" lakeName="Acme Policies" canManage />
+      </TestWrapper>
+    );
+
+  it('says a never-scanned lake has not been scanned, rather than looking clean', () => {
+    h.findings.mockReturnValue(listing([]));
+    h.health.mockReturnValue({ data: { inconsistency: null } });
+    renderChip();
+
+    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent('Not scanned yet');
+  });
+
+  it('dates a scanned lake with no open findings', () => {
+    h.findings.mockReturnValue(listing([]));
+    h.health.mockReturnValue(scanned());
+    renderChip();
+
+    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent(
+      `No open findings · checked ${formatFindingDate('2026-03-08T12:00:00Z')}`
+    );
+  });
+
+  // A run that read zero members is the same "not clean" distinction one level down.
+  it('does not call a run that read no documents clean', () => {
+    h.findings.mockReturnValue(listing([]));
+    h.health.mockReturnValue(scanned({ memberCount: 0 }));
+    renderChip();
+
+    const chip = screen.getByTestId('datalake-findings-chip-lake-1');
+    expect(chip).toHaveTextContent('Nothing scanned');
+    expect(chip).not.toHaveTextContent('No open findings');
+  });
+
+  // The open-findings query resolving to undefined (loading, or errored under `retry: false`) must
+  // not read as an empty list - that would claim a lake with unknown open work is clean.
+  it('stays on the bare label while the open-findings query has not resolved', () => {
+    h.findings.mockReturnValue(listing(undefined as unknown as IDataLakeFindingDocument[]));
+    h.health.mockReturnValue(scanned());
+    renderChip();
+
+    const chip = screen.getByTestId('datalake-findings-chip-lake-1');
+    expect(chip).toHaveTextContent('Findings');
+    expect(chip).not.toHaveTextContent('No open findings');
+  });
+
+  it('lets open findings outrank the last run state', () => {
+    h.health.mockReturnValue(scanned());
+    renderChip();
+
+    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent('1 to review');
   });
 
   // Terminal-only history (e.g. one dismissed finding, zero open) must not take the entry point

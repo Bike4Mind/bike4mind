@@ -18,9 +18,14 @@ import {
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import RuleFolderOutlinedIcon from '@mui/icons-material/RuleFolderOutlined';
 import RadarIcon from '@mui/icons-material/Radar';
-import type { IDataLakeFindingDocument, InconsistencyKind, LakeFindingStatus } from '@bike4mind/common';
+import type {
+  IDataLakeFindingDocument,
+  InconsistencyKind,
+  LakeFindingStatus,
+  LakeHealthApiResponse,
+} from '@bike4mind/common';
 import { INCONSISTENCY_KINDS, LAKE_FINDING_STATUSES } from '@bike4mind/common';
-import { useDataLakeFindings, useScanDataLakeFindings } from '@client/app/hooks/data/dataLakes';
+import { useDataLakeFindings, useGetDataLakeHealth, useScanDataLakeFindings } from '@client/app/hooks/data/dataLakes';
 import FindingSourcePane from './FindingSourcePane';
 import {
   FINDING_DETECTOR_LABEL,
@@ -323,13 +328,78 @@ export function LakeFindingsDialog({
   );
 }
 
+type ChipDisplay = {
+  label: string;
+  tooltip: string;
+  color: 'warning' | 'neutral';
+};
+
+/**
+ * What the chip says about the last detection run when there is no open work. An empty open query
+ * alone cannot tell "never scanned" from "scanned and clean", so the run's own stamp
+ * (`inconsistency` on GET /health) is what separates them. Either query not having answered yet
+ * (or having failed) leaves the chip on its bare label rather than guessing: `openFindingsUnresolved`
+ * covers the open-findings query (loading, or errored under `retry: false`), and
+ * `inconsistency === undefined` covers health.
+ */
+export function findingsChipDisplay({
+  openCount,
+  hasMore,
+  openFindingsUnresolved,
+  inconsistency,
+}: {
+  openCount: number;
+  hasMore: boolean;
+  openFindingsUnresolved: boolean;
+  inconsistency: LakeHealthApiResponse['inconsistency'] | undefined;
+}): ChipDisplay {
+  if (openCount > 0) {
+    return {
+      // A full page is a lower bound, so it reads `50+` rather than claiming an exact count.
+      label: `${openCount}${hasMore ? '+' : ''} to review`,
+      tooltip: 'Documents in this lake appear to contradict each other. Review the passages.',
+      color: 'warning',
+    };
+  }
+  if (openFindingsUnresolved || inconsistency === undefined) {
+    return {
+      label: 'Findings',
+      tooltip: "Review this lake's detected findings, including past ones.",
+      color: 'neutral',
+    };
+  }
+  if (inconsistency === null) {
+    return {
+      label: 'Not scanned yet',
+      tooltip: 'This lake has not been checked for contradicting documents yet.',
+      color: 'neutral',
+    };
+  }
+  const checked = formatFindingDate(inconsistency.computedAt);
+  // A run that read no members found nothing because it looked at nothing - not a clean lake.
+  if (inconsistency.memberCount === 0) {
+    return {
+      label: `Nothing scanned · checked ${checked}`,
+      tooltip: 'The last check had no documents it could read, so it could not look for contradictions.',
+      color: 'neutral',
+    };
+  }
+  return {
+    // "open", because dismissed or resolved findings may still exist behind the chip.
+    label: `No open findings · checked ${checked}`,
+    tooltip: "No open contradictions in the last check. Review this lake's past findings.",
+    color: 'neutral',
+  };
+}
+
 /**
  * The affordance that reaches the dialog, in the lake manager's badge row.
  *
  * Always rendered for a manager, regardless of the open count: a lake whose only findings are
  * dismissed or resolved still has history worth reviewing, and gating this on the open-only query
  * would make it unreachable in that state even though the route serves those rows. The open count
- * only changes its color/label - warning + a count when there is open work, neutral otherwise.
+ * only changes its color/label - warning + a count when there is open work, neutral otherwise, with
+ * the last detection run's state as the label (see `findingsChipDisplay`).
  * Gated on `canManage` to match the route, which refuses a reader because the rows carry document
  * excerpts.
  */
@@ -350,32 +420,30 @@ export default function LakeFindingsChip({
       enabled: canManage,
     }
   );
-  const count = findings?.length ?? 0;
-  const hasOpenFindings = count > 0;
+  // Same query key as the health badge beside this chip, so it shares that fetch rather than adding one.
+  const { data: health } = useGetDataLakeHealth(lakeId, canManage);
+  const display = findingsChipDisplay({
+    openCount: findings?.length ?? 0,
+    hasMore,
+    openFindingsUnresolved: findings === undefined,
+    inconsistency: health?.inconsistency,
+  });
 
   if (!canManage) return null;
 
   return (
     <>
-      <Tooltip
-        title={
-          hasOpenFindings
-            ? 'Documents in this lake appear to contradict each other. Review the passages.'
-            : "Review this lake's detected findings, including past ones."
-        }
-        size="sm"
-      >
+      <Tooltip title={display.tooltip} size="sm">
         <Chip
           size="sm"
           variant="soft"
-          color={hasOpenFindings ? 'warning' : 'neutral'}
+          color={display.color}
           startDecorator={<RuleFolderOutlinedIcon sx={{ fontSize: 12 }} />}
           onClick={() => setOpen(true)}
           sx={{ fontSize: '11px', cursor: 'pointer' }}
           data-testid={`datalake-findings-chip-${lakeId}`}
         >
-          {/* A full page is a lower bound, so it reads `50+` rather than claiming an exact count. */}
-          {hasOpenFindings ? `${count}${hasMore ? '+' : ''} to review` : 'Findings'}
+          {display.label}
         </Chip>
       </Tooltip>
       {/* The dialog is independent of the open-findings state on purpose. The chip's color/label is
