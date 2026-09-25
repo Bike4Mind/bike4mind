@@ -41,6 +41,7 @@ import {
 } from './dataLakeWizard';
 import { slugifyDataLakeName } from './dataLakeSlug';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import type { DataLakeStatus } from '@bike4mind/common';
 
 const mountHook = <T>(hook: () => T) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -74,7 +75,7 @@ const seedWizardFile = () =>
     ],
   });
 
-type SeedOpts = { names?: string[]; targetLake?: { id: string; slug: string } | null };
+type SeedOpts = { names?: string[]; targetLake?: { id: string; slug: string; status?: DataLakeStatus } | null };
 
 const seedWizard = ({ names = ['a.txt'], targetLake = null }: SeedOpts = {}) =>
   useDataLakeWizardStore.setState({
@@ -463,6 +464,60 @@ describe('useBatchUpload lake targeting', () => {
     );
 
     expect(presignedLakeRef()).toBe('existing1');
+  });
+
+  /**
+   * #3222: the Complete screen discloses a non-serving lake by reading `uploadProgress.lakeStatus`.
+   * Asserted on the STORE, not on createWizardLake's return value - a status that is read from the
+   * response but never reaches the store leaves the screen exactly as silent as before, and a
+   * component test that seeds `lakeStatus` by hand would still pass.
+   */
+  it('records the created lake status, so the Complete screen can disclose a draft', async () => {
+    apiPut.mockResolvedValue({ data: { success: true } });
+    installApiPostRouter();
+    apiPost.mockImplementation((url: string, body?: { files?: { fileName: string }[] }) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1', status: 'draft' } });
+      if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch1' } });
+      if (url === '/api/files/generate-presigned-urls-batch') {
+        const files = (body?.files ?? []).map(f => ({
+          fileId: `id-${f.fileName}`,
+          fileKey: `key-${f.fileName}`,
+          url: `https://s3.example.com/${f.fileName}`,
+          fileName: f.fileName,
+        }));
+        return Promise.resolve({ data: { files } });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedWizard();
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    // Asserted at 'complete', the state the screen actually renders - not at the moment the status
+    // is written. The run sets `lakeStatus` early and flips to 'complete' later, so a setter that
+    // replaced rather than merged would still pass a mid-flight assertion and ship a silent screen.
+    await waitFor(() => expect(useDataLakeWizardStore.getState().uploadProgress.status).toBe('complete'));
+    expect(useDataLakeWizardStore.getState().uploadProgress.lakeStatus).toBe('draft');
+  });
+
+  // Append mode never calls create, so the status has to come off the target lake - otherwise adding
+  // files to a draft lake reports success and discloses nothing.
+  it('records the target lake status in append mode', async () => {
+    apiPut.mockResolvedValue({ data: { success: true } });
+    installApiPostRouter();
+    seedWizard({ targetLake: { id: 'existing1', slug: 'existing-slug', status: 'draft' } });
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(useDataLakeWizardStore.getState().uploadProgress.status).toBe('complete'));
+    expect(useDataLakeWizardStore.getState().uploadProgress.lakeStatus).toBe('draft');
+    expect(postCall('/api/data-lakes')).toBeUndefined();
   });
 });
 
@@ -1018,6 +1073,22 @@ describe('useCreateLakeFromDrive (#1916)', () => {
     // No files, so nothing that belongs to the upload pipeline should have run.
     expect(postCall('/api/data-lakes/batches')).toBeUndefined();
     expect(uploadFileToUrlMock).not.toHaveBeenCalled();
+  });
+
+  // #3222: the fileless path has its own commit and its own Complete screen, so it needs its own
+  // wire - the batch path's assignment never runs here.
+  it('records the created lake status on the fileless path too', async () => {
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1', status: 'draft' } });
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedDriveOnly();
+
+    const { result } = mountDriveCommit();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(useDataLakeWizardStore.getState().uploadProgress.lakeStatus).toBe('draft');
   });
 
   it('lands the wizard on the upload step with a fileless progress record', async () => {

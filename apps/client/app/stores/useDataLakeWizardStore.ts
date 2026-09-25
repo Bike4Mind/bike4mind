@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { isReservedTagPrefix } from '@bike4mind/common';
-import type { TaxonomyStatus } from '@bike4mind/common';
+import type { DataLakeStatus, TaxonomyStatus } from '@bike4mind/common';
 import type { FolderTreeNode, WizardFile } from '../utils/folderTreeParser';
 import { deriveTagPrefixFromLakeName } from '../hooks/data/dataLakeSlug';
 import {
@@ -91,6 +91,11 @@ export interface UploadProgress {
    * optionalSteps.taxonomy is true.
    */
   taxonomyStatus?: TaxonomyStatus;
+  /**
+   * Lifecycle status of the lake this run committed into (#3222). From the create response or the
+   * target lake, never assumed - absent means a fallback lake, which always serves.
+   */
+  lakeStatus?: DataLakeStatus;
 }
 
 // ── Defaults ────────────────────────────────────────────────────────────────
@@ -169,6 +174,12 @@ export interface WizardTargetLake {
   organizationId: string | null;
   /** Whether the caller may manage this lake. Same gate as above - the status route 404s otherwise. */
   canManage: boolean;
+  /**
+   * Lake lifecycle, so appending files to a lake that is still `draft` discloses on the Complete
+   * screen that the new files ground nothing yet (#3222). Optional because `DataLakeConfig.status`
+   * is: a built-in fallback lake has no document and always serves.
+   */
+  status?: DataLakeStatus;
 }
 
 /**
@@ -188,6 +199,7 @@ export const toWizardTargetLake = (lake: {
   requiredEntitlement?: string;
   organizationId?: string | null;
   canManage?: boolean;
+  status?: DataLakeStatus;
 }): WizardTargetLake => ({
   id: lake.id,
   slug: lake.slug,
@@ -197,6 +209,7 @@ export const toWizardTargetLake = (lake: {
   requiredEntitlement: lake.requiredEntitlement,
   organizationId: lake.organizationId ?? null,
   canManage: lake.canManage ?? false,
+  status: lake.status,
 });
 
 /**
