@@ -480,6 +480,10 @@ describe('getDynamicDataLakeAccess - the #3055 gate-excluded-lake count', () => 
           } as never,
         },
         user: { id: 'alice', tags: [] },
+        // Vouched, so the seed alone would have let this count run - the catch below is what has
+        // to clear it back to skipped. Without this the seed already skips the count and the
+        // catch's own clear is never exercised (review finding).
+        entitlementKeysResolved: true,
         logger,
       });
       expect(countGateExcludedLakes).not.toHaveBeenCalled();
@@ -504,6 +508,9 @@ describe('getDynamicDataLakeAccess - the #3055 gate-excluded-lake count', () => 
           } as never,
         },
         user: { id: 'alice', tags: [] },
+        // Vouched, so the seed alone would have let this count run - the catch below is what has
+        // to clear it back to skipped (see the sibling comment on the grant-exemption test above).
+        entitlementKeysResolved: true,
         logger,
       });
       expect(countGateExcludedLakes).not.toHaveBeenCalled();
@@ -646,6 +653,9 @@ describe('getDynamicDataLakeAccess - the #3055 gate-excluded-lake count', () => 
           adminSettings: { getSettingsValue: vi.fn().mockRejectedValue(new Error('settings down')) } as never,
         },
         user: { id: 'alice', tags: [] },
+        // Vouched, so the seed alone would have let this count run - the catch below is what has
+        // to clear it back to skipped (see the sibling comment on the grant-exemption test above).
+        entitlementKeysResolved: true,
         logger,
       });
       expect(countGateExcludedLakes).not.toHaveBeenCalled();
@@ -848,9 +858,12 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('never vouched for'));
   });
 
-  // The other half of the same contract, and the one a cast hides: omitting the field must not
-  // COMPILE. Deleting `entitlementKeysResolved` from MeasurableDataLakeAccessContext makes the
-  // suppressed error disappear and fails this file on the unused directive.
+  // The other half of the same contract, and the one a cast hides: at a real call site, omitting
+  // the field must not compile. The @ts-expect-error below documents that at the type level, but
+  // this file itself is excluded from typecheck (services/tsconfig.json excludes **/*.test.ts), so
+  // deleting `entitlementKeysResolved` from MeasurableDataLakeAccessContext would NOT fail this
+  // suite - only the production call site (ChatCompletionProcess.getDataLakeAccessContext, which
+  // is typechecked) enforces this for real.
   it('refuses a context without the completeness signal at the type level', async () => {
     const countGateExcludedLakes = vi.fn().mockResolvedValue(5);
     const res = await measureIdentityNamedExclusion(
@@ -1229,6 +1242,34 @@ describe('getDynamicDataLakeAccess - the persisted access-grant rung', () => {
       expect.stringMatching(/getDynamicDataLakeAccess\.reach/),
       expect.objectContaining({ skipped: ['legacy-uuid-not-an-objectid'] })
     );
+  });
+
+  it('skips the account-wide exclusion count when a granted id is unusable, even for a vouched host', async () => {
+    // Reprises the fixture above with entitlementKeysResolved: true and countGateExcludedLakes
+    // wired, so it also exercises excludedByAccessCountPrerequisitesComplete's clear on this
+    // branch - without those the seed alone already skips the count and the clear is unobserved
+    // (review finding).
+    const open = dbLake({ id: 'open', createdByUserId: 'original-creator', isPublic: true });
+    const countGateExcludedLakes = vi.fn().mockResolvedValue(9);
+
+    const res = await getDynamicDataLakeAccess({
+      db: {
+        dataLakes: {
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([open]),
+          findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+          countGateExcludedLakes,
+        } as never,
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        dataLakeAccessGrants: {
+          listByPrincipal: vi.fn().mockResolvedValue([grantRow('legacy-uuid-not-an-objectid', 'owner')]),
+        } as never,
+      },
+      user: { id: 'grantee', tags: [] },
+      entitlementKeysResolved: true,
+    });
+
+    expect(res.excludedByAccessCount).toBeUndefined();
+    expect(countGateExcludedLakes).not.toHaveBeenCalled();
   });
 
   it('never asks for grants for an id-less caller', async () => {
