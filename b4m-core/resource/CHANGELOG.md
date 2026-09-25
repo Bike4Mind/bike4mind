@@ -1,5 +1,11 @@
 # @bike4mind/resource
 
+## 0.8.0
+
+### Minor Changes
+
+- [#3134](https://github.com/Bike4Mind/bike4mind/pull/3134) [`e4b4032`](https://github.com/Bike4Mind/bike4mind/commit/e4b40325c25d79379755d074379f4f6de2a47d64) Thanks [@onoya](https://github.com/onoya)! - add a model-driven contradiction detection pass
+
 ## 0.7.1
 
 ### Patch Changes
