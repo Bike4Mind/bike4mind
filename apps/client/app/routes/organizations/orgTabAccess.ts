@@ -32,10 +32,36 @@ export const canViewOrgUsage = (
   return organization.managerId === currentUser.id;
 };
 
+/**
+ * Who may see the Billing & Subscription tab. Owner only - NOT `canManageOrg`, which is satisfied
+ * by any member holding `share`/`update`. All three of the tab's actions are owner-gated, so a
+ * member reaching it saw an enabled control for every one of them and an error back from each:
+ * - Subscribe        pages/api/organizations/subscriptions/subscribe.ts (verifyOrgOwner)
+ * - Change seats     pages/api/organizations/subscriptions/update-seats.ts
+ * - Billing portal   pages/api/stripe/portal.ts
+ * Must stay in sync with those three.
+ *
+ * A platform admin who is not the owner is deliberately excluded, though the first two routes would
+ * admit them: portal.ts has no admin bypass, so an admin would still get a Billing Portal button
+ * that rejects them. Admins act on an org's billing through the Admin -> Organizations panel, which
+ * is the same split the page already makes for member management.
+ *
+ * Nothing is lost by hiding it: the plan, its status, the renewal date and seat usage are all on
+ * the Overview tab and the page header, which every member sees.
+ */
+export const canViewOrgBilling = (
+  currentUser: { id: string } | null | undefined,
+  organization: { userId: string } | null | undefined
+): boolean => {
+  if (!currentUser || !organization) return false;
+  return currentUser.id === organization.userId;
+};
+
 export interface OrgTabAccess {
   canManageOrg: boolean;
   canViewUsage: boolean;
   canManageGroups: boolean;
+  canViewBilling: boolean;
 }
 
 /**
@@ -46,7 +72,6 @@ export interface OrgTabAccess {
  */
 export const resolveAccessibleTab = (selected: OrganizationTabs, access: OrgTabAccess): OrganizationTabs => {
   const managePinned =
-    selected === OrganizationTabs.Billing ||
     selected === OrganizationTabs.Integrations ||
     selected === OrganizationTabs.GitHub ||
     selected === OrganizationTabs.Webhooks ||
@@ -57,5 +82,7 @@ export const resolveAccessibleTab = (selected: OrganizationTabs, access: OrgTabA
     return OrganizationTabs.Overview;
   }
   if (!access.canManageGroups && selected === OrganizationTabs.Groups) return OrganizationTabs.Overview;
+  // Billing has its own gate rather than riding canManageOrg: every action on it is owner-only.
+  if (!access.canViewBilling && selected === OrganizationTabs.Billing) return OrganizationTabs.Overview;
   return selected;
 };

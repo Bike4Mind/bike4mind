@@ -1,4 +1,4 @@
-import { annVectorSearch, type AnnVectorSearchResult } from './annVectorSearch';
+import { annVectorSearch, type AnnRankableFile, type AnnVectorSearchResult } from './annVectorSearch';
 
 export interface AtlasVectorSearchAdapters {
   vectorSearch(
@@ -22,7 +22,7 @@ export type AtlasVectorSearchResult = AnnVectorSearchResult;
  */
 export async function atlasVectorSearch(args: {
   fileIds: string[];
-  fileById: Map<string, { fileName: string; fileTags: string[] }>;
+  fileById: Map<string, AnnRankableFile>;
   queryVector: number[];
   model: string;
   limit: number;

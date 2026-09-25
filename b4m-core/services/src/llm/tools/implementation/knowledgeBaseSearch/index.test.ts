@@ -1187,11 +1187,10 @@ describe('search_knowledge_base untrusted-content delimiter (#1659)', () => {
   });
 
   /**
-   * Passage headers carry no date. `SemanticChunkResult` no longer has a field to put one in, so
-   * the compiler is the real guard here; this pins the rendered shape so a re-added date would have
-   * to break a visible assertion rather than slip in after the parenthetical.
+   * A passage carrying no `documentDate` (the common case - most files have none) stays undated.
+   * `hitOf` never sets the field, so this also pins the header shape itself.
    */
-  it('heads every passage undated', async () => {
+  it('heads every passage undated when documentDate is absent', async () => {
     semanticDataLakeSearchMock.mockResolvedValue({
       results: [hitOf('first passage'), { ...hitOf('second passage', 'Other.pdf'), chunkId: 'c2', fileId: 'f2' }],
       scan: { ...scan, filesMatching: 2, filesScoped: 2, filesScanned: 2, chunksScanned: 2 },
@@ -1202,6 +1201,30 @@ describe('search_knowledge_base untrusted-content delimiter (#1659)', () => {
     expect(out).not.toMatch(/dated/);
     // Still exactly two real headers.
     expect(out.match(/^\d+\. \*\*/gm)).toHaveLength(2);
+  });
+
+  it('heads every passage undated when documentDate is explicitly null', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [{ ...hitOf('first passage'), documentDate: null }],
+      scan,
+    });
+    const out = await run(delimiterCtx());
+    expect(out).toContain('1. **Handbook** (ID: f1, relevance 0.81)\n');
+    expect(out).not.toContain('dated');
+  });
+
+  /**
+   * Regression guard for #3047/#3113: a previous attempt at dated passage headers silently dropped
+   * the date on this exact channel. Pinned on the ISO date `documentDateClause` emits, appended
+   * AFTER the existing `(ID: ..., relevance ...)` parenthetical rather than folded into it.
+   */
+  it('appends the document date clause when the passage carries a documentDate (#3048)', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [{ ...hitOf('first passage'), documentDate: new Date('2019-03-04T00:00:00.000Z') }],
+      scan,
+    });
+    const out = await run(delimiterCtx());
+    expect(out).toContain('1. **Handbook** (ID: f1, relevance 0.81) - dated 2019-03-04\n');
   });
 
   it('defangs a passage that forges a data-lake instruction block', async () => {

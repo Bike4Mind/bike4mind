@@ -6,10 +6,17 @@ import type { IDataLakeFindingDocument } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   findings: vi.fn(),
+  scan: vi.fn(),
+  scanLakeId: vi.fn(),
+  scanPending: { value: false },
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useDataLakeFindings: (lakeId: string | null, filters?: unknown, opts?: unknown) => h.findings(lakeId, filters, opts),
+  useScanDataLakeFindings: (lakeId: string) => {
+    h.scanLakeId(lakeId);
+    return { mutate: h.scan, isPending: h.scanPending.value };
+  },
 }));
 
 // The panes fetch their own document; stubbed so this file tests the review surface rather than the
@@ -60,6 +67,7 @@ const listing = (rows: IDataLakeFindingDocument[], over: Record<string, unknown>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.scanPending.value = false;
   h.findings.mockReturnValue(listing([finding()]));
 });
 
@@ -120,8 +128,8 @@ describe('LakeFindingsDialog', () => {
     expect(screen.getByTestId('lake-finding-advisory')).toHaveTextContent(/not proven/i);
   });
 
-  // #3045 owns resolution and #3046 owns corpus changes; this surface reads. A button appearing
-  // here is the regression that matters, because it would be a write nobody argued for.
+  // #3045 owns resolution and #3046 owns corpus changes; apart from "Scan now" this surface reads.
+  // A button appearing here is the regression that matters, because it would be a write nobody argued for.
   it('offers no way to rule on a finding or change the corpus', () => {
     renderDialog();
     fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
@@ -210,7 +218,37 @@ describe('LakeFindingsDialog', () => {
     h.findings.mockReturnValue(listing([]));
     renderDialog();
 
-    expect(screen.getByTestId('lake-findings-empty')).toHaveTextContent(/after a detection run/i);
+    expect(screen.getByTestId('lake-findings-empty')).toHaveTextContent(/after a scan/i);
+    expect(screen.getByTestId('lake-findings-empty')).not.toHaveTextContent(/clean/i);
+  });
+
+  it('runs detection on this lake when Scan now is pressed', () => {
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-findings-scan-btn'));
+
+    expect(h.scanLakeId).toHaveBeenCalledWith('lake-1');
+    expect(h.scan).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers Scan now on an empty list, where a curator who just uploaded lands', () => {
+    h.findings.mockReturnValue(listing([]));
+    renderDialog();
+
+    expect(screen.getByTestId('lake-findings-scan-btn')).toBeInTheDocument();
+  });
+
+  it('blocks a second scan while one is running', () => {
+    h.scanPending.value = true;
+    renderDialog();
+
+    expect(screen.getByTestId('lake-findings-scan-btn')).toBeDisabled();
+  });
+
+  it('withholds Scan now when the findings read was refused', () => {
+    h.findings.mockReturnValue(listing(undefined as unknown as IDataLakeFindingDocument[], { isForbidden: true }));
+    renderDialog();
+
+    expect(screen.queryByTestId('lake-findings-scan-btn')).not.toBeInTheDocument();
   });
 
   it('explains a permission refusal rather than painting an error', () => {
