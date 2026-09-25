@@ -59,6 +59,11 @@ export interface GenericAddItemsModalProps<T> {
   emptyResultMessage?: string;
   triggerTestId?: string;
   searchMinLength?: number;
+
+  // Controlled mode: when `open` is supplied the parent owns open/close and the built-in trigger
+  // is not rendered, so a caller can pair its own button with this dialog.
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 function GenericAddItemsModal<T>({
@@ -99,9 +104,20 @@ function GenericAddItemsModal<T>({
   showButtonBadge = true,
   triggerTestId,
   searchMinLength,
+  open: controlledOpen,
+  onOpenChange,
 }: GenericAddItemsModalProps<T>) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const isControlled = controlledOpen !== undefined;
+  const open = isControlled ? controlledOpen : uncontrolledOpen;
+  const setOpen = useCallback(
+    (next: boolean) => {
+      if (isControlled) onOpenChange?.(next);
+      else setUncontrolledOpen(next);
+    },
+    [isControlled, onOpenChange]
+  );
   const [searchTerm, setSearchTerm] = useState('');
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
@@ -110,7 +126,7 @@ function GenericAddItemsModal<T>({
   const handleClose = useCallback(() => {
     setOpen(false);
     if (onSearch) onSearch('');
-  }, [onSearch]);
+  }, [onSearch, setOpen]);
 
   const handleSelectAll = useCallback(() => {
     if (selectedIds.length === items.length || selectedIds.length > 0) {
@@ -137,7 +153,7 @@ function GenericAddItemsModal<T>({
     onAdd(selectedIds);
     setOpen(false);
     if (onSearch) onSearch('');
-  }, [onAdd, selectedIds, onSearch]);
+  }, [onAdd, selectedIds, onSearch, setOpen]);
 
   const handleSearch = useCallback(
     (searchTerm: string) => {
@@ -157,22 +173,24 @@ function GenericAddItemsModal<T>({
 
   return (
     <>
-      <Button
-        className="generic-add-items-modal-trigger"
-        data-testid={triggerTestId}
-        sx={{
-          fontWeight: 500,
-          fontSize: '14px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          borderRadius: '8px',
-          minWidth: '160px',
-        }}
-        onClick={() => setOpen(true)}
-      >
-        {buttonIcon} {buttonLabel} {showButtonBadge && value?.length ? `(${value.length})` : ''}
-      </Button>
+      {!isControlled && (
+        <Button
+          className="generic-add-items-modal-trigger"
+          data-testid={triggerTestId}
+          sx={{
+            fontWeight: 500,
+            fontSize: '14px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            borderRadius: '8px',
+            minWidth: '160px',
+          }}
+          onClick={() => setOpen(true)}
+        >
+          {buttonIcon} {buttonLabel} {showButtonBadge && value?.length ? `(${value.length})` : ''}
+        </Button>
+      )}
       <Modal
         className="generic-add-items-modal"
         open={open}

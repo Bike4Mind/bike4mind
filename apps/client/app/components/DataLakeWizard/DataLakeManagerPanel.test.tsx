@@ -624,6 +624,7 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     await user.click(screen.getByTestId('datalake-manager-lake-mine'));
 
     expect(screen.getByTestId('datalake-addfiles-btn-mine')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-addexisting-btn-mine')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-settings-btn-mine')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-archive-btn-mine')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-delete-active-btn-mine')).toBeInTheDocument();
@@ -638,6 +639,7 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
 
     expect(screen.getByTestId('datalake-manager-lakeinfo')).toHaveTextContent('Theirs');
     expect(screen.queryByTestId('datalake-addfiles-btn-theirs')).toBeNull();
+    expect(screen.queryByTestId('datalake-addexisting-btn-theirs')).toBeNull();
     expect(screen.queryByTestId('datalake-settings-btn-theirs')).toBeNull();
     expect(screen.queryByTestId('datalake-archive-btn-theirs')).toBeNull();
     expect(screen.queryByTestId('datalake-delete-active-btn-theirs')).toBeNull();
