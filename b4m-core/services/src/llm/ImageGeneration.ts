@@ -353,6 +353,11 @@ export class ImageGenerationService {
     if (questId) {
       quest = await this.db.quests.findById(questId);
       if (!quest) throw new NotFoundError('Quest not found');
+      // See ImageEdit's retry guard: bind the retried quest to the access-checked session.
+      if (quest.sessionId !== sessionId) {
+        Logger.globalInstance.warn(`Quest ${questId} does not belong to session ${sessionId}; refusing retry.`);
+        throw new NotFoundError('Quest not found');
+      }
       // If the quest is a retry, we need to clear out the replies and images
       quest.images = [];
       quest.replies = [];
