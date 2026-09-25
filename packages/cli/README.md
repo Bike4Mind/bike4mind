@@ -199,6 +199,7 @@ While in interactive mode. This mirrors the registry in `src/config/commands.ts`
 - `/sandbox` - Show sandbox status and configuration
 - `/sandbox:enable` / `/sandbox:disable` - Toggle the sandbox
 - `/sandbox:mode <auto-allow|permissions>` - Set enforcement mode
+- `/sandbox:network <on|off>` - Toggle network egress (fail-closed by default; on filters proxy-aware clients against the allowlist)
 - `/sandbox:trust-domain <domain> [...]` / `/sandbox:domains` - Manage the network allowlist
 - `/sandbox:violations [count]` / `/sandbox:violations:clear` - Inspect / clear violations
 

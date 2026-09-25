@@ -76,7 +76,9 @@ const run = (req: unknown, res: unknown) => (handler as (req: unknown, res: unkn
 describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', status: 'active' });
+    // origin: 'connector-fed' so these unrelated tests clear the origin gate; its own polarity is
+    // pinned separately below (curated / no-origin-stored / connector-fed cases).
+    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', status: 'active', origin: 'connector-fed' });
     h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
     h.userFindById.mockResolvedValue({ googleDrive: { refreshToken: 'enc-refresh' } });
     h.isEncrypted.mockReturnValue(true);
@@ -214,7 +216,7 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
   );
 
   it('connects a draft lake (the first sync of a freshly created lake)', async () => {
-    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', status: 'draft' });
+    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', status: 'draft', origin: 'connector-fed' });
     const { res, status } = makeRes();
     await run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res);
     expect(h.connCreate).toHaveBeenCalled();
@@ -324,5 +326,43 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
       /valid drive folder id/i
     );
     expect(h.dlFindById).not.toHaveBeenCalled();
+  });
+
+  it('refuses to connect a folder to a curated lake, before any Drive call', async () => {
+    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', status: 'active', origin: 'curated' });
+    const { res } = makeRes();
+    await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(/curated/i);
+
+    // Refused before the credential capture, so a rejected connect costs no Drive calls.
+    expect(h.getValidUserDriveAccessToken).not.toHaveBeenCalled();
+    expect(h.getFolderAccess).not.toHaveBeenCalled();
+    expect(h.connCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses to connect a folder to a lake with no origin stored, before any Drive call', async () => {
+    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', status: 'active' });
+    const { res } = makeRes();
+    await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(/curated/i);
+
+    // Fails closed, same as the curated case above: only an explicit 'connector-fed' passes.
+    expect(h.getValidUserDriveAccessToken).not.toHaveBeenCalled();
+    expect(h.getFolderAccess).not.toHaveBeenCalled();
+    expect(h.connCreate).not.toHaveBeenCalled();
+  });
+
+  it('connects a folder to a connector-fed lake', async () => {
+    h.dlFindById.mockResolvedValue({
+      id: 'lake1',
+      organizationId: 'orgA',
+      status: 'active',
+      origin: 'connector-fed',
+    });
+    // clearAllMocks() only clears call history, not implementations - a prior test's
+    // sendToQueue rejection would otherwise leak in since this runs after those cases.
+    h.sendToQueue.mockResolvedValue(undefined);
+    const { res } = makeRes();
+    await run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res);
+
+    expect(h.getFolderAccess).toHaveBeenCalled();
   });
 });

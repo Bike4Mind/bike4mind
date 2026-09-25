@@ -176,8 +176,13 @@ describe('formatDocumentDate', () => {
   });
 });
 
+/**
+ * All three retrieval channels now feed this a real authored date (#3048), captured at ingest and
+ * carried on the FabFile. The clause still has to render nothing for a file that has none, which is
+ * the normal case for most documents - so both halves of that contract are pinned here.
+ */
 describe('documentDateClause', () => {
-  it('renders the clause all three retrieval channels append', () => {
+  it('renders the clause a retrieval channel would append', () => {
     expect(documentDateClause(new Date('2026-08-14T09:30:00.000Z'))).toBe(' - dated 2026-08-14');
   });
 

@@ -6,6 +6,7 @@ import {
   userRepository,
   fabFileRepository,
   cacheRepository,
+  sessionAgentConfigRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -57,7 +58,10 @@ const getAndDeleteHandler = baseApi()
             sessions: sessionRepository,
             projects: projectRepository,
             fabFiles: fabFileRepository,
+            users: userRepository,
+            sessionAgentConfigs: sessionAgentConfigRepository,
           },
+          logger: req.logger,
         }
       )
     );

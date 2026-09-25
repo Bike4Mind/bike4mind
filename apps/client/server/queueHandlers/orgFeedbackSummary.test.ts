@@ -24,6 +24,7 @@ vi.mock('sst', () => ({
 vi.mock('@bike4mind/common', () => ({
   ChatModels: { CLAUDE_4_5_HAIKU_BEDROCK: 'claude-haiku' },
   ORG_FEEDBACK_SUMMARY_JOB_TYPE: 'orgFeedbackSummary',
+  ORG_FEEDBACK_SUMMARY_TAG_LIMIT: 20,
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -75,20 +76,25 @@ const run = (logger = makeLogger()) => runOrgFeedbackSummary(message, logger as 
 
 const frames = () => h.sendToClient.mock.calls.map(call => call[2] as { status: string; errorMessage?: string });
 
+const tagRows = (n: number) => Array.from({ length: n }, (_, i) => ({ key: `tag-${i}`, count: 100 - i }));
+
+const REPORT = {
+  range: { from: message.startDate, to: message.endDate },
+  totals: { count: 7 },
+  byDay: [{ day: '2026-08-02', count: 7 }],
+  bySubject: [{ key: 'chat', count: 7 }],
+  byType: [{ key: 'bug', count: 5 }],
+  byStatus: [{ key: 'open', count: 6 }],
+  byTag: [{ key: 'slow', count: 3 }],
+  byTagTruncated: false,
+  byMember: [{ userId: 'u1', displayName: MEMBER_NAME, count: 7 }],
+  membership: { memberCount: 1, aclOnly: [], stampOnly: [] },
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   h.findOne.mockResolvedValue({ summaryJobId: SUMMARY_JOB_ID, status: 'pending' });
-  h.orgFeedbackReport.mockResolvedValue({
-    range: { from: message.startDate, to: message.endDate },
-    totals: { count: 7 },
-    byDay: [{ day: '2026-08-02', count: 7 }],
-    bySubject: [{ key: 'chat', count: 7 }],
-    byType: [{ key: 'bug', count: 5 }],
-    byStatus: [{ key: 'open', count: 6 }],
-    byTag: [{ key: 'slow', count: 3 }],
-    byMember: [{ userId: 'u1', displayName: MEMBER_NAME, count: 7 }],
-    membership: { memberCount: 1, aclOnly: [], stampOnly: [] },
-  });
+  h.orgFeedbackReport.mockResolvedValue(REPORT);
   h.complete.mockImplementation(async (_model, _messages, _opts, onText) => {
     await onText(['Feedback was steady across the window.']);
   });
@@ -105,7 +111,45 @@ describe('runOrgFeedbackSummary', () => {
     expect(prompt).not.toContain('u1');
   });
 
+  describe('partial tag list note', () => {
+    const PARTIAL_NOTE = 'more tags exist, so do not describe this as the complete tag breakdown';
+    const promptFor = async (byTagCount: number | null, byTagTruncated: boolean) => {
+      h.orgFeedbackReport.mockResolvedValue({
+        ...REPORT,
+        byTagTruncated,
+        ...(byTagCount === null ? {} : { byTag: tagRows(byTagCount) }),
+      });
+      await run();
+      return JSON.stringify(h.complete.mock.calls[0][1]);
+    };
+
+    // A truncated report is always exactly ORG_FEEDBACK_BY_TAG_LIMIT (50) rows: FeedbackReportQueries
+    // sets the flag only when more matched, and slices to the limit.
+    it('says the list is a cut when the report was truncated', async () => {
+      const prompt = await promptFor(50, true);
+      expect(prompt).toContain(PARTIAL_NOTE);
+      expect(prompt).toContain('only the top 20 tags by count are listed');
+      expect(prompt).toContain('tag-19');
+      expect(prompt).not.toContain('tag-20');
+    });
+
+    it('stays quiet when the report was not truncated and every tag fits', async () => {
+      expect(await promptFor(null, false)).not.toContain(PARTIAL_NOTE);
+    });
+
+    it('stays quiet at exactly the prompt limit', async () => {
+      expect(await promptFor(20, false)).not.toContain(PARTIAL_NOTE);
+    });
+
+    it('says the list is a cut when the prompt limit drops tags the report kept', async () => {
+      const prompt = await promptFor(21, false);
+      expect(prompt).toContain(PARTIAL_NOTE);
+      expect(prompt).toContain('only the top 20 tags by count are listed');
+    });
+  });
+
   it('writes the artifact and releases the window on success', async () => {
+    h.orgFeedbackReport.mockResolvedValue({ ...REPORT, byTag: tagRows(50), byTagTruncated: true });
     await run();
 
     const [payload, key] = h.upload.mock.calls[0];
@@ -113,7 +157,10 @@ describe('runOrgFeedbackSummary', () => {
     expect(JSON.parse(payload as string)).toMatchObject({
       summaryJobId: SUMMARY_JOB_ID,
       summary: 'Feedback was steady across the window.',
-      counts: { totals: { count: 7 } },
+      // The truncation flag has to survive into the stored artifact: the read route parses it back
+      // out of S3, and a caption on a stale artifact is the only place a reader learns the tag
+      // list was cut.
+      counts: { totals: { count: 7 }, byTagTruncated: true },
     });
     // activeKey moving to the job's own id is what frees this window for a re-run.
     expect(h.updateOne).toHaveBeenLastCalledWith(
@@ -121,6 +168,30 @@ describe('runOrgFeedbackSummary', () => {
       { status: 'completed', s3Key: key, activeKey: SUMMARY_JOB_ID }
     );
     expect(frames().map(f => f.status)).toEqual(['processing', 'processing', 'completed']);
+  });
+
+  it('serializes byTagTruncated: false rather than dropping the key on an empty population', async () => {
+    h.orgFeedbackReport.mockResolvedValue({
+      range: { from: message.startDate, to: message.endDate },
+      totals: { count: 0 },
+      byDay: [],
+      bySubject: [],
+      byType: [],
+      byStatus: [],
+      byTag: [],
+      byTagTruncated: false,
+      byMember: [],
+      membership: { memberCount: 0, aclOnly: [], stampOnly: [] },
+    });
+
+    await run();
+
+    // Asserted after the JSON round-trip the upload actually performs: JSON.stringify omits an
+    // undefined value entirely, and an absent key is what the artifact contract reserves for one
+    // written before the field existed. Reading the in-memory object would miss that.
+    const { counts } = JSON.parse(h.upload.mock.calls[0][0] as string);
+    expect('byTagTruncated' in counts).toBe(true);
+    expect(counts.byTagTruncated).toBe(false);
   });
 
   it('resolves and keeps the completed status when only the completion frame rejects', async () => {

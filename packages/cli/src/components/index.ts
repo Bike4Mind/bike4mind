@@ -16,6 +16,8 @@ export { FileAutocomplete } from './FileAutocomplete';
 export { ConfigEditor } from './ConfigEditor';
 export type { ConfigEditorProps } from './ConfigEditor';
 export { TrustLocationSelector } from './TrustLocationSelector';
+export { FolderTrustPrompt } from './FolderTrustPrompt';
+export type { FolderTrustChoice } from './FolderTrustPrompt';
 export { RewindSelector } from './RewindSelector';
 export { SessionSelector } from './SessionSelector';
 export { ModelPicker } from './ModelPicker';

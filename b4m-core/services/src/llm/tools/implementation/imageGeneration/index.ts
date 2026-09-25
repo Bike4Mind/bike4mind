@@ -9,6 +9,8 @@ import {
   GenerateImageToolCall,
   isBflImageModel,
   isGeminiImageModel,
+  resolveImageDimensions,
+  BFL_DIMENSION_BOUNDS,
   isGPTImage2Model,
   toNonWebpOutputFormat,
   type ImageOutputFormat,
@@ -22,7 +24,7 @@ import {
   getSettingsMap,
   getSettingsValue,
 } from '@bike4mind/utils';
-import { BFLImageService } from '@bike4mind/utils';
+import { BFLImageService, downloadImageAsBuffer } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { ImageGenerateParams } from 'openai/resources/images';
 import { getEffectiveApiKey } from '../../../../apiKeyService';
@@ -33,18 +35,6 @@ import { persistGeneratedFileAsFabFile } from '../../helpers/persistGeneratedFil
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 import { resolveImageArgs } from './resolveImageArgs';
-
-async function downloadImage(url: string) {
-  // Handle data URLs (base64 images) from GPT-Image-1
-  if (url.startsWith('data:image/')) {
-    const base64Data = url.split(',')[1];
-    return Buffer.from(base64Data, 'base64');
-  }
-
-  // Handle regular URLs from DALL-E and other models
-  const response = await axios.get(url, { responseType: 'arraybuffer' });
-  return response.data;
-}
 
 /**
  * Validate that an image-generation provider's API key is present. Without
@@ -113,7 +103,7 @@ export async function processAndStoreImages(
   await context.statusUpdate({}, 'Storing images...');
   return Promise.all(
     images.map(async image => {
-      const buffer = await downloadImage(image);
+      const buffer = await downloadImageAsBuffer(image);
       const fileType = await fileTypeFromBuffer(buffer);
       // Default the extension when detection fails: a `${uuid}.undefined` filename would
       // both store with a bogus extension and miss the inline-image regex in PromptReplies
@@ -281,8 +271,7 @@ export const imageGenerationTool: ToolDefinition = {
             // generate() only accepts the generation FLUX variants; in practice only those
             // reach this branch (fill/Kontext are edit models), so narrow to satisfy it.
             model: bflModel as ImageModels.FLUX_PRO | ImageModels.FLUX_PRO_1_1 | ImageModels.FLUX_PRO_ULTRA,
-            width: width ?? 1024,
-            height: height ?? 768,
+            ...resolveImageDimensions({ width, height, size }, BFL_DIMENSION_BOUNDS),
             aspect_ratio: aspect_ratio,
             output_format: nonWebpOutputFormat ?? 'png',
             prompt_upsampling: prompt_upsampling ?? false,
@@ -363,23 +352,10 @@ export const imageGenerationTool: ToolDefinition = {
         }
         const service = new LocalImageService(selfHostBaseUrl, context.logger);
 
-        // The local backend takes discrete width/height; derive them from the
-        // size string (e.g. '512x512') when explicit dimensions aren't set.
-        let localWidth = width;
-        let localHeight = height;
-        if ((!localWidth || !localHeight) && typeof size === 'string') {
-          const [sw, sh] = size.split('x').map(Number);
-          if (sw && sh) {
-            localWidth = sw;
-            localHeight = sh;
-          }
-        }
-
         const images = await service.generate(prompt, {
           n,
           model: model.replace(/^local-image\//, ''),
-          width: localWidth,
-          height: localHeight,
+          ...resolveImageDimensions({ width, height, size }),
         });
 
         const storedImageUrls = await processAndStoreImages(images, context, model, provider);
@@ -434,8 +410,11 @@ export const imageGenerationTool: ToolDefinition = {
             // Only sizes the cost calculator can price are offered, so the model can never
             // pick one that bills at a different size than it renders. Omitting the field
             // lets the user's saved panel size apply, which may be outside this set.
+            // Note this set also feeds BFL Pro's width/height (via resolveImageDimensions)
+            // when it fits BFL's supported range - it is not OpenAI-exclusive, just
+            // OpenAI-priced.
             description:
-              "The size of the image to generate (OpenAI only): '1024x1024' square, '1536x1024' landscape, or '1024x1536' portrait. Omit this field when the user does not ask for a specific shape, so their saved preference applies.",
+              "The size of the image to generate: '1024x1024' square, '1536x1024' landscape, or '1024x1536' portrait. Ignored by providers that take an aspect ratio instead (Flux Ultra, Gemini), or that cannot produce the requested dimensions. Omit this field when the user does not ask for a specific shape, so their saved preference applies.",
             enum: [...PRICEABLE_IMAGE_SIZES],
           },
           quality: {

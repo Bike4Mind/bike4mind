@@ -39,8 +39,13 @@ import { useChatInput } from '@client/app/hooks/useChatInput';
  * holds launches while the current session is optimistic).
  */
 export type UseSessionCacheMigrationReturn = {
-  /** Move the paginated quest list from tmpId -> realId. No-op if no tmp data exists. */
-  migrateQuests: (tmpId: string, realId: string) => void;
+  /**
+   * Copy the paginated quest list from tmpId -> realId. No-op if no tmp data exists. The tmp entry
+   * is removed unless `keepTmp`: a view still on the tmpId URL reads it until the navigation to
+   * realId commits, and removing it first paints an empty notebook for that window - such a
+   * caller removes it with `cleanupOptimistic` once navigated.
+   */
+  migrateQuests: (tmpId: string, realId: string, options?: { keepTmp?: boolean }) => void;
   /** Write the real session document under realId, drop the synthetic tmp cache entry, and clear the empty tmpId draft. */
   migrateSession: (tmpId: string, realId: string, realSession: ISessionDocument) => void;
   /** Remove all optimistic cache entries for a tmpId (used when the new session is rolled back). */
@@ -51,12 +56,12 @@ export function useSessionCacheMigration(): UseSessionCacheMigrationReturn {
   const queryClient = useQueryClient();
 
   const migrateQuests = useCallback(
-    (tmpId: string, realId: string) => {
+    (tmpId: string, realId: string, options?: { keepTmp?: boolean }) => {
       // Move quests cache so SessionMiddle doesn't flash empty when the URL updates.
       const tmpQuestsData = queryClient.getQueryData(['quests', 'session', tmpId]);
       if (tmpQuestsData) {
         queryClient.setQueryData(['quests', 'session', realId], tmpQuestsData);
-        queryClient.removeQueries({ queryKey: ['quests', 'session', tmpId] });
+        if (!options?.keepTmp) queryClient.removeQueries({ queryKey: ['quests', 'session', tmpId] });
       }
     },
     [queryClient]

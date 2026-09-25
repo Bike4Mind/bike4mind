@@ -8,6 +8,7 @@ import type {
 import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
 import {
   ChatModels,
+  createThinkMarkerEscaper,
   IMessage,
   MessageContentText,
   ModelBackend,
@@ -89,6 +90,9 @@ const SLOW_MODEL_REQUEST_TIMEOUT_MS = 120000; // 120s for slow/opus-class models
  * Floored to a round number for headroom against that formula being retuned.
  */
 const ANTHROPIC_NONSTREAMING_MAX_TOKENS = 21_000;
+// Outside CLEAN_FINISH_REASONS (common/src/utils/stopReasons.ts), so a turn the user
+// stopped mid-stream is never reported as a clean finish.
+const STREAM_ABORTED_STOP_REASON = 'aborted';
 
 /**
  * Output budget used when the caller names none. Only applies to models that do NOT spend
@@ -1123,6 +1127,9 @@ export class AnthropicBackend implements ICompletionBackend {
       // stale assistant content. The in-promise `degenerateVerdict` is invisible
       // from there.
       let degeneratedThisTurn = false;
+      // Same reasoning as degeneratedThisTurn: tool calls collected from a stream that
+      // ended before message_stop may have half-written arguments and must not run.
+      let streamEndedEarlyThisTurn = false;
       // Capture per-turn token usage so the post-stream tool-recursion site
       // can carry it forward as accumulated multi-turn billable usage.
       // Populated from the message_delta event inside the streaming Promise.
@@ -1237,6 +1244,11 @@ export class AnthropicBackend implements ICompletionBackend {
               if (requestTimeout) clearTimeout(requestTimeout);
 
               let isInThinkingBlock = false;
+              let thinkingBlockIndex = 0;
+              // The SDK iterator returns normally, without throwing, both on abort and when
+              // the HTTP body ends early, so message_stop is the only proof of a finished turn.
+              let sawMessageStop = false;
+              const reasoningEscaper = createThinkMarkerEscaper();
               // Collect all content blocks for preservation (thinking, text, tool_use)
               const collectedContent: Record<string, unknown>[] = [];
               // Capture usage info from message_delta event for cache stats
@@ -1331,12 +1343,16 @@ export class AnthropicBackend implements ICompletionBackend {
                   if (event.type === 'content_block_start') {
                     if ('content_block' in event && event.content_block.type === 'thinking') {
                       isInThinkingBlock = true;
+                      thinkingBlockIndex = event.index;
                       // Initialize the thinking block in our collection. The start event's
                       // content_block carries type/thinking (empty at start) plus signature -
                       // spread it directly; thinking_delta events accumulate into it below.
                       collectedContent[event.index] = { ...event.content_block };
                       streamedText[event.index] = '<think>';
-                      await cb(streamedText, { toolsUsed });
+                      // Tagged, not suppressed: an adaptive model opens a thinking block on
+                      // every turn whether or not the caller enabled thinking (see the
+                      // max_tokens note above), so this marker reaches consumers regardless.
+                      await cb(streamedText, { toolsUsed, channel: 'reasoning' });
                     } else if ('content_block' in event && event.content_block.type === 'tool_use') {
                       // Handle tool use start
                       const toolBlock = event.content_block;
@@ -1367,12 +1383,17 @@ export class AnthropicBackend implements ICompletionBackend {
                   } else if (event.type === 'content_block_delta') {
                     if ('delta' in event && event.delta.type === 'thinking_delta') {
                       const thinkingText = event.delta.thinking;
-                      // Accumulate thinking content in the collected block
+                      // Accumulate thinking content in the collected block - kept raw
+                      // (unescaped) since this is resent to the API verbatim in tool-use loops.
                       if (collectedContent[event.index]) {
                         collectedContent[event.index].thinking += thinkingText;
                       }
-                      streamedText[event.index] = thinkingText;
-                      await cb(streamedText, { toolsUsed: toolsUsed });
+                      // Escaped before it reaches the transcript: reasoning is
+                      // provider-authored and can contain marker-shaped substrings that would
+                      // otherwise be indistinguishable from the real <think>/</think> we wrap
+                      // around it.
+                      streamedText[event.index] = reasoningEscaper.push(thinkingText);
+                      await cb(streamedText, { toolsUsed: toolsUsed, channel: 'reasoning' });
                     } else if ('delta' in event && event.delta.type === 'text_delta') {
                       streamedText[event.index] = event.delta.text;
                       checkDegenerate(event.delta.text);
@@ -1420,8 +1441,8 @@ export class AnthropicBackend implements ICompletionBackend {
                   } else if (event.type === 'content_block_stop') {
                     if (isInThinkingBlock) {
                       isInThinkingBlock = false;
-                      streamedText[event.index] = '</think>';
-                      await cb(streamedText, { toolsUsed: toolsUsed });
+                      streamedText[event.index] = reasoningEscaper.flush() + '</think>';
+                      await cb(streamedText, { toolsUsed: toolsUsed, channel: 'reasoning' });
                     } else if (collectedContent[event.index] && collectedContent[event.index].type === 'tool_use') {
                       // Parse the complete tool input when the block ends
                       if (func[event.index] && func[event.index].parameters) {
@@ -1463,6 +1484,8 @@ export class AnthropicBackend implements ICompletionBackend {
                     if (deltaStopReason) {
                       stopReason = deltaStopReason;
                     }
+                  } else if (event.type === 'message_stop') {
+                    sawMessageStop = true;
                   }
                 }
               } finally {
@@ -1510,6 +1533,45 @@ export class AnthropicBackend implements ICompletionBackend {
                 reject(
                   new Error(
                     `Anthropic API stream timeout - no response received within ${idleTimeoutMsForError / 1000} seconds. The model may be overloaded. Try simplifying your request or using fewer tools.`
+                  )
+                );
+                return;
+              }
+
+              if (!sawMessageStop) {
+                streamEndedEarlyThisTurn = true;
+                if (isInThinkingBlock) {
+                  isInThinkingBlock = false;
+                  const closing: string[] = [];
+                  closing[thinkingBlockIndex] = reasoningEscaper.flush() + '</think>';
+                  await cb(closing, { toolsUsed });
+                }
+                if (options.abortSignal?.aborted) {
+                  this.logger.info('[AnthropicBackend] Stream ended before message_stop after abort', { model });
+                  await cb([], {
+                    toolsUsed,
+                    stopReason: STREAM_ABORTED_STOP_REASON,
+                    inputTokens:
+                      accumInputTokens + ((usageInfo as { input_tokens?: number } | undefined)?.input_tokens ?? 0),
+                    outputTokens:
+                      accumOutputTokens + ((usageInfo as { output_tokens?: number } | undefined)?.output_tokens ?? 0),
+                  });
+                  resolve();
+                  return;
+                }
+                this.logger.warn('[AnthropicBackend] Stream ended before message_stop - rejecting as truncated', {
+                  model,
+                  eventCount,
+                  lastEventType,
+                  funcEntries: func.filter(f => f?.name).length,
+                });
+                // Worded to include "stream timeout" so ChatCompletionProcess's
+                // isStreamIdleTimeoutError retries once and then falls back, the same as
+                // the Bedrock truncation error in bedrockBackend/base.ts. Must not say
+                // "aborted": isAbortError would then treat it as a benign cancel.
+                reject(
+                  new Error(
+                    `Anthropic API stream timeout - the stream ended after ${eventCount} events without message_stop, so the response is truncated.`
                   )
                 );
                 return;
@@ -1711,7 +1773,7 @@ export class AnthropicBackend implements ICompletionBackend {
         // is from a stream we deliberately cut off, so executing it and recursing
         // would resume the run, overwrite the degeneration stop reason, and replay
         // stale assistant content.
-        if (!degeneratedThisTurn && func.some(f => f && f.name)) {
+        if (!degeneratedThisTurn && !streamEndedEarlyThisTurn && func.some(f => f && f.name)) {
           // Track tool usage first (including ID for history reconstruction)
           const toolCallNames = func.filter(t => t?.name).map(t => t.name);
           this.logger.info('[Tool Execution] Model requested tool calls', {
@@ -1862,8 +1924,8 @@ export class AnthropicBackend implements ICompletionBackend {
                 });
 
                 // For tools that return artifacts (like recharts), stream the result directly
-                await handleToolResultStreaming(outcome.name, outcome.result, async results => {
-                  await cb(results, { inputTokens: 0, outputTokens: 0, toolsUsed });
+                await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
+                  await cb(results, { inputTokens: 0, outputTokens: 0, toolsUsed, ...artifactInfo });
                 });
 
                 // outcome.id (not toolId, which falls back to a fresh randomUUID) is what
@@ -2225,8 +2287,8 @@ export class AnthropicBackend implements ICompletionBackend {
                 });
 
                 // For tools that return artifacts (like recharts), stream the result directly
-                await handleToolResultStreaming(outcome.name, outcome.result, async results => {
-                  await cb(results, { toolsUsed });
+                await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
+                  await cb(results, { toolsUsed, ...artifactInfo });
                 });
 
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);

@@ -422,6 +422,34 @@ describe('semanticDataLakeSearch bounded scan + honest accounting', () => {
     expect(result.scan.chunksScanned).toBeGreaterThanOrEqual(1);
   });
 
+  // The lake-scoped entrypoint builds its own fileById map, separate from the file-scoped one and
+  // from the ANN path's rows. All three have to carry the vintage; only this one is reached here.
+  it('carries the parent file vintage through the lake-scoped scan', async () => {
+    const documentDate = new Date('2019-03-04T00:00:00.000Z');
+    const dated = [{ id: 'f1', fileName: 'Dated.pdf', tags: [], documentDate }];
+    const result = await semanticDataLakeSearch(baseParams(), {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: dated, hasMore: false, total: 1 }]) },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(chunkRows('f1', 1)) },
+      },
+    } as never);
+
+    expect(result.results).not.toHaveLength(0);
+    expect(result.results[0].documentDate).toEqual(documentDate);
+  });
+
+  it('leaves the vintage null on the lake-scoped path for a file that has none', async () => {
+    const result = await semanticDataLakeSearch(baseParams(), {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]) },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(chunkRows('f1', 1)) },
+      },
+    } as never);
+
+    expect(result.results).not.toHaveLength(0);
+    expect(result.results[0].documentDate).toBeNull();
+  });
+
   it('asks for a fileName order, the sort the file walk needs to be a total order', async () => {
     // The sort literal is hardcoded inside the paging loop (semanticDataLakeSearch.ts), so pinning
     // the first call pins every page - a one-page fixture is sufficient here. buildFabFileSearchQuery
@@ -1079,6 +1107,68 @@ describe('semanticDataLakeSearch supersession collapse', () => {
     expect(isPartialSearch(result)).toBe(false);
   });
 
+  it('applies a curator ruling with the flag OFF, the shipped default', async () => {
+    // Two regressions in one test, and both were silent. The flag used to gate the whole partition,
+    // so a ruling never ran on a default deployment; and `allScopedFiles` - the last projection
+    // before the partition - did not carry `supersededInLakes`, so even with the partition running
+    // the field arrived undefined. Either one alone makes every curator ruling a no-op here.
+    const files = twoGenerations().map(f =>
+      f.id === 'old'
+        ? {
+            ...f,
+            // Deliberately NOT the newer generation: a curator rules on documents that contradict
+            // each other, which is what no derived tier can express.
+            supersededInLakes: [
+              {
+                dataLakeId: 'lakeX',
+                supersededByFabFileId: 'other',
+                decidedByUserId: 'curator-1',
+                decidedAt: new Date('2026-09-22'),
+              },
+            ],
+          }
+        : f
+    );
+    const findVectors = vi.fn().mockResolvedValue([]);
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), lakes: LAKES },
+      adaptersFor(files, findVectors) as never
+    );
+
+    expect(findVectors.mock.calls[0][0]).toEqual(['new', 'other']);
+    expect(result.supersession.count).toBe(1);
+    expect(result.supersession.sample[0]).toMatchObject({ fileId: 'old', tier: 'curator', supersededBy: 'other' });
+  });
+
+  it('still leaves the DERIVED tiers off with the flag off, even while honoring a ruling', async () => {
+    // The two halves must stay separable: `old` leaves only because a curator said so, and the
+    // identical file names of `old`/`new` must not collapse on the bare file-name tier.
+    const files = twoGenerations().map(f =>
+      f.id === 'new'
+        ? {
+            ...f,
+            supersededInLakes: [
+              {
+                dataLakeId: 'lakeX',
+                supersededByFabFileId: 'other',
+                decidedByUserId: 'curator-1',
+                decidedAt: new Date('2026-09-22'),
+              },
+            ],
+          }
+        : f
+    );
+    const findVectors = vi.fn().mockResolvedValue([]);
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), lakes: LAKES },
+      adaptersFor(files, findVectors) as never
+    );
+
+    // `old` survives: nothing ruled on it, and the derived file-name tier is off.
+    expect(findVectors.mock.calls[0][0]).toEqual(['old', 'other']);
+    expect(result.supersession.sample.map(e => e.tier)).toEqual(['curator']);
+  });
+
   it('flag on but no lakes resolved: nothing is attributable, so nothing collapses', async () => {
     const findVectors = vi.fn().mockResolvedValue([]);
     const result = await semanticDataLakeSearch(
@@ -1146,7 +1236,7 @@ describe('fileScopedSemanticSearch (allow-list scope)', () => {
   });
 
   const scopedAdapters = (opts: {
-    files?: { id: string; fileName: string; tags?: { name: string }[] }[];
+    files?: { id: string; fileName: string; tags?: { name: string }[]; createdAt?: Date; documentDate?: Date | null }[];
     chunks?: { id: string; fabFileId: string; vector: number[]; text: string }[];
   }) => {
     const getAccessibleFiles = vi.fn().mockResolvedValue(opts.files ?? []);
@@ -1188,6 +1278,36 @@ describe('fileScopedSemanticSearch (allow-list scope)', () => {
     expect(findVectorsByFabFileIds.mock.calls[0][0]).toEqual(['in-scope']);
     expect(result.results).toHaveLength(1);
     expect(result.results[0].fileId).toBe('in-scope');
+  });
+
+  // The scan path shapes its rows in a different place from the ANN path (which annVectorSearch.test
+  // covers), so the field can be carried on one and dropped on the other with nothing failing: an
+  // undated passage header is indistinguishable from a document that genuinely has no vintage.
+  it('carries the parent file vintage onto the rows it shapes', async () => {
+    const documentDate = new Date('2019-03-04T00:00:00.000Z');
+    const files = [{ id: 'in-scope', fileName: 'InScope.pdf', tags: [], documentDate }];
+    const { adapters } = scopedAdapters({
+      files,
+      chunks: [{ id: 'ch1', fabFileId: 'in-scope', vector: [1, 0], text: 'scoped content' }],
+    });
+
+    const result = await fileScopedSemanticSearch(scopedParams(['in-scope']), adapters as never);
+
+    expect(result.results[0].documentDate).toEqual(documentDate);
+  });
+
+  // null, not undefined - the field is required on SemanticChunkResult precisely so a producer
+  // cannot omit it silently, and the render channels read null as "undated".
+  it('normalises a file with no vintage to null rather than leaving it undefined', async () => {
+    const { adapters } = scopedAdapters({
+      files: [{ id: 'in-scope', fileName: 'InScope.pdf', tags: [] }],
+      chunks: [{ id: 'ch1', fabFileId: 'in-scope', vector: [1, 0], text: 'scoped content' }],
+    });
+
+    const result = await fileScopedSemanticSearch(scopedParams(['in-scope']), adapters as never);
+
+    expect(result.results[0].documentDate).toBeNull();
+    expect('documentDate' in result.results[0]).toBe(true);
   });
 
   it('empty scope returns empty WITHOUT any DB access (scoped-to-nothing contract)', async () => {

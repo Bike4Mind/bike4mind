@@ -250,13 +250,17 @@ jobs:
           GH_TOKEN: ${{ steps.skill_token.outputs.token }}
           DEST: ${{ runner.temp }}/bot-review-skill.md
           OWNER: ${{ github.repository_owner }}
+          # Pinned, not `main`: this fetch has no deploy step and no canary, so an
+          # unpinned ref makes every merge to b4m-devtools live against this bot on
+          # its next run. Bump deliberately and watch the following review.
+          SKILL_REF: e280101fac69b981521b6bdb3b808b8c95957016
         run: |
           set -euo pipefail
           # FAIL LOUD: a missing / unreadable / empty skill must RED this step, never
           # silently fall back to a thinner inline review (the exact regression this
           # replaced). Path is lowercase `skill.md` to match b4m-devtools' convention -
           # the runner is case-sensitive, so this must stay in lockstep with that repo.
-          if ! gh api "repos/${OWNER}/b4m-devtools/contents/.claude/skills/bot-review/skill.md?ref=main" \
+          if ! gh api "repos/${OWNER}/b4m-devtools/contents/.claude/skills/bot-review/skill.md?ref=${SKILL_REF}" \
                  --jq '.content' | base64 -d > "$DEST"; then
             echo "::error::Could not fetch bot-review skill from b4m-devtools (token / access / path). Refusing to run a degraded review."
             exit 1
@@ -275,7 +279,7 @@ jobs:
           # not beyond reach. This output belongs to a step that finished before the
           # agent started, which is what makes it usable as the reference.
           echo "skill_sha=$(sha256sum "$DEST" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-          echo "bot-review skill fetched ($(wc -l < "$DEST") lines) from b4m-devtools@main"
+          echo "bot-review skill fetched ($(wc -l < "$DEST") lines) from b4m-devtools@${SKILL_REF}"
 
       - name: Record review start time
         id: review_start

@@ -40,6 +40,7 @@ vi.mock('@bike4mind/database', () => ({
   // omitted because this mock REPLACES the whole module: an unlisted export is an import-time
   // failure, not a silent undefined, and the file reports zero tests rather than a failed one.
   lakeConfigChangeEventRepository: { __repo: 'lakeConfigChangeEvents' },
+  lakeMembershipChangeEventRepository: { __repo: 'lakeMembershipChangeEvents' },
   adminSettingsRepository: { __repo: 'adminSettings' },
 }));
 vi.mock('@server/dataLakes/dataLakeScopes', () => ({
@@ -72,6 +73,8 @@ describe('PUT /api/files/tags/[id]', () => {
     // service, so a route that stopped spreading lakeConfigAuditDb would still compile and record
     // nothing at all, with no other assertion here going red.
     expect(adapters.db.lakeConfigChangeEvents).toEqual({ __repo: 'lakeConfigChangeEvents' });
+    // Without this the bulk prefix-arm join/leave this door drives would leave no membership trail.
+    expect(adapters.db.lakeMembershipChangeEvents).toEqual({ __repo: 'lakeMembershipChangeEvents' });
     expect(adapters.db.adminSettings).toEqual({ __repo: 'adminSettings' });
   });
 
@@ -187,6 +190,8 @@ describe('DELETE /api/files/tags/[id]', () => {
     // Same reason as the rename above: a prefix-arm delete can drive an auto-activate, and the
     // audit repos are optional, so dropping them would be silent.
     expect(adapters.db.lakeConfigChangeEvents).toEqual({ __repo: 'lakeConfigChangeEvents' });
+    // Without this the bulk prefix-arm join/leave this door drives would leave no membership trail.
+    expect(adapters.db.lakeMembershipChangeEvents).toEqual({ __repo: 'lakeMembershipChangeEvents' });
     expect(adapters.db.adminSettings).toEqual({ __repo: 'adminSettings' });
   });
 

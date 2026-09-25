@@ -55,6 +55,14 @@ const handler = baseApi().post(
       delete body.corpusGroundingMode;
     }
 
+    // Summary provenance is copy metadata, never client input: it is stamped by the summarization
+    // handler and carried from a source by fork/snip/clone, and a session created here has no
+    // summary to have been triggered. createSessionParametersSchema must declare it for those copy
+    // paths, and declaring it is exactly what makes it reachable from this raw, unparsed body - so
+    // strip it unconditionally here, the same way corpusGroundingMode is stripped above. Without
+    // this a caller could persist trusted-looking provenance on a notebook nothing ever summarized.
+    delete body.summaryTrigger;
+
     // Manage-but-not-member admission: a lake maintainer who is not a member of the lake's org (or
     // does not otherwise pass the ordinary tag/entitlement gate) can still test it, for exactly this
     // session, if they manage it. Authorize here - never let it ride through createSession's own

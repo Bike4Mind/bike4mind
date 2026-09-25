@@ -84,6 +84,41 @@ describe('createDataLake seeds an owner access grant', () => {
   });
 });
 
+describe('createDataLake persists origin', () => {
+  const makeDb = () => {
+    const create = vi.fn(async (doc: Record<string, unknown>) => ({ id: 'newLakeId', ...doc }) as IDataLakeDocument);
+    return {
+      create,
+      db: {
+        dataLakes: { find: vi.fn(async () => []), create },
+        dataLakeAccessGrants: { upsertGrant: vi.fn(async () => ({}) as never) },
+      },
+    };
+  };
+
+  it('passes an explicit connector-fed origin through to the created document', async () => {
+    const { db, create } = makeDb();
+    await createDataLake(
+      'creator',
+      { name: 'Sales', slug: 'sales', fileTagPrefix: 'sl:', origin: 'connector-fed' } as Parameters<
+        typeof createDataLake
+      >[1],
+      { db } as never
+    );
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ origin: 'connector-fed' }));
+  });
+
+  it('omits origin when not supplied, leaving the schema default (curated) to apply', async () => {
+    const { db, create } = makeDb();
+    await createDataLake(
+      'creator',
+      { name: 'Sales', slug: 'sales', fileTagPrefix: 'sl:' } as Parameters<typeof createDataLake>[1],
+      { db } as never
+    );
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ origin: undefined }));
+  });
+});
+
 describe('createDataLake slug disambiguation stays inside MAX_DATA_LAKE_SLUG_LENGTH (#2032)', () => {
   /**
    * `find` reports a collision for every slug in `taken`, so disambiguation is forced to keep

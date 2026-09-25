@@ -3,6 +3,7 @@ import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { deriveLakeServingState } from '@bike4mind/common';
 
 /**
  * Floating indicator that shows data lake upload progress
@@ -19,6 +20,10 @@ export default function DataLakeUploadIndicator() {
   if (!shouldShow) return null;
 
   const pct = progress.totalFiles > 0 ? Math.round((progress.uploadedFiles / progress.totalFiles) * 100) : 0;
+
+  // Third surface disclosing a non-serving lake (#3222) - a bare "Upload Complete" here is the same
+  // false all-clear as the wizard's Complete screens. Unknown status claims nothing (fallback lake).
+  const lakeServes = !progress.lakeStatus || deriveLakeServingState(progress.lakeStatus).servesRetrieval;
 
   const handleClick = () => {
     openWizard();
@@ -60,6 +65,13 @@ export default function DataLakeUploadIndicator() {
           <Typography level="body-xs" color="neutral">
             {progress.uploadedFiles} / {progress.totalFiles} files
           </Typography>
+          {progress.status === 'complete' && !lakeServes && (
+            <Typography level="body-xs" color="warning" data-testid="upload-indicator-not-serving">
+              {progress.lakeStatus === 'draft'
+                ? 'Draft - not searchable yet'
+                : `Not searchable yet (${progress.lakeStatus})`}
+            </Typography>
+          )}
         </Box>
 
         <IconButton size="sm" variant="plain" color="neutral">

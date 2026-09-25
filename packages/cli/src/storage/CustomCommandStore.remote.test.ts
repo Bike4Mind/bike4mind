@@ -29,6 +29,7 @@ describe('CustomCommandStore with remote source', () => {
 
     // Override the default home dirs by using a projectRoot that has no .claude/skills etc.
     const store = new CustomCommandStore(projectRoot, { remoteSource });
+    store.setProjectTrusted(true); // folder-trust gate: project skills load only when trusted
     await store.loadCommands();
 
     const summarize = store.getCommand('summarize');
@@ -56,6 +57,7 @@ describe('CustomCommandStore with remote source', () => {
     );
 
     const store = new CustomCommandStore(projectRoot, { remoteSource });
+    store.setProjectTrusted(true); // folder-trust gate: project skills load only when trusted
     await store.loadCommands();
 
     const summarize = store.getCommand('summarize');
@@ -79,6 +81,7 @@ describe('CustomCommandStore with remote source', () => {
 
     // No remote source at construction; load local files only.
     const store = new CustomCommandStore(projectRoot);
+    store.setProjectTrusted(true); // folder-trust gate: project skills load only when trusted
     await store.loadCommands();
     expect(store.getCommand('shared')?.source).toBe('project');
     expect(store.getCommand('remote-only')).toBeUndefined();
@@ -120,6 +123,7 @@ describe('CustomCommandStore with remote source', () => {
 
     const remoteSource = new RemoteSkillSource(apiClient, { cacheFilePath: cachePath, freshTtlMs: 0 });
     const store = new CustomCommandStore(projectRoot, { remoteSource });
+    store.setProjectTrusted(true); // folder-trust gate: project skills load only when trusted
     await store.loadCommands();
 
     expect(store.getCommand('local-only')?.source).toBe('project');
@@ -148,6 +152,7 @@ describe('CustomCommandStore with remote source', () => {
     );
 
     const store = new CustomCommandStore(projectRoot, { remoteSource });
+    store.setProjectTrusted(true); // folder-trust gate: project skills load only when trusted
     await store.loadCommands();
 
     // Local skill still loads.

@@ -12,6 +12,7 @@ import {
   getSharedSessionsFromServer,
   updateSessionToServer,
 } from '@client/app/utils/sessionsAPICalls';
+import type { SessionUpdatePayload } from '@client/app/utils/sessionsAPICalls';
 import {
   InfiniteData,
   QueryClient,
@@ -41,6 +42,7 @@ import { useJobStatus } from '@client/app/hooks/useJobStatus';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
 import { isOptimisticId } from '@client/app/utils/llm';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
+import { visibleReplyForExport } from '@client/app/utils/replyUtils';
 import { getInsufficientCreditsMessage } from '@client/app/utils/error';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
 
@@ -433,7 +435,7 @@ export function useToggleFavoriteSession(sessionId: string) {
  * declares; `propagateToProjects` is a write OPTION rather than session state, and
  * controls whether new knowledgeIds also fan out to the containing projects.
  */
-export type UpdateSessionInput = Partial<ISessionDocument> & { id: string; propagateToProjects?: boolean };
+export type UpdateSessionInput = SessionUpdatePayload & { id: string; propagateToProjects?: boolean };
 
 export function useUpdateSession(callback?: { onSuccess?: (session: ISessionDocument) => void }) {
   const queryClient = useQueryClient();
@@ -477,9 +479,10 @@ export const useDownloadSession = () => {
       let dataString = title + '\n\n';
       quests.data.forEach((quest: IChatHistoryItem) => {
         dataString += 'User:' + quest.prompt + '\n';
-        (quest.replies || []).forEach(reply => {
+        const reply = visibleReplyForExport(quest);
+        if (reply) {
           dataString += 'AI:' + reply + '\n';
-        });
+        }
         dataString += '\n';
       });
       const blob = new Blob([dataString], { type: 'text/plain;charset=utf-8' });
@@ -518,9 +521,10 @@ const buildSessionMarkdown = (session: ISessionDocument, quests: IChatHistoryIte
   let markdown = `# ${formatSessionTitle(session.name)}\n\n`;
   quests.forEach((quest: IChatHistoryItem) => {
     markdown += `**User:** ${quest.prompt}\n\n`;
-    (quest.replies || []).forEach(reply => {
+    const reply = visibleReplyForExport(quest);
+    if (reply) {
       markdown += `**AI:** ${reply}\n\n`;
-    });
+    }
     markdown += '---\n\n';
   });
   return markdown;

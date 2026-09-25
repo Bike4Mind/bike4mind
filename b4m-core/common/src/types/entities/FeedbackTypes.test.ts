@@ -85,8 +85,12 @@ describe('FeedbackRollupQuerySchema', () => {
     expect(FEEDBACK_ROLLUP_MAX_WINDOW_DAYS).toBe(366);
   });
 
-  it('accepts a window at exactly the cap and rejects one past it', () => {
-    expect(FeedbackRollupQuerySchema.safeParse({ from: at(0), to: at(366) }).success).toBe(true);
+  it('accepts the widest window the inclusive bounds allow and rejects one instant more', () => {
+    // `to` is included, so 366 whole days of coverage ends one millisecond short of the 366-day
+    // gap - a gap of exactly 366 days would cover 366 days plus that final instant.
+    const widest = new Date(BASE + 366 * DAY_MS - 1).toISOString();
+    expect(FeedbackRollupQuerySchema.safeParse({ from: at(0), to: widest }).success).toBe(true);
+    expect(FeedbackRollupQuerySchema.safeParse({ from: at(0), to: at(366) }).success).toBe(false);
     expect(FeedbackRollupQuerySchema.safeParse({ from: at(0), to: at(367) }).success).toBe(false);
   });
 

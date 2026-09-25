@@ -1,33 +1,49 @@
-import type { IDataLakeAccessGrantRepository, IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
+import type {
+  IDataLakeAccessGrantRepository,
+  IDataLakeRepository,
+  IFabFileRepository,
+  IUserRepository,
+} from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { canManageLake, type ManageActor } from './manageRule';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { diffLakeConfig } from './diffLakeConfig';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
+import { recordLakeMembershipChange, type LakeMembershipAuditAdapters } from './recordLakeMembershipChange';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import type { UnarchiveResult } from './unarchiveDataLake';
-import { bestEffortSetDriveConnectionEnabled, type DriveConnectionEnablePort } from './ports';
+import {
+  bestEffortSetDriveConnectionEnabled,
+  bestEffortAdjustOwnerStorage,
+  groupStorageDeltaByOwner,
+  type DriveConnectionEnablePort,
+} from './ports';
 
-interface RestoreDeletedDataLakeAdapters extends LakeConfigAuditAdapters {
+interface RestoreDeletedDataLakeAdapters extends LakeConfigAuditAdapters, LakeMembershipAuditAdapters {
   // The event repo is REQUIRED here, unlike the optional shape LakeConfigAuditAdapters carries
   // for recomputeLakeStats: every caller of this service is an API route (there is exactly one
   // per service), so nothing is spared by making it optional and a route that forgot to wire it
   // would go dark silently - the one failure mode an audit must not have. Required here turns
   // that into a compile error.
-  db: LakeConfigAuditAdapters['db'] & {
-    lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
-    dataLakes: Pick<
-      IDataLakeRepository,
-      'findById' | 'settleLifecycleStatus' | 'setStats' | 'activateIfDraft' | 'claimRestoring'
-    >;
-    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
-    fabFiles: Pick<
-      IFabFileRepository,
-      'findDeletedByDataLakeTag' | 'findByContentHashesInDataLake' | 'undeleteByDataLakeTag' | 'computeDataLakeStats'
-    >;
-  };
+  db: LakeConfigAuditAdapters['db'] &
+    LakeMembershipAuditAdapters['db'] & {
+      lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
+      dataLakes: Pick<
+        IDataLakeRepository,
+        'findById' | 'settleLifecycleStatus' | 'setStats' | 'activateIfDraft' | 'claimRestoring'
+      >;
+      dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+      fabFiles: Pick<
+        IFabFileRepository,
+        'findDeletedByDataLakeTag' | 'findByContentHashesInDataLake' | 'undeleteByDataLakeTag' | 'computeDataLakeStats'
+      >;
+      // REQUIRED, same reasoning as lakeConfigChangeEvents above: a route that forgot to wire it
+      // would silently leave a restored file's bytes uncounted against its owner's storage quota,
+      // correctable only via the admin recalculate-storage endpoint.
+      users: Pick<IUserRepository, 'incrementCurrentStorage'>;
+    };
   /** Re-enable the lake's Drive connection, reversing archive/delete's disable. See ports.ts. */
   enableDriveConnection?: DriveConnectionEnablePort;
 }
@@ -111,7 +127,25 @@ export const restoreDeletedDataLake = async (
   // The batch this lake's own archive recorded, if any. undefined for a lake with no mark
   // (archived before the field existed, or never archived), which leaves archivedAt untouched.
   const archiveStampToClear = existing.filesArchivedAt ?? undefined;
-  const restoredCount = await db.fabFiles.undeleteByDataLakeTag(scope, duplicateIds, stampedAt, archiveStampToClear);
+  const restored = await db.fabFiles.undeleteByDataLakeTag(scope, duplicateIds, stampedAt, archiveStampToClear);
+  const restoredCount = restored.length;
+
+  // A restore puts these files back inside every lake read, which is a membership JOIN that no
+  // add door recorded - the delete side logged a `removed` for each of them, so without this a
+  // reader replaying the log has them still gone. Ids, not the pre-read batch: each row moved
+  // under its own conditional write, so two restores re-entering 'restoring' concurrently split
+  // the batch rather than both claiming all of it. Best-effort, like every other membership
+  // recorder - the undelete has already landed by the time this runs.
+  for (const { id: fabFileId } of restored) {
+    await recordLakeMembershipChange(
+      { actor, lake: existing, fabFileId, action: 'added', origin: 'person' },
+      { db, logger }
+    );
+  }
+  // Grouped by owner, not the lake's creator - see groupStorageDeltaByOwner. Off the same restored
+  // set as the membership log above, so a re-run after a crash only credits files THIS attempt
+  // actually put back in the counted set.
+  await bestEffortAdjustOwnerStorage(db.users, groupStorageDeltaByOwner(restored, 1), logger);
 
   // Explicit null, not undefined, which mongoose would drop and leave the spent mark in place.
   // Terminal transition only - see the note on archiveDataLake's settle step.

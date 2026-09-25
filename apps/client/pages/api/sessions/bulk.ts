@@ -3,7 +3,13 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sessionService } from '@bike4mind/services';
 import { sessionRepository } from '@bike4mind/database/auth';
-import { projectRepository, fabFileRepository, withTransaction } from '@bike4mind/database';
+import {
+  projectRepository,
+  fabFileRepository,
+  sessionAgentConfigRepository,
+  userRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
 
 const handler = baseApi()
@@ -41,7 +47,10 @@ const handler = baseApi()
                     sessions: sessionRepository,
                     projects: projectRepository,
                     fabFiles: fabFileRepository,
+                    users: userRepository,
+                    sessionAgentConfigs: sessionAgentConfigRepository,
                   },
+                  logger: req.logger,
                 }
               )
             );

@@ -10,11 +10,13 @@ import {
   REQUEST_ID_HEADER,
   LEGACY_REQUEST_ID_HEADER,
   isAgentOwnedByEmbedKey,
+  inlinesReasoningIntoText,
   type IMessage,
+  type ModelInfo,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { assertOwnerHasCredits, assertKeySpendWithinCap, apiKeyService } from '@bike4mind/services';
-import { executeCompletion } from '@bike4mind/services/cliCompletions';
+import { executeCompletion, resolveOpenAiBareModelAlias } from '@bike4mind/services/cliCompletions';
 import {
   resolveQuestErrorCode,
   buildSharedTools,
@@ -196,23 +198,28 @@ async function buildEmbedServerTools(args: {
    * per-member credit side-table and can lag membership (a member may have no row yet).
    */
   ownerOrg: { userId?: string; users?: Array<{ userId?: string }> | null } | null;
+  /**
+   * Resolved once on the request path for the reasoning-channel model gate, which runs
+   * before this. Passed in rather than re-derived: both are per-request work, and the gate
+   * cannot be skipped.
+   */
+  apiKeys: ApiKeyTable;
+  models: ModelInfo[];
+  /** hydrated.model past resolveOpenAiBareModelAlias; catalog ids are the dated spelling. */
+  modelId: string;
   logger: Logger;
   getAbortSignal: () => AbortSignal | undefined;
 }): Promise<ICompletionOptionTools[] | undefined> {
-  const { ctx, hydrated, ownerOrg, logger, getAbortSignal } = args;
+  const { ctx, hydrated, ownerOrg, apiKeys: toolApiKeys, models, modelId, logger, getAbortSignal } = args;
 
   const enabledTools = resolveEmbedTools(hydrated);
   if (enabledTools.length === 0) return undefined;
 
   // These reads are independent, so fetch them together (mirrors the
   // agent/org parallel fetch on the request path above).
-  const [project, owner, toolApiKeys, toolAvailability] = await Promise.all([
+  const [project, owner, toolAvailability] = await Promise.all([
     hydrated.projectId ? projectRepository.findById(hydrated.projectId) : Promise.resolve(null),
     userRepository.findById(ctx.userId),
-    apiKeyService.getEffectiveLLMApiKeys(ctx.userId, {
-      db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-      getSettingsByNames,
-    }),
     // Never rejects (see resolveToolAvailability's doc comment). Fail-closed here (unlike the
     // Tools picker UI's fail-open default): embed-widget end users have no way to add their own
     // key, so a tool this lookup couldn't confirm works should not reach the model.
@@ -241,14 +248,13 @@ async function buildEmbedServerTools(args: {
     return undefined;
   }
 
-  const models = await getAvailableModels(toolApiKeys as ApiKeyTable);
-  const modelInfo = models.find(m => m.id === hydrated.model);
-  const toolLlm = getLlmByModel(toolApiKeys as ApiKeyTable, { modelInfo, logger, endUserId: ctx.userId });
+  const modelInfo = models.find(m => m.id === modelId);
+  const toolLlm = getLlmByModel(toolApiKeys, { modelInfo, logger, endUserId: ctx.userId });
   if (!toolLlm) {
     logger.warn('[EMBED_CHAT] No LLM backend for tool context; running without tools');
     return undefined;
   }
-  toolLlm.currentModel = hydrated.model ?? '';
+  toolLlm.currentModel = modelId;
 
   const deps: ToolBuilderDeps = {
     userId: ctx.userId,
@@ -273,7 +279,7 @@ async function buildEmbedServerTools(args: {
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),
     llm: toolLlm,
-    model: hydrated.model,
+    model: modelId,
   };
   const callbacks: ToolBuilderCallbacks = {
     onStatusUpdate: async () => {},
@@ -281,7 +287,17 @@ async function buildEmbedServerTools(args: {
     onToolFinish: async () => {},
   };
 
-  const tools = buildSharedTools(deps, callbacks, { enabledTools, getAbortSignal, toolAvailability });
+  const tools = buildSharedTools(deps, callbacks, {
+    enabledTools,
+    getAbortSignal,
+    toolAvailability,
+    // Leave imageUrlSigningSecret unset: the embed widget has no card renderer
+    // (server/embed/embedWidgetPage.ts appends reply text verbatim into a text bubble) and no
+    // JWT for an anonymous visitor to hit the (jwtOnly) image proxy with, so a signed secret here
+    // would only make web_search pay for an image search whose fence prints as raw JSON to the
+    // visitor. An unset secret makes performWebSearch degrade to plain prose instead.
+    config: { web_search: {} },
+  });
   return tools && tools.length > 0 ? tools : undefined;
 }
 
@@ -444,12 +460,46 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         }
       }
 
+      // Reasoning must never reach an anonymous visitor. On these providers it shares one
+      // frame with the reply prose at the same index, so the per-frame channel tag that
+      // covers every other family has nothing to separate, and a public stream does not
+      // parse markers. Refuse the model here - after every billing and rate gate, because
+      // the catalog read can miss its cache and reach a provider, and a caller past its
+      // spend cap or rate limit must not be able to drive that work; still before any
+      // stream bytes, so the refusal is a clean JSON 422.
+      // Fail-closed on a model the catalog cannot describe (see inlinesReasoningIntoText).
+      const embedApiKeys = (await apiKeyService.getEffectiveLLMApiKeys(ctx.userId, {
+        db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+        getSettingsByNames,
+      })) as ApiKeyTable;
+      const embedModels = await getAvailableModels(embedApiKeys);
+      // Same alias resolution executeCompletion applies, so a bare OpenAI name
+      // ('gpt-4.1-mini') finds its dated catalog entry here instead of reading as an
+      // undescribed model and failing closed on one completion would have accepted.
+      const embedModelId = resolveOpenAiBareModelAlias(hydrated.model);
+      const embedAdapterFamily = embedModels.find(m => m.id === embedModelId)?.adapterFamily;
+      if (inlinesReasoningIntoText(embedAdapterFamily)) {
+        logger.warn('[EMBED_CHAT] Refused a model that streams reasoning in the text channel', {
+          model: embedModelId,
+          adapterFamily: embedAdapterFamily,
+        });
+        return res.status(422).json({
+          error: 'unprocessable',
+          error_description:
+            'Bound agent uses a model whose reasoning streams inline with its reply, which cannot be hidden from a public visitor. Set the agent to a different model.',
+          code: 'agent_model_not_embeddable',
+        });
+      }
+
       // --- Server-side tools (built pre-stream so a failure is a clean JSON 500) ---
       // Aborting on client disconnect stops the backend stream AND the tool loop, so a
       // closed embed tab cannot keep billing the owner org through the remaining turns.
       const abortController = new AbortController();
       res.on('close', () => abortController.abort());
       const serverTools = await buildEmbedServerTools({
+        apiKeys: embedApiKeys,
+        models: embedModels,
+        modelId: embedModelId,
         ctx,
         hydrated,
         // Only an org-owned agent extends KB authorization to org-mate projects.
@@ -506,9 +556,10 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
           source: 'api',
           logger,
           onChunk: async (text, info) => {
-            // Public/anonymous caller: text + usage/credits only. buildPublicSSEEvent
-            // drops server-internal metadata (tool calls, thinking blocks) that the
-            // backend reports on tool/reasoning turns. See its contract in sseEvents.ts.
+            // Public/anonymous caller: text + usage/credits only. Drops the
+            // server-internal metadata the backend reports on tool turns. The text is
+            // forwarded verbatim - reasoning is kept out by the model gate above, not by
+            // filtering content. See its contract in sseEvents.ts.
             write(serializeSSEEvent(buildPublicSSEEvent(text, info)));
           },
         });

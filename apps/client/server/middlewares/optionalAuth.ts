@@ -1,6 +1,7 @@
 import passport from 'passport';
 import type { Request, Response, NextFunction } from 'express';
 import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';
+import { admitsOptionalAuthUser } from '@server/middlewares/oauthRouteGate';
 
 /**
  * Optional authentication for public-facing publish surfaces. Populates
@@ -49,7 +50,10 @@ export async function optionalAuth(req: Request, res: Response, next: NextFuncti
     await new Promise<void>(resolve => {
       passport.authenticate('jwt', { session: false }, (err: Error | null, user: Express.User | false) => {
         if (err) req.logger?.warn(`[optionalAuth] JWT verify error (continuing anonymous): ${err.message}`);
-        if (user) req.user = user;
+        // Admit only a user the shared guard accepts: a pre-MFA session or a relying-party OAuth
+        // token must degrade to anonymous here, or an OAuth token could mint a gate-proof cookie /
+        // write annotations as the subject user on these auth:false routes. See oauthRouteGate.ts.
+        if (admitsOptionalAuthUser(user)) req.user = user as Express.User;
         resolve();
       })(req, res, () => resolve());
     });

@@ -3,10 +3,11 @@
 //   1. Node 24 (which runs the CLI) rejects a bare ESM JSON import without it
 //      (ERR_IMPORT_ATTRIBUTE_MISSING) - the CLI's rolldown bundle keeps this
 //      import external, so the attribute must reach the emitted output.
-//   2. It stays a *static* import, so @vercel/nft (the tracer Next/OpenNext use
-//      to build the server Lambda's file closure) includes index.json. A
-//      createRequire/readFileSync form is invisible to nft and drops the file,
-//      500-ing registration on deploy (isDisposableEmail runs by default).
+//   2. It stays a *static* import, so the file tracer that builds the server
+//      Lambda's closure (OpenNext, pinned in infra/web.ts) includes index.json.
+//      A createRequire/readFileSync form is invisible to a static tracer and
+//      drops the file, 500-ing registration on deploy (isDisposableEmail runs
+//      by default).
 import disposableDomains from 'disposable-email-domains' with { type: 'json' };
 
 // ~4.5k entries from the maintained `disposable-email-domains` list.

@@ -1,4 +1,6 @@
 import * as XLSX from 'xlsx';
+import { stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
+import { visibleReplyForExport } from '@client/app/utils/replyUtils';
 import { Document, Paragraph, TextRun, Packer, HeadingLevel, BorderStyle } from 'docx';
 import {
   DocxColors,
@@ -35,6 +37,7 @@ export interface ExportedChatMessage {
       inputTokens?: number;
       outputTokens?: number;
     };
+    citables?: CitableSource[];
   };
 }
 
@@ -79,19 +82,17 @@ export async function notebooksToExcel(data: BulkExportData): Promise<Blob> {
         });
       }
 
-      // Assistant replies
-      const replies = msg.replies || [];
-      for (const reply of replies) {
-        if (reply) {
-          messagesData.push({
-            Notebook: nb.name,
-            Timestamp: msg.timestamp ? new Date(msg.timestamp).toISOString() : '',
-            Role: 'Assistant',
-            Content: reply,
-            Model: msg.promptMeta?.model?.name || '',
-            Tokens: msg.promptMeta?.tokenUsage?.outputTokens || '',
-          });
-        }
+      // Assistant reply: one row per turn, not per stored slot
+      const reply = visibleReplyForExport(msg);
+      if (reply) {
+        messagesData.push({
+          Notebook: nb.name,
+          Timestamp: msg.timestamp ? new Date(msg.timestamp).toISOString() : '',
+          Role: 'Assistant',
+          Content: stripSearchResultCardFences(reply, msg.promptMeta?.citables),
+          Model: msg.promptMeta?.model?.name || '',
+          Tokens: msg.promptMeta?.tokenUsage?.outputTokens || '',
+        });
       }
     }
   }
@@ -310,44 +311,47 @@ export async function notebooksToDocx(data: BulkExportData): Promise<Blob> {
           );
         }
 
-        // Assistant replies
-        const replies = msg.replies || [];
-        for (const reply of replies) {
-          if (reply) {
-            const roleStyle = DocxRoleStyles.assistant;
+        // Assistant reply: one block per turn, not per stored slot
+        const reply = visibleReplyForExport(msg);
+        if (reply) {
+          const roleStyle = DocxRoleStyles.assistant;
 
-            // Role header
-            children.push(
-              new Paragraph({
-                children: [
-                  new TextRun({
-                    text: roleStyle.label,
-                    bold: true,
-                    size: DocxFontSizes.body,
-                    color: roleStyle.textColor,
-                  }),
-                  new TextRun({ text: ':', size: DocxFontSizes.body }),
-                ],
-                spacing: { before: DocxSpacing.afterRole },
-              })
-            );
+          // Role header
+          children.push(
+            new Paragraph({
+              children: [
+                new TextRun({
+                  text: roleStyle.label,
+                  bold: true,
+                  size: DocxFontSizes.body,
+                  color: roleStyle.textColor,
+                }),
+                new TextRun({ text: ':', size: DocxFontSizes.body }),
+              ],
+              spacing: { before: DocxSpacing.afterRole },
+            })
+          );
 
-            // Message content with background shading and left border
-            children.push(
-              new Paragraph({
-                children: [new TextRun({ text: reply, size: DocxFontSizes.small })],
-                shading: { fill: roleStyle.backgroundColor },
-                border: {
-                  left: {
-                    color: roleStyle.borderColor,
-                    size: DocxBorderSizes.accent,
-                    style: BorderStyle.SINGLE,
-                  },
+          // Message content with background shading and left border
+          children.push(
+            new Paragraph({
+              children: [
+                new TextRun({
+                  text: stripSearchResultCardFences(reply, msg.promptMeta?.citables),
+                  size: DocxFontSizes.small,
+                }),
+              ],
+              shading: { fill: roleStyle.backgroundColor },
+              border: {
+                left: {
+                  color: roleStyle.borderColor,
+                  size: DocxBorderSizes.accent,
+                  style: BorderStyle.SINGLE,
                 },
-                spacing: { after: DocxSpacing.afterHeading },
-              })
-            );
-          }
+              },
+              spacing: { after: DocxSpacing.afterHeading },
+            })
+          );
         }
       }
     }
@@ -418,12 +422,10 @@ export function notebooksToMarkdown(data: BulkExportData): string {
           md += `${roleLabel}:\n\n${msg.prompt}\n\n`;
         }
 
-        // Assistant replies
-        const replies = msg.replies || [];
-        for (const reply of replies) {
-          if (reply) {
-            md += `**AI**:\n\n${reply}\n\n`;
-          }
+        // Assistant reply: one entry per turn, not per stored slot
+        const reply = visibleReplyForExport(msg);
+        if (reply) {
+          md += `**AI**:\n\n${stripSearchResultCardFences(reply, msg.promptMeta?.citables)}\n\n`;
         }
       }
     }

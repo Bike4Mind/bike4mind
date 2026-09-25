@@ -130,14 +130,10 @@ describe('GET /api/data-lakes/batches - reconciler wiring', () => {
     );
   });
 
-  // The wiring pin for this route's ...lakeConfigAuditDb spread, written as BEHAVIOUR rather than as
-  // an assertion on the adapters object: this spec deliberately runs the real reconciler (see the
-  // note at the top of the file), so there is no service mock whose arguments could be inspected.
-  // Driving the whole path instead is the stronger pin anyway - it fails if the route stops
-  // spreading the audit repos, and also if reconcileStuckBatches stops forwarding them onward.
-  // Worth pinning here specifically because this reconciler forces terminal exactly the batches that
-  // never reached finalizeBatchIfComplete, making it the only path that can ever publish those lakes.
-  it('records the auto-activate that forcing a stuck batch terminal causes', async () => {
+  // Forcing a stuck batch terminal still corrects the lake's stats, but never publishes it -
+  // reconcileStuckBatches has no principal to attribute a promote to, and it should not have
+  // one: publishing is now an explicit, owner/admin-only action of its own.
+  it("corrects the lake's stats when forcing a stuck batch terminal, without publishing it", async () => {
     const stuckBatch = {
       id: 'stuck1',
       userId: 'u1',
@@ -155,24 +151,14 @@ describe('GET /api/data-lakes/batches - reconciler wiring', () => {
       createdByUserId: 'u1',
       status: 'draft',
     });
-    // fileCount > 0 is what makes the flip eligible at all.
     h.computeDataLakeStats.mockResolvedValue({ fileCount: 3, totalSizeBytes: 10, totalChunkedChars: 20 });
-    h.activateIfDraft.mockResolvedValue(true);
 
     const { res } = makeRes();
     await run(res);
 
-    expect(h.recordConfigChange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        dataLakeId: 'lake1',
-        action: 'auto-activate',
-        // `system` on both counts by design: no principal drove this, and activateIfDraft
-        // authorizes nothing (see recomputeLakeStats).
-        principalKind: 'system',
-        manageRung: 'system',
-        changes: [expect.objectContaining({ field: 'status', before: 'draft', after: 'active' })],
-      })
-    );
+    expect(h.dlSetStats).toHaveBeenCalledWith('lake1', expect.anything());
+    expect(h.activateIfDraft).not.toHaveBeenCalled();
+    expect(h.recordConfigChange).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'auto-activate' }));
   });
 
   it('does not force a fresh analyzing batch (still within the timeout)', async () => {

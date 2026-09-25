@@ -1,6 +1,6 @@
 import { memoryLedgerRepository, memoryPrincipalKeyRepository } from '@bike4mind/database';
 import { embeddingScorer, recall } from '@bike4mind/memory';
-import { MEMENTO_MIN_SIMILARITY } from '@bike4mind/common';
+import { MEMENTO_MIN_SIMILARITY, isDocumentSource } from '@bike4mind/common';
 import { createKeyProvider } from './factCipher';
 import { createLedgerMemoryStore } from './ledgerMemoryStore';
 import { embedMementoQuery } from './mementoQueryEmbedding';
@@ -29,9 +29,12 @@ export interface LakeBeliefRecall {
   /** Source FabFile ids the fact was extracted from, for citation. Always at least one (reachable). */
   sources: string[];
   /**
-   * `YYYY-MM-DD` of the source document, when it is known. Absent for a belief whose document has
-   * since been deleted, and for a run with no dates resolver wired - both render as unknown rather
-   * than as a guess.
+   * `YYYY-MM-DD` of the source document, when it is known. Still absent today, but no longer for
+   * want of the data: ingest now captures `FabFile.documentDate` (#3048), and what keeps every
+   * lake-memory card undated is that production wires no dates resolver (see `resolveSourceDates`).
+   * With no resolver wired no belief carries a date, so `buildLakeMemoryContext` omits the date
+   * line altogether - its `dated` gate gives the "unknown" rendering only once some fact in the
+   * batch does carry one.
    */
   sourceDate?: string;
 }
@@ -66,8 +69,17 @@ export interface RecallLakeMemoryOptions {
    * the budget cut, so it reads only the slice that will actually be rendered rather than every
    * source the reachability gate scans.
    *
-   * Optional so a caller that has no FabFile access still recalls (undated) rather than failing; the
-   * production wiring always supplies it.
+   * UNWIRED in production. The resolver this once received answered with the FabFile's `createdAt`,
+   * which dated a belief by when its source was uploaded - so a claim from a decade-old report
+   * rendered on the card as this month's reading, and the model weighed it against a genuinely
+   * newer one accordingly. An undated card is the honest output; see formatDocumentDate in
+   * renderRetrievedContentBlock.ts (b4m-core/services) for the same rule on the retrieval headers.
+   *
+   * `FabFile.documentDate` (#3048) now supplies a real authored date, so a correct resolver is
+   * finally possible - but wiring one is NOT just a field swap. A belief cites `sources` as a set,
+   * those sources can carry different vintages, and collapsing them to one card date is a judgement
+   * about which source speaks for the belief. That judgement belongs with the reader (#2688), so it
+   * needs deciding on its own rather than inheriting whatever a resolver happens to pick first.
    */
   resolveSourceDates?: (sourceIds: string[]) => Promise<Map<string, string>>;
 }
@@ -121,7 +133,10 @@ export async function recallLakeMemory(opts: RecallLakeMemoryOptions): Promise<L
 
   // Reachability gate + query embed are independent of each other (both derive from the belief set),
   // so resolve them together.
-  const allSourceIds = [...new Set(beliefs.flatMap(b => b.sources ?? []))];
+  // Documents only: a curator-resolution belief also cites the finding it was decided on (#3049),
+  // which is not a FabFile and would ride into the ObjectId-only lookup behind this resolver,
+  // logging `skipping ids that cannot address a row by _id` on every turn that recalls one.
+  const allSourceIds = [...new Set(beliefs.flatMap(b => b.sources ?? []).filter(isDocumentSource))];
   const [reachable, embedded] = await Promise.all([
     opts.resolveReachableSources(allSourceIds),
     embedMementoQuery(opts.userId, opts.query).catch(err => {

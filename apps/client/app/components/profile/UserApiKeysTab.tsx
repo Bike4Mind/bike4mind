@@ -94,6 +94,7 @@ const RESOURCE_LABELS: Record<string, string> = {
   ai: 'AI',
   'marketing-reports': 'Marketing Reports',
   optihashi: 'OptiHashi',
+  me: 'Account',
 };
 
 const ACTION_LABELS: Record<string, string> = {

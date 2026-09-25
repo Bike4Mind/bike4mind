@@ -1,11 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { openSearchVectorSearch } from './openSearchVectorSearch';
 
-// f1 carries a date, f2 deliberately does not: the ANN path must forward the parent's createdAt
-// (#2236) rather than serving dateless passages while the scan path serves dated ones.
-const F1_CREATED_AT = new Date('2026-08-14T09:30:00.000Z');
 const fileById = new Map([
-  ['f1', { fileName: 'a.pdf', fileTags: ['x'], createdAt: F1_CREATED_AT }],
+  ['f1', { fileName: 'a.pdf', fileTags: ['x'] }],
   ['f2', { fileName: 'b.pdf', fileTags: [] }],
 ]);
 
@@ -48,9 +45,9 @@ describe('openSearchVectorSearch', () => {
         fileId: 'f1',
         fileName: 'a.pdf',
         fileTags: ['x'],
+        documentDate: null,
         chunkText: 'hello',
         score: 0.8,
-        fileCreatedAt: F1_CREATED_AT,
       },
     ]);
     expect(result.hitsReturned).toBe(1);

@@ -1,5 +1,5 @@
 import { baseApi } from './baseApi';
-import type { EndpointContract, PathParamsOf, RequestBodyOf } from '@bike4mind/common';
+import type { EndpointContract, PathParamsOf, QueryParamsOf, RequestBodyOf } from '@bike4mind/common';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
 /**
@@ -11,13 +11,28 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express';
  */
 const METHODS = ['all', 'get', 'head', 'post', 'put', 'patch', 'delete', 'options', 'trace'] as const;
 
+/** Returns a copy of `obj` restricted to `keys`. */
+function pick(obj: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  // Object.hasOwn, not `k in obj`: the latter also matches inherited names
+  // (`toString`, `constructor`, ...), which would report an absent key as
+  // present - the same class of bug the defineEndpoint overlap guard fixed.
+  return Object.fromEntries(keys.filter(k => Object.hasOwn(obj, k)).map(k => [k, obj[k]]));
+}
+
+/** Returns a copy of `obj` without `keys`. */
+function omit(obj: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  const excluded = new Set(keys);
+  return Object.fromEntries(Object.entries(obj).filter(([key]) => !excluded.has(key)));
+}
+
 /**
  * Next.js transport adapter for an {@link EndpointContract}.
  *
  * Derives the route's auth mode + required scopes from the contract and validates
- * the body against the contract schema, exposing it to the handler as the typed
- * `req.validated`. Returns the usual `baseApi` router, so callers chain
- * `.use(...)` / `.post(...)` exactly as before.
+ * path params, query params, and the body against the contract schema (in that
+ * order), exposing them to the handler as the typed `req.validatedParams` /
+ * `req.validatedQuery` / `req.validated`. Returns the usual `baseApi` router, so
+ * callers chain `.use(...)` / `.post(...)` exactly as before.
  *
  * Rate limiting is passed as `options.rateLimit` (rather than the caller chaining
  * its own `.use(...)`) so the adapter can order it correctly - auth -> rate limit
@@ -32,7 +47,11 @@ export function nextRouteForContract<C extends EndpointContract>(
   contract: C,
   options: { maxBodySize?: number; exemptReadsFromDailyRateLimit?: boolean; rateLimit?: RequestHandler } = {}
 ) {
-  type ValidatedReq = Request & { validated: RequestBodyOf<C>; validatedParams: PathParamsOf<C> };
+  type ValidatedReq = Request & {
+    validated: RequestBodyOf<C>;
+    validatedParams: PathParamsOf<C>;
+    validatedQuery: QueryParamsOf<C>;
+  };
   type Handler = (req: ValidatedReq, res: Response, next: NextFunction) => unknown;
 
   const { rateLimit, ...baseOptions } = options;
@@ -62,10 +81,37 @@ export function nextRouteForContract<C extends EndpointContract>(
   //
   // Next's file-based routing merges dynamic segments into req.query, not req.params
   // (there is no req.params in a Next.js API route) - see the pathParams doc comment.
+  //
+  // pathParams and queryParams are scoped ASYMMETRICALLY on purpose, not both the
+  // same way:
+  //   - pathParams is a fixed, closed set - only the `{name}` segments declared in
+  //     `path` are ever populated by Next's routing, so it is picked down to
+  //     exactly its own declared keys. Any other key in req.query (a real query
+  //     string field, or the sibling schema's) is none of its business.
+  //   - queryParams is inherently open - a caller can send any real query key - so
+  //     it is scoped by omitting only the sibling pathParams's declared keys,
+  //     never every undeclared key. That is what lets a `.strict()` queryParams
+  //     schema still 422 a genuinely unexpected key, and a `.passthrough()` one
+  //     still retain it, exactly as it would with no pathParams sibling at all.
+  // Getting this backwards (pick-ing queryParams down to its own keys, or
+  // omit-ing queryParams's keys off of pathParams) reintroduces the same
+  // interference this split exists to prevent, just on the other schema.
   const pathParamsSchema = contract.pathParams;
+  const queryParamsSchema = contract.queryParams;
+  const pathParamsKeys = pathParamsSchema ? Object.keys(pathParamsSchema.shape) : [];
+
   if (pathParamsSchema) {
     prelude.push((req, _res, next) => {
-      req.validatedParams = pathParamsSchema.parse(req.query) as PathParamsOf<C>;
+      req.validatedParams = pathParamsSchema.parse(pick(req.query, pathParamsKeys)) as PathParamsOf<C>;
+      next();
+    });
+  }
+
+  // Real query-string fields, validated after path params but before the body -
+  // same precedence reasoning: address/filter the resource before its payload.
+  if (queryParamsSchema) {
+    prelude.push((req, _res, next) => {
+      req.validatedQuery = queryParamsSchema.parse(omit(req.query, pathParamsKeys)) as QueryParamsOf<C>;
       next();
     });
   }

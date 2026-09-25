@@ -148,14 +148,6 @@ const run = (body: unknown, res: unknown, id?: string) =>
 const runAs = (userId: string, body: unknown, res: unknown) =>
   (handler as (req: unknown, res: unknown) => Promise<void>)(req(body, FILE_ID, userId), res);
 
-// A real API key always carries scopes; these tests are about auditPrincipal attribution, not the
-// scope gate, so the key holds the write scope a lake-tag join/leave asserts.
-const runWithKey = (keyId: string, body: unknown, res: unknown) =>
-  (handler as (req: unknown, res: unknown) => Promise<void>)(
-    req(body, FILE_ID, 'u1', { keyId, scopes: ['datalake:write'] }),
-    res
-  );
-
 const fabFile = (overrides: Record<string, unknown> = {}) => ({
   id: FILE_ID,
   userId: 'u1',
@@ -249,59 +241,19 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
     ]);
   });
 
-  // The wiring pin for this route's ...lakeConfigAuditDb spread, written as BEHAVIOUR: this spec runs
-  // the real updateFabFile (no @bike4mind/services mock), so there is no call whose adapters could be
-  // inspected. Driving the join instead pins the whole chain - route spread, service forwarding, and
-  // the activation branch that emits the row.
-  it('records the auto-activate when a joining file publishes a draft lake', async () => {
+  // A joining file no longer publishes a draft lake as a side effect - it only corrects
+  // stats. Publishing is now the explicit, separately-audited `promoteDataLake` door.
+  it("corrects a draft lake's stats on join without publishing it", async () => {
     h.findByDatalakeTag.mockResolvedValue({ ...LAKE, status: 'draft' });
     h.findUpdateAccessById.mockResolvedValue(fabFile({ tags: [] }));
     makeStatefulFabFile({ id: FILE_ID, userId: 'u1', tags: [] });
-    // A lake with a member is by definition no longer a draft - fileCount > 0 is what makes the
-    // flip eligible, which is why the suite default of 0 leaves every other case unaffected.
     h.computeDataLakeStats.mockResolvedValue({ fileCount: 1, totalSizeBytes: 12, totalChunkedChars: 0 });
-    h.activateIfDraft.mockResolvedValue(true);
     const { res } = makeRes();
 
     await run({ tags: [{ name: META, strength: 1 }] }, res);
 
-    expect(h.recordConfigChange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        dataLakeId: 'lake-1',
-        action: 'auto-activate',
-        principalKind: 'user',
-        principalId: 'u1',
-        // `system` even though a real user drove it: the rung records what AUTHORIZED the write, and
-        // activateIfDraft checks nothing (see recomputeLakeStats).
-        manageRung: 'system',
-        changes: [expect.objectContaining({ field: 'status', before: 'draft', after: 'active' })],
-      })
-    );
-  });
-
-  // The API-key half of the case above, on the same real chain. #1964 fixed this misattribution on
-  // the tag-toggle door; the PUT door had the identical gap - the route attached no principal, so
-  // `updateFabFile` built its `reconcileLakeTags` actor without one and the fallback named the
-  // human. Dropping the route's `auditPrincipal` line turns this red while every other case here
-  // stays green.
-  it('names the API key, not the human, when a key-driven join publishes a draft lake', async () => {
-    h.findByDatalakeTag.mockResolvedValue({ ...LAKE, status: 'draft' });
-    h.findUpdateAccessById.mockResolvedValue(fabFile({ tags: [] }));
-    makeStatefulFabFile({ id: FILE_ID, userId: 'u1', tags: [] });
-    h.computeDataLakeStats.mockResolvedValue({ fileCount: 1, totalSizeBytes: 12, totalChunkedChars: 0 });
-    h.activateIfDraft.mockResolvedValue(true);
-    const { res } = makeRes();
-
-    await runWithKey('key-abc', { tags: [{ name: META, strength: 1 }] }, res);
-
-    expect(h.recordConfigChange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: 'auto-activate',
-        principalKind: 'apiKey',
-        principalId: 'key-abc',
-        onBehalfOfUserId: 'u1',
-      })
-    );
+    expect(h.setStats).toHaveBeenCalledWith('lake-1', expect.anything());
+    expect(h.activateIfDraft).not.toHaveBeenCalled();
   });
 
   it('does not change tags and never looks a lake up when tags is omitted (a rename)', async () => {
@@ -387,21 +339,18 @@ describe('PUT /api/files/[id] - lake write authorization', () => {
     expect(h.update).not.toHaveBeenCalled();
   });
 
-  // The org-admin rung joins through the same reconciler as any other caller, so it can trigger
-  // the one-way draft -> active flip too, not only the join gate itself.
-  it('lets an org admin activate a draft org lake by joining it', async () => {
+  // The org-admin rung joins through the same reconciler as any other caller. Joining a draft
+  // lake no longer publishes it - only the explicit promote door does - so this just
+  // corrects the lake's stats and touches nothing else.
+  it('lets an org admin join a draft org lake without publishing it', async () => {
     h.administeredOrgIds = ['org-1'];
     h.findByDatalakeTag.mockResolvedValue({ ...ORG_LAKE, status: 'draft' });
     h.computeDataLakeStats.mockResolvedValue({ fileCount: 1, totalSizeBytes: 12, totalChunkedChars: 0 });
-    h.activateIfDraft.mockResolvedValue(true);
     const { res } = makeRes();
 
     await runAs('u2', { tags: [{ name: META, strength: 1 }] }, res);
 
-    expect(h.recordConfigChange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        changes: [expect.objectContaining({ field: 'status', before: 'draft', after: 'active' })],
-      })
-    );
+    expect(h.setStats).toHaveBeenCalledWith(ORG_LAKE.id, expect.anything());
+    expect(h.activateIfDraft).not.toHaveBeenCalled();
   });
 });

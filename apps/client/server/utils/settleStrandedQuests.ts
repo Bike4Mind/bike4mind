@@ -7,10 +7,16 @@ import { ABANDONED_REPLY, terminalRecoveryFor } from '@server/chatCompletion/que
  * do its job - the read crashed, or at least one quest write was dropped - from
  * a legitimate "nothing was stranded". Both settle 0, and a caller emitting a
  * bare count could not tell them apart on a dashboard.
+ *
+ * `failedExecutionIds` names which of the input executions still have an
+ * unsettled quest, so a caller whose execution write is already terminal (and
+ * so unreachable by any status-gated sweep) can persist a marker and retry
+ * later instead of losing the quest for good.
  */
 export interface SettleResult {
   settled: number;
   failed: boolean;
+  failedExecutionIds: string[];
 }
 
 /**
@@ -39,10 +45,10 @@ export async function settleStrandedQuests(
   logger: Pick<ILogger, 'warn' | 'error'>,
   logPrefix: string
 ): Promise<SettleResult> {
-  if (executionIds.length === 0) return { settled: 0, failed: false };
+  if (executionIds.length === 0) return { settled: 0, failed: false, failedExecutionIds: [] };
 
   let settled = 0;
-  let failures = 0;
+  const failedExecutionIds: string[] = [];
   try {
     const stranded = await questRepository.findUnfinishedByAgentExecutionIds(executionIds);
     for (const quest of stranded) {
@@ -58,16 +64,22 @@ export async function settleStrandedQuests(
         // later sweep revisits it: a dropped write strands that bubble for
         // good, and reporting the pass as clean would hide it from the alarm
         // that exists to catch exactly this.
-        failures += 1;
+        if (quest.agentExecutionId) failedExecutionIds.push(quest.agentExecutionId);
         logger.warn(`${logPrefix} Failed to settle stranded quest`, { questId: quest.id, err });
       }
     }
-    if (settled > 0 || failures > 0) {
-      logger.warn(`${logPrefix} Settled stranded quests`, { stranded: stranded.length, settled, failures });
+    if (settled > 0 || failedExecutionIds.length > 0) {
+      logger.warn(`${logPrefix} Settled stranded quests`, {
+        stranded: stranded.length,
+        settled,
+        failures: failedExecutionIds.length,
+      });
     }
   } catch (err) {
     logger.error(`${logPrefix} Stranded-quest settle pass failed`, { err });
-    return { settled, failed: true };
+    // The read itself failed, so there is no per-quest information - every
+    // requested execution is unaccounted for and must be treated as failed.
+    return { settled, failed: true, failedExecutionIds: [...executionIds] };
   }
-  return { settled, failed: failures > 0 };
+  return { settled, failed: failedExecutionIds.length > 0, failedExecutionIds };
 }

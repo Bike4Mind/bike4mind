@@ -65,7 +65,12 @@ export async function getEligibleConfigs({
     // Check each config to see if it's eligible for proactive messaging
     for (const config of configs) {
       try {
-        // Verify session still exists and is not deleted
+        // Verify session still exists and is not deleted. Skip rather than delete: this scan's
+        // view of session/attachment state can be stale by the time we'd act on it (e.g. a
+        // reattach + PUT landing between the read here and the delete), so deleting by
+        // (sessionId, agentId) risks destroying a config that became valid again in between.
+        // The worker (agentProactiveMessage queue handler) independently revalidates access
+        // before executing, so a truly orphaned row is inert, not exploitable - just noise.
         const session = await db.sessions.findById(config.sessionId);
         if (!session || session.deletedAt) {
           logger.info(`Skipping config ${config.id}: session not found or deleted`);

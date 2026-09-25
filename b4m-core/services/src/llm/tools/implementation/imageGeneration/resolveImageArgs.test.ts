@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { ImageModels } from '@bike4mind/common';
 import { resolveImageArgs, type ImageToolArgs } from './resolveImageArgs';
-import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
+import { OMITTED_QUALITY_TIER, PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 
 describe('resolveImageArgs', () => {
   it('lets each tool-call arg win over the client imageConfig value', () => {
@@ -75,6 +75,52 @@ describe('resolveImageArgs', () => {
     // calculator estimates at 1024x1024, which is the pre-existing (documented) behavior.
     it('still honors a client imageConfig size outside the priceable set', () => {
       expect(resolveImageArgs({ model: ImageModels.GPT_IMAGE_2, size: '2048x2048' }, {}).size).toBe('2048x2048');
+    });
+  });
+
+  // #3007: neither side naming a tier used to leave `quality` undefined, which is dropped from
+  // the OpenAI call - OpenAI then picks the effort itself and can render above the tier the
+  // reservation already held, with no reconciliation afterwards. The pin is the billed tier, so
+  // this changes no reservation, only what OpenAI is actually asked for.
+  describe('omitted quality', () => {
+    it.each([ImageModels.GPT_IMAGE_1_5, ImageModels.GPT_IMAGE_1_MINI, ImageModels.GPT_IMAGE_2])(
+      'pins %s to the tier the reservation bills',
+      model => {
+        expect(resolveImageArgs({ model }, {}).quality).toBe(OMITTED_QUALITY_TIER);
+      }
+    );
+
+    it('pins the default model when no imageConfig is supplied at all', () => {
+      expect(resolveImageArgs(undefined, {}).quality).toBe(OMITTED_QUALITY_TIER);
+    });
+
+    // gpt-image-1 is upgraded to gpt-image-2 above, so the pin has to survive that rewrite.
+    it('pins after the gpt-image-1 upgrade', () => {
+      expect(resolveImageArgs({ model: ImageModels.GPT_IMAGE_1 }, {}).quality).toBe(OMITTED_QUALITY_TIER);
+    });
+
+    it.each([ImageModels.FLUX_PRO_ULTRA, ImageModels.GEMINI_2_5_FLASH_IMAGE, 'local-image/Deliberate v2'])(
+      'leaves %s undefined - no tier concept, and not priced by this calculator',
+      model => {
+        expect(resolveImageArgs({ model } as never, {}).quality).toBeUndefined();
+      }
+    );
+
+    // 'auto' is the opt-in escape hatch the pin leaves open: it bills at the ceiling (PR #2977)
+    // and must keep reaching OpenAI unresolved.
+    it.each(['auto', 'low', 'high'] as const)('never overrides an explicit %s from the tool call', quality => {
+      expect(resolveImageArgs({ model: ImageModels.GPT_IMAGE_2 }, { quality }).quality).toBe(quality);
+    });
+
+    it('never overrides an explicit tier from the client imageConfig', () => {
+      expect(resolveImageArgs({ model: ImageModels.GPT_IMAGE_2, quality: 'low' }, {}).quality).toBe('low');
+    });
+
+    // The OpenAI SDK types these args nullable; a null must pin, not survive as a null.
+    it('treats a null tool-call quality as omitted', () => {
+      expect(resolveImageArgs({ model: ImageModels.GPT_IMAGE_2 }, { quality: null }).quality).toBe(
+        OMITTED_QUALITY_TIER
+      );
     });
   });
 });
