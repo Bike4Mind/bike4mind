@@ -146,19 +146,15 @@ const coveringPath = (source: string, hashed: readonly string[]) =>
 
 describe('MCP_VERSION covers every workspace package the MCP bundle carries', () => {
   /**
-   * copyFiles sources deliberately outside the hash. tiktoken's wasm lives under node_modules, so
-   * it is untracked and `git ls-tree` has no blob to hash - MCP_VERSION does not move when it
-   * changes. The entry may also simply be inert here: this handler's import graph does not reach
-   * tiktoken (mcpCall.ts imports only @bike4mind/mcp, which esbuild treats as external), and it is
-   * absent from the `install` list, so nothing resolves it at runtime either. Listing it records
-   * that the exclusion is deliberate, not that it is harmless.
+   * copyFiles sources deliberately outside the hash. Empty today: everything mcpHandler copies is a
+   * workspace package with tracked source.
    *
    * An entry qualifies only if it sits under `node_modules`. Untracked alone is not enough: every
    * copied `<pkg>/dist` is gitignored too, so an untracked-only rule would let a workspace package
    * be exempted here - one line in a test file, no infra diff - rather than hashed. A dependency
    * artifact has no tracked source to hash; a workspace package always does.
    */
-  const UNHASHED = ['apps/client/node_modules/tiktoken/tiktoken_bg.wasm'];
+  const UNHASHED: string[] = [];
 
   /** Read lazily so a shape change fails as a test, not as a collection error. */
   let memo: { hashed: string[]; copied: string[]; declaration: string; hashConst: string } | undefined;
