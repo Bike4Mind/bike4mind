@@ -7,6 +7,7 @@ import { withTransaction, dataLakeRepository, dataLakeAccessGrantRepository } fr
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { BadRequestError } from '@server/utils/errors';
 import { logEvent } from '@server/utils/analyticsLog';
+import { reportAndNotifyKeptPersonalLakeShares } from '@server/utils/keptPersonalLakeSharesNotifier';
 import {
   OrganizationEvents,
   toSafeUser,
@@ -116,6 +117,10 @@ const handler = baseApi()
         }
       )
     );
+
+    // After the commit, as on the removal route. The leaver gets no count back: they already know
+    // what they were shared.
+    await reportAndNotifyKeptPersonalLakeShares(req.user.id, organization, req.logger);
 
     await logEvent(
       {

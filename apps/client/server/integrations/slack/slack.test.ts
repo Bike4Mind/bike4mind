@@ -51,7 +51,13 @@ vi.mock('@server/utils/cloudwatch', () => ({
   recordFeedbackDeliverySkipped: vi.fn(),
 }));
 
-import { resolveSlackWebhookUrl, resolveFeedbackSlackRoute, postFeedbackToSlack } from './slack';
+import {
+  resolveSlackWebhookUrl,
+  resolveFeedbackSlackRoute,
+  postFeedbackToSlack,
+  postEmailMirrorToSlack,
+  EMAIL_MIRROR_TIMEOUT_MS,
+} from './slack';
 import { Logger } from '@bike4mind/observability';
 import {
   recordFeedbackDeliverySuccess,
@@ -366,5 +372,32 @@ describe('postFeedbackToSlack', () => {
     const [, body] = mocks.post.mock.calls[0];
     expect(body.text).not.toContain(injected);
     expect(body.text).toContain('&lt;https://evil.example/|Open record&gt;');
+  });
+});
+
+describe('postEmailMirrorToSlack', () => {
+  const payload = { to: 'a@example.com', subject: 'Hi', emailType: 'other', bodyPreview: 'preview' } as const;
+
+  beforeEach(() => {
+    mocks.post.mockReset();
+    mocks.post.mockResolvedValue({ status: 200 });
+    vi.mocked(Logger.error).mockClear();
+  });
+
+  it('posts with a bounded timeout, because the mailer awaits this inside a request', async () => {
+    mocks.getSettingsMap.mockResolvedValue({ SlackEmailAuditWebhookUrl: 'https://hooks.slack.com/services/audit' });
+    await postEmailMirrorToSlack(payload);
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    const [url, , options] = mocks.post.mock.calls[0];
+    expect(url).toBe('https://hooks.slack.com/services/audit');
+    expect(options.timeout).toBe(EMAIL_MIRROR_TIMEOUT_MS);
+    expect(EMAIL_MIRROR_TIMEOUT_MS).toBeLessThan(60_000);
+  });
+
+  it('swallows a timed-out post so the email result is unchanged', async () => {
+    mocks.getSettingsMap.mockResolvedValue({ SlackEmailAuditWebhookUrl: 'https://hooks.slack.com/services/audit' });
+    mocks.post.mockRejectedValue(Object.assign(new Error('timeout of 5000ms exceeded'), { code: 'ECONNABORTED' }));
+    await expect(postEmailMirrorToSlack(payload)).resolves.toBeUndefined();
+    expect(Logger.error).toHaveBeenCalledTimes(1);
   });
 });

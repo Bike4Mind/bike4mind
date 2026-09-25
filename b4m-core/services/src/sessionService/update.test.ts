@@ -18,6 +18,7 @@ import { updateSession } from './update';
 import { getCachedSignedUrl } from '@bike4mind/utils';
 import { updateShareableFiles } from '../projectService';
 import { IUserDocument } from '@bike4mind/common';
+import { NotFoundError } from '@bike4mind/utils';
 
 // ObjectId-shaped: updateSession drops knowledgeIds that cannot address a row, and the lake
 // derivation reads them through `_id: { $in: ... }`.
@@ -54,7 +55,7 @@ describe('updateSession — signed-URL cache pre-warm gate', () => {
             name: 'Session',
           }),
         },
-        update: vi.fn(),
+        updateWithUpdateAccess: vi.fn((_user: unknown, data: unknown) => Promise.resolve(data)),
       },
       projects: {
         // Empty so the per-project `updateShareableFiles` loop is a no-op; this test only
@@ -109,7 +110,7 @@ describe('updateSession - forceKnowledgeRetrieval passthrough', () => {
   const user = { id: 'user-1' } as IUserDocument;
 
   const makeAdapters = (existing: Record<string, unknown>) => {
-    const update = vi.fn();
+    const update = vi.fn((_user: unknown, data: unknown) => Promise.resolve(data));
     return {
       update,
       adapters: {
@@ -125,7 +126,7 @@ describe('updateSession - forceKnowledgeRetrieval passthrough', () => {
                 ...existing,
               }),
             },
-            update,
+            updateWithUpdateAccess: update,
           },
           projects: { findAllBySessionId: vi.fn().mockResolvedValue([]) },
           fabFiles: { findAllByIds: vi.fn().mockResolvedValue([]) },
@@ -140,19 +141,31 @@ describe('updateSession - forceKnowledgeRetrieval passthrough', () => {
 
   beforeEach(() => vi.clearAllMocks());
 
+  it('re-checks update access at write time as the same user, and 404s instead of returning the stale read', async () => {
+    // A share revocation or soft-delete landing between the authorizing read and the write makes
+    // the conditional write match nothing. Returning the read-time doc would report success.
+    const { update, adapters } = makeAdapters({});
+    update.mockResolvedValueOnce(null);
+    await expect(updateSession(user, { id: 'session-1', name: 'Renamed' }, adapters)).rejects.toBeInstanceOf(
+      NotFoundError
+    );
+    // Same user as the read, and no opts: global write stays off, matching the read.
+    expect(update).toHaveBeenCalledExactlyOnceWith(user, expect.objectContaining({ id: 'session-1', name: 'Renamed' }));
+  });
+
   it('persists forceKnowledgeRetrieval: true onto the session', async () => {
     const { update, adapters } = makeAdapters({ forceKnowledgeRetrieval: false });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exercising the new schema field before types settle
     await updateSession(user, { id: 'session-1', forceKnowledgeRetrieval: true } as any, adapters);
     expect(update).toHaveBeenCalledTimes(1);
-    expect(update.mock.calls[0][0]).toMatchObject({ forceKnowledgeRetrieval: true });
+    expect(update.mock.calls[0][1]).toMatchObject({ forceKnowledgeRetrieval: true });
   });
 
   it('persists forceKnowledgeRetrieval: false (toggling off), not the old truthy value', async () => {
     const { update, adapters } = makeAdapters({ forceKnowledgeRetrieval: true });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exercising the new schema field before types settle
     await updateSession(user, { id: 'session-1', forceKnowledgeRetrieval: false } as any, adapters);
-    expect(update.mock.calls[0][0]).toMatchObject({ forceKnowledgeRetrieval: false });
+    expect(update.mock.calls[0][1]).toMatchObject({ forceKnowledgeRetrieval: false });
   });
 
   it('leaves forceKnowledgeRetrieval untouched when the field is omitted', async () => {
@@ -160,7 +173,7 @@ describe('updateSession - forceKnowledgeRetrieval passthrough', () => {
     await updateSession(user, { id: 'session-1', name: 'Renamed' }, adapters);
     // Omitted -> not written at all, so the stored value is left untouched (a targeted
     // write, not a round-trip of the whole session).
-    const saved = update.mock.calls[0][0];
+    const saved = update.mock.calls[0][1];
     expect(saved.name).toBe('Renamed');
     expect(saved).not.toHaveProperty('forceKnowledgeRetrieval');
   });
@@ -173,7 +186,7 @@ describe('updateSession - forceKnowledgeRetrieval passthrough', () => {
       { id: 'session-1', surface: 'datalake', forceKnowledgeRetrieval: true } as any,
       adapters
     );
-    const saved = update.mock.calls[0][0];
+    const saved = update.mock.calls[0][1];
     expect(saved.forceKnowledgeRetrieval).toBe(true);
     // surface is stripped by the allow-list AND never round-tripped, so it is absent from
     // the targeted write and the stored 'opti' is left untouched.
@@ -213,7 +226,7 @@ describe('updateSession - project propagation opt-out', () => {
                 name: 'Session',
               }),
             },
-            update: vi.fn(),
+            updateWithUpdateAccess: vi.fn((_user: unknown, data: unknown) => Promise.resolve(data)),
           },
           projects: {
             findAllBySessionId: vi.fn().mockResolvedValue([project]),
@@ -259,8 +272,8 @@ describe('updateSession - project propagation opt-out', () => {
     expect(adapters.db.projects.update).not.toHaveBeenCalled();
     expect(updateShareableFiles).not.toHaveBeenCalled();
     // The session itself still records the file - only the project fan-out is skipped.
-    expect(adapters.db.sessions.update).toHaveBeenCalledOnce();
-    expect(adapters.db.sessions.update.mock.calls[0][0].knowledgeIds).toEqual([NEW_FILE]);
+    expect(adapters.db.sessions.updateWithUpdateAccess).toHaveBeenCalledOnce();
+    expect(adapters.db.sessions.updateWithUpdateAccess.mock.calls[0][1].knowledgeIds).toEqual([NEW_FILE]);
   });
 
   it('propagates only the newly added file, not the whole list', async () => {
@@ -317,7 +330,7 @@ describe('updateSession - project propagation opt-out', () => {
     expect(project.fileIds).toEqual(['already-there']);
     expect(updateShareableFiles).not.toHaveBeenCalled();
     // The session itself still records it; only the project grant is refused.
-    expect(adapters.db.sessions.update).toHaveBeenCalledOnce();
+    expect(adapters.db.sessions.updateWithUpdateAccess).toHaveBeenCalledOnce();
   });
 
   it('propagates when propagateToProjects is explicitly true', async () => {
@@ -359,7 +372,7 @@ describe('updateSession - project propagation opt-out', () => {
         adapters
       );
 
-      const written = adapters.db.sessions.update.mock.calls[0][0];
+      const written = adapters.db.sessions.updateWithUpdateAccess.mock.calls[0][1];
       expect(written.knowledgeIds).toEqual([NEW_FILE]);
       expect(written.name).toBe('renamed');
     });
@@ -370,7 +383,7 @@ describe('updateSession - project propagation opt-out', () => {
 
       // Field absent -> not written at all, so the stored list is left untouched rather
       // than round-tripped. A stronger "unchanged, not cleared" guarantee than before.
-      expect(adapters.db.sessions.update.mock.calls[0][0]).not.toHaveProperty('knowledgeIds');
+      expect(adapters.db.sessions.updateWithUpdateAccess.mock.calls[0][1]).not.toHaveProperty('knowledgeIds');
     });
   });
 });
@@ -384,7 +397,7 @@ describe('updateSession - lake-scope derivation on attach', () => {
   const user = { id: 'user-1' } as IUserDocument;
 
   const makeAdapters = (existing: Record<string, unknown>, lakeFiles: Array<Record<string, unknown>>) => {
-    const update = vi.fn();
+    const update = vi.fn((_user: unknown, data: unknown) => Promise.resolve(data));
     return {
       update,
       adapters: {
@@ -400,7 +413,7 @@ describe('updateSession - lake-scope derivation on attach', () => {
                 ...existing,
               }),
             },
-            update,
+            updateWithUpdateAccess: update,
           },
           projects: { findAllBySessionId: vi.fn().mockResolvedValue([]) },
           fabFiles: {
@@ -423,7 +436,7 @@ describe('updateSession - lake-scope derivation on attach', () => {
 
     await updateSession(user, { id: 'session-1', knowledgeIds: [LAKE_FILE_ID] } as never, adapters as never);
 
-    expect(update.mock.calls[0][0]).toMatchObject({ retrievalTags: ['datalake:acme'] });
+    expect(update.mock.calls[0][1]).toMatchObject({ retrievalTags: ['datalake:acme'] });
   });
 
   it('derives nothing from a personal file, leaving the notebook unscoped', async () => {
@@ -431,7 +444,7 @@ describe('updateSession - lake-scope derivation on attach', () => {
 
     await updateSession(user, { id: 'session-1', knowledgeIds: [PERSONAL_FILE_ID] } as never, adapters as never);
 
-    expect(update.mock.calls[0][0].retrievalTags).toBeUndefined();
+    expect(update.mock.calls[0][1].retrievalTags).toBeUndefined();
   });
 
   /**
@@ -451,8 +464,8 @@ describe('updateSession - lake-scope derivation on attach', () => {
       adapters as never
     );
 
-    expect(update.mock.calls[0][0].retrievalTags).toBeUndefined();
-    expect(update.mock.calls[0][0].knowledgeIds).toEqual([LAKE_FILE_ID]);
+    expect(update.mock.calls[0][1].retrievalTags).toBeUndefined();
+    expect(update.mock.calls[0][1].knowledgeIds).toEqual([LAKE_FILE_ID]);
   });
 
   it('still derives when a lake file is attached beside an unusable id', async () => {
@@ -466,7 +479,7 @@ describe('updateSession - lake-scope derivation on attach', () => {
       adapters as never
     );
 
-    expect(update.mock.calls[0][0]).toMatchObject({ retrievalTags: ['datalake:acme'] });
+    expect(update.mock.calls[0][1]).toMatchObject({ retrievalTags: ['datalake:acme'] });
   });
 
   it('derives nothing for a session whose explicit scope selected no lake', async () => {
@@ -478,7 +491,7 @@ describe('updateSession - lake-scope derivation on attach', () => {
 
     await updateSession(user, { id: 'session-1', knowledgeIds: [LAKE_FILE_ID] } as never, adapters as never);
 
-    expect(update.mock.calls[0][0].retrievalTags).toBeUndefined();
+    expect(update.mock.calls[0][1].retrievalTags).toBeUndefined();
   });
 
   it('never overwrites a scope the session already has', async () => {
@@ -490,7 +503,7 @@ describe('updateSession - lake-scope derivation on attach', () => {
 
     // Derivation is skipped, so retrievalTags is never in the targeted write - the existing
     // scope is left untouched rather than overwritten (or round-tripped).
-    expect(update.mock.calls[0][0]).not.toHaveProperty('retrievalTags');
+    expect(update.mock.calls[0][1]).not.toHaveProperty('retrievalTags');
   });
 
   /**
@@ -510,7 +523,7 @@ describe('updateSession - lake-scope derivation on attach', () => {
         adapters as never
       );
 
-      expect(update.mock.calls[0][0]).toMatchObject({
+      expect(update.mock.calls[0][1]).toMatchObject({
         retrievalTags: ['datalake:research', 'datalake:legal'],
         lakeScopeExplicit: true,
       });
@@ -523,7 +536,7 @@ describe('updateSession - lake-scope derivation on attach', () => {
 
       // Without the flag, resolveLakeMemoryScope reads [] as "no scope expressed" and grounds on
       // EVERY entitled lake - the exact opposite of what the caller asked for.
-      expect(update.mock.calls[0][0]).toMatchObject({ retrievalTags: [], lakeScopeExplicit: true });
+      expect(update.mock.calls[0][1]).toMatchObject({ retrievalTags: [], lakeScopeExplicit: true });
     });
 
     it('clears the scope on null, so retrieval falls back to every reachable lake', async () => {
@@ -531,7 +544,7 @@ describe('updateSession - lake-scope derivation on attach', () => {
 
       await updateSession(user, { id: 'session-1', lakeScope: null } as never, adapters as never);
 
-      expect(update.mock.calls[0][0]).toMatchObject({ retrievalTags: [], lakeScopeExplicit: false });
+      expect(update.mock.calls[0][1]).toMatchObject({ retrievalTags: [], lakeScopeExplicit: false });
     });
 
     it('leaves the stored scope alone when the field is omitted', async () => {
@@ -539,8 +552,8 @@ describe('updateSession - lake-scope derivation on attach', () => {
 
       await updateSession(user, { id: 'session-1', name: 'renamed' } as never, adapters as never);
 
-      expect(update.mock.calls[0][0]).not.toHaveProperty('retrievalTags');
-      expect(update.mock.calls[0][0]).not.toHaveProperty('lakeScopeExplicit');
+      expect(update.mock.calls[0][1]).not.toHaveProperty('retrievalTags');
+      expect(update.mock.calls[0][1]).not.toHaveProperty('lakeScopeExplicit');
     });
 
     /**
@@ -562,8 +575,8 @@ describe('updateSession - lake-scope derivation on attach', () => {
         adapters as never
       );
 
-      expect(update.mock.calls[0][0]).not.toHaveProperty('retrievalTags');
-      expect(update.mock.calls[0][0]).not.toHaveProperty('lakeScopeExplicit');
+      expect(update.mock.calls[0][1]).not.toHaveProperty('retrievalTags');
+      expect(update.mock.calls[0][1]).not.toHaveProperty('lakeScopeExplicit');
     });
 
     it('lets a caller-set scope win over derivation when one write does both', async () => {
@@ -578,7 +591,7 @@ describe('updateSession - lake-scope derivation on attach', () => {
         adapters as never
       );
 
-      expect(update.mock.calls[0][0]).toMatchObject({
+      expect(update.mock.calls[0][1]).toMatchObject({
         retrievalTags: ['datalake:chosen'],
         lakeScopeExplicit: true,
       });
@@ -595,7 +608,7 @@ describe('updateSession - lake-scope derivation on attach', () => {
         adapters as never
       );
 
-      expect(update.mock.calls[0][0]).toMatchObject({ retrievalTags: [], lakeScopeExplicit: false });
+      expect(update.mock.calls[0][1]).toMatchObject({ retrievalTags: [], lakeScopeExplicit: false });
     });
   });
 });

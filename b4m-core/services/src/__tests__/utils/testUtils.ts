@@ -184,6 +184,7 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
   vi.mocked({
     ...createMockRepository<ISessionDocument>(),
     shareable: createMockShareableRepository<ISessionDocument>(),
+    updateWithUpdateAccess: vi.fn(),
     upsertByOpenaiConversationId: vi.fn() as MockedFunction<ISessionRepository['upsertByOpenaiConversationId']>,
     upsertByClaudeConversationId: vi.fn() as MockedFunction<ISessionRepository['upsertByClaudeConversationId']>,
     search: vi.fn(),

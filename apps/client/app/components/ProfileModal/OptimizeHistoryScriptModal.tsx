@@ -1,3 +1,4 @@
+import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import { FC, useState } from 'react';
 import { Modal, ModalDialog, Typography, Stack, Button, Box, IconButton, Tooltip } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
@@ -5,8 +6,6 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DownloadIcon from '@mui/icons-material/Download';
 import CheckIcon from '@mui/icons-material/Check';
 import { toast } from 'sonner';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter/dist/cjs';
-import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import { APP_NAME } from '@client/config/general';
 
 interface OptimizeHistoryScriptModalProps {
@@ -410,19 +409,12 @@ const OptimizeHistoryScriptModal: FC<OptimizeHistoryScriptModalProps> = ({ open,
             borderRadius: 'sm',
           }}
         >
-          <SyntaxHighlighter
+          <HighlightedCode
+            code={SCRIPT_CONTENT}
             language="python"
-            // @ts-ignore
-            style={oneDark}
-            customStyle={{
-              margin: 0,
-              fontSize: '0.875rem',
-              maxHeight: '100%',
-            }}
+            customStyle={{ maxHeight: '100%' }}
             showLineNumbers
-          >
-            {SCRIPT_CONTENT}
-          </SyntaxHighlighter>
+          />
         </Box>
       </ModalDialog>
     </Modal>

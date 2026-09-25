@@ -48,7 +48,7 @@ describe('RetrievalCoverageBanner', () => {
     );
   });
 
-  it('lists each reason behind the disclosure when reasons are supplied', () => {
+  it('lists each reason outright when reasons are supplied', () => {
     render(
       <Wrapper>
         <RetrievalCoverageBanner
@@ -62,9 +62,9 @@ describe('RetrievalCoverageBanner', () => {
     expect(details.textContent).toContain('2 document(s) excluded');
   });
 
-  it('omits the disclosure entirely when there are no reasons', () => {
-    // An empty <details> renders as a bare, clickable "Why the scan was partial" that opens onto
-    // nothing. The banner still stands on its own without it.
+  it('omits the reasons section entirely when there are no reasons', () => {
+    // Otherwise the "Why the scan was partial" heading stands over an empty list. The banner
+    // still stands on its own without it.
     render(
       <Wrapper>
         <RetrievalCoverageBanner reasons={[]} />

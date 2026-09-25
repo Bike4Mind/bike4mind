@@ -79,6 +79,8 @@ vi.mock('@bike4mind/database', () => ({
   TelemetryAuditLogModel: { create: vi.fn().mockResolvedValue(undefined) },
 }));
 
+vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
+
 import handler from '../update';
 
 const run = ({
@@ -139,6 +141,7 @@ describe('PUT /api/users/:id/update - lockout guard', () => {
     await promise;
     expect(res._getStatusCode()).toBe(200);
     expect(mockAdminUpdateUser).toHaveBeenCalled();
+    expect(mockAdminUpdateUser.mock.calls[0][2].db.userApiKeys).toBeDefined();
   });
 
   it('does not run the lockout check at all for a non-demote update (isAdmin absent from body)', async () => {

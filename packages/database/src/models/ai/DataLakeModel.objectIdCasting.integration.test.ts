@@ -163,6 +163,17 @@ describe('findPublicLakes', () => {
   });
 });
 
+describe('findByIds', () => {
+  it('drops an uncastable id and returns the rest', async () => {
+    const lakes = await dataLakeRepository.findByIds([JUNK_ID, grantOnlyId]);
+    expect(lakes.map(l => String(l.id))).toEqual([grantOnlyId]);
+  });
+
+  it('resolves to nothing when no id is castable', async () => {
+    expect(await dataLakeRepository.findByIds([JUNK_ID])).toEqual([]);
+  });
+});
+
 describe('findBySlugAmongIds', () => {
   it('resolves the slug when the candidate set also holds an uncastable id', async () => {
     const lake = await dataLakeRepository.findBySlugAmongIds('grant-only', [JUNK_ID, grantOnlyId]);

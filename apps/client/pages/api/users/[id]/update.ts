@@ -9,6 +9,7 @@ import {
   withTransaction,
   TelemetryAuditLogModel,
 } from '@bike4mind/database';
+import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userService } from '@bike4mind/services';
 import { ApiKeyScope, redactUserSecretsForSelf } from '@bike4mind/common';
 import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
@@ -157,6 +158,7 @@ const handler = baseApi().put(
             users: userRepository,
             organizations: Organization,
             friendship: friendshipRepository,
+            userApiKeys: userApiKeyRepository,
             // Audits admin `currentCredits` changes as CreditTransactions.
             creditTransactions: creditTransactionRepository,
           },
