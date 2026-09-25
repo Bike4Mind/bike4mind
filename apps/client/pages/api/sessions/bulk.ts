@@ -7,6 +7,7 @@ import {
   projectRepository,
   fabFileRepository,
   sessionAgentConfigRepository,
+  userRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -46,8 +47,10 @@ const handler = baseApi()
                     sessions: sessionRepository,
                     projects: projectRepository,
                     fabFiles: fabFileRepository,
+                    users: userRepository,
                     sessionAgentConfigs: sessionAgentConfigRepository,
                   },
+                  logger: req.logger,
                 }
               )
             );
