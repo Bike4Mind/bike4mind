@@ -3,12 +3,17 @@ import { promises, existsSync } from 'fs';
 import { mkdtemp, writeFile, readFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { createHash } from 'crypto';
 import {
   editLocalFileTool,
   resolveEditLocalFile,
   FuzzyEditConfirmationRequiredError,
   isFuzzyEditConfirmationRequired,
 } from './index';
+
+function sha256(content: string): string {
+  return createHash('sha256').update(content, 'utf-8').digest('hex');
+}
 
 // Silent logger; the tool only touches context.logger and context.allowedDirectories.
 const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
@@ -121,5 +126,132 @@ describe('editLocalFile: fuzzy writes are bound to the confirmed file snapshot (
     // Read-only: the file is unchanged after resolving.
     expect(await readFile(file, 'utf-8')).toBe('hello world\n');
     expect(existsSync(file)).toBe(true);
+  });
+});
+
+describe('editLocalFile: the write path reuses the gate-resolved span, but always reads fresh', () => {
+  it('applies a gateSnapshot whose span/replacement genuinely correspond to a unique old_string/new_string match', async () => {
+    const dir = await freshDir('b4m-reuse-');
+    const file = join(dir, 'note.txt');
+    await writeFile(file, 'hello world\n');
+    const tool = editTool([dir]);
+
+    const plan = await resolveEditLocalFile({ path: file, old_string: 'hello world', new_string: 'hi world' }, [dir]);
+    const message = await tool.toolFn({
+      path: file,
+      old_string: 'hello world',
+      new_string: 'hi world',
+      gateSnapshot: { contentHash: plan.contentHash, resolvedEdit: plan.resolvedEdit },
+    });
+
+    expect(message).toContain('File edited successfully');
+    expect(await readFile(file, 'utf-8')).toBe('hi world\n');
+  });
+
+  it('rejects a gateSnapshot pointing at one of several occurrences of old_string (ambiguous - direct-call bypass)', async () => {
+    const dir = await freshDir('b4m-ambiguous-snapshot-');
+    const file = join(dir, 'note.txt');
+    const content = 'hello world\nhello world\n';
+    await writeFile(file, content);
+    const tool = editTool([dir]);
+
+    // old_string occurs twice - a fresh resolveEdit() would throw "ambiguous match".
+    // A snapshot whose matchedText/replacement equal old_string/new_string verbatim,
+    // with real bytes at the SECOND occurrence, must not bypass that rejection - a
+    // caller reaching this tool directly (no CLI wrapper) could otherwise supply the
+    // real hash and pick whichever occurrence it wants.
+    const secondOccurrenceIndex = 'hello world\n'.length;
+    await expect(
+      tool.toolFn({
+        path: file,
+        old_string: 'hello world',
+        new_string: 'hi world',
+        gateSnapshot: {
+          contentHash: sha256(content),
+          resolvedEdit: { startIndex: secondOccurrenceIndex, matchedText: 'hello world', replacement: 'hi world' },
+        },
+      })
+    ).rejects.toThrow(/occurrences/i);
+    expect(await readFile(file, 'utf-8')).toBe(content);
+  });
+
+  it('still reads the file fresh and re-resolves when the gateSnapshot hash no longer matches (TOCTOU)', async () => {
+    const dir = await freshDir('b4m-stale-snapshot-');
+    const file = join(dir, 'note.txt');
+    await writeFile(file, 'hello world\n');
+    const tool = editTool([dir]);
+
+    const plan = await resolveEditLocalFile({ path: file, old_string: 'hello world', new_string: 'hi world' }, [dir]);
+    // The file changes after the gate resolved it - the snapshot's hash is now stale.
+    await writeFile(file, 'hello there\n');
+
+    const message = await tool.toolFn({
+      path: file,
+      old_string: 'hello there',
+      new_string: 'hi there',
+      gateSnapshot: { contentHash: plan.contentHash, resolvedEdit: plan.resolvedEdit },
+    });
+
+    expect(message).toContain('File edited successfully');
+    expect(await readFile(file, 'utf-8')).toBe('hi there\n');
+  });
+
+  it('rejects a gateSnapshot whose hash matches but whose resolvedEdit span is inconsistent with the real content', async () => {
+    const dir = await freshDir('b4m-inconsistent-span-');
+    const file = join(dir, 'note.txt');
+    await writeFile(file, 'hello world\n');
+    const tool = editTool([dir]);
+
+    // A real contentHash, paired with a resolvedEdit that was never actually resolved
+    // from it - matchedText does not correspond to the real bytes at startIndex.
+    // Simulates a gateSnapshot reaching the write path with a span that was never
+    // computed against the current content.
+    const plan = await resolveEditLocalFile({ path: file, old_string: 'hello world', new_string: 'hi world' }, [dir]);
+    const mismatchedSnapshot = {
+      contentHash: plan.contentHash,
+      resolvedEdit: { startIndex: 0, matchedText: 'totally made up span', replacement: 'unexpected replacement' },
+    };
+
+    const message = await tool.toolFn({
+      path: file,
+      old_string: 'hello world',
+      new_string: 'hi world',
+      gateSnapshot: mismatchedSnapshot,
+    });
+
+    // The inconsistent span is rejected (matchedText is not the real bytes at
+    // startIndex), so the write falls back to a genuine resolveEdit() over
+    // old_string/new_string.
+    expect(message).toContain('File edited successfully');
+    expect(await readFile(file, 'utf-8')).toBe('hi world\n');
+  });
+
+  it("rejects a forged gateSnapshot whose span/replacement do not correspond to this call's old_string/new_string (direct-call bypass)", async () => {
+    const dir = await freshDir('b4m-forged-snapshot-');
+    const file = join(dir, 'note.txt');
+    const content = 'hello world\n';
+    await writeFile(file, content);
+    const tool = editTool([dir]);
+
+    // A real contentHash for real, currently-present bytes ('hello world' at index 0
+    // passes the real-bytes check) - but old_string here is 'absent', which never
+    // matched anything: this snapshot was never produced by resolving old_string/
+    // new_string. A caller hitting this tool directly (bypassing the CLI wrapper's
+    // gateSnapshot stripping) could forge exactly this to write arbitrary content at
+    // an arbitrary offset with no old_string match at all.
+    const forgedSnapshot = {
+      contentHash: sha256(content),
+      resolvedEdit: { startIndex: 0, matchedText: 'hello world', replacement: 'unexpected' },
+    };
+
+    await expect(
+      tool.toolFn({
+        path: file,
+        old_string: 'absent',
+        new_string: 'does not matter',
+        gateSnapshot: forgedSnapshot,
+      })
+    ).rejects.toThrow(/not found/i);
+    expect(await readFile(file, 'utf-8')).toBe(content);
   });
 });
