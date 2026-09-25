@@ -40,7 +40,7 @@ import {
   replaceLastToolResultObservationOpenAI,
   getLatestToolCallIdOpenAI,
 } from './backend';
-import { handleToolResultStreaming } from './toolStreamingHelper';
+import { handleToolResultStreaming, createRecursiveArtifactGuard } from './toolStreamingHelper';
 import { DispatchModel } from './dispatchModel';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
@@ -50,11 +50,10 @@ import {
   isRetryableError,
   stripToolArtifactMarkup,
   TOOL_ARTIFACT_EMITTERS,
+  ARTIFACT_DELIVERED_PLACEHOLDER,
+  ARTIFACT_REMOVED_PLACEHOLDER,
 } from '@bike4mind/common';
 import { normalizeOpenAIFinishReason, normalizeOpenAIResponsesStopReason } from './stopReason';
-
-const ARTIFACT_DELIVERED_PLACEHOLDER = '[Artifact rendered and delivered to user]';
-const ARTIFACT_REMOVED_PLACEHOLDER = '[Artifact markup removed]';
 
 // Type for the reasoning_effort parameter that can be added to ChatCompletionCreateParams
 // OpenAI API expects reasoning_effort as a top-level string, not a nested object
@@ -1310,6 +1309,12 @@ export class OpenAIBackend implements ICompletionBackend {
                   }
             );
 
+            // The real, top-level callback - pinned through every recursion level via
+            // _internal.artifactCallback - so a CHAINED MCP tool call's artifact always reaches
+            // the client directly instead of the (possibly buffering) recursive guard below.
+            // See anthropicBackend for the same pattern.
+            const artifactCallback = options._internal?.artifactCallback ?? callback;
+
             // Inject results in original order; track artifact streaming for deduplication.
             let anyArtifactWasStreamed = false;
             // Keep tools if any resolved tool was an MCP tool - regardless of execution outcome.
@@ -1343,15 +1348,16 @@ export class OpenAIBackend implements ICompletionBackend {
                 resultStr.substring(0, 200) + '...'
               );
 
-              // Track per-outcome whether this specific tool produced artifacts,
-              // so we only sanitize the tool result that actually had artifacts streamed.
+              // Track per-outcome whether this specific tool streamed an artifact, which picks
+              // the placeholder the model sees (delivered vs removed) - every result is still
+              // sanitized below, not only the ones that streamed.
               let thisToolHadArtifact = false;
 
               // Stream artifact-generating tool results immediately to the client.
               await handleToolResultStreaming(outcome.name, outcome.result, async results => {
                 thisToolHadArtifact = true;
                 anyArtifactWasStreamed = true;
-                await callback(results, {
+                await artifactCallback(results, {
                   inputTokens: 0,
                   outputTokens: 0,
                   toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
@@ -1375,20 +1381,11 @@ export class OpenAIBackend implements ICompletionBackend {
               );
             }
 
-            // Make one recursive call after all tools have been processed.
-            // If any artifact was already streamed, buffer and strip duplicates from recursive response.
-            let recursiveBuffer = '';
-            let recursiveMeta: CompletionInfo = { inputTokens: 0, outputTokens: 0 };
-            const recursiveCallback: typeof callback = anyArtifactWasStreamed
-              ? async (results, meta) => {
-                  for (const r of results) {
-                    if (r != null) recursiveBuffer += r;
-                  }
-                  if (meta.inputTokens || meta.outputTokens) {
-                    recursiveMeta = { ...meta };
-                  }
-                }
-              : callback;
+            // Make one recursive call after all tools have been processed. If any artifact was
+            // already streamed, buffer the response and strip any duplicate artifact markup the
+            // model echoes back in it before it reaches the client. A genuinely NEW artifact from
+            // a chained MCP tool call bypasses this guard entirely via artifactCallback above.
+            const guard = anyArtifactWasStreamed ? createRecursiveArtifactGuard(callback) : undefined;
 
             // Keep tools available for MCP tools (enables chaining); remove for built-in tools
             // Carry this turn's tokens forward so the terminal recursive call's
@@ -1411,18 +1408,14 @@ export class OpenAIBackend implements ICompletionBackend {
                   accumInputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
                   accumOutputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
                   accumCacheReadTokens: totalCacheReadTokens,
+                  artifactCallback,
                 },
               },
-              recursiveCallback,
+              guard?.callback ?? callback,
               toolsUsed
             );
 
-            if (anyArtifactWasStreamed && recursiveBuffer) {
-              const cleaned = recursiveBuffer.replace(/<artifact(?:\s[^>]*)?>[\s\S]*?<\/artifact>/gi, '').trim();
-              if (cleaned) {
-                await callback([cleaned], recursiveMeta);
-              }
-            }
+            if (guard) await guard.flush();
 
             return;
           } else {
@@ -1694,6 +1687,9 @@ export class OpenAIBackend implements ICompletionBackend {
               }
         );
 
+        // See the streaming branch above for why artifactCallback exists.
+        const artifactCallback = options._internal?.artifactCallback ?? callback;
+
         // Inject results in original order; track whether any artifact was streamed
         // so we can strip duplicate artifacts from GPT's recursive follow-up.
         let anyArtifactWasStreamed = false;
@@ -1722,8 +1718,9 @@ export class OpenAIBackend implements ICompletionBackend {
           const resultStr = outcome.result.toString();
           this.logger.debug(`[Tool Result] Tool executed for ${outcome.name}:`, resultStr.substring(0, 200) + '...');
 
-          // Track per-outcome whether this specific tool produced artifacts,
-          // so we only sanitize the tool result that actually had artifacts streamed.
+          // Track per-outcome whether this specific tool streamed an artifact, which picks the
+          // placeholder the model sees (delivered vs removed) - every result is still sanitized
+          // below, not only the ones that streamed.
           let thisToolHadArtifact = false;
 
           // Stream artifact-generating tool results immediately to the client.
@@ -1733,7 +1730,7 @@ export class OpenAIBackend implements ICompletionBackend {
           await handleToolResultStreaming(outcome.name, outcome.result, async results => {
             thisToolHadArtifact = true;
             anyArtifactWasStreamed = true;
-            await callback(results, {
+            await artifactCallback(results, {
               ...splitCacheInclusiveInput(
                 accumInputTokens + inputTokens,
                 accumCacheReadTokens + cachedTokensFromStream
@@ -1759,74 +1756,39 @@ export class OpenAIBackend implements ICompletionBackend {
           );
         }
 
-        // If an artifact was already streamed to the client, buffer GPT's recursive
-        // response and strip any <artifact> tags it may reconstruct from tool call
-        // parameters. GPT models can rebuild artifacts even when the tool result is
-        // sanitized, because they retain the original tool call arguments in context.
-        if (anyArtifactWasStreamed) {
-          let recursiveBuffer = '';
-          let recursiveMeta: CompletionInfo = { inputTokens: 0, outputTokens: 0 };
+        // If an artifact was already streamed to the client, buffer GPT's recursive response
+        // and strip any duplicate artifact markup it echoes back in it (GPT can reconstruct one
+        // even when the tool result is sanitized, since it retains the original tool call
+        // arguments in context) before ever reaching the client. A genuinely NEW artifact from a
+        // chained MCP tool call bypasses this guard entirely via artifactCallback above.
+        const guard = anyArtifactWasStreamed ? createRecursiveArtifactGuard(callback) : undefined;
 
-          // Carry this turn's tokens forward so the recursive call's emits
-          // carry the full multi-turn billable total (each OpenAI API call is
-          // billed independently - accumulating is required for correct
-          // credit attribution).
-          await this.complete(
-            model,
-            messages,
-            {
-              ...options,
-              tools: anyMcpTool ? options.tools : undefined,
-              // First-turn-only tool_choice: after tools run, let the model synthesize.
-              tool_choice: 'auto',
-              _internal: {
-                ...options._internal,
-                toolCallCount: toolCallCount + 1,
-                accumInputTokens: accumInputTokens + inputTokens,
-                accumOutputTokens: accumOutputTokens + outputTokens,
-                accumCacheReadTokens: accumCacheReadTokens + cachedTokensFromStream,
-              },
+        // Keep tools available for MCP tools (enables chaining); remove for built-in tools.
+        // Carry this turn's tokens forward so the recursive call's emits carry the full
+        // multi-turn billable total (each OpenAI API call is billed independently -
+        // accumulating is required for correct credit attribution).
+        await this.complete(
+          model,
+          messages,
+          {
+            ...options,
+            tools: anyMcpTool ? options.tools : undefined,
+            // First-turn-only tool_choice: after tools run, let the model synthesize.
+            tool_choice: 'auto',
+            _internal: {
+              ...options._internal,
+              toolCallCount: toolCallCount + 1,
+              accumInputTokens: accumInputTokens + inputTokens,
+              accumOutputTokens: accumOutputTokens + outputTokens,
+              accumCacheReadTokens: accumCacheReadTokens + cachedTokensFromStream,
+              artifactCallback,
             },
-            async (results, meta) => {
-              for (const r of results) {
-                if (r != null) recursiveBuffer += r;
-              }
-              if (meta.inputTokens || meta.outputTokens) {
-                recursiveMeta = { ...meta };
-              }
-            },
-            toolsUsed
-          );
+          },
+          guard?.callback ?? callback,
+          toolsUsed
+        );
 
-          // Strip artifact tags and forward cleaned text to the client
-          const cleaned = recursiveBuffer.replace(/<artifact(?:\s[^>]*)?>[\s\S]*?<\/artifact>/gi, '').trim();
-          if (cleaned) {
-            await callback([cleaned], recursiveMeta);
-          }
-        } else {
-          // No artifact was streamed - use normal callback
-          // Keep tools available for MCP tools (enables chaining); remove for built-in tools
-          // Carry accumulators forward as above.
-          await this.complete(
-            model,
-            messages,
-            {
-              ...options,
-              tools: anyMcpTool ? options.tools : undefined,
-              // First-turn-only tool_choice: after tools run, let the model synthesize.
-              tool_choice: 'auto',
-              _internal: {
-                ...options._internal,
-                toolCallCount: toolCallCount + 1,
-                accumInputTokens: accumInputTokens + inputTokens,
-                accumOutputTokens: accumOutputTokens + outputTokens,
-                accumCacheReadTokens: accumCacheReadTokens + cachedTokensFromStream,
-              },
-            },
-            callback,
-            toolsUsed
-          );
-        }
+        if (guard) await guard.flush();
       } else {
         // Pass tool calls through callback without executing.
         // Terminal leaf - emit accumulated total plus this turn's tokens.
