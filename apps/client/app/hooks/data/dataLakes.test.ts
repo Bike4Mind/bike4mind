@@ -75,6 +75,7 @@ import {
   useUpdateDataLake,
   useUpdateFallbackLakeSettings,
   useArchiveDataLake,
+  usePromoteDataLake,
   useGetTransitionalDataLakes,
   useRetryLakeLifecycle,
   useTransferLakeOwnership,
@@ -1783,6 +1784,22 @@ describe('the needs-attention list and its retry', () => {
     expect(keys).toContain(JSON.stringify(['data-lakes', 'deleted']));
     expect(keys).toContain(JSON.stringify(['dataLakeTagCounts']));
     expect(keys).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeHealth', 'lake1']));
+  });
+
+  it('publishing a draft refreshes that lake\'s health, so the serving chip leaves "Not serving: draft"', async () => {
+    // Serving is derived from lake.status server-side and the health query does not refetch on
+    // focus, so this invalidation is the only thing that moves the chip without a reload.
+    const { wrapper, invalidate } = mountWith();
+    apiPost.mockResolvedValueOnce({ data: { success: true } });
+
+    const { result } = renderHook(() => usePromoteDataLake(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('lake1');
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/lifecycle', { action: 'promote' });
+    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeHealth', 'lake1']));
   });
 
   it('a fixed-action lifecycle hook refreshes the needs-attention list too', async () => {
