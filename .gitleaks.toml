@@ -22,6 +22,9 @@ paths = [
   ".*\\.test\\.[tj]sx?$",
   ".*\\.spec\\.[tj]sx?$",
   ".*/__tests__/.*",
+  # Python test file naming convention (pytest discovery: test_*.py / *_test.py)
+  ".*/test_[^/]*\\.py$",
+  ".*_test\\.py$",
   # Documentation - placeholder strings are expected here
   ".*docs/.*",
   ".*docs-site/.*",
@@ -78,7 +81,9 @@ regexes = [
   # Literal ellipsis placeholder - used in console.log usage examples
   "mongodb(\\+srv)?://\\.\\.\\.",
   # Documentation example in echo statements - user:pass with known placeholder hostnames only
-  "mongodb(\\+srv)?://user:pass@(localhost|127\\.0\\.0\\.1|example\\.com|cluster\\.|docdb\\.|your-cluster)"
+  "mongodb(\\+srv)?://user:pass@(localhost|127\\.0\\.0\\.1|example\\.com|cluster\\.|docdb\\.|your-cluster)",
+  # Test-fixture placeholder host with no credentials (RFC 2606 reserved domain)
+  "mongodb(\\+srv)?://db\\.example\\.org/"
 ]
 
 [[rules]]
