@@ -82,21 +82,30 @@ describe('splitEquals', () => {
   });
 
   // Same sampling as measureGrowth in b4m-core/services/src/__tests__/utils/regexLinearity.ts: the
-  // first run is the warm-up, and each size keeps its fastest of five runs so a single GC pause or
-  // noisy-neighbor stall on a shared CI runner cannot fake a super-linear ratio.
+  // input doubles until a warm run takes 25ms, so the ratio compares samples well above timer, JIT
+  // and GC noise, and each size keeps its fastest of five runs. Times are thread CPU ms: on a loaded
+  // runner a longer run is likelier to be preempted, which inflates a wall-clock ratio.
   function assertLinearGrowth(scan: (s: string) => unknown, build: (n: number) => string, small: number) {
     const time = (input: string) => {
-      const startedAt = performance.now();
+      const startedAt = process.threadCpuUsage();
       scan(input);
-      return performance.now() - startedAt;
+      const { user, system } = process.threadCpuUsage(startedAt);
+      return (user + system) / 1000;
     };
-    const baselineInput = build(small);
-    let baselineMs = time(baselineInput);
-    expect(baselineMs).toBeLessThan(500);
-    for (let i = 1; i < 5; i++) baselineMs = Math.min(baselineMs, time(baselineInput));
-    const doubledInput = build(small * 2);
-    let ratio = Infinity;
-    for (let i = 0; i < 5 && ratio >= 3; i++) ratio = Math.min(ratio, time(doubledInput) / Math.max(baselineMs, 5));
+    let n = small;
+    let baselineInput = build(n);
+    expect(time(baselineInput)).toBeLessThan(500);
+    while (time(baselineInput) < 25 && baselineInput.length < 1_000_000) {
+      n *= 2;
+      baselineInput = build(n);
+      expect(time(baselineInput)).toBeLessThan(500);
+    }
+    const fastest = (input: string) => Math.min(...Array.from({ length: 5 }, () => time(input)));
+    const baselineMs = fastest(baselineInput);
+    const doubledMs = fastest(build(n * 2));
+    let ratio = doubledMs / Math.max(baselineMs, 5);
+    // A cache or heap-size cliff lands in one doubling step; a quadratic scan is 4x on both.
+    if (ratio >= 3) ratio = Math.min(ratio, fastest(build(n * 4)) / Math.max(doubledMs, 5));
     expect(ratio).toBeLessThan(3);
   }
 

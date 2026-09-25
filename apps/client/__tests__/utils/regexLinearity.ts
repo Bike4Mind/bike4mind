@@ -5,25 +5,37 @@ export const SMALL_INPUT_MS_CEILING = 500;
 export const GROWTH_RATIO_CEILING = 3;
 const MIN_BASELINE_MS = 5;
 const SAMPLES = 5;
+const CALIBRATED_BASELINE_MS = 25;
+const MAX_CALIBRATED_CHARS = 1_000_000;
 
 export function measureGrowth(run: (input: string) => unknown, build: (n: number) => string, small: number) {
   const time = (input: string) => {
-    const startedAt = performance.now();
+    const startedAt = process.threadCpuUsage();
     run(input);
-    return performance.now() - startedAt;
+    const { user, system } = process.threadCpuUsage(startedAt);
+    return (user + system) / 1000;
   };
-  const baselineInput = build(small);
-  const firstMs = time(baselineInput);
+  let n = small;
+  let baselineInput = build(n);
   // Skip the doubled run once the baseline has already failed: on a super-linear regex it can take minutes.
+  const firstMs = time(baselineInput);
   if (firstMs >= SMALL_INPUT_MS_CEILING) return { baselineMs: firstMs, ratio: Infinity };
-  // The first run is the warm-up; each size keeps its fastest of SAMPLES runs so a single GC pause or
-  // noisy-neighbor stall on a shared CI runner cannot fake a super-linear ratio.
-  let baselineMs = firstMs;
-  for (let i = 1; i < SAMPLES; i++) baselineMs = Math.min(baselineMs, time(baselineInput));
-  const doubledInput = build(small * 2);
-  let ratio = Infinity;
-  for (let i = 0; i < SAMPLES && ratio >= GROWTH_RATIO_CEILING; i++) {
-    ratio = Math.min(ratio, time(doubledInput) / Math.max(baselineMs, MIN_BASELINE_MS));
+  // The input doubles until a warm run takes CALIBRATED_BASELINE_MS, so the ratio compares samples well
+  // above timer, JIT and GC noise; each size keeps its fastest of SAMPLES runs. Times are thread CPU ms:
+  // on a loaded runner a longer run is likelier to be preempted, which inflates a wall-clock ratio.
+  while (time(baselineInput) < CALIBRATED_BASELINE_MS && baselineInput.length < MAX_CALIBRATED_CHARS) {
+    n *= 2;
+    baselineInput = build(n);
+    const coldMs = time(baselineInput);
+    if (coldMs >= SMALL_INPUT_MS_CEILING) return { baselineMs: coldMs, ratio: Infinity };
+  }
+  const fastest = (input: string) => Math.min(...Array.from({ length: SAMPLES }, () => time(input)));
+  const baselineMs = fastest(baselineInput);
+  const doubledMs = fastest(build(n * 2));
+  let ratio = doubledMs / Math.max(baselineMs, MIN_BASELINE_MS);
+  // A cache or heap-size cliff lands in one doubling step; a quadratic scan is 4x on both.
+  if (ratio >= GROWTH_RATIO_CEILING) {
+    ratio = Math.min(ratio, fastest(build(n * 4)) / Math.max(doubledMs, MIN_BASELINE_MS));
   }
   return { baselineMs, ratio };
 }
