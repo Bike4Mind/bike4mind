@@ -87,6 +87,11 @@ describe('data-lake routes declare an API-key scope gate', () => {
   it.each(files.map(f => [path.relative(ROUTES_DIR, f), f]))('%s', (rel, file) => {
     const source = readFileSync(file, 'utf8');
 
+    // `auth: 'jwtOnly'` skips the api-key chain entirely (see baseApi.ts) - a key-bearing
+    // request is rejected before any scope check runs, so `requiredScopes` would be dead code
+    // here, not a forgotten gate.
+    if (/baseApi\(\{ auth: 'jwtOnly' \}\)/.test(source)) return;
+
     const gate = source.match(/baseApi\(\{ requiredScopes: (DATA_LAKE_[A-Z_]+) \}\)/);
     expect(gate, 'route must declare requiredScopes from @server/dataLakes/dataLakeScopes').not.toBeNull();
 
