@@ -202,9 +202,9 @@ export function getLlmByModel(
 // warm Lambda instances from re-fetching every request (admin model changes still take
 // effect within 5 minutes, and a cold start always rebuilds the list).
 const MODEL_CACHE_TTL_MS = 5 * 60_000;
-// When the price-catalog fetch fails, cache the literal-priced fallback only
-// briefly: a transient DB blip should cost seconds of superseded prices, not
-// a full TTL window.
+// When a backend listing or a catalog/price read fails, cache the degraded list
+// only briefly: a transient blip or a missed perBackendTimeoutMs should cost
+// seconds of a short list or superseded prices, not a full TTL window.
 const MODEL_CACHE_RETRY_TTL_MS = 30_000;
 // preFilterModels keeps the merged list from before the deprecation filter. It is
 // never returned to a caller; getSupersededModels reads it to put a display name
@@ -414,12 +414,15 @@ export const getAvailableModels = async (
   });
 
   const results = await Promise.allSettled(backendPromises);
+  let listingFailed = false;
 
   const backendModels = results
     .map((result, index) => {
       if (result.status === 'fulfilled') {
+        if ('error' in result.value) listingFailed = true;
         return result.value.models;
       } else {
+        listingFailed = true;
         const backendName = Object.keys(backends)[index];
         Logger.globalInstance.error(`[getAvailableModels] Failed to get models from ${backendName}:`, result.reason);
         return [];
@@ -476,9 +479,9 @@ export const getAvailableModels = async (
   // overlay leaves the output set identical.
   const filtered = priced.filter(m => !isModelDeprecated(m));
 
-  // Store in module-level cache (short-lived when a catalog fetch failed). The
-  // cached list is always private-inclusive; see getModelCacheKey.
-  const ttl = catalogFetchFailed ? MODEL_CACHE_RETRY_TTL_MS : MODEL_CACHE_TTL_MS;
+  // Store in module-level cache (short-lived when a listing or catalog fetch
+  // failed). The cached list is always private-inclusive; see getModelCacheKey.
+  const ttl = listingFailed || catalogFetchFailed ? MODEL_CACHE_RETRY_TTL_MS : MODEL_CACHE_TTL_MS;
   _modelCache = { key: cacheKey, models: filtered, preFilterModels: priced, expiresAt: Date.now() + ttl };
 
   return applyPrivateVisibility(filtered, includePrivate);

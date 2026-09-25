@@ -102,6 +102,62 @@ describe('getAvailableModels options', () => {
 });
 
 describe('getAvailableModels module cache', () => {
+  // The retry TTL is 30s and the full TTL 5 minutes; 60s sits between them.
+  const pastRetryTtl = () => {
+    const start = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(start + 60_000);
+  };
+
+  it('relists a backend that timed out once the short retry TTL passes, under the same cache key', async () => {
+    ollamaListing = () => new Promise<ModelInfo[]>(() => {});
+    const degraded = await getAvailableModels({ ollama: 'http://flaky:11434' }, { perBackendTimeoutMs: 20 });
+    expect(degraded.some(m => m.backend === ModelBackend.Ollama)).toBe(false);
+
+    ollamaListing = async host => [
+      { id: `ollama@${host}`, type: 'text', name: host, backend: ModelBackend.Ollama } as ModelInfo,
+    ];
+    pastRetryTtl();
+    try {
+      const recovered = await getAvailableModels({ ollama: 'http://flaky:11434' }, { perBackendTimeoutMs: 20 });
+      expect(recovered.some(m => m.id === 'ollama@http://flaky:11434')).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('relists a backend whose listing threw once the short retry TTL passes', async () => {
+    ollamaListing = async () => {
+      throw new Error('connection reset');
+    };
+    const degraded = await getAvailableModels({ ollama: 'http://flaky:11434' });
+    expect(degraded.some(m => m.backend === ModelBackend.Ollama)).toBe(false);
+
+    ollamaListing = async host => [
+      { id: `ollama@${host}`, type: 'text', name: host, backend: ModelBackend.Ollama } as ModelInfo,
+    ];
+    pastRetryTtl();
+    try {
+      const recovered = await getAvailableModels({ ollama: 'http://flaky:11434' });
+      expect(recovered.some(m => m.id === 'ollama@http://flaky:11434')).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('keeps a fully successful listing for the full TTL', async () => {
+    const first = await getAvailableModels({ ollama: 'http://steady:11434' });
+    expect(first.some(m => m.id === 'ollama@http://steady:11434')).toBe(true);
+
+    ollamaListing = async () => [];
+    pastRetryTtl();
+    try {
+      const cached = await getAvailableModels({ ollama: 'http://steady:11434' });
+      expect(cached.some(m => m.id === 'ollama@http://steady:11434')).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it('does not serve an includePrivate:false list to an includePrivate:true caller, or the reverse', async () => {
     const filteredFirst = await getAvailableModels(BFL_KEYS, { includePrivate: false });
     expect(filteredFirst.some(m => m.id === PRIVATE_MODEL)).toBe(false);
