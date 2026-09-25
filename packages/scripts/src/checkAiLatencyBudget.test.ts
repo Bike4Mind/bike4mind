@@ -1,11 +1,16 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   assertBudgetConfig,
   completedResult,
   gatedAverageSec,
   incompleteResult,
+  isLatencyObservation,
   mergeResults,
   msToSec,
+  StreamingTimeoutError,
   textStreamBudgetMs,
 } from '../../../apps/client/e2e/ai-latency-budget';
 import type { PromptScenario, PromptResult } from '../../../apps/client/e2e/ai-latency-helpers';
@@ -16,8 +21,9 @@ import type { PromptScenario, PromptResult } from '../../../apps/client/e2e/ai-l
  * Lives here rather than beside the module because `apps/client/e2e` is excluded from every
  * vitest project (apps/client/vitest.config.mts, LANE_EXCLUDE) - a co-located test would match no
  * project and never run, which is the same silent-no-op class this suite exists to catch. The
- * module under test is deliberately dependency-free so it can be imported outside a Playwright
- * runner; if it ever grows a Playwright import, this file stops compiling and that is the signal.
+ * module under test stays importable outside a Playwright runner only as long as its imports stay
+ * minimal, and nothing enforces that on its own: a `@playwright/test` import added there still
+ * typechecks and still resolves under vitest. So the import list is asserted below, explicitly.
  *
  * The rules pinned here are the ones whose regression is invisible at runtime: a budget that
  * quietly reverts to the flat cap still passes every e2e run (the prompt just fails as a "hang"
@@ -30,6 +36,74 @@ const scenario = (over: Partial<PromptScenario> = {}): PromptScenario => ({
   prompt: 'prompt text',
   expectedKeywords: ['k'],
   ...over,
+});
+
+describe('module boundary', () => {
+  const MODULE = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '../../../apps/client/e2e/ai-latency-budget.ts'
+  );
+
+  const FACTORY = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '../../../apps/client/e2e/ai-latency-suite-factory.ts'
+  );
+
+  it('records an incomplete result only behind the predicate', () => {
+    // The predicate's unit tests below cannot see whether the factory still calls it, and the
+    // factory itself is unreachable from any vitest project. Dropping the guard - recording every
+    // throw again - is the exact run-1 revert, so the call site is pinned as text here.
+    const source = fs.readFileSync(FACTORY, 'utf8');
+    expect(source.match(/incompleteResult\(/g) ?? []).toHaveLength(1);
+    const block = source.slice(source.indexOf('} catch (err'));
+    expect(block).toMatch(/if \(isLatencyObservation\(err\)\) \{[\s\S]*?incompleteResult\(/);
+    // ...and the throw is outside it, so a non-latency failure still fails the test.
+    expect(block).toMatch(/\n\s+throw err;/);
+  });
+
+  it('imports nothing that would drag in a Playwright runner', () => {
+    // The load-bearing property of this module: it is importable from here. `@playwright/test`
+    // added to it would typecheck and would even resolve under vitest, so the only thing standing
+    // between a stray import and this whole file quietly becoming unrunnable is this assertion.
+    // Matched on `from '...'` rather than on a line-anchored `import ...` so a multi-line or
+    // re-exported form cannot slip past the assertion.
+    const source = fs.readFileSync(MODULE, 'utf8');
+    const specifiers = [...source.matchAll(/\bfrom\s+'([^']+)'/g)].map(m => m[1]);
+    expect([...new Set(specifiers)].sort()).toEqual(['./ai-latency-helpers', './constants']);
+  });
+});
+
+describe('isLatencyObservation', () => {
+  it('accepts a blown streaming budget', () => {
+    expect(isLatencyObservation(new StreamingTimeoutError(150_000, 'reply still growing'))).toBe(true);
+  });
+
+  it('rejects the setup failures that share the same try block', () => {
+    // These are the run-1 bug: recorded as incomplete, they counted into the gated average, paged
+    // #slow-responses and failed the nightly for something that is not AI slowness.
+    expect(isLatencyObservation(new Error('Send button did not become enabled after retries'))).toBe(false);
+    expect(isLatencyObservation(new Error('locator.waitFor: Timeout 10000ms exceeded'))).toBe(false);
+  });
+
+  it('rejects a non-Error throw', () => {
+    for (const thrown of [
+      undefined,
+      null,
+      'Streaming did not complete within 150000ms',
+      { name: 'StreamingTimeoutError' },
+    ]) {
+      expect(isLatencyObservation(thrown)).toBe(false);
+    }
+  });
+
+  it('carries the cap and the stage in its message', () => {
+    // The stage is the triage signal: no text streamed at all points at tool work, a growing reply
+    // points at the stream itself.
+    const err = new StreamingTimeoutError(300_000, 'no text streamed yet (tool work still in flight?)');
+    expect(err.timeoutMs).toBe(300_000);
+    expect(err.message).toContain('300000ms');
+    expect(err.message).toContain('no text streamed yet');
+  });
 });
 
 describe('textStreamBudgetMs', () => {
@@ -77,6 +151,14 @@ describe('assertBudgetConfig', () => {
     ).not.toThrow();
   });
 
+  it('rejects the pre-rename key instead of ignoring it', () => {
+    // The specs cast their JSON config, so excess-property checking is off: a config left on the
+    // old spelling would typecheck, read as configured, and silently fall back to the flat cap.
+    const stale = { ...scenario({ id: 'smartphone' }), streamingBudgetSec: 300 } as PromptScenario;
+    expect(() => assertBudgetConfig([stale])).toThrow(/streamingBudgetSec was renamed.*smartphone/s);
+    expect(() => assertBudgetConfig([scenario({ id: 'ok', textStreamingBudgetSec: 300 })])).not.toThrow();
+  });
+
   it('checks every configured prompt, not just the ones a given day would pick', () => {
     const prompts = [scenario({ id: 'ok' }), scenario({ id: 'bad', textStreamingBudgetSec: 1, expectsImage: true })];
     expect(() => assertBudgetConfig(prompts)).toThrow(/bad/);
@@ -84,13 +166,33 @@ describe('assertBudgetConfig', () => {
 });
 
 describe('result builders', () => {
-  it('rounds both duration fields at the same granularity', () => {
-    // The completed and incomplete paths used to spell the same conversion two different ways.
+  it('rounds every duration field to the nearest millisecond', () => {
+    // Asserted against literals at a value where rounding and truncating disagree (1.235 vs 1.234).
+    // Comparing a builder to msToSec would pass for either rule, which is what this used to do.
     expect(msToSec(120_000)).toBe(120);
-    expect(msToSec(120_499.6)).toBe(120.5);
-    const done = completedResult(scenario(), { response: 'abcd', responseTimeMs: 2000, renderTimeMs: 500 });
-    expect(done.responseTimeSec).toBe(msToSec(2000));
-    expect(incompleteResult(scenario(), 2000).responseTimeSec).toBe(done.responseTimeSec);
+    expect(msToSec(1234.6)).toBe(1.235);
+    const done = completedResult(scenario(), { response: 'abcd', responseTimeMs: 1234.6, renderTimeMs: 1234.6 });
+    expect(done.responseTimeSec).toBe(1.235);
+    expect(done.renderTimeSec).toBe(1.235);
+    expect(incompleteResult(scenario(), 1234.6).responseTimeSec).toBe(1.235);
+  });
+
+  it('reports the streaming rate over the measured window', () => {
+    // Rounded to whole chars/s: the field is a triage signal, not a measurement.
+    expect(
+      completedResult(scenario(), { response: 'x'.repeat(10), responseTimeMs: 2000, renderTimeMs: 0 })
+        .responseRateCharsPerSec
+    ).toBe(5);
+    expect(
+      completedResult(scenario(), { response: 'abcd', responseTimeMs: 3000, renderTimeMs: 0 }).responseRateCharsPerSec
+    ).toBe(1);
+  });
+
+  it('keeps renderTimeMs out of the streaming latency', () => {
+    // The artifact/image settle tail is recorded beside the stream window, never folded into it.
+    const done = completedResult(scenario(), { response: 'x', responseTimeMs: 2000, renderTimeMs: 90_000 });
+    expect(done.responseTimeMs).toBe(2000);
+    expect(done.renderTimeSec).toBe(90);
   });
 
   it('classifies measuresDeliverable identically whether the prompt finished or not', () => {

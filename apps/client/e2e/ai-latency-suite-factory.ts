@@ -2,7 +2,6 @@ import fs from 'fs';
 import path from 'path';
 import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
-import { StreamingTimeoutError } from './pages/ChatPage';
 import {
   resolveSelectedModel,
   dailySeed,
@@ -15,6 +14,7 @@ import {
   textStreamBudgetMs,
   completedResult,
   incompleteResult,
+  isLatencyObservation,
   mergeResults,
   gatedAverageSec,
 } from './ai-latency-budget';
@@ -62,8 +62,14 @@ export function createAiLatencySuite({
   // it completes: a LATER prompt that times out makes Playwright recycle the worker, which resets
   // this module's in-memory state - an afterAll that knew only in-memory results would then clobber
   // the file with a partial (or empty) set (the observed `results: []`). Reading the file back and
-  // merging by id keeps each write monotonic. Safe without locking because the AI-latency suites run
-  // serially (PW_WORKERS=1 in e2e-ai-latency.yml), so there is never a concurrent writer.
+  // merging by id keeps each write monotonic.
+  //
+  // NOT safe against a concurrent writer, and there can be one: the matrix job runs with
+  // PW_WORKERS=3 (e2e-ai-latency.yml) against `fullyParallel: true`, so two prompts of the same
+  // spec can read-modify-write this file at once and the later write wins with a stale prior set.
+  // The window is the JSON round trip, so in practice prompts minutes apart rarely collide - but a
+  // lost update silently drops a row, and dropping an `incomplete` row reads as a healthy cell.
+  // Serializing the latency job (or one file per prompt) is the real fix and is tracked separately.
   function persistResults(model: string, newResults: PromptResult[]) {
     fs.mkdirSync(resultsDir, { recursive: true });
 
@@ -135,13 +141,9 @@ export function createAiLatencySuite({
           }
         }
       } catch (err: unknown) {
-        // Only a blown streaming budget is a latency observation. The send path also does
-        // pre-stream setup - waiting for the send button to enable, gating on the response
-        // container mounting - and stamping one of those flakes `incomplete` would count it into
-        // the gated average, page the slow-responses channel and fail the nightly for something
-        // that is not AI slowness. Anything else propagates untouched: the test still fails
-        // loudly, it just does not claim a timing it never took.
-        if (err instanceof StreamingTimeoutError) {
+        // Recording is narrowed to a blown streaming budget; see isLatencyObservation for why a
+        // send-ready or mount flake must not be stamped as one.
+        if (isLatencyObservation(err)) {
           const result = incompleteResult(scenario, Date.now() - startMs);
           collectedResults.push(result);
           persistResults(resolvedModel, [result]);
