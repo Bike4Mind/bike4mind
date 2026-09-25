@@ -57,7 +57,7 @@ import type { DataLakeGroundingMode, DataLakeOrigin } from '@bike4mind/common';
 import { useStartChatWithLakes } from '@client/app/hooks/useStartChatWithLake';
 import { DataLakeSpendPanel } from './DataLakeSpendPanel';
 import { LakeConfigHistorySection } from './LakeConfigHistorySection';
-import { DataLakeProposalsPanel } from './DataLakeProposalsPanel';
+import { DataLakeProposalsPanel, type ProposalsView } from './DataLakeProposalsPanel';
 import { DataLakeResearchPanel } from './DataLakeResearchPanel';
 import { TestLakeScopeDialog } from './TestLakeScopeDialog';
 
@@ -194,7 +194,23 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   // lake list already carries): there is no precomputed "has proposals" signal, and a queue tab
   // that only appears after you click it would never be found. One small read per modal open.
   const proposals = useDataLakeProposals(lake?.id ?? null, 'pending', { enabled: !!lake?.canManage });
+  // Also fetched on open: a lake whose every proposal was declined still needs the tab, or its
+  // tombstones could never be seen or restored.
+  const declinedProposals = useDataLakeProposals(lake?.id ?? null, 'declined', { enabled: !!lake?.canManage });
+  // Keyed by lake, so switching lakes lands on the pending queue again rather than carrying over
+  // whichever view was open on the previous lake.
+  const [proposalsViewFor, setProposalsViewFor] = useState<{ lakeId: string; view: ProposalsView } | null>(null);
+  const proposalsView: ProposalsView =
+    proposalsViewFor && proposalsViewFor.lakeId === lake?.id ? proposalsViewFor.view : 'pending';
+  const shownProposals = proposalsView === 'declined' ? declinedProposals : proposals;
   const reviewProposal = useReviewDataLakeProposal(lake?.id ?? '');
+  // Always derived from the pending fetch above (not gated on the declined tab being open), so a
+  // declined row superseded by a still-pending proposal for the same source reads as superseded the
+  // moment the declined tab is opened, rather than only after the pending tab has been visited once.
+  const pendingCanonicalSourceKeys = useMemo(
+    () => new Set((proposals.data ?? []).map(p => p.canonicalSourceKey)),
+    [proposals.data]
+  );
   // Shown even while the queue is empty: the Research tab tells a curator its results land "in the
   // Proposals queue", so the queue has to be findable before the first proposal arrives. The empty
   // state explains how proposals get there.
@@ -766,9 +782,13 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                 </TabPanel>
                 <TabPanel value="proposals" sx={{ p: 0 }}>
                   <DataLakeProposalsPanel
-                    proposals={proposals.data}
-                    isLoading={proposals.isLoading}
-                    error={proposals.isForbidden ? null : proposals.error}
+                    view={proposalsView}
+                    onViewChange={view => {
+                      if (lake?.id) setProposalsViewFor({ lakeId: lake.id, view });
+                    }}
+                    proposals={shownProposals.data}
+                    isLoading={shownProposals.isLoading}
+                    error={shownProposals.isForbidden ? null : shownProposals.error}
                     pendingProposalId={reviewProposal.isPending ? reviewProposal.variables?.proposalId : undefined}
                     // Survives the toast: which source failed, and why, stays on its own card until
                     // the next attempt on it.
@@ -784,6 +804,8 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     onDecline={(proposalId, reason) =>
                       reviewProposal.mutate({ proposalId, decision: 'decline', reason })
                     }
+                    onRestore={proposalId => reviewProposal.mutate({ proposalId, decision: 'restore' })}
+                    pendingCanonicalSourceKeys={pendingCanonicalSourceKeys}
                   />
                 </TabPanel>
                 <TabPanel value="research" sx={{ p: 0 }}>

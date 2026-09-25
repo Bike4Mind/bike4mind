@@ -9,6 +9,7 @@ import {
   DATALAKE_TAG_PREFIX,
   DATA_LAKE_PROPOSAL_EXCERPT_MAX_CHARS,
   DATA_LAKE_PROPOSAL_MAX_TAGS,
+  DATA_LAKE_PROPOSAL_RATIONALE_MAX_CHARS,
 } from '@bike4mind/common';
 import { computeServerTextHash } from './admissionContract';
 import { canonicalSourceKey, sanitizeSourceUrlForRecord } from './canonicalSourceKey';
@@ -61,6 +62,8 @@ export interface ProposalCandidate {
   proposedTags?: string[];
   /** 0..1, display only. Out-of-range values are dropped rather than clamped - see below. */
   confidence?: number;
+  /** One line on why `confidence` is what it is. Display only; trimmed and bounded here. */
+  rationale?: string;
   provenance: DataLakeProposalProvenance;
 }
 
@@ -107,6 +110,11 @@ const sanitizeProposedTags = (tags: readonly string[] | undefined): string[] =>
 const usableConfidence = (confidence: number | undefined): number | undefined =>
   typeof confidence === 'number' && Number.isFinite(confidence) && confidence >= 0 && confidence <= 1
     ? confidence
+    : undefined;
+
+const usableRationale = (rationale: string | undefined): string | undefined =>
+  typeof rationale === 'string' && rationale.trim()
+    ? rationale.trim().slice(0, DATA_LAKE_PROPOSAL_RATIONALE_MAX_CHARS)
     : undefined;
 
 /**
@@ -171,6 +179,7 @@ export async function proposeDataLakeContent(
     textHash,
     proposedTags: sanitizeProposedTags(candidate.proposedTags),
     confidence: usableConfidence(candidate.confidence),
+    rationale: usableRationale(candidate.rationale),
     provenance: candidate.provenance,
     // Only set when a prior ruling exists and the text moved past it - the reviewer sees that this
     // source has been here before instead of being asked the same question twice with no context.

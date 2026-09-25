@@ -2244,9 +2244,10 @@ export function reviewProposalFailureMessage(error: unknown): string {
 }
 
 /**
- * Approve or decline one proposal. An approval admits the source into the lake through the ordinary
- * ingestion door, so it invalidates the lake's file list and health alongside the queue - the file
- * appears immediately, and its health badge stops reflecting a corpus that just changed.
+ * Approve, decline, or restore (declined back to pending) one proposal. An approval admits the source
+ * into the lake through the ordinary ingestion door, so it invalidates the lake's file list and health
+ * alongside the queue - the file appears immediately, and its health badge stops reflecting a corpus
+ * that just changed.
  */
 export function useReviewDataLakeProposal(dataLakeId: string) {
   const queryClient = useQueryClient();
@@ -2257,7 +2258,7 @@ export function useReviewDataLakeProposal(dataLakeId: string) {
       reason,
     }: {
       proposalId: string;
-      decision: 'approve' | 'decline';
+      decision: 'approve' | 'decline' | 'restore';
       reason?: string;
     }) => {
       const { data } = await api.post<{ data: IDataLakeProposalDocument }>(
@@ -2272,7 +2273,13 @@ export function useReviewDataLakeProposal(dataLakeId: string) {
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
       }
-      toast.success(decision === 'approve' ? `Added "${proposal.title}" to the lake` : 'Proposal declined');
+      toast.success(
+        decision === 'approve'
+          ? `Added "${proposal.title}" to the lake`
+          : decision === 'restore'
+            ? 'Proposal restored to the queue'
+            : 'Proposal declined'
+      );
     },
     onError: (error: unknown) => {
       toast.error(reviewProposalFailureMessage(error));
