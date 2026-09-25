@@ -1,5 +1,14 @@
 import { Logger } from '@bike4mind/observability';
-import { ChatModels, IMessage, ModelBackend, PermissionDeniedError, type ModelInfo } from '@bike4mind/common';
+import {
+  ChatModels,
+  IMessage,
+  ModelBackend,
+  PermissionDeniedError,
+  stripToolArtifactMarkup,
+  ARTIFACT_DELIVERED_PLACEHOLDER,
+  ARTIFACT_REMOVED_PLACEHOLDER,
+  type ModelInfo,
+} from '@bike4mind/common';
 import { stripAllToolBlocks, stripToolDependentMessages } from '../toolPairingUtils';
 import { executeToolsBatch } from '../executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from '../recordToolResult';
@@ -13,7 +22,7 @@ import {
   ICompletionResponseChunk,
 } from '../backend';
 import { getCachingAdapter } from '../caching/adapters';
-import { handleToolResultStreaming } from '../toolStreamingHelper';
+import { handleToolResultStreaming, createRecursiveArtifactGuard } from '../toolStreamingHelper';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from '../responseFormatHelpers';
 import {
   BedrockRuntimeClient,
@@ -618,20 +627,41 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
             // continuation round come back empty.
             const roundReasoningBlocks = this.takeReasoningBlocks();
 
+            // The real, top-level callback - pinned through every recursion level via
+            // _internal.artifactCallback - so a CHAINED tool call's artifact always reaches
+            // the client directly instead of the (possibly buffering) recursive guard below.
+            // See anthropicBackend for the same pattern.
+            const artifactCallback = options._internal?.artifactCallback ?? callback;
+
+            // Track artifact streaming: the model can echo the tool's own <artifact> tag back
+            // in its final reply once it reads it from the tool result, and the reply parser
+            // would render that echo as a second, empty card - strip it from history (below)
+            // and, as a backstop, from the recursive completion's buffered text (after the
+            // loop). See anthropicBackend for the same pattern.
+            let anyArtifactWasStreamed = false;
             // Inject results in original order
             for (const outcome of outcomes) {
               if (outcome.ok) {
+                let thisToolHadArtifact = false;
+
                 // For tools that return artifacts (like recharts), stream the result directly
                 await handleToolResultStreaming(outcome.name, outcome.result, async results => {
-                  await callback(results, buildCompletionInfo());
+                  thisToolHadArtifact = true;
+                  anyArtifactWasStreamed = true;
+                  await artifactCallback(results, buildCompletionInfo());
                 });
 
-                const resultStr = outcome.result.toString();
-                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
+                // Strip artifact markup from every tool result, not only the ones that
+                // streamed, so the model never sees markup it could echo into its reply.
+                const sanitizedResult = stripToolArtifactMarkup(
+                  outcome.result.toString(),
+                  thisToolHadArtifact ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
+                );
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, sanitizedResult, true);
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  resultStr,
+                  sanitizedResult,
                   roundReasoningBlocks
                 );
               } else {
@@ -642,7 +672,12 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
                 );
                 const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
-                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                // Strip too - matches the success path above (openaiBackend does the same for
+                // its error branch) so an error message can't carry echoable artifact markup.
+                const observation = stripToolArtifactMarkup(
+                  `Error processing ${outcome.name} tool: ${errorMessage}`,
+                  ARTIFACT_REMOVED_PLACEHOLDER
+                );
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 // Push error result so the model can continue
                 this.pushToolMessages(
@@ -656,6 +691,12 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
 
             // Add newline separator before recursive call to ensure proper markdown rendering
             await callback(['\n\n'], buildCompletionInfo());
+
+            // If any artifact was already streamed, buffer the recursive response and strip
+            // any duplicate artifact markup the model echoes back in it before it reaches the
+            // client - see anthropicBackend for the same pattern. A genuinely NEW artifact from
+            // a chained tool call bypasses this guard entirely via artifactCallback above.
+            const guard = anyArtifactWasStreamed ? createRecursiveArtifactGuard(callback) : undefined;
 
             // Carry this turn's tokens forward so the terminal recursive call
             // emits the full multi-turn billable total to cb.
@@ -677,11 +718,14 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   toolCallCount: toolCallCount + 1,
                   accumInputTokens: accumInputTokens + inputTokens,
                   accumOutputTokens: accumOutputTokens + outputTokens,
+                  artifactCallback,
                 },
               },
-              callback,
+              guard?.callback ?? callback,
               toolsUsed
             );
+
+            if (guard) await guard.flush();
           } else {
             // New behavior: just pass tool calls through callback, don't execute
             Logger.globalInstance.log('[BaseBedrockBackend] executeTools=false, passing tool calls to callback');
@@ -733,8 +777,13 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               // One take for the whole round - see the streaming path above.
               const roundReasoningBlocks = this.takeReasoningBlocks();
 
+              // See the streaming branch above for why artifactCallback exists.
+              const artifactCallback = options._internal?.artifactCallback ?? callback;
+
               // Execute each resolved call and push its result, so the model sees
               // every tool it invoked on the recursive turn, then recurse once.
+              // See the streaming branch above for why anyArtifactWasStreamed exists.
+              let anyArtifactWasStreamed = false;
               for (const { id, name, parameters } of executable) {
                 const toolFn = options.tools?.find(o => o.toolSchema.name === name)?.toolFn;
                 if (!toolFn) continue;
@@ -754,17 +803,33 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   result = `Error processing ${name} tool: ${err instanceof Error ? err.message : 'Unknown error'}`;
                 }
 
+                let thisToolHadArtifact = false;
+
                 // For tools that return artifacts (like recharts), stream the result directly
                 await handleToolResultStreaming(name, result, async results => {
-                  await callback(results, buildCompletionInfo());
+                  thisToolHadArtifact = true;
+                  anyArtifactWasStreamed = true;
+                  await artifactCallback(results, buildCompletionInfo());
                 });
 
-                recordToolResult(toolsUsed, { id, name }, result.toString(), succeeded);
-                this.pushToolMessages(messages, { id, name, parameters }, result.toString(), roundReasoningBlocks);
+                // Strip artifact markup from every tool result, not only the ones that
+                // streamed, so the model never sees markup it could echo into its reply.
+                const sanitizedResult = stripToolArtifactMarkup(
+                  result.toString(),
+                  thisToolHadArtifact ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
+                );
+                recordToolResult(toolsUsed, { id, name }, sanitizedResult, succeeded);
+                this.pushToolMessages(messages, { id, name, parameters }, sanitizedResult, roundReasoningBlocks);
               }
 
               // Add newline separator before recursive call to ensure proper markdown rendering
               await callback(['\n\n'], buildCompletionInfo());
+
+              // If any artifact was already streamed, buffer the recursive response and strip
+              // any duplicate artifact markup the model echoes back in it before it reaches the
+              // client - see the streaming branch above for the same pattern. A genuinely NEW
+              // artifact from a chained tool call bypasses this guard via artifactCallback above.
+              const guard = anyArtifactWasStreamed ? createRecursiveArtifactGuard(callback) : undefined;
 
               // Recursively call complete to continue the conversation.
               // Carry this turn's tokens forward so the terminal recursive call
@@ -784,11 +849,15 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                     toolCallCount: toolCallCount + 1,
                     accumInputTokens: accumInputTokens + inputTokens,
                     accumOutputTokens: accumOutputTokens + outputTokens,
+                    artifactCallback,
                   },
                 },
-                callback,
+                guard?.callback ?? callback,
                 toolsUsed
               );
+
+              if (guard) await guard.flush();
+
               return; // Exit after recursive call
             }
           } else {
