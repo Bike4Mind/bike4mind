@@ -875,6 +875,16 @@ export interface AttachmentLakeAccess {
   lakeMemberships?: DataLakeMembershipScope[];
   dataLakeTags?: string[];
   dataLakeTagPrefixes?: string[];
+  /**
+   * Set by a door whose lake resolution FAILED, to separate "this caller has no lake arms" from
+   * "we could not work out what they have". Both produce the same empty buckets, and a consumer
+   * that cannot tell them apart reports an outage as a clean deny - which, on a path that picks
+   * an input and then bills for the result, means quietly using a different file than the caller
+   * named. Mirrors the omitted-not-zero treatment of `excludedByAccessCount` (#3055).
+   *
+   * Never widens anything: consumers must fail closed on it, never fall back to a wider read.
+   */
+  resolutionFailed?: boolean;
 }
 
 /**

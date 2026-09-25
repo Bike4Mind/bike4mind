@@ -136,7 +136,7 @@ describe('ImageEditService.process model dispatch', () => {
         organizations: { findById: vi.fn(async () => null) },
         ...dbExtra,
         fabFiles: {
-          findAllInIds: vi.fn(async () => [
+          findAccessibleInIds: vi.fn(async () => [
             {
               id: 'mask1',
               fileName: 'image_mask_1.png',
@@ -319,10 +319,7 @@ describe('ImageEditService.process reference images (#2744)', () => {
         quests: { findById: vi.fn(async () => quest), update: vi.fn(async () => quest) },
         users: { findById: vi.fn(async () => richUser) },
         organizations: { findById: vi.fn(async () => null) },
-        fabFiles: {
-          findAllInIds: vi.fn(async () => []),
-          findAccessibleInIds,
-        },
+        fabFiles: { findAccessibleInIds },
       },
       startImageEditProcess: vi.fn(),
       deleteFabFile: vi.fn(),
@@ -371,9 +368,8 @@ describe('ImageEditService.process reference images (#2744)', () => {
     ]);
   });
 
-  it('scopes the anchor lookup to the caller, unlike the legacy unscoped mask lookup', async () => {
-    // findAllInIds (still used for the mask) ignores the principal entirely; anchors must
-    // not inherit that, or naming an id would read any user's file.
+  it('scopes the anchor lookup to the caller', async () => {
+    // An unscoped lookup ignores the principal entirely; naming an id would read any user's file.
     const { findAccessibleInIds } = await run({ referenceImageFabFileIds: ['a'] });
 
     // Third arg is the resolved lake access, which must reach the lookup too - a lake-only
@@ -412,14 +408,247 @@ describe('ImageEditService.process reference images (#2744)', () => {
     ]);
   });
 
-  it('resolves lake access only when anchors were actually requested', async () => {
-    // The mask-only edit is the mainline and had no lake roundtrip before this feature;
-    // anchors are the only thing on this path that needs the lake arms.
+  it('resolves lake access once per run, anchors or not - the mask lookup needs it too', async () => {
     const withoutAnchors = await run({});
-    expect(withoutAnchors.resolveLakeAccess).not.toHaveBeenCalled();
+    expect(withoutAnchors.resolveLakeAccess).toHaveBeenCalledTimes(1);
 
     const withAnchors = await run({ referenceImageFabFileIds: ['a'] });
     expect(withAnchors.resolveLakeAccess).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ImageEditService.process mask access (#3069)', () => {
+  const editSpy = vi.fn();
+  const maskFile = {
+    id: 'mask1',
+    fileName: 'image_mask_1.png',
+    mimeType: 'image/png',
+    filePath: 'masks/mask1.png',
+    moderationStatus: 'clean',
+  };
+
+  /**
+   * `reachable` decides what the access predicate would return, so a test can model "the caller
+   * owns it", "only the lake arms reach it", and "it belongs to someone else" without standing up
+   * a real Mongo predicate.
+   */
+  const run = async (
+    opts: {
+      reachable?: (ids: string[], lakeAccess: unknown) => unknown[];
+      model?: string;
+      lakeAccess?: Record<string, unknown>;
+      withResolver?: boolean;
+      failLakeAccess?: boolean;
+      fabFileIds?: string[];
+    } = {}
+  ) => {
+    const reachable = opts.reachable ?? ((ids: string[]) => ids.map(id => (id === 'mask1' ? maskFile : null)));
+    const findAccessibleInIds = vi.fn(async (ids: string[], _access: unknown, lakeAccess: unknown) =>
+      reachable(ids || [], lakeAccess).filter(Boolean)
+    );
+    const deleteFabFile = vi.fn();
+    const getSignedUrl = vi.fn(async (path: string) => `https://example.invalid/${path}`);
+    const resolveLakeAccess = vi.fn(async () => {
+      if (opts.failLakeAccess) throw new Error('lake-resolution-outage');
+      return (opts.lakeAccess ?? {}) as never;
+    });
+    const quest = {
+      id: 'quest1',
+      sessionId: 'session1',
+      status: undefined as string | undefined,
+      type: 'message',
+      reply: undefined as string | undefined,
+      replies: [],
+      images: [],
+    };
+    const service = new ImageEditService({
+      db: {
+        sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
+        quests: { findById: vi.fn(async () => quest), update: vi.fn(async () => quest) },
+        users: { findById: vi.fn(async () => richUser) },
+        organizations: { findById: vi.fn(async () => null) },
+        fabFiles: { findAccessibleInIds },
+      },
+      startImageEditProcess: vi.fn(),
+      deleteFabFile,
+      wsHttpsUrl: 'wss://example.invalid',
+      abilityGetter: vi.fn(),
+      logEvent: vi.fn(),
+      storage: {} as never,
+      fabFileStorage: { getSignedUrl } as never,
+      ...(opts.withResolver === false ? {} : { resolveLakeAccess }),
+    } as never);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).tokenizer = {
+      encodeTokens: vi.fn(async () => [1, 2, 3]),
+      decodeTokens: vi.fn(async () => 'make it blue'),
+    };
+    await service.process({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        userId: 'user1',
+        prompt: 'make it blue',
+        model: opts.model ?? ImageModels.GPT_IMAGE_1_5,
+        image: 'https://example.invalid/source.png',
+        fabFileIds: opts.fabFileIds ?? ['mask1'],
+      } as never,
+      logger: silentLogger,
+    });
+    return { quest, findAccessibleInIds, deleteFabFile, getSignedUrl, resolveLakeAccess };
+  };
+
+  beforeEach(() => {
+    editSpy.mockReset();
+    editSpy.mockRejectedValue(new Error('stop-after-dispatch'));
+    vi.mocked(aiImageService).mockClear();
+    vi.mocked(aiImageService).mockReturnValue({ edit: editSpy } as never);
+    vi.mocked(getAvailableModels).mockResolvedValue([]);
+  });
+
+  it('scopes the mask lookup to the caller and threads lake access through it', async () => {
+    const { findAccessibleInIds } = await run({ lakeAccess: { dataLakeTags: ['datalake:acme'] } });
+
+    expect(findAccessibleInIds).toHaveBeenCalledWith(
+      ['mask1'],
+      { userId: 'user1', userGroups: undefined },
+      { dataLakeTags: ['datalake:acme'] }
+    );
+  });
+
+  it('still presigns and sends a mask the caller can reach', async () => {
+    const { getSignedUrl } = await run();
+
+    expect(getSignedUrl).toHaveBeenCalledWith('masks/mask1.png');
+    expect(editSpy.mock.calls[0][2].mask).toBeTruthy();
+  });
+
+  it('still resolves a mask reachable only through the data lake', async () => {
+    // The lake arms are the whole reason lakeAccess is threaded: without them a lake-only mask
+    // the workbench admitted would silently stop working the moment the lookup became scoped.
+    const lakeOnly = (ids: string[], lakeAccess: unknown) =>
+      (lakeAccess as { dataLakeTags?: string[] })?.dataLakeTags?.length ? ids.map(() => maskFile) : [];
+
+    const { getSignedUrl } = await run({ reachable: lakeOnly, lakeAccess: { dataLakeTags: ['datalake:acme'] } });
+
+    expect(getSignedUrl).toHaveBeenCalledWith('masks/mask1.png');
+  });
+
+  it('never presigns a mask that belongs to another user, and fails rather than editing without it', async () => {
+    const { getSignedUrl, quest } = await run({ reachable: () => [] });
+
+    expect(getSignedUrl).not.toHaveBeenCalled();
+    // Nothing reached the provider at all - the alpha channel is the payload of this leak.
+    expect(editSpy).not.toHaveBeenCalled();
+    expect(quest.type).toBe('error');
+    expect(quest.reply).toContain('mask1');
+    expect(quest.reply).toContain('not accessible');
+  });
+
+  it('names every unresolved id, so the caller knows which workbench file to remove', async () => {
+    const { quest } = await run({ fabFileIds: ['ghost-a', 'ghost-b'], reachable: () => [] });
+
+    expect(quest.reply).toContain('ghost-a');
+    expect(quest.reply).toContain('ghost-b');
+  });
+
+  it("fails a fill edit rather than inpainting with someone else's mask", async () => {
+    const { quest } = await run({ reachable: () => [], model: ImageModels.FLUX_PRO_FILL });
+
+    expect(editSpy).not.toHaveBeenCalled();
+    expect(quest.type).toBe('error');
+    // Fails at the access gate now, ahead of the fill path's own missing-mask check.
+    expect(quest.reply).toContain('not accessible');
+  });
+
+  it("keeps deleting the caller's own mask, and stops handing the cleanup ids it cannot reach", async () => {
+    const reachableRun = await run();
+    expect(reachableRun.deleteFabFile).toHaveBeenCalledWith('user1', 'mask1');
+
+    const foreignRun = await run({ reachable: () => [] });
+    expect(foreignRun.deleteFabFile).not.toHaveBeenCalled();
+  });
+
+  it('degrades to owner/share/global-read when no lake resolver is wired, rather than failing', async () => {
+    const { findAccessibleInIds, getSignedUrl } = await run({ withResolver: false });
+
+    expect(findAccessibleInIds).toHaveBeenCalledWith(['mask1'], { userId: 'user1', userGroups: undefined }, undefined);
+    expect(getSignedUrl).toHaveBeenCalledWith('masks/mask1.png');
+  });
+
+  it('fails the quest instead of substituting a mask when lake access cannot be determined', async () => {
+    const { quest, deleteFabFile } = await run({
+      failLakeAccess: true,
+      reachable: () => [], // nothing resolves by ownership, so an id genuinely goes missing
+    });
+
+    expect(editSpy).not.toHaveBeenCalled();
+    expect(quest.type).toBe('error');
+    expect(quest.reply).toContain('data-lake lookup failed');
+    expect(quest.status).toBe('done');
+    // Nothing resolved, so there is no mask to clean up - and crucially no provider dispatch.
+    expect(deleteFabFile).not.toHaveBeenCalled();
+  });
+
+  it('never sends the second mask to the provider when the first one cannot be resolved', async () => {
+    // The substitution this guards, with both ids actually present rather than described: the
+    // caller's list is [lakeOnlyMask, ownBrushedMask] and only the second resolves. The mask slot
+    // is positional - `fabFiles.find(first image)` - so dropping the first silently promotes the
+    // second, and the edit renders and bills on an input the caller never chose. Asserted on the
+    // provider payload, because "which bytes reached the provider" is the whole claim.
+    const ownMask = { ...maskFile, id: 'own-mask', filePath: 'masks/own.png' };
+    const { quest, getSignedUrl } = await run({
+      fabFileIds: ['lake-only-mask', 'own-mask'],
+      reachable: ids => ids.map(id => (id === 'own-mask' ? ownMask : null)),
+    });
+
+    expect(editSpy).not.toHaveBeenCalled();
+    // The substitute was never even presigned, let alone sent as an alpha channel.
+    expect(getSignedUrl).not.toHaveBeenCalledWith('masks/own.png');
+    expect(quest.type).toBe('error');
+    expect(quest.reply).toContain('lake-only-mask');
+  });
+
+  it("sends the caller's own mask when every id in a two-id list resolves", async () => {
+    // The control for the case above: same two-id shape, both reachable, so the positional pick
+    // still happens normally and the guard is not just failing everything with two ids.
+    const ownMask = { ...maskFile, id: 'own-mask', filePath: 'masks/own.png' };
+    const { getSignedUrl, quest } = await run({
+      fabFileIds: ['mask1', 'own-mask'],
+      reachable: ids => ids.map(id => (id === 'own-mask' ? ownMask : maskFile)),
+    });
+
+    expect(getSignedUrl).toHaveBeenCalledWith('masks/mask1.png');
+    expect(quest.reply).toBe('stop-after-dispatch');
+  });
+
+  it('still runs when the lake resolver fails but every requested id resolves by ownership', async () => {
+    // A lake outage must not break edits that never needed the lake arms.
+    const { quest, getSignedUrl } = await run({ failLakeAccess: true });
+
+    expect(getSignedUrl).toHaveBeenCalledWith('masks/mask1.png');
+    // 'stop-after-dispatch' is the provider stub - the run reached dispatch.
+    expect(quest.reply).toBe('stop-after-dispatch');
+  });
+
+  it('degrades rather than stranding the quest when the lake resolver itself rejects', async () => {
+    // This resolution used to sit above the try/catch that owns the quest's terminal write, where
+    // an unhandled rejection escaped `process` with no terminal write at all. Not a 'running' row
+    // for the check-timeout reaper either: `status = 'running'` is only in memory until
+    // startQuestHeartbeat persists it, and that runs inside the try - so the quest kept whatever
+    // status it was enqueued with and nothing would ever have reclaimed it. The run must reach
+    // dispatch on the ownership arms alone.
+    const { findAccessibleInIds, quest } = await run({ failLakeAccess: true });
+
+    // Empty buckets (never widened) but flagged, so the guard above can tell an outage from a deny.
+    expect(findAccessibleInIds).toHaveBeenCalledWith(
+      ['mask1'],
+      { userId: 'user1', userGroups: undefined },
+      { resolutionFailed: true }
+    );
+    // 'stop-after-dispatch' is the provider stub - proof the outage did not short-circuit the run.
+    expect(quest.reply).toBe('stop-after-dispatch');
+    expect(quest.status).toBe('done');
   });
 });
 

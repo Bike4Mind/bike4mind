@@ -312,9 +312,9 @@ export class ImageEditService {
   /**
    * Resolves explicit gpt-image style anchors for the edit path, in the caller's order.
    *
-   * Access-scoped via findAccessibleInIds - deliberately NOT the unscoped findAllInIds this
-   * file still uses for the mask lookup, which predates it. A reference the caller named but
-   * we cannot serve is an error rather than a silent drop: these ids were asked for by name,
+   * Access-scoped via findAccessibleInIds, as the mask lookup in `process` now is too. A
+   * reference the caller named but we cannot serve is an error rather than a silent drop
+   * (where an unreachable mask is only dropped): these ids were asked for by name,
    * and quietly rendering fewer anchors bills for an image the user did not describe.
    * Mirrors ImageGenerationService.resolveReferenceImages - keep the two in step.
    */
@@ -359,7 +359,17 @@ export class ImageEditService {
 
     return uniqueIds.map(id => {
       const file = byId.get(id);
-      if (!file) throw new BadRequestError(`Reference image ${id} was not found or is not accessible`);
+      if (!file) {
+        // Same distinction the mask guard in `process` makes: when lake resolution failed, a miss
+        // is "we could not check", not "you may not have this". Reporting it as a 400 would blame
+        // the caller for our outage and send them off verifying a share that is fine.
+        if (lakeAccess?.resolutionFailed) {
+          throw new InternalServerError(
+            `Could not verify access to reference image ${id} because the data-lake lookup failed. Please try again.`
+          );
+        }
+        throw new BadRequestError(`Reference image ${id} was not found or is not accessible`);
+      }
       if (!file.mimeType.startsWith('image')) throw new BadRequestError(`Reference image ${id} is not an image`);
       if (!isImageServeable(file)) {
         throw new BadRequestError(`Reference image ${id} is not available (moderation pending or blocked)`);
@@ -429,7 +439,9 @@ export class ImageEditService {
 
     const clientMessageSender = new ClientMessageSender(this.db, logger);
     const wsEndpoint = this.wsHttpsUrl;
-    const fabFiles = await this.db.fabFiles.findAllInIds(fabFileIds || []);
+    // Assigned inside the try so a failed lookup lands on the quest as an error rather than
+    // escaping this method; the finally's mask cleanup reads it either way.
+    let fabFiles: IFabFileDocument[] = [];
 
     // Persist status='running' + heartbeat updatedAt so a hung/killed edit is recoverable by the
     // check-timeout endpoint. Disposer is cleared in the finally below. See startQuestHeartbeat.
@@ -437,6 +449,67 @@ export class ImageEditService {
 
     try {
       stopHeartbeat = await startQuestHeartbeat(this.db, quest, logger, 'image-edit-heartbeat');
+
+      // Owner-wide lake access for scoping every fabFile lookup on this path - the mask below and
+      // the anchors further down. Resolved unconditionally, mirroring ImageGenerationService: the
+      // mask lookup runs on every edit, so there is no anchor-free mainline left to spare the
+      // roundtrip.
+      //
+      // Covers PUBLISHED lakes only. The resolver behind this is active-only while the browse door
+      // that admits a file to the workbench also serves draft lakes, so a file in an unpublished
+      // lake is attachable and then dropped here. Pre-existing and shared with generation and the
+      // chat tool, not introduced by the scoping - see findAccessibleInIds' docblock.
+      //
+      // A rejection is caught rather than propagated, but NOT flattened into "no lake arms": that
+      // would report an outage as a clean deny. It is recorded as `resolutionFailed` and acted on
+      // at the guard below, so a transient lake failure still lets an edit whose inputs all resolve
+      // by ownership run normally.
+      const lakeAccess = this.resolveLakeAccess
+        ? await this.resolveLakeAccess(user, logger).catch(error => {
+            logger.warn('[ImageEdit] Lake access resolution failed; falling back to ownership-only', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return { resolutionFailed: true } as AttachmentLakeAccess;
+          })
+        : undefined;
+
+      // Access-scoped: a caller-supplied mask id the caller cannot reach is never presigned and
+      // never fed to a provider as an alpha channel.
+      const requestedFabFileIds = [...new Set(fabFileIds ?? [])];
+      fabFiles = await this.db.fabFiles.findAccessibleInIds(
+        requestedFabFileIds,
+        { userId, userGroups: user.groups ?? undefined },
+        lakeAccess
+      );
+
+      // STRICT, like the anchor lookup below and unlike ImageGenerationService.selectInputImage:
+      // an id that does not resolve fails the edit rather than being dropped.
+      //
+      // Dropping is not neutral here, because the mask slot is positional - `fabFiles.find(first
+      // image)` further down. Losing the caller's first image silently promotes the next one, so
+      // the edit runs on an input they never chose, renders a different picture, and bills for it.
+      // Generation can afford leniency because its dropped candidates are guesses (carry-forward,
+      // a stray attachment); every id here was put in the request by the client on the caller's
+      // behalf, and a draft-lake file the workbench itself admitted is exactly the case that
+      // reaches this (#3279).
+      //
+      // The `finally` cleanup reads the same list, so an unresolved id also stops reaching
+      // deleteFabFile - which already refused it.
+      const resolvedIds = new Set(fabFiles.map(file => file.id));
+      const unresolvedIds = requestedFabFileIds.filter(id => !resolvedIds.has(id));
+      if (unresolvedIds.length > 0) {
+        // Separated because the remedies differ: a deny is the caller's to clear, an outage is
+        // ours and is worth retrying. Flattening them would send someone off auditing a share
+        // that is fine.
+        if (lakeAccess?.resolutionFailed) {
+          throw new InternalServerError(
+            'Could not verify access to the attached files because the data-lake lookup failed. The edit was not run - please try again.'
+          );
+        }
+        throw new BadRequestError(
+          `Attached file ${unresolvedIds.join(', ')} was not found or is not accessible. Remove it from the workbench and try again.`
+        );
+      }
 
       const apiKeyTable = await getEffectiveLLMApiKeys(userId, { db: this.db, getSettingsByNames });
 
@@ -544,18 +617,6 @@ export class ImageEditService {
       // `signedUrl` was just minted above from `fabFileStorage.getSignedUrl` - trusted provenance.
       const maskBase64Image = signedUrl ? await imageUrlToBase64(signedUrl, true) : undefined;
 
-      // Owner-wide lake access, mirroring ImageGenerationService: a lake-only anchor the
-      // workbench admitted must still resolve. Absent resolver degrades to
-      // owner/share/global-read only - never widens, never fails the run.
-      //
-      // Resolved only when anchors were actually requested. Unlike ImageGenerationService,
-      // which needs lake arms for the primary-image lookup on every run, this path uses them
-      // for anchors alone - so an unconditional call would add a lake-membership roundtrip to
-      // every edit, including the mask-only mainline that had none before this feature.
-      const lakeAccess =
-        referenceImageFabFileIds?.length && this.resolveLakeAccess
-          ? await this.resolveLakeAccess(user, logger)
-          : undefined;
       const referenceImages = await this.resolveReferenceImages({
         referenceImageFabFileIds,
         userId,
