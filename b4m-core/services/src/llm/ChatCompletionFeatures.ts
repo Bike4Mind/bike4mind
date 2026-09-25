@@ -795,15 +795,13 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
     try {
       // The SAME entitlement-aware resolver forced retrieval and the knowledge tools use, so the card
       // spans exactly the lakes this user may read - the offer and the read can't disagree.
-      const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
-      // `entitlementKeysResolved` deliberately omitted (defaults to complete): this call site reads
-      // only `dataLakeTags`, never `excludedByAccessCount` - see that field's own doc on why an
-      // entitlement-read failure must reach it (#3155 review). Add the field here too if this ever
-      // starts reading the count.
+      const { keys: entitlementKeys, resolved: entitlementKeysResolved } =
+        await this.chatCompletion.resolveEntitlementKeys();
       const { dataLakeTags: entitledTags } = await getDynamicDataLakeAccess({
         db: this.chatCompletion.db,
         user: this.user,
         entitlementKeys,
+        entitlementKeysResolved,
       });
       // SCOPE to the session's selected lakes. Without this the card would inject EVERY entitled
       // lake's beliefs into every turn regardless of which lake the session is about - the always-on
@@ -1992,14 +1990,22 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   // resolved-access shape is a contract, not because a live caller needs it.
   private async resolveDataLakeAccess(): Promise<ResolvedLakeAccessSet> {
     const { db, user } = this.chatCompletion;
-    const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
+    const { keys: entitlementKeys, resolved: entitlementKeysResolved } =
+      await this.chatCompletion.resolveEntitlementKeys();
     // `logger` is not optional in practice: getDynamicDataLakeAccess degrades closed on a failed
     // grants or lakes read and reports it ONLY through this logger (setting lakeViewComplete false
     // as the machine-readable half). Omitting it made every one of those catches silent on the main
     // chat path, so "this user reaches no lakes" and "the grant read just failed" looked identical.
-    // `entitlementKeysResolved` deliberately omitted here too, same reason as the lake-memory card
-    // above: this path never reads `excludedByAccessCount` (#3155 review).
-    const resolved = await getDynamicDataLakeAccess({ db, user, entitlementKeys, logger: this.logger });
+    // A degraded key list can drop an entitlement-gated lake from the set below, so the signal
+    // travels with the keys: it is what makes `lakeViewComplete` report this turn's coverage as
+    // reduced instead of passing off a short list as whole.
+    const resolved = await getDynamicDataLakeAccess({
+      db,
+      user,
+      entitlementKeys,
+      entitlementKeysResolved,
+      logger: this.logger,
+    });
     // `user.id` is the session OWNER here, not merely the turn's actor: preauthorizedLakeIds only
     // reaches this process after vetPreauthorizedLakeIds has established the two are the same
     // principal, and an unvetted path leaves the field unset.
@@ -2126,13 +2132,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       if (datalakeTags.length === 0) return null;
 
       const { db, user } = this.chatCompletion;
-      const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
+      const { keys: entitlementKeys, resolved: entitlementKeysResolved } =
+        await this.chatCompletion.resolveEntitlementKeys();
       // Held in a local rather than passed inline: the grant-reach memo is scoped by OBJECT
       // IDENTITY, so the telemetry derivation below is a cache hit only if it gets this same
-      // instance (see grantedLakeIdsUsedFor). `entitlementKeysResolved` deliberately omitted, same
-      // reason as the other two builders in this file: nothing downstream of this object reads
-      // `excludedByAccessCount` (#3155 review).
-      const lakeAccessContext = { db, user, entitlementKeys, logger: this.logger };
+      // instance (see grantedLakeIdsUsedFor).
+      const lakeAccessContext = { db, user, entitlementKeys, entitlementKeysResolved, logger: this.logger };
       const prompts = await getAccessibleDataLakePrompts(lakeAccessContext, {
         restrictToDatalakeTags: datalakeTags,
         preauthorizedLakeIds: this.preauthorizedLakeIds,
