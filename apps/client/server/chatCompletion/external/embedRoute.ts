@@ -16,7 +16,7 @@ import {
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { assertOwnerHasCredits, assertKeySpendWithinCap, apiKeyService } from '@bike4mind/services';
-import { executeCompletion } from '@bike4mind/services/cliCompletions';
+import { executeCompletion, resolveOpenAiBareModelAlias } from '@bike4mind/services/cliCompletions';
 import {
   resolveQuestErrorCode,
   buildSharedTools,
@@ -205,10 +205,12 @@ async function buildEmbedServerTools(args: {
    */
   apiKeys: ApiKeyTable;
   models: ModelInfo[];
+  /** hydrated.model past resolveOpenAiBareModelAlias; catalog ids are the dated spelling. */
+  modelId: string;
   logger: Logger;
   getAbortSignal: () => AbortSignal | undefined;
 }): Promise<ICompletionOptionTools[] | undefined> {
-  const { ctx, hydrated, ownerOrg, apiKeys: toolApiKeys, models, logger, getAbortSignal } = args;
+  const { ctx, hydrated, ownerOrg, apiKeys: toolApiKeys, models, modelId, logger, getAbortSignal } = args;
 
   const enabledTools = resolveEmbedTools(hydrated);
   if (enabledTools.length === 0) return undefined;
@@ -246,13 +248,13 @@ async function buildEmbedServerTools(args: {
     return undefined;
   }
 
-  const modelInfo = models.find(m => m.id === hydrated.model);
+  const modelInfo = models.find(m => m.id === modelId);
   const toolLlm = getLlmByModel(toolApiKeys, { modelInfo, logger, endUserId: ctx.userId });
   if (!toolLlm) {
     logger.warn('[EMBED_CHAT] No LLM backend for tool context; running without tools');
     return undefined;
   }
-  toolLlm.currentModel = hydrated.model ?? '';
+  toolLlm.currentModel = modelId;
 
   const deps: ToolBuilderDeps = {
     userId: ctx.userId,
@@ -277,7 +279,7 @@ async function buildEmbedServerTools(args: {
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),
     llm: toolLlm,
-    model: hydrated.model,
+    model: modelId,
   };
   const callbacks: ToolBuilderCallbacks = {
     onStatusUpdate: async () => {},
@@ -471,10 +473,14 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         getSettingsByNames,
       })) as ApiKeyTable;
       const embedModels = await getAvailableModels(embedApiKeys);
-      const embedAdapterFamily = embedModels.find(m => m.id === hydrated.model)?.adapterFamily;
+      // Same alias resolution executeCompletion applies, so a bare OpenAI name
+      // ('gpt-4.1-mini') finds its dated catalog entry here instead of reading as an
+      // undescribed model and failing closed on one completion would have accepted.
+      const embedModelId = resolveOpenAiBareModelAlias(hydrated.model);
+      const embedAdapterFamily = embedModels.find(m => m.id === embedModelId)?.adapterFamily;
       if (inlinesReasoningIntoText(embedAdapterFamily)) {
         logger.warn('[EMBED_CHAT] Refused a model that streams reasoning in the text channel', {
-          model: hydrated.model,
+          model: embedModelId,
           adapterFamily: embedAdapterFamily,
         });
         return res.status(422).json({
@@ -493,6 +499,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       const serverTools = await buildEmbedServerTools({
         apiKeys: embedApiKeys,
         models: embedModels,
+        modelId: embedModelId,
         ctx,
         hydrated,
         // Only an org-owned agent extends KB authorization to org-mate projects.

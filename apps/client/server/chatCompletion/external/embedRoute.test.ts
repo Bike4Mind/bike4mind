@@ -46,9 +46,14 @@ vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys },
 }));
 
-vi.mock('@bike4mind/services/cliCompletions', () => ({
-  executeCompletion: mockExecuteCompletion,
-}));
+vi.mock('@bike4mind/services/cliCompletions', async () => {
+  // The REAL alias resolver: the route's model gate has to resolve a bare OpenAI name
+  // exactly as executeCompletion does, so a stub here would hide the mismatch it guards.
+  const actual = await vi.importActual<typeof import('@bike4mind/services/cliCompletions')>(
+    '@bike4mind/services/cliCompletions'
+  );
+  return { executeCompletion: mockExecuteCompletion, resolveOpenAiBareModelAlias: actual.resolveOpenAiBareModelAlias };
+});
 
 vi.mock('@bike4mind/services/llm', async () => {
   // Mirror the real resolveQuestErrorCode against the stand-in class, delegating
@@ -826,6 +831,25 @@ describe('POST /api/embed/chat - server-side tools', () => {
     expect(await res.json()).toMatchObject({ code: 'agent_model_not_embeddable' });
     // Pre-stream refusal: nothing was billed and no SSE frame was written.
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('accepts a bare OpenAI model alias by resolving it to its catalog id', async () => {
+    // The catalog stores the dated snapshot, and executeCompletion resolves the bare name
+    // before its own lookup. A gate reading the raw id finds no family and fail-closes on a
+    // model the completion would have accepted.
+    const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([
+      { id: 'gpt-4.1-mini-2025-04-14', backend: 'openai', adapterFamily: 'openai-chat' } as never,
+    ]);
+    hydrateWith({ model: 'gpt-4.1-mini' });
+
+    const res = await post(CHAT);
+
+    expect(res.status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalled();
+    // The tool context is pointed at the resolved id too, not the alias the catalog lacks.
+    const deps = mockBuildSharedTools.mock.calls[0]?.[0] as { model: string } | undefined;
+    expect(deps?.model).toBe('gpt-4.1-mini-2025-04-14');
   });
 
   it('keeps text already streamed when the run fails afterwards', async () => {
