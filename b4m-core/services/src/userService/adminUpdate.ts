@@ -139,11 +139,12 @@ export async function adminUpdateUser(
   // it is already negative, `-previousBalance` is a positive floor that would invert a
   // deduction into a credit, so apply the delta verbatim in that case.
   const creditDelta = previousBalance >= 0 ? Math.max(rawDelta, -previousBalance) : rawDelta;
-  // Stamp a purchase timestamp only for a net grant; a deduction must not count as a purchase.
-  const lastCreditsPurchasedAt = creditDelta > 0 ? new Date() : user.lastCreditsPurchasedAt;
   const auditCreditChange = creditDelta !== 0 && !!db.creditTransactions;
 
-  const builtParams = { ...baseParams, lastCreditsPurchasedAt };
+  // Stamp a purchase timestamp only for a net grant: a deduction is not a purchase, and carrying
+  // the field on every other admin save would $set the read snapshot back over a concurrent
+  // purchase stamp (addCredits only stamps for type === 'purchase', so an admin grant needs this).
+  const builtParams = creditDelta > 0 ? { ...baseParams, lastCreditsPurchasedAt: new Date() } : baseParams;
   const builtUser = applyBaseUserUpdates(user, builtParams);
   // Persist ONLY the fields this request changed, never a spread of the read snapshot -
   // that is what let an admin save round-trip (and revert) a concurrent tokenVersion bump

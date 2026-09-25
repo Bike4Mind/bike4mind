@@ -6,6 +6,7 @@ import {
   PromptMeta,
   rebindPromptMetaSession,
   redactPromptMetaForViewer,
+  toPersistedSummaryTrigger,
 } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
@@ -56,6 +57,7 @@ export const cloneSession = async (
     tags: session.tags ?? [],
     summary: session.summary,
     summaryAt: session.summaryAt,
+    summaryTrigger: toPersistedSummaryTrigger(session.summaryTrigger),
     taggedAt: session.taggedAt,
     clonedSourceId: session.id,
     // Carried from the source, not re-derived: the owner's scope is already correct and explicit,

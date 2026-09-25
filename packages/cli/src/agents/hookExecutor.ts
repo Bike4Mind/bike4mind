@@ -15,6 +15,7 @@
 
 import type { HookDefinition, HookMatcher, HookResult } from './types.js';
 import { runShellCommand } from '../utils/shellRunner.js';
+import { requestShellCommandPermission, type ShellCommandPermissionDeps } from '../utils/commandPermission.js';
 
 /**
  * Context passed to hook scripts via stdin as JSON
@@ -40,9 +41,27 @@ const DEFAULT_HOOK_TIMEOUT_SECONDS = 60;
  * @param context - Context to pass to the hook
  * @returns Hook execution result
  */
-async function executeCommandHook(hook: HookDefinition, context: HookContext): Promise<HookResult> {
+async function executeCommandHook(
+  hook: HookDefinition,
+  context: HookContext,
+  perm: ShellCommandPermissionDeps
+): Promise<HookResult> {
   if (!hook.command) {
     return { decision: 'allow' };
+  }
+
+  // Gate the hook command through the permission path BEFORE running it. Loading
+  // a trusted project's agent does not pre-authorize the shell it carries. `perm`
+  // is required so a call site that forgets to wire it is a type error, never a
+  // silent bypass that runs the repo's shell unprompted.
+  const decision = await requestShellCommandPermission(
+    `agent_hook:${context.hook_event_name}`,
+    hook.command,
+    context.cwd,
+    perm
+  );
+  if (!decision.allowed) {
+    return { decision: 'deny', reason: decision.reason || 'Hook command denied' };
   }
 
   const timeoutSeconds = hook.timeout ?? DEFAULT_HOOK_TIMEOUT_SECONDS;
@@ -134,7 +153,11 @@ function matchesToolPattern(toolName: string, pattern: string): boolean {
  * @param context - Context to pass to matching hooks
  * @returns Aggregated hook result
  */
-export async function executeHooks(hooks: HookMatcher[] | undefined, context: HookContext): Promise<HookResult> {
+export async function executeHooks(
+  hooks: HookMatcher[] | undefined,
+  context: HookContext,
+  perm: ShellCommandPermissionDeps
+): Promise<HookResult> {
   if (!hooks || hooks.length === 0) {
     return { decision: 'allow' };
   }
@@ -159,7 +182,7 @@ export async function executeHooks(hooks: HookMatcher[] | undefined, context: Ho
   const results = await Promise.all(
     matchingHooks
       .filter(hook => hook.type === 'command') // Only command hooks for now
-      .map(hook => executeCommandHook(hook, context))
+      .map(hook => executeCommandHook(hook, context, perm))
   );
 
   // If any hook denies/blocks, return that result

@@ -1,9 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
-import SessionContainer from '@client/app/components/Session/SessionContainer';
-import { NotebookFilepondProvider } from '@client/app/components/Session/NotebookFilepondProvider';
-import DataLakeChatSurface from '@client/app/components/datalake/DataLakeChatSurface';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { useQuestPreparation } from '@client/app/hooks/useQuestPreparation';
@@ -23,9 +20,9 @@ const NewNotebookPage = () => {
 
   useDocumentTitle(search.goal || isPreparingQuest ? 'Preparing Quest...' : 'New Notebook');
 
-  // CRITICAL: Record the launch intent before child useEffects read it.
-  // useLayoutEffect runs synchronously after render but before child useEffects,
-  // so useSendMessage's consuming effect finds the intent already set.
+  // CRITICAL: Record the launch intent before useSendMessage's effect reads it. A commit runs
+  // all its layout effects before any passive effect, and the shell mounts this component in
+  // the same commit as the chat (shell.tsx), so the consuming effect finds the intent set.
   useLayoutEffect(() => {
     if (!hasProcessedQuestParams.current && search.goal) {
       hasProcessedQuestParams.current = true;
@@ -48,6 +45,8 @@ const NewNotebookPage = () => {
     }
   }, [search.goal, search.questmaster, setPreparingQuest, navigate]);
 
+  // Runs on entering /new, from anywhere: the shell keeps the chat mounted, but mounts this
+  // component only while /new is the matched child.
   useEffect(() => {
     // Clear workbench state for new notebook
     console.log('🧹 Clearing all workbench files for new notebook');
@@ -66,12 +65,8 @@ const NewNotebookPage = () => {
   }, [setCurrentSession, setCurrentSessionId, clearAllSessions, setWorkBenchAgents]);
 
   // Overlay is now rendered at app level (QuestPreparationOverlay in root layout)
-  // so it persists across page navigation
-  return (
-    <NotebookFilepondProvider>
-      <DataLakeChatSurface chat={<SessionContainer isLoading={false} />} />
-    </NotebookFilepondProvider>
-  );
+  // so it persists across page navigation. The chat itself is the notebook shell's (shell.tsx).
+  return null;
 };
 
 export default NewNotebookPage;

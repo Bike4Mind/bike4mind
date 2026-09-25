@@ -46,8 +46,9 @@ export interface PersistedSessionState {
 export const useAccessToken = create<{
   /** In-memory ONLY (never persisted): a page reload re-obtains it via the bootstrap silent
    *  refresh, which exchanges the HttpOnly refresh cookie. Kept in JS rather than a cookie
-   *  because the WebSocket lives on a different registrable domain and authenticates with
-   *  `?token=<accessToken>`, which a cookie cannot reach. */
+   *  because the WebSocket lives on a different registrable domain: JS uses the token to mint a
+   *  single-use connect ticket (POST /api/websocket/ticket) and the socket authenticates with
+   *  `?ticket=<ticket>`, which a cookie cannot reach. */
   accessToken: string | null;
   /** True while the active session belongs to a user an admin is impersonating. Derived from
    *  the server (`impersonating` on the loginAs / refresh / identify responses) because the

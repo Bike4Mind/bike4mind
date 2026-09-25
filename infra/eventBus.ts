@@ -80,6 +80,45 @@ eventBus.subscribe(
 );
 
 // Session events
+//
+// Shared DLQ for the session enrichment handlers. EventBridge invokes these Lambdas
+// asynchronously, so a failure can be lost on either side of the invoke:
+// - the rule-target DLQ (sessionEnrichmentRuleDLQ) only sees events EventBridge could not
+//   hand to Lambda at all;
+// - once Lambda accepts the invoke, a thrown error, timeout or init crash is retried by
+//   Lambda (2 retries) and then dropped unless the FUNCTION has a dead-letter target
+//   (sessionEnrichmentFunctionDLQ). This is the side a real handler failure lands on.
+// Alarm-only (no source queue to replay into; recovery is re-emitting the event), see
+// infra/dlqAlarms.ts. Guarded by infra/__tests__/sessionEnrichmentDlq.test.ts.
+const sessionEnrichmentDLQ = new sst.aws.Queue('sessionEnrichmentDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+
+// Lambda delivers async-invoke failures to the DLQ with the function's own execution role.
+const sessionEnrichmentDLQSendPermission = {
+  actions: ['sqs:SendMessage'],
+  resources: [sessionEnrichmentDLQ.arn],
+};
+
+// sst.aws.Function has no first-party async-invoke DLQ prop, so the underlying
+// aws.lambda.Function's deadLetterConfig is set directly (same as fabFileModerationDLQ in
+// infra/queues.ts).
+const sessionEnrichmentFunctionDLQ = {
+  function: {
+    deadLetterConfig: { targetArn: sessionEnrichmentDLQ.arn },
+  },
+};
+
+const sessionEnrichmentRuleDLQ = {
+  target: {
+    deadLetterConfig: { arn: sessionEnrichmentDLQ.arn },
+  },
+};
+
 const sessionAutoNamingSubscription = eventBus.subscribe(
   'session-auto-name',
   {
@@ -96,12 +135,15 @@ const sessionAutoNamingSubscription = eventBus.subscribe(
         actions: ['bedrock:*'],
         resources: ['*'],
       },
+      sessionEnrichmentDLQSendPermission,
     ],
+    transform: sessionEnrichmentFunctionDLQ,
   },
   {
     pattern: {
       detailType: ['session.auto_name'],
     },
+    transform: sessionEnrichmentRuleDLQ,
   }
 );
 
@@ -121,12 +163,15 @@ const sessionSummarizationSubscription = eventBus.subscribe(
         actions: ['bedrock:*'],
         resources: ['*'],
       },
+      sessionEnrichmentDLQSendPermission,
     ],
+    transform: sessionEnrichmentFunctionDLQ,
   },
   {
     pattern: {
       detailType: ['session.summarize'],
     },
+    transform: sessionEnrichmentRuleDLQ,
   }
 );
 
@@ -139,9 +184,10 @@ const sessionContextSummarizationSubscription = eventBus.subscribe(
     vpc: lambdaVpc,
     timeout: '2 minutes',
     environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
-    permissions: [{ actions: ['bedrock:*'], resources: ['*'] }],
+    permissions: [{ actions: ['bedrock:*'], resources: ['*'] }, sessionEnrichmentDLQSendPermission],
+    transform: sessionEnrichmentFunctionDLQ,
   },
-  { pattern: { detailType: ['session.context_summarize'] } }
+  { pattern: { detailType: ['session.context_summarize'] }, transform: sessionEnrichmentRuleDLQ }
 );
 
 const sessionTaggingSubscription = eventBus.subscribe(
@@ -163,14 +209,46 @@ const sessionTaggingSubscription = eventBus.subscribe(
         actions: ['bedrock:*'],
         resources: ['*'],
       },
+      sessionEnrichmentDLQSendPermission,
     ],
+    transform: sessionEnrichmentFunctionDLQ,
   },
   {
     pattern: {
       detailType: ['session.tag'],
     },
+    transform: sessionEnrichmentRuleDLQ,
   }
 );
+
+const sessionEnrichmentSubscriptions = [
+  sessionAutoNamingSubscription,
+  sessionSummarizationSubscription,
+  sessionContextSummarizationSubscription,
+  sessionTaggingSubscription,
+];
+
+// EventBridge delivers to a rule-target DLQ as the events.amazonaws.com service principal,
+// so the queue needs a resource policy granting SendMessage, scoped to the session rules.
+new aws.sqs.QueuePolicy('sessionEnrichmentDLQPolicy', {
+  queueUrl: sessionEnrichmentDLQ.url,
+  policy: $util
+    .all([sessionEnrichmentDLQ.arn, $util.all(sessionEnrichmentSubscriptions.map(sub => sub.nodes.rule.arn))])
+    .apply(([dlqArn, ruleArns]) =>
+      JSON.stringify({
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Effect: 'Allow',
+            Principal: { Service: 'events.amazonaws.com' },
+            Action: 'sqs:SendMessage',
+            Resource: dlqArn,
+            Condition: { ArnEquals: { 'aws:SourceArn': ruleArns } },
+          },
+        ],
+      })
+    ),
+});
 
 // Notebook Curation events
 eventBus.subscribe(
@@ -354,6 +432,7 @@ sst.aws.Queue.createPolicy('SreFixQueueDLQEventsPolicy', sreFixQueueDLQ.arn);
 export {
   eventBus,
   telemetryAlertRuleDLQ,
+  sessionEnrichmentDLQ,
   sreFixDispatchSubscription,
   sessionAutoNamingSubscription,
   sessionSummarizationSubscription,

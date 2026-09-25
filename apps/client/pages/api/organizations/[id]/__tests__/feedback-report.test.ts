@@ -90,7 +90,7 @@ describe('GET /api/organizations/[id]/feedback-report', () => {
   });
 
   it('refuses a window longer than a year, the same ceiling the summary route enforces', async () => {
-    await expect(invoke({ from: '2024-01-01', to: '2026-01-01' })).rejects.toThrow(/must not exceed 365 days/);
+    await expect(invoke({ from: '2024-01-01', to: '2026-01-01' })).rejects.toThrow(/must not exceed 366 days/);
     expect(orgFeedbackReport).not.toHaveBeenCalled();
   });
 

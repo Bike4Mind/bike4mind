@@ -718,6 +718,16 @@ export class NotebookExportService {
       };
     }
 
+    // citables resolve b4m_map fences in the reply text this export already includes, unlike the
+    // rest of promptMeta which is opt-in metadata about the reply - so it must not share the
+    // includeMetadata gate, or turning that toggle off silently drops the place list.
+    if (message.promptMeta?.citables) {
+      exportedMessage.promptMeta = {
+        ...exportedMessage.promptMeta,
+        citables: message.promptMeta.citables,
+      };
+    }
+
     // Add agent info
     if (message.agentIds && message.agentIds.length > 0) {
       exportedMessage.agentIds = message.agentIds;

@@ -5,10 +5,10 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { NotFoundError } from '@server/utils/errors';
 import {
   Permission,
-  ISessionDocument,
   IChatHistoryItem,
   IUserDocument,
   redactPromptMetaForViewer,
+  PersistedSessionSummaryTrigger,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Session as SessionModel, sessionRepository } from '@bike4mind/database/auth';
@@ -141,7 +141,9 @@ export const stopReply = async (sessionId: string, ability: Ability) => {
   if (!session) throw new NotFoundError('Session not found');
   if (!latestQuest) throw new NotFoundError('No active quest found');
 
-  if (latestQuest.status !== 'stopped') {
+  // Only a quest still generating can be stopped. A Stop that raced the final chunk would
+  // otherwise overwrite a finished answer and broadcast a late 'stopped' for it.
+  if (latestQuest.status !== 'stopped' && latestQuest.status !== 'done') {
     // Emit a cancellation event through pub/sub if available
     try {
       Logger.info(`Stopping quest generation for questId: ${latestQuest.id}`, {
@@ -153,20 +155,22 @@ export const stopReply = async (sessionId: string, ability: Ability) => {
       console.error('Error emitting cancellation event:', error);
     }
 
-    return await Quest.findOneAndUpdate(
-      { _id: latestQuest.id },
+    // The status filter closes the same race between the read above and this write.
+    const stopped = await Quest.findOneAndUpdate(
+      { _id: latestQuest.id, status: { $nin: ['done', 'stopped'] } },
       {
         status: 'stopped',
         statusMessage: 'Generation cancelled by user',
       },
       { new: true } // Return the updated document
     );
+    return stopped ?? latestQuest;
   }
 
   return latestQuest;
 };
 
-export const summarizeSession = async (sessionId: string, trigger: ISessionDocument['summaryTrigger']) => {
+export const summarizeSession = async (sessionId: string, trigger: PersistedSessionSummaryTrigger) => {
   await publishSummarizeSession(sessionId, trigger);
 };
 

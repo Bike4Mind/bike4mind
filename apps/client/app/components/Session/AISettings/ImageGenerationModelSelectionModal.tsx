@@ -27,12 +27,13 @@ import {
   BFL_IMAGE_MODELS,
   BFL_SAFETY_TOLERANCE,
   GEMINI_IMAGE_MODELS,
+  fallbackImageSize,
   IMAGE_SIZE_CONSTRAINTS,
+  isSupportedImageSize,
   OpenAIImageQuality,
   OpenAIImageSize,
   OpenAIImageStyle,
   isGPTImageModel,
-  isGPTImage2Model,
   isKontextModel as isKontextImageModel,
   EDIT_SUPPORTED_IMAGE_MODELS,
 } from '@bike4mind/common';
@@ -49,7 +50,14 @@ import {
 import MetadataChip from './MetaDataChips';
 import { useModelStats } from '@client/app/hooks/data/useModelStats';
 import { ContextHelpButton } from '@client/app/components/help';
-import { ignoresUpsamplingAndSeed, withInertNote } from './inertImageSettings';
+import {
+  ASPECT_RATIO_INERT_NOTE,
+  ignoresAspectRatio,
+  ignoresUpsamplingAndSeed,
+  withInertNote,
+} from './inertImageSettings';
+import { imageSizeUpdate } from './imageSizeUpdate';
+import { defaultImageSize, getAvailableImageSizes } from './imageSizeOptions';
 interface ImageGenerationModelSelectionModalProps {
   open: boolean;
   onClose: () => void;
@@ -193,14 +201,8 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
       const updates: Parameters<typeof setLLM>[0] = { imageModel: newModel, lastUsedImageModel: newModel };
       // If switching to a GPT model with an incompatible size (e.g. a BFL-only size like '1440x810'),
       // reset to the default GPT size so we don't send an invalid size to the backend.
-      if (
-        isGPTImageModel(newModel) &&
-        _size &&
-        !IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes.includes(
-          _size as (typeof IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes)[number]
-        )
-      ) {
-        updates.size = IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.defaultSize;
+      if (isGPTImageModel(newModel) && _size && !isSupportedImageSize(newModel, _size)) {
+        updates.size = fallbackImageSize(newModel);
       }
       setLLM(updates);
     },
@@ -258,22 +260,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
     color: 'text.primary',
   };
 
-  const getModelConstraintKey = (modelId: string) => {
-    if (isGPTImage2Model(modelId)) return 'GPT_IMAGE_2';
-    if (isGPTImageModel(modelId)) return 'GPT_IMAGE_1';
-    if ((BFL_IMAGE_MODELS as readonly string[]).includes(modelId)) return 'BFL';
-    return 'GPT_IMAGE_1';
-  };
   const isKontextModel = isKontextImageModel(contextImageModel);
-  const getAvailableSizes = (modelId: string) => {
-    if (isGPTImage2Model(modelId)) return IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.sizes;
-    if (isGPTImageModel(modelId)) return IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes;
-    if ((BFL_IMAGE_MODELS as readonly string[]).includes(modelId)) {
-      if (isKontextModel) return [];
-      return IMAGE_SIZE_CONSTRAINTS.BFL.sizes;
-    }
-    return IMAGE_SIZE_CONSTRAINTS.BFL.sizes;
-  };
 
   // Coerce quality only when the selected model cannot express the current value - i.e. it
   // came from the other vocabulary (or is unset/'auto', which the select cannot display).
@@ -311,9 +298,9 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
           {
             label: 'Image Size',
             type: 'select' as const,
-            value: _size || IMAGE_SIZE_CONSTRAINTS[getModelConstraintKey(contextImageModel)].defaultSize,
-            onChange: (value: OpenAIImageSize | null) => value && setLLM({ size: value }),
-            options: getAvailableSizes(contextImageModel).map(s => ({ value: s, label: s })),
+            value: _size || defaultImageSize(contextImageModel),
+            onChange: (value: OpenAIImageSize | null) => value && setLLM(imageSizeUpdate(contextImageModel, value)),
+            options: getAvailableImageSizes(contextImageModel, _size).map(s => ({ value: s, label: s })),
             testId: 'image-setting-size-select',
           },
         ]
@@ -369,7 +356,13 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
             inputProps: {
               type: 'number',
               placeholder: 'Auto',
-              slotProps: { input: { min: 256, max: 4096, step: 8 } },
+              slotProps: {
+                input: {
+                  min: IMAGE_SIZE_CONSTRAINTS.BFL.minWidth,
+                  max: IMAGE_SIZE_CONSTRAINTS.BFL.maxWidth,
+                  step: IMAGE_SIZE_CONSTRAINTS.BFL.stepSize,
+                },
+              },
             },
             testId: 'image-setting-width-input',
           },
@@ -381,7 +374,13 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
             inputProps: {
               type: 'number',
               placeholder: 'Auto',
-              slotProps: { input: { min: 256, max: 4096, step: 8 } },
+              slotProps: {
+                input: {
+                  min: IMAGE_SIZE_CONSTRAINTS.BFL.minHeight,
+                  max: IMAGE_SIZE_CONSTRAINTS.BFL.maxHeight,
+                  step: IMAGE_SIZE_CONSTRAINTS.BFL.stepSize,
+                },
+              },
             },
             testId: 'image-setting-height-input',
           },
@@ -392,6 +391,12 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
       type: 'select' as const,
       value: _aspect_ratio?.toString() ?? '',
       onChange: (value: string | null) => setLLM({ aspect_ratio: value ? value : undefined }),
+      tooltip: withInertNote(
+        'Shape of the generated image',
+        ignoresAspectRatio(contextImageModel),
+        ASPECT_RATIO_INERT_NOTE
+      ),
+      disabled: ignoresAspectRatio(contextImageModel),
       options: [
         { value: '', label: 'Auto' },
         { value: '16:9', label: '16:9' },
@@ -578,6 +583,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
                         <Select
                           value={setting.value}
                           onChange={(_, newValue: any) => setting.onChange(newValue)}
+                          disabled={(setting as { disabled?: boolean }).disabled}
                           sx={commonSelectStyles}
                           slotProps={{ listbox: { sx: { zIndex: 2000 } } }}
                           data-testid={(setting as any).testId}

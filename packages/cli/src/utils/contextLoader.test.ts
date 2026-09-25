@@ -177,7 +177,9 @@ describe('contextLoader', () => {
         expect(result.errors).toEqual([]);
       });
 
-      it('should use cwd when projectDir is null', async () => {
+      it('should skip the project layer when projectDir is null (no cwd fallback)', async () => {
+        // The folder-trust gate passes null for an untrusted project; the repo's
+        // context file must NOT be loaded from cwd in that case.
         vi.mocked(fs.lstatSync).mockImplementation((p: fs.PathLike) => {
           if (p === '/home/user/project/CLAUDE.md') {
             return { isDirectory: () => false, isSymbolicLink: () => false, size: 100 } as fs.Stats;
@@ -188,7 +190,7 @@ describe('contextLoader', () => {
 
         const result = await loadContextFiles(null);
 
-        expect(result.projectContext?.path).toBe('/home/user/project/CLAUDE.md');
+        expect(result.projectContext).toBeNull();
       });
     });
 

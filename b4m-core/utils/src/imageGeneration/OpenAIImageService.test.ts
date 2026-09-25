@@ -27,12 +27,7 @@ vi.mock('./imageProcessorUtils', () => ({
   downloadImageAsBuffer: vi.fn(),
 }));
 
-import {
-  buildModerationBlockedError,
-  isSupportedEditSize,
-  OpenAIImageService,
-  resolveGptImageOutputOptions,
-} from './OpenAIImageService';
+import { buildModerationBlockedError, OpenAIImageService, resolveGptImageOutputOptions } from './OpenAIImageService';
 import { downloadImageAsBuffer } from './imageProcessorUtils';
 
 // The helper only reads `code`, `status`, and `requestID` off the error, so a
@@ -222,50 +217,6 @@ describe('OpenAIImageService.generate output controls', () => {
     expect(image).toBe('data:image/webp;base64,QUJD');
   });
 });
-
-describe('isSupportedEditSize', () => {
-  it('accepts the gpt-image-1 family presets', () => {
-    for (const size of ['1024x1024', '1024x1536', '1536x1024']) {
-      expect(isSupportedEditSize(ImageModels.GPT_IMAGE_1_5, size)).toBe(true);
-    }
-  });
-
-  it('rejects a dall-e-2 size for the gpt-image-1 family', () => {
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_1_5, '512x512')).toBe(false);
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_1, '256x256')).toBe(false);
-  });
-
-  it('rejects a custom resolution for the gpt-image-1 family, which has fixed sizes', () => {
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_1_5, '1920x1088')).toBe(false);
-  });
-
-  it('accepts the gpt-image-2 presets and auto', () => {
-    for (const size of ['1024x1024', '2048x2048', '2048x1152', '3840x2160', '2160x3840', 'auto']) {
-      expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, size)).toBe(true);
-    }
-  });
-
-  it('accepts a custom gpt-image-2 resolution that meets every constraint', () => {
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, '1920x1088')).toBe(true);
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, '1280x1024')).toBe(true);
-  });
-
-  it('rejects a custom gpt-image-2 resolution for each individual constraint', () => {
-    // Each of these violates exactly one rule from IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, '1920x1080')).toBe(false); // 1080 is not a multiple of 16
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, '800x800')).toBe(false); // under the minimum pixel count
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, '3840x2224')).toBe(false); // over the maximum pixel count
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, '3072x768')).toBe(false); // aspect ratio beyond 3:1
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, '3856x2144')).toBe(false); // long edge beyond 3840
-  });
-
-  it('rejects a size that is absent or not a WIDTHxHEIGHT pair', () => {
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, undefined)).toBe(false);
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, null)).toBe(false);
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, 'wide')).toBe(false);
-  });
-});
-
 const PNG_DATA_URL = `data:image/png;base64,${Buffer.from('fake-png').toString('base64')}`;
 
 function makeService() {
@@ -399,6 +350,24 @@ describe('OpenAIImageService.edit', () => {
     expect(params.response_format).toBe('url');
     expect(params.user).toBe('user-1');
   });
+
+  it.each(['1792x1024', '1024x1792'])(
+    'omits the dall-e-3 size %s on the dall-e-2 edit arm, which OpenAI would reject',
+    async size => {
+      // The size gate used to be computed and then ignored on this arm, so a size dall-e-2
+      // does not accept reached OpenAI and 400-ed the whole edit. Dropping it lets OpenAI
+      // apply its own default instead, which is what the gpt-image arm has always done.
+      const params = await editParams({ model: ImageModels.DALL_E_2, size });
+
+      expect(params).not.toHaveProperty('size');
+    }
+  );
+
+  it.each(['256x256', '512x512', '1024x1024'])('forwards the dall-e-2 size %s, which its tier accepts', async size => {
+    const params = await editParams({ model: ImageModels.DALL_E_2, size });
+
+    expect(params.size).toBe(size);
+  });
 });
 
 describe('OpenAIImageService.generate gpt-image-2 sizing', () => {
@@ -436,6 +405,36 @@ describe('OpenAIImageService.generate gpt-image-2 sizing', () => {
 
     expect(params.size).toBe('auto');
   });
+});
+
+describe('OpenAIImageService.generate legacy dall-e sizing', () => {
+  beforeEach(() => {
+    imagesGenerate.mockReset();
+  });
+
+  /** Runs generate() against the mocked SDK and returns the params it sent. */
+  async function generateParams(options: Record<string, unknown>): Promise<Record<string, unknown>> {
+    imagesGenerate.mockResolvedValue({ data: [{ url: 'https://example.test/i.png' }] });
+    await makeService().generate('a bicycle', options);
+    return imagesGenerate.mock.calls[0][0] as Record<string, unknown>;
+  }
+
+  it.each(['256x256', '512x512', '1024x1024'])('keeps the dall-e-2 size %s', async size => {
+    const params = await generateParams({ model: ImageModels.DALL_E_2, size });
+
+    expect(params.size).toBe(size);
+  });
+
+  it.each(['1792x1024', '1024x1792'])(
+    'coerces the dall-e-3 size %s to the dall-e-2 default rather than sending it',
+    async size => {
+      // The legacy branch measured every dall-e model against the union of both tiers, so
+      // these survived and 400-ed at OpenAI. Each tier is now measured against its own list.
+      const params = await generateParams({ model: ImageModels.DALL_E_2, size });
+
+      expect(params.size).toBe('1024x1024');
+    }
+  );
 });
 
 describe('OpenAIImageService.generate gpt-image quality forwarding (#2742)', () => {
@@ -560,5 +559,87 @@ describe('OpenAIImageService.generate gpt-image quality forwarding (#2742)', () 
     });
 
     expect(images).toHaveLength(3);
+  });
+});
+
+describe('OpenAIImageService reference images (#2744)', () => {
+  const REF_A = `data:image/png;base64,${Buffer.from('anchor-a').toString('base64')}`;
+  const REF_B = `data:image/png;base64,${Buffer.from('anchor-b').toString('base64')}`;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    imagesEdit.mockResolvedValue({ created: 0, output_format: 'png', data: [{ b64_json: 'RURJVA==' }] });
+    // Every source routed through toImageFile lands here. Decoding data URLs the way the
+    // real helper does is what lets the ordering assertion below tell the anchors apart.
+    vi.mocked(downloadImageAsBuffer).mockImplementation(async (source: string) =>
+      source.startsWith('data:image/') ? Buffer.from(source.split(',')[1], 'base64') : Buffer.from('primary')
+    );
+  });
+
+  it('appends anchors after the edit source so a mask still binds to the source', async () => {
+    const params = await editParams({
+      model: ImageModels.GPT_IMAGE_2,
+      mask: PNG_DATA_URL,
+      referenceImages: [REF_A, REF_B],
+    });
+
+    const images = params.image as File[];
+    expect(images).toHaveLength(3);
+    // OpenAI applies the mask to element 0; the edit source has to be that element.
+    expect(images[0].name).toBe('image.png');
+    expect(images.slice(1).map(file => file.name)).toEqual(['reference-1.png', 'reference-2.png']);
+    expect(params.mask).toBeInstanceOf(File);
+  });
+
+  it('preserves the caller-supplied anchor order', async () => {
+    const params = await editParams({
+      model: ImageModels.GPT_IMAGE_2,
+      referenceImages: [REF_A, REF_B],
+    });
+
+    const bytes = await Promise.all((params.image as File[]).slice(1).map(file => file.text()));
+    expect(bytes).toEqual(['anchor-a', 'anchor-b']);
+  });
+
+  it('drops anchors for dall-e-2, whose edit endpoint takes a single image', async () => {
+    const params = await editParams({
+      model: ImageModels.DALL_E_2,
+      referenceImages: [REF_A, REF_B],
+    });
+
+    expect(params.image).toBeInstanceOf(File);
+    expect(Array.isArray(params.image)).toBe(false);
+  });
+
+  it('sends no anchor key when none are supplied', async () => {
+    const params = await editParams({ model: ImageModels.GPT_IMAGE_2 });
+
+    expect(params.image).toHaveLength(1);
+  });
+
+  it('forwards anchors through the image-to-image generate path', async () => {
+    await new OpenAIImageService('test-key', new Logger(), 'image-processor-lambda').generate('an inventory icon', {
+      model: ImageModels.GPT_IMAGE_2,
+      imagePrompt: 'https://example.test/primary.png',
+      referenceImages: [REF_A, REF_B],
+    });
+
+    expect(imagesEdit).toHaveBeenCalledTimes(1);
+    const images = imagesEdit.mock.calls[0][0].image as File[];
+    expect(images).toHaveLength(3);
+    expect(images[0].name).toBe('image.png');
+  });
+
+  it('never leaks referenceImages into the text-to-image params the SDK validates', async () => {
+    imagesGenerate.mockResolvedValue({ created: 0, output_format: 'png', data: [{ b64_json: 'QUJD' }] });
+
+    await new OpenAIImageService('test-key', new Logger(), 'image-processor-lambda').generate('an inventory icon', {
+      model: ImageModels.GPT_IMAGE_2,
+      referenceImages: [REF_A],
+    });
+
+    // No primary image means the text-to-image endpoint, which would 400 on an unknown key.
+    expect(imagesGenerate).toHaveBeenCalledTimes(1);
+    expect(imagesGenerate.mock.calls[0][0]).not.toHaveProperty('referenceImages');
   });
 });

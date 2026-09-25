@@ -121,6 +121,80 @@ describe('SelfHostWorker', () => {
     worker.stop();
   });
 
+  it('retries returned batch failures while acknowledging other received messages', async () => {
+    const worker = new SelfHostWorker(mockLogger);
+    const bad = makeMessage({ MessageId: 'bad', ReceiptHandle: 'rc-bad' });
+    const good = makeMessage({ MessageId: 'good', ReceiptHandle: 'rc-good' });
+    const dispatch = vi.fn(async (event: { Records: { messageId: string }[] }) => ({
+      batchItemFailures: event.Records[0].messageId === 'bad' ? [{ itemIdentifier: 'bad' }] : [],
+    }));
+    drainOnce(worker, [bad, good]);
+    worker.registerQueueHandler('q', 'http://sqs/q', dispatch);
+
+    worker.start();
+
+    await vi.waitFor(() => expect(mockReceiveFromQueue).toHaveBeenCalledTimes(2));
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(mockDeleteFromQueue.mock.calls).toEqual([['http://sqs/q', 'rc-good']]);
+  });
+
+  it('acknowledges a redelivered batch failure only after successful processing', async () => {
+    const worker = new SelfHostWorker(mockLogger);
+    const dispatch = vi
+      .fn()
+      .mockResolvedValueOnce({ batchItemFailures: [{ itemIdentifier: 'm1' }] })
+      .mockResolvedValueOnce({ batchItemFailures: [] });
+    mockReceiveFromQueue
+      .mockResolvedValueOnce([makeMessage()])
+      .mockResolvedValueOnce([
+        makeMessage({ ReceiptHandle: 'retry-receipt', Attributes: { ApproximateReceiveCount: '2' } }),
+      ])
+      .mockImplementationOnce(async () => {
+        await worker.stop();
+        return [];
+      });
+    worker.registerQueueHandler('q', 'http://sqs/q', dispatch);
+
+    worker.start();
+
+    await vi.waitFor(() => expect(mockReceiveFromQueue).toHaveBeenCalledTimes(3));
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(mockDeleteFromQueue.mock.calls).toEqual([['http://sqs/q', 'retry-receipt']]);
+  });
+
+  it.each([undefined, null, {}, { statusCode: 200 }, { batchItemFailures: [] }, { batchItemFailures: null }])(
+    'acknowledges successful handler response %j',
+    async result => {
+      const worker = new SelfHostWorker(mockLogger);
+      drainOnce(worker, [makeMessage()]);
+      worker.registerQueueHandler('q', 'http://sqs/q', vi.fn().mockResolvedValue(result));
+
+      worker.start();
+
+      await vi.waitFor(() => expect(mockReceiveFromQueue).toHaveBeenCalledTimes(2));
+      expect(mockDeleteFromQueue.mock.calls).toEqual([['http://sqs/q', 'r1']]);
+    }
+  );
+
+  it.each([
+    { batchItemFailures: 'invalid' },
+    { batchItemFailures: {} },
+    { batchItemFailures: [null] },
+    { batchItemFailures: [{}] },
+    { batchItemFailures: [{ itemIdentifier: '' }] },
+    { batchItemFailures: [{ itemIdentifier: null }] },
+    { batchItemFailures: [{ itemIdentifier: 'another-message' }] },
+  ])('retains a message when its partial batch response is malformed: %j', async result => {
+    const worker = new SelfHostWorker(mockLogger);
+    drainOnce(worker, [makeMessage()]);
+    worker.registerQueueHandler('q', 'http://sqs/q', vi.fn().mockResolvedValue(result));
+
+    worker.start();
+
+    await vi.waitFor(() => expect(mockReceiveFromQueue).toHaveBeenCalledTimes(2));
+    expect(mockDeleteFromQueue).not.toHaveBeenCalled();
+  });
+
   it('names every polled queue and scheduled task in its boot log', async () => {
     // The only signal a self-host operator has that a consumer was skipped (its env var unset,
     // so main.ts warned and moved on) is which names this line does NOT contain. A count alone
@@ -158,6 +232,49 @@ describe('SelfHostWorker', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(fn).toHaveBeenCalledTimes(2);
     worker.stop();
+  });
+
+  it('runs startup and interval ticks through the same guard and drains startup on stop', async () => {
+    vi.useFakeTimers();
+    const worker = new SelfHostWorker(mockLogger);
+    let resolveRun!: () => void;
+    const fn = vi.fn(
+      () =>
+        new Promise<void>(resolve => {
+          resolveRun = resolve;
+        })
+    );
+    worker.registerScheduledTask('recovery', 60_000, fn, { runOnStartup: true });
+    worker.start();
+    expect(fn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    let stopped = false;
+    const stopping = worker.stop(1000).then(() => {
+      stopped = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stopped).toBe(false);
+    resolveRun();
+    await stopping;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs a failed startup task and retries on the next interval', async () => {
+    vi.useFakeTimers();
+    const worker = new SelfHostWorker(mockLogger);
+    const fn = vi.fn().mockRejectedValueOnce(new Error('Database unavailable')).mockResolvedValue(undefined);
+    worker.registerScheduledTask('recovery', 60_000, fn, { runOnStartup: true });
+    worker.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('scheduled task "recovery" failed'), {
+      error: 'Database unavailable',
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fn).toHaveBeenCalledTimes(2);
+    await worker.stop();
   });
 
   it('does not start a scheduled task again while its previous run is still in flight', async () => {
