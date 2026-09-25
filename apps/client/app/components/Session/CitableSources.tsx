@@ -250,9 +250,15 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
               </Typography>
             )}
           </Typography>
+          {/* Both badges below pin placement="top": chips are full-width and stack, so Joy's
+              default bottom lands the box on the next chip down. Note this does not clear the
+              conflict case entirely - conflicts are stamped symmetrically, so the lower chip of
+              a pair now opens over the partner above it. No placement clears both on a stacked
+              list; removing it needs a design change, not a prop (#3290). */}
           {isTruncated && (
             <Tooltip
               size="sm"
+              placement="top"
               title={`Content truncated${
                 truncationCap ? ` at ${truncationCap.toLocaleString()} chars` : ''
               } - the model saw a partial read of this source`}
@@ -264,7 +270,7 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
             </Tooltip>
           )}
           {conflictTooltip && (
-            <Tooltip size="sm" title={conflictTooltip}>
+            <Tooltip size="sm" placement="top" title={conflictTooltip}>
               <ConflictIcon
                 data-testid="citable-conflict-badge"
                 // The Tooltip only names the conflict to a reader who can hover it. titleAccess is
