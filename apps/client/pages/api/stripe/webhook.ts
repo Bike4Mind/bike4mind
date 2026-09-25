@@ -18,7 +18,7 @@ import { customerExists, CustomerType, isStripeConfigured, stripe } from '@serve
 import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { sendToClient } from '@server/websocket/utils';
-import { creditService } from '@bike4mind/services';
+import { creditService, userService } from '@bike4mind/services';
 import dayjs from 'dayjs';
 import { Resource } from 'sst';
 
@@ -344,15 +344,12 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       }
 
       if (user) {
-        // Before the flag write: if deactivation throws, Stripe's retry still sees the flag unset.
-        const deactivatingKeys = !user.disputePending;
-        if (deactivatingKeys) {
-          await userApiKeyRepository.deactivateAllByUserId(user.id);
-        }
-        await userRepository.update({ id: user.id, disputePending: true });
+        const { deactivatedKeys } = await userService.flagDisputePending(user, {
+          db: { users: userRepository, userApiKeys: userApiKeyRepository },
+        });
 
         await postMessageToSlack(
-          `\u{1F6A8} *Stripe Dispute Created* \u2014 dispute ${dispute.id}\n*User:* ${user.name || user.email} (${user.id})\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nAccount flagged, credits clawback initiated${deactivatingKeys ? ', API keys deactivated' : ''}.`
+          `\u{1F6A8} *Stripe Dispute Created* \u2014 dispute ${dispute.id}\n*User:* ${user.name || user.email} (${user.id})\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nAccount flagged, credits clawback initiated${deactivatedKeys ? ', API keys deactivated' : ''}.`
         );
         req.logger.info(`User ${user.id} flagged disputePending=true for dispute ${dispute.id}`);
       } else {
