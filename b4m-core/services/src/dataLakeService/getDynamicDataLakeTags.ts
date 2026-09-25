@@ -250,6 +250,24 @@ export async function getDynamicDataLakeTags(context: DataLakeAccessContext): Pr
 }
 
 /**
+ * Per-CALL options, deliberately not fields on `DataLakeAccessContext`: the context object is
+ * memoized per turn BY IDENTITY (see `dataLakeAccessContextMemo` in ChatCompletionProcess and
+ * `scopedAsyncMemo`'s WeakMap), so a caller wanting a differently-scoped resolution must be able to
+ * reuse the SAME context - spreading it into a copy would miss every membership/grant/supersession
+ * memo and re-read them against a possibly different snapshot.
+ */
+export interface GetDynamicDataLakeAccessOptions {
+  /**
+   * Resolve the ATTACHMENT scope rather than the retrieval one: draft lakes join active ones, as
+   * they already do on the browse door that admitted the file to the workbench (#3279). Only the
+   * three attachment doors may pass this - `ChatCompletionProcess.attachmentLakeAccess`,
+   * `resolveAttachmentLakeAccess`, and the app layer's `createAttachmentLakeAccess`. Every
+   * retrieval surface leaves it unset.
+   */
+  includeDraftLakes?: boolean;
+}
+
+/**
  * Returns BOTH the meta-tags AND the file tag prefixes for a user's accessible data lakes.
  * Use this for fabfiles.search() so files are matched by either the datalake:* meta-tag
  * (when present) OR by their content tag prefix (e.g. opti:*, acme:*) - many data lake
@@ -263,9 +281,11 @@ export async function getDynamicDataLakeTags(context: DataLakeAccessContext): Pr
  * The DB pre-filter's owner bypass is honoured too: a lake the caller created resolves even
  * when they do not hold its own declared gate. Ownership is re-verified here against the
  * persisted `createdByUserId` rather than assumed from the query, and stays bounded by the
- * pre-filter's `status: 'active'`, so a caller's own DRAFT lake remains browse-only. The
- * bypass is org-independent, matching browse: a creator who has since moved orgs still reaches
- * a gated lake they made in the old one, and only they or an admin could have put files in it.
+ * pre-filter's status set - `active` alone by default, so a DRAFT lake stays out of retrieval;
+ * `opts.includeDraftLakes` widens that to browse's own draft+active for the attachment doors, and
+ * for them only (#3279). The bypass is org-independent, matching browse: a creator who has since
+ * moved orgs still reaches a gated lake they made in the old one, and only they or an admin could
+ * have put files in it.
  *
  * Persisted access GRANTS are honoured on the same terms browse honours them (`grantedLakeReachFor`),
  * when a grant repo is wired: the grant row IS the authorization, so a granted lake bypasses the
@@ -274,7 +294,10 @@ export async function getDynamicDataLakeTags(context: DataLakeAccessContext): Pr
  * the lake's CREATOR, not the caller, so a granted lake's files match the moment the lake is in
  * this set.
  */
-export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): Promise<{
+export async function getDynamicDataLakeAccess(
+  context: DataLakeAccessContext,
+  opts: GetDynamicDataLakeAccessOptions = {}
+): Promise<{
   dataLakeTags: string[];
   dataLakeTagPrefixes: string[];
   scopedTagPrefixes: string[];
@@ -522,7 +545,7 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
         entitlementKeys,
         organizationIds,
         userId,
-        { ...reach, supersededOwnLakeIds: [...supersededOwnLakeIds] }
+        { ...reach, supersededOwnLakeIds: [...supersededOwnLakeIds], includeDraftLakes: opts.includeDraftLakes }
       );
       dynamicDataLakes = dbLakes.map(toDataLakeConfig);
       for (const dl of dbLakes) {
@@ -572,7 +595,17 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
     // a successful query - see `excludedByAccessCountPrerequisitesComplete`'s own doc for why
     // running the count on a degraded input would produce a confidently wrong number in either
     // direction rather than the honest "unknown" this field's contract requires.
-    if (excludedByAccessCountPrerequisitesComplete) {
+    //
+    // Skipped entirely on the attachment pass (#3279). That pass is a SECOND resolution in the same
+    // turn, and every one of its consumers builds an `AttachmentLakeAccess` from the tag/prefix/lake
+    // buckets alone - none reads this count. The count is also status-scoped to ACTIVE lakes and
+    // `includeDraftLakes` does not touch it, so re-running it here would spend a second whole-account
+    // query to recompute the identical number. Leaving the field `undefined` is the honest
+    // "not measured" its own contract already defines, not a false zero.
+    // Not warned when skipped for the attachment pass: unlike the degraded-prerequisite branch
+    // below, nothing failed - that pass was never asking the question.
+    const measureExclusionCount = !opts.includeDraftLakes && excludedByAccessCountPrerequisitesComplete;
+    if (measureExclusionCount) {
       try {
         excludedByAccessCount = await context.db.dataLakes.countGateExcludedLakes(
           userTags,
@@ -586,7 +619,7 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
       } catch (err) {
         context.logger?.warn('[dataLakes] gate-excluded-lake count failed; reporting as unknown', err);
       }
-    } else if (countPrerequisiteReadFailed) {
+    } else if (!opts.includeDraftLakes && countPrerequisiteReadFailed) {
       // Only an actual read failure warns. A host that simply never stated entitlement completeness
       // also skips the count, silently: that is its standing contract, not a per-turn incident, and
       // logging it every turn would bury the failures this line is here to surface.

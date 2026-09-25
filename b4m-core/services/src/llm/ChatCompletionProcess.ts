@@ -113,6 +113,7 @@ import {
   warnIfManyLakeMemberships,
   type MeasurableDataLakeAccessContext,
   type EntitlementResolution,
+  type GetDynamicDataLakeAccessOptions,
 } from '../dataLakeService/getDynamicDataLakeTags';
 // Re-exported so the resolver below and the type it returns stay reachable from one import, while
 // the declaration stays beside the context contract it has to satisfy.
@@ -899,6 +900,16 @@ export class ChatCompletionProcess {
    */
   private accessibleDataLakeAccessMemo: ResolvedLakeAccessSetWithAdmissions | undefined;
   /**
+   * Per-turn memo for the ATTACHMENT scope (#3279) - the same resolution as
+   * `accessibleDataLakeAccessMemo` above but with DRAFT lakes included, as browse includes them.
+   * Kept separate rather than widening that one: it feeds the tool-offer gate, the inline-defer
+   * plan and the retrieval seed's `lakeScope`, and an unpublished lake must not become ground truth
+   * for a question the user never pointed at. Resolved lazily off the SAME `DataLakeAccessContext`
+   * object, so the second pass re-runs one lake query and re-uses that turn's
+   * membership/grant/supersession snapshot rather than taking a second, possibly divergent one.
+   */
+  private attachmentDataLakeAccessMemo: ResolvedLakeAccessSetWithAdmissions | undefined;
+  /**
    * The SAME `DataLakeAccessContext` object for the whole turn (#3055), so every call into
    * `getDynamicDataLakeTags.ts`'s per-turn memos (membershipOrgIdsForTurn, grantedLakeReachForTurn,
    * supersededOwnLakeIdsForTurn - see scopedAsyncMemo's WeakMap-on-identity doc) shares one
@@ -1089,34 +1100,47 @@ export class ChatCompletionProcess {
    * empty access (treated as "no lake"), never breaks the turn.
    */
   private async getAccessibleDataLakeAccess(): Promise<ResolvedLakeAccessSetWithAdmissions> {
-    if (this.accessibleDataLakeAccessMemo === undefined) {
-      try {
-        const resolved = await getDynamicDataLakeAccess(await this.getDataLakeAccessContext());
-        // Same union the retrieval and tool doors run, so all three agree on what this session can
-        // reach; it re-derives the manage gate per call, so a revoked maintainer's memo comes back
-        // un-widened exactly as it would have before the admission.
-        this.accessibleDataLakeAccessMemo = await unionPreauthorizedLakeAccess(
-          resolved,
-          this.turnPreauthorizedLakeIds,
-          this.user.id,
-          this.db
-        );
-      } catch (err) {
-        this.logger.warn(
-          `[dataLakes] accessible-lake resolution failed; treating as no lake: ${(err as Error)?.message}`
-        );
-        this.accessibleDataLakeAccessMemo = {
-          dataLakeTags: [],
-          dataLakeTagPrefixes: [],
-          scopedTagPrefixes: [],
-          lakes: [],
-          // excludedByAccessCount omitted, not 0: resolution failed outright, so whether access
-          // shaped anything is unknown, not "nothing was excluded" (#3055).
-          admittedPreauthorizedTags: new Set(),
-        };
-      }
-    }
+    this.accessibleDataLakeAccessMemo ??= await this.resolveDataLakeAccess({});
     return this.accessibleDataLakeAccessMemo;
+  }
+
+  /**
+   * The same resolution with DRAFT lakes included - the ATTACHMENT scope (#3279). Separate memo,
+   * separate query, deliberately: see `attachmentDataLakeAccessMemo`. Lazy, so a turn with no
+   * attachments never pays for it.
+   */
+  private async getAttachmentDataLakeAccess(): Promise<ResolvedLakeAccessSetWithAdmissions> {
+    this.attachmentDataLakeAccessMemo ??= await this.resolveDataLakeAccess({ includeDraftLakes: true });
+    return this.attachmentDataLakeAccessMemo;
+  }
+
+  /**
+   * The body both memos above share, so retrieval and attachment can differ ONLY by the status set
+   * they admit - never by the union, the fail direction, or the context they resolve against.
+   */
+  private async resolveDataLakeAccess(
+    opts: GetDynamicDataLakeAccessOptions
+  ): Promise<ResolvedLakeAccessSetWithAdmissions> {
+    try {
+      const resolved = await getDynamicDataLakeAccess(await this.getDataLakeAccessContext(), opts);
+      // Same union the retrieval and tool doors run, so all three agree on what this session can
+      // reach; it re-derives the manage gate per call, so a revoked maintainer's memo comes back
+      // un-widened exactly as it would have before the admission.
+      return await unionPreauthorizedLakeAccess(resolved, this.turnPreauthorizedLakeIds, this.user.id, this.db);
+    } catch (err) {
+      this.logger.warn(
+        `[dataLakes] accessible-lake resolution failed; treating as no lake: ${(err as Error)?.message}`
+      );
+      return {
+        dataLakeTags: [],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [],
+        lakes: [],
+        // excludedByAccessCount omitted, not 0: resolution failed outright, so whether access
+        // shaped anything is unknown, not "nothing was excluded" (#3055).
+        admittedPreauthorizedTags: new Set(),
+      };
+    }
   }
 
   /**
@@ -1196,12 +1220,18 @@ export class ChatCompletionProcess {
    * one `$or` is the cross-tenant promotion the SCOPED/OPEN split forbids. Registry lakes are
    * covered by `dataLakeTagPrefixes` instead. Never construct `lakeMemberships` any other way here.
    *
-   * Fail direction is inherited from `getAccessibleDataLakeAccess`, which catches its own failures
+   * Fail direction is inherited from `resolveDataLakeAccess`, which catches its own failures
    * and returns an empty access set - so a lake-resolution outage degrades to today's
    * ownership-only behaviour. Never widen on error.
+   *
+   * Resolved through `getAttachmentDataLakeAccess`, NOT the retrieval memo (#3279): browse admits a
+   * DRAFT lake's file to the workbench, so re-authorizing that same named file against an
+   * active-only lake set would be narrower than the door that admitted it. The retrieval memo stays
+   * active-only - the two are separate on purpose, and the three attachment doors
+   * (`resolveAttachmentLakeAccess`, `createAttachmentLakeAccess`, this one) must stay in step.
    */
   private async attachmentLakeAccess(): Promise<AttachmentLakeAccess> {
-    const access = await this.getAccessibleDataLakeAccess();
+    const access = await this.getAttachmentDataLakeAccess();
     const lakeMemberships = lakeMembershipsFrom(access.lakes);
     warnIfManyLakeMemberships(lakeMemberships, this.logger, 'attachment-resolution');
     return {

@@ -226,23 +226,28 @@ describe('resolveRetrievalLakeScope', () => {
     // same resolver; it is a literal, so a change on the chat side would not fail here. Threads
     // organizationRepository so the resolver can derive membership itself - user.organizationId
     // (the selected-org pointer) is NOT forwarded (#1674).
-    expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
-      db: {
-        dataLakes: dataLakeRepository,
-        dataLakeAccessGrants: dataLakeAccessGrantRepository,
-        organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
-        // The grant rung. Both adapters are optional on the resolver, so an unthreaded one is not
-        // a type error - it just silently drops a grant-reached lake out of retrieval, which is
-        // exactly the divergence this deep-equality assertion exists to catch.
-        dataLakeAccessGrants: dataLakeAccessGrantRepository,
-        adminSettings: adminSettingsRepository,
+    expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith(
+      {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
+          // The grant rung. Both adapters are optional on the resolver, so an unthreaded one is not
+          // a type error - it just silently drops a grant-reached lake out of retrieval, which is
+          // exactly the divergence this deep-equality assertion exists to catch.
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          adminSettings: adminSettingsRepository,
+        },
+        user: { id: 'u1', tags: ['Opti'] },
+        entitlementKeys: ['optihashi:pro'],
+        // Stated, not omitted: this seam's entitlement resolution propagates a failure instead of
+        // degrading to `[]`, so the keys above are always the caller's real ones.
+        entitlementKeysResolved: true,
       },
-      user: { id: 'u1', tags: ['Opti'] },
-      entitlementKeys: ['optihashi:pro'],
-      // Stated, not omitted: this seam's entitlement resolution propagates a failure instead of
-      // degrading to `[]`, so the keys above are always the caller's real ones.
-      entitlementKeysResolved: true,
-    });
+      // Second argument: the per-call options. Empty is the retrieval scope - the attachment door
+      // is the only caller that opts into draft lakes (#3279).
+      {}
+    );
   });
 
   it('returns the shared resolver output untouched for a non-privileged caller', async () => {
@@ -288,18 +293,21 @@ describe('resolveRetrievalLakeScope', () => {
   it('forwards absent tags explicitly rather than falsy-coercing them', async () => {
     await resolveRetrievalLakeScope(asReq({ id: 'u1', tags: null }));
 
-    expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
-      db: {
-        dataLakes: dataLakeRepository,
-        dataLakeAccessGrants: dataLakeAccessGrantRepository,
-        organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
-        dataLakeAccessGrants: dataLakeAccessGrantRepository,
-        adminSettings: adminSettingsRepository,
+    expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith(
+      {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          adminSettings: adminSettingsRepository,
+        },
+        user: { id: 'u1', tags: [] },
+        entitlementKeys: [],
+        entitlementKeysResolved: true,
       },
-      user: { id: 'u1', tags: [] },
-      entitlementKeys: [],
-      entitlementKeysResolved: true,
-    });
+      {}
+    );
   });
 
   it('never forwards user.organizationId, regardless of its shape (#1343 concern now lives in the shared resolver)', async () => {
@@ -310,18 +318,21 @@ describe('resolveRetrievalLakeScope', () => {
     const populatedOrg = { _id: { toHexString: () => 'org-hex' }, name: 'Acme' } as unknown as string;
     await resolveRetrievalLakeScope(asReq({ id: 'u1', tags: ['Opti'], organizationId: populatedOrg }));
 
-    expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
-      db: {
-        dataLakes: dataLakeRepository,
-        dataLakeAccessGrants: dataLakeAccessGrantRepository,
-        organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
-        dataLakeAccessGrants: dataLakeAccessGrantRepository,
-        adminSettings: adminSettingsRepository,
+    expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith(
+      {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          adminSettings: adminSettingsRepository,
+        },
+        user: { id: 'u1', tags: ['Opti'] },
+        entitlementKeys: [],
+        entitlementKeysResolved: true,
       },
-      user: { id: 'u1', tags: ['Opti'] },
-      entitlementKeys: [],
-      entitlementKeysResolved: true,
-    });
+      {}
+    );
   });
 
   it('serves the resolver membership lookup from the request memo for the requesting user', async () => {
@@ -383,7 +394,21 @@ describe('resolveRetrievalLakeScopeForUser', () => {
   it('prefers a caller-supplied memo over re-resolving - the request path must not pay twice', async () => {
     await resolveRetrievalLakeScopeForUser({ id: 'u1', tags: [] } as never, { entitlementKeys: ['k'] });
     expect(mockGetUserEntitlements).not.toHaveBeenCalled();
-    expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith(expect.objectContaining({ entitlementKeys: ['k'] }));
+    expect(mockGetDynamicDataLakeAccess.mock.calls[0][0]).toMatchObject({ entitlementKeys: ['k'] });
+  });
+
+  // #3279: this resolver serves the retrieval surfaces AND, through createAttachmentLakeAccess, the
+  // agent/image attachment door - which must track browse's draft+active set because browse is what
+  // admitted the file to the workbench. The flag is the only thing separating them, so both
+  // polarities are pinned.
+  it('does not ask for draft lakes unless the caller opts in', async () => {
+    await resolveRetrievalLakeScopeForUser({ id: 'u1', tags: [] } as never);
+    expect(mockGetDynamicDataLakeAccess.mock.calls[0][1]).not.toHaveProperty('includeDraftLakes', true);
+  });
+
+  it('forwards includeDraftLakes for the attachment door', async () => {
+    await resolveRetrievalLakeScopeForUser({ id: 'u1', tags: [] } as never, { includeDraftLakes: true });
+    expect(mockGetDynamicDataLakeAccess.mock.calls[0][1]).toMatchObject({ includeDraftLakes: true });
   });
 
   it('falls back to the organization repository for membership when given no memo', async () => {

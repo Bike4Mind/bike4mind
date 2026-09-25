@@ -1132,7 +1132,9 @@ describe('ChatCompletionProcess', () => {
     };
 
     it('derives lakeMemberships via lakeMembershipsFrom (owned only) and forwards tags/prefixes verbatim', async () => {
-      (service as any).accessibleDataLakeAccessMemo = {
+      // Seeds the ATTACHMENT memo, not the retrieval one: since #3279 the two are separate
+      // resolutions - the attachment scope admits draft lakes, as browse does.
+      (service as any).attachmentDataLakeAccessMemo = {
         dataLakeTags: ['datalake:acme', 'datalake:reg'],
         dataLakeTagPrefixes: ['reg:'],
         lakes: [OWNED_LAKE, REGISTRY_LAKE],
@@ -1197,8 +1199,65 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    // #3279: the attachment door re-authorizes a file the user NAMED and that browse
+    // (`GET /api/files/byIds`) already admitted to the workbench, so it must track browse's
+    // draft+active status set. Retrieval must not follow it there - an unpublished lake is not
+    // ground truth for a question the user never pointed at. These three pin both halves.
+    it('resolves the attachment scope with draft lakes included', async () => {
+      const findActiveByUserTagsAndEntitlements = vi.fn().mockResolvedValue([]);
+      (service as any).attachmentDataLakeAccessMemo = undefined;
+      (service as any).user = { ...(service as any).user, id: 'user-1' };
+      (service as any).db = {
+        ...(service as any).db,
+        dataLakes: { findActiveByUserTagsAndEntitlements, countGateExcludedLakes: vi.fn().mockResolvedValue(0) },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      };
+
+      await (service as any).attachmentLakeAccess();
+
+      expect(findActiveByUserTagsAndEntitlements.mock.calls[0][4]).toMatchObject({ includeDraftLakes: true });
+    });
+
+    it('leaves the RETRIEVAL resolution active-only', async () => {
+      const findActiveByUserTagsAndEntitlements = vi.fn().mockResolvedValue([]);
+      (service as any).accessibleDataLakeAccessMemo = undefined;
+      (service as any).user = { ...(service as any).user, id: 'user-1' };
+      (service as any).db = {
+        ...(service as any).db,
+        dataLakes: { findActiveByUserTagsAndEntitlements, countGateExcludedLakes: vi.fn().mockResolvedValue(0) },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      };
+
+      await (service as any).getAccessibleDataLakeAccess();
+
+      expect(findActiveByUserTagsAndEntitlements.mock.calls[0][4]).not.toHaveProperty('includeDraftLakes', true);
+    });
+
+    it('keeps the two on separate memos, so neither can serve the other its status set', async () => {
+      // A single shared memo would make the answer depend on which door ran first in the turn.
+      const findActiveByUserTagsAndEntitlements = vi.fn().mockResolvedValue([]);
+      (service as any).accessibleDataLakeAccessMemo = undefined;
+      (service as any).attachmentDataLakeAccessMemo = undefined;
+      (service as any).user = { ...(service as any).user, id: 'user-1' };
+      (service as any).db = {
+        ...(service as any).db,
+        dataLakes: { findActiveByUserTagsAndEntitlements, countGateExcludedLakes: vi.fn().mockResolvedValue(0) },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      };
+
+      await (service as any).getAccessibleDataLakeAccess();
+      await (service as any).attachmentLakeAccess();
+      // Second call of each is served from its own memo - one query per scope, not per caller.
+      await (service as any).getAccessibleDataLakeAccess();
+      await (service as any).attachmentLakeAccess();
+
+      expect(findActiveByUserTagsAndEntitlements).toHaveBeenCalledTimes(2);
+      expect(findActiveByUserTagsAndEntitlements.mock.calls[0][4]).not.toHaveProperty('includeDraftLakes', true);
+      expect(findActiveByUserTagsAndEntitlements.mock.calls[1][4]).toMatchObject({ includeDraftLakes: true });
+    });
+
     it('getAttachedKnowledgeFiles forwards the resolved lakeAccess as the getAccessibleFiles third argument', async () => {
-      (service as any).accessibleDataLakeAccessMemo = {
+      (service as any).attachmentDataLakeAccessMemo = {
         dataLakeTags: ['datalake:acme'],
         dataLakeTagPrefixes: [],
         lakes: [OWNED_LAKE],
@@ -3900,7 +3959,8 @@ describe('ChatCompletionProcess', () => {
      * `getAttachedKnowledgeFiles` (getAccessibleFiles) and `fabFilesToMessages`
      * (fetchAndConvertFabFiles) must resolve `attachmentLakeAccess()` off the SAME
      * memoized per-turn access, or an id reachable through one door could silently
-     * disagree with the other.
+     * disagree with the other. That memo is the ATTACHMENT one since #3279, which is
+     * what this seeds.
      */
     it('forwards the same attachmentLakeAccess to fetchAndConvertFabFiles as getAttachedKnowledgeFiles gets from getAccessibleFiles', async () => {
       const membership = {
@@ -3909,7 +3969,7 @@ describe('ChatCompletionProcess', () => {
         fileTagPrefix: 'acme:',
         creatorUserId: 'creator-1',
       };
-      (service as any).accessibleDataLakeAccessMemo = {
+      (service as any).attachmentDataLakeAccessMemo = {
         dataLakeTags: ['datalake:acme'],
         dataLakeTagPrefixes: [],
         lakes: [

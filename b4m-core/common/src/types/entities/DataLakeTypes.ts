@@ -197,6 +197,19 @@ export interface TransitionalDataLakeSummary {
  */
 export const LAKE_INGESTABLE_STATUSES = ['draft', 'active'] as const satisfies readonly DataLakeStatus[];
 
+/**
+ * The statuses whose files the product actually puts in front of a user: browse
+ * (`buildAccessibleQuery`'s default, behind `listDataLakes` and so behind `GET /api/files/byIds`)
+ * admits both, which is what lets a draft lake's file be attached in the workbench.
+ *
+ * Shared with the ATTACHMENT door's opt-in
+ * (`findActiveByUserTagsAndEntitlements`'s `includeDraftLakes`) so the two cannot drift: an
+ * attachment lookup narrower than the door that admitted the file silently drops it (#3279).
+ * Retrieval/semantic search is deliberately NOT in this set - it stays `active`-only, because an
+ * unpublished lake must not become ground truth for a question the user never pointed at it.
+ */
+export const LAKE_ATTACHABLE_STATUSES = ['draft', 'active'] as const satisfies readonly DataLakeStatus[];
+
 type LakeIngestableStatus = (typeof LAKE_INGESTABLE_STATUSES)[number];
 
 /**
@@ -655,6 +668,19 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
        * over-matches once ownership has moved.
        */
       supersededOwnLakeIds?: string[];
+      /**
+       * Widens the status filter from `active` alone to `LAKE_ATTACHABLE_STATUSES` (draft +
+       * active) - the set browse already admits. Opt-in and OFF by default, because it is an
+       * access widening that only ONE caller class is entitled to: the ATTACHMENT doors, where
+       * the user has explicitly named a file the product already showed them and let them attach
+       * (#3279). Retrieval and semantic search must leave it unset - an unpublished lake is not
+       * ground truth for a question the user never pointed at it.
+       *
+       * Widens ONLY the status filter. Every other arm - org prerequisite, requirement gate,
+       * grants, owner bypass - applies unchanged, so this can never surface a draft lake the
+       * caller could not have reached had it been published.
+       */
+      includeDraftLakes?: boolean;
     }
   ): Promise<IDataLakeDocument[]>;
   /**

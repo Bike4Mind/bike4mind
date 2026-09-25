@@ -183,6 +183,38 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
     expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], undefined, 'alice')).toEqual([]);
   });
 
+  it('includeDraftLakes lifts that status bound - the ATTACHMENT scope, which tracks browse', async () => {
+    // #3279: browse admits a draft lake's file to the workbench, so an attachment lookup resolved
+    // active-only is narrower than the door that admitted the file and silently drops it.
+    await dataLakeRepository.create(baseLake({ slug: 'draft', createdByUserId: 'alice', status: 'draft' }));
+
+    const attachment = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], undefined, 'alice', {
+      includeDraftLakes: true,
+    });
+
+    expect(attachment.map(l => l.slug)).toEqual(['draft']);
+  });
+
+  it('includeDraftLakes widens the STATUS filter only - never a gate, and never past draft', async () => {
+    // The whole safety argument for the widening: it may add a lake the caller could have reached
+    // had it been published, and nothing else. Both halves are asserted, because either one
+    // failing turns a status fix into an authorization bug.
+    await dataLakeRepository.create(
+      baseLake({ slug: 'draft-gated', createdByUserId: 'alice', status: 'draft', requiredUserTag: 'TagBobLacks' })
+    );
+    await dataLakeRepository.create(baseLake({ slug: 'archived', createdByUserId: 'bob', status: 'archived' }));
+    await dataLakeRepository.create(baseLake({ slug: 'deleted', createdByUserId: 'bob', status: 'deleted' }));
+    await dataLakeRepository.create(baseLake({ slug: 'archiving', createdByUserId: 'bob', status: 'archiving' }));
+
+    const bob = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], undefined, 'bob', {
+      includeDraftLakes: true,
+    });
+
+    // Bob's own archived/deleted/transitional lakes stay out despite the owner bypass, and Alice's
+    // draft lake stays gated on the tag he does not hold.
+    expect(bob).toEqual([]);
+  });
+
   it('grant arm reaches a private, cross-org, gated lake - and an empty list adds no arm', async () => {
     // The transferred-owner case: transferLakeOwnership moves ownership through grant rows and
     // leaves createdByUserId alone, so without this arm the new owner browses a lake they cannot

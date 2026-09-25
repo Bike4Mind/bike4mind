@@ -44,6 +44,21 @@ describe('createAttachmentLakeAccess', () => {
     );
   });
 
+  it('opts IN to includeDraftLakes, so the attachment scope tracks the door that admitted the file', async () => {
+    // #3279: `GET /api/files/byIds` admits a draft lake's file to the workbench. Resolving this
+    // door active-only made it narrower than that, and the image mask / reference anchors /
+    // generation input were dropped for a file the user had explicitly attached.
+    resolveRetrievalLakeScopeForUser.mockResolvedValue({ lakes: [], dataLakeTags: [], dataLakeTagPrefixes: [] });
+    const logger = makeLogger();
+
+    await createAttachmentLakeAccess(USER, logger as never)();
+
+    expect(resolveRetrievalLakeScopeForUser).toHaveBeenCalledWith(
+      USER,
+      expect.objectContaining({ includeDraftLakes: true })
+    );
+  });
+
   it('derives lakeMemberships through lakeMembershipsFrom and forwards the tag buckets verbatim', async () => {
     resolveRetrievalLakeScopeForUser.mockResolvedValue({
       lakes: [{ id: 'l1' }],
