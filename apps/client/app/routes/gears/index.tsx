@@ -261,9 +261,16 @@ const GearsPage = () => {
             })}
           >
             <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}>
-              {/* GEAR_ICONS holds bare elements, so the icon size is set once here
-                rather than repeated on every entry in the map. */}
-              <Stack direction="row" alignItems="center" gap={1} sx={{ '& > svg': { fontSize: '20px' } }}>
+              {/* GEAR_ICONS holds bare elements, so size and colour are set once here
+                rather than repeated on every entry in the map. Tertiary because an
+                icon at title strength competes with the title beside it, thirty
+                times over. */}
+              <Stack
+                direction="row"
+                alignItems="center"
+                gap={1}
+                sx={{ '& > svg': { fontSize: '20px', color: 'text.tertiary' } }}
+              >
                 {GEAR_ICONS[gear.key] ?? <SettingsOutlinedIcon />}
                 <Typography level="title-md">{gear.title}</Typography>
               </Stack>
@@ -342,12 +349,17 @@ const GearsPage = () => {
                         // light one is near white and drops it to 2.4:1 - the darker
                         // step of the same green clears AA there. The 10% fill is an
                         // alpha, so it needs no such split.
-                        const ink = theme.palette.mode === 'dark' ? green[800] : green[950];
+                        const dark = theme.palette.mode === 'dark';
+                        const ink = dark ? green[800] : green[950];
+                        // On the white card a solid stroke of the darker green draws a
+                        // hard box round the chip, so light mode gets a tint instead -
+                        // the same trick the theme's own border.soft uses.
+                        const stroke = dark ? green[800] : greenAlpha[800][30];
                         return {
                           gap: '6px',
                           '--Chip-minHeight': '24px',
                           backgroundColor: greenAlpha[800][10],
-                          border: `1px solid ${ink}`,
+                          border: `1px solid ${stroke}`,
                           color: ink,
                           // Bike4MindIcon fills with var(--Icon-color), which Joy's
                           // variant would otherwise set from the success palette.
