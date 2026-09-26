@@ -117,6 +117,30 @@ const totalCacheTokens = (accum: number, turn: number | undefined): number | und
   return total > 0 ? total : undefined;
 };
 
+/**
+ * Associates a failed tool call's elapsed time with the thrown error object, so it survives
+ * from inside the executeToolsBatch task closure out to the outcome-mapping site below.
+ * Keyed by object identity in a WeakMap rather than a property written onto the error itself:
+ * a frozen or otherwise non-extensible thrown error (`Object.freeze(new Error(...))`, which some
+ * tools throw as immutable singletons) made that property write throw a TypeError in strict
+ * mode, masking the original tool error with an unrelated "Cannot add property" one. This never
+ * touches the error, so `instanceof PermissionDeniedError` and `.message` keep working
+ * unchanged wherever it's read afterward, and entries are collected once the error is.
+ */
+const toolDurationsByError = new WeakMap<object, number>();
+
+function tagToolDuration<E>(error: E, durationMs: number): E {
+  if (error && typeof error === 'object') {
+    toolDurationsByError.set(error, durationMs);
+  }
+  return error;
+}
+
+function readToolDuration(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  return toolDurationsByError.get(error);
+}
+
 export class AnthropicBackend implements ICompletionBackend {
   private _api: Anthropic;
   private logger: Logger;
@@ -1882,8 +1906,12 @@ export class AnthropicBackend implements ICompletionBackend {
                   parameterKeys: Object.keys(parsedParams),
                 });
                 const toolStartTime = Date.now();
-                const result = await toolFn(parsedParams);
-                return { id, name, parameters, isMcpTool, result, durationMs: Date.now() - toolStartTime };
+                try {
+                  const result = await toolFn(parsedParams);
+                  return { id, name, parameters, isMcpTool, result, durationMs: Date.now() - toolStartTime };
+                } catch (error) {
+                  throw tagToolDuration(error, Date.now() - toolStartTime);
+                }
               }),
               { parallel: parallelEnabled, maxConcurrency: options.maxParallelTools }
             );
@@ -1899,7 +1927,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   result: { toString(): string };
                   durationMs: number;
                 }
-              | { ok: false; id: string; name: string; parameters: string; error: unknown };
+              | { ok: false; id: string; name: string; parameters: string; error: unknown; durationMs?: number };
 
             const outcomes: ToolOutcome[] = batchOutcomes.map((outcome, i) =>
               outcome.ok
@@ -1910,6 +1938,7 @@ export class AnthropicBackend implements ICompletionBackend {
                     name: resolvedTools[i].name,
                     parameters: resolvedTools[i].parameters,
                     error: outcome.error,
+                    durationMs: readToolDuration(outcome.error),
                   }
             );
 
@@ -1967,7 +1996,13 @@ export class AnthropicBackend implements ICompletionBackend {
                 // outcome.id (not toolId, which falls back to a fresh randomUUID) is what
                 // toolsUsed was pushed with, so it's what correlates back to that entry.
                 // Record the sanitized string, not resultStr - that's what the model actually saw.
-                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, sanitizedResult, true);
+                recordToolResult(
+                  toolsUsed,
+                  { id: outcome.id, name: outcome.name },
+                  sanitizedResult,
+                  true,
+                  outcome.durationMs
+                );
 
                 this.pushToolMessages(
                   messages,
@@ -1991,7 +2026,13 @@ export class AnthropicBackend implements ICompletionBackend {
                   `Error processing ${outcome.name} tool: ${errorMessage}`,
                   ARTIFACT_REMOVED_PLACEHOLDER
                 );
-                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
+                recordToolResult(
+                  toolsUsed,
+                  { id: outcome.id, name: outcome.name },
+                  observation,
+                  false,
+                  outcome.durationMs
+                );
                 this.pushToolMessages(
                   messages,
                   { id: toolId, name: outcome.name, parameters: outcome.parameters },
@@ -2286,8 +2327,12 @@ export class AnthropicBackend implements ICompletionBackend {
                   parameterKeys: Object.keys(parsedParams),
                 });
                 const toolStartTime = Date.now();
-                const result = await toolFn(parsedParams);
-                return { id, name, parameters, isMcpTool, result, durationMs: Date.now() - toolStartTime };
+                try {
+                  const result = await toolFn(parsedParams);
+                  return { id, name, parameters, isMcpTool, result, durationMs: Date.now() - toolStartTime };
+                } catch (error) {
+                  throw tagToolDuration(error, Date.now() - toolStartTime);
+                }
               }),
               { parallel: parallelEnabled, maxConcurrency: options.maxParallelTools }
             );
@@ -2303,7 +2348,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   result: { toString(): string };
                   durationMs: number;
                 }
-              | { ok: false; id: string; name: string; parameters: string; error: unknown };
+              | { ok: false; id: string; name: string; parameters: string; error: unknown; durationMs?: number };
 
             const outcomesNS: ToolOutcomeNS[] = batchOutcomesNS.map((outcome, i) =>
               outcome.ok
@@ -2314,6 +2359,7 @@ export class AnthropicBackend implements ICompletionBackend {
                     name: resolvedTools[i].name,
                     parameters: resolvedTools[i].parameters,
                     error: outcome.error,
+                    durationMs: readToolDuration(outcome.error),
                   }
             );
 
@@ -2354,7 +2400,13 @@ export class AnthropicBackend implements ICompletionBackend {
                   thisToolHadArtifact ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
                 );
 
-                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, sanitizedResult, true);
+                recordToolResult(
+                  toolsUsed,
+                  { id: outcome.id, name: outcome.name },
+                  sanitizedResult,
+                  true,
+                  outcome.durationMs
+                );
 
                 this.pushToolMessages(
                   messages,
@@ -2377,7 +2429,13 @@ export class AnthropicBackend implements ICompletionBackend {
                   `Error processing ${outcome.name} tool: ${errorMessage}`,
                   ARTIFACT_REMOVED_PLACEHOLDER
                 );
-                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
+                recordToolResult(
+                  toolsUsed,
+                  { id: outcome.id, name: outcome.name },
+                  observation,
+                  false,
+                  outcome.durationMs
+                );
                 this.pushToolMessages(
                   messages,
                   { id: toolId, name: outcome.name, parameters: outcome.parameters },
