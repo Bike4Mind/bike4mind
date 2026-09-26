@@ -18,4 +18,6 @@ export * from './cancelEmailChange';
 export * from './sendOTC';
 export * from './verifyOTC';
 export * from './moderationPolicy';
+export * from './accountState';
+export * from './flagDisputePending';
 export * from './requestModerationAppeal';
