@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { Logger } from '@bike4mind/observability';
 
 vi.mock('../../../../apiKeyService', () => ({
@@ -8,7 +8,7 @@ vi.mock('../../../../apiKeyService', () => ({
 }));
 
 import { getSerperKey, getSearxngUrl, getWebSearchProviderSetting } from '../../../../apiKeyService';
-import { createSearxngProvider, createSerpApiProvider, resolveWebSearchProvider } from './providers';
+import { createSearxngProvider, createSerpApiProvider, resolveWebSearchProvider, serpApiSearch } from './providers';
 
 const mockGetSerperKey = vi.mocked(getSerperKey);
 const mockGetSearxngUrl = vi.mocked(getSearxngUrl);
@@ -467,5 +467,83 @@ describe('searchPlaces', () => {
       expect.objectContaining({ status: 503 })
     );
     errorSpy.mockRestore();
+  });
+});
+
+/** A fetch that never resolves on its own - it only rejects once its own AbortSignal fires. */
+function neverSettlingFetch(): (url: string, init?: RequestInit) => Promise<Response> {
+  return (_url, init) =>
+    new Promise((_, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        const abortError = new Error('The operation was aborted');
+        abortError.name = 'AbortError';
+        reject(abortError);
+      });
+    });
+}
+
+describe('serpApiSearch retry behavior', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('retries once on a timeout and throws the explicit timeout error after 2 attempts', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockImplementation(neverSettlingFetch());
+
+    const pending = expect(serpApiSearch(adapters, 'q')).rejects.toThrow(
+      'Web search timed out: SerpAPI did not respond within 20s (tried 2 times)'
+    );
+
+    await vi.advanceTimersByTimeAsync(20_000); // first attempt aborts
+    await vi.advanceTimersByTimeAsync(500); // fixed retry delay
+    await vi.advanceTimersByTimeAsync(20_000); // second attempt aborts
+
+    await pending;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns results when the first attempt times out and the second succeeds', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    let calls = 0;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      calls += 1;
+      if (calls === 1) return neverSettlingFetch()(url, init);
+      return Promise.resolve(jsonRes({ organic_results: [{ title: 'T', link: 'https://x.com', snippet: 's' }] }));
+    });
+
+    const pending = expect(serpApiSearch(adapters, 'q')).resolves.toEqual({
+      organic_results: [{ title: 'T', link: 'https://x.com', snippet: 's' }],
+    });
+
+    await vi.advanceTimersByTimeAsync(20_000); // first attempt aborts
+    await vi.advanceTimersByTimeAsync(500); // fixed retry delay, then second attempt resolves
+
+    await pending;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a 500 and succeeds on the second attempt', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockResolvedValueOnce(jsonRes({}, false, 500)).mockResolvedValueOnce(jsonRes({ organic_results: [] }));
+
+    const pending = expect(serpApiSearch(adapters, 'q')).resolves.toEqual({ organic_results: [] });
+
+    await vi.advanceTimersByTimeAsync(500); // fixed retry delay
+
+    await pending;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry a 401 and fails after a single attempt', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockResolvedValue(jsonRes({}, false, 401));
+
+    await expect(serpApiSearch(adapters, 'q')).rejects.toThrow('SERP API error');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

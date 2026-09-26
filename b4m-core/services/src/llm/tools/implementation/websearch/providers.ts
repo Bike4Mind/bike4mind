@@ -96,8 +96,19 @@ const SERPAPI_QDR: Record<NonNullable<ReturnType<typeof recencyBucket>>, string>
 
 // Matches serpApiSearch's DEFAULT_NUM_RESULTS and the web_search tool schema default.
 const DEFAULT_NUM_RESULTS = 3;
-// Mirror serpApiSearch's request timeout so a hung provider fails the same way.
+// Request timeout for the image/places/SearXNG paths (single attempt, no retry). These already
+// fail soft to [] rather than surfacing an error to the user, so they keep the original 60s
+// budget unchanged. The primary organic search below no longer shares this constant - see
+// SERPAPI_ATTEMPT_TIMEOUT_MS, which is shorter and retried once.
 const SEARCH_TIMEOUT_MS = 60_000;
+// Per-attempt timeout for serpApiSearch's organic search, retried once (SERPAPI_MAX_ATTEMPTS) -
+// short enough that a stalled SerpAPI response no longer holds the web_search tool call for
+// anywhere near the old 60s.
+const SERPAPI_ATTEMPT_TIMEOUT_MS = 20_000;
+// serpApiSearch attempts: the original request plus exactly one retry.
+const SERPAPI_MAX_ATTEMPTS = 2;
+// Fixed delay before the retry - small enough that the worst case stays well under the old 60s.
+const SERPAPI_RETRY_DELAY_MS = 500;
 // Citables are persisted with the quest, so keep the per-hit image list bounded.
 const MAX_IMAGES_PER_RESULT = 4;
 // Enough to build a card row from without flooding the model's context with URLs.
@@ -251,11 +262,89 @@ function indexImagesByLink(
   return byLink;
 }
 
+/** A single serpApiSearch attempt that failed, tagged with enough context to decide on retry. */
+type SerpApiAttemptFailure = {
+  ok: false;
+  /** Timeout/abort, network error, or HTTP 429/5xx - anything else fails immediately. */
+  retryable: boolean;
+  timedOut: boolean;
+  status?: number;
+  error: Error;
+};
+
+type SerpApiAttemptResult = { ok: true; data: SerpApiResponse } | SerpApiAttemptFailure;
+
+/** True for the AbortController-driven rejection our own per-attempt timeout produces. */
+function isAbortError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'AbortError';
+}
+
+const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * One SerpAPI organic-search attempt, bounded by SERPAPI_ATTEMPT_TIMEOUT_MS. Never throws -
+ * failures (timeout, network error, non-OK response) come back as a tagged result so
+ * serpApiSearch can decide whether to retry without duplicating the timeout/abort bookkeeping.
+ */
+async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApiAttemptResult> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SERPAPI_ATTEMPT_TIMEOUT_MS);
+  const startedAt = Date.now();
+  try {
+    const response = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
+    Logger.globalInstance.log('📡 WebSearch Tool: SerpAPI response', {
+      attempt,
+      status: response.status,
+      elapsedMs: Date.now() - startedAt,
+    });
+
+    if (response.ok) return { ok: true, data: (await response.json()) as SerpApiResponse };
+
+    const errorText = await response.text();
+    Logger.globalInstance.error('❌ WebSearch Tool: API error details:', {
+      status: response.status,
+      statusText: response.statusText,
+      errorText,
+      endpoint: url.origin,
+      attempt,
+    });
+    return {
+      ok: false,
+      retryable: response.status === 429 || response.status >= 500,
+      timedOut: false,
+      status: response.status,
+      error: new Error(`SERP API error: ${response.statusText} - ${errorText}`),
+    };
+  } catch (error) {
+    const timedOut = isAbortError(error);
+    // A network-level failure (DNS, connection reset, TLS, ...) surfaces from fetch as a
+    // TypeError; anything else is unexpected and is not treated as transient.
+    const retryable = timedOut || error instanceof TypeError;
+    Logger.globalInstance.error('❌ WebSearch Tool: SerpAPI request failed:', {
+      attempt,
+      timedOut,
+      elapsedMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return {
+      ok: false,
+      retryable,
+      timedOut,
+      error: error instanceof Error ? error : new Error(String(error)),
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 /**
  * Raw SerpAPI (https://serpapi.com/search) call. Returns the organic results envelope; an empty
- * envelope when no key is configured (callers gate on the key before relying on this), and throws
- * on a non-OK response so the tool surfaces the failure. Exported (re-exported from index) for the
- * REST endpoint and existing tests.
+ * envelope when no key is configured (callers gate on the key before relying on this). Retries
+ * once (SERPAPI_MAX_ATTEMPTS) on a timeout/abort, a network-level fetch failure, or an HTTP
+ * 429/5xx; any other non-OK response (e.g. a bad key or bad params) fails immediately. Throws on
+ * final failure so the tool surfaces it - two still-timed-out attempts throw an explicit "timed
+ * out" error instead of the raw abort's generic DOMException message. Exported (re-exported from
+ * index) for the REST endpoint and existing tests.
  */
 export async function serpApiSearch(
   adapters: GetEffectiveApiKeyAdapters,
@@ -287,32 +376,26 @@ export async function serpApiSearch(
 
   url.search = searchParams.toString();
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
-
-  let response: Response;
-  try {
-    response = await fetch(url.toString(), {
-      method: 'GET',
-      signal: controller.signal,
+  let lastFailure: SerpApiAttemptFailure | undefined;
+  for (let attempt = 1; attempt <= SERPAPI_MAX_ATTEMPTS; attempt++) {
+    const outcome = await attemptSerpApiRequest(url, attempt);
+    if (outcome.ok) return outcome.data;
+    lastFailure = outcome;
+    if (!outcome.retryable || attempt === SERPAPI_MAX_ATTEMPTS) break;
+    Logger.globalInstance.log('📡 WebSearch Tool: retrying SerpAPI after transient failure', {
+      attempt,
+      status: outcome.status,
+      timedOut: outcome.timedOut,
     });
-  } finally {
-    clearTimeout(timeoutId);
-  }
-  Logger.globalInstance.log('📡 WebSearch Tool: Response status:', response.status);
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    Logger.globalInstance.error('❌ WebSearch Tool: API error details:', {
-      status: response.status,
-      statusText: response.statusText,
-      errorText,
-      endpoint: url.origin,
-    });
-    throw new Error(`SERP API error: ${response.statusText} - ${errorText}`);
+    await sleep(SERPAPI_RETRY_DELAY_MS);
   }
 
-  return (await response.json()) as SerpApiResponse;
+  if (lastFailure?.timedOut) {
+    throw new Error(
+      `Web search timed out: SerpAPI did not respond within ${SERPAPI_ATTEMPT_TIMEOUT_MS / 1000}s (tried ${SERPAPI_MAX_ATTEMPTS} times)`
+    );
+  }
+  throw lastFailure?.error ?? new Error('SERP API error: request failed');
 }
 
 /**

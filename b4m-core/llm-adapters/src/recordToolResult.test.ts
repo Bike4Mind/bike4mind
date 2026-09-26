@@ -87,4 +87,23 @@ describe('recordToolResult', () => {
       MAX_RECORDED_TOOL_RESULT_CHARS + TOOL_RESULT_TRUNCATION_NOTICE.length
     );
   });
+
+  it('records executionTime on success', () => {
+    const toolsUsed: RecordableToolUse[] = [{ name: 'web_search', id: 'call_1' }];
+    recordToolResult(toolsUsed, { id: 'call_1', name: 'web_search' }, '5 results found', true, 1234);
+    expect(toolsUsed[0].executionTime).toBe(1234);
+  });
+
+  it('records executionTime on failure', () => {
+    const toolsUsed: RecordableToolUse[] = [{ name: 'web_search', id: 'call_1' }];
+    recordToolResult(toolsUsed, { id: 'call_1', name: 'web_search' }, 'Error: timed out', false, 20_500);
+    expect(toolsUsed[0].success).toBe(false);
+    expect(toolsUsed[0].executionTime).toBe(20_500);
+  });
+
+  it('leaves executionTime undefined when the caller has no timing', () => {
+    const toolsUsed: RecordableToolUse[] = [{ name: 'web_search', id: 'call_1' }];
+    recordToolResult(toolsUsed, { id: 'call_1', name: 'web_search' }, 'result', true);
+    expect(toolsUsed[0].executionTime).toBeUndefined();
+  });
 });
