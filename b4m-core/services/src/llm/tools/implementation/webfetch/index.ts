@@ -156,6 +156,8 @@ type FirecrawlFetchOptions = {
    *  what it does, but true would NOT be honored there - a self-host with no Firecrawl key still
    *  gets the full chrome. Only pass true if that is acceptable for the caller. */
   onlyMainContent?: boolean;
+  /** Fetch live and ask Firecrawl not to cache the result (maxAge 0, storeInCache false). */
+  fresh?: boolean;
 };
 
 /**
@@ -205,6 +207,7 @@ export async function firecrawlFetch(
     formats: ['markdown' as const],
     timeout: timeoutMs,
     ...(options?.onlyMainContent !== undefined && { onlyMainContent: options.onlyMainContent }),
+    ...(options?.fresh && { maxAge: 0, storeInCache: false }),
   };
 
   const startedAt = Date.now();
