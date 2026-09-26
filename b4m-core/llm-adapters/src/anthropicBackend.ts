@@ -118,24 +118,27 @@ const totalCacheTokens = (accum: number, turn: number | undefined): number | und
 };
 
 /**
- * Tag key for stashing a failed tool call's elapsed time onto the thrown error itself, so it
- * survives from inside the executeToolsBatch task closure out to the outcome-mapping site below -
- * property-tagging (not a wrapper class) keeps `instanceof PermissionDeniedError` and `.message`
- * on the original error working unchanged wherever it's read afterward.
+ * Associates a failed tool call's elapsed time with the thrown error object, so it survives
+ * from inside the executeToolsBatch task closure out to the outcome-mapping site below.
+ * Keyed by object identity in a WeakMap rather than a property written onto the error itself:
+ * a frozen or otherwise non-extensible thrown error (`Object.freeze(new Error(...))`, which some
+ * tools throw as immutable singletons) made that property write throw a TypeError in strict
+ * mode, masking the original tool error with an unrelated "Cannot add property" one. This never
+ * touches the error, so `instanceof PermissionDeniedError` and `.message` keep working
+ * unchanged wherever it's read afterward, and entries are collected once the error is.
  */
-const TOOL_DURATION_TAG = Symbol('toolDurationMs');
+const toolDurationsByError = new WeakMap<object, number>();
 
 function tagToolDuration<E>(error: E, durationMs: number): E {
   if (error && typeof error === 'object') {
-    (error as Record<symbol, number>)[TOOL_DURATION_TAG] = durationMs;
+    toolDurationsByError.set(error, durationMs);
   }
   return error;
 }
 
 function readToolDuration(error: unknown): number | undefined {
   if (!error || typeof error !== 'object') return undefined;
-  const tagged = (error as Record<symbol, unknown>)[TOOL_DURATION_TAG];
-  return typeof tagged === 'number' ? tagged : undefined;
+  return toolDurationsByError.get(error);
 }
 
 export class AnthropicBackend implements ICompletionBackend {

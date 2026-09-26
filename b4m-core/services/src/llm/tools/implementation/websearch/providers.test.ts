@@ -539,6 +539,60 @@ describe('serpApiSearch retry behavior', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('retries a 429 and succeeds on the second attempt', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockResolvedValueOnce(jsonRes({}, false, 429)).mockResolvedValueOnce(jsonRes({ organic_results: [] }));
+
+    const pending = expect(serpApiSearch(adapters, 'q')).resolves.toEqual({ organic_results: [] });
+
+    await vi.advanceTimersByTimeAsync(500); // fixed retry delay
+
+    await pending;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a network-level TypeError (DNS/connection reset/TLS) and succeeds on the second attempt', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    let calls = 0;
+    fetchMock.mockImplementation(() => {
+      calls += 1;
+      if (calls === 1) return Promise.reject(new TypeError('fetch failed'));
+      return Promise.resolve(jsonRes({ organic_results: [] }));
+    });
+
+    const pending = expect(serpApiSearch(adapters, 'q')).resolves.toEqual({ organic_results: [] });
+
+    await vi.advanceTimersByTimeAsync(500); // fixed retry delay
+
+    await pending;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  // Regression: the final error used to read ONLY the last attempt's outcome, so a first
+  // attempt that got a concrete HTTP 503 followed by a second attempt that timed out produced
+  // "SerpAPI did not respond within 20s" - false, since the first attempt proves SerpAPI DID
+  // respond. The message now distinguishes "the last attempt timed out" from "nothing ever
+  // responded" and names the earlier attempt's actual failure.
+  it('reports the earlier response, not a blanket "did not respond", when only the last attempt times out', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    let calls = 0;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      calls += 1;
+      if (calls === 1) return Promise.resolve(jsonRes({}, false, 503));
+      return neverSettlingFetch()(url, init);
+    });
+
+    const pending = expect(serpApiSearch(adapters, 'q')).rejects.toThrow(
+      "Web search timed out: SerpAPI's last attempt did not respond within 20s (earlier attempt: HTTP 503)"
+    );
+
+    await vi.advanceTimersByTimeAsync(500); // fixed retry delay before the second attempt
+    await vi.advanceTimersByTimeAsync(20_000); // second attempt aborts
+
+    await pending;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('does not retry a 401 and fails after a single attempt', async () => {
     mockGetSerperKey.mockResolvedValue('serp-key');
     fetchMock.mockResolvedValue(jsonRes({}, false, 401));
