@@ -64,4 +64,45 @@ describe('getCodeFileType', () => {
     expect(getCodeFileType('TypeScript')).toEqual({ ext: 'ts', mime: 'text/typescript' });
     expect(getCodeFileType('CSV')).toEqual({ ext: 'csv', mime: 'text/csv' });
   });
+
+  // Regression: these languages had no entry, so they fell back to the generic .txt default -
+  // a regression from before this map existed, when they saved as `.${lang}` and were accepted
+  // because the server's EXT_TO_MIME (b4m-core/utils/src/file.ts) already knows the extension.
+  it('maps the previously-missing languages to their real extension and MIME', () => {
+    expect(getCodeFileType('go')).toEqual({ ext: 'go', mime: 'text/x-go' });
+    expect(getCodeFileType('java')).toEqual({ ext: 'java', mime: 'text/x-java-source' });
+    expect(getCodeFileType('c')).toEqual({ ext: 'c', mime: 'text/x-c++src' });
+    expect(getCodeFileType('cpp')).toEqual({ ext: 'cpp', mime: 'text/x-c++src' });
+    expect(getCodeFileType('c++')).toEqual({ ext: 'cpp', mime: 'text/x-c++src' });
+    expect(getCodeFileType('cc')).toEqual({ ext: 'cpp', mime: 'text/x-c++src' });
+    expect(getCodeFileType('cs')).toEqual({ ext: 'cs', mime: 'text/x-csharp' });
+    expect(getCodeFileType('csharp')).toEqual({ ext: 'cs', mime: 'text/x-csharp' });
+    expect(getCodeFileType('rs')).toEqual({ ext: 'rs', mime: 'text/x-rust' });
+    expect(getCodeFileType('rust')).toEqual({ ext: 'rs', mime: 'text/x-rust' });
+    expect(getCodeFileType('rb')).toEqual({ ext: 'rb', mime: 'application/x-ruby' });
+    expect(getCodeFileType('ruby')).toEqual({ ext: 'rb', mime: 'application/x-ruby' });
+    expect(getCodeFileType('kt')).toEqual({ ext: 'kt', mime: 'text/x-kotlin' });
+    expect(getCodeFileType('kotlin')).toEqual({ ext: 'kt', mime: 'text/x-kotlin' });
+    expect(getCodeFileType('php')).toEqual({ ext: 'php', mime: 'application/x-httpd-php' });
+    expect(getCodeFileType('swift')).toEqual({ ext: 'swift', mime: 'text/x-swift' });
+    expect(getCodeFileType('toml')).toEqual({ ext: 'toml', mime: 'application/toml' });
+    expect(getCodeFileType('scss')).toEqual({ ext: 'scss', mime: 'text/x-scss' });
+    expect(getCodeFileType('sass')).toEqual({ ext: 'sass', mime: 'text/x-sass' });
+    expect(getCodeFileType('less')).toEqual({ ext: 'less', mime: 'text/less' });
+    expect(getCodeFileType('zsh')).toEqual({ ext: 'sh', mime: 'text/x-sh' });
+    expect(getCodeFileType('ini')).toEqual({ ext: 'ini', mime: 'text/plain' });
+    expect(getCodeFileType('mdx')).toEqual({ ext: 'mdx', mime: 'text/markdown' });
+  });
+
+  // A language tag with no entry above but whose name is itself a known upload extension
+  // still saves as `.${lang}` (accepted server-side) rather than the generic .txt fallback.
+  it('falls back to `.${lang}` for an unmapped language whose name is a known upload extension', () => {
+    expect(getCodeFileType('h')).toEqual({ ext: 'h', mime: 'text/plain' });
+    expect(getCodeFileType('log')).toEqual({ ext: 'log', mime: 'text/plain' });
+  });
+
+  it('still falls back to txt for a language name that is not a known upload extension', () => {
+    expect(getCodeFileType('brainfuck')).toEqual({ ext: 'txt', mime: 'text/plain' });
+    expect(getCodeFileType('cobol')).toEqual({ ext: 'txt', mime: 'text/plain' });
+  });
 });
