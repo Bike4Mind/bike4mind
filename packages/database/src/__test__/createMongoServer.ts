@@ -70,10 +70,11 @@ const withPortRetry = async <T>(start: () => Promise<T>): Promise<T> => {
  * one fails on a timeout, asserts nothing, and goes green on re-run of the same commit.
  *
  * This is not a hang mask - it is the correct budget for work that starts a database. A genuinely
- * hung test still fails, just later. Keep it the single lever for the whole class: raising the
- * shard default instead would hand the same slack to ~1000 unit tests that must stay tight.
- * `apps/client/__tests__/mongoTestTimeoutBudget.test.ts` fails the build if a real-Mongo suite in
- * that shard declares anything else.
+ * hung test still fails, just later. In apps/client and packages/scripts keep it the single lever
+ * for the whole class: raising their defaults instead would hand the same slack to ~1000 unit tests
+ * that must stay tight, and `mongoTestTimeoutBudget.test.ts` in each fails the build if a real-Mongo
+ * suite declares anything else. This package is the exception: most of its suites boot mongod, so
+ * its vitest.config.ts sets this budget as the default and the per-file declaration is optional.
  */
 export const MONGO_TEST_TIMEOUT_MS = 60_000;
 
