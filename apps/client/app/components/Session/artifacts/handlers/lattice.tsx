@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, Typography } from '@mui/joy';
 import type { LatticeArtifact } from '@bike4mind/common';
 import ArtifactPreviewCard from '@client/app/components/GenAI/ArtifactPreviewCard';
+import { artifactFileName } from '@client/app/utils/artifactFileName';
 import { registerArtifactType, type ArtifactPreviewProps } from '../registry';
 
 type ParseResult = { ok: true; artifact: LatticeArtifact } | { ok: false; error: unknown };
@@ -75,7 +76,7 @@ const LatticePreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifact
         copyMessage="Financial model copied to clipboard"
         saveTooltip="Save model as file"
         saveFile={() => ({
-          fileName: `${model.title.toLowerCase().replace(/\s+/g, '_')}_${Date.now()}.json`,
+          fileName: artifactFileName(model.title, 'json', 'financial-model'),
           mimeType: 'application/json',
           successMessage: 'Saved financial model as file',
         })}

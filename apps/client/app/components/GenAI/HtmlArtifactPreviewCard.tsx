@@ -2,6 +2,7 @@ import React from 'react';
 import { type HtmlArtifact } from '@bike4mind/common';
 import InlineArtifactPreview from './InlineArtifactPreview';
 import ArtifactPreviewCard from './ArtifactPreviewCard';
+import { artifactFileName } from '@client/app/utils/artifactFileName';
 
 interface HtmlArtifactPreviewCardProps {
   artifact: HtmlArtifact;
@@ -25,7 +26,7 @@ const HtmlArtifactPreviewCard: React.FC<HtmlArtifactPreviewCardProps> = ({ artif
       copyMessage="HTML code copied to clipboard"
       saveTooltip="Save as HTML file"
       saveFile={() => ({
-        fileName: `${artifact.title.toLowerCase().replace(/\s+/g, '_')}_${Date.now()}.html`,
+        fileName: artifactFileName(artifact.title, 'html', 'html-document'),
         mimeType: 'text/html',
         successMessage: 'Saved HTML as file',
       })}
