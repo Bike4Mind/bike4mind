@@ -49,4 +49,25 @@ describe('toolsUsedToFunctionCalls', () => {
   it('returns an empty array for an empty input', () => {
     expect(toolsUsedToFunctionCalls([])).toEqual([]);
   });
+
+  it('carries executionTime through on both a successful and a failed call', () => {
+    const result = toolsUsedToFunctionCalls([
+      { name: 'web_search', arguments: '{}', id: 'call_1', returnValue: 'ok', success: true, executionTime: 842 },
+      {
+        name: 'web_search',
+        arguments: '{}',
+        id: 'call_2',
+        returnValue: 'Error: timed out',
+        success: false,
+        executionTime: 20_500,
+      },
+    ]);
+    expect(result[0].executionTime).toBe(842);
+    expect(result[1].executionTime).toBe(20_500);
+  });
+
+  it('leaves executionTime undefined when the source entry has none', () => {
+    const result = toolsUsedToFunctionCalls([{ name: 'web_search', arguments: '{}', id: 'call_1' }]);
+    expect(result[0].executionTime).toBeUndefined();
+  });
 });
