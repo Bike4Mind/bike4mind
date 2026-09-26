@@ -83,6 +83,7 @@ vi.mock('sst', () => ({
     OVERWATCH_INGEST_ENABLED: { value: 'true' },
     OVERWATCH_INGEST_URL: { value: 'https://app.bike4mind.com/api/overwatch/v1/events' },
     OVERWATCH_INGEST_KEY: { value: 'b4m_live_testkey1234567890abcdef12345678' },
+    OVERWATCH_PRODUCT_INGEST_KEYS: { value: 'not-configured' },
     B4M_ANALYTICS_ENABLED: { value: 'true' },
     OVERWATCH_PSEUDONYM_SALT: { value: 'aaabbbcccddd0000111122223333444455556666777788889999aaaabbbbcccc0001' },
   },
