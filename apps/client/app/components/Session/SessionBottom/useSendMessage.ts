@@ -1254,7 +1254,13 @@ export function useSendMessage({
 
   // Programmatic submit + briefcase launch handling, extracted to a dedicated
   // hook. Owns the /opti null-session guard, nonce dedup, and timer cleanup.
-  useProgrammaticSubmit({ handleSendClick, readyState, submitting, currentSession });
+  useProgrammaticSubmit({
+    handleSendClick,
+    readyState,
+    submitting,
+    currentSession,
+    isNewChat: location.pathname === '/new',
+  });
 
   return { submitting, stoppingMessage, pendingAutoSubmitGoal, handleSendClick, handleStopMessage };
 }
