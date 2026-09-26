@@ -52,21 +52,20 @@ describe('artifactFileName', () => {
   // convention), while still exercising the actual non-ASCII code points at runtime.
   it('keeps CJK characters instead of wiping the title to the fallback', () => {
     vi.useFakeTimers().setSystemTime(1700000000000);
-    // '日本語のタイトル' is a Japanese title (no case to fold).
-    const title = '日本語のタイトル';
+    const title = '\u65e5\u672c\u8a9e\u306e\u30bf\u30a4\u30c8\u30eb';
     expect(artifactFileName(title, 'txt')).toBe(`${title}_1700000000000.txt`);
   });
 
   it('keeps accented characters instead of wiping the title to the fallback', () => {
     vi.useFakeTimers().setSystemTime(1700000000000);
-    // 'Résumé Café' is "Résumé Café".
-    expect(artifactFileName('Résumé Café', 'txt')).toBe('résumé_café_1700000000000.txt');
+    expect(artifactFileName('R\u00e9sum\u00e9 Caf\u00e9', 'txt')).toBe('r\u00e9sum\u00e9_caf\u00e9_1700000000000.txt');
   });
 
   it('still strips path/OS-reserved characters and control characters from a non-ASCII title', () => {
     vi.useFakeTimers().setSystemTime(1700000000000);
-    // '日本語/タイトル' is a Japanese title split by a stripped slash.
-    expect(artifactFileName('日本語/タイトル', 'txt')).toBe('日本語_タイトル_1700000000000.txt');
+    expect(artifactFileName('\u65e5\u672c\u8a9e/\u30bf\u30a4\u30c8\u30eb', 'txt')).toBe(
+      '\u65e5\u672c\u8a9e_\u30bf\u30a4\u30c8\u30eb_1700000000000.txt'
+    );
     expect(artifactFileName('caf\u0000e\u0007', 'txt')).toBe('caf_e_1700000000000.txt');
   });
 });
