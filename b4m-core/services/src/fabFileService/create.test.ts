@@ -78,6 +78,19 @@ describe('createFabFile - extension-first MIME resolution', () => {
     expect(created.mimeType).toBe(SupportedFabFileMimeTypes.SH);
   });
 
+  // Regression: the Mermaid preview card's disk-icon "Save as Mermaid file" upload sent
+  // `<name>_<ts>.mmd` as text/plain and was refused with "File type .mmd is not supported"
+  // because `.mmd` was missing from the extension table.
+  it('accepts a Mermaid diagram source file (.mmd) saved as text/plain', async () => {
+    const created = await createFabFile(
+      'u1',
+      { ...base, fileName: 'flowchart_1234567890.mmd', mimeType: 'text/plain' },
+      resolvingAdapters()
+    );
+
+    expect(created.mimeType).toBe(SupportedFabFileMimeTypes.TXT_PLAIN);
+  });
+
   // Inverted deliberately: a digit tail used to be exempted as a date/version fragment, which
   // meant renaming any binary to 'payload.1' got it admitted as plain text. Every dot-tail is
   // an extension now, so it must resolve or the file is refused.

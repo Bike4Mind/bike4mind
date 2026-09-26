@@ -183,6 +183,7 @@ const EXT_TO_MIME: Record<string, string> = Object.assign(Object.create(null), {
   text: SupportedFabFileMimeTypes.TXT_PLAIN,
   md: SupportedFabFileMimeTypes.TXT_MARKDOWN,
   mdx: SupportedFabFileMimeTypes.TXT_MARKDOWN,
+  mmd: SupportedFabFileMimeTypes.TXT_PLAIN, // Mermaid diagram source.
   html: SupportedFabFileMimeTypes.HTML,
   htm: SupportedFabFileMimeTypes.HTML,
   // Browser-reported spelling with no client-side counterpart in guessMimeType.

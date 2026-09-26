@@ -80,6 +80,7 @@ const FilePondModal: React.FC<FilePondModalProps> = ({ onFileProcessComplete }) 
         '.sql',
         '.graphql',
         '.md',
+        '.mmd',
         '.txt',
         '.csv',
         // Generic text
