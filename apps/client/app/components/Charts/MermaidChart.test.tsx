@@ -37,7 +37,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import MermaidChart, { computeSvgExportSize } from './MermaidChart';
+import MermaidChart, { clampExportScale, computeSvgExportSize, prepareExportSvg } from './MermaidChart';
 import mermaid from 'mermaid';
 import { useSnackbar } from '@client/app/contexts/SnackbarContext';
 
@@ -411,5 +411,71 @@ describe('computeSvgExportSize', () => {
     const nonFinite = createSvg({ viewBox: '0 0 NaN 300' });
     vi.spyOn(nonFinite, 'getBoundingClientRect').mockReturnValue({ width: 120, height: 80 } as unknown as DOMRect);
     expect(computeSvgExportSize(nonFinite)).toEqual({ width: 240, height: 160 });
+  });
+
+  // Regression: a 2x export of a large diagram exceeded Chrome's ~268M px^2 canvas area (and,
+  // for very wide/tall ones, its 32767px per-side cap), so canvas.toBlob returned null and the
+  // export failed with "Failed to create blob" - a regression vs. the old tiny-but-working
+  // export. The clamp trades resolution for a canvas the browser will actually rasterize.
+  it('clamps a large diagram so neither side nor total area exceed the canvas limits', () => {
+    const svg = createSvg({ viewBox: '0 0 20000 10000' });
+    const { width, height } = computeSvgExportSize(svg);
+
+    expect(width).toBeLessThanOrEqual(16384);
+    expect(height).toBeLessThanOrEqual(16384);
+    expect(width * height).toBeLessThanOrEqual(16_000_000);
+    // Aspect ratio (2:1) survives the clamp, within rounding.
+    expect(width / height).toBeCloseTo(2, 1);
+  });
+
+  it('clamps an extremely wide diagram against the per-side limit even when area is not the binding constraint', () => {
+    const svg = createSvg({ viewBox: '0 0 50000 100' });
+    const { width, height } = computeSvgExportSize(svg);
+
+    expect(width).toBe(16384);
+    expect(height).toBeGreaterThan(0);
+  });
+
+  it('does not clamp a diagram that already fits under both limits', () => {
+    const svg = createSvg({ viewBox: '0 0 400 300' });
+    expect(computeSvgExportSize(svg, 3)).toEqual({ width: 1200, height: 900 });
+  });
+});
+
+describe('clampExportScale', () => {
+  it('leaves the requested scale alone when the result already fits both limits', () => {
+    expect(clampExportScale(400, 300, 2)).toBe(2);
+  });
+
+  it('never reduces the smaller side below 1px, even past the side/area caps', () => {
+    const scale = clampExportScale(1, 1_000_000_000, 2);
+    expect(Math.round(1 * scale)).toBeGreaterThanOrEqual(1);
+  });
+
+  it('is a no-op passthrough for a non-positive base size', () => {
+    expect(clampExportScale(0, 300, 2)).toBe(2);
+    expect(clampExportScale(400, 0, 2)).toBe(2);
+  });
+});
+
+// Guards the case tests of computeSvgExportSize alone cannot: deleting the width/height
+// assignment on the clone reintroduces the 300x150 bug while every sizing-math test stays
+// green, because those tests never look at the clone itself.
+describe('prepareExportSvg', () => {
+  it('gives the clone explicit numeric width/height while leaving the live element untouched', () => {
+    const svg = createSvg({ viewBox: '0 0 400 300', width: '100%', height: '100%' });
+
+    const clone = prepareExportSvg(svg);
+
+    expect(clone.getAttribute('width')).toBe('800');
+    expect(clone.getAttribute('height')).toBe('600');
+    expect(svg.getAttribute('width')).toBe('100%');
+    expect(svg.getAttribute('height')).toBe('100%');
+  });
+
+  it('is the same element serialized by svgToPngBlob (a distinct node, not the live one)', () => {
+    const svg = createSvg({ viewBox: '0 0 400 300' });
+    const clone = prepareExportSvg(svg);
+    expect(clone).not.toBe(svg);
   });
 });

@@ -182,7 +182,10 @@ describe('MIME_TYPE_MAP', () => {
     expect(MIME_TYPE_MAP['.py']).toBe('text/x-python');
   });
 
-  it('covers the artifact-export extensions added for CodeArtifactPreviewCard/MermaidChart saves', () => {
+  // This map (detectMimeType) is not on the client artifact-save path - it backs Jira/Confluence
+  // attachment MIME detection. These entries were added alongside that round of artifact-save
+  // work for consistency, not because CodeArtifactPreviewCard/MermaidChart consume this map.
+  it('covers the extensions added alongside the artifact-save work (.mmd, .tsx, .jsx, .css, .sh, .sql)', () => {
     expect(MIME_TYPE_MAP['.mmd']).toBe('text/plain');
     expect(MIME_TYPE_MAP['.tsx']).toBe('text/typescript');
     expect(MIME_TYPE_MAP['.jsx']).toBe('text/javascript');
