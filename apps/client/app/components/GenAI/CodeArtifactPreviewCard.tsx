@@ -16,6 +16,8 @@ import { toast } from 'sonner';
 import { brand } from '@client/app/utils/themes/colors';
 import ShowMoreButton from '@client/app/components/common/ShowMoreButton';
 import { actionButtonSx } from '@client/app/components/common/actionButtonSx';
+import { artifactFileName } from '@client/app/utils/artifactFileName';
+import { getCodeFileType } from './codeArtifactFileType';
 
 interface CodeArtifactData {
   title: string;
@@ -95,19 +97,8 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
   const handleSaveAsFile = async (e: React.MouseEvent) => {
     e.stopPropagation();
     try {
-      const fileName = `${data.title.toLowerCase().replace(/\s+/g, '_')}_${Date.now()}.${data.language}`;
-      const mimeType =
-        data.language === 'javascript'
-          ? 'text/javascript'
-          : data.language === 'typescript'
-            ? 'text/typescript'
-            : data.language === 'python'
-              ? 'text/x-python'
-              : data.language === 'html'
-                ? 'text/html'
-                : data.language === 'css'
-                  ? 'text/css'
-                  : 'text/plain';
+      const { ext, mime: mimeType } = getCodeFileType(data.language);
+      const fileName = artifactFileName(data.title, ext, 'code-snippet');
       const file = new File([data.code], fileName, { type: mimeType });
       const fileData = {
         type: KnowledgeType.FILE,
