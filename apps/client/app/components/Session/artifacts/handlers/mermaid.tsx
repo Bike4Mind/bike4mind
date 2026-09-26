@@ -3,6 +3,7 @@ import { Box } from '@mui/joy';
 import type { MermaidArtifact } from '@bike4mind/common';
 import MermaidChart from '@client/app/components/Charts/MermaidChart';
 import ArtifactPreviewCard from '@client/app/components/GenAI/ArtifactPreviewCard';
+import { artifactFileName } from '@client/app/utils/artifactFileName';
 import { registerArtifactType, type ArtifactPreviewProps } from '../registry';
 
 const MermaidPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactId, index }) => {
@@ -35,7 +36,7 @@ const MermaidPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifact
         copyMessage="Mermaid source copied to clipboard"
         saveTooltip="Save as Mermaid file"
         saveFile={() => ({
-          fileName: `${mermaidArtifact.title.toLowerCase().replace(/\s+/g, '_')}_${Date.now()}.mmd`,
+          fileName: artifactFileName(mermaidArtifact.title, 'mmd', 'mermaid-chart'),
           mimeType: 'text/plain',
           successMessage: 'Saved diagram as file',
         })}
