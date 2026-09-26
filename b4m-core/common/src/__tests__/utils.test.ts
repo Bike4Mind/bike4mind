@@ -160,6 +160,12 @@ describe('extensionFromMimeType', () => {
     expect(extensionFromMimeType('audio/opus')).toBe('opus');
     expect(extensionFromMimeType('audio/flac')).toBe('flac');
   });
+
+  it('prefers the canonical extension for a mime type that now has more than one', () => {
+    // .js/.ts were already canonical for these mimes; .jsx/.tsx must not jump ahead of them
+    expect(extensionFromMimeType('text/javascript')).toBe('js');
+    expect(extensionFromMimeType('text/typescript')).toBe('ts');
+  });
 });
 
 describe('MIME_TYPE_MAP', () => {
@@ -174,5 +180,14 @@ describe('MIME_TYPE_MAP', () => {
     // Code
     expect(MIME_TYPE_MAP['.ts']).toBe('text/typescript');
     expect(MIME_TYPE_MAP['.py']).toBe('text/x-python');
+  });
+
+  it('covers the artifact-export extensions added for CodeArtifactPreviewCard/MermaidChart saves', () => {
+    expect(MIME_TYPE_MAP['.mmd']).toBe('text/plain');
+    expect(MIME_TYPE_MAP['.tsx']).toBe('text/typescript');
+    expect(MIME_TYPE_MAP['.jsx']).toBe('text/javascript');
+    expect(MIME_TYPE_MAP['.css']).toBe('text/css');
+    expect(MIME_TYPE_MAP['.sh']).toBe('text/x-sh');
+    expect(MIME_TYPE_MAP['.sql']).toBe('text/x-sql');
   });
 });

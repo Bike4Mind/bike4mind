@@ -3,6 +3,7 @@ import { Box } from '@mui/joy';
 import DOMPurify from 'dompurify';
 import type { SvgArtifact } from '@bike4mind/common';
 import ArtifactPreviewCard from '@client/app/components/GenAI/ArtifactPreviewCard';
+import { artifactFileName } from '@client/app/utils/artifactFileName';
 import { registerArtifactType, type ArtifactPreviewProps } from '../registry';
 
 export const sanitizeSvg = (raw: string): string =>
@@ -81,7 +82,7 @@ const SvgPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactId }
         source={artifact.content}
         saveTooltip="Save as SVG file"
         saveFile={() => ({
-          fileName: `${svgTitle.toLowerCase().replace(/\s+/g, '_')}_${Date.now()}.svg`,
+          fileName: artifactFileName(svgTitle, 'svg', 'svg-graphic'),
           mimeType: 'image/svg+xml',
           successMessage: 'Saved SVG as file',
         })}
