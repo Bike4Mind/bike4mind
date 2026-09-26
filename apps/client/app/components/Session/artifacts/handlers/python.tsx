@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, Typography } from '@mui/joy';
 import type { PythonArtifact } from '@bike4mind/common';
 import ArtifactPreviewCard from '@client/app/components/GenAI/ArtifactPreviewCard';
+import { artifactFileName } from '@client/app/utils/artifactFileName';
 import { registerArtifactType, type ArtifactPreviewProps } from '../registry';
 
 const SUPPORTED_PACKAGES = ['numpy', 'pandas', 'matplotlib', 'scipy', 'seaborn', 'sklearn'];
@@ -54,7 +55,7 @@ const PythonPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactI
         copyMessage="Python code copied to clipboard"
         saveTooltip="Save as Python file"
         saveFile={() => ({
-          fileName: `${title.toLowerCase().replace(/\s+/g, '_')}_${Date.now()}.py`,
+          fileName: artifactFileName(title, 'py', 'python-script'),
           mimeType: 'text/x-python',
           successMessage: 'Saved Python script as file',
         })}

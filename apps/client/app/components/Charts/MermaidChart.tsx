@@ -5,6 +5,7 @@ import ArtifactModeTabs from '@client/app/components/common/ArtifactModeTabs';
 import { Code, Download, ContentCopy } from '@mui/icons-material';
 import ErrorIcon from '@mui/icons-material/Error';
 import { useSnackbar } from '@client/app/contexts/SnackbarContext';
+import { artifactFileName } from '@client/app/utils/artifactFileName';
 
 interface MermaidChartProps {
   chartDefinition: string;
@@ -27,6 +28,118 @@ interface MermaidChartProps {
  * out yet on first paint) without spinning for a chart that is display:none indefinitely.
  */
 const ZERO_WIDTH_RETRY_FRAMES = 30;
+
+/** Fallback raster size (before scale) when neither the viewBox nor the live element yield one. */
+const FALLBACK_SVG_WIDTH = 300;
+const FALLBACK_SVG_HEIGHT = 150;
+
+// Canvas limits a raster export must fit under. Chrome caps a canvas at 32767px per side and
+// ~268,435,456px^2 total; iOS Safari caps total area much lower, around 16,777,216px^2. 16384
+// and 16_000_000 stay comfortably under both without a per-browser branch - a 2x export of a
+// large diagram used to exceed these silently, so canvas.toBlob returned null and the export
+// failed with "Failed to create blob" instead of a smaller-but-working PNG.
+const MAX_EXPORT_SIDE = 16384;
+const MAX_EXPORT_AREA = 16_000_000;
+
+/**
+ * Scales `scale` down (never up) so a `baseWidth` x `baseHeight` image rasterizes at or under
+ * both the per-side and total-area canvas limits, while keeping aspect ratio. Never clamps
+ * below the scale that keeps the smaller side at >= 1px, so a degenerate (near-zero) base size
+ * still produces a valid image rather than a 0x0 one.
+ */
+export function clampExportScale(baseWidth: number, baseHeight: number, scale: number): number {
+  if (baseWidth <= 0 || baseHeight <= 0) return scale;
+  const sideLimit = MAX_EXPORT_SIDE / Math.max(baseWidth, baseHeight);
+  const areaLimit = Math.sqrt(MAX_EXPORT_AREA / (baseWidth * baseHeight));
+  const minScale = 1 / Math.min(baseWidth, baseHeight);
+  return Math.max(Math.min(scale, sideLimit, areaLimit), minScale);
+}
+
+/** The svg's intrinsic size before any export scale is applied: viewBox, else the live rect, else a fixed fallback. */
+function getBaseSvgSize(svgElement: SVGSVGElement): { width: number; height: number } {
+  const viewBox = svgElement.getAttribute('viewBox');
+  if (viewBox) {
+    const parts = viewBox.trim().split(/\s+/).map(Number);
+    const [, , vbWidth, vbHeight] = parts;
+    if (parts.length === 4 && parts.every(Number.isFinite) && vbWidth > 0 && vbHeight > 0) {
+      return { width: vbWidth, height: vbHeight };
+    }
+  }
+  const rect = svgElement.getBoundingClientRect();
+  if (rect.width > 0 && rect.height > 0) {
+    return { width: rect.width, height: rect.height };
+  }
+  return { width: FALLBACK_SVG_WIDTH, height: FALLBACK_SVG_HEIGHT };
+}
+
+/**
+ * Derives the PNG export size from the svg's viewBox, falling back to the live element's
+ * bounding rect, then clamps the requested scale to the canvas limits above. Pure so it can be
+ * unit-tested without mocking canvas/Image, which jsdom does not implement - see
+ * MermaidChart.test.tsx.
+ *
+ * renderChart sets width="100%" height="100%" on the rendered <svg> so it fills its container,
+ * which leaves the serialized element with no intrinsic size of its own: rasterizing it as-is
+ * left Chrome falling back to its 300x150 default, so exports came out tiny and blurry
+ * regardless of the diagram's actual size.
+ */
+export function computeSvgExportSize(svgElement: SVGSVGElement, scale = 2): { width: number; height: number } {
+  const { width: baseWidth, height: baseHeight } = getBaseSvgSize(svgElement);
+  const effectiveScale = clampExportScale(baseWidth, baseHeight, scale);
+  return { width: Math.round(baseWidth * effectiveScale), height: Math.round(baseHeight * effectiveScale) };
+}
+
+/**
+ * Clones the live svg and stamps it with explicit width/height for rasterization, leaving the
+ * original's responsive (100%/100%) sizing untouched. Split out from svgToPngBlob so a test can
+ * assert the clone actually carries numeric dimensions - the sizing math alone can't catch a
+ * regression that drops this step and reintroduces Chrome's 300x150 default.
+ */
+export function prepareExportSvg(svgElement: SVGSVGElement, scale = 2): SVGSVGElement {
+  const { width, height } = computeSvgExportSize(svgElement, scale);
+  const clone = svgElement.cloneNode(true) as SVGSVGElement;
+  clone.setAttribute('width', String(width));
+  clone.setAttribute('height', String(height));
+  return clone;
+}
+
+/**
+ * Shared svg -> canvas -> PNG pipeline for both the Copy-as-PNG and Download actions. Clones
+ * the svg so the explicit width/height set for rasterization never touch the live, responsive
+ * (100%/100%) element mermaid rendered into the DOM.
+ *
+ * No background fill: Joy's theme background tokens are CSS custom properties, and resolving
+ * one to a concrete color for ctx.fillStyle needs getComputedStyle on a mounted element - not
+ * worth the added surface for a transparent-PNG nicety, so dark-theme exports stay transparent.
+ */
+export async function svgToPngBlob(svgElement: SVGSVGElement, scale = 2): Promise<Blob> {
+  const clone = prepareExportSvg(svgElement, scale);
+  const width = Number(clone.getAttribute('width'));
+  const height = Number(clone.getAttribute('height'));
+
+  const svgData = new XMLSerializer().serializeToString(clone);
+  const img = new window.Image();
+
+  return new Promise<Blob>((resolve, reject) => {
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Failed to get canvas context'));
+        return;
+      }
+      ctx.drawImage(img, 0, 0, width, height);
+      canvas.toBlob(blob => {
+        if (blob) resolve(blob);
+        else reject(new Error('Failed to create blob'));
+      }, 'image/png');
+    };
+    img.onerror = () => reject(new Error('Failed to load image'));
+    img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
+  });
+}
 
 const MermaidChart: React.FC<MermaidChartProps> = ({
   chartDefinition,
@@ -194,27 +307,7 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
       const svgElement = elementRef.current.querySelector('svg');
       if (!svgElement) throw new Error('SVG element not found');
 
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error('Failed to get canvas context');
-
-      const svgData = new XMLSerializer().serializeToString(svgElement);
-      const img = new window.Image();
-
-      const blob = await new Promise<Blob>((resolve, reject) => {
-        img.onload = () => {
-          canvas.width = img.width;
-          canvas.height = img.height;
-          ctx.drawImage(img, 0, 0);
-          canvas.toBlob(blob => {
-            if (blob) resolve(blob);
-            else reject(new Error('Failed to create blob'));
-          }, 'image/png');
-        };
-        img.onerror = () => reject(new Error('Failed to load image'));
-        img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
-      });
-
+      const blob = await svgToPngBlob(svgElement);
       const item = new ClipboardItem({ 'image/png': blob });
       await navigator.clipboard.write([item]);
       showSnackbar('Chart copied as PNG', { variant: 'plain' });
@@ -230,31 +323,12 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
       const svgElement = elementRef.current.querySelector('svg');
       if (!svgElement) throw new Error('SVG element not found');
 
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error('Failed to get canvas context');
-
-      const svgData = new XMLSerializer().serializeToString(svgElement);
-      const img = new window.Image();
-
-      const blob = await new Promise<Blob>((resolve, reject) => {
-        img.onload = () => {
-          canvas.width = img.width;
-          canvas.height = img.height;
-          ctx.drawImage(img, 0, 0);
-          canvas.toBlob(blob => {
-            if (blob) resolve(blob);
-            else reject(new Error('Failed to create blob'));
-          }, 'image/png');
-        };
-        img.onerror = () => reject(new Error('Failed to load image'));
-        img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
-      });
+      const blob = await svgToPngBlob(svgElement);
 
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${title || 'mermaid-chart'}.png`;
+      a.download = artifactFileName(title, 'png', 'mermaid-chart');
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
