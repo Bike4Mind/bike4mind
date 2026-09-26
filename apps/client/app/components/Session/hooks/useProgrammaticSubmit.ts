@@ -4,6 +4,7 @@ import type { B4MLLMTools, IChatHistoryItemDocument, ISessionDocument } from '@b
 import { ReadyState } from '@client/app/contexts/WebsocketContext';
 import { useChatInput } from '@client/app/hooks/useChatInput';
 import { isFreshNonce } from '@client/app/utils/briefcase/dispatchDedup';
+import { isOptimisticId } from '@client/app/utils/llm';
 
 interface UseProgrammaticSubmitParams {
   /** The send function to drive - typically `useSendMessage`'s `handleSendClick`. */
@@ -14,6 +15,8 @@ interface UseProgrammaticSubmitParams {
   readyState: ReadyState;
   submitting: boolean;
   currentSession: ISessionDocument | null;
+  /** On `/new`, where `handleSendClick` mints the session itself, so a launch need not wait for one. */
+  isNewChat: boolean;
 }
 
 /**
@@ -32,12 +35,17 @@ interface UseProgrammaticSubmitParams {
  * `currentSession` is still null. Without this guard a `sessionId: undefined` reaches
  * the server, which mints a NEW session and lands the response on the wrong notebook.
  * The retry effect picks the prompt up once `changeSession` finishes.
+ *
+ * Briefcase launches additionally never consume against an optimistic session (the
+ * server has never seen its id); they wait for session.created to swap in the real
+ * one. The one null-session exception is an unpinned launch on `/new`.
  */
 export function useProgrammaticSubmit({
   handleSendClick,
   readyState,
   submitting,
   currentSession,
+  isNewChat,
 }: UseProgrammaticSubmitParams): void {
   const readyStateRef = useRef(readyState);
   // eslint-disable-next-line react-hooks/refs
@@ -55,6 +63,10 @@ export function useProgrammaticSubmit({
   // eslint-disable-next-line react-hooks/refs
   currentSessionRef.current = currentSession;
 
+  const isNewChatRef = useRef(isNewChat);
+  // eslint-disable-next-line react-hooks/refs
+  isNewChatRef.current = isNewChat;
+
   // Consume a pending briefcase launch if this surface is the elected target and
   // ready. Session election: a dispatch carrying a sessionId is only handled by
   // the matching surface; a null sessionId may be handled by any (the nonce guard
@@ -66,8 +78,14 @@ export function useProgrammaticSubmit({
   const tryConsumeLaunch = useCallback(() => {
     const dispatch = useChatInput.getState().programmaticLaunch;
     if (!dispatch) return;
-    if (readyStateRef.current !== ReadyState.OPEN || submittingRef.current || !currentSessionRef.current) return;
-    if (dispatch.sessionId && dispatch.sessionId !== currentSessionRef.current.id) return;
+    if (readyStateRef.current !== ReadyState.OPEN || submittingRef.current) return;
+    const session = currentSessionRef.current;
+    if (session) {
+      if (isOptimisticId(session.id)) return;
+      if (dispatch.sessionId && dispatch.sessionId !== session.id) return;
+    } else if (!isNewChatRef.current || dispatch.sessionId) {
+      return;
+    }
     // De-dupe across subscribers/re-mounts before doing anything observable.
     if (!isFreshNonce(dispatch.dispatchNonce)) {
       useChatInput.getState().setProgrammaticLaunch(null);
@@ -78,10 +96,10 @@ export function useProgrammaticSubmit({
     const content = dispatch.promptContent;
     // The elected session at consume time - the send is dropped if it changes
     // during the settle delay (election must hold through to the actual send).
-    const electedSessionId = currentSessionRef.current.id;
+    const electedSessionId = session?.id ?? null;
     const timer = setTimeout(() => {
       launchTimersRef.current.delete(timer);
-      if (currentSessionRef.current?.id !== electedSessionId) return;
+      if ((currentSessionRef.current?.id ?? null) !== electedSessionId) return;
       handleSendClickRef.current(content, { toolsOverride });
     }, 150);
     launchTimersRef.current.add(timer);
@@ -129,5 +147,5 @@ export function useProgrammaticSubmit({
     }
     tryConsumeLaunch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [readyState, submitting, currentSession]);
+  }, [readyState, submitting, currentSession, isNewChat]);
 }
