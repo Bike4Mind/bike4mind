@@ -13,6 +13,7 @@ import advancedFormat from 'dayjs/plugin/advancedFormat';
 import { SlackClient } from '../SlackClient';
 import { buildScheduleMessageModal } from '../modals/ScheduleMessageModal';
 import { parseAndValidateTime } from '../utils/time-parser';
+import { matchQuotedText } from '../utils/reminder-parser';
 import { handleRemindCommand } from './reminderCommands';
 import { handleConfigCommand } from './configCommands';
 import { B4mCommandContext, B4mCommandResult } from './types';
@@ -247,10 +248,10 @@ async function handleScheduleCommand(args: string[], context: B4mCommandContext)
   // /b4m schedule "message" <time expression> - inline scheduling
   // Check if the first arg starts with a quote (inline message)
   const fullText = args.join(' ');
-  const quoteMatch = fullText.match(/^["'](.+?)["']\s+(.+)$/);
+  const quoteMatch = matchQuotedText(fullText);
 
   if (quoteMatch) {
-    const [, message, timeExpression] = quoteMatch;
+    const [message, timeExpression] = quoteMatch;
 
     try {
       const slackClient = new SlackClient(botToken, logger);

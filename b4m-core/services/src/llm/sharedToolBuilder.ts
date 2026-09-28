@@ -32,6 +32,7 @@ import { isToolOfferable, type ToolAvailability } from './toolAvailability';
 import { extractAndSaveEntitiesFromToolResult, shouldExtractEntitiesFromTool } from '../conversationContextService';
 import type { MinimalSessionRepository } from '../conversationContextService/types';
 import { notifyToolFinish } from './toolFinishObserver';
+import { scanArtifactTags } from '../utils/scanArtifactTags';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -278,7 +279,6 @@ const VALID_SIDE_EFFECT_TYPES = new Set([
   'populateFamilyProblem',
   'populateDecomposition',
 ]);
-const TOOL_ARTIFACT_RE = /<artifact\s+([^>]*)>([\s\S]*?)<\/artifact>/gi;
 
 // ---------------------------------------------------------------------------
 // Main function
@@ -671,10 +671,7 @@ function wrapToolsForSentinels(
           result.includes('<artifact')
         ) {
           try {
-            TOOL_ARTIFACT_RE.lastIndex = 0;
-            let artifactMatch;
-            while ((artifactMatch = TOOL_ARTIFACT_RE.exec(result)) !== null) {
-              const [, attrsStr, content] = artifactMatch;
+            for (const { attrs: attrsStr, body: content } of scanArtifactTags(result, true)) {
               const attrs = parseToolArtifactAttributes(attrsStr);
 
               // Checked on the final value, so a repeated type= attribute cannot smuggle one past.
