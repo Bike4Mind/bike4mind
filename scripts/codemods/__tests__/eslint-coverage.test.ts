@@ -117,6 +117,27 @@ describe('apps/workers <-> apps/client import boundary', () => {
     expect(hasRestrictedImportError(messages)).toBe(true);
   });
 
+  it('flags apps/client/app (the Next.js block) importing from apps/workers', async () => {
+    const messages = await lint(`import x from '@workers/events/spider';`, 'apps/client/app/foo.tsx');
+    expect(hasRestrictedImportError(messages)).toBe(true);
+  });
+
+  it('flags apps/client reaching into apps/workers by a relative path', async () => {
+    const messages = await lint(
+      `import x from '../../../workers/src/events/spider';`,
+      'apps/client/server/utils/foo.ts'
+    );
+    expect(hasRestrictedImportError(messages)).toBe(true);
+  });
+
+  it.each(['@client/app/components/Foo', '@/app/components/Foo', '@pages/api/foo'])(
+    'flags apps/workers importing client UI or route code via %s',
+    async specifier => {
+      const messages = await lint(`import x from '${specifier}';`, 'apps/workers/src/events/foo.ts');
+      expect(hasRestrictedImportError(messages)).toBe(true);
+    }
+  );
+
   it('flags apps/workers importing UI code (react)', async () => {
     const messages = await lint(`import { useState } from 'react';`, 'apps/workers/src/events/foo.ts');
     expect(hasRestrictedImportError(messages)).toBe(true);

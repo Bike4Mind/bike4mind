@@ -318,7 +318,8 @@ const noUiImportsInWorkers = {
     { name: 'react-dom', message: WORKERS_NO_UI_MESSAGE },
     { name: 'next', message: WORKERS_NO_UI_MESSAGE },
   ],
-  patterns: [{ group: ['@client/app/*', 'next/*', '@mui/*'], message: WORKERS_NO_UI_MESSAGE }],
+  // @/app/* and @pages/* too: apps/workers/tsconfig.json maps @/* and @pages/* into apps/client.
+  patterns: [{ group: ['@client/app/*', '@/app/*', '@pages/*', 'next/*', '@mui/*'], message: WORKERS_NO_UI_MESSAGE }],
 };
 
 export default defineConfig([
