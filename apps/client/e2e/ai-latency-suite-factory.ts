@@ -64,12 +64,16 @@ export function createAiLatencySuite({
   // the file with a partial (or empty) set (the observed `results: []`). Reading the file back and
   // merging by id keeps each write monotonic.
   //
-  // NOT safe against a concurrent writer, and there can be one: the matrix job runs with
-  // PW_WORKERS=3 (e2e-ai-latency.yml) against `fullyParallel: true`, so two prompts of the same
-  // spec can read-modify-write this file at once and the later write wins with a stale prior set.
-  // The window is the JSON round trip, so in practice prompts minutes apart rarely collide - but a
-  // lost update silently drops a row, and dropping an `incomplete` row reads as a healthy cell.
-  // Serializing the latency job (or one file per prompt) is the real fix and is tracked separately.
+  // The unlocked read-modify-write is safe only because nothing writes this file concurrently, and
+  // that rests on two invariants, not on PW_WORKERS (the job runs 3 workers, with fullyParallel):
+  //  - each matrix cell runs exactly one spec file per `playwright test` invocation
+  //    (e2e-ai-latency.yml), and exactly one project matches each ai-latency spec;
+  //  - the describe below is `mode: 'default'`, which overrides fullyParallel: its prompts form one
+  //    job, and after a failure the retry and the remaining prompts are re-queued as ONE job that
+  //    starts only once the failed worker has finished its afterAll.
+  // Switching that mode to 'parallel', or running several specs per invocation, makes two workers
+  // race here, and a lost update that drops an `incomplete` row reads as a healthy cell.
+  // checkAiLatencyBudget.test.ts pins both invariants.
   function persistResults(model: string, newResults: PromptResult[]) {
     fs.mkdirSync(resultsDir, { recursive: true });
 
@@ -203,6 +207,7 @@ export function createAiLatencySuite({
   }
 
   test.describe(describeLabel, () => {
+    // Load-bearing: keeps this spec's prompts on one worker at a time (see persistResults).
     test.describe.configure({ mode: 'default' });
 
     test.beforeEach(async ({ page, basePage }) => {

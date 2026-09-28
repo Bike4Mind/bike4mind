@@ -61,6 +61,30 @@ describe('module boundary', () => {
     expect(block).toMatch(/\n\s+throw err;/);
   });
 
+  it('keeps each spec on one writer at a time', () => {
+    // persistResults' unlocked read-modify-write is safe only while no two workers write the same
+    // results file: the describe must stay 'default' (which overrides fullyParallel), and each CI
+    // cell must run a single spec. Either change still produces well-formed results files, just
+    // with a row silently lost, so both are pinned as text here.
+    const factory = fs.readFileSync(FACTORY, 'utf8');
+    expect(factory.match(/describe\.configure\(\{[^}]*\}\)/g)).toEqual(["describe.configure({ mode: 'default' })"]);
+
+    const e2eDir = path.dirname(FACTORY);
+    const specs = fs.readdirSync(e2eDir).filter(f => /^ai-latency-.*\.spec\.ts$/.test(f));
+    expect(specs.length).toBeGreaterThan(0);
+    for (const spec of specs) {
+      expect(fs.readFileSync(path.join(e2eDir, spec), 'utf8'), spec).not.toMatch(/describe\.configure|mode:/);
+    }
+
+    const workflow = fs.readFileSync(path.resolve(e2eDir, '../../../.github/workflows/e2e-ai-latency.yml'), 'utf8');
+    const invocations = workflow.match(/playwright test [^\n]*/g) ?? [];
+    const latencyRuns = invocations.filter(line => !line.includes('ai-latency-discover'));
+    expect(latencyRuns.length).toBeGreaterThan(0);
+    for (const line of latencyRuns) {
+      expect(line).toMatch(/^playwright test "e2e\/\$\{SPEC_FILE\}\.spec\.ts"/);
+    }
+  });
+
   it('imports nothing that would drag in a Playwright runner', () => {
     // The load-bearing property of this module: it is importable from here. `@playwright/test`
     // added to it would typecheck and would even resolve under vitest, so the only thing standing
