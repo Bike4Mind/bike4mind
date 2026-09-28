@@ -1160,6 +1160,10 @@ export class ChatCompletionProcess {
    * the question is "is this file lake content", not "can the caller read it by any route".
    * `restrictToFileIds` bounds it to the requested ids. Returns `null` when it cannot
    * tell, which callers must treat as "cannot judge".
+   *
+   * Deliberately RETRIEVAL-scoped (active lakes only), not the draft-inclusive
+   * `getAttachmentDataLakeAccess`: a draft-lake attachment is inlined, but retrieval cannot reach
+   * its lake, so it must not count as lake content here - that keeps the corpus personal.
    */
   private async countLakeReachableAttachments(ids: string[]): Promise<number | null> {
     if (ids.length === 0) return 0;

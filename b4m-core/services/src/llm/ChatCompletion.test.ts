@@ -1104,6 +1104,29 @@ describe('ChatCompletionProcess', () => {
       const count = await (service as any).countLakeReachableAttachments(['f1']);
       expect(count).toBe(1);
     });
+
+    it('asks through the RETRIEVAL scope, never the draft-inclusive attachment one', async () => {
+      // Switching to the attachment memo would count a draft-lake attachment as lake content and
+      // flip personalCorpusOnly, even though retrieval cannot reach that lake.
+      (service as any).accessibleDataLakeAccessMemo = {
+        dataLakeTags: [LAKE.datalakeTag],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [],
+        lakes: [{ ...LAKE, source: 'dynamic' as const, membership: MEMBERSHIP }],
+      };
+      (service as any).attachmentDataLakeAccessMemo = {
+        dataLakeTags: [LAKE.datalakeTag, 'datalake:draft'],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [],
+        lakes: [],
+      };
+      const search = vi.fn().mockResolvedValue({ data: [], hasMore: false, total: 0 });
+      (service as any).db = { fabfiles: { search } };
+
+      await (service as any).countLakeReachableAttachments(['f1']);
+
+      expect(search.mock.calls[0][5].dataLakeTags).toEqual([LAKE.datalakeTag]);
+    });
   });
 
   describe('attachmentLakeAccess (#1576 attachment door lake-membership arm)', () => {
