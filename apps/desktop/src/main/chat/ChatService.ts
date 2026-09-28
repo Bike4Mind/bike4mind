@@ -90,9 +90,6 @@ const MAX_CONCURRENT_SPAWNED = 3;
  */
 const MAX_SPAWN_DEPTH = 2;
 
-/** How much of a spawned session's closing reply is quoted back to its parent. */
-const CHILD_REPORT_CHARS = 2_000;
-
 export interface ChatServiceLogger {
   debug(message: string): void;
   warn(message: string): void;
@@ -1295,8 +1292,9 @@ const HOST_GUIDANCE: readonly string[] = [
   'one permanently. They reach this project only, and a spawned session can read and change',
   'exactly the folders you can - it cannot be given others.',
   'A session you spawn runs on its own and does NOT report back into this turn. Finish your',
-  'answer without it; its result arrives in this conversation later, as a message. Never start a',
-  'second session because the first has not answered yet, and never start several to try',
+  'answer without it. Later, this conversation is told THAT it finished - never what it said,',
+  'so use session_read on its id when you need that. Never start a second session because the',
+  'first has not answered yet, and never start several to try',
   'variations of one task - each one spends the user credits and each one asks them to approve',
   'it first.',
   'A spawned session starts with an EMPTY conversation and cannot see anything said here, so its',
@@ -1328,30 +1326,33 @@ function renderTranscript(session: ChatSession): string {
 /**
  * What a finished spawned session tells its parent.
  *
- * The closing reply is quoted rather than summarized: summarizing would need another model
- * call, and the parent is a model that can read. `stopReason` is stated when it means the run
- * did not simply finish, because "it stopped after too many tool calls" and "it answered" are
- * very different things to build a next step on.
+ * The child's own output is NOT carried across. A spawned session runs on a prompt the parent
+ * wrote, and piping its reply straight back in would put text the parent never read - produced
+ * by a model the user was not watching - into the next request as though the user had typed it.
+ * `stopReason` is stated when it means the run did not simply finish, because "it stopped after
+ * too many tool calls" and "it answered" are very different things to build a next step on.
+ *
+ * `session_read` is how the parent gets the content, deliberately: one more tool call, held to
+ * the same project scope, and visible in the transcript as a thing that was asked for.
  */
 function describeChildOutcome(child: ChatSession): string {
   const last = [...child.messages].reverse().find(message => message.role === 'assistant');
   const header = `The session you started, "${child.title}" (${child.id}), has finished.`;
+  const read = `Read it with session_read (${child.id}) if you need what it produced.`;
 
-  if (!last) return `${header}\nIt produced no reply. Read it with session_read if you need to know why.`;
+  if (!last) return `${header}\nIt produced no reply. ${read}`;
   if (last.error) return `${header}\nIt failed: ${last.error}`;
 
   const note =
     last.stopReason === 'tool_turn_limit'
-      ? '\nIt stopped at the tool-call limit rather than finishing, so this may be incomplete.'
+      ? ' It stopped at the tool-call limit rather than finishing, so its work may be incomplete.'
       : last.stopReason === 'max_tokens'
-        ? '\nIts reply was cut off at the length limit.'
+        ? ' Its reply was cut off at the length limit.'
         : last.stopReason === 'aborted'
-          ? '\nIt was stopped before it finished.'
+          ? ' It was stopped before it finished.'
           : '';
 
-  const body = last.content.trim();
-  const quoted = body.length > CHILD_REPORT_CHARS ? `${body.slice(0, CHILD_REPORT_CHARS)}\n[...]` : body;
-  return `${header}${note}\n\nWhat it concluded:\n${quoted || '(it said nothing)'}`;
+  return `${header}${note}\n${read}`;
 }
 
 /**

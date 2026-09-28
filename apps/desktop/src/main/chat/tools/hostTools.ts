@@ -125,8 +125,9 @@ export const sessionSpawn: ToolDefinition = {
     if (!outcome.ok) throw new Error(outcome.message);
     return [
       `Started session ${outcome.session.id} ("${outcome.session.title}").`,
-      'It is running now. You will be told in this conversation when it finishes; do not wait',
-      'for it in this turn, and do not start another one for the same work.',
+      'It is running now. You will be told in this conversation WHEN it finishes, but not what',
+      'it said - read it with session_read then if you need that. Do not wait for it in this',
+      'turn, and do not start another one for the same work.',
     ].join('\n');
   },
 };
