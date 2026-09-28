@@ -12,6 +12,7 @@ import {
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { getFilesStorage } from '@server/utils/storage';
+import { createAttachmentLakeAccess } from '@server/queueHandlers/agentExecutor.attachmentLakeAccess';
 import { z } from 'zod';
 import { NotebookExportRequestSchema } from '../../../types/api';
 
@@ -69,6 +70,10 @@ const handler = baseApi().post(
       sessionRepository,
       chatHistoryRepository: questRepository,
       knowledgeRepository: fabFileRepository,
+      knowledgeAccess: {
+        userGroups: req.user.groups ?? undefined,
+        resolveLakeAccess: createAttachmentLakeAccess(req.user, req.logger),
+      },
       artifactRepository,
       artifactContentRepository,
       toolRepository: {
