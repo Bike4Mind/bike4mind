@@ -2813,7 +2813,22 @@ describe('GET /api/publish/serve - sign-up gate is for anonymous viewers of open
     expect(res._getStatusCode()).toBe(200);
     const data = res._getData() as string;
     expect(data).toContain('baked body');
-    expect(data).not.toContain('Read the rest with a free account');
+    expect(data).not.toContain('Create free account');
+  });
+
+  it('strips the baked gate from a public bundle for a signed-in viewer, and does not cache it', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(await bakedBundleBytes());
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' }, raw: true });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('baked body');
+    expect(data).not.toContain(GATE);
+
+    const { res: appRes, promise: appPromise } = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' } });
+    await appPromise;
+    expect(appRes.getHeader('Cache-Control')).toBe('private, no-store');
   });
 
   it('strips the baked gate from a private bundle for its owner', async () => {
