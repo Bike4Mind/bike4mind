@@ -122,6 +122,14 @@ describe('apps/workers <-> apps/client import boundary', () => {
     expect(hasRestrictedImportError(messages)).toBe(true);
   });
 
+  it.each(['@bike4mind/workers', '@bike4mind/workers/src/events/spider'])(
+    'flags apps/client importing the workers package by name (%s)',
+    async specifier => {
+      const messages = await lint(`import x from '${specifier}';`, 'apps/client/server/foo.ts');
+      expect(hasRestrictedImportError(messages)).toBe(true);
+    }
+  );
+
   it('flags apps/client reaching into apps/workers by a relative path', async () => {
     const messages = await lint(
       `import x from '../../../workers/src/events/spider';`,
@@ -138,10 +146,13 @@ describe('apps/workers <-> apps/client import boundary', () => {
     }
   );
 
-  it('flags apps/workers importing UI code (react)', async () => {
-    const messages = await lint(`import { useState } from 'react';`, 'apps/workers/src/events/foo.ts');
-    expect(hasRestrictedImportError(messages)).toBe(true);
-  });
+  it.each(['react', 'react/jsx-runtime', 'react-dom/client', 'react-dom/server'])(
+    'flags apps/workers importing UI code (%s)',
+    async specifier => {
+      const messages = await lint(`import x from '${specifier}';`, 'apps/workers/src/events/foo.ts');
+      expect(hasRestrictedImportError(messages)).toBe(true);
+    }
+  );
 
   it('does not flag apps/workers importing apps/client/server code via the @server/* bridge', async () => {
     const messages = await lint(`import { Config } from '@server/utils/config';`, 'apps/workers/src/events/foo.ts');

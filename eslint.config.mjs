@@ -299,7 +299,7 @@ const WORKERS_BOUNDARY_MESSAGE =
   'shared package) and workers import it.';
 const noWorkersImportInClient = [
   {
-    group: ['@workers/*', '**/apps/workers/**', '**/workers/src/**'],
+    group: ['@workers/*', '@bike4mind/workers', '@bike4mind/workers/*', '**/apps/workers/**', '**/workers/src/**'],
     message: WORKERS_BOUNDARY_MESSAGE,
   },
 ];
@@ -319,7 +319,12 @@ const noUiImportsInWorkers = {
     { name: 'next', message: WORKERS_NO_UI_MESSAGE },
   ],
   // @/app/* and @pages/* too: apps/workers/tsconfig.json maps @/* and @pages/* into apps/client.
-  patterns: [{ group: ['@client/app/*', '@/app/*', '@pages/*', 'next/*', '@mui/*'], message: WORKERS_NO_UI_MESSAGE }],
+  patterns: [
+    {
+      group: ['@client/app/*', '@/app/*', '@pages/*', 'react/*', 'react-dom/*', 'next/*', '@mui/*'],
+      message: WORKERS_NO_UI_MESSAGE,
+    },
+  ],
 };
 
 export default defineConfig([
