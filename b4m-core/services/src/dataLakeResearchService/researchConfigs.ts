@@ -110,6 +110,24 @@ export async function updateResearchConfig(
   // absent query is a refusal), and re-normalizing the merge is also what re-clamps a stored value
   // that a tightened bound has since put out of range.
   const merged = normalizeResearchLevers({ ...existing, ...input });
+  // Compared with `recencyDays`/`model` coerced to `null`, matching how each is actually stored
+  // below - so a merely-absent field is never mistaken for a change from a previously-cleared one
+  // when diffed against `existing` (which went through the same coercion on its own last write).
+  const nextName = input.name !== undefined ? normalizeName(input.name) : existing.name;
+  const nextLevers = { ...merged, recencyDays: merged.recencyDays ?? null, model: merged.model ?? null };
+  const existingLevers = {
+    query: existing.query,
+    model: existing.model ?? null,
+    maxResults: existing.maxResults,
+    maxProposals: existing.maxProposals,
+    recencyDays: existing.recencyDays ?? null,
+    allowedDomains: existing.allowedDomains,
+    blockedDomains: existing.blockedDomains,
+    minRelevance: existing.minRelevance,
+    costCeilingMicroUsd: existing.costCeilingMicroUsd,
+    proposedTags: existing.proposedTags,
+  };
+  const nothingMoved = nextName === existing.name && JSON.stringify(nextLevers) === JSON.stringify(existingLevers);
 
   const updated = await db.dataLakeResearchConfigs.updateConfig(configId, lake.id, {
     ...merged,
@@ -118,24 +136,29 @@ export async function updateResearchConfig(
     // so a user clearing either field would watch it come straight back.
     recencyDays: merged.recencyDays ?? null,
     model: merged.model ?? null,
-    ...(input.name !== undefined ? { name: normalizeName(input.name) } : {}),
+    ...(input.name !== undefined ? { name: nextName } : {}),
     lastUpdatedByUserId: actor.userId,
   });
 
   if (!updated) throw new NotFoundError('Research configuration not found');
 
-  await recordLakeConfigChange(
-    {
-      actor,
-      lake,
-      grants,
-      action: 'update-research-config',
-      // The UPDATED document's own name, not the input: an edit that never touched `name` still
-      // reads by its current name here rather than by whatever this caller happened to submit.
-      changes: [researchConfigChange(updated.name, 'updated')],
-    },
-    { db, logger }
-  );
+  // An idempotent PUT (the submitted body matches what is already stored) genuinely changed
+  // nothing, so it earns no `researchConfig: updated: <name>` row - a resubmit-without-edits is not
+  // an event a History reader needs to see.
+  if (!nothingMoved) {
+    await recordLakeConfigChange(
+      {
+        actor,
+        lake,
+        grants,
+        action: 'update-research-config',
+        // The UPDATED document's own name, not the input: an edit that never touched `name` still
+        // reads by its current name here rather than by whatever this caller happened to submit.
+        changes: [researchConfigChange(updated.name, 'updated')],
+      },
+      { db, logger }
+    );
+  }
 
   return updated;
 }
