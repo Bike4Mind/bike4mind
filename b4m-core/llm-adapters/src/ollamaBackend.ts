@@ -22,7 +22,7 @@ import { ILogger, Logger } from '@bike4mind/observability';
 import { Agent } from 'undici';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { executeToolsBatch } from './executeToolsBatch';
-import { fullToolResult, truncateToolResult } from './recordToolResult';
+import { attachFullToolResult, truncateToolResult } from './recordToolResult';
 import { normalizeOllamaDoneReason } from './stopReason';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -394,17 +394,20 @@ export class OllamaBackend implements ICompletionBackend {
       // stamped directly into the rebuild, index-aligned with outcomes/observations.
       const executedToolsUsed = [
         ...priorToolsUsed,
-        ...resolved.map(({ tc }, i) => ({
-          name: tc.name,
-          arguments: tc.arguments,
-          id: tc.id,
-          // String(...) matches recordToolResult's own defensive wrap on the other backends -
-          // observations[i] is already a string here (executeToolsBatch<string>), but keeping
-          // the same guard means a future change to that generic can't silently drop it.
-          returnValue: truncateToolResult(String(observations[i])),
-          ...fullToolResult(observations[i]),
-          success: outcomes[i].ok,
-        })),
+        ...resolved.map(({ tc }, i) => {
+          const entry = {
+            name: tc.name,
+            arguments: tc.arguments,
+            id: tc.id,
+            // String(...) matches recordToolResult's own defensive wrap on the other backends -
+            // observations[i] is already a string here (executeToolsBatch<string>), but keeping
+            // the same guard means a future change to that generic can't silently drop it.
+            returnValue: truncateToolResult(String(observations[i])),
+            success: outcomes[i].ok,
+          };
+          attachFullToolResult(entry, observations[i]);
+          return entry;
+        }),
       ];
 
       // Stop before another round if the request was cancelled mid-flight, rather

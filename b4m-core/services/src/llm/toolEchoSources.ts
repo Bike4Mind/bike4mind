@@ -1,4 +1,4 @@
-import { TOOL_RESULT_TRUNCATION_NOTICE } from '@bike4mind/llm-adapters';
+import { TOOL_RESULT_TRUNCATION_NOTICE, getFullToolResult } from '@bike4mind/llm-adapters';
 import type { ToolEchoSource } from '@bike4mind/utils';
 import type { ToolsUsedEntry } from './toolsUsedToFunctionCalls';
 
@@ -29,9 +29,10 @@ export function buildToolEchoSources(toolsUsed: readonly ToolsUsedEntry[]): Tool
     if (!TOOL_ECHO_SOURCE_TOOLS.has(tool.name)) continue;
     let text: string;
     let truncated: boolean;
-    if (typeof tool.fullReturnValue === 'string' && tool.fullReturnValue !== '') {
-      text = tool.fullReturnValue;
-      truncated = tool.fullReturnValueTruncated === true;
+    const full = getFullToolResult(tool);
+    if (full && full.text !== '') {
+      text = full.text;
+      truncated = full.truncated;
     } else if (typeof tool.returnValue === 'string' && tool.returnValue !== '') {
       truncated = tool.returnValue.endsWith(TOOL_RESULT_TRUNCATION_NOTICE);
       text = truncated ? tool.returnValue.slice(0, -TOOL_RESULT_TRUNCATION_NOTICE.length) : tool.returnValue;

@@ -18,8 +18,12 @@ export const MAX_RECORDED_TOOL_RESULT_CHARS = 8_000;
 
 export const TOOL_RESULT_TRUNCATION_NOTICE = '\n[tool result truncated]';
 
-/** Cap on the in-memory `fullReturnValue` (chars). */
+/** Cap on the in-memory full result (chars). */
 export const MAX_FULL_TOOL_RESULT_CHARS = 200_000;
+
+export type FullToolResult = { text: string; truncated: boolean };
+
+const FULL_TOOL_RESULT_KEY = '__b4mFullToolResult';
 
 export type RecordableToolUse = {
   name: string;
@@ -27,14 +31,6 @@ export type RecordableToolUse = {
   /** Tool use ID for Anthropic API tool pairing */
   id?: string;
   returnValue?: string;
-  /**
-   * The untruncated result (up to MAX_FULL_TOOL_RESULT_CHARS), in memory only: the reply parser
-   * uses it to spot tool output the model quoted back. toolsUsedToFunctionCalls never copies it,
-   * so it is not persisted.
-   */
-  fullReturnValue?: string;
-  /** True when `fullReturnValue` was cut at MAX_FULL_TOOL_RESULT_CHARS. */
-  fullReturnValueTruncated?: boolean;
   success?: boolean;
   /** Wall-clock ms the tool took to run, success or failure. Undefined when the caller has none. */
   executionTime?: number;
@@ -45,12 +41,23 @@ export function truncateToolResult(observation: string): string {
   return observation.slice(0, MAX_RECORDED_TOOL_RESULT_CHARS) + TOOL_RESULT_TRUNCATION_NOTICE;
 }
 
-export function fullToolResult(observation: unknown): { fullReturnValue: string; fullReturnValueTruncated: boolean } {
+/**
+ * Keeps the untruncated result on the entry for the reply parser's echo check (see
+ * buildToolEchoSources in services). It is non-enumerable so JSON.stringify and spreads skip it:
+ * `toolsUsed` also leaves the process whole (Research Mode streams each callback's completionInfo
+ * over the websocket, where API Gateway caps a post at 128 KB), and it must never be persisted.
+ */
+export function attachFullToolResult(entry: object, observation: unknown): void {
   const text = String(observation);
-  return {
-    fullReturnValue: text.slice(0, MAX_FULL_TOOL_RESULT_CHARS),
-    fullReturnValueTruncated: text.length > MAX_FULL_TOOL_RESULT_CHARS,
+  const value: FullToolResult = {
+    text: text.slice(0, MAX_FULL_TOOL_RESULT_CHARS),
+    truncated: text.length > MAX_FULL_TOOL_RESULT_CHARS,
   };
+  Object.defineProperty(entry, FULL_TOOL_RESULT_KEY, { value, enumerable: false, configurable: true, writable: true });
+}
+
+export function getFullToolResult(entry: object): FullToolResult | undefined {
+  return Object.getOwnPropertyDescriptor(entry, FULL_TOOL_RESULT_KEY)?.value as FullToolResult | undefined;
 }
 
 /**
@@ -82,7 +89,7 @@ export function recordToolResult(
     return;
   }
   entry.returnValue = truncateToolResult(String(observation));
-  Object.assign(entry, fullToolResult(observation));
+  attachFullToolResult(entry, observation);
   entry.success = success;
   // Left undefined (rather than defaulted to e.g. 0) when the caller has no timing - see
   // RecordableToolUse's doc comment.

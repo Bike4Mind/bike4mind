@@ -26,11 +26,18 @@ import {
   getSettingsValue,
   processFabFilesServer,
   fetchAndConvertFabFiles,
+  ClientMessageSender,
 } from '@bike4mind/utils';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { measureIdentityNamedExclusion } from '../dataLakeService/getDynamicDataLakeTags';
 import type { FabFileNotice } from '@bike4mind/utils';
-import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
+import {
+  getLlmByModel,
+  getAvailableModels,
+  attachFullToolResult,
+  getFullToolResult,
+  MAX_FULL_TOOL_RESULT_CHARS,
+} from '@bike4mind/llm-adapters';
 import {
   ChatModels,
   ImageModels,
@@ -1472,7 +1479,8 @@ describe('ChatCompletionProcess', () => {
             toolsUsed.push({ name: toolName, arguments: '{"url":"x"}', id: 't1' });
             await cb(['Fetching.'], { toolsUsed });
             // Stamped in place with no callback after it, as recordToolResult does.
-            Object.assign(toolsUsed[0], { returnValue: page, fullReturnValue: page, success: true });
+            Object.assign(toolsUsed[0], { returnValue: page, success: true });
+            attachFullToolResult(toolsUsed[0], page);
             await cb([answer]);
             await cb([], { stopReason: 'end_turn' });
           });
@@ -5385,6 +5393,31 @@ describe('ChatCompletionProcess', () => {
       expect(tokens.lakeRetrieval).toBe(0);
       // No lake rows, so nothing moved and the residual is the whole billed system-prompt total.
       expect(tokens.systemPrompts).toBe(grossResidual);
+    });
+  });
+
+  describe('research-mode stream payload', () => {
+    it('does not send the in-memory full tool result over the websocket', async () => {
+      const sendToClient = vi.fn();
+
+      vi.mocked(ClientMessageSender).mockImplementationOnce(function () {
+        return { sendToClient };
+      } as any);
+      const page = 'p'.repeat(MAX_FULL_TOOL_RESULT_CHARS);
+      const entry = { name: 'web_fetch', id: 't1', returnValue: 'short', success: true };
+      attachFullToolResult(entry, page);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (service as any).sendResearchModeStreamUpdate({ id: 'q1', sessionId: 's1' }, 'cfg-1', ['chunk'], {
+        toolsUsed: [entry],
+      });
+
+      expect(sendToClient).toHaveBeenCalledTimes(1);
+      const wire = JSON.stringify(sendToClient.mock.calls[0][2]);
+      expect(wire).toContain('"returnValue":"short"');
+      expect(wire).not.toContain('ppppp');
+      expect(wire.length).toBeLessThan(128 * 1024);
+      expect(getFullToolResult(entry)?.text).toBe(page);
     });
   });
 
