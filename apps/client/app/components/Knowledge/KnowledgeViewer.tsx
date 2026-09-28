@@ -102,6 +102,7 @@ import { useMessageFiles } from '@client/app/hooks/useMessageFiles';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useQuestExport } from '@client/app/hooks/data/useQuestExport';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
+import { extractMermaidFence } from '@client/app/utils/mermaidFence';
 
 // Dynamic imports for artifact viewers
 const ReactArtifactViewer = dynamic(() => import('./ReactArtifactViewer'), {
@@ -2571,9 +2572,9 @@ export const FileContent = ({
           /^mindmap\s/.test(content.trim());
 
         // Check if the content is a Mermaid diagram wrapped in code blocks
-        const mermaidMatch = content.match(/```mermaid\s*([\s\S]*?)```/);
+        const mermaidBody = extractMermaidFence(content);
 
-        if (isMermaidDiagram || mermaidMatch) {
+        if (isMermaidDiagram || mermaidBody !== null) {
           // This branch returns BEFORE the MarkdownViewer handoff below, and it is the surface a
           // citation chip actually opens (/opti?mode=datalake&article=<id>), so dropping the anchor
           // here would lose the passage on the main deep-link path. A diagram has no prose blocks
@@ -2582,7 +2583,7 @@ export const FileContent = ({
           return (
             <>
               {citedPassage && <UnmarkedCitedPassage passage={citedPassage} title="Cited passage" />}
-              <MermaidChart chartDefinition={mermaidMatch ? mermaidMatch[1].trim() : content} />
+              <MermaidChart chartDefinition={mermaidBody ?? content} />
             </>
           );
         }
