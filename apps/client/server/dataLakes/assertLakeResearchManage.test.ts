@@ -38,7 +38,7 @@ describe('assertLakeResearchManage', () => {
     expect(h.assertLakeAccess).toHaveBeenCalledWith('my-lake', expect.anything(), expect.anything());
   });
 
-  // #3298: the actor these routes need to record a History event, built once here (matching
+  // The actor these routes need to record a History event, built once here (matching
   // grants.ts/lifecycle.ts) rather than re-derived at each of the three call sites.
   it('also hands back the ManageActor built from the same AccessContext', async () => {
     const { actor } = await assertLakeResearchManage(req(), 'my-lake');
@@ -55,7 +55,7 @@ describe('assertLakeResearchManage', () => {
     expect(keyActor.auditPrincipal).toMatchObject({ principalKind: 'apiKey' });
   });
 
-  // #3298: the gate and the recorded History rung must agree on the same grant set, so the gate
+  // The gate and the recorded History rung must agree on the same grant set, so the gate
   // hands its own grants back rather than making each write re-fetch (or silently get none).
   it('also hands back the active grants it loaded for the gate', async () => {
     const { grants: resolved } = await assertLakeResearchManage(req(), 'my-lake');
