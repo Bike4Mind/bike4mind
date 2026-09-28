@@ -1,16 +1,18 @@
 import { fileRead, globFiles, grepSearch } from './fileTools';
 import { bashExecute } from './shellTools';
+import { fileEdit, fileWrite } from './writeTools';
 import type { ToolDefinition, ToolSchema } from './types';
 
 /**
  * The tools this client offers the model.
  *
- * Reads run unattended; `bash_execute` runs code, so it declares `approval` and ChatService
- * holds it at the gate until the user answers. The write tools and the server-side ones
- * (web_search and friends) are later stages, and are added here only once each has its gate
- * rather than being declared early and refused at run time.
+ * Reads run unattended; `bash_execute` runs code and the write tools change files, so each
+ * declares `approval` and ChatService holds it at the gate until the user answers. A write
+ * additionally shows the user the diff it would apply before they answer. The server-side
+ * tools (web_search and friends) are a later stage, and are added here only once each has its
+ * gate rather than being declared early and refused at run time.
  */
-const TOOLS: readonly ToolDefinition[] = [fileRead, globFiles, grepSearch, bashExecute];
+const TOOLS: readonly ToolDefinition[] = [fileRead, globFiles, grepSearch, bashExecute, fileWrite, fileEdit];
 
 const BY_NAME = new Map(TOOLS.map(tool => [tool.schema.name, tool]));
 

@@ -49,6 +49,14 @@ export interface SandboxedCommand {
   cleanup(): Promise<void>;
 }
 
+/**
+ * The credential stores, home-expanded. Shared with the write tools: a command must not read
+ * them, and a write tool must not overwrite them either, whatever folder the user granted.
+ */
+export function credentialPaths(): string[] {
+  return NEVER_READABLE.map(expandHome);
+}
+
 export function sandboxAvailable(): boolean {
   if (platform() !== 'darwin') return false;
   try {
@@ -97,7 +105,7 @@ export function buildProfile(writableRoots: readonly string[], alwaysDenied: rea
     '',
   ];
 
-  for (const denied of [...NEVER_READABLE.map(expandHome), ...alwaysDenied]) {
+  for (const denied of [...credentialPaths(), ...alwaysDenied]) {
     lines.push(`(deny file-read* file-write* (subpath "${escapeProfilePath(denied)}"))`);
   }
 

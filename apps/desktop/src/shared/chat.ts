@@ -14,6 +14,42 @@ export type ChatRole = 'user' | 'assistant';
 export type ChatToolStatus = 'awaiting-approval' | 'running' | 'done' | 'error' | 'denied';
 
 /**
+ * One line of a proposed change, as the approval prompt renders it.
+ *
+ * Structured rather than a unified-diff string: the renderer shows line numbers and colours
+ * each line by kind, and parsing "+"/"-" prefixes back out of text would misread any source
+ * line that legitimately starts with one.
+ */
+export type ChatDiffLineKind = 'context' | 'add' | 'remove' | 'gap';
+
+export interface ChatDiffLine {
+  kind: ChatDiffLineKind;
+  text: string;
+  /** Line number before the change; absent on added lines and on gaps. */
+  oldLine?: number;
+  /** Line number after the change; absent on removed lines and on gaps. */
+  newLine?: number;
+}
+
+/**
+ * What a write tool is about to do, computed BEFORE the user is asked.
+ *
+ * This is the whole point of the write gate: approving "write file" with no visible change is
+ * not informed consent. It describes an intention, never a completed action - nothing has
+ * touched the disk when this is shown.
+ */
+export interface ChatDiff {
+  /** Absolute path the change applies to. */
+  path: string;
+  operation: 'create' | 'overwrite' | 'edit';
+  added: number;
+  removed: number;
+  lines: ChatDiffLine[];
+  /** Set when the change was too large to render exactly; `lines` is then a summary of it. */
+  truncated?: boolean;
+}
+
+/**
  * One tool the model asked for, and what running it produced.
  *
  * The loop runs in the main process: the model names a tool, main executes it locally and
@@ -35,6 +71,11 @@ export interface ChatToolCall {
   approvalId?: string;
   /** What the user is being asked to allow, ready to display. Set with `approvalId`. */
   approvalDetail?: string;
+  /**
+   * The change a write tool proposes, set with `approvalId` on tools that edit files. The
+   * user sees it before answering; nothing has been written while this is on screen.
+   */
+  approvalDiff?: ChatDiff;
 }
 
 /**
