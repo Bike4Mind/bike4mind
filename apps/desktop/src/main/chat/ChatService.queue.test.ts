@@ -187,31 +187,53 @@ describe('ChatService queued messages', () => {
     expect(gated.queuedMessages(id).map(message => message.text)).toEqual(['typed ahead']);
   });
 
-  it('drains several queued messages FIFO, one turn each', async () => {
+  /**
+   * One pending message, not a line of them.
+   *
+   * Sending again while something is already waiting APPENDS to it, so the whole wait produces
+   * a single next turn carrying everything the user said. The alternative - a separate turn per
+   * keystroke burst - sets several unattended turns running off one wait, and the user who
+   * typed two halves of one thought gets them answered separately.
+   */
+  it('appends a second send to the message already waiting, as one next turn', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'first');
     await waitForEvent('start');
     await service.send(id, 'second');
     await service.send(id, 'third');
 
-    expect(service.queuedMessages(id).map(message => message.text)).toEqual(['second', 'third']);
+    expect(service.queuedMessages(id).map(message => message.text)).toEqual(['second\nthird']);
 
     await finishReply(0);
     await waitForEvent('start', 1);
-    expect(service.queuedMessages(id).map(message => message.text)).toEqual(['third']);
 
-    await finishReply(1);
-    await waitForEvent('start', 2);
-
+    expect(service.queuedMessages(id)).toEqual([]);
     const session = await service.getSession(id);
     expect(session?.messages.filter(message => message.role === 'user').map(message => message.content)).toEqual([
       'first',
-      'second',
-      'third',
+      'second\nthird',
     ]);
+    // One further turn, not two.
+    expect(post).toHaveBeenCalledTimes(2);
   });
 
-  it('returns every queued message when a stop lands on a queue of several', async () => {
+  it('keeps the same pending message across appends, so one cancel takes all of it back', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'first');
+    await waitForEvent('start');
+    const initial = await service.send(id, 'second');
+    const appended = await service.send(id, 'third');
+
+    const initialId = initial.ok && initial.queued ? initial.message.id : 'a';
+    const appendedId = appended.ok && appended.queued ? appended.message.id : 'b';
+    expect(appendedId).toBe(initialId);
+
+    service.cancelQueued(id, initialId);
+    expect(service.queuedMessages(id)).toEqual([]);
+    expect(queueEvents.at(-1)?.returned?.messages.map(message => message.text)).toEqual(['second\nthird']);
+  });
+
+  it('returns everything typed during the turn when it is stopped', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'first');
     await waitForEvent('start');
@@ -222,7 +244,7 @@ describe('ChatService queued messages', () => {
     await waitForEvent('done');
 
     expect(post).toHaveBeenCalledTimes(1);
-    expect(queueEvents.at(-1)?.returned?.messages.map(message => message.text)).toEqual(['second', 'third']);
+    expect(queueEvents.at(-1)?.returned?.messages.map(message => message.text)).toEqual(['second\nthird']);
   });
 
   it('hands a queued message back when its own turn is refused', async () => {

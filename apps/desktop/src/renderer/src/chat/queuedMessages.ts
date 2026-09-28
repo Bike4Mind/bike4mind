@@ -49,9 +49,15 @@ export function describeReturn(returned: ChatQueueEvent['returned']): string | n
   return `${cause}, so ${subject} ${one ? 'was' : 'were'} not sent. ${back}`;
 }
 
-/** One pending row's label, clipped so a pasted wall of text cannot push the composer off screen. */
-export function queuedPreview(message: ChatQueuedMessage, limit = 160): string {
-  const oneLine = message.text.replace(/\s+/g, ' ').trim();
-  if (oneLine.length <= limit) return oneLine || '(attachments only)';
-  return `${oneLine.slice(0, limit).trimEnd()}...`;
+/**
+ * The pending row's text, clipped so a pasted wall of text cannot push the composer off screen.
+ *
+ * Line breaks are KEPT: a pending message grows by appending each further send on its own line,
+ * so flattening it would run separate things the user said into one run-on sentence. The row
+ * clamps its own height in CSS; this only bounds what is handed to it.
+ */
+export function queuedPreview(message: ChatQueuedMessage, limit = 400): string {
+  const trimmed = message.text.replace(/[ \t]+/g, ' ').trim();
+  if (!trimmed) return '(attachments only)';
+  return trimmed.length <= limit ? trimmed : `${trimmed.slice(0, limit).trimEnd()}...`;
 }

@@ -421,7 +421,10 @@ export interface SendMessageRequest {
 }
 
 /**
- * A message typed while a reply was still running, waiting to become the next turn.
+ * What the user typed while a reply was still running, waiting to become the next turn.
+ *
+ * There is at most one per session: sending again while something is already pending appends
+ * to it, so the whole wait produces a single next turn rather than a line of them.
  *
  * Queued messages live in the MAIN process, keyed by session, and are never persisted. That
  * lifetime is chosen rather than defaulted: one is only ever meaningful for as long as the

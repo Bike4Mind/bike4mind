@@ -8,16 +8,32 @@ import type {
 } from '@shared/chat';
 
 /**
- * Messages typed during a live turn, waiting to be sent when it ends.
+ * What the user has typed during a live turn, waiting to be sent when it ends.
  *
- * FIFO per session, and every message that leaves without being sent is handed BACK rather
- * than dropped: cancelling, a stopped reply, a failed reply and a refused turn all take the
- * same exit, so there is exactly one way a queued message can disappear from the UI and it
- * always ends with the text in the composer again.
+ * At most ONE pending message per session: a second send while something is already waiting
+ * appends to it rather than lining up behind it, so the whole wait produces a single next turn
+ * carrying everything the user said. The list shape is kept because a release can hand back
+ * more than one entry - the refused-flush path returns the head alongside anything requeued
+ * behind it - but the queue itself never grows past one by normal use.
+ *
+ * Every message that leaves without being sent is handed BACK rather than dropped: cancelling,
+ * a stopped reply, a failed reply and a refused turn all take the same exit, so there is
+ * exactly one way a queued message can disappear from the UI and it always ends with the text
+ * in the composer again.
  *
  * Nothing is persisted, matching SessionActivity: a queue entry is only meaningful while the
  * reply it is waiting behind is open, and replies are anchored to in-memory AbortControllers.
  */
+/** Union of the two attachment sets by id, so re-sending the same file does not double it. */
+function mergedAttachments(
+  pending: readonly ChatAttachment[] | undefined,
+  incoming: readonly ChatAttachment[]
+): { attachments?: ChatAttachment[] } {
+  const byId = new Map((pending ?? []).map(attachment => [attachment.id, attachment]));
+  for (const attachment of incoming) byId.set(attachment.id, attachment);
+  return byId.size > 0 ? { attachments: [...byId.values()] } : {};
+}
+
 export class MessageQueue {
   private readonly queues = new Map<string, ChatQueuedMessage[]>();
 
@@ -44,17 +60,32 @@ export class MessageQueue {
     return this.list(sessionId).flatMap(message => (message.attachments ?? []).map(attachment => attachment.id));
   }
 
+  /**
+   * Add to what is pending, or start it.
+   *
+   * A second send joins the message already waiting, on a new line. Keeping its id and
+   * `queuedAt` matters: the row above the composer stays the same row rather than being
+   * replaced, and one cancel still takes back everything typed during this turn.
+   */
   enqueue(sessionId: string, text: string, attachments: readonly ChatAttachment[] = []): ChatQueuedMessage {
-    const message: ChatQueuedMessage = {
-      id: randomUUID(),
-      sessionId,
-      text,
-      queuedAt: new Date().toISOString(),
-      ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
-    };
-    this.queues.set(sessionId, [...this.list(sessionId), message]);
+    const pending = this.list(sessionId)[0];
+    const merged: ChatQueuedMessage = pending
+      ? {
+          ...pending,
+          text: [pending.text, text].filter(Boolean).join('\n'),
+          ...mergedAttachments(pending.attachments, attachments),
+        }
+      : {
+          id: randomUUID(),
+          sessionId,
+          text,
+          queuedAt: new Date().toISOString(),
+          ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
+        };
+
+    this.queues.set(sessionId, [merged]);
     this.announce(sessionId);
-    return message;
+    return merged;
   }
 
   /** Take the head, to send it. Nothing is announced: the caller may still have to hand it back. */

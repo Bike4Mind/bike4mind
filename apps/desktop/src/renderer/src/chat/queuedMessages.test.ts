@@ -62,14 +62,15 @@ describe('describeReturn', () => {
 });
 
 describe('queuedPreview', () => {
-  it('flattens newlines so one row stays one row', () => {
-    expect(queuedPreview(queued('first\n\nsecond'))).toBe('first second');
+  // A pending message grows one line per send, so flattening would run them together.
+  it('keeps the line breaks that separate what was typed', () => {
+    expect(queuedPreview(queued('first\nsecond'))).toBe('first\nsecond');
   });
 
   it('clips a pasted wall of text', () => {
-    const preview = queuedPreview(queued('x'.repeat(400)));
+    const preview = queuedPreview(queued('x'.repeat(900)));
     expect(preview.endsWith('...')).toBe(true);
-    expect(preview.length).toBeLessThan(200);
+    expect(preview.length).toBeLessThan(450);
   });
 
   // An attachment with no prose is a real turn, so the row still has to say something.

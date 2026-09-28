@@ -24,15 +24,25 @@ describe('MessageQueue', () => {
     queue.enqueue('a', 'one');
     queue.enqueue('a', 'two');
 
-    expect(events.map(event => event.queued.map(message => message.text))).toEqual([['one'], ['one', 'two']]);
+    expect(events.map(event => event.queued.map(message => message.text))).toEqual([['one'], ['one\ntwo']]);
   });
 
-  it('takes from the head', () => {
+  // One pending message per session: a second send joins it rather than lining up behind it.
+  it('appends to the message already waiting, keeping its identity', () => {
+    const first = queue.enqueue('a', 'one');
+    const second = queue.enqueue('a', 'two');
+
+    expect(second.id).toBe(first.id);
+    expect(second.queuedAt).toBe(first.queuedAt);
+    expect(queue.list('a').map(message => message.text)).toEqual(['one\ntwo']);
+  });
+
+  it('takes the pending message', () => {
     queue.enqueue('a', 'one');
     queue.enqueue('a', 'two');
 
-    expect(queue.takeNext('a')?.text).toBe('one');
-    expect(queue.list('a').map(message => message.text)).toEqual(['two']);
+    expect(queue.takeNext('a')?.text).toBe('one\ntwo');
+    expect(queue.list('a')).toEqual([]);
   });
 
   // A stale click must not cancel whatever happened to be next.
@@ -48,8 +58,11 @@ describe('MessageQueue', () => {
 
     queue.cancel('a', first.id);
     expect(events.at(-1)?.returned).toMatchObject({ reason: 'cancelled' });
-    expect(events.at(-1)?.returned?.messages.map(message => message.text)).toEqual(['one']);
+    // One cancel takes back everything typed during the turn, because it is all one message.
+    expect(events.at(-1)?.returned?.messages.map(message => message.text)).toEqual(['one\ntwo']);
+    expect(queue.list('a')).toEqual([]);
 
+    queue.enqueue('a', 'again');
     queue.releaseAll('a', 'stopped');
     expect(events.at(-1)?.returned).toMatchObject({ reason: 'stopped' });
     expect(events.at(-1)?.queued).toEqual([]);
@@ -77,10 +90,20 @@ describe('MessageQueue', () => {
   // Pruning deletes attachment bytes nothing persisted references; a queued message is not
   // persisted, so its files would go with it.
   it('reports the attachments it is holding, so they survive pruning', () => {
-    queue.enqueue('a', 'look', [
-      { id: 'att1', kind: 'image', name: 'shot.png', mediaType: 'image/png', byteSize: 10, sourceBytes: 10 },
-    ]);
+    const shot = {
+      id: 'att1',
+      kind: 'image' as const,
+      name: 'shot.png',
+      mediaType: 'image/png',
+      byteSize: 10,
+      sourceBytes: 10,
+    };
+    queue.enqueue('a', 'look', [shot]);
     expect(queue.attachmentIds('a')).toEqual(['att1']);
+
+    // An append carries its own files in, and re-sending the same one does not double it.
+    queue.enqueue('a', 'and this', [shot, { ...shot, id: 'att2', name: 'other.png' }]);
+    expect(queue.attachmentIds('a')).toEqual(['att1', 'att2']);
   });
 
   it('forgets a deleted conversation silently', () => {

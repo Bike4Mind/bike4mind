@@ -430,6 +430,12 @@ export class ChatService {
      */
     if (this.active.has(sessionId)) {
       if (!this.deps.queue || released) return { ok: false, error: 'This conversation is still replying.' };
+      // Against the MERGED total: this send joins whatever is already waiting, so the cap has
+      // to be read against the turn that will actually go out.
+      const pending = this.deps.queue.list(sessionId)[0]?.attachments?.length ?? 0;
+      if (pending + attachments.length > MAX_ATTACHMENTS_PER_TURN) {
+        return { ok: false, error: `Only ${MAX_ATTACHMENTS_PER_TURN} attachments fit in one message.` };
+      }
       return { ok: true, queued: true, message: this.deps.queue.enqueue(sessionId, prompt, attachments) };
     }
 

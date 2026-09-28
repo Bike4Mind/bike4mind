@@ -13,6 +13,9 @@ import { queuedPreview } from './queuedMessages';
  * hands, so it sits outside the transcript, above the input it came from, and carries the one
  * control that takes it back. A queue nobody can see into or cancel would be worse than no
  * queue at all - the user would have no way to tell what is about to be said on their behalf.
+ *
+ * Normally exactly one row: sending again while a message is pending appends to that message.
+ * It still maps over a list so a release that hands back more than one has somewhere to draw.
  */
 export function QueuedMessageList({
   messages,
@@ -25,11 +28,11 @@ export function QueuedMessageList({
 
   return (
     <Stack spacing={0.5} sx={{ ...contentColumnSx, pt: 1.5 }} data-testid="composer-queued-list">
-      {messages.map((message, index) => (
+      {messages.map(message => (
         <Stack
           key={message.id}
           direction="row"
-          alignItems="center"
+          alignItems="flex-start"
           spacing={1}
           sx={{
             borderRadius: 'sm',
@@ -37,15 +40,32 @@ export function QueuedMessageList({
             borderColor: 'neutral.outlinedBorder',
             bgcolor: 'background.level1',
             px: 1,
-            py: 0.5,
+            py: 0.75,
           }}
           data-testid="composer-queued-message"
         >
-          <Typography level="body-xs" textColor="text.tertiary" sx={{ flexShrink: 0 }}>
-            {messages.length > 1 ? `Queued ${index + 1}` : 'Queued'}
+          <Typography
+            level="body-xs"
+            textColor="text.tertiary"
+            sx={{ flexShrink: 0, alignSelf: 'flex-start', pt: 0.25 }}
+          >
+            Queued
           </Typography>
 
-          <Typography level="body-sm" noWrap sx={{ flex: 1, minWidth: 0 }}>
+          <Typography
+            level="body-sm"
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              whiteSpace: 'pre-wrap',
+              // A message that grew by appending stays readable, without letting a long one
+              // push the composer down the screen.
+              display: '-webkit-box',
+              WebkitLineClamp: 3,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
+            }}
+          >
             {queuedPreview(message)}
           </Typography>
 
@@ -59,6 +79,7 @@ export function QueuedMessageList({
             size="sm"
             variant="plain"
             color="neutral"
+            sx={{ alignSelf: 'flex-start' }}
             onClick={() => onCancel(message.id)}
             aria-label="Cancel this queued message"
             data-testid="composer-cancel-queued-btn"
