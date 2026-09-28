@@ -134,6 +134,34 @@ export interface BackgroundProcessInfo {
   error?: string;
 }
 
+/**
+ * One model this deployment offers, as the picker renders it.
+ *
+ * Sourced from `GET /api/models`, which builds the list from the calling account's effective
+ * provider keys - so this is genuinely per-deployment and per-account, and the desktop client
+ * never ships a list of its own.
+ */
+export interface ChatModelOption {
+  id: string;
+  name: string;
+  /** Provider serving it ("anthropic", "ollama", ...). Shown as a secondary label. */
+  backend?: string;
+  contextWindow?: number;
+}
+
+/**
+ * The answer to `listModels`.
+ *
+ * `error` set means the list could not be READ (offline, signed out, server error) and says
+ * nothing about what the deployment offers. An empty list with no error is the other case: the
+ * server answered, and holds no model this client can drive. The picker distinguishes the two,
+ * because "try again" is only useful advice for the first.
+ */
+export interface ChatModelCatalog {
+  models: ChatModelOption[];
+  error?: string;
+}
+
 /** Token counts for a finished turn. Absent when the server sent none. */
 export interface ChatUsage {
   inputTokens?: number;
@@ -203,7 +231,18 @@ export interface SendMessageRequest {
  * `sendMessage` resolves as soon as the turn is accepted, not when the reply finishes - the
  * reply arrives as stream events. A rejection here means the turn never started.
  */
-export type SendMessageResult = { ok: true; messageId: string } | { ok: false; error: string };
+export type SendMessageResult =
+  | {
+      ok: true;
+      messageId: string;
+      /**
+       * Set when accepting the turn changed something the user did not ask for - today only
+       * a model substitution, when the conversation's saved model is no longer offered by
+       * this deployment. Shown once, beside the composer; not an error.
+       */
+      notice?: string;
+    }
+  | { ok: false; error: string };
 
 /**
  * Folders the tools are allowed to touch.

@@ -6,6 +6,7 @@ import { IPC_CHANNELS } from '@shared/ipc';
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ChatService } from './ChatService';
+import { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
@@ -13,8 +14,15 @@ import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 
-/** Matches the CLI's default. Choosing a model per session is T7's job. */
-const DEFAULT_MODEL: string = ChatModels.CLAUDE_4_5_SONNET;
+/**
+ * The model a new conversation prefers, matching the CLI's default so the two clients agree
+ * about what "the default" means for one account.
+ *
+ * A PREFERENCE, not a list: the real set comes from the server (see ModelCatalog), and a
+ * deployment that does not offer this one gets the first model it does offer instead. It is
+ * still the fallback for a session file written before the catalog could be read.
+ */
+const PREFERRED_MODEL: string = ChatModels.CLAUDE_4_5_SONNET;
 
 /** How much of a background process's output the panel asks for when it rejoins after a reload. */
 const PANEL_TAIL_CHARS = 20_000;
@@ -34,9 +42,14 @@ export interface RegisteredChat {
 export function registerChat(auth: AuthService): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
   const userData = app.getPath('userData');
-  const store = new SessionStore(join(userData, 'sessions'), DEFAULT_MODEL);
+  const store = new SessionStore(join(userData, 'sessions'), PREFERRED_MODEL);
   const access = new AccessStore(join(userData, 'tool-access.json'));
   const approvals = new ApprovalGate();
+  const models = new ModelCatalog({
+    logger,
+    getApiClient: () => auth.getApiClient(),
+    getEnvironmentUrl: () => auth.getState().environment.url,
+  });
 
   const broadcast = (event: ChatStreamEvent) => {
     for (const window of BrowserWindow.getAllWindows()) {
@@ -56,7 +69,9 @@ export function registerChat(auth: AuthService): RegisteredChat {
   const service = new ChatService({
     store,
     access,
+    models,
     logger,
+    preferredModel: PREFERRED_MODEL,
     approvals,
     background,
     // userData holds the auth vault. Without this a user who shares their home folder would be
@@ -67,6 +82,10 @@ export function registerChat(auth: AuthService): RegisteredChat {
     emit: broadcast,
   });
 
+  ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
+  ipcMain.handle(IPC_CHANNELS.chatSetSessionModel, (_event, sessionId: string, model: string) =>
+    service.setSessionModel(sessionId, model)
+  );
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
   ipcMain.handle(IPC_CHANNELS.chatCreateSession, () => service.createSession());
   ipcMain.handle(IPC_CHANNELS.chatGetSession, (_event, sessionId: string) => service.getSession(sessionId));
