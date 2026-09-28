@@ -22,12 +22,17 @@ function formatBytes(bytes: number): string {
 
 /**
  * Where a relative pattern is anchored: the session's working directory, or the single granted
- * root when there is exactly one and no working directory. A Code session always has one, so
- * "search this project" needs no path even with several folders granted.
+ * root when there is exactly one and no working directory. A Code session pointed at a project
+ * always has one, so "search this project" needs no path even with several folders granted.
+ *
+ * Nothing granted and nothing to run in is its own refusal rather than the ambiguity message:
+ * that is a Code session whose folder has not been chosen yet, and telling the model to name a
+ * path would invite it to guess one.
  */
 function defaultBase(context: ToolContext): string {
   if (context.workingDirectory) return context.workingDirectory;
   if (context.roots.length === 1) return context.roots[0];
+  if (context.roots.length === 0) throw new Error('No folder has been shared, so there is nothing to look in.');
   throw new Error(
     `Specify "path": several folders are granted (${context.roots.join(', ')}), so a relative pattern is ambiguous.`
   );

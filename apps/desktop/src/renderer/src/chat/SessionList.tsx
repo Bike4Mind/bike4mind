@@ -15,7 +15,7 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatSessionMode, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { groupSessions, orderedSessions, type ProjectGroup } from './grouping';
-import { ChevronIcon, MoreIcon, PanelLeftIcon, PlusIcon, SearchIcon, SlidersIcon } from './icons';
+import { MoreIcon, PanelLeftIcon, PlusIcon, SearchIcon, SlidersIcon } from './icons';
 import { ModeSwitcher } from './ModeSwitcher';
 import { SessionBadge } from './SessionBadge';
 
@@ -192,10 +192,10 @@ function ProjectHeader({
  * The sidebar: primary nav, a pinned section, then the sessions for the current mode - Code
  * sessions under a header per project, Chat sessions in one flat list - and the account strip.
  *
- * Adapted from Claude Code desktop's layout. Two of its nav entries have no honest counterpart
- * here and are not shipped as dead links: "Artifacts" has nothing to point at, because desktop
- * conversations are local and produce none, and "Customize" is this app's tool settings, which
- * is what the Customize entry opens.
+ * Adapted from Claude Code desktop's layout, with its nav entries dropped rather than shipped
+ * as dead links: "Artifacts" has nothing to point at, because desktop conversations are local
+ * and produce none, and "Customize" and "More" were removed on the user's instruction. New is
+ * the only nav entry left, and it behaves identically in both modes.
  */
 export function SessionList({
   sessions,
@@ -211,8 +211,6 @@ export function SessionList({
   onCreateInProject,
   onDelete,
   onTogglePin,
-  customize,
-  more,
   card,
   footer,
 }: {
@@ -230,17 +228,11 @@ export function SessionList({
   onCreateInProject: (directory: string) => void;
   onDelete: (sessionId: string) => void;
   onTogglePin: (session: ChatSessionSummary) => void;
-  /** Which folders the agent may touch - Claude's "Customize", in this app's terms. */
-  customize?: ReactNode;
-  /** The collapsible More panel. */
-  more?: ReactNode;
   /** The dismissible card slot above the account strip. */
   card?: ReactNode;
   footer?: ReactNode;
 }) {
   const [query, setQuery] = useState('');
-  const [customizeOpen, setCustomizeOpen] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
 
   const matching = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -260,10 +252,10 @@ export function SessionList({
 
   /**
    * The modifier plus 1-9 opens the nth row, counted the way the sidebar draws them and
-   * filtered the way the search box currently has them. Nothing on the rows advertises this
-   * any more - the numbered badges are gone - so More is where it is written down. Bound on
-   * the window rather than the sidebar, because a user reaching for it is almost always
-   * typing in the composer at the time.
+   * filtered the way the search box currently has them. Nothing advertises this any more -
+   * the numbered badges went in T10 and the More panel that documented it was removed - but
+   * the bindings themselves still work. Bound on the window rather than the sidebar, because
+   * a user reaching for it is almost always typing in the composer at the time.
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -354,28 +346,9 @@ export function SessionList({
       </Box>
 
       <Stack spacing={0.25} sx={{ px: 1, pb: 1 }}>
-        <NavItem
-          icon={<PlusIcon />}
-          label={mode === 'code' ? 'New Code session' : 'New chat'}
-          onClick={onCreate}
-          testId="chat-new-session-btn"
-        />
-        <NavItem
-          icon={<SlidersIcon />}
-          label="Customize"
-          onClick={() => setCustomizeOpen(open => !open)}
-          end={<ChevronIcon open={customizeOpen} />}
-          testId="sidebar-customize-btn"
-        />
-        {customizeOpen && <Box sx={{ px: 1, pb: 0.5 }}>{customize}</Box>}
-        <NavItem
-          icon={<MoreIcon />}
-          label="More"
-          onClick={() => setMoreOpen(open => !open)}
-          end={<ChevronIcon open={moreOpen} />}
-          testId="sidebar-more-btn"
-        />
-        {moreOpen && <Box sx={{ px: 1, pb: 0.5 }}>{more}</Box>}
+        {/* One label and one behaviour in both modes: it makes a session and opens nothing.
+            A Code session starts unbound and its chip row is where a project is chosen. */}
+        <NavItem icon={<PlusIcon />} label="New" onClick={onCreate} testId="chat-new-session-btn" />
         <Box sx={{ px: 0.5, pt: 0.5 }}>
           <Input
             size="sm"
@@ -428,7 +401,11 @@ export function SessionList({
 
             {sections.loose.length > 0 && (
               <Box>
-                {sections.pinned.length > 0 && <SectionLabel>Conversations</SectionLabel>}
+                {/* In Code mode these are the sessions with no project yet, and they sit under
+                    the project groups - unlabelled they read as belonging to the last one. */}
+                {(sections.pinned.length > 0 || sections.projects.length > 0) && (
+                  <SectionLabel>{mode === 'code' ? 'No project' : 'Conversations'}</SectionLabel>
+                )}
                 <List size="sm" sx={{ '--ListItem-radius': '6px', gap: 0.25 }}>
                   {sections.loose.map(session => (
                     <SessionRow key={session.id} session={session} {...rowProps} />

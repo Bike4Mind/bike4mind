@@ -211,6 +211,12 @@ export interface ProjectBindingError {
   message: string;
   /** Refused on timing rather than validity: the same change works once the session is idle. */
   busy: boolean;
+  /**
+   * Set when nothing went wrong and nothing happened - a dismissed folder picker, above all.
+   * It still has to be said, because a click that produces no visible change is the failure
+   * this row exists to stop being silent; it just is not drawn in red.
+   */
+  info?: boolean;
 }
 
 /** Everything the chip row above the composer can change about a Code session's grounding. */
@@ -476,18 +482,20 @@ export function useConversation(
     [onSummaryChanged]
   );
 
+  /** Resolves true when the session really moved, so a caller can report what happened after. */
   const changeProject = useCallback(
     async (change: Omit<UpdateProjectRequest, 'sessionId'>) => {
-      if (!sessionId) return;
+      if (!sessionId) return false;
       setProjectBusy(true);
       setProjectError(null);
       try {
         const result = await window.b4m.chat.updateProject({ sessionId, ...change });
         if (!result.ok) {
           setProjectError({ message: result.error, busy: !!result.busy });
-          return;
+          return false;
         }
         applySummary(result.session);
+        return true;
       } finally {
         setProjectBusy(false);
       }
@@ -496,21 +504,45 @@ export function useConversation(
   );
 
   const pickDirectory = useCallback(async () => {
+    setProjectError(null);
     const directory = await window.b4m.chat.pickProjectDirectory();
-    if (!directory) return;
+    if (!directory) {
+      setProjectError({ message: 'No folder chosen, so nothing changed.', busy: false, info: true });
+      return;
+    }
     const inspected = await window.b4m.chat.inspectProject(directory);
     // The workspace choice does not travel: it named a worktree of the repository being left,
     // and carrying it across would create one in a repository the user has only just pointed at.
-    await changeProject({ directory, branch: inspected.currentBranch ?? '', workspace: false });
+    const moved = await changeProject({ directory, branch: inspected.currentBranch ?? '', workspace: false });
+    // The folder is still usable when git could not be read - it just has no branches to offer -
+    // so this is reported after the move rather than instead of it.
+    if (moved && inspected.error) setProjectError({ message: inspected.error, busy: false });
   }, [changeProject]);
 
-  const setBranch = useCallback((branch: string) => changeProject({ branch }), [changeProject]);
-  const setWorkspace = useCallback((workspace: boolean) => changeProject({ workspace }), [changeProject]);
+  const setBranch = useCallback(
+    async (branch: string) => {
+      await changeProject({ branch });
+    },
+    [changeProject]
+  );
+  const setWorkspace = useCallback(
+    async (workspace: boolean) => {
+      await changeProject({ workspace });
+    },
+    [changeProject]
+  );
 
   const addContextDirectory = useCallback(async () => {
     if (!sessionId) return;
+    setProjectError(null);
     const updated = await window.b4m.chat.addContextDirectory(sessionId);
-    if (updated) applySummary(updated);
+    // Null is a dismissed picker: the button is disabled until the session has a project, so
+    // the other way main returns null is not reachable from here.
+    if (!updated) {
+      setProjectError({ message: 'No folder chosen, so nothing was added.', busy: false, info: true });
+      return;
+    }
+    applySummary(updated);
   }, [sessionId, applySummary]);
 
   const removeContextDirectory = useCallback(

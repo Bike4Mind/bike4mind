@@ -12,7 +12,7 @@ export class PathAccessDenied extends Error {
     super(
       reason ??
         `Access denied: ${requested} is outside the folders you have granted. ` +
-          'Ask the user to grant that folder in Settings.'
+          'Ask the user to add that folder from the chip row above the message box.'
     );
     this.name = 'PathAccessDenied';
   }
