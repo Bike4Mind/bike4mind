@@ -130,48 +130,53 @@ describe('GET /api/gears/status', () => {
     expect(mocks.addCredits).not.toHaveBeenCalled();
   });
 
-  it('derives unlocks from data existence and grants the one-time reward with a stable transactionId', async () => {
+  it('derives unlocks from data existence and reports the reward as claimable without paying it', async () => {
     // Answer true only for the destination arm ($or query), not the shareproject arm.
     mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
     const { res, promise } = run({ id: 'u1' });
     await promise;
 
-    const body = res._getJSONData() as { gears: Array<{ key: string; unlocked: boolean; creditsAwarded?: number }> };
+    const body = res._getJSONData() as { gears: Array<{ key: string; unlocked: boolean; claimable?: boolean }> };
     const projects = body.gears.find(g => g.key === 'projects')!;
     expect(projects.unlocked).toBe(true);
-    expect(projects.creditsAwarded).toBeGreaterThan(0);
-    expect(mocks.addCredits).toHaveBeenCalledTimes(1);
-    expect(mocks.addCredits.mock.calls[0][0]).toMatchObject({
-      ownerId: 'u1',
-      type: 'generic_add',
-      transactionId: 'gear-unlock:u1:projects',
-    });
+    expect(projects.claimable).toBe(true);
+    // Read-only: the payout is POST /api/gears/claim's job.
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+    expect(mocks.claimOnce).not.toHaveBeenCalled();
   });
 
-  it('never re-grants once the ledger has the gear transaction', async () => {
+  it('a gear already in the ledger is not claimable', async () => {
     mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
     mocks.txFind.mockResolvedValue([{ transactionId: 'gear-unlock:u1:projects' }]);
 
     const { res, promise } = run({ id: 'u1' });
     await promise;
 
-    const body = res._getJSONData() as { gears: Array<{ key: string; creditsAwarded?: number }> };
-    expect(body.gears.find(g => g.key === 'projects')!.creditsAwarded).toBeUndefined();
-    expect(mocks.addCredits).not.toHaveBeenCalled();
+    const body = res._getJSONData() as { gears: Array<{ key: string; unlocked: boolean; claimable?: boolean }> };
+    const projects = body.gears.find(g => g.key === 'projects')!;
+    expect(projects.unlocked).toBe(true);
+    expect(projects.claimable).toBeUndefined();
   });
 
-  it('a reward failure never breaks the status surface (nav still gets its answer)', async () => {
-    mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
-    mocks.addCredits.mockRejectedValue(new Error('ledger down'));
-
+  it('a paid gear stays claimed after its unlock lapses (e.g. the only agent was deleted)', async () => {
+    mocks.txFind.mockResolvedValue([{ transactionId: 'gear-unlock:u1:agents' }]);
     const { res, promise } = run({ id: 'u1' });
     await promise;
 
-    expect(res._getStatusCode()).toBe(200);
-    const body = res._getJSONData() as { gears: Array<{ key: string; unlocked: boolean; creditsAwarded?: number }> };
-    const projects = body.gears.find(g => g.key === 'projects')!;
-    expect(projects.unlocked).toBe(true);
-    expect(projects.creditsAwarded).toBeUndefined();
+    const body = res._getJSONData() as {
+      gears: Array<{ key: string; unlocked: boolean; claimable?: boolean; claimed?: boolean }>;
+    };
+    const agents = body.gears.find(g => g.key === 'agents')!;
+    expect(agents.unlocked).toBe(false);
+    expect(agents.claimed).toBe(true);
+    expect(agents.claimable).toBeUndefined();
+  });
+
+  it('a locked gear is not claimable', async () => {
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+    const body = res._getJSONData() as { gears: Array<{ claimable?: boolean }> };
+    expect(body.gears.some(g => g.claimable)).toBe(false);
   });
 
   it('unlock by receipt: project membership (not just ownership) is queried', async () => {
@@ -210,11 +215,11 @@ describe('GET /api/gears/status - skill gears', () => {
     await promise;
 
     const body = res._getJSONData() as {
-      gears: Array<{ key: string; creditsAwarded?: number; credits: number }>;
+      gears: Array<{ key: string; claimable?: boolean; credits: number }>;
     };
     const byKey = Object.fromEntries(body.gears.map(g => [g.key, g]));
-    expect(byKey.apikey.creditsAwarded).toBe(byKey.apikey.credits);
-    expect(byKey.projects.creditsAwarded).toBe(byKey.projects.credits);
+    expect(byKey.apikey.claimable).toBe(true);
+    expect(byKey.projects.claimable).toBe(true);
     expect(byKey.projects.credits).toBe(1000);
     expect(byKey.apikey.credits).toBe(500);
   });
@@ -279,22 +284,26 @@ describe('GET /api/gears/status - published reward waits for a non-owner view', 
     await promise;
 
     const body = res._getJSONData() as {
-      gears: Array<{ key: string; unlocked: boolean; rewardPending?: boolean; creditsAwarded?: number }>;
+      gears: Array<{ key: string; unlocked: boolean; rewardPending?: boolean; claimable?: boolean }>;
     };
     const published = body.gears.find(g => g.key === 'published')!;
     expect(published.unlocked).toBe(true);
     expect(published.rewardPending).toBe(true);
-    expect(published.creditsAwarded).toBeUndefined();
-    expect(mocks.addCredits).not.toHaveBeenCalled();
+    expect(published.claimable).toBeUndefined();
   });
 
-  it('pays the 5000 once a non-owner view exists', async () => {
+  it('becomes claimable for the 5000 once a non-owner view exists', async () => {
     mocks.publishedExists.mockResolvedValue({ _id: 'a1' });
     const { res, promise } = run({ id: 'u1' });
     await promise;
 
-    const body = res._getJSONData() as { gears: Array<{ key: string; creditsAwarded?: number }> };
-    expect(body.gears.find(g => g.key === 'published')!.creditsAwarded).toBe(5000);
+    const body = res._getJSONData() as {
+      gears: Array<{ key: string; credits: number; claimable?: boolean; rewardPending?: boolean }>;
+    };
+    const published = body.gears.find(g => g.key === 'published')!;
+    expect(published.claimable).toBe(true);
+    expect(published.rewardPending).toBeUndefined();
+    expect(published.credits).toBe(5000);
   });
 });
 
@@ -333,13 +342,12 @@ describe('GET /api/gears/status - Manage Gears admin overrides', () => {
     await promise;
 
     const body = res._getJSONData() as {
-      gears: Array<{ key: string; credits: number; title: string; creditsAwarded?: number }>;
+      gears: Array<{ key: string; credits: number; title: string; claimable?: boolean }>;
     };
     const projects = body.gears.find(g => g.key === 'projects')!;
     expect(projects.credits).toBe(1);
     expect(projects.title).toBe('Projects (nerfed)');
-    expect(projects.creditsAwarded).toBe(1);
-    expect(mocks.addCredits.mock.calls[0][0]).toMatchObject({ credits: 1 });
+    expect(projects.claimable).toBe(true);
   });
 
   it('serves the code-default presentation when no override exists', async () => {
@@ -349,20 +357,5 @@ describe('GET /api/gears/status - Manage Gears admin overrides', () => {
     const byKey = Object.fromEntries(body.gears.map(g => [g.key, g]));
     expect(byKey.projects.title).toBe('Projects');
     expect(byKey.clidocs.ctaAction).toContain('#stamp:clidocs');
-  });
-});
-
-describe('GET /api/gears/status - reward announcement is race-safe (dup-toast fix)', () => {
-  it('the LOSER of a concurrent claim does not report creditsAwarded even though the grant succeeded', async () => {
-    mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
-    mocks.claimOnce.mockResolvedValue(false); // another concurrent request already claimed the announce
-
-    const { res, promise } = run({ id: 'u1' });
-    await promise;
-
-    const body = res._getJSONData() as { gears: Array<{ key: string; creditsAwarded?: number }> };
-    // Ledger still granted (addCredits called) but THIS response must not announce it.
-    expect(mocks.addCredits).toHaveBeenCalled();
-    expect(body.gears.find(g => g.key === 'projects')!.creditsAwarded).toBeUndefined();
   });
 });

@@ -1,7 +1,7 @@
 import { Box, Button, Card, Chip, chipClasses, Stack, TabList, TabPanel, Tabs, Tooltip, Typography } from '@mui/joy';
 import type { Theme } from '@mui/joy/styles';
 import { useNavigate } from '@tanstack/react-router';
-import { cloneElement, useEffect, useRef, useState } from 'react';
+import { cloneElement, useState } from 'react';
 import { toast } from 'sonner';
 import CheckIcon from '@mui/icons-material/Check';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
@@ -38,7 +38,7 @@ import CalculateOutlinedIcon from '@mui/icons-material/CalculateOutlined';
 import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
 import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
 import { api } from '@client/app/contexts/ApiContext';
-import { useGearsStatus, type GearKey, type GearStatus } from '@client/app/hooks/useGearsStatus';
+import { useClaimGear, useGearsStatus, type GearKey, type GearStatus } from '@client/app/hooks/useGearsStatus';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
@@ -103,7 +103,12 @@ const creditText = (gear: GearStatus) => `${gear.credits.toLocaleString()} credi
 type RewardState = 'locked' | 'claimable' | 'pending' | 'claimed';
 
 const rewardState = (gear: GearStatus): RewardState => {
+  // Checked before the unlock: a paid gear whose data was deleted is locked
+  // again, but offering its reward a second time would be a promise the claim
+  // endpoint refuses.
+  if (gear.claimed) return 'claimed';
   if (!gear.unlocked) return 'locked';
+  if (gear.claimable) return 'claimable';
   return gear.rewardPending ? 'pending' : 'claimed';
 };
 
@@ -209,12 +214,17 @@ const GearsPage = () => {
   const { isFeatureEnabled } = useFeatureEnabled();
   const { isFeatureEnabled: isAdminFeatureEnabled } = useAdminSettingsCache();
   const { setOpen: setFileBrowserOpen } = useFileBrowser();
-  // Guard against double-toasting in strict mode / refetches.
-  const toastedRef = useRef(false);
 
-  // No gear reaches 'claimable' yet: the status endpoint still pays out the moment
-  // it sees an unlock. The claim endpoint makes the state real and wires this up.
-  const claim = (_gear: GearStatus) => undefined;
+  const { mutate: claimGear, isPending: claiming } = useClaimGear();
+  const claim = (gear: GearStatus) => {
+    if (claiming) return;
+    claimGear(gear.key, {
+      onSuccess: result => {
+        if (result.creditsAwarded) toast.success(`Reward claimed - ${creditText(gear)} for ${gear.title}`);
+      },
+      onError: () => toast.error("Couldn't claim the reward. Try again."),
+    });
+  };
 
   // Same gating as the sidenav: a gear whose feature is off for this deployment
   // isn't offered at all (it would dead-end on gated endpoints).
@@ -232,18 +242,6 @@ const GearsPage = () => {
     g =>
       g.kind === 'skill' && g.key !== LEAD_KEY && !GENERATOR_KEYS.includes(g.key) && !INTEGRATION_KEYS.includes(g.key)
   );
-
-  // Surface fresh unlock rewards the moment the status lands.
-  useEffect(() => {
-    if (!data || toastedRef.current) return;
-    const awarded = data.gears.filter(g => g.creditsAwarded);
-    if (awarded.length > 0) {
-      toastedRef.current = true;
-      for (const g of awarded) {
-        toast.success(`Gear unlocked: ${g.title} - +${g.creditsAwarded} credits`);
-      }
-    }
-  }, [data]);
 
   /** Interpret a gear's ctaAction - see lib/gears/presentation.ts for the grammar. */
   const onCta = (gear: GearStatus) => {
@@ -384,7 +382,14 @@ const GearsPage = () => {
                       data-testid={`gear-pending-${gear.key}`}
                       // Joy sets gap as a plain declaration per size (3px on sm), not
                       // as a variable, so it is overridden directly.
-                      sx={{ gap: '6px', '--Chip-minHeight': '24px', fontSize: '13px' }}
+                      sx={theme => ({
+                        gap: '6px',
+                        '--Chip-minHeight': '24px',
+                        fontSize: '13px',
+                        // The chip's own text colour, as the green and grey chips are
+                        // stroked in theirs.
+                        border: `1px solid ${theme.palette.warning.softColor}`,
+                      })}
                     >
                       {gear.credits.toLocaleString()}
                     </Chip>

@@ -1,7 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { CreditHolderType } from '@bike4mind/common';
-import { creditService } from '@bike4mind/services';
 import { GEAR_PRESENTATION } from '@client/lib/gears/presentation';
 import {
   Project,
@@ -25,7 +23,6 @@ import {
   importHistoryJobRepository,
   rapidReplyAuditLogRepository,
   researchDataRepository,
-  userRepository,
 } from '@bike4mind/database';
 
 /**
@@ -38,10 +35,13 @@ import {
  * so there is no unlock table to migrate or drift, and existing history is
  * grandfathered automatically (a project you were added to unlocks Projects).
  *
+ * This endpoint only reads. The reward is paid by POST /api/gears/claim when
+ * the user asks for it, so the status can be polled from anywhere in the app
+ * without moving anyone's balance.
+ *
  * Idempotency rides the credit ledger: the stable transactionId
  * `gear-unlock:<userId>:<gearKey>` is a unique key on CreditTransaction, so a
- * duplicate grant is swallowed by addCredits - this endpoint can be polled
- * freely and can never double-credit.
+ * duplicate grant is swallowed by addCredits and a gear can never pay twice.
  */
 
 /**
@@ -100,7 +100,7 @@ export type GearKey =
   // client-claimable curiosity stamps (see pages/api/gears/stamp.ts)
   | 'clidocs';
 
-const gearTxId = (userId: string, key: GearKey) => `gear-unlock:${userId}:${key}`;
+export const gearTxId = (userId: string, key: GearKey) => `gear-unlock:${userId}:${key}`;
 
 /** Facts gathered once per request and shared by every gear check - keeps the
  *  endpoint at a handful of indexed queries no matter how many gears exist. */
@@ -120,7 +120,7 @@ async function gatherFacts(userId: string): Promise<GearFacts> {
   return { userId, usageFeatures: new Set(usageFeatures), chatModelCount: chatModels.length, stamps };
 }
 
-interface GearDef {
+export interface GearDef {
   key: GearKey;
   kind: GearKind;
   /** One-time unlock reward (pre-scale) - see the schedule note above. */
@@ -385,11 +385,69 @@ export interface GearStatus {
   intro: string;
   cta: string;
   ctaAction: string;
-  /** Set only on the response that actually granted the reward. */
-  creditsAwarded?: number;
+  /** Unlocked and paid-for conditions met, but the reward is not claimed yet. */
+  claimable?: boolean;
+  /** The ledger has paid this gear. Independent of `unlocked`, which follows live
+   *  data: deleting your only agent re-locks the gear, but the reward stays spent. */
+  claimed?: boolean;
   /** Unlocked, but the payout's stricter condition isn't met yet (e.g.
    *  Published: waiting for a non-owner view). */
   rewardPending?: boolean;
+}
+
+export interface GearEvaluation {
+  def: GearDef;
+  unlocked: boolean;
+  /** Effective amount: an admin override is ABSOLUTE (not scaled), so what the
+   *  admin typed is exactly what pays out. */
+  credits: number;
+  /** The payout's own condition - `rewardCheck` where the gear has one. */
+  rewardEligible: boolean;
+  alreadyRewarded: boolean;
+}
+
+/**
+ * Every active gear's unlock and reward state for one user. Shared by this
+ * endpoint and the claim one, so the button a user sees and the payout it
+ * triggers are decided by the same code.
+ *
+ * `onlyKeys` narrows the checks to the gears asked about; the facts are
+ * gathered in full either way, since they are a fixed handful of queries.
+ */
+export async function evaluateGears(
+  userId: string,
+  onlyKeys?: GearKey[]
+): Promise<{ evaluations: GearEvaluation[]; overrides: Awaited<ReturnType<typeof gearOverrideRepository.byKey>> }> {
+  // Admin overrides (Manage Gears) layer over the code defaults: disabled
+  // gears vanish (no card, no payout).
+  const [facts, overrides] = await Promise.all([gatherFacts(userId), gearOverrideRepository.byKey()]);
+  const activeGears = GEARS.filter(
+    g => overrides.get(g.key)?.enabled !== false && (!onlyKeys || onlyKeys.includes(g.key))
+  );
+  const unlockedFlags = await Promise.all(activeGears.map(g => g.check(facts)));
+
+  // One indexed query tells us which unlocks were already rewarded.
+  const txIds = activeGears.map(g => gearTxId(userId, g.key));
+  const existing = await creditTransactionRepository.find({ transactionId: { $in: txIds } });
+  const rewarded = new Set((existing as Array<{ transactionId?: string }>).map(t => t.transactionId).filter(Boolean));
+
+  const evaluations = await Promise.all(
+    activeGears.map(async (def, i) => {
+      const unlocked = unlockedFlags[i];
+      const alreadyRewarded = rewarded.has(gearTxId(userId, def.key));
+      // The payout may lag the unlock behind a stricter condition (anti-farm
+      // friction); evaluate it only when it could change the outcome.
+      const rewardEligible = unlocked && !alreadyRewarded && def.rewardCheck ? await def.rewardCheck(facts) : unlocked;
+      return {
+        def,
+        unlocked,
+        credits: overrides.get(def.key)?.credits ?? creditsFor(def),
+        rewardEligible,
+        alreadyRewarded,
+      };
+    })
+  );
+  return { evaluations, overrides };
 }
 
 const handler = baseApi().get(
@@ -397,25 +455,9 @@ const handler = baseApi().get(
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
-    // Admin overrides (Manage Gears) layer over the code defaults: disabled
-    // gears vanish (no card, no payout); a credits override is ABSOLUTE (not
-    // scaled) so what the admin typed is exactly what pays out.
-    const [facts, overrides] = await Promise.all([gatherFacts(String(userId)), gearOverrideRepository.byKey()]);
-    const activeGears = GEARS.filter(g => overrides.get(g.key)?.enabled !== false);
-    const unlockedFlags = await Promise.all(activeGears.map(g => g.check(facts)));
-
-    // One indexed query tells us which unlocks were already rewarded, so the
-    // common case (nothing new) never attempts a ledger write.
-    const txIds = activeGears.map(g => gearTxId(String(userId), g.key));
-    const existing = await creditTransactionRepository.find({ transactionId: { $in: txIds } });
-    const rewarded = new Set((existing as Array<{ transactionId?: string }>).map(t => t.transactionId).filter(Boolean));
-
-    const gears: GearStatus[] = [];
-    for (let i = 0; i < activeGears.length; i++) {
-      const def = activeGears[i];
-      const unlocked = unlockedFlags[i];
+    const { evaluations, overrides } = await evaluateGears(String(userId));
+    const gears: GearStatus[] = evaluations.map(({ def, unlocked, credits, rewardEligible, alreadyRewarded }) => {
       const o = overrides.get(def.key);
-      const credits = o?.credits ?? creditsFor(def);
       const base = GEAR_PRESENTATION[def.key];
       const gear: GearStatus = {
         key: def.key,
@@ -428,41 +470,11 @@ const handler = baseApi().get(
         cta: o?.cta ?? base.cta,
         ctaAction: o?.ctaAction ?? base.ctaAction,
       };
-      const alreadyRewarded = rewarded.has(gearTxId(String(userId), def.key));
-      // The payout may lag the unlock behind a stricter condition (anti-farm
-      // friction); evaluate it only when it could change the outcome.
-      const rewardEligible = unlocked && !alreadyRewarded && def.rewardCheck ? await def.rewardCheck(facts) : unlocked;
       if (unlocked && !rewardEligible && !alreadyRewarded) gear.rewardPending = true;
-      if (rewardEligible && credits > 0 && !alreadyRewarded) {
-        try {
-          const holder = await creditService.addCredits(
-            {
-              ownerId: String(userId),
-              ownerType: CreditHolderType.User,
-              credits,
-              type: 'generic_add',
-              transactionId: gearTxId(String(userId), def.key),
-              reason: `gear unlock: ${def.key}`,
-            },
-            { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
-          );
-          // addCredits returns the holder on both a fresh grant and an idempotent
-          // duplicate, so it can't tell us who actually granted. claimOnce is a
-          // race-safe (userId, key) upsert - only the inserting request wins, so
-          // concurrent polls don't each fire a duplicate '+N credits' toast. The
-          // ledger stays the source of truth for the money; this only de-dups the
-          // announcement.
-          if (holder && (await gearStampRepository.claimOnce(String(userId), `reward:${def.key}`))) {
-            gear.creditsAwarded = credits;
-          }
-        } catch (err) {
-          // Reward failure must not break the status surface - the nav still
-          // needs its answer. The stable transactionId makes any retry safe.
-          req.logger?.warn?.({ err, key: def.key }, 'gear unlock credit grant failed');
-        }
-      }
-      gears.push(gear);
-    }
+      if (rewardEligible && credits > 0 && !alreadyRewarded) gear.claimable = true;
+      if (alreadyRewarded) gear.claimed = true;
+      return gear;
+    });
 
     return res.status(200).json({
       gears,

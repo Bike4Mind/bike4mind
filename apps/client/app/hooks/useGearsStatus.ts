@@ -1,4 +1,4 @@
-import { useQuery, type QueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 
 /**
@@ -52,7 +52,10 @@ export interface GearStatus {
   kind: GearKind;
   unlocked: boolean;
   credits: number;
-  creditsAwarded?: number;
+  /** Conditions met, reward not taken yet - POST /api/gears/claim pays it. */
+  claimable?: boolean;
+  /** Paid - stays true even if the unlock later lapses (see the endpoint). */
+  claimed?: boolean;
   rewardPending?: boolean;
   /** Presentation is server truth (code defaults + Manage Gears admin overrides). */
   title: string;
@@ -74,6 +77,32 @@ export function useGearsStatus() {
     // Unlocks only move forward and creations invalidate explicitly (or are
     // picked up on the next visit) - keep the nav from refetching on every mount.
     staleTime: 5 * 60_000,
+  });
+}
+
+export interface ClaimGearResponse {
+  key: GearKey;
+  /** Set only on the response that actually paid - see pages/api/gears/claim.ts. */
+  creditsAwarded?: number;
+  alreadyClaimed?: boolean;
+}
+
+/**
+ * Claim one gear's reward. The card flips at once and the status is then
+ * refetched to confirm; the balance itself updates through the user
+ * subscription, so nothing here touches it.
+ */
+export function useClaimGear() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (key: GearKey) => (await api.post<ClaimGearResponse>('/api/gears/claim', { key })).data,
+    onSuccess: (_data, key) => {
+      queryClient.setQueryData<GearsStatusResponse>(
+        ['gears', 'status'],
+        prev => prev && { ...prev, gears: prev.gears.map(g => (g.key === key ? { ...g, claimable: false } : g)) }
+      );
+      void queryClient.invalidateQueries({ queryKey: ['gears', 'status'] });
+    },
   });
 }
 
