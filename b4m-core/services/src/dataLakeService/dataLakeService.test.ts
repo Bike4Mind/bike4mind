@@ -4660,6 +4660,43 @@ describe('cleanupDeletedDataLake - phase 2 sweep', () => {
     expect(adapters.db.dataLakes.delete).toHaveBeenCalledWith('lake1');
   });
 
+  it('releases the lake GitHub connection, and does it BEFORE the file sweep', async () => {
+    // Same reason as the Drive release above: the row's repositoryId is globally unique and
+    // unreachable once the lake is gone, so a row surviving the purge orphans the claim.
+    const adapters = makeAdapters('purging');
+    const order: string[] = [];
+    const releaseGitHubConnection = vi.fn(async () => {
+      order.push('release-github');
+    });
+    adapters.db.fabFiles.hardDeleteOneById = vi.fn(async () => {
+      order.push('hard-delete');
+      return true;
+    });
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      ...adapters,
+      releaseGitHubConnection,
+    });
+    expect(releaseGitHubConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
+    expect(order).toEqual(['release-github', 'hard-delete', 'hard-delete']);
+  });
+
+  it('aborts the sweep when the GitHub release fails, rather than purging the lake around it', async () => {
+    const adapters = makeAdapters('purging');
+    const err = await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      ...adapters,
+      releaseGitHubConnection: vi.fn().mockRejectedValue(new Error('github is down')),
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(BadRequestError);
+    expect(adapters.db.dataLakes.delete).not.toHaveBeenCalled();
+  });
+
+  it('sweeps normally when no GitHub release port is wired', async () => {
+    const adapters = makeAdapters('purging');
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+    expect(adapters.db.dataLakes.delete).toHaveBeenCalledWith('lake1');
+  });
+
   it('is idempotent: already-gone lake is a no-op success', async () => {
     const adapters = makeAdapters('deleted');
     adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(null);
