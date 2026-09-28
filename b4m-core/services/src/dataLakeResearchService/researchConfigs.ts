@@ -5,6 +5,13 @@ import type {
 } from '@bike4mind/common';
 import { RESEARCH_CONFIG_NAME_MAX_CHARS } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { researchConfigChange } from '../dataLakeService/diffLakeConfig';
+import type { LakeGrant, ManageActor } from '../dataLakeService/manageRule';
+import {
+  recordLakeConfigChange,
+  type LakeConfigAuditAdapters,
+  type LakeConfigAuditLakeRef,
+} from '../dataLakeService/recordLakeConfigChange';
 import { normalizeResearchLevers, type ResearchLeversDraft } from './researchLevers';
 
 /**
@@ -13,12 +20,16 @@ import { normalizeResearchLevers, type ResearchLeversDraft } from './researchLev
  * normalization and the one rule that is not a lever - v1 accepts only `on_demand`.
  */
 
-export interface ResearchConfigAdapters {
-  db: {
+export interface ResearchConfigAdapters extends LakeConfigAuditAdapters {
+  db: LakeConfigAuditAdapters['db'] & {
     dataLakeResearchConfigs: Pick<
       IDataLakeResearchConfigRepository,
       'createConfig' | 'listByLake' | 'findByIdInLake' | 'updateConfig' | 'deleteConfig'
     >;
+    // REQUIRED, not optional: every caller of these writes is one of the two research-config
+    // routes, so leaving it optional would let a create/edit/delete go unaudited silently - the
+    // exact gap #3298 reports.
+    lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
   };
 }
 
@@ -44,25 +55,37 @@ const assertSupportedTrigger = (trigger: ResearchRunTrigger | undefined): Resear
 };
 
 export async function createResearchConfig(
-  dataLakeId: string,
-  actorUserId: string,
+  lake: LakeConfigAuditLakeRef,
+  actor: ManageActor,
+  grants: readonly LakeGrant[],
   input: { name: string; trigger?: ResearchRunTrigger } & ResearchLeversDraft,
-  { db }: ResearchConfigAdapters
+  { db, logger }: ResearchConfigAdapters
 ): Promise<IDataLakeResearchConfigDocument> {
-  const existing = await db.dataLakeResearchConfigs.listByLake(dataLakeId);
+  const existing = await db.dataLakeResearchConfigs.listByLake(lake.id);
   if (existing.length >= RESEARCH_CONFIGS_PER_LAKE_MAX) {
     throw new BadRequestError(
       `This data lake already has the maximum of ${RESEARCH_CONFIGS_PER_LAKE_MAX} research configurations`
     );
   }
 
-  return db.dataLakeResearchConfigs.createConfig({
-    dataLakeId,
-    name: normalizeName(input.name),
+  const name = normalizeName(input.name);
+  const created = await db.dataLakeResearchConfigs.createConfig({
+    dataLakeId: lake.id,
+    name,
     trigger: assertSupportedTrigger(input.trigger),
-    createdByUserId: actorUserId,
+    createdByUserId: actor.userId,
     ...normalizeResearchLevers(input),
   });
+
+  // `grants` comes from the caller's own gate (assertLakeResearchManage), not re-fetched here -
+  // the gate and the recorded manage rung must agree on the same grant set, the same reasoning
+  // reviewDataLakeProposal's resolveReviewable applies to its own reused grants.
+  await recordLakeConfigChange(
+    { actor, lake, grants, action: 'create-research-config', changes: [researchConfigChange(name, 'created')] },
+    { db, logger }
+  );
+
+  return created;
 }
 
 export function listResearchConfigs(
@@ -74,12 +97,13 @@ export function listResearchConfigs(
 
 export async function updateResearchConfig(
   configId: string,
-  dataLakeId: string,
-  actorUserId: string,
+  lake: LakeConfigAuditLakeRef,
+  actor: ManageActor,
+  grants: readonly LakeGrant[],
   input: { name?: string } & ResearchLeversDraft,
-  { db }: ResearchConfigAdapters
+  { db, logger }: ResearchConfigAdapters
 ): Promise<IDataLakeResearchConfigDocument> {
-  const existing = await db.dataLakeResearchConfigs.findByIdInLake(configId, dataLakeId);
+  const existing = await db.dataLakeResearchConfigs.findByIdInLake(configId, lake.id);
   if (!existing) throw new NotFoundError('Research configuration not found');
 
   // Normalized over the MERGE of stored and incoming, not over the patch alone: normalization needs
@@ -88,7 +112,7 @@ export async function updateResearchConfig(
   // that a tightened bound has since put out of range.
   const merged = normalizeResearchLevers({ ...existing, ...input });
 
-  const updated = await db.dataLakeResearchConfigs.updateConfig(configId, dataLakeId, {
+  const updated = await db.dataLakeResearchConfigs.updateConfig(configId, lake.id, {
     ...merged,
     // Explicitly cleared rather than left off: `normalizeResearchLevers` OMITS `recencyDays` and
     // `model` when they are unset, and `$set` of a partial would leave the previous value in place -
@@ -96,20 +120,50 @@ export async function updateResearchConfig(
     recencyDays: merged.recencyDays ?? null,
     model: merged.model ?? null,
     ...(input.name !== undefined ? { name: normalizeName(input.name) } : {}),
-    lastUpdatedByUserId: actorUserId,
+    lastUpdatedByUserId: actor.userId,
   });
 
   if (!updated) throw new NotFoundError('Research configuration not found');
+
+  await recordLakeConfigChange(
+    {
+      actor,
+      lake,
+      grants,
+      action: 'update-research-config',
+      // The UPDATED document's own name, not the input: an edit that never touched `name` still
+      // reads by its current name here rather than by whatever this caller happened to submit.
+      changes: [researchConfigChange(updated.name, 'updated')],
+    },
+    { db, logger }
+  );
+
   return updated;
 }
 
 export async function deleteResearchConfig(
   configId: string,
-  dataLakeId: string,
-  { db }: ResearchConfigAdapters
+  lake: LakeConfigAuditLakeRef,
+  actor: ManageActor,
+  grants: readonly LakeGrant[],
+  { db, logger }: ResearchConfigAdapters
 ): Promise<void> {
-  const deleted = await db.dataLakeResearchConfigs.deleteConfig(configId, dataLakeId);
+  const existing = await db.dataLakeResearchConfigs.findByIdInLake(configId, lake.id);
+  if (!existing) throw new NotFoundError('Research configuration not found');
+
+  const deleted = await db.dataLakeResearchConfigs.deleteConfig(configId, lake.id);
   if (!deleted) throw new NotFoundError('Research configuration not found');
-  // Run history is deliberately NOT swept with the config: a run row is what a proposal's
-  // `runId` points at, and those proposals outlive the config that produced them.
+  // Run history is deliberately NOT swept with the config: a row is what a proposal's `runId`
+  // points at, and those proposals outlive the config that produced them.
+
+  await recordLakeConfigChange(
+    {
+      actor,
+      lake,
+      grants,
+      action: 'delete-research-config',
+      changes: [researchConfigChange(existing.name, 'deleted')],
+    },
+    { db, logger }
+  );
 }
