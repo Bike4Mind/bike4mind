@@ -779,6 +779,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               const inheritedArtifactGuard = options._internal?.artifactGuard;
               let artifactGuard = inheritedArtifactGuard;
 
+              // The text-only send below is never reached on this branch, so a turn's intro text
+              // ("Here's the second chart:") goes out here. On a chained call `callback` is the
+              // guard's buffering callback, so emitArtifact still flushes it ahead of the artifact.
+              if (streamedText.some(Boolean)) await callback(streamedText, buildCompletionInfo());
+
               // Execute each resolved call and push its result, so the model sees
               // every tool it invoked on the recursive turn, then recurse once.
               for (const { id, name, parameters } of executable) {
