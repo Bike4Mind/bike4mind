@@ -2865,3 +2865,79 @@ describe('GET /api/publish/serve - sign-up gate is for anonymous viewers of open
     expect(res._getData() as string).not.toContain(GATE);
   });
 });
+
+describe('GET /api/publish/serve - per-entry share-link view counts (#3255)', () => {
+  const withEntry = (over: Record<string, unknown> = {}) =>
+    bundle({
+      visibility: 'private',
+      shareTokens: [{ _id: 'entry1', token: 'tok123', revokedAt: null }],
+      ...over,
+    });
+  // The per-link write is the updateOne carrying arrayFilters; the artifact-level bump has none.
+  const perLinkCall = () =>
+    mockUpdateOne.mock.calls.find(call => !!(call[2] as { arrayFilters?: unknown })?.arrayFilters);
+
+  it('resolves through shareTokens[] as well as the legacy scalar, pinning revokedAt per entry', async () => {
+    mockArtifactFindOne.mockReturnValue(withEntry());
+    mockDownload.mockResolvedValue(Buffer.from('<html><body>Hi</body></html>'));
+
+    const { promise } = run(['a', 'tok123']);
+    await promise;
+
+    const filter = mockArtifactFindOne.mock.calls[0][0] as { $or: unknown[] };
+    expect(filter.$or).toEqual([
+      { shareToken: 'tok123' },
+      { shareTokens: { $elemMatch: { token: 'tok123', revokedAt: null } } },
+    ]);
+  });
+
+  it('counts the matched entry: +1 viewCount and a lastViewedAt stamp, for an ANONYMOUS viewer', async () => {
+    mockArtifactFindOne.mockReturnValue(withEntry());
+    mockDownload.mockResolvedValue(Buffer.from('<html><body>Hi</body></html>'));
+
+    const { promise } = run(['a', 'tok123']);
+    await promise;
+
+    const call = perLinkCall();
+    expect(call).toBeDefined();
+    expect((call![1] as { $inc: Record<string, number> }).$inc['shareTokens.$[entry].viewCount']).toBe(1);
+    expect((call![1] as { $set: Record<string, Date> }).$set['shareTokens.$[entry].lastViewedAt']).toBeInstanceOf(Date);
+    expect(call![2]).toEqual({ arrayFilters: [{ 'entry._id': 'entry1' }] });
+  });
+
+  it('does not count the owner or a crawler', async () => {
+    mockArtifactFindOne.mockReturnValue(withEntry());
+    mockDownload.mockResolvedValue(Buffer.from('<html><body>Hi</body></html>'));
+
+    const owner = run(['a', 'tok123'], { user: { id: 'owner1' } });
+    await owner.promise;
+    expect(perLinkCall()).toBeUndefined();
+
+    mockUpdateOne.mockClear();
+    const crawler = run(['a', 'tok123'], { userAgent: 'Slackbot-LinkExpanding 1.0' });
+    await crawler.promise;
+    expect(perLinkCall()).toBeUndefined();
+  });
+
+  it('still serves a pre-backfill row (scalar only) without a per-link count', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private', shareToken: 'tok123', shareTokens: [] }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><body>Hi</body></html>'));
+
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(perLinkCall()).toBeUndefined();
+    // The artifact-level counters still bump.
+    expect(mockUpdateOne).toHaveBeenCalled();
+  });
+
+  it('does not count a /p/* view, nor a framed sub-document of a share link', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ shareTokens: [{ _id: 'entry1', token: 'tok123' }] }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><body>Hi</body></html>'));
+
+    const { promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+    expect(perLinkCall()).toBeUndefined();
+  });
+});

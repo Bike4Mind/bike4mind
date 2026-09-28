@@ -355,6 +355,17 @@ function starvedByOutputClaim(
 
 type PlanOneResult = { entry: CatalogDiffEntry; row: IModelCatalogRowInput } | { unchanged: true } | { reason: string };
 
+/**
+ * What a source said this run about disabling the model: only the fields it CONTRIBUTED, never the
+ * row in force, whose autoDisabled may be a previous run's "awaiting price" that promotion exists to
+ * clear.
+ */
+function sourceDisabledReasonOf(contributed: ReadonlyMap<string, unknown>): string | undefined {
+  if (contributed.get('autoDisabled') !== true) return undefined;
+  const reason = contributed.get('autoDisabledReason');
+  return typeof reason === 'string' && reason.length > 0 ? reason : 'disabled by its source';
+}
+
 function planOne(
   candidate: Candidate,
   existing: ResolvedCatalogRecord | undefined,
@@ -541,6 +552,7 @@ function planOne(
       policy: input.policy,
       credentials: input.credentials,
       hasTrustedPrice: hasTrustedPrice(candidate, input.knownPricedModelIds),
+      sourceDisabledReason: sourceDisabledReasonOf(contributed),
     });
     // autoDisabledReason is omitted rather than set to undefined so a promotion
     // reads as a removed key in the diff instead of a key that is still there.

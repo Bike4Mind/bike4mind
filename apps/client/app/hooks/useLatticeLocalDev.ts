@@ -22,6 +22,7 @@ import type {
   PrimitiveValue,
 } from '@bike4mind/common';
 import { isForbiddenObjectKey } from '@bike4mind/utils/safeObjectKey';
+import { splitEquals } from '@client/app/utils/splitEquals';
 
 // TYPES
 
@@ -117,10 +118,10 @@ function parseFormula(formula: string): {
   const normalized = formula.toLowerCase().trim();
 
   // Pattern: "X = Y + Z" or "X equals Y plus Z" (supports multi-word entity names)
-  const equalsMatch = normalized.match(/^(.+?)\s*(?:=|equals?)\s*(.+)$/i);
+  const equalsMatch = splitEquals(normalized);
 
   if (equalsMatch) {
-    const [, output, expression] = equalsMatch;
+    const [output, expression] = equalsMatch;
 
     if (expression.includes('+') || expression.includes('plus')) {
       return {
