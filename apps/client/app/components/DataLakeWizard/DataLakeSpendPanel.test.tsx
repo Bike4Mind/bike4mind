@@ -88,7 +88,7 @@ describe('DataLakeSpendPanel', () => {
     expect(screen.getByTestId('datalake-spend-overtime-table')).toBeInTheDocument();
   });
 
-  // #3298: research judge cost reaches the ledger under feature 'operations', but a curator who
+  // Research judge cost reaches the ledger under feature 'operations', but a curator who
   // never touched an upload would not recognize that name - this is the one place it says "Research".
   it('labels research and ingestion spend distinctly in the by-feature breakdown', () => {
     renderPanel({
@@ -124,7 +124,7 @@ describe('DataLakeSpendPanel', () => {
     expect(screen.getByText('chat')).toBeInTheDocument();
   });
 
-  // #3298: the by-day breakdown buckets in UTC, so an evening run showed up under the next day
+  // The by-day breakdown buckets in UTC, so an evening run showed up under the next day
   // with nothing telling the viewer why - the fix is labeling the bucket, not re-deriving it.
   it("labels the by-day breakdown as UTC rather than implying the viewer's own timezone", () => {
     renderPanel({
@@ -136,7 +136,7 @@ describe('DataLakeSpendPanel', () => {
     expect(screen.getByText('By day (UTC)')).toBeInTheDocument();
   });
 
-  // #3298: the copy cited the per-upload-batch budget even when the spend on screen came from a
+  // The copy cited the per-upload-batch budget even when the spend on screen came from a
   // research run, which never touches an upload batch at all.
   it("names the per-run budget as an ingestion figure, distinct from a research run's own ceiling", () => {
     renderPanel();
