@@ -6,10 +6,11 @@ import Chip from '@mui/joy/Chip';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { isTurnBudgetStop, type ChatMessage, type ChatReplyRound, type ChatToolCall } from '@shared/chat';
+import { isTurnBudgetStop, type ChatMessage } from '@shared/chat';
 import { ArtifactList } from './ArtifactCard';
 import { AttachmentRow } from './Attachments';
 import { contentColumnSx } from './layout';
+import { callsIn, roundsOf } from './replyRounds';
 import { ToolCallList, type RespondToApproval } from './ToolCallList';
 
 /** What each budget the agent loop enforces is called in the thread. See isTurnBudgetStop. */
@@ -97,25 +98,6 @@ function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: str
       </Sheet>
     </Stack>
   );
-}
-
-/**
- * The turn as an ordered list of rounds, however it was stored.
- *
- * A message from before rounds were recorded - or one whose turn ran no tools - collapses to a
- * single round holding everything, which is exactly how it used to draw: all the prose, then
- * all the rows. The ordering was never captured for those, and inventing one would put tool
- * rows next to text they have nothing to do with.
- */
-function roundsOf(message: ChatMessage): ChatReplyRound[] {
-  if (message.rounds && message.rounds.length > 0) return message.rounds;
-  return [{ text: message.content, toolCallIds: (message.toolCalls ?? []).map(call => call.id) }];
-}
-
-/** A round's own calls, in the message's order. Ids it names that are gone simply drop out. */
-function callsIn(round: ChatReplyRound, toolCalls: readonly ChatToolCall[]): ChatToolCall[] {
-  const wanted = new Set(round.toolCallIds);
-  return toolCalls.filter(call => wanted.has(call.id));
 }
 
 /**
