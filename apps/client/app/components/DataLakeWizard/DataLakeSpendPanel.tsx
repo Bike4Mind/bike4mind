@@ -175,7 +175,7 @@ export function DataLakeSpendPanel({
 
       {isBrandNew ? (
         <Typography level="body-sm" color="neutral" data-testid="datalake-spend-empty">
-          No embedding spend recorded yet. Costs appear here after the first file is indexed.
+          No spend recorded yet. Costs appear here after the first file is indexed or research run completes.
         </Typography>
       ) : predatesLedger ? (
         <Typography level="body-sm" color="neutral" data-testid="datalake-spend-empty">
