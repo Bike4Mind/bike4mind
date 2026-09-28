@@ -1498,16 +1498,20 @@ export interface DataLakeDocumentPurgeReceipt {
 
 /**
  * Wire shape of GET /api/data-lakes/:id/spend. `embeddingSpendMicroUsd` is the lake's
- * lifetime RESERVATION-TIME meter (reserve-first, admin-reset/release-compensated);
- * `ledger` is the ATTRIBUTED cost rolled up from UsageEvent rows (ingestion embeds only).
- * Neither is a provider-reported figure - both derive from the same pre-call, Math.ceil'd
- * estimate over locally-counted tokens (fabFileVectorize writes the ledger's `costUsd`
- * from `estimatedMicroUsd`, the exact value the meter reserved). They diverge only via an
- * admin reset or a release-after-failure, not because one is "actual" and the other isn't -
- * the client must label them distinctly (lifetime meter vs. attributed/ledgered cost)
- * without implying either is a true provider-billed number. Budgets mirror
- * `resolveSpendLevers()`'s live values so the view never has to re-derive them - resolved at the
- * lake's OWN cost tier, so they are the same ceilings the ingestion gate enforces on it.
+ * lifetime RESERVATION-TIME meter (reserve-first, admin-reset/release-compensated) - INGESTION
+ * ONLY, it never counts research-run spend; `ledger` is the ATTRIBUTED cost rolled up from
+ * UsageEvent rows, which carries BOTH ingestion embeds (`feature: 'embedding'`) and research-run
+ * judge calls (`feature: 'operations'`, #3298) - see `ledger.byFeature` to split the two.
+ * `embeddingSpendMicroUsd` is not a provider-reported figure - it derives from the same pre-call,
+ * Math.ceil'd estimate over locally-counted tokens (fabFileVectorize writes the ledger's
+ * `costUsd` from `estimatedMicroUsd`, the exact value the meter reserved). The two diverge (even
+ * on ingestion alone) via an admin reset or a release-after-failure, not because one is "actual"
+ * and the other isn't - the client must label them distinctly (lifetime INGESTION meter vs.
+ * attributed/ledgered cost across every lake-attributed feature) without implying either is a
+ * true provider-billed number. Budgets mirror `resolveSpendLevers()`'s live values so the view
+ * never has to re-derive them - resolved at the lake's OWN cost tier, so they are the same
+ * ceilings the ingestion gate enforces on it. The research cost ceiling is a SEPARATE lever, set
+ * per saved research configuration, not surfaced on this response at all.
  */
 export interface IDataLakeSpendResponse {
   dataLakeId: string;
@@ -1525,7 +1529,7 @@ export interface IDataLakeSpendResponse {
    * (individual vs organization). Returned so the view can explain a ceiling rather than just state it.
    */
   tierMultiplier: number;
-  /** Actual COGS from the UsageEvent ledger (ingestion embeds attributed to this lake). */
+  /** Actual COGS from the UsageEvent ledger attributed to this lake (ingestion embeds + research judge calls). */
   ledger: ILakeUsageSummary;
 }
 
