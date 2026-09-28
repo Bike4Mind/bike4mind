@@ -97,4 +97,15 @@ describe('BaseRepository.update whole-document hazard (via userRepository)', () 
     const after = await User.findById(id);
     expect(after!.currentCredits).toBe(100); // reverted, identical to a plain snapshot
   });
+
+  it('decrementReferralsAvailable decrements atomically and floors at zero', async () => {
+    const u = await User.create({ username: 'referrer', name: 'R', email: 'r@example.com', numReferralsAvailable: 3 });
+    const id = String(u._id);
+
+    await userRepository.decrementReferralsAvailable(id, 2);
+    expect((await User.findById(id))!.numReferralsAvailable).toBe(1);
+
+    await userRepository.decrementReferralsAvailable(id, 5);
+    expect((await User.findById(id))!.numReferralsAvailable).toBe(0);
+  });
 });
