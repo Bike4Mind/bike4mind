@@ -7,6 +7,8 @@ import { toast } from 'sonner';
 import { KnowledgeType } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
+import { artifactFileName } from '@client/app/utils/artifactFileName';
+import { getCodeFileType } from '@client/app/components/GenAI/codeArtifactFileType';
 
 export const SnippetCard: React.FC<SnippetCardProps> = ({ meta, content, expanded, isEditMode, onEdit }) => {
   const [editContent, setEditContent] = useState(content);
@@ -18,19 +20,8 @@ export const SnippetCard: React.FC<SnippetCardProps> = ({ meta, content, expande
 
   const handleSaveAsFile = async () => {
     try {
-      const fileName = `${meta.title.toLowerCase().replace(/\s+/g, '_')}_${Date.now()}.${meta.type}`;
-      const mimeType =
-        meta.type === 'javascript'
-          ? 'text/javascript'
-          : meta.type === 'typescript'
-            ? 'text/typescript'
-            : meta.type === 'python'
-              ? 'text/x-python'
-              : meta.type === 'html'
-                ? 'text/html'
-                : meta.type === 'css'
-                  ? 'text/css'
-                  : 'text/plain';
+      const { ext, mime: mimeType } = getCodeFileType(meta.type);
+      const fileName = artifactFileName(meta.title, ext, 'code-snippet');
 
       const file = new File([content], fileName, { type: mimeType });
 

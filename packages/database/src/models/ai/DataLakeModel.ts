@@ -149,6 +149,10 @@ const DataLakeSchema = new mongoose.Schema(
     lakeMemoryExtractionAt: { type: Date },
     lakeMemoryCursor: { type: String },
     lakeMemoryPurgedAt: { type: Date },
+    // Model inconsistency pass (#3057) concurrency lease - server-managed, never client-writable. Own
+    // field rather than sharing the lake-memory lease so the two LLM passes never block each other.
+    // No index, same rationale as the leases above.
+    modelInconsistencyRunAt: { type: Date },
   },
   {
     timestamps: true,
@@ -614,6 +618,13 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       .find({ datalakeTag: { $in: datalakeTags } })
       .select(LIST_PROJECTION)
       .sort({ _id: 1 });
+    return docs.map(doc => doc.toJSON() as IDataLakeDocument);
+  }
+
+  async findByIds(ids: string[]): Promise<IDataLakeDocument[]> {
+    const usable = usableObjectIds(ids, 'DataLakeModel.findByIds');
+    if (usable.length === 0) return [];
+    const docs = await this.dataLakeModel.find({ _id: { $in: usable } }).select(LIST_PROJECTION);
     return docs.map(doc => doc.toJSON() as IDataLakeDocument);
   }
 
@@ -1156,6 +1167,32 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     await this.dataLakeModel.updateOne(
       { _id: id, lakeMemoryExtractionAt: claimedAt },
       { $set: { lakeMemoryExtractionAt: null } }
+    );
+  }
+
+  async claimModelInconsistencyRun(id: string, at: Date, staleBefore: Date): Promise<boolean> {
+    // Same guarded-in-filter claim as claimLakeMemoryExtraction, on the model-pass lease field: an
+    // unset field or a stamp older than staleBefore (a crashed run) is claimable, and a concurrent
+    // claimer that already wrote a fresh stamp loses this filter, so exactly one run holds it.
+    const res = await this.dataLakeModel.updateOne(
+      {
+        _id: id,
+        $or: [
+          { modelInconsistencyRunAt: null },
+          { modelInconsistencyRunAt: { $exists: false } },
+          { modelInconsistencyRunAt: { $lt: staleBefore } },
+        ],
+      },
+      { $set: { modelInconsistencyRunAt: at } }
+    );
+    return res.modifiedCount === 1;
+  }
+
+  async releaseModelInconsistencyRun(id: string, claimedAt: Date): Promise<void> {
+    // Compare-and-clear: releasing unconditionally would strand a stale takeover's newer lease.
+    await this.dataLakeModel.updateOne(
+      { _id: id, modelInconsistencyRunAt: claimedAt },
+      { $set: { modelInconsistencyRunAt: null } }
     );
   }
 

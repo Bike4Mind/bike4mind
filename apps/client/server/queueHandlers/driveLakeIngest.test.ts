@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
-import { DATA_LAKE_STATUSES } from '@bike4mind/common';
+import { DATA_LAKE_STATUSES, DocumentDateSource } from '@bike4mind/common';
 
 // Passthrough the wrapper so we drive the raw handler directly.
 vi.mock('@server/queueHandlers/utils', () => ({
@@ -130,7 +130,13 @@ vi.mock('@bike4mind/services', () => ({
   },
   fabFilesService: { deleteFabFile: h.deleteFabFile },
 }));
-vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
+// The heavy barrel stays stubbed, but acceptDocumentDate is kept REAL: driveDocumentVintage routes
+// its candidate through it on purpose, so a stub here would fake away the plausibility window and
+// let this suite pass on a vintage the ingest would actually refuse.
+vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
+  FabFileChunkSearchIndex: {},
+  acceptDocumentDate: (await importOriginal<typeof import('@bike4mind/fab-pipeline')>()).acceptDocumentDate,
+}));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
 vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
 vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
@@ -392,6 +398,55 @@ describe('driveLakeIngest consumer', () => {
         expect.anything()
       );
     }
+  });
+
+  // driveDocumentVintage has its own unit tests, but nothing pinned that this dispatch actually
+  // SPREADS it into the create payload (#3048). Dropping the spread loses the vintage for every
+  // Drive-authored file silently - the ingest succeeds and the passage header just renders undated.
+  it('carries the Drive vintage pair into createFabFile for a Drive-authored file', async () => {
+    h.walkFolder.mockResolvedValue([
+      {
+        id: 'd1',
+        name: 'Quarterly review',
+        mimeType: 'application/vnd.google-apps.document',
+        relativePath: 'Quarterly review',
+        createdTime: '2019-03-04T09:15:00.000Z',
+      },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    expect(h.createFabFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        driveFileId: 'd1',
+        documentDate: new Date('2019-03-04T09:15:00.000Z'),
+        documentDateSource: DocumentDateSource.DRIVE_CREATED,
+      }),
+      expect.anything()
+    );
+  });
+
+  // The Editors gate, asserted at the dispatch rather than only on the helper: for an uploaded
+  // binary `createdTime` is the UPLOAD time, which is exactly the ingestion-time-as-vintage
+  // mistake this field exists to avoid. Its real vintage comes from chunking its own metadata.
+  it('sends no vintage for an uploaded binary, whose createdTime is only its upload time', async () => {
+    h.walkFolder.mockResolvedValue([
+      {
+        id: 'd1',
+        name: 'scan.pdf',
+        mimeType: 'application/pdf',
+        relativePath: 'scan.pdf',
+        createdTime: '2019-03-04T09:15:00.000Z',
+      },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    const payload = h.createFabFile.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.documentDate).toBeUndefined();
+    expect(payload.documentDateSource).toBeUndefined();
   });
 
   it('skips an oversized file before fetching it and counts it into skippedFiles', async () => {
@@ -2167,6 +2222,42 @@ describe('driveLakeIngest consumer', () => {
       expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'cursor-1', expect.any(Date), {
         fullWalk: false,
       });
+    });
+
+    // The full-walk arm pins this too, but the two arms reach createFabFile through different
+    // Drive reads: the changes feed has its own field list and its own DriveFile mapping, so
+    // `createdTime` can fall out of the incremental path alone and leave every file a re-sync
+    // brings in undated, with the full-walk test still green.
+    it('carries the Drive vintage pair into createFabFile on the incremental arm too', async () => {
+      withCursor();
+      h.listChanges.mockResolvedValue({
+        changes: [
+          {
+            fileId: 'd1',
+            removed: false,
+            file: {
+              id: 'd1',
+              name: 'Quarterly review',
+              mimeType: 'application/vnd.google-apps.document',
+              parents: ['FOLDER'],
+              createdTime: '2019-03-04T09:15:00.000Z',
+            },
+          },
+        ],
+        newStartPageToken: 'cursor-1',
+      });
+      h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+      await run();
+
+      expect(h.createFabFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          driveFileId: 'd1',
+          documentDate: new Date('2019-03-04T09:15:00.000Z'),
+          documentDateSource: DocumentDateSource.DRIVE_CREATED,
+        }),
+        expect.anything()
+      );
     });
 
     it('ignores a changed file that does not resolve under the connected root (Drive-wide feed, folder-scoped lake)', async () => {

@@ -51,8 +51,11 @@ export class ChatCompletionInvoke {
   }
 
   /**
-   * Resolve the caller's entitlement keys for the admission-time model gate,
-   * mirroring `ChatCompletionProcess.resolveEntitlementKeys`. Fail-safe: an
+   * Resolve the caller's entitlement keys for the admission-time model gate.
+   * Same name as `ChatCompletionProcess.resolveEntitlementKeys` but a DIFFERENT
+   * shape and a different consumer: that one returns the keys with a completeness
+   * signal because a lake-access context reads it, this one is keys-only because
+   * the model gate has no "unknown" branch to take. Fail-safe: an
    * entitlement-resolution error (e.g. a subscription DB read failure) must
    * NEVER break the send path - degrade to tag-only matching ([]), the
    * pre-entitlement behavior. No injected resolver means [] means tag-only.

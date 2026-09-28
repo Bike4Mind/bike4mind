@@ -40,6 +40,7 @@ import {
 } from '@client/app/hooks/data/dataLakes';
 import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined';
 import { toast } from 'sonner';
+import { useTranslation } from 'react-i18next';
 import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import useStartChatWithLake from '@client/app/hooks/useStartChatWithLake';
 import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptyState';
@@ -49,6 +50,7 @@ import LakeFindingsChip from '@client/app/components/datalake/LakeFindingsDialog
 import LakeDriveStatusChip from '@client/app/components/datalake/LakeDriveStatusChip';
 import { lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
 import type { IDataLakeBatchSummary } from '@bike4mind/common';
+import AddExistingFilesModal from './AddExistingFilesModal';
 import type { ManagerLake } from './shared';
 
 // Right pane: selected lake's details + management actions
@@ -88,12 +90,16 @@ export function LakeInfoPanel({
   onDeleted: () => void;
 }) {
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
+  const { t } = useTranslation();
   const archiveLake = useArchiveDataLake();
   const deleteLake = usePermanentDeleteDataLake();
   const promoteLake = usePromoteDataLake();
   const demoteLake = useDemoteDataLake();
   const startChatWithLake = useStartChatWithLake();
   const [startingChat, setStartingChat] = useState(false);
+  // Mounted only while open so the picker's file query does not fire (and page through the
+  // caller's whole knowledge base) until it is actually needed.
+  const [addExistingOpen, setAddExistingOpen] = useState(false);
   const visibility = lakeVisibilityLabel(lake);
   // "Rebuild passages": gated on canRebuild, NOT canManage - a fallback (built-in) lake has no
   // document to manage but can still be rebuilt by an admin (see assertLakeRebuildAccess). Only
@@ -195,6 +201,7 @@ export function LakeInfoPanel({
             variant="soft"
             color="primary"
             startDecorator={<ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />}
+            aria-label={`Start chat with ${lake.name}`}
             data-testid={`datalake-startchat-btn-${lake.id}`}
             loading={startingChat}
             onClick={async () => {
@@ -222,6 +229,7 @@ export function LakeInfoPanel({
                 variant="soft"
                 color="primary"
                 startDecorator={<AddIcon sx={{ fontSize: 16 }} />}
+                aria-label={`Add files to ${lake.name}`}
                 data-testid={`datalake-addfiles-btn-${lake.id}`}
                 onClick={() => openWizardForLake(toWizardTargetLake(lake))}
                 sx={{ flexShrink: 0, fontSize: '13px' }}
@@ -230,9 +238,21 @@ export function LakeInfoPanel({
               </Button>
               <Button
                 size="sm"
+                variant="soft"
+                color="primary"
+                startDecorator={<AddIcon sx={{ fontSize: 16 }} />}
+                data-testid={`datalake-addexisting-btn-${lake.id}`}
+                onClick={() => setAddExistingOpen(true)}
+                sx={{ flexShrink: 0, fontSize: '13px' }}
+              >
+                {t('file_browser.add_existing_title', 'Add existing files')}
+              </Button>
+              <Button
+                size="sm"
                 variant="outlined"
                 color="neutral"
                 startDecorator={<SettingsOutlinedIcon sx={{ fontSize: 16 }} />}
+                aria-label={`Settings for ${lake.name}`}
                 data-testid={`datalake-settings-btn-${lake.id}`}
                 onClick={onOpenSettings}
                 sx={{ flexShrink: 0, fontSize: '13px' }}
@@ -305,6 +325,9 @@ export function LakeInfoPanel({
               </Tooltip>
             </>
           )}
+          {lake.canManage && addExistingOpen && (
+            <AddExistingFilesModal lake={lake} open onClose={() => setAddExistingOpen(false)} />
+          )}
           {/* A fallback lake's narrower settings editor (currently grounding mode only), same shape
               as the Rebuild gate below: canManageSettings is a NARROWER flag than canManage, so a
               fallback lake (canManage always false) can still get here. `!lake.canManage` excludes
@@ -316,6 +339,7 @@ export function LakeInfoPanel({
               variant="outlined"
               color="neutral"
               startDecorator={<SettingsOutlinedIcon sx={{ fontSize: 16 }} />}
+              aria-label={`Settings for ${lake.name}`}
               data-testid={`datalake-fallback-settings-btn-${lake.id}`}
               onClick={onOpenFallbackSettings}
               sx={{ flexShrink: 0, fontSize: '13px' }}

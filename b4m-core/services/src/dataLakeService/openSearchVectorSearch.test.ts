@@ -45,6 +45,7 @@ describe('openSearchVectorSearch', () => {
         fileId: 'f1',
         fileName: 'a.pdf',
         fileTags: ['x'],
+        documentDate: null,
         chunkText: 'hello',
         score: 0.8,
       },

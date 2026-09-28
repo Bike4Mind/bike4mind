@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { ChatModels, ModelBackend, toModelRecord } from '@bike4mind/common';
 import type { IModelCatalogRow, ModelInfo } from '@bike4mind/common';
 import { getAvailableModels, setModelCatalogProvider, setModelPriceRowsProvider } from './index';
-import { mergeCatalog, mergeCatalogWithDrops } from './mergeCatalog';
+import { mergeCatalog, mergeCatalogWithDrops, resolveCatalogRecords } from './mergeCatalog';
 import type { BackendGateContext } from './backendGate';
 
 const NO_KEYS: BackendGateContext = { apiKeys: null, isSelfHost: false };
@@ -172,6 +172,60 @@ describe('mergeCatalog: per-field-group precedence', () => {
     expect(merged[0].contextWindow).toBe(12_345);
     expect(merged[0].rank).toBe(1);
     expect(merged[0].description).toBe('discovered description');
+  });
+
+  it('ranks a seed row above discovery for {presentation} only', () => {
+    const rows = [
+      row({
+        modelId: 'gpt-6-sol',
+        source: 'discovery',
+        effectiveFrom: new Date('2026-06-01T00:00:00Z'),
+        ownedGroups: ['limits', 'presentation'],
+        patch: { contextWindow: 400_000, releaseDate: '2026-09-01' },
+      }),
+      row({
+        modelId: 'gpt-6-sol',
+        source: 'seed',
+        effectiveFrom: new Date('2026-07-01T00:00:00Z'),
+        ownedGroups: ['limits', 'presentation'],
+        patch: { contextWindow: 272_000, description: 'Seeded copy.', releaseDate: '2026-08-15' },
+      }),
+    ];
+
+    expect(resolveCatalogRecords(rows).get('gpt-6-sol')?.record).toMatchObject({
+      contextWindow: 400_000,
+      description: 'Seeded copy.',
+      releaseDate: '2026-08-15',
+    });
+  });
+
+  it('ranks operator over seed over discovery for {presentation} in one bucket', () => {
+    const presenting = (source: string, rank: number) =>
+      row({ modelId: 'gpt-6-sol', source, ownedGroups: ['presentation'], patch: { rank } });
+
+    const resolve = (rows: IModelCatalogRow[]) => resolveCatalogRecords(rows).get('gpt-6-sol')?.record.rank;
+
+    expect(resolve([presenting('discovery', 1), presenting('seed', 2), presenting('operator', 3)])).toBe(3);
+    expect(resolve([presenting('operator', 3), presenting('discovery', 1), presenting('seed', 2)])).toBe(3);
+    expect(resolve([presenting('discovery', 1), presenting('seed', 2)])).toBe(2);
+    expect(resolve([presenting('seed', 2), presenting('discovery', 1)])).toBe(2);
+  });
+
+  it('keeps the adapter literal presentation under a discovery row that owns only releaseDate', () => {
+    const seed = seedModel({ logoFile: 'openai.svg', releaseDate: '2025-04-14' });
+    const merged = mergeCatalogWithDrops(
+      [seed],
+      [row({ modelId: seed.id, ownedGroups: ['presentation'], patch: { releaseDate: '2026-09-01' } })],
+      NO_KEYS
+    ).models;
+
+    // The literal is the merge base, so the row overrides only the key it carries.
+    expect(merged[0]).toMatchObject({
+      description: 'the seeded description',
+      rank: 5,
+      logoFile: 'openai.svg',
+      releaseDate: '2026-09-01',
+    });
   });
 
   it('prefers the newest row within one source tier', () => {

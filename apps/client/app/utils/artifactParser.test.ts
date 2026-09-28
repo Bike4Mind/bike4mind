@@ -12,6 +12,7 @@ import {
   isSvgGraphicallyEmpty,
   shouldWarnElidedArtifact,
   elidedReplyWarning,
+  validateArtifactContent,
 } from './artifactParser';
 
 const STALE = 'core dist is stale - run pnpm turbo:core:build (or --force if that reports FULL TURBO)';
@@ -122,6 +123,37 @@ describe('parseArtifactsWithFallback', () => {
     expect(result.artifacts[0].content).toContain('<!DOCTYPE html>');
     // The promoted document is stripped from the prose left for markdown rendering.
     expect(result.cleanedContent).not.toContain('<!DOCTYPE html>');
+  });
+
+  it('sanitizes < > and " from the title of a promoted bare HTML document', () => {
+    const dangerous =
+      '<!DOCTYPE html><html><head><title>Attack <script>"xss"</title></head><body></body></html>';
+    const result = parseArtifactsWithFallback(dangerous);
+    expect(result.artifacts).toHaveLength(1);
+    // All three problem characters must be gone from the title attribute.
+    expect(result.artifacts[0].title).toBe('Attack scriptxss');
+  });
+
+  it('sanitizes < > and " from the title of a fenced full HTML document', () => {
+    const fence =
+      '```html\n<!DOCTYPE html><html><head><title>A "test" <page></title></head><body></body></html>\n```';
+    const result = parseArtifactsWithFallback(fence);
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe('A test page');
+  });
+
+  it('falls back to HTML Snippet when a fenced fragment has no title tag', () => {
+    const fence = '```html\n<div><h1>Hi</h1></div>\n<!-- title tag is in a comment -->\n```';
+    const result = parseArtifactsWithFallback(fence);
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe('HTML Snippet');
+  });
+
+  it('sanitizes < > and " from the title of a fenced HTML fragment', () => {
+    const fence = '```html\n<div><h1>Hi</h1></div>\n<title>Bad<>Title"</title>\n```';
+    const result = parseArtifactsWithFallback(fence);
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe('BadTitle');
   });
 
   it('promotes a bare HTML document even when an explicit artifact is also present', () => {
@@ -575,6 +607,26 @@ describe('elidedReplyWarning', () => {
   });
 });
 
+describe('validateArtifactContent - HTML structure', () => {
+  // The check used to be exact-case on '<!DOCTYPE', so a lowercase doctype - valid HTML, and
+  // what several models emit - was reported as malformed and the viewer showed a warning
+  // over a page that rendered perfectly well.
+  it.each([
+    '<!DOCTYPE html><html><body>hi</body></html>',
+    '<!doctype html><body>hi</body>',
+    '<HTML><body>hi</body></HTML>',
+  ])('accepts %s', content => {
+    expect(validateArtifactContent('html', content).errors).not.toContain(
+      'HTML artifacts should include proper HTML structure'
+    );
+  });
+
+  it('still flags content with no HTML structure at all', () => {
+    expect(validateArtifactContent('html', 'just some text').errors).toContain(
+      'HTML artifacts should include proper HTML structure'
+    );
+  });
+});
 /**
  * The fenced detectors match a fence on its own and check the promotion anchors in the
  * callback, so these cases pin the promotion decisions and the behaviour that changed

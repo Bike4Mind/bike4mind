@@ -12,6 +12,7 @@ const input = (overrides: Partial<CreateDataLakeProposalInput> = {}): CreateData
   textHash: 'hash-a',
   proposedTags: ['finance'],
   confidence: 0.6,
+  rationale: 'covers the quarterly filings the lake tracks',
   provenance: { producer: 'research_run', runId: 'run-1', retrievedAt: new Date('2026-08-01T00:00:00Z') },
   ...overrides,
 });
@@ -151,6 +152,7 @@ describe('DataLakeProposalRepository', () => {
     const declined = await repo.claimForReview(created.id, review({ status: 'declined', declineReason: 'paywalled' }));
 
     expect(declined?.excerpt).toBeNull();
+    expect(declined?.rationale).toBeNull();
     // The identity, the reason, the reviewer and the hash all survive - a hash is not the material,
     // and it is what detects this source coming back materially changed.
     expect(declined?.canonicalSourceKey).toBe('https://example.com/report');
@@ -204,6 +206,46 @@ describe('DataLakeProposalRepository', () => {
     const stored = await DataLakeProposalModel.findById(approved.id);
     expect(stored?.status).toBe('approved');
     expect((await repo.listByLake('lake-1', { status: 'pending' })).map(p => p.id)).toEqual([fresh.id]);
+  });
+
+  it('restores a declined proposal to pending, marked as previously declined', async () => {
+    const created = await create();
+    await repo.claimForReview(created.id, review({ status: 'declined', declineReason: 'paywalled' }));
+
+    const result = await repo.restoreDeclined(created.id);
+
+    expect(result.restored).toBe(true);
+    const stored = await DataLakeProposalModel.findById(created.id);
+    expect(stored?.status).toBe('pending');
+    expect(stored?.priorDisposition).toBe('declined');
+    expect(stored?.reviewedByUserId).toBeNull();
+    expect(stored?.declineReason).toBeNull();
+    // The decline stripped the material, and a restore does not bring it back.
+    expect(stored?.excerpt).toBeNull();
+  });
+
+  it('keeps an existing prior disposition when restoring', async () => {
+    const created = await create({ priorDisposition: 'approved' });
+    await repo.claimForReview(created.id, review({ status: 'declined' }));
+
+    await repo.restoreDeclined(created.id);
+
+    expect((await DataLakeProposalModel.findById(created.id))?.priorDisposition).toBe('approved');
+  });
+
+  it('restores only a declined proposal', async () => {
+    const created = await create();
+
+    expect(await repo.restoreDeclined(created.id)).toEqual({ restored: false, reason: 'not_declined' });
+  });
+
+  it('refuses to restore a tombstone whose source already has a pending proposal', async () => {
+    const declined = await create();
+    await repo.claimForReview(declined.id, review({ status: 'declined' }));
+    await create({ textHash: 'hash-b' });
+
+    expect(await repo.restoreDeclined(declined.id)).toEqual({ restored: false, reason: 'pending_exists' });
+    expect((await DataLakeProposalModel.findById(declined.id))?.status).toBe('declined');
   });
 
   it('lists a lake queue newest first, and narrows by status', async () => {

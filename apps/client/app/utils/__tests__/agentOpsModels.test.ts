@@ -152,4 +152,14 @@ describe('agentOpsModelLabels', () => {
     expect(labels.get('twin-a')).toBe('Twin (Bedrock: twin-a)');
     expect(labels.get('twin-b')).toBe('Twin (Bedrock: twin-b)');
   });
+
+  it('treats names that differ only by case as twins, keeping each one its own spelling', () => {
+    const labels = agentOpsModelLabels([
+      model({ id: 'o3', name: 'o3', backend: ModelBackend.OpenAI }),
+      model({ id: 'bedrock-o3', name: 'O3', backend: ModelBackend.Bedrock }),
+    ]);
+
+    expect(labels.get('o3')).toBe('o3 (OpenAI)');
+    expect(labels.get('bedrock-o3')).toBe('O3 (Bedrock)');
+  });
 });

@@ -1,7 +1,7 @@
 import { BadRequestError, InternalServerError } from '@bike4mind/utils';
 import { getLlmByModel, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { ChatModels, getTextModelCost, type ModelInfo } from '@bike4mind/common';
+import { getTextModelCost, RESEARCH_RELEVANCE_MODEL_DEFAULT, type ModelInfo } from '@bike4mind/common';
 import { z } from 'zod';
 
 /**
@@ -33,7 +33,7 @@ export interface RelevanceJudgement {
 }
 
 /** The model used when a config names none, or names one this deployment no longer offers. */
-export const RELEVANCE_JUDGE_DEFAULT_MODEL: string = ChatModels.GPT4_1_MINI;
+export const RELEVANCE_JUDGE_DEFAULT_MODEL: string = RESEARCH_RELEVANCE_MODEL_DEFAULT;
 
 /** Snippets are short; a judgment that needs more than this is not a judgment. */
 const JUDGE_MAX_TOKENS = 300;

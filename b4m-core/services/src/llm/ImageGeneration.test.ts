@@ -949,3 +949,46 @@ describe('ImageGenerationService.process (size normalization)', () => {
     expect(billed).toMatchObject({ size: '1440x810' });
   });
 });
+
+describe('ImageGenerationService.invoke (retry quest bound to its session)', () => {
+  const makeInvokeService = (questSessionId: string) => {
+    const update = vi.fn(async () => undefined);
+    const startImageGenerationProcess = vi.fn(async () => undefined);
+    const service = new ImageGenerationService({
+      db: {
+        sessions: { findById: vi.fn(async () => ({ id: 'session1' }) as ISessionDocument) },
+        quests: {
+          update,
+          getMostRecentChatHistory: vi.fn(async () => []),
+          findById: vi.fn(async () => ({ id: 'quest1', sessionId: questSessionId }) as any),
+        },
+      },
+      startImageGenerationProcess,
+    } as any);
+    const invoke = () =>
+      service.invoke({
+        body: {
+          sessionId: 'session1',
+          questId: 'quest1',
+          prompt: 'a cat',
+          model: ImageModels.FLUX_PRO_1_1,
+          fabFileIds: [],
+        } as any,
+        userId: 'user1',
+      });
+    return { invoke, update, startImageGenerationProcess };
+  };
+
+  it('refuses a questId from another session before touching the quest', async () => {
+    const { invoke, update, startImageGenerationProcess } = makeInvokeService('other-session');
+    await expect(invoke()).rejects.toThrow('Quest not found');
+    expect(update).not.toHaveBeenCalled();
+    expect(startImageGenerationProcess).not.toHaveBeenCalled();
+  });
+
+  it('retries a quest from the same session', async () => {
+    const { invoke, update } = makeInvokeService('session1');
+    await invoke();
+    expect(update).toHaveBeenCalled();
+  });
+});

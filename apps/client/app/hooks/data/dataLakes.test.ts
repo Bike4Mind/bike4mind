@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { BrowsePublicDataLakesResult, PublicDataLakeSummary } from '@bike4mind/common';
+import type { BrowsePublicDataLakesResult, IDataLakeBatchSummary, PublicDataLakeSummary } from '@bike4mind/common';
 import { RESEARCH_RUN_STALE_AFTER_MS } from '@bike4mind/common';
 // Mocked below (vi.mock is hoisted); imported so the refusal-toast assertion can read the spy.
 import { toast } from 'sonner';
@@ -60,6 +60,9 @@ import {
   rebuildBacklog,
   lakeMemoryPollInterval,
   LAKE_MEMORY_POLL_MS,
+  activeBatchesPollInterval,
+  ACTIVE_BATCHES_POLL_MS,
+  IDLE_BATCHES_POLL_MS,
   useBrowsePublicDataLakes,
   useCleanupDataLake,
   useDataLakeResearchRuns,
@@ -75,6 +78,7 @@ import {
   useUpdateDataLake,
   useUpdateFallbackLakeSettings,
   useArchiveDataLake,
+  usePromoteDataLake,
   useGetTransitionalDataLakes,
   useRetryLakeLifecycle,
   useTransferLakeOwnership,
@@ -88,6 +92,7 @@ import {
   useGrantLakeAccess,
   useRevokeLakeAccess,
   useReprocessFabFile,
+  useScanDataLakeFindings,
   useUnderChunkedCount,
 } from './dataLakes';
 
@@ -933,6 +938,54 @@ describe('lakeMemoryPollInterval', () => {
   it('does not poll a settled or absent payload', () => {
     expect(lakeMemoryPollInterval({ running: false, state: 'current' })).toBe(false);
     expect(lakeMemoryPollInterval(undefined)).toBe(false);
+  });
+});
+
+/**
+ * Active-batches list poll cadence. Nothing else executes the `refetchInterval` closure, so a
+ * wrong cadence ships green here or nowhere.
+ */
+describe('activeBatchesPollInterval', () => {
+  /** Only the two fields the predicate reads; the summary type is far wider than this. */
+  const batch = (overrides: Partial<IDataLakeBatchSummary>): IDataLakeBatchSummary =>
+    ({ status: 'completed', ...overrides }) as IDataLakeBatchSummary;
+
+  it('idles on no data and on an empty list', () => {
+    expect(activeBatchesPollInterval(undefined)).toBe(IDLE_BATCHES_POLL_MS);
+    expect(activeBatchesPollInterval([])).toBe(IDLE_BATCHES_POLL_MS);
+  });
+
+  // Literal on purpose, not sourced from the shared constants: a status dropped from
+  // BATCH_NON_TERMINAL_STATUSES/TAXONOMY_NON_TERMINAL_STATUSES/BATCH_TERMINAL_STATUSES must fail here.
+  it.each(['preparing', 'uploading', 'processing'] as const)('stays fast while batch status is %s', status => {
+    expect(activeBatchesPollInterval([batch({ status })])).toBe(ACTIVE_BATCHES_POLL_MS);
+  });
+
+  it.each(['queued', 'analyzing', 'applying'] as const)('stays fast while taxonomyStatus is %s', taxonomyStatus => {
+    expect(activeBatchesPollInterval([batch({ status: 'completed', taxonomyStatus })])).toBe(ACTIVE_BATCHES_POLL_MS);
+  });
+
+  it.each(['completed', 'completed_with_errors', 'failed', 'cancelled'] as const)(
+    'idles when batch status is %s',
+    status => {
+      expect(activeBatchesPollInterval([batch({ status })])).toBe(IDLE_BATCHES_POLL_MS);
+    }
+  );
+
+  it.each(['none', 'ready', 'applied', 'failed', 'dismissed'] as const)(
+    'idles when taxonomyStatus is %s',
+    taxonomyStatus => {
+      expect(activeBatchesPollInterval([batch({ status: 'completed', taxonomyStatus })])).toBe(IDLE_BATCHES_POLL_MS);
+    }
+  );
+
+  it('goes fast if ANY batch in a mixed list is still moving', () => {
+    expect(
+      activeBatchesPollInterval([
+        batch({ status: 'completed', taxonomyStatus: 'ready' }),
+        batch({ status: 'uploading' }),
+      ])
+    ).toBe(ACTIVE_BATCHES_POLL_MS);
   });
 });
 
@@ -1783,6 +1836,22 @@ describe('the needs-attention list and its retry', () => {
     expect(keys).toContain(JSON.stringify(['data-lakes', 'deleted']));
     expect(keys).toContain(JSON.stringify(['dataLakeTagCounts']));
     expect(keys).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeHealth', 'lake1']));
+  });
+
+  it('publishing a draft refreshes that lake\'s health, so the serving chip leaves "Not serving: draft"', async () => {
+    // Serving is derived from lake.status server-side and the health query does not refetch on
+    // focus, so this invalidation is the only thing that moves the chip without a reload.
+    const { wrapper, invalidate } = mountWith();
+    apiPost.mockResolvedValueOnce({ data: { success: true } });
+
+    const { result } = renderHook(() => usePromoteDataLake(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('lake1');
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/lifecycle', { action: 'promote' });
+    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeHealth', 'lake1']));
   });
 
   it('a fixed-action lifecycle hook refreshes the needs-attention list too', async () => {
@@ -2076,5 +2145,59 @@ describe('useReprocessFabFile request body', () => {
     });
 
     expect(apiPost).toHaveBeenCalledWith('/api/files/reprocess', { fabFileId: 'file1' });
+  });
+});
+
+describe('useScanDataLakeFindings', () => {
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result } = renderHook(() => useScanDataLakeFindings('lake1'), { wrapper });
+    return { result, invalidate };
+  };
+
+  beforeEach(() => {
+    apiPost.mockReset();
+    (toast.success as ReturnType<typeof vi.fn>).mockReset();
+    (toast.error as ReturnType<typeof vi.fn>).mockReset();
+  });
+
+  it('runs detection on the lake and re-reads every findings filter plus the health badge', async () => {
+    apiPost.mockResolvedValueOnce({
+      data: { countsByKind: { 'metric-disagreement': 2, 'date-disagreement': 1 }, memberCount: 4 },
+    });
+    const { result, invalidate } = mount();
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/inconsistencies');
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    // The bare prefix, so the dialog's filtered list and the chip's open-only count both refresh.
+    expect(keys).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeHealth', 'lake1']));
+    expect(toast.success).toHaveBeenCalledWith('Scan complete: 3 finding(s) across 4 document(s).');
+  });
+
+  it('says nothing was read rather than calling an empty lake clean', async () => {
+    apiPost.mockResolvedValueOnce({ data: { countsByKind: {}, memberCount: 0 } });
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+
+    expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/no document in this lake has text/i));
+  });
+
+  it("surfaces the rate limit's own retry hint, not axios' status line", async () => {
+    apiPost.mockRejectedValueOnce(axiosRefusal(429, 'Rate limit exceeded. Try again in 120 seconds.'));
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync().catch(() => {});
+    });
+
+    expect(toast.error).toHaveBeenCalledWith('Rate limit exceeded. Try again in 120 seconds.');
   });
 });

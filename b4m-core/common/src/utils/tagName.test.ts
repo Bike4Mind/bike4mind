@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { matchTagDocument, resolveFileTagDocs } from './tagName';
+import { citationTagDescription, citationTagLabels, matchTagDocument, resolveFileTagDocs } from './tagName';
 
 /**
  * The trim/fold/data-lake helpers are covered from the tagService side
@@ -87,5 +87,55 @@ describe('resolveFileTagDocs', () => {
 
   it('handles a file with no tags', () => {
     expect(resolveFileTagDocs([], DOCS)).toEqual([]);
+  });
+});
+
+describe('citationTagLabels', () => {
+  it('reduces a lake prefix-arm tag to its humanized last segment', () => {
+    expect(citationTagLabels(['my-lake:legal'])).toEqual(['Legal']);
+    expect(citationTagLabels(['opti:family:care-planning'])).toEqual(['Care planning']);
+  });
+
+  it('drops the membership meta-tag whatever its casing', () => {
+    expect(citationTagLabels(['datalake:acme', 'DataLake:acme', 'budget'])).toEqual(['Budget']);
+  });
+
+  it('drops the uncategorized placeholder - #3291', () => {
+    expect(citationTagLabels(['my-lake:uncategorized'])).toEqual([]);
+    expect(citationTagLabels(['my-lake:Uncategorized', 'my-lake:legal'])).toEqual(['Legal']);
+  });
+
+  it('drops a bare prefix, which names no navigable category', () => {
+    expect(citationTagLabels(['my-lake:', '  '])).toEqual([]);
+  });
+
+  it('dedupes labels two lakes both contribute', () => {
+    expect(citationTagLabels(['alpha:legal', 'beta:legal'])).toEqual(['Legal']);
+  });
+
+  it('leaves an ordinary user tag alone apart from casing the first letter', () => {
+    expect(citationTagLabels(['onboarding'])).toEqual(['Onboarding']);
+  });
+
+  it('ignores a non-string name, since tags arrive from a stored document', () => {
+    expect(citationTagLabels([null, 42, undefined, 'legal'])).toEqual(['Legal']);
+  });
+});
+
+describe('citationTagDescription', () => {
+  it('joins at most four labels', () => {
+    expect(citationTagDescription(['a:one', 'a:two', 'a:three', 'a:four', 'a:five'])).toBe('One, Two, Three, Four');
+  });
+
+  it('spends the budget on surviving labels, not dropped ones', () => {
+    // The four internal names ahead of `legal` would have consumed a pre-filter slice entirely.
+    expect(
+      citationTagDescription(['datalake:acme', 'acme:uncategorized', 'acme:', 'datalake:beta', 'acme:legal'])
+    ).toBe('Legal');
+  });
+
+  it('is undefined when nothing survives, so the chip draws no description line', () => {
+    expect(citationTagDescription(['datalake:acme', 'acme:uncategorized'])).toBeUndefined();
+    expect(citationTagDescription([])).toBeUndefined();
   });
 });

@@ -429,11 +429,14 @@ jobs:
   #     legs tile the file set EXACTLY for any count - no hand-maintained bucket
   #     lists, and a newly added test file cannot land in two legs or in none. The
   #     leg count is pinned by checkClientTestShards.test.ts.
-  #   - client-integration: the SAME package and filter as `client`, selected onto
-  #     its real-Mongo `*.e2e.test.ts` files by a different script. apps/client is
-  #     therefore the one package that appears in two legs; the two lanes are
-  #     disjoint by construction (the unit lane excludes exactly the glob the
-  #     integration lane includes), so nothing runs twice and nothing is dropped.
+  #   - client-integration 1/3, 2/3, 3/3: the SAME package and filter as `client`,
+  #     selected onto its real-Mongo `*.e2e.test.ts` files by a different script and
+  #     sharded the same way. Every one of the ~60 files boots a mongod, so the lane
+  #     is split across three runners rather than run as one leg that was the
+  #     workflow's critical path. apps/client is therefore the one package that
+  #     appears in two legs per index; the two lanes are disjoint by construction
+  #     (the unit lane excludes exactly the glob the integration lane includes), so
+  #     nothing runs twice and nothing is dropped.
   #   - services: by far the heaviest remaining package (test-file count and
   #     Mongo-backed setup cost), alone so it doesn't drag down a shared bucket.
   #   - cli-slack, data: hand-grouped buckets of the next-heaviest packages, kept
@@ -503,18 +506,31 @@ jobs:
             filter: '--filter @bike4mind/client'
             workers: ''
             args: '--shard=3/3'
-          # The client package's ~20 real-Mongo suites (`*.e2e.test.ts`), split off
+          # The client package's ~60 real-Mongo suites (`*.e2e.test.ts`), split off
           # the shard above. Each boots a mongod, and inline they pushed that job
           # past `timeout-minutes` even on runs where the suite itself passed - the
           # job was killed after the tests were green, so the signal was a coin
           # flip rather than a result. Same package and filter as `client`; the
           # `script` below is what selects the lane (see apps/client/vitest.config.mts).
-          # Capped workers: these contend for mongod ports, and createMongoServer's
-          # retry loop is the documented flake when too many start at once.
-          - name: client-integration
+          # Three legs for the same reason the unit lane shards at all: the lane is
+          # the workflow's critical path as one runner. Capped workers: these contend
+          # for mongod ports, and createMongoServer's retry loop is the documented
+          # flake when too many start at once.
+          - name: client-integration 1/3
             filter: '--filter @bike4mind/client'
             workers: '2'
             script: 'test:integration'
+            args: '--shard=1/3'
+          - name: client-integration 2/3
+            filter: '--filter @bike4mind/client'
+            workers: '2'
+            script: 'test:integration'
+            args: '--shard=2/3'
+          - name: client-integration 3/3
+            filter: '--filter @bike4mind/client'
+            workers: '2'
+            script: 'test:integration'
+            args: '--shard=3/3'
           - name: services
             filter: '--filter @bike4mind/services'
             workers: ''
@@ -624,11 +640,12 @@ jobs:
       - name: Mark shard start
         run: echo "SHARD_START_SECONDS=$(date +%s)" >> "$GITHUB_ENV"
 
-      # `matrix.shard.script` is unset on every shard but client-integration, and an
-      # unset matrix value is the empty string here, so `||` falls back to the unit
-      # `test` script. `matrix.shard.args` is likewise empty on every leg but the three
-      # client ones, where it carries `--shard=i/3` - deliberately with no `--` separator
-      # before it, see the matrix entries above for why that is load-bearing.
+      # `matrix.shard.script` is unset on every shard but the three client-integration
+      # ones, and an unset matrix value is the empty string here, so `||` falls back
+      # to the unit `test` script. `matrix.shard.args` is likewise set only on the
+      # shard legs (three client, three client-integration), where it carries
+      # `--shard=i/3` - deliberately with no `--` separator before it, see the matrix
+      # entries above for why that is load-bearing.
       - name: Run Tests (${{ matrix.shard.name }})
         env:
           CI: true

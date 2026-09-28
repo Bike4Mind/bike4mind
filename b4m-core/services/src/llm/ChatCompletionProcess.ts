@@ -111,8 +111,12 @@ import {
   lakeMembershipsFrom,
   measureIdentityNamedExclusion,
   warnIfManyLakeMemberships,
-  type DataLakeAccessContext,
+  type MeasurableDataLakeAccessContext,
+  type EntitlementResolution,
 } from '../dataLakeService/getDynamicDataLakeTags';
+// Re-exported so the resolver below and the type it returns stay reachable from one import, while
+// the declaration stays beside the context contract it has to satisfy.
+export type { EntitlementResolution };
 import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
 import {
   buildElisionStamp,
@@ -865,9 +869,10 @@ export class ChatCompletionProcess {
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
   /**
-   * Set only in `resolveEntitlementKeys()`'s catch branch; read by `getDataLakeAccessContext()` to
-   * set `DataLakeAccessContext.entitlementKeysResolved` - see that field's own doc for the "THREW
-   * vs. legitimately empty" distinction this exists to carry (#3155).
+   * Set only in `resolveEntitlementKeys()`'s catch branch and reported back through that method's
+   * own return value, so no caller can take the keys without also being handed this - see
+   * `DataLakeAccessContext.entitlementKeysResolved` for the "THREW vs. legitimately empty"
+   * distinction it carries (#3155).
    *
    * NOT the same axis as `entitlementsResolved` above (review: the two names read as near-synonyms
    * but answer different questions) - that one means "an attempt has been made this process, so the
@@ -885,7 +890,7 @@ export class ChatCompletionProcess {
    * suppress a healthy turn's telemetry. Caching the in-flight PROMISE (set synchronously, before
    * any `await`) closes the window: every racing caller awaits the same one settlement.
    */
-  private entitlementKeysPromise?: Promise<string[]>;
+  private entitlementKeysPromise?: Promise<EntitlementResolution>;
   /**
    * Per-turn memo for the caller's resolved data-lake access. Shared by the tool-offer check
    * (userHasAccessibleKnowledgeLake), the corpus inline-defer plan (resolveCorpusInlinePlan) and
@@ -902,7 +907,7 @@ export class ChatCompletionProcess {
    * read that can observe a different snapshot (e.g. a grant revoked between the two reads) and
    * disagree with the first about what this caller can reach.
    */
-  private dataLakeAccessContextMemo: DataLakeAccessContext | undefined;
+  private dataLakeAccessContextMemo: MeasurableDataLakeAccessContext | undefined;
   /**
    * This turn's VETTED `session.preauthorizedLakeIds` (see vetPreauthorizedLakeIds), captured on a
    * field because `getAccessibleDataLakeAccess` is a session-less private method and its consumers
@@ -1003,9 +1008,13 @@ export class ChatCompletionProcess {
    * first `await`, so two callers racing before resolution settles converge on the SAME promise
    * instead of each running the try/catch independently - see that field's own doc for the race
    * this closes.
+   *
+   * Returns the keys AND whether they are the caller's real ones, as one value: this method is the
+   * only place the fail-safe `[]` is produced, so handing the two back separately is what let a
+   * lake-access context carry degraded keys without the signal that says so.
    */
-  public async resolveEntitlementKeys(): Promise<string[]> {
-    if (this.entitlementsResolved) return this.entitlementKeys;
+  public async resolveEntitlementKeys(): Promise<EntitlementResolution> {
+    if (this.entitlementsResolved) return this.entitlementResolution();
     if (!this.entitlementKeysPromise) {
       this.entitlementKeysPromise = (async () => {
         try {
@@ -1023,10 +1032,14 @@ export class ChatCompletionProcess {
           this.entitlementResolutionFailed = true;
         }
         this.entitlementsResolved = true;
-        return this.entitlementKeys;
+        return this.entitlementResolution();
       })();
     }
     return this.entitlementKeysPromise;
+  }
+
+  private entitlementResolution(): EntitlementResolution {
+    return { keys: this.entitlementKeys, resolved: !this.entitlementResolutionFailed };
   }
 
   /**
@@ -1051,16 +1064,16 @@ export class ChatCompletionProcess {
    * `getAccessibleDataLakeAccess`'s own resolution. See `dataLakeAccessContextMemo`'s doc for why
    * identity, not field equality, is what those memos key on.
    */
-  private async getDataLakeAccessContext(): Promise<DataLakeAccessContext> {
+  private async getDataLakeAccessContext(): Promise<MeasurableDataLakeAccessContext> {
     if (this.dataLakeAccessContextMemo === undefined) {
-      const entitlementKeys = await this.resolveEntitlementKeys();
+      const { keys: entitlementKeys, resolved } = await this.resolveEntitlementKeys();
       this.dataLakeAccessContextMemo = {
         db: this.db,
         user: this.user,
         entitlementKeys,
         // #3155: lets the exclusion-telemetry count tell a legitimately empty entitlement list
         // apart from a failed lookup - see `entitlementResolutionFailed`'s own doc.
-        entitlementKeysResolved: !this.entitlementResolutionFailed,
+        entitlementKeysResolved: resolved,
         // Without this, a countGateExcludedLakes failure warns into a void: the resolver
         // swallows it internally (never throws), so this call's own try/catch never sees it.
         logger: this.logger,
@@ -2746,8 +2759,12 @@ export class ChatCompletionProcess {
       const abortSignalHolder: { signal?: AbortSignal } = {};
 
       // Resolve entitlement keys once before building tools so the knowledge tools'
-      // data-lake access (getDynamicDataLakeAccess) sees the same keys as forced retrieval.
-      const entitlementKeys = await this.resolveEntitlementKeys();
+      // data-lake access (getDynamicDataLakeAccess) sees the same keys as forced retrieval. The
+      // resolution's completeness half is not carried into ToolContext: no knowledge tool reads an
+      // exclusion count, so the tool path simply gets `undefined` there (the honest answer for an
+      // unvouched host) while its lake view keeps the optimistic default. Carry the half through if
+      // a tool ever grows a consumer for that count.
+      const { keys: entitlementKeys } = await this.resolveEntitlementKeys();
 
       const toolBuilder = new ToolBuilder({
         user: this.user,

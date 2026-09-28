@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   releaseDriveConnectionForLake: vi.fn(),
   stampLakeMemoryPurge: vi.fn(),
   shredPrincipalMemory: vi.fn(),
+  getFilesStorage: vi.fn(() => ({ delete: vi.fn() })),
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {
@@ -43,6 +44,7 @@ vi.mock('@server/integrations/google/drive/common', () => ({
 }));
 vi.mock('@server/memory/ledgerMemoryStore', () => ({ shredPrincipalMemory: h.shredPrincipalMemory }));
 vi.mock('@server/memory/factCipher', () => ({ createKeyProvider: () => ({}) }));
+vi.mock('@server/utils/storage', () => ({ getFilesStorage: h.getFilesStorage }));
 
 import { dispatch } from './dataLakeCleanup';
 
@@ -86,6 +88,17 @@ describe('dataLakeCleanup consumer', () => {
         }),
         logger,
       })
+    );
+  });
+
+  it("wires the object store, so a purge deletes each file's stored bytes and not just its rows", async () => {
+    h.cleanup.mockResolvedValue(undefined);
+    await dispatch(makeEvent(payload), {} as never, logger);
+    expect(h.getFilesStorage).toHaveBeenCalled();
+    expect(h.cleanup).toHaveBeenCalledWith(
+      expect.anything(),
+      'lake1',
+      expect.objectContaining({ storage: expect.anything() })
     );
   });
 

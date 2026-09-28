@@ -1,5 +1,6 @@
 import { ToolContext, ToolDefinition } from '../../base/types';
 import {
+  citationTagDescription,
   CitableSource,
   describePipelineStall,
   getEmbeddingModelCost,
@@ -23,6 +24,7 @@ import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts
 import { membershipOrgIdsForTurn } from '../../../../dataLakeService/membershipOrgIdsForTurn';
 import {
   defangRetrievedContent,
+  documentDateClause,
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
@@ -153,8 +155,12 @@ function formatSemanticResults(
     // (`### Name (ID: ...)`): the conflict note that precedes the block names documents by
     // `fabFileId` alone, and without it on the heading the model has no way to map a named id back
     // to a passage it can read.
+    //
+    // Dated from the document's own vintage (#3048) when it has one, appended after the
+    // parenthetical rather than folded into it - the leading tokens of this shape are what
+    // defangRetrievedContent matches on. Never from `createdAt` (#3047).
     return (
-      `${i + 1}. **${toContentLabel(prettyFileName(r.fileName))}** (ID: ${r.fileId}, relevance ${r.score.toFixed(2)})\n` +
+      `${i + 1}. **${toContentLabel(prettyFileName(r.fileName))}** (ID: ${r.fileId}, relevance ${r.score.toFixed(2)})${documentDateClause(r.documentDate)}\n` +
       text
     );
   });
@@ -440,11 +446,7 @@ async function emitSemanticCitables(
       type: 'document',
       title: r.fileName,
       url: `/opti?mode=datalake&article=${r.fileId}`,
-      description:
-        r.fileTags
-          .filter(t => !t.startsWith('datalake:'))
-          .slice(0, 4)
-          .join(', ') || undefined,
+      description: citationTagDescription(r.fileTags),
       timestamp: new Date().toISOString(),
       status: 'complete',
       metadata: {
@@ -1489,16 +1491,12 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           // could only be a guess, and the reader lands on the whole document, which is honest.
           if (rankedResults.length > 0) {
             const citables: CitableSource[] = rankedResults.map((file: IFabFileDocument, index: number) => {
-              const fileTags = (file.tags?.map(t => t.name) || [])
-                .filter(t => !t.startsWith('datalake:'))
-                .slice(0, 4)
-                .join(', ');
               return {
                 id: file.id,
                 type: 'document' as const,
                 title: file.fileName,
                 url: `/opti?mode=datalake&article=${file.id}`,
-                description: fileTags || undefined,
+                description: citationTagDescription(file.tags?.map(t => t.name) || []),
                 timestamp: new Date().toISOString(),
                 status: 'complete' as const,
                 metadata: {
