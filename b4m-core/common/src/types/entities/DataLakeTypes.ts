@@ -1501,7 +1501,7 @@ export interface DataLakeDocumentPurgeReceipt {
  * lifetime RESERVATION-TIME meter (reserve-first, admin-reset/release-compensated) - INGESTION
  * ONLY, it never counts research-run spend; `ledger` is the ATTRIBUTED cost rolled up from
  * UsageEvent rows, which carries BOTH ingestion embeds (`feature: 'embedding'`) and research-run
- * judge calls (`feature: 'operations'`, #3298) - see `ledger.byFeature` to split the two.
+ * judge calls (`feature: 'operations'`) - see `ledger.byFeature` to split the two.
  * `embeddingSpendMicroUsd` is not a provider-reported figure - it derives from the same pre-call,
  * Math.ceil'd estimate over locally-counted tokens (fabFileVectorize writes the ledger's
  * `costUsd` from `estimatedMicroUsd`, the exact value the meter reserved). The two diverge (even
