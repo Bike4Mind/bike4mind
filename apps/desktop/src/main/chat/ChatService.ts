@@ -8,6 +8,7 @@ import type {
   ChatModelOption,
   ChatProject,
   ChatSession,
+  ChatSessionStatusEvent,
   ChatSessionSummary,
   ChatStreamEvent,
   ChatToolCall,
@@ -22,6 +23,7 @@ import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
 import { DEFAULT_COMPLETIONS_PATH, streamCompletion, type CompletionMessage } from './completions';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
+import type { SessionActivity } from './SessionActivity';
 import type { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import type { ApprovalGate } from './tools/ApprovalGate';
@@ -66,6 +68,11 @@ export interface ChatServiceDeps {
   /** Paths kept out of reach of shell commands whatever the user granted. See tools/sandbox.ts. */
   protectedPaths?: readonly string[];
   /** Null whenever no session is usable, which is how a signed-out send is refused. */
+  /**
+   * Per-session status for the sidebar. Fed from here because this is where a reply's lifetime
+   * is known; the approval gate feeds it the other half.
+   */
+  activity?: SessionActivity;
   getApiClient(): AuthenticatedApiClient | null;
   /** Identifies the cached completions endpoint; changing environments invalidates it. */
   getEnvironmentUrl(): string;
@@ -97,6 +104,11 @@ export class ChatService {
 
   listSessions(): Promise<ChatSessionSummary[]> {
     return this.deps.store.list();
+  }
+
+  /** Every session that is busy right now, for a renderer that has just mounted. */
+  sessionStatuses(): ChatSessionStatusEvent[] {
+    return this.deps.activity?.snapshot() ?? [];
   }
 
   listModels(force = false): Promise<ChatModelCatalog> {
@@ -211,6 +223,7 @@ export class ChatService {
     await this.deps.background?.killSession(sessionId);
     await this.deps.attachments?.deleteSession(sessionId);
     await this.deps.store.delete(sessionId);
+    this.deps.activity?.forget(sessionId);
   }
 
   /**
@@ -278,10 +291,14 @@ export class ChatService {
     const replyId = randomUUID();
     const controller = new AbortController();
     this.active.set(sessionId, controller);
+    this.deps.activity?.replyStarted(sessionId);
 
     void this.runReply(session, replyId, api, controller).finally(() => {
-      // Only clear if still ours: a delete-then-recreate could have installed a newer one.
-      if (this.active.get(sessionId) === controller) this.active.delete(sessionId);
+      // Only clear if still ours: a delete-then-recreate could have installed a newer one, and
+      // telling activity this reply ended would then mark a live one idle.
+      if (this.active.get(sessionId) !== controller) return;
+      this.active.delete(sessionId);
+      this.deps.activity?.replyEnded(sessionId);
     });
 
     return { ok: true, messageId: replyId, ...(notice ? { notice } : {}) };

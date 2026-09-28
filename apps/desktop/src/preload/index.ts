@@ -3,6 +3,7 @@ import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth'
 import type {
   ChatApprovalDecision,
   ChatAttachmentInput,
+  ChatSessionStatusEvent,
   ChatStreamEvent,
   CreateCodeSessionRequest,
   SendMessageRequest,
@@ -69,6 +70,12 @@ const api: DesktopApi = {
       const handler = (_event: unknown, streamEvent: ChatStreamEvent) => listener(streamEvent);
       ipcRenderer.on(IPC_CHANNELS.chatStreamEvent, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.chatStreamEvent, handler);
+    },
+    getSessionStatuses: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetSessionStatuses),
+    onSessionStatus: listener => {
+      const handler = (_event: unknown, event: ChatSessionStatusEvent) => listener(event);
+      ipcRenderer.on(IPC_CHANNELS.chatSessionStatus, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatSessionStatus, handler);
     },
   },
   files: {

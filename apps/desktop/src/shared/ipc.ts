@@ -6,6 +6,7 @@ import type {
   ChatAttachmentInput,
   ChatModelCatalog,
   ChatSession,
+  ChatSessionStatusEvent,
   ChatSessionSummary,
   ChatStreamEvent,
   CreateCodeSessionRequest,
@@ -61,6 +62,9 @@ export const IPC_CHANNELS = {
   chatStopBackground: 'chat:stop-background',
   /** main -> renderer push; reply tokens as they arrive. */
   chatStreamEvent: 'chat:stream-event',
+  chatGetSessionStatuses: 'chat:get-session-statuses',
+  /** main -> renderer push; one session started or stopped being busy. */
+  chatSessionStatus: 'chat:session-status',
   toolsGetAccess: 'tools:get-access',
   toolsGrantAccess: 'tools:grant-access',
   toolsRevokeAccess: 'tools:revoke-access',
@@ -149,6 +153,14 @@ export interface DesktopApi {
     stopBackgroundProcess(sessionId: string, processId: string): Promise<void>;
     /** Subscribe to reply progress; returns the unsubscribe. */
     onStreamEvent(listener: (event: ChatStreamEvent) => void): () => void;
+    /**
+     * Every session that is busy right now. Read once on mount to seed the sidebar: the pushes
+     * below only describe CHANGES, so a window that opened after a background session hit the
+     * approval gate would otherwise never hear about it.
+     */
+    getSessionStatuses(): Promise<ChatSessionStatusEvent[]>;
+    /** Subscribe to per-session status changes; returns the unsubscribe. */
+    onSessionStatus(listener: (event: ChatSessionStatusEvent) => void): () => void;
   };
   files: {
     /**

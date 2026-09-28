@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatProject, ChatSessionSummary } from '@shared/chat';
-import { groupSessions } from './grouping';
+import { groupSessions, orderedSessions, quickSwitchIndices, QUICK_SWITCH_LIMIT } from './grouping';
 
 function project(directory: string, name: string): ChatProject {
   return {
@@ -81,5 +81,59 @@ describe('groupSessions', () => {
     expect(sections.projects).toEqual([]);
     expect(sections.loose.map(entry => entry.id)).toEqual(['a']);
     expect(sections.pinned.map(entry => entry.id)).toEqual(['b']);
+  });
+});
+
+describe('orderedSessions', () => {
+  it('reads pinned first, then each project, then the loose rows', () => {
+    const sections = groupSessions(
+      [
+        session({ id: 'loose' }),
+        session({ id: 'pin', pinned: true }),
+        session({ id: 'one-a', mode: 'code', project: project('/r/one', 'one') }),
+        session({ id: 'two-a', mode: 'code', project: project('/r/two', 'two') }),
+        session({ id: 'one-b', mode: 'code', project: project('/r/one', 'one') }),
+      ],
+      'chat'
+    );
+    expect(orderedSessions(sections).map(entry => entry.id)).toEqual(['pin', 'loose']);
+
+    const code = groupSessions(
+      [
+        session({ id: 'pin', mode: 'code', pinned: true, project: project('/r/one', 'one') }),
+        session({ id: 'one-a', mode: 'code', project: project('/r/one', 'one') }),
+        session({ id: 'two-a', mode: 'code', project: project('/r/two', 'two') }),
+        session({ id: 'one-b', mode: 'code', project: project('/r/one', 'one') }),
+      ],
+      'code'
+    );
+    expect(orderedSessions(code).map(entry => entry.id)).toEqual(['pin', 'one-a', 'one-b', 'two-a']);
+  });
+});
+
+describe('quickSwitchIndices', () => {
+  it('numbers from one across sections rather than restarting in each', () => {
+    const sections = groupSessions(
+      [
+        session({ id: 'pin', mode: 'code', pinned: true, project: project('/r/one', 'one') }),
+        session({ id: 'one-a', mode: 'code', project: project('/r/one', 'one') }),
+        session({ id: 'two-a', mode: 'code', project: project('/r/two', 'two') }),
+      ],
+      'code'
+    );
+    const indices = quickSwitchIndices(orderedSessions(sections));
+
+    expect(indices.get('pin')).toBe(1);
+    expect(indices.get('one-a')).toBe(2);
+    expect(indices.get('two-a')).toBe(3);
+  });
+
+  it('numbers only the first nine rows', () => {
+    const many = Array.from({ length: 12 }, (_unused, position) => session({ id: `s${position}` }));
+    const indices = quickSwitchIndices(orderedSessions(groupSessions(many, 'chat')));
+
+    expect(indices.size).toBe(QUICK_SWITCH_LIMIT);
+    expect(indices.get('s8')).toBe(9);
+    expect(indices.has('s9')).toBe(false);
   });
 });

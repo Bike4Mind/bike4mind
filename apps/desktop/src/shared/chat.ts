@@ -313,6 +313,29 @@ export type ChatStreamEvent =
     }
   | { type: 'background-status'; sessionId: string; process: BackgroundProcessInfo };
 
+/**
+ * What a session is doing, as the sidebar draws it.
+ *
+ * 'needs-action' outranks 'processing' whenever both are true, which they are for the whole
+ * time a tool sits at the approval gate: the turn is still open, but the model is not what is
+ * holding it up - the user is, and they may well be looking at a different conversation.
+ */
+export type ChatSessionStatus = 'processing' | 'needs-action' | 'done';
+
+/**
+ * One session's status changing, pushed main -> renderer.
+ *
+ * Deliberately NOT a member of ChatStreamEvent. That union is per-reply progress aimed at the
+ * open conversation; this is per-session lifecycle for every conversation at once, including
+ * ones with no reply in flight and no window showing them. Keeping them apart means neither
+ * consumer has to filter the other's traffic, and it lets the snapshot channel that seeds this
+ * one carry the same payload shape.
+ */
+export interface ChatSessionStatusEvent {
+  sessionId: string;
+  status: ChatSessionStatus;
+}
+
 export interface SendMessageRequest {
   sessionId: string;
   text: string;

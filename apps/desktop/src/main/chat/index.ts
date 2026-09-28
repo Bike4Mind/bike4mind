@@ -4,6 +4,7 @@ import { ChatModels } from '@bike4mind/common';
 import type {
   ChatApprovalDecision,
   ChatAttachmentInput,
+  ChatSessionStatusEvent,
   ChatStreamEvent,
   CreateCodeSessionRequest,
   ProjectInspection,
@@ -16,6 +17,7 @@ import { AttachmentStore } from './AttachmentStore';
 import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
 import { ChatService } from './ChatService';
 import { ModelCatalog } from './ModelCatalog';
+import { SessionActivity } from './SessionActivity';
 import { SessionStore } from './SessionStore';
 import { currentBranch, isGitRepository, listBranches, projectDisplayName } from './project/git';
 import { AccessStore } from './tools/AccessStore';
@@ -93,18 +95,29 @@ export function registerChat(auth: AuthService): RegisteredChat {
   const store = new SessionStore(join(userData, 'sessions'), PREFERRED_MODEL);
   const access = new AccessStore(join(userData, 'tool-access.json'));
   const attachments = new AttachmentStore(join(userData, 'attachments'), logger, shrinkImage);
-  const approvals = new ApprovalGate();
   const models = new ModelCatalog({
     logger,
     getApiClient: () => auth.getApiClient(),
     getEnvironmentUrl: () => auth.getState().environment.url,
   });
 
-  const broadcast = (event: ChatStreamEvent) => {
+  const send = (channel: string, payload: unknown) => {
     for (const window of BrowserWindow.getAllWindows()) {
-      window.webContents.send(IPC_CHANNELS.chatStreamEvent, event);
+      window.webContents.send(channel, payload);
     }
   };
+
+  const broadcast = (event: ChatStreamEvent) => send(IPC_CHANNELS.chatStreamEvent, event);
+
+  // Declared before the two things that feed it, because both take it as a constructor
+  // argument: the gate reports who is waiting on the user, the service reports who is
+  // replying, and this turns the pair into the one status a sidebar row draws.
+  const activity = new SessionActivity((event: ChatSessionStatusEvent) => send(IPC_CHANNELS.chatSessionStatus, event));
+
+  const approvals = new ApprovalGate({
+    requested: sessionId => activity.approvalRequested(sessionId),
+    settled: sessionId => activity.approvalSettled(sessionId),
+  });
 
   // Output and status go out on the same channel as reply tokens: a background process is
   // still something that conversation is doing, and a renderer that reloads re-subscribes to
@@ -124,6 +137,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     preferredModel: PREFERRED_MODEL,
     approvals,
     background,
+    activity,
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which is T4's invariant broken through a side door.
     protectedPaths: [userData],
@@ -140,6 +154,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     service.setSessionPinned(sessionId, pinned)
   );
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
+  ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => service.sessionStatuses());
   ipcMain.handle(IPC_CHANNELS.chatCreateSession, () => service.createSession());
   ipcMain.handle(IPC_CHANNELS.chatCreateCodeSession, (_event, request: CreateCodeSessionRequest) =>
     service.createCodeSession(request)
