@@ -5,7 +5,7 @@ import { ForbiddenError } from '@server/utils/errors';
 import { SpiderEvents } from '@server/utils/eventBus';
 import { v4 as uuidv4 } from 'uuid';
 import { assertSessionOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
-import { HTTPError } from '@bike4mind/common';
+import { ApiKeyScope, HTTPError } from '@bike4mind/common';
 
 type SpiderOperation = 'messageCount' | 'curation' | 'summarize' | 'tags' | 'embeddings';
 
@@ -74,7 +74,7 @@ const isSpendingSpiderOperation = (operation: SpiderOperation): operation is Spe
  * - dryRun: boolean (default: false) - If true, only simulates the job without making changes
  * - operations: string[] (default: all) - Specific operations to run
  */
-const handler = baseApi().post(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler(async (req, res) => {
     // Only admins can trigger Spider
     if (!req.user?.isAdmin) {

@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { adminSettingsRepository, modelDiscoveryRunRepository } from '@bike4mind/database';
 import type { IModelDiscoveryRun } from '@bike4mind/common';
@@ -117,7 +118,7 @@ const fullRun = (run: IModelDiscoveryRun) => ({
   droppedRecords: run.droppedRecords ?? [],
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
     if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
 

@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest, telemetryAuditLogRepository } from '@bike4mind/database';
@@ -10,7 +11,7 @@ const paramsSchema = z.object({
   id: z.string().min(1),
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   // GET /api/admin/context-telemetry/[id] - Get single telemetry entry
   .get(
     asyncHandler(async (req, res) => {

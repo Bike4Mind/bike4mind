@@ -4,7 +4,7 @@ import { Quest } from '@bike4mind/database';
 import { z } from 'zod';
 import { ForbiddenError, NotFoundError, BadRequestError } from '@server/utils/errors';
 import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
-import { type ContextTelemetry } from '@bike4mind/common';
+import { ApiKeyScope, type ContextTelemetry } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { createTelemetryIssue } from '@server/utils/telemetryIssueCreator';
 
@@ -21,7 +21,7 @@ const bodySchema = z.object({
     .describe('Additional context to include in the issue'),
 });
 
-const handler = baseApi().post(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin, BadRequestError } from '@server/utils/errors';
 import { getDlqByLabel, getDlqUrl } from '@server/utils/dlqRegistry';
@@ -23,7 +24,7 @@ const QuerySchema = z.object({
  * timeout so that receipt handles remain valid while the admin reviews
  * and decides whether to replay individual messages.
  */
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   ensureAdmin(req.user?.isAdmin);
 
   const result = QuerySchema.safeParse(req.query);

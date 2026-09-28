@@ -10,6 +10,7 @@
  * @route POST /api/admin/github/test - Test the GitHub connection
  */
 
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError, ensureAdmin } from '@server/utils/errors';
 import { Logger } from '@bike4mind/observability';
@@ -18,7 +19,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 
 const logger = new Logger({ metadata: { component: 'admin-github-test' } });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   // Rate limit to prevent abuse (30 tests/hour - makes real API calls)
   .use(
     rateLimit({

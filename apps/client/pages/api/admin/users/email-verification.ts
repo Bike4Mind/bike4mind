@@ -1,6 +1,7 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { User } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { z } from 'zod';
@@ -13,7 +14,7 @@ const EmailVerificationQuerySchema = z.object({
 });
 
 // Admin-only endpoint to list users by email verification status
-const handler = baseApi({ auth: true }).get(
+const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] }).get(
   asyncHandler(async (req, res) => {
     // Check admin authorization
     if (!req.user?.isAdmin) {
