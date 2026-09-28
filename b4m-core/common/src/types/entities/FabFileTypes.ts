@@ -1546,6 +1546,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]>;
   /**
+   * Lightweight count of the same set `findByDriveConnectionIdInDataLake` resolves - the
+   * disconnect-confirmation dialog needs a number, not every file's body, to warn how many
+   * documents a disconnect will delete.
+   */
+  countByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<number>;
+  /**
    * The Drive file ids a given ingest batch has already UPLOADED a FabFile for. This is what a
    * resumed ingest slice subtracts from its fresh walk, so it must exclude a row whose bytes never
    * actually landed - `status: 'pending'` alone does not prove that (every fresh row is minted
