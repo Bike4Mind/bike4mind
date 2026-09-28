@@ -27,8 +27,7 @@ export interface ResearchConfigAdapters extends LakeConfigAuditAdapters {
       'createConfig' | 'listByLake' | 'findByIdInLake' | 'updateConfig' | 'deleteConfig'
     >;
     // REQUIRED, not optional: every caller of these writes is one of the two research-config
-    // routes, so leaving it optional would let a create/edit/delete go unaudited silently - the
-    // exact gap #3298 reports.
+    // routes, so leaving it optional would let a create/edit/delete go unaudited silently.
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
   };
 }
