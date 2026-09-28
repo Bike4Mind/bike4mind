@@ -130,7 +130,7 @@ describe('runLakeResearch', () => {
     );
   });
 
-  // #3298: a run reaching an outcome left no trace in the lake's History tab.
+  // A run reaching an outcome left no trace in the lake's History tab.
   it('records the completed outcome against the resolved lake and the run query', async () => {
     await runLakeResearch('run-1', logger);
 
@@ -142,7 +142,7 @@ describe('runLakeResearch', () => {
     );
   });
 
-  // #3298 follow-up: a fault in the audit write used to reject `recordRunEffects`'s `Promise.all`
+  // Follow-up: a fault in the audit write used to reject `recordRunEffects`'s `Promise.all`
   // AFTER `settle('completed')` had already landed, which re-ran the pair as `'failed'` (a second
   // ledger row plus an overwritten, incorrect run status) instead of just logging the failure.
   it('is best-effort: a failed outcome write does not re-settle an already-completed run', async () => {
@@ -155,7 +155,7 @@ describe('runLakeResearch', () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/outcome record failed/));
   });
 
-  describe('judge-cost usage recording (#3298 - the runs API reported spend the Spend tab never showed)', () => {
+  describe('judge-cost usage recording (the runs API reported spend the Spend tab never showed)', () => {
     it('records one UsageEvent for the run, attributed to the lake and the resolved judge model', async () => {
       h.claimForExecution.mockResolvedValue(claimedRun({ levers: levers({ model: 'gpt-4.1-mini' }) }));
 
