@@ -109,7 +109,8 @@ export async function startResearchRun(
       // a `start-research-run` row to the `complete-research-run` row it belongs to. Read from
       // `run.levers` (the normalized snapshot just created above), not `config.query` directly, so
       // the two rows are guaranteed to agree even for a config saved before a normalization change.
-      changes: [researchRunChange(run.levers.query, 'started')],
+      // `run.id` disambiguates two runs of the same config with an unedited (so identical) query.
+      changes: [researchRunChange(run.levers.query, 'started', run.id)],
     },
     { db, logger }
   );
