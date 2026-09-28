@@ -223,6 +223,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     service.send(request.sessionId, request.text, request.attachments)
   );
   ipcMain.handle(IPC_CHANNELS.chatStopReply, (_event, sessionId: string) => service.stop(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatContinueReply, (_event, sessionId: string) => service.continueReply(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatRespondToApproval, (_event, approvalId: string, decision: ChatApprovalDecision) =>
     approvals.resolve(approvalId, decision)
   );

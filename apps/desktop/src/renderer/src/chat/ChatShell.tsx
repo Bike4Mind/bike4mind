@@ -289,7 +289,9 @@ export function ChatShell({ account }: { account?: ReactNode }) {
         <MessageThread
           messages={conversation.messages}
           sessionId={activeId}
+          streaming={conversation.streaming}
           onRespond={conversation.respondToApproval}
+          onContinue={() => void conversation.continueReply()}
         />
 
         {conversation.sendError && (

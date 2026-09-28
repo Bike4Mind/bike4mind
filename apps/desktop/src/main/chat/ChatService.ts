@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type {
+  ChatArtifact,
   ChatAttachment,
   ChatMedia,
   ChatMessage,
@@ -22,6 +23,7 @@ import type {
   UpdateProjectRequest,
   UpdateProjectResult,
 } from '@shared/chat';
+import { isTurnBudgetStop } from '@shared/chat';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
@@ -65,11 +67,43 @@ interface ResolvedServerConfig {
 }
 
 /**
- * Ceiling on tool round trips within a single user turn. A model that keeps calling tools
- * without concluding would otherwise bill and run forever; hitting the cap ends the turn with
- * whatever it has said, flagged so the UI can show it was cut short rather than finished.
+ * What one user turn is allowed to spend before the loop stops it.
+ *
+ * A model that keeps calling tools without concluding would bill and run forever, so a turn
+ * needs SOME bound. A bare round-trip count is a poor one: reading a file, searching and
+ * writing one file is already several rounds, and real coding turns run to dozens or hundreds,
+ * so any count low enough to catch a runaway early also kills ordinary work. These three bound
+ * the two things that actually go wrong - spending without end, and spinning in place - and
+ * leave a working turn alone.
+ *
+ * `rounds` is the backstop rather than the primary guard: high enough that no real turn has
+ * reached it, finite so a turn always ends.
+ *
+ * `stalledRounds` is the real runaway detector. A model that asks for the SAME tool calls, with
+ * the same arguments, several rounds running is not making progress whatever the results say;
+ * legitimate work repeats a command (re-running a test) but does not repeat an identical round
+ * five times. This catches a loop in seconds where a count would take minutes.
+ *
+ * `wallClockMs` bounds the case neither of the others sees: rounds that each make progress but
+ * grind on far past the point the user would have wanted a say. It is wall clock rather than
+ * tokens on purpose - the server's usage numbers are optional on the wire, and a guard that
+ * silently stops existing when a field is missing is not a guard.
+ *
+ * Hitting any of them ends the turn with whatever it has, flagged so the UI can show it was cut
+ * short rather than finished, and offer to carry on. See isTurnBudgetStop.
  */
-const MAX_TOOL_TURNS = 10;
+export interface TurnLimits {
+  rounds: number;
+  /** Identical rounds IN A ROW, counted as repeats: this many after the first end the turn. */
+  stalledRounds: number;
+  wallClockMs: number;
+}
+
+const TURN_LIMITS: TurnLimits = {
+  rounds: 200,
+  stalledRounds: 5,
+  wallClockMs: 30 * 60 * 1000,
+};
 
 /**
  * How many agent-spawned sessions may have a reply in flight at once, across the whole app.
@@ -129,6 +163,12 @@ export interface ChatServiceDeps {
    * artifacts are still parsed and shown - they simply exist only on this machine.
    */
   artifacts?: ArtifactPublisher;
+  /**
+   * Tightens a turn's budget. Only tests set it: exercising a guard whose production values are
+   * hundreds of rounds and half an hour of wall clock is not something a unit test can afford
+   * to do at full size.
+   */
+  turnLimits?: Partial<TurnLimits>;
   /** Null whenever no session is usable, which is how a signed-out send is refused. */
   getApiClient(): AuthenticatedApiClient | null;
   /** Identifies the cached completions endpoint; changing environments invalidates it. */
@@ -141,6 +181,19 @@ interface RequestedTool {
   id?: string;
   name: string;
   arguments?: string;
+}
+
+/**
+ * What a reply that ran out of budget hands back to the run that carries it on.
+ *
+ * Carried forward rather than re-derived from the stored message because two of the three
+ * fields cannot be recovered from it: the text has had its artifact markup stripped, and
+ * re-extracting restored markup would mint fresh ids and publish the same artifacts twice.
+ */
+interface ResumedReply {
+  content: string;
+  toolCalls: ChatToolCall[];
+  artifacts: ChatArtifact[];
 }
 
 /**
@@ -488,12 +541,65 @@ export class ChatService {
     // reference was added to the composer and then removed. See AttachmentStore.prune.
     void this.pruneAttachments(session);
 
-    const replyId = randomUUID();
+    const replyId = this.startReply(session, api);
+    return { ok: true, messageId: replyId, ...(notice ? { notice } : {}) };
+  }
+
+  /**
+   * Carry on a turn the loop's own budget stopped, in place.
+   *
+   * Genuine resumption, not a re-prompt: the completions endpoint is stateless, so a turn's
+   * whole state IS its transcript, and an interrupted turn's transcript already ends on a
+   * complete round of tool results - exactly the shape a fresh request continues from. Nothing
+   * synthetic is appended, and the model picks up with every file it read and wrote still in
+   * front of it. The one thing it does not get back is the ROUND STRUCTURE: the interrupted
+   * turn's rounds were flattened into a single stored assistant message when it landed, so the
+   * model sees all of its own tool calls as one batch rather than the sequence it made them in.
+   * That is the same replay a typed follow-up gets today, and it costs the ordering, not the
+   * work.
+   *
+   * Refused rather than silently re-prompting when the last turn was not budget-stopped, so
+   * this can never be the thing that makes a finished conversation spend another turn.
+   */
+  async continueReply(sessionId: string): Promise<SendMessageResult> {
+    if (this.active.has(sessionId)) return { ok: false, error: 'This conversation is still replying.' };
+
+    const api = this.deps.getApiClient();
+    if (!api) return { ok: false, error: 'Sign in to continue this reply.' };
+
+    const session = await this.deps.store.get(sessionId);
+    if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+
+    const last = session.messages[session.messages.length - 1];
+    if (!last || last.role !== 'assistant' || !isTurnBudgetStop(last.stopReason)) {
+      return { ok: false, error: 'There is nothing to continue here.' };
+    }
+
+    const replyId = this.startReply(session, api, {
+      id: last.id,
+      content: last.content,
+      toolCalls: last.toolCalls ?? [],
+      artifacts: last.artifacts ?? [],
+    });
+    return { ok: true, messageId: replyId };
+  }
+
+  /**
+   * Put a reply in flight and own its lifetime. Returns the message id it will arrive under -
+   * a fresh one, or the interrupted message's when this run is carrying that one on.
+   */
+  private startReply(
+    session: ChatSession,
+    api: AuthenticatedApiClient,
+    resume?: ResumedReply & { id: string }
+  ): string {
+    const sessionId = session.id;
+    const replyId = resume?.id ?? randomUUID();
     const controller = new AbortController();
     this.active.set(sessionId, controller);
     this.deps.activity?.replyStarted(sessionId);
 
-    void this.runReply(session, replyId, api, controller).finally(() => {
+    void this.runReply(session, replyId, api, controller, resume).finally(() => {
       // Only clear if still ours: a delete-then-recreate could have installed a newer one, and
       // telling activity this reply ended would then mark a live one idle.
       if (this.active.get(sessionId) !== controller) return;
@@ -506,7 +612,7 @@ export class ChatService {
       void this.flushChildReports(sessionId);
     });
 
-    return { ok: true, messageId: replyId, ...(notice ? { notice } : {}) };
+    return replyId;
   }
 
   /**
@@ -591,16 +697,23 @@ export class ChatService {
     session: ChatSession,
     replyId: string,
     api: AuthenticatedApiClient,
-    controller: AbortController
+    controller: AbortController,
+    resume?: ResumedReply
   ): Promise<void> {
     const sessionId = session.id;
+    const limits = { ...TURN_LIMITS, ...this.deps.turnLimits };
+    const deadline = Date.now() + limits.wallClockMs;
     this.deps.emit({ type: 'start', sessionId, messageId: replyId });
 
-    let content = '';
+    // Seeded from the interrupted run on a resume, so `done` carries the whole reply: the
+    // renderer replaces the message's text with it rather than extending what it already shows.
+    let content = resume?.content ?? '';
     let stopReason: string | undefined;
     let usage: ChatUsage | undefined;
-    const toolCalls: ChatToolCall[] = [];
+    const toolCalls: ChatToolCall[] = [...(resume?.toolCalls ?? [])];
     let thinking: unknown[] | undefined;
+    let previousRound: string | null = null;
+    let stalled = 0;
 
     try {
       const serverConfig = await this.resolveServerConfig(api);
@@ -614,7 +727,7 @@ export class ChatService {
       );
       wire.unshift(buildSystemMessage(roots, !!media, !!host, session.project));
 
-      for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
+      for (let round = 0; round < limits.rounds; round++) {
         const requested: RequestedTool[] = [];
         let turnText = '';
         let turnThinking: unknown[] | undefined;
@@ -628,9 +741,13 @@ export class ChatService {
             // `error` never reaches here (the transport throws on it); `meta` carries no reply.
             if (event.type === 'error' || event.type === 'meta') return;
             if (event.text) {
-              content += event.text;
+              // Every round streams into the SAME message, so without a break here the last
+              // sentence of one round runs into the first word of the next. On the emitted
+              // text only: the wire keeps its own round structure and needs no filler.
+              const text = turnText.length === 0 ? paragraphBreak(content) + event.text : event.text;
+              content += text;
               turnText += event.text;
-              this.deps.emit({ type: 'delta', sessionId, messageId: replyId, text: event.text });
+              this.deps.emit({ type: 'delta', sessionId, messageId: replyId, text });
             }
             if (event.type === 'tool_use') {
               if (event.tools) requested.push(...event.tools);
@@ -652,6 +769,18 @@ export class ChatService {
 
         if (controller.signal.aborted) break;
         if (requested.length === 0) break;
+
+        // A round asking for exactly what the last one did has learned nothing from the
+        // results. One repeat is ordinary work (re-running a test after an edit); this many in
+        // a row is a loop, and stopping here costs the user one wasted round rather than the
+        // minutes a round count would take to notice.
+        const signature = roundSignature(requested);
+        stalled = signature === previousRound ? stalled + 1 : 0;
+        previousRound = signature;
+        if (stalled >= limits.stalledRounds) {
+          stopReason = 'tool_stall_limit';
+          break;
+        }
 
         thinking = turnThinking;
         const settled = await this.runTools(
@@ -684,7 +813,13 @@ export class ChatService {
           })),
         });
 
-        if (turn === MAX_TOOL_TURNS - 1) stopReason = 'tool_turn_limit';
+        // Checked after a round rather than before one, so a turn is never cut between asking
+        // for a tool and reporting what it returned.
+        if (Date.now() >= deadline) {
+          stopReason = 'turn_time_limit';
+          break;
+        }
+        if (round === limits.rounds - 1) stopReason = 'tool_turn_limit';
       }
 
       if (controller.signal.aborted) stopReason = 'aborted';
@@ -694,12 +829,16 @@ export class ChatService {
       // back exactly what the live one showed. An aborted reply is included on purpose: a
       // complete artifact followed by a stop is still a complete artifact.
       const parsed = extractArtifacts(content);
-      const artifacts =
+      const published =
         parsed.artifacts.length > 0 && this.deps.artifacts
           ? await this.deps.artifacts.publish(parsed.artifacts, sessionId)
           : parsed.artifacts;
+      // A resumed run only ever sees markup the rounds AFTER the interruption emitted - the
+      // seeded text was stripped before it was stored - so the earlier artifacts are carried
+      // across rather than parsed again, and none of them is published twice.
+      const artifacts = [...(resume?.artifacts ?? []), ...published];
 
-      await this.deps.store.appendMessage(sessionId, {
+      await this.settleReply(sessionId, !!resume, {
         id: replyId,
         role: 'assistant',
         content: parsed.content,
@@ -725,7 +864,7 @@ export class ChatService {
 
       // Persisted even though it failed: a thread that silently drops the turn leaves the
       // user's own prompt sitting there with no explanation next time they open it.
-      await this.deps.store.appendMessage(sessionId, {
+      await this.settleReply(sessionId, !!resume, {
         id: replyId,
         role: 'assistant',
         content,
@@ -735,6 +874,32 @@ export class ChatService {
       });
       this.deps.emit({ type: 'error', sessionId, messageId: replyId, message });
     }
+  }
+
+  /**
+   * Write a finished reply to its message: a new one normally, an overwrite when this run
+   * carried on an earlier one.
+   *
+   * A resumed run keeps the original message rather than adding a second assistant turn beside
+   * it, because it IS the same turn - one the budget interrupted. Two bubbles with a "stopped
+   * short" chip stranded between them would describe the loop's bookkeeping rather than what
+   * the model did.
+   */
+  private async settleReply(sessionId: string, resumed: boolean, message: ChatMessage): Promise<void> {
+    if (!resumed) {
+      await this.deps.store.appendMessage(sessionId, message);
+      return;
+    }
+    // stopReason and error are set explicitly, undefined included: a resumed run that finishes
+    // must clear the budget stop the previous one left behind, and `Partial` would keep it.
+    await this.deps.store.updateMessage(sessionId, message.id, {
+      content: message.content,
+      stopReason: message.stopReason,
+      error: message.error,
+      toolCalls: message.toolCalls,
+      thinking: message.thinking,
+      artifacts: message.artifacts,
+    });
   }
 
   /**
@@ -1328,6 +1493,26 @@ const HOST_GUIDANCE: readonly string[] = [
   'conversation to be deleted.',
 ];
 
+/**
+ * Whatever newlines it takes to reach exactly one blank line at the end of `content`.
+ *
+ * Empty for empty content, which is what keeps a single-round reply - the common case - free of
+ * a leading blank line.
+ */
+function paragraphBreak(content: string): string {
+  if (content.length === 0) return '';
+  const trailing = /\n*$/.exec(content)?.[0].length ?? 0;
+  return trailing >= 2 ? '' : '\n'.repeat(2 - trailing);
+}
+
+/**
+ * What one round ASKED FOR, as a comparable string. Names and arguments only: a round is a
+ * repeat of the last one when it requests the same work, and the per-call ids differ every time.
+ */
+function roundSignature(requested: readonly RequestedTool[]): string {
+  return requested.map(tool => `${tool.name}(${tool.arguments ?? ''})`).join('\n');
+}
+
 /** One session as plain text, for session_read. Mirrors what the thread shows, minus the chrome. */
 function renderTranscript(session: ChatSession): string {
   const lines = [`Conversation: ${session.title}`, `Last updated: ${session.updatedAt}`, ''];
@@ -1373,14 +1558,13 @@ function describeChildOutcome(child: ChatSession): string {
   if (!last) return `${header}\nIt produced no reply. ${read}`;
   if (last.error) return `${header}\nIt failed: ${last.error}`;
 
-  const note =
-    last.stopReason === 'tool_turn_limit'
-      ? ' It stopped at the tool-call limit rather than finishing, so its work may be incomplete.'
-      : last.stopReason === 'max_tokens'
-        ? ' Its reply was cut off at the length limit.'
-        : last.stopReason === 'aborted'
-          ? ' It was stopped before it finished.'
-          : '';
+  const note = isTurnBudgetStop(last.stopReason)
+    ? ' It ran out of its turn budget rather than finishing, so its work may be incomplete.'
+    : last.stopReason === 'max_tokens'
+      ? ' Its reply was cut off at the length limit.'
+      : last.stopReason === 'aborted'
+        ? ' It was stopped before it finished.'
+        : '';
 
   return `${header}${note}\n${read}`;
 }

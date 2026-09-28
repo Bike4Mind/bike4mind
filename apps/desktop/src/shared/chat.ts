@@ -235,7 +235,8 @@ export interface ChatMessage {
   thinking?: unknown[];
   /**
    * Normalized reason generation ended, on assistant messages. 'max_tokens' means the reply
-   * was CUT OFF rather than finished; 'aborted' is this client stopping it.
+   * was CUT OFF rather than finished; 'aborted' is this client stopping it. The three values
+   * `isTurnBudgetStop` covers mean the agent loop's own budget ran out mid-task.
    */
   stopReason?: string;
   /** Set instead of a reply when the turn failed; the message is kept so the thread shows why. */
@@ -646,4 +647,18 @@ export interface ChatPendingApproval {
   /** True when "always in this chat" must not be offered; see ChatToolCall.approvalIrreversible. */
   irreversible?: boolean;
   requestedAt: string;
+}
+
+/**
+ * The stop reasons that mean the agent loop ran out of ITS budget rather than the model
+ * finishing, the server truncating, or the user pressing Stop.
+ *
+ * Every one of them describes a turn that was still working when it was cut, so all three are
+ * resumable: the transcript already ends on a complete round of tool results, which is exactly
+ * the state a fresh request needs to carry on from. Callers that care about "stopped short vs
+ * answered" - the Continue affordance, and a parent reading a spawned session's outcome - go
+ * through here so a fourth budget added later reaches both without being wired twice.
+ */
+export function isTurnBudgetStop(reason?: string): boolean {
+  return reason === 'tool_turn_limit' || reason === 'turn_time_limit' || reason === 'tool_stall_limit';
 }

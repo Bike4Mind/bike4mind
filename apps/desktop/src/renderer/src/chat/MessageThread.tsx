@@ -1,17 +1,32 @@
 import { useEffect, useRef } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
+import Button from '@mui/joy/Button';
 import Chip from '@mui/joy/Chip';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import type { ChatMessage } from '@shared/chat';
+import { isTurnBudgetStop, type ChatMessage } from '@shared/chat';
 import { ArtifactList } from './ArtifactCard';
 import { AttachmentRow } from './Attachments';
 import { contentColumnSx } from './layout';
 import { ToolCallList, type RespondToApproval } from './ToolCallList';
 
-function StopReasonChip({ reason }: { reason?: string }) {
+/** What each budget the agent loop enforces is called in the thread. See isTurnBudgetStop. */
+const BUDGET_STOP_LABELS: Record<string, string> = {
+  tool_turn_limit: 'Paused after a lot of tool calls',
+  turn_time_limit: 'Paused after running a long time',
+  tool_stall_limit: 'Paused after repeating the same step',
+};
+
+/**
+ * Why a reply ended, when that was not simply the model finishing.
+ *
+ * A budget stop is drawn beside Continue rather than on its own, so the row says "here is what
+ * happened and here is what to do about it" - the chip alone read as a dead end, which is
+ * exactly what it no longer is.
+ */
+function StopReasonRow({ reason, onContinue }: { reason?: string; onContinue?: () => void }) {
   if (reason === 'max_tokens') {
     return (
       <Chip size="sm" color="warning" variant="soft" sx={{ mt: 1 }} data-testid="chat-truncated-chip">
@@ -19,11 +34,18 @@ function StopReasonChip({ reason }: { reason?: string }) {
       </Chip>
     );
   }
-  if (reason === 'tool_turn_limit') {
+  if (isTurnBudgetStop(reason)) {
     return (
-      <Chip size="sm" color="warning" variant="soft" sx={{ mt: 1 }} data-testid="chat-tool-limit-chip">
-        Stopped after too many tool calls
-      </Chip>
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }} flexWrap="wrap" useFlexGap>
+        <Chip size="sm" color="warning" variant="soft" data-testid="chat-tool-limit-chip">
+          {BUDGET_STOP_LABELS[reason as string]}
+        </Chip>
+        {onContinue && (
+          <Button size="sm" variant="soft" color="primary" onClick={onContinue} data-testid="chat-continue-reply-btn">
+            Continue
+          </Button>
+        )}
+      </Stack>
     );
   }
   if (reason === 'aborted') {
@@ -77,7 +99,16 @@ function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: str
  * Nothing here reports that a reply is on its way. The status line under the transcript does
  * that for the whole turn, and a spinner in the thread as well would be the same fact twice.
  */
-function AssistantTurn({ message, onRespond }: { message: ChatMessage; onRespond: RespondToApproval }) {
+function AssistantTurn({
+  message,
+  onRespond,
+  onContinue,
+}: {
+  message: ChatMessage;
+  onRespond: RespondToApproval;
+  /** Absent unless this is the turn a Continue would resume; see MessageThread. */
+  onContinue?: () => void;
+}) {
   const toolCalls = message.toolCalls ?? [];
 
   return (
@@ -104,7 +135,7 @@ function AssistantTurn({ message, onRespond }: { message: ChatMessage; onRespond
         </Alert>
       )}
 
-      <StopReasonChip reason={message.stopReason} />
+      <StopReasonRow reason={message.stopReason} onContinue={onContinue} />
     </Box>
   );
 }
@@ -138,12 +169,17 @@ function SystemTurn({ message }: { message: ChatMessage }) {
 export function MessageThread({
   messages,
   sessionId,
+  streaming,
   onRespond,
+  onContinue,
 }: {
   messages: ChatMessage[];
   /** Needed to read attachment bytes back; they are stored per conversation. */
   sessionId: string | null;
+  /** A reply is in flight for this conversation, so there is nothing to resume yet. */
+  streaming: boolean;
   onRespond: RespondToApproval;
+  onContinue: () => void;
 }) {
   const bottom = useRef<HTMLDivElement>(null);
   const last = messages[messages.length - 1];
@@ -169,13 +205,20 @@ export function MessageThread({
     // scrollbar in the middle of the window rather than at the edge of the pane.
     <Box sx={{ flex: 1, overflowY: 'auto' }} data-testid="chat-thread">
       <Stack spacing={3} sx={{ ...contentColumnSx, py: 3 }}>
-        {messages.map(message =>
+        {messages.map((message, index) =>
           message.system ? (
             <SystemTurn key={message.id} message={message} />
           ) : message.role === 'user' ? (
             <UserTurn key={message.id} message={message} sessionId={sessionId} />
           ) : (
-            <AssistantTurn key={message.id} message={message} onRespond={onRespond} />
+            <AssistantTurn
+              key={message.id}
+              message={message}
+              onRespond={onRespond}
+              // Only the last turn, and only while nothing is running: resuming writes back
+              // into its own message, so a Continue on an older one would edit history.
+              {...(index === messages.length - 1 && !streaming ? { onContinue } : {})}
+            />
           )
         )}
         <div ref={bottom} />

@@ -57,6 +57,7 @@ export const IPC_CHANNELS = {
   chatDeleteSession: 'chat:delete-session',
   chatSendMessage: 'chat:send-message',
   chatStopReply: 'chat:stop-reply',
+  chatContinueReply: 'chat:continue-reply',
   chatRespondToApproval: 'chat:respond-to-approval',
   chatPickAttachments: 'chat:pick-attachments',
   chatAddAttachments: 'chat:add-attachments',
@@ -142,6 +143,11 @@ export interface DesktopApi {
     sendMessage(request: SendMessageRequest): Promise<SendMessageResult>;
     /** Stop an in-flight reply, keeping what has streamed so far. No-op if none is running. */
     stopReply(sessionId: string): Promise<void>;
+    /**
+     * Carry on the last reply if the agent loop's budget cut it short. Streams into the SAME
+     * message, so the events are indistinguishable from the turn never having stopped.
+     */
+    continueReply(sessionId: string): Promise<SendMessageResult>;
     /** Open the OS file picker and take in whatever is chosen. Resolves empty if the user cancels. */
     pickAttachments(sessionId: string): Promise<AddAttachmentsResult>;
     /** Take in dropped or pasted files. The bytes are written to disk before this resolves. */

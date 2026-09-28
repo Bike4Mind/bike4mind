@@ -292,6 +292,8 @@ export interface ConversationController {
   dismissNotice: () => void;
   send: (text: string, attachments?: readonly ChatAttachment[]) => Promise<void>;
   stop: () => void;
+  /** Resume the last reply if the agent loop's budget cut it short. */
+  continueReply: () => Promise<void>;
   rename: (title: string) => Promise<void>;
   /** Pin this conversation to a model; it is used from the next turn on. */
   setModel: (model: string) => Promise<void>;
@@ -361,10 +363,14 @@ export function useConversation(
       if (event.type === 'start') {
         setStreaming(true);
         setTurn({ startedAt: Date.now(), tokens: null });
-        setMessages(current => [
-          ...current,
-          { id: event.messageId, role: 'assistant', content: '', createdAt: new Date().toISOString() },
-        ]);
+        // A continued reply starts on a message that is already here, and keeps its text and
+        // tool rows: the deltas extend them. Only the stop reason goes, because the turn it
+        // described is running again.
+        setMessages(current =>
+          current.some(message => message.id === event.messageId)
+            ? current.map(message => (message.id === event.messageId ? { ...message, stopReason: undefined } : message))
+            : [...current, { id: event.messageId, role: 'assistant', content: '', createdAt: new Date().toISOString() }]
+        );
         return;
       }
 
@@ -497,6 +503,15 @@ export function useConversation(
 
   const stop = useCallback(() => {
     if (sessionId) void window.b4m.chat.stopReply(sessionId);
+  }, [sessionId]);
+
+  // No optimistic update: the reply's own 'start' event clears the stop-reason chip, and doing
+  // it here as well would hide the button on a continue main went on to refuse.
+  const continueReply = useCallback(async () => {
+    if (!sessionId) return;
+    setSendError(null);
+    const result = await window.b4m.chat.continueReply(sessionId);
+    if (!result.ok) setSendError(result.error);
   }, [sessionId]);
 
   const rename = useCallback(
@@ -644,6 +659,7 @@ export function useConversation(
     dismissNotice,
     send,
     stop,
+    continueReply,
     rename,
     setModel,
     project,
