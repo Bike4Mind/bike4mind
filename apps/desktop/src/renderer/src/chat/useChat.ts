@@ -7,9 +7,11 @@ import type {
   ChatSession,
   ChatSessionStatus,
   ChatSessionSummary,
+  ChatToolCall,
   CreateCodeSessionRequest,
 } from '@shared/chat';
 import { applyStatusEvents } from './sessionStatus';
+import { totalTokens, type TurnProgress } from './statusLine';
 
 export interface SessionsController {
   sessions: ChatSessionSummary[];
@@ -191,11 +193,26 @@ export function useModelCatalog(): ModelCatalogController {
   return { models, loading, error, reload };
 }
 
+/**
+ * Fold a settled tool call over the one it settles.
+ *
+ * The settled call replaces its predecessor wholesale except for `approvalDiff`, which main
+ * sends ONLY with the approval prompt. Taking the later call whole would throw away the one
+ * record of what the edit actually changed - and an expanded row is exactly where a user goes
+ * looking for that after they have clicked through it.
+ */
+function mergeToolCall(previous: ChatToolCall, next: ChatToolCall): ChatToolCall {
+  if (next.approvalDiff || !previous.approvalDiff) return next;
+  return { ...next, approvalDiff: previous.approvalDiff };
+}
+
 export interface ConversationController {
   session: ChatSession | null;
   messages: ChatMessage[];
   /** Set while a reply for THIS session is streaming. */
   streaming: boolean;
+  /** Elapsed clock and server-reported cost of the turn in flight; null when none is. */
+  turn: TurnProgress | null;
   sendError: string | null;
   /** One-shot message about something main changed while accepting a turn. Not a failure. */
   notice: string | null;
@@ -223,6 +240,7 @@ export function useConversation(
   const [session, setSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
+  const [turn, setTurn] = useState<TurnProgress | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -238,6 +256,7 @@ export function useConversation(
       setSession(null);
       setMessages([]);
       setStreaming(false);
+      setTurn(null);
       return;
     }
 
@@ -247,8 +266,10 @@ export function useConversation(
       setSession(loaded);
       setMessages(loaded?.messages ?? []);
       // A reply already running for this session keeps streaming into main; this view just
-      // rejoins at whatever is persisted until the next event arrives.
+      // rejoins at whatever is persisted until the next event arrives. The status line stays
+      // off until it does: this window never saw that turn start, so it cannot time it.
       setStreaming(false);
+      setTurn(null);
     });
     return () => {
       current = false;
@@ -261,6 +282,7 @@ export function useConversation(
 
       if (event.type === 'start') {
         setStreaming(true);
+        setTurn({ startedAt: Date.now(), tokens: null });
         setMessages(current => [
           ...current,
           { id: event.messageId, role: 'assistant', content: '', createdAt: new Date().toISOString() },
@@ -277,6 +299,14 @@ export function useConversation(
         return;
       }
 
+      // The running total the server has reported so far. Kept only while a turn is open, so
+      // nothing survives to be shown against the next one.
+      if (event.type === 'usage') {
+        const counted = totalTokens(event.usage);
+        if (counted !== null) setTurn(current => (current ? { ...current, tokens: counted } : current));
+        return;
+      }
+
       if (event.type === 'tool-start' || event.type === 'tool-end') {
         setMessages(current =>
           current.map(message => {
@@ -286,7 +316,7 @@ export function useConversation(
             return {
               ...message,
               toolCalls: known
-                ? existing.map(call => (call.id === event.call.id ? event.call : call))
+                ? existing.map(call => (call.id === event.call.id ? mergeToolCall(call, event.call) : call))
                 : [...existing, event.call],
             };
           })
@@ -315,6 +345,7 @@ export function useConversation(
       if (event.type !== 'done' && event.type !== 'error') return;
 
       setStreaming(false);
+      setTurn(null);
       setMessages(current =>
         current.map(message => {
           if (message.id !== event.messageId) return message;
@@ -410,6 +441,7 @@ export function useConversation(
     session,
     messages,
     streaming,
+    turn,
     sendError,
     notice,
     dismissNotice,

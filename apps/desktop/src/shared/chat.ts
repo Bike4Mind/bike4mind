@@ -261,7 +261,13 @@ export interface ChatModelCatalog {
   error?: string;
 }
 
-/** Token counts for a finished turn. Absent when the server sent none. */
+/**
+ * Token counts the SERVER reported, never a client-side estimate.
+ *
+ * The completions endpoint reports usage per request, so an agent turn - which makes one
+ * request per tool round trip - produces several of these, and the turn's cost is their sum.
+ * Absent means the server sent none, which is not the same as zero.
+ */
 export interface ChatUsage {
   inputTokens?: number;
   outputTokens?: number;
@@ -346,6 +352,8 @@ export interface ChatSession extends ChatSessionMeta {
  * the turn that started it, so they keep arriving with no reply in flight and carry no
  * `messageId`. A consumer that only cares about replies must ignore them explicitly rather
  * than treating an unrecognised event as terminal.
+ *
+ * 'usage' is non-terminal too: several arrive during one reply, each carrying the running total.
  */
 export type ChatStreamEvent =
   | { type: 'start'; sessionId: string; messageId: string }
@@ -353,6 +361,12 @@ export type ChatStreamEvent =
   | { type: 'tool-start'; sessionId: string; messageId: string; call: ChatToolCall }
   | { type: 'tool-end'; sessionId: string; messageId: string; call: ChatToolCall }
   | { type: 'tool-progress'; sessionId: string; messageId: string; callId: string; text: string }
+  /**
+   * The turn's cost so far, emitted after each tool round trip completes and once more with
+   * the reply. `usage` is the running total of what the server reported, so a consumer shows a
+   * real number from the first round trip on rather than waiting for 'done' - or estimating.
+   */
+  | { type: 'usage'; sessionId: string; messageId: string; usage: ChatUsage }
   | {
       type: 'done';
       sessionId: string;

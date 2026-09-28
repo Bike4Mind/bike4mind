@@ -17,6 +17,8 @@ import { NewCodeSessionDialog } from './NewCodeSessionDialog';
 import { SessionList } from './SessionList';
 import { SidebarCard } from './SidebarCard';
 import { SidebarShortcuts } from './SidebarShortcuts';
+import { TurnStatus } from './TurnStatus';
+import { describeActivity } from './statusLine';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
 import { useConversation, useModelCatalog, useSessionStatuses, useSessions } from './useChat';
@@ -128,6 +130,11 @@ export function ChatShell({ account }: { account?: ReactNode }) {
     modelOption?.supportsVision === false && draft.attachments.some(attachment => attachment.kind === 'image')
       ? `${modelOption.name} cannot read images. Pick a model that can, or remove the image before sending.`
       : null;
+
+  // What the turn in flight is doing, read off the reply being streamed into the thread. Only
+  // the last message can be that reply, so nothing earlier is consulted.
+  const inFlight = conversation.messages[conversation.messages.length - 1];
+  const activity = describeActivity(inFlight?.toolCalls ?? [], (inFlight?.content.length ?? 0) > 0);
 
   const onSend = useCallback(
     async (text: string) => {
@@ -263,9 +270,10 @@ export function ChatShell({ account }: { account?: ReactNode }) {
         <MessageThread
           messages={conversation.messages}
           sessionId={activeId}
-          streaming={conversation.streaming}
           onRespond={conversation.respondToApproval}
         />
+
+        <TurnStatus turn={conversation.turn} activity={activity} />
 
         {conversation.sendError && (
           <Alert size="sm" color="danger" variant="soft" sx={contentColumnSx} data-testid="chat-send-error">

@@ -2,7 +2,6 @@ import { useEffect, useRef } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Chip from '@mui/joy/Chip';
-import CircularProgress from '@mui/joy/CircularProgress';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
@@ -73,31 +72,21 @@ function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: str
  *
  * A reply can run for screens, and a container drawn around that much text reads as a wall
  * rather than as prose; the right-aligned user bubble is what separates the two speakers.
+ *
+ * Nothing here reports that a reply is on its way. The status line under the transcript does
+ * that for the whole turn, and a spinner in the thread as well would be the same fact twice.
  */
-function AssistantTurn({
-  message,
-  streaming,
-  onRespond,
-}: {
-  message: ChatMessage;
-  streaming: boolean;
-  onRespond: RespondToApproval;
-}) {
+function AssistantTurn({ message, onRespond }: { message: ChatMessage; onRespond: RespondToApproval }) {
   const toolCalls = message.toolCalls ?? [];
-  const awaitingFirstToken = streaming && message.content.length === 0 && toolCalls.length === 0 && !message.error;
 
   return (
     <Box sx={{ minWidth: 0 }} data-testid="chat-message-assistant">
-      {awaitingFirstToken ? (
-        <CircularProgress size="sm" data-testid="chat-awaiting-reply" />
-      ) : (
-        // pre-wrap, not a markdown renderer: the model emits newlines and indentation that
-        // collapse to a single line without it. Rendering markdown is its own task.
-        message.content.length > 0 && (
-          <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-            {message.content}
-          </Typography>
-        )
+      {/* pre-wrap, not a markdown renderer: the model emits newlines and indentation that
+          collapse to a single line without it. Rendering markdown is its own task. */}
+      {message.content.length > 0 && (
+        <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {message.content}
+        </Typography>
       )}
 
       {/* After the text, which is the order it arrives in: the model says what it is about to
@@ -118,13 +107,11 @@ function AssistantTurn({
 export function MessageThread({
   messages,
   sessionId,
-  streaming,
   onRespond,
 }: {
   messages: ChatMessage[];
   /** Needed to read attachment bytes back; they are stored per conversation. */
   sessionId: string | null;
-  streaming: boolean;
   onRespond: RespondToApproval;
 }) {
   const bottom = useRef<HTMLDivElement>(null);
@@ -151,16 +138,11 @@ export function MessageThread({
     // scrollbar in the middle of the window rather than at the edge of the pane.
     <Box sx={{ flex: 1, overflowY: 'auto' }} data-testid="chat-thread">
       <Stack spacing={3} sx={{ ...contentColumnSx, py: 3 }}>
-        {messages.map((message, index) =>
+        {messages.map(message =>
           message.role === 'user' ? (
             <UserTurn key={message.id} message={message} sessionId={sessionId} />
           ) : (
-            <AssistantTurn
-              key={message.id}
-              message={message}
-              streaming={streaming && index === messages.length - 1}
-              onRespond={onRespond}
-            />
+            <AssistantTurn key={message.id} message={message} onRespond={onRespond} />
           )
         )}
         <div ref={bottom} />

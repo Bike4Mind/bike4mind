@@ -1,0 +1,72 @@
+import type { ChatToolCall, ChatUsage } from '@shared/chat';
+import { activePhrase } from './toolRows';
+
+/**
+ * What the status line under the transcript knows about the turn in flight.
+ *
+ * `tokens` is deliberately nullable and deliberately server-sourced. The completions endpoint
+ * reports usage per request, so the count only becomes real when a round trip finishes; until
+ * then the field is ABSENT rather than estimated. A client-side guess that reads as an
+ * authoritative number is worse than a number that shows up a second late.
+ */
+export interface TurnProgress {
+  /** Epoch ms the turn started, for the elapsed clock. Local, because only this client knows it. */
+  startedAt: number;
+  /** Sum of the server's counts for the round trips that have COMPLETED. Null until the first. */
+  tokens: number | null;
+}
+
+/** Total of what the server reported, or null when it reported nothing usable. */
+export function totalTokens(usage: ChatUsage | undefined): number | null {
+  if (!usage) return null;
+  const input = usage.inputTokens ?? 0;
+  const output = usage.outputTokens ?? 0;
+  const total = input + output;
+  return total > 0 ? total : null;
+}
+
+/** "12s", "3m 7s", "1h 4m" - the same shape at every scale, so the line never changes width much. */
+export function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+/** Compact counts: "820", "1.1k", "12k", "1.2M". One decimal only where it still carries meaning. */
+export function formatTokens(count: number): string {
+  if (count < 1000) return String(count);
+  if (count < 10_000) return `${(count / 1000).toFixed(1)}k`;
+  if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
+  return `${(count / 1_000_000).toFixed(1)}M`;
+}
+
+/**
+ * The third field: a short description of what the turn is doing right now.
+ *
+ * Read off the state the turn already publishes - tool statuses and the progress lines the slow
+ * tools report - rather than asked for. Approval outranks everything, because a turn parked at
+ * the gate is not working on anything at all.
+ */
+export function describeActivity(calls: readonly ChatToolCall[], hasText: boolean): string {
+  if (calls.some(call => call.status === 'awaiting-approval')) return 'Waiting for your answer...';
+
+  const running = calls.filter(call => call.status === 'running');
+  if (running.length === 1) {
+    const only = running[0];
+    return only.progress?.trim() || activePhrase(only.name);
+  }
+  if (running.length > 1) return 'Running tools...';
+
+  return hasText ? 'Responding...' : 'Thinking...';
+}
+
+/** The whole line, dot-separated, as one string - which is also how a test can read it. */
+export function statusFields(turn: TurnProgress, now: number, activity: string): string[] {
+  return [
+    formatElapsed(now - turn.startedAt),
+    ...(turn.tokens === null ? [] : [`${formatTokens(turn.tokens)} tokens`]),
+    activity,
+  ];
+}

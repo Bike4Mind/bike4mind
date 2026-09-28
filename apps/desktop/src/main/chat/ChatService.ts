@@ -436,6 +436,7 @@ export class ChatService {
         const requested: RequestedTool[] = [];
         let turnText = '';
         let turnThinking: unknown[] | undefined;
+        let turnUsage: ChatUsage | undefined;
 
         await streamCompletion(
           api.getAxiosInstance(),
@@ -454,10 +455,18 @@ export class ChatService {
               if (event.thinking) turnThinking = event.thinking;
             }
             if (event.stopReason) stopReason = event.stopReason;
-            if (event.usage) usage = event.usage;
+            if (event.usage) turnUsage = event.usage;
           },
           controller.signal
         );
+
+        // Within one request the server's counts are cumulative, so the last report wins; across
+        // the requests an agent turn makes they are separate bills, so the turn's cost is their
+        // sum. Emitted here rather than only on 'done' so the status line can show a real number
+        // from the first round trip on - the alternative is a field that stays blank for a
+        // minute, or one filled in with a guess.
+        usage = addUsage(usage, turnUsage);
+        if (usage) this.deps.emit({ type: 'usage', sessionId, messageId: replyId, usage });
 
         if (controller.signal.aborted) break;
         if (requested.length === 0) break;
@@ -850,6 +859,23 @@ const MEDIA_GUIDANCE: readonly string[] = [
   'The result is shown or played to the USER and is never returned to you: you cannot see the',
   'image or hear the audio. Never describe what a generated image depicts or how audio sounds.',
 ];
+
+/**
+ * Add one round trip's reported usage to the turn's running total.
+ *
+ * Absent stays absent: a server that reported nothing must not be made to look like it reported
+ * zero, because the status line draws the field only once there is a real number behind it.
+ */
+export function addUsage(total: ChatUsage | undefined, next: ChatUsage | undefined): ChatUsage | undefined {
+  if (!next) return total;
+  if (!total) return next;
+  const inputTokens = (total.inputTokens ?? 0) + (next.inputTokens ?? 0);
+  const outputTokens = (total.outputTokens ?? 0) + (next.outputTokens ?? 0);
+  return {
+    ...(total.inputTokens === undefined && next.inputTokens === undefined ? {} : { inputTokens }),
+    ...(total.outputTokens === undefined && next.outputTokens === undefined ? {} : { outputTokens }),
+  };
+}
 
 /** Tool arguments arrive as a raw JSON string; a malformed one becomes an empty object. */
 function parseArguments(raw: string | undefined): Record<string, unknown> {
