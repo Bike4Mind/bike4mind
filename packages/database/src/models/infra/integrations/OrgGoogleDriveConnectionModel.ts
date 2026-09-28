@@ -342,6 +342,15 @@ class OrgGoogleDriveConnectionRepository
    * different durations and stealing a live chain is far more damaging than stealing an idle claim -
    * see CHAINED_SYNC_CLAIM_STALE_MS.
    *
+   * `enabled: { $ne: false }` closes the disconnect race: a message already on the ingest queue (a
+   * poll fired just before disconnect, a manual Re-sync, or a fresh connect's first sync) could
+   * otherwise still win this claim AFTER the drive-connection DELETE handler disables the row,
+   * create FabFiles past the purge's snapshot, and then have its row hard-deleted by release -
+   * stranding those new files exactly like the bug this whole purge exists to fix. Paired with the
+   * atomic disable in disableIfNotSyncing: either this wins (disable can't have landed while enabled
+   * was still true) or the disable already won (enabled is false and this matches nothing) - never
+   * both.
+   *
    * Returns the freshly-minted `ingestClaimToken` this claim is identified by (null if the claim was
    * lost). The caller must carry it into its own renewSyncClaim, which compare-and-sets on it.
    */
@@ -352,6 +361,7 @@ class OrgGoogleDriveConnectionRepository
     const claimed = await this.model.findOneAndUpdate(
       {
         _id: id,
+        enabled: { $ne: false },
         $or: [
           { status: 'connected' },
           // $in: [null] matches a missing field too - a claim that never started a chain.
@@ -374,6 +384,25 @@ class OrgGoogleDriveConnectionRepository
       }
     );
     return claimed !== null ? claimToken : null;
+  }
+
+  /**
+   * Route-side half of the disconnect/claimForSync race (see claimForSync's `enabled` guard for the
+   * other half): atomically disables the connection ONLY if it is not currently claimed for an
+   * in-flight sync, instead of the old snapshot-read-then-unconditional-disable that let a claim
+   * landing in the gap between the two survive the disable. Either this wins (status was not
+   * 'syncing', enabled flips false, and claimForSync's own guard then refuses any claim that lands
+   * after) or a claim already won (status is 'syncing') and this matches nothing - never both.
+   *
+   * Returns whether the disable took effect; false means the caller should 409 (a sync is currently
+   * in flight) rather than proceed to purge past a connection that might still be ingesting.
+   */
+  async disableIfNotSyncing(id: string): Promise<boolean> {
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, status: { $ne: 'syncing' } },
+      { $set: { enabled: false } }
+    );
+    return result !== null;
   }
 
   /**
