@@ -153,6 +153,32 @@ describe('DataLakeResearchRunRepository', () => {
     });
   });
 
+  // The guard against a settle racing an already-terminal run (e.g. an enqueue-failure settle that
+  // lands after the executor already claimed and finished the same row): a second settle is a
+  // no-op, not an overwrite of the real outcome, and the caller can tell from the return value.
+  it('reports true when it actually settles the row, false when the row was already terminal', async () => {
+    const created = await repo.createRun(input());
+
+    const first = await repo.settleRun(created.id, {
+      status: 'completed',
+      completedAt: new Date(),
+      spentMicroUsd: 100,
+      totals: emptyResearchRunTotals(),
+    });
+    const second = await repo.settleRun(created.id, {
+      status: 'failed',
+      completedAt: new Date(),
+      spentMicroUsd: 0,
+      totals: emptyResearchRunTotals(),
+      error: 'a stale, racing settle',
+    });
+
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+    // The real outcome survives untouched - the racing settle never landed.
+    expect(await repo.findByIdInLake(created.id, LAKE)).toMatchObject({ status: 'completed', spentMicroUsd: 100 });
+  });
+
   it('settles a failure with its message and no stop reason', async () => {
     const created = await repo.createRun(input());
 
