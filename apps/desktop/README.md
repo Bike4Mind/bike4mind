@@ -84,6 +84,50 @@ Routing uses hash history. A packaged build loads the renderer over `file://`, w
 origin for the History API to push against, so hash history is the one mode that behaves
 identically in dev and when packaged.
 
+## App icon
+
+`build/icon.svg` is the source of truth: a copy of the square bike4mind mark that the web app
+uses as its splash logo and favicon (`apps/client/public/images/logos/Colored_Favicon.svg` -
+byte-identical to `icons/Colored_Logo_Clean.svg`, despite the name, so there is no separate
+wordmark to weigh against it). It is copied in rather than read across from `apps/client`,
+because a packaged app ships only its own directory.
+
+Regenerate every format after a brand change:
+
+```bash
+./apps/desktop/build/generate-icons.sh
+```
+
+macOS only. It rasterises with Quick Look (`qlmanage`) and packs the `.icns` with `iconutil`;
+ImageMagick handles only the resulting PNG. **ImageMagick cannot rasterise this SVG** - its
+internal renderer silently drops every gradient-filled path, which here is the entire wheel,
+leaving four cyan dots on a blank canvas. Quick Look flattens onto white, so the script
+restores the transparent corners with a circular mask.
+
+| File | Consumed by |
+| --- | --- |
+| `build/icon.icns` | electron-builder, macOS app bundle |
+| `build/icon.ico` | electron-builder, Windows |
+| `build/icon.png` | electron-builder, Linux (512x512) |
+| `src/renderer/favicon.png` | the renderer's `<link rel="icon">` |
+
+The mark is inset rather than bled to the edge: 824/1024 on macOS, which is Apple's icon
+grid, and a looser 0.92 elsewhere, where there is no grid to match. It stops reading as a
+wheel below about 32px - the white filigree inside the disc washes out into a pale blob at
+16px - but the disc silhouette and the brand blue still carry it.
+
+Where the icon actually shows:
+
+- **Windows and Linux** take it from the `icon` option on the `BrowserWindow`, which resolves
+  through electron-vite's `?asset` import so the PNG is copied into `out/main/chunks/` and the
+  path is correct both in dev and when packaged.
+- **macOS** ignores that option - its windows have no icon - and reads the dock icon from the
+  app bundle, which only exists once T9 packages the app. `app.dock.setIcon()` covers the gap
+  for `pnpm dev`.
+- The renderer's favicon is cosmetic inside Electron, which does not apply a page favicon to
+  the window. It is there for where the renderer is opened as a page: devtools and
+  `electron-vite preview`.
+
 ## Version constraints
 
 **Electron 44 is required, and it is not a Node-version compromise.** The repo sets
