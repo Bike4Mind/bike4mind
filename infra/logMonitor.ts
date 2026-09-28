@@ -43,7 +43,7 @@ import { imageProcessor } from './functions';
 
 // Log handler function for processing CloudWatch logs and sending to Slack
 const logHandler = new sst.aws.Function('logHandler', {
-  handler: 'apps/client/server/events/logToSlack.ingest',
+  handler: 'apps/workers/src/events/logToSlack.ingest',
   runtime: 'nodejs24.x',
   link: [...allSecrets, sreJobQueue],
   vpc: lambdaVpc,
