@@ -4,6 +4,7 @@ import type {
   ChatAttachment,
   ChatMessage,
   ChatModelOption,
+  ChatQueuedMessage,
   ChatSession,
   ChatSessionStatus,
   ChatSessionSummary,
@@ -11,6 +12,7 @@ import type {
   CreateCodeSessionRequest,
   UpdateProjectRequest,
 } from '@shared/chat';
+import { describeReturn } from './queuedMessages';
 import { applyStatusEvents } from './sessionStatus';
 import { totalTokens, type TurnProgress } from './statusLine';
 
@@ -246,6 +248,16 @@ export interface ConversationController {
   dismissNotice: () => void;
   send: (text: string, attachments?: readonly ChatAttachment[]) => Promise<void>;
   stop: () => void;
+  /** Messages typed ahead of the live turn, oldest first. Empty unless one is streaming. */
+  queued: ChatQueuedMessage[];
+  /** Take one back. Its text returns through `returned`, which is also how it is edited. */
+  cancelQueued: (queuedId: string) => void;
+  /**
+   * Text the queue handed back, for the composer to take in. A new object each time, so a
+   * consumer can key an effect on its identity; `clearReturned` acknowledges it.
+   */
+  returned: { id: number; messages: ChatQueuedMessage[] } | null;
+  clearReturned: () => void;
   rename: (title: string) => Promise<void>;
   /** Pin this conversation to a model; it is used from the next turn on. */
   setModel: (model: string) => Promise<void>;
@@ -274,6 +286,8 @@ export function useConversation(
   const [notice, setNotice] = useState<string | null>(null);
   const [projectBusy, setProjectBusy] = useState(false);
   const [projectError, setProjectError] = useState<ProjectBindingError | null>(null);
+  const [queued, setQueued] = useState<ChatQueuedMessage[]>([]);
+  const [returned, setReturned] = useState<{ id: number; messages: ChatQueuedMessage[] } | null>(null);
 
   // Read inside the IPC subscription, which must not be torn down and rebuilt per session
   // change: a rebuild between 'start' and the first 'delta' would drop tokens.
@@ -284,6 +298,8 @@ export function useConversation(
     setSendError(null);
     setNotice(null);
     setProjectError(null);
+    setReturned(null);
+    setQueued([]);
     if (!sessionId) {
       setSession(null);
       setMessages([]);
@@ -303,10 +319,35 @@ export function useConversation(
       setStreaming(false);
       setTurn(null);
     });
+    // Read rather than derived: main owns the queue, and a window opening onto a session that
+    // was queued into from another one has witnessed no push for it.
+    void window.b4m.chat.getQueuedMessages(sessionId).then(pending => {
+      if (current) setQueued(pending);
+    });
     return () => {
       current = false;
     };
   }, [sessionId]);
+
+  useEffect(() => {
+    return window.b4m.chat.onQueueChanged(event => {
+      if (event.sessionId !== activeSessionId.current) return;
+      setQueued(event.queued);
+      // Main appended this one to the thread itself, so this window has no copy of it. Guarded
+      // against a duplicate because the same push reaches every open window.
+      const appended = event.sent?.message;
+      if (appended) {
+        setMessages(current =>
+          current.some(message => message.id === appended.id) ? current : [...current, appended]
+        );
+      }
+      const explanation = describeReturn(event.returned);
+      if (explanation) setNotice(explanation);
+      // Counted, not content-keyed: two cancels of the same text must both reach the composer.
+      const back = event.returned;
+      if (back) setReturned(current => ({ id: (current?.id ?? 0) + 1, messages: back.messages }));
+    });
+  }, []);
 
   useEffect(() => {
     return window.b4m.chat.onStreamEvent(event => {
@@ -403,16 +444,28 @@ export function useConversation(
 
       setSendError(null);
       setNotice(null);
-      const optimistic: ChatMessage = {
-        // Temporary: main assigns the persisted id. They meet again on the next load, which is
-        // the only place the difference could show, and by then this one is gone.
-        id: `pending-${Date.now()}`,
-        role: 'user',
-        content: prompt,
-        createdAt: new Date().toISOString(),
-        ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
+
+      // Drawn before the round trip so the thread answers the keystroke immediately - but only
+      // when this turn is going out now. Main decides queueing, so `streaming` is a guess here;
+      // it is only ever wrong in the gap where a reply has just ended, and the result below
+      // corrects it either way. A queued message must NOT appear in the transcript: that would
+      // claim it had been sent, which is the one thing it has not been.
+      const optimistic: ChatMessage | null = streaming
+        ? null
+        : {
+            // Temporary: main assigns the persisted id. They meet again on the next load, which
+            // is the only place the difference could show, and by then this one is gone.
+            id: `pending-${Date.now()}`,
+            role: 'user',
+            content: prompt,
+            createdAt: new Date().toISOString(),
+            ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
+          };
+      if (optimistic) setMessages(current => [...current, optimistic]);
+
+      const discardOptimistic = () => {
+        if (optimistic) setMessages(current => current.filter(message => message.id !== optimistic.id));
       };
-      setMessages(current => [...current, optimistic]);
 
       const result = await window.b4m.chat.sendMessage({
         sessionId,
@@ -420,11 +473,30 @@ export function useConversation(
         ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
       });
       if (!result.ok) {
-        setMessages(current => current.filter(message => message.id !== optimistic.id));
+        discardOptimistic();
         setSendError(result.error);
         return;
       }
+      // It queued after all: the pending row above the composer is where it lives now.
+      if (result.queued) {
+        discardOptimistic();
+        return;
+      }
       if (result.notice) setNotice(result.notice);
+      // It went out although this window thought a reply was running - the turn that was
+      // streaming had already ended. The thread has to show the prompt that is now in it.
+      if (!optimistic) {
+        setMessages(current => [
+          ...current,
+          {
+            id: `pending-${Date.now()}`,
+            role: 'user',
+            content: prompt,
+            createdAt: new Date().toISOString(),
+            ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
+          },
+        ]);
+      }
 
       const summary = await window.b4m.chat.getSession(sessionId);
       if (summary) {
@@ -433,12 +505,21 @@ export function useConversation(
         onSummaryChanged({ ...rest, messageCount: summary.messages.length });
       }
     },
-    [sessionId, onSummaryChanged]
+    [sessionId, streaming, onSummaryChanged]
   );
 
   const stop = useCallback(() => {
     if (sessionId) void window.b4m.chat.stopReply(sessionId);
   }, [sessionId]);
+
+  const cancelQueued = useCallback(
+    (queuedId: string) => {
+      if (sessionId) void window.b4m.chat.cancelQueuedMessage(sessionId, queuedId);
+    },
+    [sessionId]
+  );
+
+  const clearReturned = useCallback(() => setReturned(null), []);
 
   const rename = useCallback(
     async (title: string) => {
@@ -585,6 +666,10 @@ export function useConversation(
     dismissNotice,
     send,
     stop,
+    queued,
+    cancelQueued,
+    returned,
+    clearReturned,
     rename,
     setModel,
     project,

@@ -1,4 +1,4 @@
-import { useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -6,8 +6,11 @@ import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
+import type { ChatQueuedMessage } from '@shared/chat';
 import { AttachmentRow } from './Attachments';
 import { contentColumnSx } from './layout';
+import { QueuedMessageList } from './QueuedMessageList';
+import { mergeIntoDraft } from './queuedMessages';
 import { toAttachmentInputs, type AttachmentDraft } from './useAttachments';
 
 export function Composer({
@@ -20,6 +23,10 @@ export function Composer({
   placeholder = 'Send a message...',
   onSend,
   onStop,
+  queued,
+  onCancelQueued,
+  returned,
+  onReturnedConsumed,
   footer,
   status,
 }: {
@@ -44,6 +51,16 @@ export function Composer({
   notReady?: string | null;
   onSend: (text: string) => void;
   onStop: () => void;
+  /** Typed ahead of the live turn, waiting to be sent. Drawn above the input. */
+  queued?: readonly ChatQueuedMessage[];
+  onCancelQueued?: (queuedId: string) => void;
+  /**
+   * Messages the queue handed back, to take into the draft. Anything the user is midway
+   * through typing is kept: the returned text is appended to it, never swapped for it.
+   * `onReturnedConsumed` acknowledges the batch so it is taken in exactly once.
+   */
+  returned?: { id: number; messages: ChatQueuedMessage[] } | null;
+  onReturnedConsumed?: () => void;
   /** Controls that belong to the next turn rather than to the app - the model picker. */
   footer?: ReactNode;
   /**
@@ -57,13 +74,27 @@ export function Composer({
 
   const hasContent = text.trim().length > 0 || attachments.attachments.length > 0;
   const blocked = !!blockedReason || !!notReady;
+  // `streaming` is NOT here: a send during a live turn is queued, not dropped. It used to be
+  // the first condition, which is why pressing Enter mid-reply did nothing at all.
+  const canSubmit = hasContent && !disabled && !attachments.busy && !blocked;
 
   const submit = () => {
-    if (!hasContent || disabled || streaming || attachments.busy || blocked) return;
+    if (!canSubmit) return;
     const prompt = text.trim();
     setText('');
     onSend(prompt);
   };
+
+  // Text coming back out of the queue - cancelled, or its turn stopped or failed. Tracked by
+  // batch id rather than by content, so cancelling the same message twice lands twice, and so a
+  // re-render between the merge and the acknowledgement cannot merge it again.
+  const consumedReturn = useRef<number | null>(null);
+  useEffect(() => {
+    if (!returned || consumedReturn.current === returned.id) return;
+    consumedReturn.current = returned.id;
+    setText(current => mergeIntoDraft(current, returned.messages));
+    onReturnedConsumed?.();
+  }, [returned, onReturnedConsumed]);
 
   // Enter sends, Shift+Enter breaks the line - the convention every chat client here shares.
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -119,6 +150,8 @@ export function Composer({
         </Alert>
       )}
 
+      <QueuedMessageList messages={queued ?? []} onCancel={onCancelQueued ?? (() => undefined)} />
+
       {attachments.attachments.length > 0 && (
         <Box sx={{ ...contentColumnSx, pt: 1.5 }}>
           <AttachmentRow sessionId={sessionId} attachments={attachments.attachments} onRemove={attachments.remove} />
@@ -140,19 +173,17 @@ export function Composer({
           slotProps={{ textarea: { 'data-testid': 'chat-composer-input', onPaste } }}
         />
 
-        {streaming ? (
+        {/* Both at once while a reply runs: stopping this turn and queueing the next one are
+            different intentions, and swapping one control for the other made the second
+            unreachable. Send is labelled for what the click actually does. */}
+        {streaming && (
           <Button variant="soft" color="neutral" onClick={onStop} data-testid="chat-stop-btn">
             Stop
           </Button>
-        ) : (
-          <Button
-            onClick={submit}
-            disabled={disabled || !hasContent || attachments.busy || blocked}
-            data-testid="chat-send-btn"
-          >
-            Send
-          </Button>
         )}
+        <Button onClick={submit} disabled={!canSubmit} data-testid="chat-send-btn">
+          {streaming ? 'Queue' : 'Send'}
+        </Button>
       </Stack>
 
       {/* The live turn line gets the full width, on its own row, left aligned. Sharing the

@@ -421,12 +421,88 @@ export interface SendMessageRequest {
 }
 
 /**
+ * A message typed while a reply was still running, waiting to become the next turn.
+ *
+ * Queued messages live in the MAIN process, keyed by session, and are never persisted. That
+ * lifetime is chosen rather than defaulted: one is only ever meaningful for as long as the
+ * turn it was queued behind is still open, and a reply is anchored to an in-memory
+ * AbortController - so after a restart there is no turn left for a queued message to follow,
+ * and anything that survived would fire against a conversation the user last saw hours ago.
+ * Main is still the owner rather than the renderer, because main streams replies for sessions
+ * no window has open (see useConversation) and a queue in renderer state would die on a
+ * session switch while the turn it belongs to carried on.
+ */
+export interface ChatQueuedMessage {
+  id: string;
+  sessionId: string;
+  text: string;
+  /** Descriptors whose bytes are already on disk; they are held back from pruning while queued. */
+  attachments?: ChatAttachment[];
+  queuedAt: string;
+}
+
+/**
+ * Why a queued message left the queue WITHOUT being sent.
+ *
+ * Every one of these hands the text back to the composer rather than dropping it - see
+ * ChatQueueEvent.returned. 'stopped' is the case the whole design turns on: pressing stop is
+ * the user changing their mind about the answer they were queueing against, so firing the
+ * queued message into that is the opposite of what they meant.
+ */
+export type ChatQueueReturnReason =
+  /** The user cancelled it from the pending row. */
+  | 'cancelled'
+  /** The user stopped the reply it was waiting behind. */
+  | 'stopped'
+  /** That reply ended in an error. */
+  | 'failed'
+  /** Its turn came and main refused it - signed out, or a model that cannot read its image. */
+  | 'refused';
+
+/**
+ * One session's queue changing, pushed main -> renderer.
+ *
+ * Deliberately NOT a member of ChatStreamEvent, for the same reason ChatSessionStatusEvent is
+ * not: that union is progress within one reply, and this is per-session state that outlives
+ * any single reply and matters for conversations no window is showing.
+ *
+ * `queued` is always the AUTHORITATIVE list for the session, so a renderer replaces rather
+ * than reconciles. `returned` is the separate half: messages that are no longer queued and
+ * whose text the composer must take back.
+ */
+export interface ChatQueueEvent {
+  sessionId: string;
+  queued: ChatQueuedMessage[];
+  /**
+   * A queued message that just became a real turn, and the thread message it became.
+   *
+   * The renderer cannot draw this one itself. A turn it sends by hand is drawn optimistically
+   * from the text in its own composer, but a flushed message is appended to the thread by main
+   * with no window involved - so without this, the reply would stream in under no visible
+   * prompt at all. Emitted BEFORE the reply's 'start', so the prompt lands above it.
+   */
+  sent?: { queuedId: string; message: ChatMessage };
+  returned?: {
+    messages: ChatQueuedMessage[];
+    reason: ChatQueueReturnReason;
+    /** The refusal, on 'refused'. Absent on the others, which the reason alone explains. */
+    detail?: string;
+  };
+}
+
+/**
  * `sendMessage` resolves as soon as the turn is accepted, not when the reply finishes - the
  * reply arrives as stream events. A rejection here means the turn never started.
+ *
+ * `queued: true` is the third outcome: the conversation was already replying, so nothing was
+ * sent and the message is waiting. Main decides this, not the renderer - a reply finishing
+ * between a renderer-side "is it streaming?" check and the IPC call would otherwise queue a
+ * message behind a turn that had already ended, and nothing would ever release it.
  */
 export type SendMessageResult =
   | {
       ok: true;
+      queued?: false;
       messageId: string;
       /**
        * Set when accepting the turn changed something the user did not ask for - today only
@@ -435,6 +511,7 @@ export type SendMessageResult =
        */
       notice?: string;
     }
+  | { ok: true; queued: true; message: ChatQueuedMessage }
   | { ok: false; error: string };
 
 /**

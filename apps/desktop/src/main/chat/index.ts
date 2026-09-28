@@ -4,6 +4,7 @@ import { ChatModels } from '@bike4mind/common';
 import type {
   ChatApprovalDecision,
   ChatAttachmentInput,
+  ChatQueueEvent,
   ChatSessionStatusEvent,
   ChatStreamEvent,
   CreateCodeSessionRequest,
@@ -18,6 +19,7 @@ import { AttachmentStore } from './AttachmentStore';
 import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
 import { ChatService } from './ChatService';
 import { MediaStore } from './media/MediaStore';
+import { MessageQueue } from './MessageQueue';
 import { registerMediaProtocol } from './media/protocol';
 import { ModelCatalog } from './ModelCatalog';
 import { SessionActivity } from './SessionActivity';
@@ -119,6 +121,10 @@ export function registerChat(auth: AuthService): RegisteredChat {
   // replying, and this turns the pair into the one status a sidebar row draws.
   const activity = new SessionActivity((event: ChatSessionStatusEvent) => send(IPC_CHANNELS.chatSessionStatus, event));
 
+  // Typed-ahead messages, on their own channel: this is per-session state that outlives any
+  // one reply, so it travels beside the status pushes rather than inside the reply stream.
+  const queue = new MessageQueue((event: ChatQueueEvent) => send(IPC_CHANNELS.chatQueueChanged, event));
+
   const approvals = new ApprovalGate({
     requested: sessionId => activity.approvalRequested(sessionId),
     settled: sessionId => activity.approvalSettled(sessionId),
@@ -144,6 +150,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     background,
     media,
     activity,
+    queue,
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which is T4's invariant broken through a side door.
     protectedPaths: [userData],
@@ -213,6 +220,10 @@ export function registerChat(auth: AuthService): RegisteredChat {
     service.send(request.sessionId, request.text, request.attachments)
   );
   ipcMain.handle(IPC_CHANNELS.chatStopReply, (_event, sessionId: string) => service.stop(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatGetQueued, (_event, sessionId: string) => service.queuedMessages(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatCancelQueued, (_event, sessionId: string, queuedId: string) =>
+    service.cancelQueued(sessionId, queuedId)
+  );
   ipcMain.handle(IPC_CHANNELS.chatRespondToApproval, (_event, approvalId: string, decision: ChatApprovalDecision) =>
     approvals.resolve(approvalId, decision)
   );

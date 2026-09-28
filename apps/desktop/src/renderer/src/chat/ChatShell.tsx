@@ -317,6 +317,10 @@ export function ChatShell({ account }: { account?: ReactNode }) {
           }
           onSend={text => void onSend(text)}
           onStop={conversation.stop}
+          queued={conversation.queued}
+          onCancelQueued={conversation.cancelQueued}
+          returned={conversation.returned}
+          onReturnedConsumed={conversation.clearReturned}
           footer={
             <ModelPicker
               catalog={catalog}
