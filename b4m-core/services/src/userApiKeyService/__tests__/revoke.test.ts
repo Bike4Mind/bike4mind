@@ -28,7 +28,7 @@ function makeSyncedRepo() {
 describe('revokeUserApiKey', () => {
   it('disables an embed:chat key while leaving its embed fields intact', async () => {
     const { repo, getStored } = makeSyncedRepo();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const adapters = {
       db: {
         userApiKeys: repo as any,
@@ -58,7 +58,7 @@ describe('revokeUserApiKey', () => {
 
   it('records the revocation audit trail and returns the key name', async () => {
     const { repo, getStored } = makeSyncedRepo();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const adapters = {
       db: {
         userApiKeys: repo as any,
@@ -79,11 +79,18 @@ describe('revokeUserApiKey', () => {
     expect(getStored()!.revokedBy).toBe('user1');
     expect(getStored()!.revokedReason).toBe('Leaked in a build log');
     expect(getStored()!.revokedAt!.getTime()).toBeGreaterThanOrEqual(before);
+    expect(repo.update).toHaveBeenCalledWith({
+      id: 'key-1',
+      status: ApiKeyStatus.DISABLED,
+      revokedAt: expect.any(Date),
+      revokedBy: 'user1',
+      revokedReason: 'Leaked in a build log',
+    });
   });
 
   it('leaves revokedReason unset when no reason is supplied', async () => {
     const { repo, getStored } = makeSyncedRepo();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const adapters = {
       db: {
         userApiKeys: repo as any,
@@ -105,7 +112,7 @@ describe('revokeUserApiKey', () => {
 
   it('keeps the first revocation when an already-revoked key is revoked again', async () => {
     const { repo, getStored } = makeSyncedRepo();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const adapters = {
       db: {
         userApiKeys: repo as any,
@@ -126,6 +133,7 @@ describe('revokeUserApiKey', () => {
 
     expect(getStored()!.revokedAt).toBe(firstRevokedAt);
     expect(getStored()!.revokedReason).toBe('Leaked in a build log');
+    expect(repo.update).toHaveBeenLastCalledWith({ id: 'key-1', status: ApiKeyStatus.DISABLED });
   });
 
   // #909: an org admin can revoke a key billed to an org they administer, even a

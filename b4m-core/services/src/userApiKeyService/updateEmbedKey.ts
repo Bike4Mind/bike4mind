@@ -99,7 +99,12 @@ export const updateEmbedKey = async (
   if (params.allowedOrigins !== undefined) apiKey.allowedOrigins = params.allowedOrigins;
   if (params.branding !== undefined) apiKey.branding = params.branding;
 
-  await db.userApiKeys.update(apiKey);
+  await db.userApiKeys.update({
+    id: apiKey.id,
+    ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+    ...(params.allowedOrigins !== undefined ? { allowedOrigins: params.allowedOrigins } : {}),
+    ...(params.branding !== undefined ? { branding: params.branding } : {}),
+  });
 
   return {
     id: apiKey.id,
