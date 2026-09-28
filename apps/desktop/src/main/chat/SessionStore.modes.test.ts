@@ -101,11 +101,12 @@ describe('SessionStore migration', () => {
   });
 
   /**
-   * A file claiming Code with no usable project would otherwise produce a session whose tools
-   * have no working directory and silently fall back to the first global grant - which for a
-   * worktree-bound session is the wrong checkout.
+   * A file claiming Code with no usable project reads back UNBOUND rather than as Chat: it
+   * keeps the chip row that can re-point it, and an unbound Code session is granted no roots
+   * at all, so it cannot fall back to the first global grant. It used to be downgraded, which
+   * dropped the project silently and moved the conversation out of Code mode with it.
    */
-  it('downgrades a code session whose project is unusable rather than trusting the mode', async () => {
+  it('keeps a code session whose project is unusable in Code mode, unbound', async () => {
     const id = '11111111-1111-4111-8111-111111111111';
     await writeFile(
       join(directory, `${id}.json`),
@@ -114,7 +115,7 @@ describe('SessionStore migration', () => {
     );
 
     const session = await store.get(id);
-    expect(session?.mode).toBe('chat');
+    expect(session?.mode).toBe('code');
     expect(session?.project).toBeUndefined();
     expect(session?.title).toBe('broken');
   });
@@ -128,7 +129,7 @@ describe('SessionStore code sessions', () => {
   });
 
   it('records the project and round-trips it', async () => {
-    const created = await store.create(MODEL, PROJECT);
+    const created = await store.create(MODEL, { project: PROJECT });
     expect(created.mode).toBe('code');
 
     const loaded = await store.get(created.id);
@@ -136,7 +137,7 @@ describe('SessionStore code sessions', () => {
   });
 
   it('leaves a Code session untitled so the first prompt still names it', async () => {
-    const created = await store.create(MODEL, PROJECT);
+    const created = await store.create(MODEL, { project: PROJECT });
     await store.appendMessage(created.id, {
       id: 'm1',
       role: 'user',
@@ -157,7 +158,7 @@ describe('SessionStore code sessions', () => {
   });
 
   it('adds a context directory once, and removes it', async () => {
-    const created = await store.create(MODEL, PROJECT);
+    const created = await store.create(MODEL, { project: PROJECT });
     await store.addContextDirectory(created.id, '/repos/another');
     await store.addContextDirectory(created.id, '/repos/another');
 
@@ -174,7 +175,7 @@ describe('SessionStore code sessions', () => {
 
   // Deleting a conversation must never be a way to lose a worktree that holds uncommitted work.
   it('deletes the session without touching the project directory', async () => {
-    const created = await store.create(MODEL, PROJECT);
+    const created = await store.create(MODEL, { project: PROJECT });
     await store.delete(created.id);
 
     expect(await store.get(created.id)).toBeNull();

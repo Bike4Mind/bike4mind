@@ -16,6 +16,7 @@ export function Composer({
   streaming,
   attachments,
   blockedReason,
+  notReady,
   placeholder = 'Send a message...',
   onSend,
   onStop,
@@ -29,11 +30,18 @@ export function Composer({
   /** Prompt for an empty composer. A Code session asks for a task, a Chat session for a message. */
   placeholder?: string;
   /**
-   * Why this turn cannot be sent as composed - today only an image on a model known not to
-   * read them. Shown in full and blocks Send: the alternative is a request the server rejects
-   * for reasons the user never sees.
+   * Why this turn cannot be sent as composed - an image on a model known not to read them, or
+   * a Code session with no project folder chosen. Shown in full and blocks Send: the
+   * alternative is a request that is refused for reasons the user never sees.
    */
   blockedReason?: string | null;
+  /**
+   * A word for the idle indicator naming a state that is not ready to send - "No folder" for a
+   * Code session with no project. It blocks Send and draws NO banner: the control that answers
+   * it is a few pixels above, and a line of prose repeating what that control already says is
+   * noise. Main refuses the turn regardless; this is so the button agrees with it.
+   */
+  notReady?: string | null;
   onSend: (text: string) => void;
   onStop: () => void;
   /** Controls that belong to the next turn rather than to the app - the model picker. */
@@ -48,7 +56,7 @@ export function Composer({
   const [text, setText] = useState('');
 
   const hasContent = text.trim().length > 0 || attachments.attachments.length > 0;
-  const blocked = !!blockedReason;
+  const blocked = !!blockedReason || !!notReady;
 
   const submit = () => {
     if (!hasContent || disabled || streaming || attachments.busy || blocked) return;
@@ -105,7 +113,7 @@ export function Composer({
           color="warning"
           variant="soft"
           sx={{ ...contentColumnSx, mt: 1 }}
-          data-testid="attachment-vision-block"
+          data-testid="composer-blocked-reason"
         >
           {blockedReason}
         </Alert>
@@ -147,6 +155,10 @@ export function Composer({
         )}
       </Stack>
 
+      {/* The live turn line gets the full width, on its own row, left aligned. Sharing the
+          control row below it meant competing with the model picker for space, and losing. */}
+      {status && <Box sx={{ ...contentColumnSx, pt: 1 }}>{status}</Box>}
+
       {/* Attach on the left, what answers the turn on the right - the shape Claude Code uses. */}
       <Stack direction="row" alignItems="center" spacing={1} sx={{ ...contentColumnSx, py: 1 }}>
         <IconButton
@@ -165,23 +177,29 @@ export function Composer({
 
         {footer}
 
-        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }} data-testid="composer-status">
-          {status ?? (
-            <>
-              <Box
-                sx={{
-                  width: 7,
-                  height: 7,
-                  borderRadius: '50%',
-                  bgcolor: streaming ? 'primary.solidBg' : disabled ? 'neutral.softBg' : 'success.solidBg',
-                }}
-              />
-              <Typography level="body-xs" textColor="text.tertiary">
-                {streaming ? 'Working' : disabled ? 'No session' : 'Ready'}
-              </Typography>
-            </>
-          )}
-        </Stack>
+        {/* Stands down entirely while the turn line above is showing: two elements that can
+            disagree about whether a reply is running is worse than one. */}
+        {!status && (
+          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }} data-testid="composer-status">
+            <Box
+              sx={{
+                width: 7,
+                height: 7,
+                borderRadius: '50%',
+                bgcolor: streaming
+                  ? 'primary.solidBg'
+                  : disabled
+                    ? 'neutral.softBg'
+                    : notReady
+                      ? 'warning.solidBg'
+                      : 'success.solidBg',
+              }}
+            />
+            <Typography level="body-xs" textColor="text.tertiary" noWrap>
+              {streaming ? 'Working' : disabled ? 'No session' : (notReady ?? 'Ready')}
+            </Typography>
+          </Stack>
+        )}
       </Stack>
     </Box>
   );

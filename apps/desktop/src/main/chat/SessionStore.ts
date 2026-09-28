@@ -1,7 +1,14 @@
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
-import type { ChatMessage, ChatProject, ChatSession, ChatSessionOrigin, ChatSessionSummary } from '@shared/chat';
+import type {
+  ChatMessage,
+  ChatProject,
+  ChatSession,
+  ChatSessionMode,
+  ChatSessionOrigin,
+  ChatSessionSummary,
+} from '@shared/chat';
 
 /** Session ids are generated here, but arrive back from the renderer over IPC - see `filePath`. */
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -26,6 +33,23 @@ export function deriveTitle(prompt: string): string {
   return `${oneLine.slice(0, TITLE_MAX_LENGTH - 3).trimEnd()}...`;
 }
 
+/** Everything about a new session other than its model. */
+export interface CreateOptions {
+  /**
+   * Fixed at creation rather than settable later for a Chat session, because the working
+   * directory it names is what the tools have been running in. A Code session CAN arrive
+   * without one and be bound afterwards - that is the one direction `mode` and `project`
+   * disagree in, and the chip row is what resolves it.
+   */
+  project?: ChatProject;
+  mode?: ChatSessionMode;
+  /**
+   * Marks a session the agent spawned. Write-once: the spawn caps are counted off it, so a
+   * session that could be re-parented could be walked out of them.
+   */
+  origin?: ChatSessionOrigin;
+}
+
 function summarize(session: ChatSession): ChatSessionSummary {
   const { messages, ...summary } = session;
   return { ...summary, messageCount: messages.length };
@@ -35,8 +59,8 @@ function summarize(session: ChatSession): ChatSessionSummary {
  * A stored project binding, or null when it is not one the tools could be pointed at.
  *
  * `workingDirectory` and `directory` are both required because they are what the tools root
- * themselves at; a partial binding is dropped and the session reads back as Chat, which is the
- * safe direction - it loses the grouping, not the conversation.
+ * themselves at; a partial binding is dropped and the session reads back unbound, which is the
+ * safe direction - it loses where it runs, not the conversation.
  */
 function normalizeProject(value: unknown): ChatProject | null {
   if (!value || typeof value !== 'object') return null;
@@ -100,13 +124,12 @@ export class SessionStore {
    * `model` is what the caller resolved against the server's catalog; omitting it falls back to
    * the build's preferred model, which is the right answer only until that catalog is readable.
    *
-   * `project` makes it a Code session. It is fixed here rather than settable later, because the
-   * working directory it names is what the tools have been running in.
-   *
-   * `origin` marks it as one the agent spawned. Write-once for the same reason: the spawn caps
-   * are counted off it, so a session that could be re-parented could be walked out of them.
+   * The rest arrive as named options rather than as three more positionals, because two of
+   * them are independently optional and `create(model, undefined, undefined, origin)` is not a
+   * call anyone can read.
    */
-  async create(model?: string, project?: ChatProject, origin?: ChatSessionOrigin): Promise<ChatSessionSummary> {
+  async create(model?: string, options: CreateOptions = {}): Promise<ChatSessionSummary> {
+    const { project, origin, mode = project ? 'code' : 'chat' } = options;
     const now = new Date().toISOString();
     const session: ChatSession = {
       id: randomUUID(),
@@ -116,8 +139,8 @@ export class SessionStore {
       model: model || this.defaultModel,
       createdAt: now,
       updatedAt: now,
-      mode: project ? 'code' : 'chat',
-      ...(project ? { project } : {}),
+      mode,
+      ...(project && mode === 'code' ? { project } : {}),
       ...(origin ? { origin } : {}),
       messages: [],
     };
@@ -233,15 +256,18 @@ export class SessionStore {
   }
 
   /**
-   * Re-ground a Code session. The caller has already resolved `workingDirectory` - this only
+   * Ground a Code session. The caller has already resolved `workingDirectory` - this only
    * records the decision, so a worktree that could not be prepared never reaches disk.
+   *
+   * Keyed on the MODE rather than on an existing project, because the first binding of an
+   * unbound Code session comes through here too.
    *
    * Leaves `updatedAt` alone: changing where a conversation is rooted says nothing about when
    * it was last talked to, and bumping it would reorder the sidebar behind the user's back.
    */
   async setProject(id: string, project: ChatProject): Promise<ChatSessionSummary | null> {
     const session = await this.get(id);
-    if (!session?.project) return null;
+    if (session?.mode !== 'code') return null;
     session.project = project;
     await this.write(session);
     return summarize(session);
@@ -328,10 +354,11 @@ export class SessionStore {
       createdAt: parsed.createdAt ?? now,
       updatedAt: parsed.updatedAt ?? parsed.createdAt ?? now,
       // Every session written before modes existed is a Chat session, which is why 'chat' is
-      // the fallback and not merely the default for new ones. A file claiming 'code' without a
-      // usable project is downgraded rather than trusted: a Code session with no working
-      // directory would send its tools to whatever the first global grant happens to be.
-      mode: parsed.mode === 'code' && project ? 'code' : 'chat',
+      // the fallback and not merely the default for new ones. A file claiming 'code' whose
+      // project did not survive normalizeProject reads back as an UNBOUND Code session rather
+      // than being downgraded: it keeps the chips that can re-point it, and it is safe only
+      // because such a session is granted no roots at all - see ChatService.resolveToolScope.
+      mode: parsed.mode === 'code' ? 'code' : 'chat',
       ...(parsed.mode === 'code' && project ? { project } : {}),
       ...(parsed.pinned ? { pinned: true } : {}),
       ...(parsed.archived ? { archived: true } : {}),

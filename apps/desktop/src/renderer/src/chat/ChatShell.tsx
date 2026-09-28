@@ -8,7 +8,6 @@ import Typography from '@mui/joy/Typography';
 import type { ChatProject, ChatSessionMode } from '@shared/chat';
 import { BackgroundProcessPanel } from './BackgroundProcessPanel';
 import { Composer } from './Composer';
-import { FolderAccess } from './FolderAccess';
 import { MessageThread } from './MessageThread';
 import { PendingApprovalBar } from './PendingApprovalBar';
 import { contentColumnSx } from './layout';
@@ -16,7 +15,6 @@ import { ModelPicker } from './ModelPicker';
 import { SessionChips } from './SessionChips';
 import { SessionList } from './SessionList';
 import { SidebarCard } from './SidebarCard';
-import { SidebarShortcuts } from './SidebarShortcuts';
 import { TurnStatus } from './TurnStatus';
 import { describeActivity } from './statusLine';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
@@ -135,6 +133,13 @@ export function ChatShell({ account }: { account?: ReactNode }) {
       ? `${modelOption.name} cannot read images. Pick a model that can, or remove the image before sending.`
       : null;
 
+  // A Code session with no project has no working directory, so main refuses the turn. Nothing
+  // is written out in prose: the unset folder chip a few pixels above is the thing to act on,
+  // and the composer names the state in one word where the reader already looks for "can I
+  // send?". Main's refusal stays as the guard, and surfaces through chat-send-error if a turn
+  // ever reaches it.
+  const unbound = conversation.session?.mode === 'code' && !conversation.session.project;
+
   // What the turn in flight is doing, read off the reply being streamed into the thread. Only
   // the last message can be that reply, so nothing earlier is consulted.
   const inFlight = conversation.messages[conversation.messages.length - 1];
@@ -176,13 +181,12 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   }, [loading, activeId, sessions, mode]);
 
   /**
-   * Start a session. In Code mode that is the folder picker and nothing else.
+   * Start a session. New behaves the same in both modes: it makes one, and opens nothing.
    *
-   * There is no setup form any more: a project directory is the only thing a Code session
-   * cannot be created without - its tools have to run somewhere - and the branch, worktree and
-   * context folders it used to ask for are all chips above the composer now, answerable at any
-   * point instead of once. So the session opens on the repository's current branch, in the
-   * checkout itself, and the row says so.
+   * A Code session is created UNBOUND - no directory, no branch - and the chip row above the
+   * composer is where a project gets chosen. Creating one used to open the OS folder picker
+   * first, which meant dismissing that dialog produced nothing at all: no session, no message,
+   * and no way back in. Nothing is asked up front now, so there is nothing left to cancel.
    */
   const onCreate = useCallback(async () => {
     if (mode !== 'code') {
@@ -190,14 +194,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
       return;
     }
     clearCodeError();
-    const directory = await window.b4m.chat.pickProjectDirectory();
-    if (!directory) return;
-    const inspected = await window.b4m.chat.inspectProject(directory);
-    const created = await createCode({
-      directory,
-      branch: inspected.currentBranch ?? '',
-      workspace: false,
-    });
+    const created = await createCode({});
     if (created) setActiveId(created);
   }, [mode, create, createCode, clearCodeError]);
 
@@ -269,8 +266,6 @@ export function ChatShell({ account }: { account?: ReactNode }) {
         onDelete={sessionId => void onDelete(sessionId)}
         onTogglePin={session => void togglePin(session)}
         onToggleArchived={session => void toggleArchived(session)}
-        customize={<FolderAccess />}
-        more={<SidebarShortcuts />}
         card={<SidebarCard />}
         footer={account}
       />
@@ -338,8 +333,10 @@ export function ChatShell({ account }: { account?: ReactNode }) {
           </Alert>
         )}
 
-        {conversation.session?.project && (
-          <SessionChips project={conversation.session.project} binding={conversation.project} />
+        {/* Every Code session, bound or not. The chips are how a project is chosen, so gating
+            them on one already being chosen is what made them unreachable. */}
+        {conversation.session?.mode === 'code' && (
+          <SessionChips project={conversation.session.project ?? null} binding={conversation.project} />
         )}
 
         <Composer
@@ -348,6 +345,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
           streaming={conversation.streaming}
           attachments={draft}
           blockedReason={blockedReason}
+          notReady={unbound ? 'No folder' : null}
           placeholder={
             conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'
           }

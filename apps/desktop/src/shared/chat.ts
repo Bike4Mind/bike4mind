@@ -299,7 +299,7 @@ export interface ChatUsage {
 export type ChatSessionMode = 'chat' | 'code';
 
 /**
- * What a Code session is grounded in, fixed when the session is created.
+ * What a Code session is grounded in, once the user has chosen it.
  *
  * `workingDirectory` is the one field the tools read, and it is stored rather than recomputed
  * because resolving it can CREATE a worktree: recomputing on every turn would either repeat
@@ -347,7 +347,11 @@ interface ChatSessionMeta {
   createdAt: string;
   updatedAt: string;
   mode: ChatSessionMode;
-  /** Set on Code sessions only. A Chat session has no project and sits outside the groups. */
+  /**
+   * Set on Code sessions that have been pointed at a directory. Absent on a Chat session, and
+   * on a Code session nobody has chosen a folder for yet - which is a usable state, not a
+   * broken one, and the only thing it cannot do is run a turn.
+   */
   project?: ChatProject;
   /** Pinned to the top of the sidebar, above both the groups and the loose conversations. */
   pinned?: boolean;
@@ -497,11 +501,11 @@ export interface ToolAccessState {
 }
 
 /**
- * What the New Code session dialog learned about a directory the user picked.
+ * What the app learned about a directory the user picked for a project.
  *
  * `isRepository: false` is not an error: the directory is still usable as a project, it just
- * has no branches and no worktree to offer, so the dialog hides both controls rather than
- * refusing the folder.
+ * has no branches and no worktree to offer, so the branch chip says so rather than the folder
+ * being refused.
  */
 export interface ProjectInspection {
   directory: string;
@@ -513,10 +517,19 @@ export interface ProjectInspection {
   error?: string;
 }
 
+/**
+ * Start a Code session. Every field is optional, because a Code session is allowed to exist
+ * with nothing chosen yet - that unbound state is what the chip row above the composer fills
+ * in, and it is the reason creating one does not depend on completing a native dialog.
+ *
+ * An unbound session has NO working directory, so it can run nothing: `send` refuses it and
+ * its tools are granted no roots at all. See ChatService.resolveToolScope.
+ */
 export interface CreateCodeSessionRequest {
-  directory: string;
-  branch: string;
-  workspace: boolean;
+  /** Absent leaves the session unbound; the folder chip is then the picker. */
+  directory?: string;
+  branch?: string;
+  workspace?: boolean;
   contextDirectories?: string[];
 }
 
