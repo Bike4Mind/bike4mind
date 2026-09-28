@@ -3,7 +3,13 @@ import React from 'react';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import { useLakeDriveConnection } from './googleDrive';
+import {
+  useLakeDriveConnection,
+  driveConnectionPollInterval,
+  DRIVE_CONNECTION_ACTIVE_POLL_MS,
+  DRIVE_CONNECTION_IDLE_POLL_MS,
+  type LakeDriveConnection,
+} from './googleDrive';
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn() } }));
 
@@ -55,5 +61,38 @@ describe('useLakeDriveConnection', () => {
     const { result } = renderLakeDriveConnection('other_org_lake');
 
     await waitFor(() => expect(result.current.isError).toBe(true));
+  });
+});
+
+// A fresh connect writes status:'connected' immediately, before the queued ingest job claims it
+// into 'syncing' - a poll that only ran while 'syncing' would never re-fetch past that pre-claim
+// gap and could cache fileCount: 0 forever.
+describe('driveConnectionPollInterval', () => {
+  const connection = (overrides: Partial<LakeDriveConnection>): LakeDriveConnection => ({
+    id: 'c1',
+    driveFolderId: 'fld_1',
+    folderName: 'Q3-Reports',
+    status: 'connected',
+    enabled: true,
+    lastError: null,
+    lastUsedAt: null,
+    connectedAt: null,
+    fileCount: 0,
+    ...overrides,
+  });
+
+  it('does not poll when there is no connection', () => {
+    expect(driveConnectionPollInterval(null)).toBe(false);
+    expect(driveConnectionPollInterval(undefined)).toBe(false);
+  });
+
+  it('polls fast while a sync is actively in flight', () => {
+    expect(driveConnectionPollInterval(connection({ status: 'syncing' }))).toBe(DRIVE_CONNECTION_ACTIVE_POLL_MS);
+  });
+
+  it('keeps polling at an idle cadence once connected, so a pre-claim fileCount eventually settles', () => {
+    expect(driveConnectionPollInterval(connection({ status: 'connected', fileCount: 0 }))).toBe(
+      DRIVE_CONNECTION_IDLE_POLL_MS
+    );
   });
 });
