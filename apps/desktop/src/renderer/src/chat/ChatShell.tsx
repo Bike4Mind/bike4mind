@@ -13,7 +13,6 @@ import { FolderAccess } from './FolderAccess';
 import { MessageThread } from './MessageThread';
 import { contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
-import { ModeSwitcher } from './ModeSwitcher';
 import { NewCodeSessionDialog } from './NewCodeSessionDialog';
 import { SessionList } from './SessionList';
 import { SidebarCard } from './SidebarCard';
@@ -228,6 +227,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
       <SessionList
         sessions={sessions}
         mode={mode}
+        onModeChange={setMode}
         loading={loading}
         activeId={activeId}
         statuses={statuses}
@@ -246,24 +246,18 @@ export function ChatShell({ account }: { account?: ReactNode }) {
 
       <Stack sx={{ flex: 1, minWidth: 0 }}>
         <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
-          <Stack direction="row" sx={{ ...contentColumnSx, py: 1.25, alignItems: 'flex-start', gap: 1 }}>
-            <Box sx={{ flex: 1, minWidth: 0 }}>
-              {conversation.session ? (
-                <>
-                  <SessionHeader
-                    title={conversation.session.title}
-                    onRename={title => void conversation.rename(title)}
-                  />
-                  {conversation.session.project && <ProjectBar project={conversation.session.project} />}
-                </>
-              ) : (
-                <Typography level="title-sm" textColor="text.tertiary">
-                  No conversation open
-                </Typography>
-              )}
-            </Box>
-            <ModeSwitcher mode={mode} onChange={setMode} />
-          </Stack>
+          <Box sx={{ ...contentColumnSx, py: 1.25 }}>
+            {conversation.session ? (
+              <>
+                <SessionHeader title={conversation.session.title} onRename={title => void conversation.rename(title)} />
+                {conversation.session.project && <ProjectBar project={conversation.session.project} />}
+              </>
+            ) : (
+              <Typography level="title-sm" textColor="text.tertiary">
+                No conversation open
+              </Typography>
+            )}
+          </Box>
         </Box>
 
         <MessageThread

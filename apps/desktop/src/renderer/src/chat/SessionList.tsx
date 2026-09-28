@@ -12,6 +12,7 @@ import Typography from '@mui/joy/Typography';
 import type { ChatSessionMode, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { groupSessions, orderedSessions, quickSwitchIndices, type ProjectGroup } from './grouping';
 import { ChevronIcon, MoreIcon, PanelLeftIcon, PlusIcon, SearchIcon, SlidersIcon } from './icons';
+import { ModeSwitcher } from './ModeSwitcher';
 import { SessionBadge } from './SessionBadge';
 
 export const SIDEBAR_WIDTH = 280;
@@ -200,6 +201,7 @@ function ProjectHeader({
 export function SessionList({
   sessions,
   mode,
+  onModeChange,
   loading,
   activeId,
   statuses,
@@ -217,6 +219,7 @@ export function SessionList({
 }: {
   sessions: ChatSessionSummary[];
   mode: ChatSessionMode;
+  onModeChange: (mode: ChatSessionMode) => void;
   loading: boolean;
   activeId: string | null;
   /** What each session is doing, pushed from main. Absent means idle. */
@@ -346,6 +349,10 @@ export function SessionList({
           <PanelLeftIcon />
         </IconButton>
       </Stack>
+
+      <Box sx={{ px: 1.5, pb: 1 }}>
+        <ModeSwitcher mode={mode} onChange={onModeChange} />
+      </Box>
 
       <Stack spacing={0.25} sx={{ px: 1, pb: 1 }}>
         <NavItem
