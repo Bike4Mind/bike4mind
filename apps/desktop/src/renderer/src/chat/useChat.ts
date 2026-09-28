@@ -288,6 +288,15 @@ export function useConversation(
   const [projectError, setProjectError] = useState<ProjectBindingError | null>(null);
   const [queued, setQueued] = useState<ChatQueuedMessage[]>([]);
   const [returned, setReturned] = useState<{ id: number; messages: ChatQueuedMessage[] } | null>(null);
+  /**
+   * Batch counter for returned text, monotonic for the life of this hook.
+   *
+   * NOT derived from `returned` itself: that is cleared on every session change, so the count
+   * would restart at 1 and the composer - which remembers the last batch it took in - would
+   * silently skip the next one as already consumed. The user then got the notice saying their
+   * text was back, with an empty composer.
+   */
+  const returnBatch = useRef(0);
 
   // Read inside the IPC subscription, which must not be torn down and rebuilt per session
   // change: a rebuild between 'start' and the first 'delta' would drop tokens.
@@ -345,7 +354,7 @@ export function useConversation(
       if (explanation) setNotice(explanation);
       // Counted, not content-keyed: two cancels of the same text must both reach the composer.
       const back = event.returned;
-      if (back) setReturned(current => ({ id: (current?.id ?? 0) + 1, messages: back.messages }));
+      if (back) setReturned({ id: ++returnBatch.current, messages: back.messages });
     });
   }, []);
 
