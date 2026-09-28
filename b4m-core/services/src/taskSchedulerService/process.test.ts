@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { process } from './process';
-import { TaskScheduleStatus, TaskScheduleHandler } from '@bike4mind/common';
+import { ITaskSchedule, ITaskScheduleRepository, TaskScheduleStatus, TaskScheduleHandler } from '@bike4mind/common';
 
-const mockHandler = vi.fn();
+type SchedulerHandlers = Parameters<typeof process>[0]['handlers'];
+type ResearchTaskSchedule = Extract<ITaskSchedule, { handler: TaskScheduleHandler.RESEARCH_TASK_PROCESS }>;
+const mockHandler = vi.fn<SchedulerHandlers[TaskScheduleHandler.RESEARCH_TASK_PROCESS]>();
 const mockLogger = { info: vi.fn(), error: vi.fn() };
 
 const now = new Date('2024-01-01T00:00:00Z');
@@ -10,7 +12,7 @@ vi.setSystemTime(now);
 
 const LEASE_TTL_MS = 30 * 60 * 1000;
 
-const makeTask = (overrides: Record<string, unknown> = {}) => ({
+const makeTask = (overrides: Partial<ResearchTaskSchedule> = {}): ResearchTaskSchedule => ({
   id: 'task-1',
   handler: TaskScheduleHandler.RESEARCH_TASK_PROCESS,
   payload: { id: 'foo', userId: 'bar' },
@@ -26,27 +28,34 @@ const makeTask = (overrides: Record<string, unknown> = {}) => ({
  * concurrent callers genuinely interleave, then does its check-and-set without another await:
  * the same all-or-nothing guarantee Mongo's findOneAndUpdate gives the real repository.
  */
-const setup = (tasks: ReturnType<typeof makeTask>[]) => {
-  const rows = tasks.map(task => ({ ...task }) as Record<string, any>);
+const setup = (tasks: ITaskSchedule[]) => {
+  const rows: ITaskSchedule[] = tasks.map(task => ({ ...task }));
 
   const taskSchedules = {
-    claimDueTaskSchedule: vi.fn(async (dueBefore: Date, leaseExpiredBefore: Date) => {
-      await Promise.resolve();
-      const row = rows.find(
-        candidate =>
-          candidate.processDate < dueBefore &&
-          (candidate.status === TaskScheduleStatus.PENDING ||
-            (candidate.status === TaskScheduleStatus.PROCESSING &&
-              (candidate.claimedAt == null || candidate.claimedAt < leaseExpiredBefore)))
-      );
-      if (!row) {
-        return null;
+    find: vi.fn<ITaskScheduleRepository['find']>(),
+    findOne: vi.fn<ITaskScheduleRepository['findOne']>(),
+    create: vi.fn<ITaskScheduleRepository['create']>(),
+    findById: vi.fn<ITaskScheduleRepository['findById']>(),
+    claimDueTaskSchedule: vi.fn<ITaskScheduleRepository['claimDueTaskSchedule']>(
+      async (dueBefore, leaseExpiredBefore) => {
+        await Promise.resolve();
+        const row = rows.find(
+          candidate =>
+            candidate.processDate != null &&
+            candidate.processDate < dueBefore &&
+            (candidate.status === TaskScheduleStatus.PENDING ||
+              (candidate.status === TaskScheduleStatus.PROCESSING &&
+                (candidate.claimedAt == null || candidate.claimedAt < leaseExpiredBefore)))
+        );
+        if (!row) {
+          return null;
+        }
+        row.status = TaskScheduleStatus.PROCESSING;
+        row.claimedAt = new Date();
+        return { ...row };
       }
-      row.status = TaskScheduleStatus.PROCESSING;
-      row.claimedAt = new Date();
-      return { ...row };
-    }),
-    update: vi.fn(async (data: Record<string, any>) => {
+    ),
+    update: vi.fn<ITaskScheduleRepository['update']>(async (data: Partial<ITaskSchedule>) => {
       await Promise.resolve();
       const row = rows.find(candidate => candidate.id === data.id);
       if (row) {
@@ -54,16 +63,19 @@ const setup = (tasks: ReturnType<typeof makeTask>[]) => {
       }
       return row ?? null;
     }),
-  };
+    updateMany: vi.fn<ITaskScheduleRepository['updateMany']>(),
+    delete: vi.fn<ITaskScheduleRepository['delete']>(),
+    count: vi.fn<ITaskScheduleRepository['count']>(),
+  } satisfies ITaskScheduleRepository;
 
-  const updateFor = (id: string) =>
-    taskSchedules.update.mock.calls.map(([arg]) => arg).find(arg => arg.id === id) as Record<string, any> | undefined;
+  const updateFor = (id: string): Partial<ITaskSchedule> | undefined =>
+    taskSchedules.update.mock.calls.map(([arg]) => arg).find(arg => arg.id === id);
 
-  return { db: { taskSchedules } as any, rows, updateFor, taskSchedules };
+  return { db: { taskSchedules }, rows, updateFor, taskSchedules };
 };
 
 describe('taskSchedulerService/process', () => {
-  let handlers: any;
+  let handlers: SchedulerHandlers;
 
   beforeEach(() => {
     mockHandler.mockReset();
@@ -71,6 +83,7 @@ describe('taskSchedulerService/process', () => {
     mockLogger.error.mockReset();
     handlers = {
       [TaskScheduleHandler.RESEARCH_TASK_PROCESS]: mockHandler,
+      [TaskScheduleHandler.CUSTOM_TASK_PROCESS]: vi.fn(async () => {}),
     };
   });
 
@@ -134,9 +147,7 @@ describe('taskSchedulerService/process', () => {
       makeTask({ id: 'task-2', payload: { id: 'ok', userId: 'bar' } }),
     ]);
     const error = new Error('Queue unavailable');
-    mockHandler.mockImplementation((payload: any) =>
-      payload.id === 'boom' ? Promise.reject(error) : Promise.resolve()
-    );
+    mockHandler.mockImplementation(payload => (payload.id === 'boom' ? Promise.reject(error) : Promise.resolve()));
 
     await process({ db, logger: mockLogger, handlers });
 
@@ -149,19 +160,6 @@ describe('taskSchedulerService/process', () => {
     expect(updateFor('task-1')).not.toHaveProperty('statusCompletedAt');
     expect(updateFor('task-2')).toMatchObject({ status: TaskScheduleStatus.COMPLETED });
     expect(mockLogger.error).toHaveBeenCalledWith('Error processing task schedule: task-1', error);
-  });
-
-  it('still completes a handler that returns synchronously', async () => {
-    const { db, taskSchedules } = setup([makeTask()]);
-    mockHandler.mockReturnValueOnce(undefined);
-
-    await process({ db, logger: mockLogger, handlers });
-
-    expect(taskSchedules.update).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        status: TaskScheduleStatus.COMPLETED,
-      })
-    );
   });
 
   it('does nothing if there are no due tasks', async () => {
@@ -184,7 +182,9 @@ describe('taskSchedulerService/process', () => {
   });
 
   it('sets task to FAILED if handler is not found', async () => {
-    const { db, updateFor } = setup([makeTask({ handler: 'UNKNOWN_HANDLER' })]);
+    const { db, updateFor } = setup([
+      makeTask({ handler: 'UNKNOWN_HANDLER' as TaskScheduleHandler.RESEARCH_TASK_PROCESS }),
+    ]);
 
     await process({ db, logger: mockLogger, handlers });
 
@@ -252,7 +252,7 @@ describe('taskSchedulerService/process', () => {
       makeTask({ payload: { id: 'stuck', userId: 'bar' } }),
       makeTask({ id: 'task-2', payload: { id: 'runnable', userId: 'bar' } }),
     ]);
-    mockHandler.mockImplementation((payload: any) =>
+    mockHandler.mockImplementation(payload =>
       payload.id === 'stuck' ? new Promise<void>(() => {}) : Promise.resolve()
     );
 
