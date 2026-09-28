@@ -4,7 +4,7 @@ import { questRepository, Session, sessionRepository } from '@bike4mind/database
 import { OperationsModelService } from '@client/services/operationsModelService';
 import { sessionService } from '@bike4mind/services';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
-import { recordSessionOperationalUsage } from '@server/events/recordSessionOperationalUsage';
+import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
 
 export const handler = withEventContext(async (event, logger) => {
   const { sessionId, userId } = SessionEvents.AutoName.schema.parse(event.properties);

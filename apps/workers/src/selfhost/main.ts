@@ -23,9 +23,9 @@ import { SelfHostWorker } from './selfHostWorker';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { dispatchSelfHostEvent } from './eventDispatch';
-import { runChunkRescueSweep, runStrandedVectorizeRescue } from './chunkRescueSweep';
+import { runChunkRescueSweep, runStrandedVectorizeRescue } from '@server/s3/chunkRescueSweep';
 import { runModerationRescueSweep } from '@server/s3/moderationRescueSweep';
-import { CHUNK_SCAN_BATCH } from './chunkScan';
+import { CHUNK_SCAN_BATCH } from '@server/s3/chunkScan';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,

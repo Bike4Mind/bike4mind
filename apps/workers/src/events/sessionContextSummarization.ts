@@ -4,7 +4,7 @@ import { Quest, Session, sessionRepository } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
 import { ChatModelName, IMessage, MessageContentObject } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
-import { recordSessionOperationalUsage } from '@server/events/recordSessionOperationalUsage';
+import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
 import mongoose from 'mongoose';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 

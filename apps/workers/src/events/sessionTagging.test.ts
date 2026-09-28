@@ -48,7 +48,7 @@ vi.mock('@client/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: h.getOperationsModel },
 }));
 
-vi.mock('@server/events/recordSessionOperationalUsage', () => ({
+vi.mock('@workers/events/recordSessionOperationalUsage', () => ({
   recordSessionOperationalUsage: h.recordUsage,
 }));
 

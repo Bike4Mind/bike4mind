@@ -4,7 +4,7 @@ import { OperationsModelService } from '@client/services/operationsModelService'
 import { withEventContext } from '@server/utils/eventContext';
 import { SessionEvents } from '@server/utils/eventBus';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
-import { recordSessionOperationalUsage } from '@server/events/recordSessionOperationalUsage';
+import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
 
 // A name that is blank after trim is not a usable tag: keeping it would let one blank element make
 // an otherwise-unusable completion look like a success. Shared by both parse paths so they cannot

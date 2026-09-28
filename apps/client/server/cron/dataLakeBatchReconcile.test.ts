@@ -76,7 +76,7 @@ vi.mock('sst', () => ({
   },
 }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
-vi.mock('@server/worker/chunkRescueSweep', () => ({
+vi.mock('@server/s3/chunkRescueSweep', () => ({
   runChunkRescueSweep: (...a: unknown[]) => h.runSweep(...(a as [])),
 }));
 vi.mock('@server/s3/moderationRescueSweep', () => ({
@@ -84,8 +84,8 @@ vi.mock('@server/s3/moderationRescueSweep', () => ({
 }));
 // Only the stranded-vectorize filter is stubbed (so the call args are assertable); the real
 // age/stale cutoff constants stay real so these tests pin the actual windows the cron uses.
-vi.mock('@server/worker/chunkScan', async importActual => ({
-  ...(await importActual<typeof import('@server/worker/chunkScan')>()),
+vi.mock('@server/s3/chunkScan', async importActual => ({
+  ...(await importActual<typeof import('@server/s3/chunkScan')>()),
   buildStrandedVectorizeScanFilter: (...a: unknown[]) => h.buildStrandedFilter(...(a as [Date, Date])),
 }));
 vi.mock('@server/utils/cloudwatch', () => ({

@@ -1,10 +1,10 @@
 import type { EventBridgeEvent } from 'aws-lambda';
 import type { Logger } from '@bike4mind/observability';
-import { handler as createMementoHandler } from '@server/events/createMemento';
-import { handler as sessionAutoNamingHandler } from '@server/events/sessionAutoNaming';
-import { handler as sessionSummarizationHandler } from '@server/events/sessionSummarization';
-import { handler as sessionContextSummarizationHandler } from '@server/events/sessionContextSummarization';
-import { handler as sessionTaggingHandler } from '@server/events/sessionTagging';
+import { handler as createMementoHandler } from '@workers/events/createMemento';
+import { handler as sessionAutoNamingHandler } from '@workers/events/sessionAutoNaming';
+import { handler as sessionSummarizationHandler } from '@workers/events/sessionSummarization';
+import { handler as sessionContextSummarizationHandler } from '@workers/events/sessionContextSummarization';
+import { handler as sessionTaggingHandler } from '@workers/events/sessionTagging';
 
 /**
  * Self-host event routing.

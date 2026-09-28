@@ -116,7 +116,7 @@ vi.mock('@server/utils/storage', () => ({
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
-vi.mock('@server/events/recordSessionOperationalUsage', () => ({
+vi.mock('@workers/events/recordSessionOperationalUsage', () => ({
   recordSessionOperationalUsage: h.recordSessionOperationalUsage,
 }));
 

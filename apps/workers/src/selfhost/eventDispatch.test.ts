@@ -8,11 +8,11 @@ const handlers = vi.hoisted(() => ({
   sessionTagging: vi.fn(),
 }));
 
-vi.mock('@server/events/createMemento', () => ({ handler: handlers.createMemento }));
-vi.mock('@server/events/sessionAutoNaming', () => ({ handler: handlers.sessionAutoNaming }));
-vi.mock('@server/events/sessionSummarization', () => ({ handler: handlers.sessionSummarization }));
-vi.mock('@server/events/sessionContextSummarization', () => ({ handler: handlers.sessionContextSummarization }));
-vi.mock('@server/events/sessionTagging', () => ({ handler: handlers.sessionTagging }));
+vi.mock('@workers/events/createMemento', () => ({ handler: handlers.createMemento }));
+vi.mock('@workers/events/sessionAutoNaming', () => ({ handler: handlers.sessionAutoNaming }));
+vi.mock('@workers/events/sessionSummarization', () => ({ handler: handlers.sessionSummarization }));
+vi.mock('@workers/events/sessionContextSummarization', () => ({ handler: handlers.sessionContextSummarization }));
+vi.mock('@workers/events/sessionTagging', () => ({ handler: handlers.sessionTagging }));
 
 const { dispatchSelfHostEvent } = await import('./eventDispatch');
 

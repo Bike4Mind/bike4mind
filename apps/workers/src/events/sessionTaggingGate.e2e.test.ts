@@ -79,7 +79,7 @@ vi.mock('@client/services/operationsModelService', () => ({
   },
 }));
 
-vi.mock('@server/events/recordSessionOperationalUsage', () => ({
+vi.mock('@workers/events/recordSessionOperationalUsage', () => ({
   recordSessionOperationalUsage: vi.fn(),
 }));
 
