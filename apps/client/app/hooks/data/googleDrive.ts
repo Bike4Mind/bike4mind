@@ -1,6 +1,7 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { DriveConnectionStatus } from '@client/app/hooks/data/driveConnectionDisplay';
+import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 
 /** Safe, credential-free view returned by GET /api/data-lakes/:id/drive-connection. */
 export type LakeDriveConnection = {
@@ -106,7 +107,12 @@ export function useConnectDriveFolderToLake() {
   });
 }
 
-/** Disconnect a lake's Drive folder, releasing the claim (DELETE /api/data-lakes/:id/drive-connection). */
+/**
+ * Disconnect a lake's Drive folder, releasing the claim (DELETE /api/data-lakes/:id/drive-
+ * connection). The route purges every FabFile the connection ingested (see drive-connection.ts),
+ * so this must also invalidate the lake's own file/count queries, not just the connection status -
+ * before this PR a disconnect deleted nothing, so those queries had nothing to go stale over.
+ */
 export function useDisconnectLakeDrive() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -114,7 +120,11 @@ export function useDisconnectLakeDrive() {
       await api.delete(`/api/data-lakes/${dataLakeId}/drive-connection`);
     },
     onSuccess: async (_data, dataLakeId) => {
-      await queryClient.invalidateQueries({ queryKey: lakeDriveConnectionKey(dataLakeId) });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: lakeDriveConnectionKey(dataLakeId) }),
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) }),
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot }),
+      ]);
     },
   });
 }
