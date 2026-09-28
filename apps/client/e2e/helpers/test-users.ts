@@ -45,6 +45,7 @@ const SPEC_KEYS = [
   'search',
   'dataLake',
   'skills',
+  'credits',
   'notebookExportBytes',
   // The notebook-export-bytes importer: no project authenticates as it, but it is loaded here so
   // the spec can reach its token through getTestUsers like every other identity.
