@@ -28,7 +28,6 @@ function makeSyncedRepo() {
 describe('revokeUserApiKey', () => {
   it('disables an embed:chat key while leaving its embed fields intact', async () => {
     const { repo, getStored } = makeSyncedRepo();
-
     const adapters = {
       db: {
         userApiKeys: repo as any,
@@ -58,7 +57,6 @@ describe('revokeUserApiKey', () => {
 
   it('records the revocation audit trail and returns the key name', async () => {
     const { repo, getStored } = makeSyncedRepo();
-
     const adapters = {
       db: {
         userApiKeys: repo as any,
@@ -90,7 +88,6 @@ describe('revokeUserApiKey', () => {
 
   it('leaves revokedReason unset when no reason is supplied', async () => {
     const { repo, getStored } = makeSyncedRepo();
-
     const adapters = {
       db: {
         userApiKeys: repo as any,
@@ -112,7 +109,6 @@ describe('revokeUserApiKey', () => {
 
   it('keeps the first revocation when an already-revoked key is revoked again', async () => {
     const { repo, getStored } = makeSyncedRepo();
-
     const adapters = {
       db: {
         userApiKeys: repo as any,

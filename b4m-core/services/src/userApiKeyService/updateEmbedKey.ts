@@ -5,6 +5,7 @@ import {
   IAgentRepository,
   IOrganizationRepository,
   isAgentOwnedByEmbedKey,
+  IUserApiKeyDocument,
   IUserApiKeyRepository,
 } from '@bike4mind/common';
 import { secureParameters, BadRequestError, NotFoundError } from '@bike4mind/utils';
@@ -84,6 +85,7 @@ export const updateEmbedKey = async (
   // key bills or to its owner. This used to be deferred to the runtime consumer,
   // which left a key rebindable to another tenant's agent. The runtime checks stay
   // (a bound agent can change hands afterwards) but this is now an access boundary.
+  const patch: Partial<IUserApiKeyDocument> = { id: apiKey.id };
   if (params.agentId !== undefined) {
     // Fail closed: the type requires `agents`, so this only fires for a caller that bypassed the
     // type. The ownership check must never be skipped on a rebind.
@@ -94,17 +96,13 @@ export const updateEmbedKey = async (
     if (!agent || !isAgentOwnedByEmbedKey(agent, apiKey)) {
       throw new BadRequestError('agentId must reference an agent owned by the billing organization or the key owner');
     }
-    apiKey.agentId = params.agentId;
+    patch.agentId = params.agentId;
   }
-  if (params.allowedOrigins !== undefined) apiKey.allowedOrigins = params.allowedOrigins;
-  if (params.branding !== undefined) apiKey.branding = params.branding;
+  if (params.allowedOrigins !== undefined) patch.allowedOrigins = params.allowedOrigins;
+  if (params.branding !== undefined) patch.branding = params.branding;
 
-  await db.userApiKeys.update({
-    id: apiKey.id,
-    ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-    ...(params.allowedOrigins !== undefined ? { allowedOrigins: params.allowedOrigins } : {}),
-    ...(params.branding !== undefined ? { branding: params.branding } : {}),
-  });
+  Object.assign(apiKey, patch);
+  await db.userApiKeys.update(patch);
 
   return {
     id: apiKey.id,

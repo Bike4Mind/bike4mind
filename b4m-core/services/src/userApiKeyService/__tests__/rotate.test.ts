@@ -44,7 +44,6 @@ const mintParams = {
 describe('rotateUserApiKey — round-trip regression guard', () => {
   it('rotated key validates successfully and prefix length matches KEY_PREFIX_LENGTH', async () => {
     const { repo, getStored } = makeSyncedRepo();
-
     const adapters = {
       db: {
         userApiKeys: repo as any,
@@ -73,7 +72,6 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
 
   it('rotation preserves spendCap and accumulated spend (rotating the secret must not reset the meter)', async () => {
     const { repo, getStored } = makeSyncedRepo();
-
     const adapters = {
       db: {
         userApiKeys: repo as any,
@@ -106,7 +104,6 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
 
   it('original key is invalid after rotation', async () => {
     const { repo } = makeSyncedRepo();
-
     const adapters = {
       db: {
         userApiKeys: repo as any,
