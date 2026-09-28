@@ -343,7 +343,9 @@ export function DataLakeResearchPanel({
   const [draftBaseline, setDraftBaseline] = useState<ConfigDraft>(emptyDraft);
   const isDirty =
     editingId !== null && (Object.keys(draft) as (keyof ConfigDraft)[]).some(key => draft[key] !== draftBaseline[key]);
-  // The cleanup reports clean on unmount too: Joy unmounts an inactive TabPanel, which drops the draft.
+  // Cleanup reports clean so a dismissed panel cannot leave the host confirming edits that no
+  // longer exist. Must stay in sync with DataLakeSettingsModal: it passes `keepMounted` on this
+  // panel's TabPanel, because an unmount takes the draft with it.
   useEffect(() => {
     onDirtyChange?.(isDirty);
     return () => onDirtyChange?.(false);
