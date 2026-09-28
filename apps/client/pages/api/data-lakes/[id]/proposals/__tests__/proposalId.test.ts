@@ -35,6 +35,8 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
   dataLakeProposalRepository: { findById: h.findById },
+  lakeConfigChangeEventRepository: {},
+  adminSettingsRepository: {},
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@server/dataLakes/proposalAdmissionDeps', () => ({ admitProposedSource: h.admitProposedSource }));
@@ -81,6 +83,22 @@ describe('POST /api/data-lakes/:id/proposals/:proposalId', () => {
       data: { id: 'prop-1', status: 'approved' },
       fabFile: { id: 'file-9', fileName: 'Report' },
     });
+  });
+
+  // A session write needs no override, but an API-key caller must be attributed to the KEY, not
+  // silently folded into the creator's own identity - deleting this wiring would still pass every
+  // other assertion in this file.
+  it('attaches auditPrincipal for an API-key caller, so the write is attributed to the key', async () => {
+    const { res } = makeRes();
+    const req = { ...makeReq({ decision: 'approve' }), apiKeyInfo: { keyId: 'key-1' } };
+
+    await handler(req as never, res);
+
+    expect(h.approveDataLakeProposal).toHaveBeenCalledWith(
+      'prop-1',
+      expect.objectContaining({ auditPrincipal: expect.objectContaining({ principalKind: 'apiKey' }) }),
+      expect.anything()
+    );
   });
 
   it('declines with the reviewer reason and admits nothing', async () => {
