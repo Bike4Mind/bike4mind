@@ -3,6 +3,7 @@ import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Stack from '@mui/joy/Stack';
 import Textarea from '@mui/joy/Textarea';
+import { contentColumnSx } from './layout';
 
 export function Composer({
   disabled,
@@ -32,8 +33,8 @@ export function Composer({
   };
 
   return (
-    <Box sx={{ p: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
-      <Stack direction="row" spacing={1} alignItems="flex-end">
+    <Box sx={{ borderTop: '1px solid', borderColor: 'divider' }}>
+      <Stack direction="row" spacing={1} alignItems="flex-end" sx={{ ...contentColumnSx, py: 1.5 }}>
         <Textarea
           value={text}
           onChange={event => setText(event.target.value)}

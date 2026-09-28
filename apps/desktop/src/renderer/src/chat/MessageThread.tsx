@@ -7,59 +7,89 @@ import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { ChatMessage } from '@shared/chat';
+import { contentColumnSx } from './layout';
 import { ToolCallList } from './ToolCallList';
 
-function Bubble({ message, streaming }: { message: ChatMessage; streaming: boolean }) {
-  const isUser = message.role === 'user';
-  const toolCalls = message.toolCalls ?? [];
-  const awaitingFirstToken =
-    streaming && !isUser && message.content.length === 0 && toolCalls.length === 0 && !message.error;
+function StopReasonChip({ reason }: { reason?: string }) {
+  if (reason === 'max_tokens') {
+    return (
+      <Chip size="sm" color="warning" variant="soft" sx={{ mt: 1 }} data-testid="chat-truncated-chip">
+        Cut off at the length limit
+      </Chip>
+    );
+  }
+  if (reason === 'tool_turn_limit') {
+    return (
+      <Chip size="sm" color="warning" variant="soft" sx={{ mt: 1 }} data-testid="chat-tool-limit-chip">
+        Stopped after too many tool calls
+      </Chip>
+    );
+  }
+  if (reason === 'aborted') {
+    return (
+      <Chip size="sm" color="neutral" variant="soft" sx={{ mt: 1 }} data-testid="chat-stopped-chip">
+        Stopped
+      </Chip>
+    );
+  }
+  return null;
+}
 
+/**
+ * The user's own turn: a right-aligned bubble, narrower than the column so the alignment
+ * reads as "mine" at a glance even when the text is long.
+ */
+function UserTurn({ message }: { message: ChatMessage }) {
   return (
-    <Stack direction="row" justifyContent={isUser ? 'flex-end' : 'flex-start'}>
+    <Stack direction="row" justifyContent="flex-end">
       <Sheet
-        variant={isUser ? 'solid' : 'soft'}
-        color={isUser ? 'primary' : 'neutral'}
-        sx={{ px: 1.75, py: 1.25, borderRadius: 'md', maxWidth: '78%', minWidth: 0 }}
-        data-testid={isUser ? 'chat-message-user' : 'chat-message-assistant'}
+        variant="soft"
+        color="primary"
+        sx={{ px: 2, py: 1.25, borderRadius: 'lg', maxWidth: '85%', minWidth: 0 }}
+        data-testid="chat-message-user"
       >
-        {!isUser && <ToolCallList calls={toolCalls} />}
-
-        {awaitingFirstToken ? (
-          <CircularProgress size="sm" data-testid="chat-awaiting-reply" />
-        ) : (
-          // pre-wrap, not a markdown renderer: the model emits newlines and indentation that
-          // collapse to a single line without it. Rendering markdown is its own task.
-          message.content.length > 0 && (
-            <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-              {message.content}
-            </Typography>
-          )
-        )}
-
-        {message.error && (
-          <Alert size="sm" color="danger" variant="soft" sx={{ mt: 1 }} data-testid="chat-message-error">
-            {message.error}
-          </Alert>
-        )}
-
-        {message.stopReason === 'max_tokens' && (
-          <Chip size="sm" color="warning" variant="soft" sx={{ mt: 1 }} data-testid="chat-truncated-chip">
-            Cut off at the length limit
-          </Chip>
-        )}
-        {message.stopReason === 'tool_turn_limit' && (
-          <Chip size="sm" color="warning" variant="soft" sx={{ mt: 1 }} data-testid="chat-tool-limit-chip">
-            Stopped after too many tool calls
-          </Chip>
-        )}
-        {message.stopReason === 'aborted' && (
-          <Chip size="sm" color="neutral" variant="soft" sx={{ mt: 1 }} data-testid="chat-stopped-chip">
-            Stopped
-          </Chip>
-        )}
+        <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {message.content}
+        </Typography>
       </Sheet>
     </Stack>
+  );
+}
+
+/**
+ * The assistant's turn: set flush in the column with no bubble around it.
+ *
+ * A reply can run for screens, and a container drawn around that much text reads as a wall
+ * rather than as prose; the right-aligned user bubble is what separates the two speakers.
+ */
+function AssistantTurn({ message, streaming }: { message: ChatMessage; streaming: boolean }) {
+  const toolCalls = message.toolCalls ?? [];
+  const awaitingFirstToken = streaming && message.content.length === 0 && toolCalls.length === 0 && !message.error;
+
+  return (
+    <Box sx={{ minWidth: 0 }} data-testid="chat-message-assistant">
+      <ToolCallList calls={toolCalls} />
+
+      {awaitingFirstToken ? (
+        <CircularProgress size="sm" data-testid="chat-awaiting-reply" />
+      ) : (
+        // pre-wrap, not a markdown renderer: the model emits newlines and indentation that
+        // collapse to a single line without it. Rendering markdown is its own task.
+        message.content.length > 0 && (
+          <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            {message.content}
+          </Typography>
+        )
+      )}
+
+      {message.error && (
+        <Alert size="sm" color="danger" variant="soft" sx={{ mt: 1 }} data-testid="chat-message-error">
+          {message.error}
+        </Alert>
+      )}
+
+      <StopReasonChip reason={message.stopReason} />
+    </Box>
   );
 }
 
@@ -84,11 +114,17 @@ export function MessageThread({ messages, streaming }: { messages: ChatMessage[]
   }
 
   return (
-    <Box sx={{ flex: 1, overflowY: 'auto', p: 2 }} data-testid="chat-thread">
-      <Stack spacing={1.5}>
-        {messages.map((message, index) => (
-          <Bubble key={message.id} message={message} streaming={streaming && index === messages.length - 1} />
-        ))}
+    // Scrolling on the outer box, the column on the inner one: reversing the two would put the
+    // scrollbar in the middle of the window rather than at the edge of the pane.
+    <Box sx={{ flex: 1, overflowY: 'auto' }} data-testid="chat-thread">
+      <Stack spacing={3} sx={{ ...contentColumnSx, py: 3 }}>
+        {messages.map((message, index) =>
+          message.role === 'user' ? (
+            <UserTurn key={message.id} message={message} />
+          ) : (
+            <AssistantTurn key={message.id} message={message} streaming={streaming && index === messages.length - 1} />
+          )
+        )}
         <div ref={bottom} />
       </Stack>
     </Box>

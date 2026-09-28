@@ -72,6 +72,17 @@ describe('ChatService tool loop', () => {
     expect(declared).toEqual(['file_read', 'glob_files', 'grep_search']);
   });
 
+  it('names the granted roots so the model looks them up instead of guessing a path', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'what is in my shared folder?');
+    await firstRequest();
+
+    const preamble = post.mock.calls[0][1].messages[0];
+    expect(preamble.role).toBe('system');
+    expect(preamble.content).toContain(root);
+    expect(preamble.content).toMatch(/absolute paths/);
+  });
+
   it('runs the tool the model asks for and feeds the result back as a second turn', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'what is the largest file?');
@@ -101,9 +112,10 @@ describe('ChatService tool loop', () => {
     expect(toolEnd && 'call' in toolEnd ? toolEnd.call.preview : '').toContain('huge.bin');
 
     // The second request must carry the provider's tool_use / tool_result pair.
+    // Index 0 is the access preamble, 1 the user prompt.
     const second = post.mock.calls[1][1].messages;
-    expect(second[1]).toMatchObject({ role: 'assistant', content: [{ type: 'tool_use', id: 'call_1' }] });
-    expect(second[2]).toMatchObject({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1' }] });
+    expect(second[2]).toMatchObject({ role: 'assistant', content: [{ type: 'tool_use', id: 'call_1' }] });
+    expect(second[3]).toMatchObject({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1' }] });
 
     const persisted = (await service.getSession(id))?.messages[1];
     expect(persisted?.toolCalls).toHaveLength(1);
@@ -126,7 +138,7 @@ describe('ChatService tool loop', () => {
     await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 3000, interval: 5 });
     expect(events.find(event => event.type === 'tool-end')).toMatchObject({ call: { status: 'denied' } });
 
-    const result = post.mock.calls[1][1].messages[2].content[0];
+    const result = post.mock.calls[1][1].messages[3].content[0];
     expect(result).toMatchObject({ type: 'tool_result', is_error: true });
     expect(result.content).toMatch(/outside the folders you have granted/);
 

@@ -154,8 +154,7 @@ export class ChatService {
       const roots = await this.deps.access.list();
       const tools = toolsForRequest(roots);
       const wire = toCompletionMessages(session);
-      const preamble = buildSystemMessage(roots);
-      if (preamble) wire.unshift(preamble);
+      wire.unshift(buildSystemMessage(roots));
 
       for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
         const requested: RequestedTool[] = [];
@@ -329,17 +328,31 @@ export class ChatService {
 }
 
 /**
- * Tell the model which folders it can actually reach.
+ * State the model's current file access, every turn, whether or not anything is granted.
  *
- * Without this it has to guess a path from the user's wording - asking about "my Downloads
- * folder" produced a call against a plainly invented path, which is denied and wastes a whole
- * tool turn. Naming the roots turns guesswork into a lookup.
- *
- * Returns undefined when nothing is granted: no tools are declared in that case, so a
- * preamble describing file access would only invite offers the client cannot honour.
+ * Both halves were learned from live failures:
+ *  - Granted but unnamed, it guesses a path from the user's wording ("my Downloads folder" ->
+ *    a call against an invented `/shared`), which is denied and wastes a whole tool turn.
+ *  - Revoked, it FABRICATES. Sending nothing when no tools are declared left a thread whose
+ *    earlier turns contained a successful tool call, and the model imitated that shape and
+ *    invented a filename and byte count rather than saying it could not look. Saying "you have
+ *    no access" explicitly is what stops that, so this is never omitted.
  */
-function buildSystemMessage(roots: readonly string[]): CompletionMessage | undefined {
-  if (roots.length === 0) return undefined;
+function buildSystemMessage(roots: readonly string[]): CompletionMessage {
+  if (roots.length === 0) {
+    return {
+      role: 'system',
+      content: [
+        'You currently have NO access to the user files or filesystem, and no tools to read them.',
+        'Earlier turns in this conversation may show successful file reads; that access has since',
+        'been revoked and you cannot rely on it.',
+        'Never claim to have read, listed or searched a file, and never invent a file name, size,',
+        'path or contents. If asked about local files, say plainly that you have no access and ask',
+        'the user to grant a folder with the "Share a folder" button.',
+      ].join('\n'),
+    };
+  }
+
   return {
     role: 'system',
     content: [
@@ -348,6 +361,7 @@ function buildSystemMessage(roots: readonly string[]): CompletionMessage | undef
       ...roots.map(root => `  ${root}`),
       'Always pass absolute paths. Any path outside those folders is denied;',
       'if you need one, ask the user to share it with the "Share a folder" button.',
+      'Never invent a file name, size or contents: if a tool did not return it, you do not know it.',
     ].join('\n'),
   };
 }

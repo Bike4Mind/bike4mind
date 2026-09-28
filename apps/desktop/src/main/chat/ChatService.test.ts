@@ -87,11 +87,29 @@ describe('ChatService', () => {
     await service.send(id, 'second');
     await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 2000, interval: 5 });
 
-    expect(post.mock.calls[1][1].messages).toEqual([
+    // The leading system turn is the access preamble; the rest is the conversation itself.
+    expect(post.mock.calls[1][1].messages.slice(1)).toEqual([
       { role: 'user', content: 'first' },
       { role: 'assistant', content: 'reply one' },
       { role: 'user', content: 'second' },
     ]);
+  });
+
+  /**
+   * Regression: with nothing granted the model used to receive no tools AND no statement about
+   * access. In a thread whose earlier turns held a successful tool call it imitated that shape
+   * and invented a filename and byte count instead of admitting it could not look.
+   */
+  it('tells the model it has no file access when nothing is granted', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'what is in my Downloads folder?');
+    await vi.waitUntil(() => post.mock.calls.length === 1, { timeout: 2000, interval: 5 });
+
+    const preamble = post.mock.calls[0][1].messages[0];
+    expect(preamble.role).toBe('system');
+    expect(preamble.content).toMatch(/NO access/);
+    expect(preamble.content).toMatch(/never invent a file name/i);
+    expect(post.mock.calls[0][1].options.tools).toEqual([]);
   });
 
   it('keeps the partial reply when stopped, reported as done rather than an error', async () => {

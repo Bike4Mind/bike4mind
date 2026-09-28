@@ -6,6 +6,7 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { Composer } from './Composer';
 import { MessageThread } from './MessageThread';
+import { contentColumnSx } from './layout';
 import { SessionList } from './SessionList';
 import { useConversation, useSessions } from './useChat';
 
@@ -92,20 +93,22 @@ export function ChatShell({ account }: { account?: ReactNode }) {
       />
 
       <Stack sx={{ flex: 1, minWidth: 0 }}>
-        <Box sx={{ px: 2, py: 1.25, borderBottom: '1px solid', borderColor: 'divider' }}>
-          {conversation.session ? (
-            <SessionHeader title={conversation.session.title} onRename={title => void conversation.rename(title)} />
-          ) : (
-            <Typography level="title-sm" textColor="text.tertiary">
-              No conversation open
-            </Typography>
-          )}
+        <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
+          <Box sx={{ ...contentColumnSx, py: 1.25 }}>
+            {conversation.session ? (
+              <SessionHeader title={conversation.session.title} onRename={title => void conversation.rename(title)} />
+            ) : (
+              <Typography level="title-sm" textColor="text.tertiary">
+                No conversation open
+              </Typography>
+            )}
+          </Box>
         </Box>
 
         <MessageThread messages={conversation.messages} streaming={conversation.streaming} />
 
         {conversation.sendError && (
-          <Alert size="sm" color="danger" variant="soft" sx={{ mx: 1.5 }} data-testid="chat-send-error">
+          <Alert size="sm" color="danger" variant="soft" sx={contentColumnSx} data-testid="chat-send-error">
             {conversation.sendError}
           </Alert>
         )}
