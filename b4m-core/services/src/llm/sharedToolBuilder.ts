@@ -8,6 +8,7 @@
 
 import {
   parseToolArtifactAttributes,
+  scanArtifactTags,
   TOOL_ARTIFACT_EMITTERS,
   type IChatHistoryItemDocument,
   type ModelInfo,
@@ -32,7 +33,6 @@ import { isToolOfferable, type ToolAvailability } from './toolAvailability';
 import { extractAndSaveEntitiesFromToolResult, shouldExtractEntitiesFromTool } from '../conversationContextService';
 import type { MinimalSessionRepository } from '../conversationContextService/types';
 import { notifyToolFinish } from './toolFinishObserver';
-import { scanArtifactTags } from '../utils/scanArtifactTags';
 
 // ---------------------------------------------------------------------------
 // Types

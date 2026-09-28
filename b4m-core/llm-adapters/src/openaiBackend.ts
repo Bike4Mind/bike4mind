@@ -53,7 +53,7 @@ import {
   isUserInitiatedAbort,
   isRetryableError,
   stripToolArtifactMarkup,
-  TOOL_ARTIFACT_EMITTERS,
+  hasDeliverablePinnedArtifact,
   ARTIFACT_DELIVERED_PLACEHOLDER,
   ARTIFACT_REMOVED_PLACEHOLDER,
 } from '@bike4mind/common';
@@ -2191,7 +2191,7 @@ export class OpenAIBackend implements ICompletionBackend {
       const r = resolved[i];
       if (outcome.ok) {
         const rawResult = outcome.result.result.toString();
-        if (TOOL_ARTIFACT_EMITTERS.has(r.name)) {
+        if (hasDeliverablePinnedArtifact(r.name, rawResult)) {
           if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
           artifactGuard.markDelivered(rawResult);
         }

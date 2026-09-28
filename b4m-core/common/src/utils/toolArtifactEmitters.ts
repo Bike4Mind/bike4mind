@@ -1,5 +1,6 @@
 import { ClaudeArtifactMimeTypes } from '../types/entities/ArtifactTypes';
 import { type ArtifactTagMemo, scanArtifactOpenTag } from './artifactOpenTag';
+import { scanArtifactTags } from './scanArtifactTags';
 
 // The tools whose results may carry artifacts, each pinned to the one type it emits. Any other
 // tool's output (web pages, files, MCP servers) is untrusted and can carry forged markup. Read by
@@ -81,30 +82,15 @@ export function filterToolArtifactMarkup(toolName: string, text: string): string
 
 /**
  * True when `text` holds at least one complete `<artifact>` block of `toolName`'s pinned type -
- * the outcome sharedToolBuilder's scanArtifactTags-based extraction actually delivers to the
- * client. Unlike filterToolArtifactMarkup (built to construct display text, so it bails to null
- * on ANY malformed/unclosed opener anywhere in the string), this keeps scanning past a broken
- * opener for a later valid block, matching extraction's own recovery behavior - so a tool result
- * with a valid pinned block followed by a stray, malformed "<artifact" cannot be reported as
- * REMOVED when the client already rendered it.
+ * the outcome sharedToolBuilder's extraction actually delivers to the client. Shares
+ * scanArtifactTags with that extraction (rather than re-parsing openers with the reply-parser
+ * grammar filterToolArtifactMarkup uses), so this stays extraction-equivalent by construction
+ * instead of by two independently maintained tag grammars.
  */
 export function hasDeliverablePinnedArtifact(toolName: string, text: string): boolean {
   const allowedType = TOOL_ARTIFACT_EMITTERS.get(toolName);
   if (allowedType === undefined) return false;
-  const opener = /<artifact\b/gi;
-  const openTag = new RegExp(`<artifact\\s(${ARTIFACT_ATTRS_PATTERN})>`, 'iy');
-  const closer = /<\/artifact>/gi;
-  for (let open = opener.exec(text); open; open = opener.exec(text)) {
-    openTag.lastIndex = open.index;
-    const tag = openTag.exec(text);
-    if (!tag) continue; // malformed opener - a later opener may still be valid
-    closer.lastIndex = openTag.lastIndex;
-    const close = closer.exec(text);
-    if (!close) break; // unclosed - closer is an unscoped search, so nothing later closes either
-    if (parseToolArtifactAttributes(tag[1]).type === allowedType) return true;
-    opener.lastIndex = closer.lastIndex;
-  }
-  return false;
+  return scanArtifactTags(text, true).some(({ attrs }) => parseToolArtifactAttributes(attrs).type === allowedType);
 }
 
 /**

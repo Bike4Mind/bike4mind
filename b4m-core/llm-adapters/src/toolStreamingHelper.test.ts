@@ -98,8 +98,10 @@ describe('stripUnstreamedToolResult: delivered vs removed must agree with what e
     // filterToolArtifactMarkup would bail to null on the trailing malformed opener and read this
     // as REMOVED, even though sharedToolBuilder's scanArtifactTags already delivered the first block.
     const result = `${MERMAID_ARTIFACT}\n<artifact identifier="x" type="text/html" title="Open"><p>x</p>`;
+    const stripped = stripUnstreamedToolResult('mermaid_chart', result);
 
-    expect(stripUnstreamedToolResult('mermaid_chart', result)).toContain(ARTIFACT_DELIVERED_PLACEHOLDER);
+    expect(stripped).toBe(`${ARTIFACT_DELIVERED_PLACEHOLDER}\n${ARTIFACT_DELIVERED_PLACEHOLDER}`);
+    expect(stripped).not.toContain(ARTIFACT_REMOVED_PLACEHOLDER);
   });
 
   it('reports REMOVED for a result holding only a different type than the tool is pinned to', () => {

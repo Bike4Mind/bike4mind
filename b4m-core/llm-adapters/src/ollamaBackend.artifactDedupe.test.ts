@@ -67,4 +67,13 @@ describe('OllamaBackend does not feed tool artifact markup back to the model', (
     expect(requests[1]).not.toContain('<artifact');
     expect(requests[1]).toContain(ARTIFACT_REMOVED_PLACEHOLDER);
   });
+
+  it("strips an emitter's own artifact markup from its error message too", async () => {
+    const { requests } = await runToolTurn('mermaid_chart', async () => {
+      throw new Error(`bad diagram ${MERMAID_ARTIFACT}`);
+    });
+
+    expect(requests[1]).not.toContain('<artifact');
+    expect(requests[1]).toContain(ARTIFACT_REMOVED_PLACEHOLDER);
+  });
 });

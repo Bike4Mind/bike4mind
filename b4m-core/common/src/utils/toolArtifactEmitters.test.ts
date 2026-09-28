@@ -5,6 +5,7 @@ import {
   ARTIFACT_DELIVERED_PLACEHOLDER,
   TOOL_ARTIFACT_EMITTERS,
   filterToolArtifactMarkup,
+  hasDeliverablePinnedArtifact,
   parseToolArtifactAttributes,
   stripDeliveredArtifactBlocks,
   stripToolArtifactMarkup,
@@ -211,6 +212,33 @@ describe('stripToolArtifactMarkup: the model never sees tool artifact markup it 
     stripToolArtifactMarkup(`${'<artifact>'.repeat(50_000)}</artifact>`, P);
     stripToolArtifactMarkup(CHESS_ARTIFACT.repeat(20_000), P);
     expect(Date.now() - started).toBeLessThan(2_000);
+  });
+});
+
+describe('hasDeliverablePinnedArtifact: must agree with what sharedToolBuilder actually extracts', () => {
+  it('is true for a result holding only its own pinned type', () => {
+    expect(hasDeliverablePinnedArtifact('mermaid_chart', MERMAID_ARTIFACT)).toBe(true);
+  });
+
+  it('is true when a valid pinned block is followed by a later malformed opener', () => {
+    const text = `${MERMAID_ARTIFACT}\n<artifact identifier="x" type="text/html" title="Open"><p>x</p>`;
+    expect(hasDeliverablePinnedArtifact('mermaid_chart', text)).toBe(true);
+  });
+
+  it('is true when a malformed opener precedes a later valid block of the pinned type', () => {
+    expect(hasDeliverablePinnedArtifact('mermaid_chart', `<artifact! ${MERMAID_ARTIFACT}`)).toBe(true);
+  });
+
+  it('is false when the only complete block is a different type', () => {
+    expect(hasDeliverablePinnedArtifact('mermaid_chart', CHESS_ARTIFACT)).toBe(false);
+  });
+
+  it('is false when the text holds no artifact markup', () => {
+    expect(hasDeliverablePinnedArtifact('mermaid_chart', 'No diagram needed.')).toBe(false);
+  });
+
+  it('is false for a tool that is not a registered emitter', () => {
+    expect(hasDeliverablePinnedArtifact('not_a_tool', MERMAID_ARTIFACT)).toBe(false);
   });
 });
 

@@ -13,7 +13,12 @@
  * and strip an echo of it.
  */
 import { describe, it, expect } from 'vitest';
-import { ARTIFACT_DELIVERED_PLACEHOLDER, ChatModels, type ICompletionOptionTools } from '@bike4mind/common';
+import {
+  ARTIFACT_DELIVERED_PLACEHOLDER,
+  ARTIFACT_REMOVED_PLACEHOLDER,
+  ChatModels,
+  type ICompletionOptionTools,
+} from '@bike4mind/common';
 import { OpenAIBackend } from './openaiBackend';
 
 type AnyRecord = Record<string, unknown>;
@@ -119,6 +124,60 @@ describe('OpenAIBackend (Responses path) does not duplicate an echoed tool artif
     expect(turn2Requests).toHaveLength(1);
     expect(turn2Requests[0]).not.toContain('<artifact');
     expect(turn2Requests[0]).toContain(ARTIFACT_DELIVERED_PLACEHOLDER);
+  });
+
+  it('strips artifact markup from a tool error message on the Responses path too', async () => {
+    const throwingTool: ICompletionOptionTools = {
+      toolSchema: {
+        name: 'mermaid_chart',
+        description: 'Generate a Mermaid chart',
+        parameters: { type: 'object', properties: { definition: { type: 'string' } }, required: ['definition'] },
+      },
+      toolFn: async () => {
+        throw new Error(`bad diagram ${MERMAID_ARTIFACT}`);
+      },
+    };
+    const backend = new OpenAIBackend('test-key');
+    const turn2Requests: string[] = [];
+    (backend as unknown as { _api: unknown })._api = {
+      responses: {
+        create: async () =>
+          responsesEventStream({
+            output: [
+              {
+                type: 'function_call',
+                call_id: 'call_1',
+                name: 'mermaid_chart',
+                arguments: '{"definition":"graph TD;A-->B"}',
+              },
+            ],
+            usage: { input_tokens: 10, output_tokens: 4 },
+          }),
+      },
+      chat: {
+        completions: {
+          create: async (params: AnyRecord) => {
+            turn2Requests.push(JSON.stringify(params));
+            return {
+              choices: [{ index: 0, message: { role: 'assistant', content: 'Sorry, that failed.' } }],
+              usage: { prompt_tokens: 5, completion_tokens: 3 },
+            };
+          },
+        },
+      },
+    };
+
+    const { cb } = captureCb();
+    await backend.complete(
+      ChatModels.GPT5,
+      [{ role: 'user', content: 'a simple process flow diagram' }],
+      { tools: [throwingTool] },
+      cb
+    );
+
+    expect(turn2Requests).toHaveLength(1);
+    expect(turn2Requests[0]).not.toContain('<artifact');
+    expect(turn2Requests[0]).toContain(ARTIFACT_REMOVED_PLACEHOLDER);
   });
 
   it('pin: a genuinely NEW artifact the model composes in its own reply text is not mistaken for an echo', async () => {
