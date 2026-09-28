@@ -221,10 +221,16 @@ export function researchConfigChange(
  * document - using the same identifier here is what lets a reader match a `start-research-run` row
  * to the `complete-research-run` row it belongs to. A failure's reason lives on the run row's own
  * `error` field, not here.
+ *
+ * The RUN ID is also encoded, because the query alone is not: a config run twice with no edit
+ * between produces two `started: <query>` rows with nothing to tell them apart, and their matching
+ * `completed`/`failed` rows the same way - a reader (or a script) trying to pair a start to its
+ * outcome by query text alone cannot tell which pairs with which.
  */
 export function researchRunChange(
   query: string,
-  outcome: 'started' | 'completed' | 'failed'
+  outcome: 'started' | 'completed' | 'failed',
+  runId: string
 ): ILakeConfigLiteralChange {
-  return literalChange('researchRun', undefined, `${outcome}: ${query}`);
+  return literalChange('researchRun', undefined, `${outcome}: ${query} (run ${runId})`);
 }
