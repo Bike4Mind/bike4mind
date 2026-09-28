@@ -6,8 +6,9 @@ type Step = (req: Request, res: Response, next: () => void) => unknown;
 /**
  * Test stand-in for server/middlewares/baseApi.ts, used as
  * `vi.mock('@server/middlewares/baseApi', () => import('@server/qa/testing/baseApiStub'))`.
- * No DB connect and no auth chain, so requireQaIngestKey is what enforces the key
- * in those tests. The real nextRouteForContract prelude (body validation, response
+ * No DB connect and no auth chain, so requireQaIngestKey (ingest), ensureAdmin
+ * (admin reads) or the report token is what enforces access in those tests.
+ * The real nextRouteForContract prelude (body validation, response
  * drift check) still runs, and a throw is served by the real errorHandler, so the
  * status and body match production.
  */
