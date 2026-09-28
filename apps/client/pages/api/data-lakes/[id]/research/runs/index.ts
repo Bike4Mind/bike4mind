@@ -77,7 +77,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
         totals: run.totals,
         error: 'The run could not be queued for execution. Try again shortly.',
       });
-      // #3298: without this, History shows "started" with no matching outcome - the run row is
+      // Without this, History shows "started" with no matching outcome - the run row is
       // settled failed here directly, never through runLakeResearch.ts (the only other place an
       // outcome is recorded), since the executor never gets a message to pick up. Best-effort, same
       // as every other outcome record.
