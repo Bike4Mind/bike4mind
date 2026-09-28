@@ -5,7 +5,6 @@ import {
   dataLakeRepository,
   dataLakeResearchRunRepository,
   fabFileRepository,
-  lakeConfigChangeEventRepository,
   organizationRepository,
   usageEventRepository,
   userRepository,
@@ -17,6 +16,7 @@ import { fetchAndParseURL } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import type { ResearchRunTotals } from '@bike4mind/common';
+import { lakeConfigAuditDb } from './lakeConfigAuditDb';
 
 /**
  * Binds one queued research run (#1682) to the real world and executes it: the admin-configured
@@ -132,8 +132,8 @@ export async function runLakeResearch(
   // `running` forever - exactly the bug a missing guard here caused once already.
   const recordOutcome = (outcome: 'completed' | 'failed') =>
     dataLakeResearchService
-      .recordResearchRunOutcome(lake, claimed.levers.query, outcome, {
-        db: { lakeConfigChangeEvents: lakeConfigChangeEventRepository },
+      .recordResearchRunOutcome(lake, claimed.levers.query, outcome, runId, {
+        db: { ...lakeConfigAuditDb },
         logger,
       })
       .catch(err => logger.warn(`[lakeResearch] outcome record failed: ${err}`));
@@ -150,9 +150,31 @@ export async function runLakeResearch(
   // closure value is the best available regardless, and can itself undercount by one judgment if
   // `propose` throws after that judgment was priced but before its progress tick.
   const recordSpend = async (amountMicroUsd: number) => {
-    if (amountMicroUsd <= 0 || !judgeModel) return;
+    if (amountMicroUsd <= 0) return;
+    if (!judgeModel) {
+      // Should not happen once any judgment has run (judgeModel is set before the first `judge`
+      // port call), but this guards against a future path that could report spend without one.
+      logger.warn('[lakeResearch] research spend not recorded: no judge model was resolved', {
+        runId,
+        dataLakeId: lake.id,
+        amountMicroUsd,
+      });
+      return;
+    }
+    // `recordOperationalUsage` needs a real, billable IUserDocument even with bypassCreditBilling
+    // set (its credit-deduction path shares the same required type) - there is no safe synthetic
+    // stand-in for a creator whose account was deleted. Logged so the drop is traceable instead of
+    // the money silently vanishing from the Spend tab a second time.
     const user = await userRepository.findById(lake.createdByUserId).catch(() => null);
-    if (!user) return;
+    if (!user) {
+      logger.warn('[lakeResearch] research spend not recorded: the lake creator could not be resolved', {
+        runId,
+        dataLakeId: lake.id,
+        createdByUserId: lake.createdByUserId,
+        amountMicroUsd,
+      });
+      return;
+    }
     const organization = user.organizationId
       ? await organizationRepository.findById(user.organizationId).catch(() => null)
       : null;
@@ -185,6 +207,11 @@ export async function runLakeResearch(
     Promise.all([recordOutcome(outcome), recordSpend(amountMicroUsd)]);
 
   const keyAdapters = { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames };
+
+  // True once `executeResearchRun` itself has resolved - distinguishes "the run failed" from "the
+  // run succeeded but recording its outcome failed", so the catch below never mistakes the latter
+  // for the former (see the catch block for why that distinction matters).
+  let executionSucceeded = false;
 
   try {
     const provider = await resolveWebSearchProvider(keyAdapters);
@@ -266,6 +293,7 @@ export async function runLakeResearch(
     };
 
     const result = await dataLakeResearchService.executeResearchRun(claimed.levers, runId, ports);
+    executionSucceeded = true;
 
     await settle({
       status: 'completed',
@@ -278,6 +306,20 @@ export async function runLakeResearch(
     logger.log('[lakeResearch] run finished', { runId, stopReason: result.stopReason, ...result.totals });
     return { claimed: true };
   } catch (error) {
+    if (executionSucceeded) {
+      // The run itself succeeded and spent money - what threw was the terminal `completed` settle
+      // write (e.g. a step-down/connection reset on the updateOne), not the run. We cannot tell
+      // whether that write actually landed server-side before the ack was lost, so re-settling or
+      // re-recording `failed` here would either silently overwrite a real `completed` row or
+      // permanently misreport a run that worked - and `claimForExecution` only reclaims `queued`
+      // rows, so a wrong `failed` could never self-heal via redelivery. Rethrow as-is: no further
+      // settle/audit write, so the queue surfaces the fault instead of the run's history lying.
+      logger.error('[lakeResearch] run completed but recording its outcome failed; leaving the run unresolved', {
+        runId,
+        error,
+      });
+      throw error;
+    }
     // The spend and totals the loop last reported, not zero - see `spentMicroUsd` above.
     await recordRunEffects('failed', spentMicroUsd);
     return failAndRethrow(error, spentMicroUsd, totals);
