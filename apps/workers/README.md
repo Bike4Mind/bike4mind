@@ -12,6 +12,7 @@ Background work that used to live under `apps/client/server`, moved here one cat
 Most of the code these handlers call still lives in `apps/client/server`. Until it is extracted into a shared package, `tsconfig.json` and `vitest.config.mts` map `@server/*`, `@client/*` and the other client aliases into `../client`. The dependency is one-way:
 
 - `apps/workers` may import `apps/client/server` code through those aliases.
+- The self-host `worker` service runs under `tsconfig.selfhost.json`, which extends `tsconfig.json` and also includes `../client/**/*.ts`. tsx applies compilerOptions only to included files, so without it the bridged client files would transpile outside strict mode. It is runtime-only; `tsc` never reads it.
 - `apps/client` must never import `apps/workers` (`@workers/*`). ESLint enforces this, and also stops workers from importing UI code (`@client/app/*`, React, Next, MUI).
 
 Code that both a client route and a worker need belongs on the client side of the bridge (for example `apps/client/server/utils/eventContext.ts` and `apps/client/server/s3/chunkScan.ts`), not here.

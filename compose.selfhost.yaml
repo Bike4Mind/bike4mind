@@ -292,11 +292,21 @@ services:
       dockerfile: apps/client/Dockerfile.chatcompletion.selfhost
     env_file:
       - .env.selfhost
-    # Runs from apps/workers so tsx picks up that package's tsconfig (its @workers/* paths plus
-    # the interim bridge into apps/client). The sst alias hook still lives in apps/client.
+    # Runs from apps/workers with tsconfig.selfhost.json: its @workers/* paths plus the interim
+    # bridge into apps/client, and an include wide enough that the bridged client files also
+    # transpile in strict mode. The sst alias hook still lives in apps/client.
     working_dir: /app/apps/workers
     command:
-      ['pnpm', 'exec', 'tsx', '--import', '../client/server/chatCompletion/selfhostSstAlias.mjs', 'src/selfhost/main.ts']
+      [
+        'pnpm',
+        'exec',
+        'tsx',
+        '--tsconfig',
+        'tsconfig.selfhost.json',
+        '--import',
+        '../client/server/chatCompletion/selfhostSstAlias.mjs',
+        'src/selfhost/main.ts',
+      ]
     depends_on:
       mongo:
         condition: service_healthy
