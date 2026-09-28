@@ -281,6 +281,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     { name: 'Sessions', description: 'Sessions (called "notebooks" in the product UI) and their attached knowledge.' },
     { name: 'Audio', description: 'Speech, music, and sound-effect generation.' },
     { name: 'Account', description: "The caller's own identity, plan tier, credit balance, and entitlements." },
+    { name: 'QA', description: 'CI ingest of end-to-end test runs.' },
   ];
 
   // Attach per-operation vendor extensions + headers by operationId. Restrict to

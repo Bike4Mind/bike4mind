@@ -9,4 +9,5 @@ export { synthesizeSpeechContract } from './contracts/tts.contract';
 export { generateMusicContract } from './contracts/music.contract';
 export { generateSoundEffectContract } from './contracts/soundEffects.contract';
 export { getMeContract } from './contracts/me.contract';
+export { ingestQaRunContract, requestQaUploadsContract } from './contracts/qa.contract';
 export { CONTRACTS } from './contracts';
