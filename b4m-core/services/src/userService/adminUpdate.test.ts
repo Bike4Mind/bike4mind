@@ -41,11 +41,19 @@ function makeAdapters(startingCredits: number, { withCreditTransactions = true }
     },
     organizations: { findById: vi.fn(), update: vi.fn() },
     friendship: {},
+    userApiKeys: { deactivateAllByUserId: vi.fn().mockResolvedValue(undefined) },
   };
   if (withCreditTransactions) {
     db.creditTransactions = { createTransaction };
   }
-  return { adapters: { db }, createTransaction, incrementCredits, update, target };
+  return {
+    adapters: { db },
+    createTransaction,
+    incrementCredits,
+    update,
+    target,
+    deactivateAllByUserId: db.userApiKeys.deactivateAllByUserId,
+  };
 }
 
 describe('adminUpdateUser — audited credit adjustments', () => {
@@ -237,6 +245,70 @@ describe('adminUpdateUser - signed creditDelta path', () => {
   });
 });
 
+describe('adminUpdateUser - lastCreditsPurchasedAt', () => {
+  const PRIOR_PURCHASE = new Date('2024-01-01T00:00:00.000Z');
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('omits lastCreditsPurchasedAt from the write when an admin deduction leaves a positive balance', async () => {
+    const { adapters, update, target } = makeAdapters(12000);
+    target.lastCreditsPurchasedAt = PRIOR_PURCHASE;
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 9500 }, adapters);
+
+    // The new balance is positive and changed, but it decreased - a clawback is not a purchase.
+    expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
+  });
+
+  it('omits lastCreditsPurchasedAt from the write for a negative creditDelta', async () => {
+    const { adapters, update, target } = makeAdapters(12000);
+    target.lastCreditsPurchasedAt = PRIOR_PURCHASE;
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -2500 }, adapters);
+
+    expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
+  });
+
+  it('omits lastCreditsPurchasedAt from the write for an edit that touches no credits', async () => {
+    const { adapters, update, target } = makeAdapters(12000);
+    target.lastCreditsPurchasedAt = PRIOR_PURCHASE;
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, tags: ['vip'] }, adapters);
+
+    // Carrying the snapshot value on an unrelated save would $set it back over a purchase
+    // stamp committed between this request's read and its write.
+    expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
+  });
+
+  it('stamps lastCreditsPurchasedAt when an admin grant increases the balance', async () => {
+    const { adapters, update, target } = makeAdapters(12000);
+    target.lastCreditsPurchasedAt = PRIOR_PURCHASE;
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 14500 }, adapters);
+
+    const stamped = update.mock.calls[0][0].lastCreditsPurchasedAt;
+    expect(stamped).toBeInstanceOf(Date);
+    expect(stamped.getTime()).toBeGreaterThan(PRIOR_PURCHASE.getTime());
+  });
+
+  it('drops a caller-supplied lastCreditsPurchasedAt on a non-grant save', async () => {
+    const { adapters, update, target } = makeAdapters(12000);
+    target.lastCreditsPurchasedAt = PRIOR_PURCHASE;
+
+    // Server-owned metadata: it is no longer in the schema, so secureParameters strips it
+    // regardless of what a caller sends - `as any` simulates a raw request body doing so.
+    await adminUpdateUser(
+      ADMIN_ID,
+      { id: TARGET_ID, tags: ['vip'], lastCreditsPurchasedAt: null } as unknown as Parameters<
+        typeof adminUpdateUser
+      >[1],
+      adapters
+    );
+
+    expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
+  });
+});
+
 describe('adminUpdateUser - preferences merge', () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -251,5 +323,56 @@ describe('adminUpdateUser - preferences merge', () => {
       showDebug: false,
       experimentalFeatures: { agentMode: true },
     });
+  });
+});
+
+describe('adminUpdateUser - API key deactivation on entering a blocked state', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    ['ban', {}, { isBanned: true }],
+    ['dispute', {}, { disputePending: true }],
+    ['suspension', { moderation: { status: 'active' } }, { moderationStatus: 'suspended' as const }],
+    ['ban and suspension in one save', {}, { isBanned: true, moderationStatus: 'suspended' as const }],
+  ])('deactivates once on %s', async (_label, seed, patch) => {
+    const { adapters, target, deactivateAllByUserId } = makeAdapters(100);
+    Object.assign(target, seed);
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, ...patch }, adapters);
+
+    expect(deactivateAllByUserId).toHaveBeenCalledTimes(1);
+    expect(deactivateAllByUserId).toHaveBeenCalledWith(TARGET_ID);
+  });
+
+  it.each([
+    ['an unrelated update', {}, { name: 'New Name' }],
+    ['re-banning a banned user', { isBanned: true }, { isBanned: true }],
+    ['re-flagging a disputed user', { disputePending: true }, { disputePending: true }],
+    [
+      're-suspending a suspended user',
+      { moderation: { status: 'suspended' } },
+      { moderationStatus: 'suspended' as const },
+    ],
+    ['suspend_pending', {}, { moderationStatus: 'suspend_pending' as const }],
+    ['throttled', {}, { moderationStatus: 'throttled' as const }],
+    ['active', { moderation: { status: 'suspended' } }, { moderationStatus: 'active' as const }],
+    ['unban', { isBanned: true }, { isBanned: false }],
+  ])('does not touch keys on %s', async (_label, seed, patch) => {
+    const { adapters, target, deactivateAllByUserId } = makeAdapters(100);
+    Object.assign(target, seed);
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, ...patch }, adapters);
+
+    expect(deactivateAllByUserId).not.toHaveBeenCalled();
+  });
+
+  it('does not deactivate when the user write fails', async () => {
+    const { adapters, update, deactivateAllByUserId } = makeAdapters(100);
+    update.mockRejectedValueOnce(new Error('write failed'));
+
+    await expect(adminUpdateUser(ADMIN_ID, { id: TARGET_ID, isBanned: true }, adapters)).rejects.toThrow(
+      'write failed'
+    );
+    expect(deactivateAllByUserId).not.toHaveBeenCalled();
   });
 });

@@ -187,6 +187,10 @@ export const handler = withEventContext(async (event, logger) => {
     summary: session.summary,
     summaryAt: session.summaryAt,
     summaryModelId: session.summaryModelId,
+    // Provenance for the summary, read back by pages/api/admin/sessions/[id]. There is no
+    // `.save()` on this path, so the assignment above only reaches the database by being named
+    // here - omitting it leaves the field undefined on every document.
+    summaryTrigger: session.summaryTrigger,
   });
 
   // Attempt to create/update the FabFile for RAG indexing.

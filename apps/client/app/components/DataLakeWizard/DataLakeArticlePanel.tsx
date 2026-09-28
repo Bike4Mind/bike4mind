@@ -7,6 +7,8 @@ import StorageIcon from '@mui/icons-material/Storage';
 import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
 import { useReprocessFabFile, type DataLakeMemberFile } from '@client/app/hooks/data/dataLakes';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
+import useSessionLayout from '@client/app/hooks/useSessionLayout';
+import { citedPassageForFile } from '@client/app/components/Knowledge/citedPassage';
 import MembershipArmBadge from '@client/app/components/datalake/MembershipArmBadge';
 import PurgeLakeDocumentAction from '@client/app/components/DataLakeWizard/PurgeLakeDocumentAction';
 import RemoveFileFromLakeDialog from './RemoveFileFromLakeDialog';
@@ -33,6 +35,15 @@ interface DataLakeArticlePanelProps {
    */
   canManage?: boolean;
   /**
+   * Whether the caller may REBUILD this lake's passages, which is what the per-file Re-process
+   * button actually invokes (`POST /api/files/reprocess` authorizes on `assertLakeRebuildAccess`).
+   * Separate from `canManage` because the two deliberately disagree for a fallback (built-in) lake:
+   * it has no document to manage so `canManage` is always false, but an admin may still rebuild it.
+   * Gating Re-process on `canManage` hid it from the one caller the server grants it to. Mirrors
+   * how LakeInfoPanel gates the whole-lake "Rebuild passages" sibling. Absent -> hidden (fail-safe).
+   */
+  canRebuild?: boolean;
+  /**
    * Whether the caller may DESTROY this document - one rung narrower than `canManage`: a curator or
    * org admin manages membership, but permanent deletion needs lake ownership AND ownership of the
    * file itself (or platform admin), which is exactly what `purgeDataLakeDocument` enforces. Separate
@@ -54,6 +65,7 @@ export default function DataLakeArticlePanel({
   dataLakeId,
   lakeName,
   canManage,
+  canRebuild,
   canPurge,
   onAskAbout,
   onRemoved,
@@ -67,6 +79,11 @@ export default function DataLakeArticlePanel({
   const reprocess = useReprocessFabFile(dataLakeId);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const stallNotice = file ? describePipelineStall(file) : null;
+  // This pane is reached from the lake manager, not from a citation click, so the anchor is
+  // usually absent. Honoring it when the ids DO match means opening the cited document here marks
+  // the same passage the chat viewer would - one primitive, both read surfaces (#3038).
+  const citedAnchor = useSessionLayout(s => s.citedPassage);
+  const citedPassage = citedPassageForFile(citedAnchor, readableFile?.id);
 
   if (!file) {
     return (
@@ -108,25 +125,39 @@ export default function DataLakeArticlePanel({
           <Typography level="h4" sx={{ flex: 1, minWidth: 0 }}>
             {title}
           </Typography>
-          {/* These mutate lake content, so they are owner-or-admin only (the backend enforces the
-              same). Hidden when viewing a read-only lake. Remove unpicks lake membership and is
-              reversible; Delete permanently destroys the document everywhere and is not. */}
+          {/* Re-process is gated on canRebuild, NOT canManage - one rung WIDER than its neighbours,
+              unlike every other narrowing on this pane. It re-derives chunks from bytes already
+              stored and mutates no lake document, which is why the server authorizes it on
+              `assertLakeRebuildAccess` rather than manage rights. For a fallback (built-in) lake
+              those two flags deliberately disagree - canManage is always false, canRebuild is the
+              admin - so the shared wrapper hid this from the one caller the server grants it to.
+              !!: an absent flag (rolling-deploy skew against an older server) must read as false,
+              matching how LakeInfoPanel coerces the same flag for the whole-lake sibling. */}
+          {!!canRebuild && (
+            <Tooltip title="Re-run chunking + vectorization" size="sm">
+              <Button
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                data-testid={`datalake-reprocess-btn-${file.id}`}
+                startDecorator={<RefreshIcon sx={{ fontSize: 16 }} />}
+                loading={reprocess.isPending}
+                onClick={() => reprocess.mutate(file.id)}
+                sx={{ flexShrink: 0, fontSize: '13px' }}
+              >
+                Re-process
+              </Button>
+            </Tooltip>
+          )}
+          {/* Remove and Delete stay on canManage: both mutate lake MEMBERSHIP or the document
+              itself, which a fallback lake has neither of - the server refuses both with
+              `assertLakeWritable`. Remove unpicks membership and is reversible; Delete permanently
+              destroys the document everywhere and is not. Do NOT hoist canPurge up alongside
+              Re-process: it already ORs in isAdmin, so it is true for exactly the admin-on-a-
+              fallback-lake case above, and would offer a red permanent-delete that 400s only after
+              they have confirmed it. */}
           {canManage && (
             <>
-              <Tooltip title="Re-run chunking + vectorization" size="sm">
-                <Button
-                  size="sm"
-                  variant="outlined"
-                  color="neutral"
-                  data-testid={`datalake-reprocess-btn-${file.id}`}
-                  startDecorator={<RefreshIcon sx={{ fontSize: 16 }} />}
-                  loading={reprocess.isPending}
-                  onClick={() => reprocess.mutate(file.id)}
-                  sx={{ flexShrink: 0, fontSize: '13px' }}
-                >
-                  Re-process
-                </Button>
-              </Tooltip>
               <Tooltip title="Remove this file from the data lake" size="sm">
                 <Button
                   size="sm"
@@ -189,7 +220,7 @@ export default function DataLakeArticlePanel({
             <Skeleton variant="text" level="body-md" sx={{ width: '70%' }} />
           </Box>
         ) : content ? (
-          <MarkdownViewer content={content} />
+          <MarkdownViewer content={content} citedPassage={citedPassage} />
         ) : (
           <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
             Unable to load file content.

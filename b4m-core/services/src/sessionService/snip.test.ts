@@ -79,6 +79,75 @@ describe('snipSession', () => {
     expect(persisted.tags).toEqual([{ name: 'racing', strength: 0.9 }]);
   });
 
+  /**
+   * Unlike `taggedAt` above, the trigger DOES ride along: a snip deliberately keeps `summary` and
+   * `summaryAt`, and the trigger is a claim about the same run on the source, so keeping two thirds
+   * of the trio and dropping the third is the incoherent state.
+   */
+
+  /**
+   * A decision-only trigger can no longer be published or stored, but a copy path must not be the
+   * thing that discovers a document holding one: rejecting it in createSessionParametersSchema
+   * would turn a stale row into a 422 that makes the notebook uncopyable. Drop the provenance,
+   * keep the copy.
+   */
+  it('drops a decision-only summaryTrigger instead of failing the snip', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      summary: 'the gist',
+      summaryTrigger: 'throttling',
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(db.sessions.create.mock.calls[0][0].summaryTrigger).toBeUndefined();
+    expect(db.sessions.create.mock.calls[0][0].summary).toBe('the gist');
+  });
+
+  it('carries the source session summaryTrigger onto the snip', async () => {
+    const { db } = makeAdapters();
+    const summaryAt = new Date('2026-01-01T00:00:00.000Z');
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      summary: 'the gist',
+      summaryAt,
+      summaryTrigger: 'contentGrowth',
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: 'the gist', summaryAt, summaryTrigger: 'contentGrowth' })
+    );
+  });
+
+  // A source summarized before the field existed must not come out of the copy carrying an invented
+  // provenance; the copy passes the field through explicitly, so the key is present holding undefined.
+  it('does not fabricate a summaryTrigger when the source has none', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      summary: 'the gist',
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(db.sessions.create.mock.calls[0][0].summaryTrigger).toBeUndefined();
+  });
+
   it('snips messages from the snip point forward when the message belongs to the session', async () => {
     const { db, created } = makeAdapters();
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });

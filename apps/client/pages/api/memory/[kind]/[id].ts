@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { isDocumentSource } from '@bike4mind/common';
 import {
   agentRepository,
   dataLakeAccessGrantRepository,
@@ -360,10 +361,17 @@ handler.get(async (req, res) => {
   let withheldOrphans = 0;
   if (kind === 'lake') {
     const survivingSources = createSurvivingSourcesResolver({ fabfiles: fabFileRepository });
-    const surviving = await survivingSources([...new Set(profile.beliefs.flatMap(b => b.sources ?? []))]);
-    // A source-less belief is kept: nothing was destroyed, so it is not an orphan.
+    // Documents only, on both sides of this check. A curator-resolution belief also cites the finding
+    // it was decided on (#3049), which is not a FabFile: feeding it to the resolver logs `skipping ids
+    // that cannot address a row by _id` on every read, and counting it as a source would make such a
+    // belief permanently un-orphanable - it would outlive the destruction of every document it names,
+    // which is the exact disclosure this block exists to close.
+    const documentSources = (belief: (typeof profile.beliefs)[number]): string[] =>
+      (belief.sources ?? []).filter(isDocumentSource);
+    const surviving = await survivingSources([...new Set(profile.beliefs.flatMap(documentSources))]);
+    // A belief citing no DOCUMENT is kept: nothing was destroyed, so it is not an orphan.
     const kept = profile.beliefs.filter(b => {
-      const sources = b.sources ?? [];
+      const sources = documentSources(b);
       return sources.length === 0 || sources.some(sourceId => surviving.has(sourceId));
     });
     withheldOrphans = profile.beliefs.length - kept.length;
@@ -373,6 +381,13 @@ handler.get(async (req, res) => {
   // Strip the embedding from each belief before serializing. A vector is 512 floats (~1MB across a
   // real user's beliefs) that no reader of this endpoint needs - and, like the /api/mementos 502, an
   // unbounded vector payload is how this route would eventually blow the Lambda response limit.
+  //
+  // `sources` is NOT filtered here, deliberately: a curator-resolution belief's `finding:<id>` entry
+  // (#3049) goes over the wire alongside the FabFile ids. Stripping it would leave a `human-reviewed`
+  // belief with no way to say which finding it came from, which is the one piece of provenance a
+  // reader of this endpoint would actually want. The cost is that a consumer of `belief.sources`
+  // cannot assume every entry addresses a FabFile - use `isDocumentSource` before any id lookup, as
+  // the orphan check above does.
   const lean = ({ embedding: _e, ...b }: (typeof served.beliefs)[number]) => b;
   const leanProfile = { ...served, beliefs: served.beliefs.map(lean) };
   // Reported rather than filtered silently, so a reader can tell a small profile from a censored one.

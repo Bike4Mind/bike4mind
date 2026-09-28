@@ -69,6 +69,7 @@ describe('Config eager-read hardening', () => {
     expect(Config.OVERWATCH_INGEST_ENABLED).toBeUndefined();
     expect(Config.OVERWATCH_INGEST_URL).toBeUndefined();
     expect(Config.OVERWATCH_INGEST_KEY).toBeUndefined();
+    expect(Config.OVERWATCH_PRODUCT_INGEST_KEYS).toBeUndefined();
     expect(Config.OVERWATCH_PSEUDONYM_SALT).toBeUndefined();
     expect(Config.B4M_ANALYTICS_ENABLED).toBeUndefined();
     expect(Config.OAUTH_RSA_PRIVATE_KEY).toBeUndefined();

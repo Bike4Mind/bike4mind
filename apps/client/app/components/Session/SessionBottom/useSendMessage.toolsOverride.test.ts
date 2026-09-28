@@ -15,44 +15,41 @@ import { resolve } from 'path';
 describe('useSendMessage - briefcase toolsOverride on the orchestration path (#95)', () => {
   const source = readFileSync(resolve(__dirname, 'useSendMessage.ts'), 'utf8');
 
-  it('derives enabledTools from resolveDispatchTools(toolsOverride, effectiveTools, agent whitelist, org defaults)', () => {
+  it('derives the dispatch tool selection from resolveDispatchTools(toolsOverride, effectiveTools, agent whitelist)', () => {
     expect(source).toMatch(
-      /const enabledTools\s*=\s*resolveDispatchTools\(\s*options\?\.toolsOverride,\s*effectiveTools,\s*orchestrationAgent\?\.allowedTools,\s*agentModeDefaultTools\s*\);/
+      /const \{ enabledTools, enabledToolsAreAmbient \} = resolveDispatchTools\(\s*options\?\.toolsOverride,\s*effectiveTools,\s*orchestrationAgent\?\.allowedTools\s*\);/
     );
   });
 
-  it('sources the agentless union base from admin settings, not a hardcoded seed', () => {
-    // The server REPLACES `profile.allowedTools` with a non-empty payload, so
-    // unioning a hardcoded schema seed here would override an admin who
-    // narrowed the org toolbelt. This is the wiring that stops that.
-    expect(source).toMatch(/agentModeDefaultToolNames\(orchestrationDefaultsSetting\)/);
-    expect(source).toMatch(/getSettingObject<unknown>\('orchestrationDefaults', undefined\)/);
+  it('puts NO derived copy of admin config on the wire', () => {
+    // The union of the user's picks and the org toolbelt happens server-side, in
+    // `pickEffectiveEnabledTools`, against the profile the executor just resolved. The hook
+    // used to read `orchestrationDefaults` to build that union here, which shipped a
+    // client-derived copy of admin config that could drift from what the server resolves -
+    // and made the client guess at org policy (unreadable setting, emptied `allowedTools`) to
+    // decide whether its own copy was safe to send. Neither symbol may come back.
+    expect(source).not.toMatch(/agentModeDefaultToolNames/);
+    expect(source).not.toMatch(/agentModeDefaultTools/);
   });
 
-  it('withholds the union base until the AUTHED settings fetch has landed', () => {
-    // `mergeIntoDefaults` seeds `orchestrationDefaults` with the compiled-in
-    // schema default for the public CDN query too, so without this gate the
-    // full seed ships whenever the authed fetch failed - re-broadening a
-    // narrowed org toolbelt. Guarding the wiring, since the behavior itself
-    // lives in the provider.
-    expect(source).toMatch(
-      /authedSettingsLoaded\s*\?\s*agentModeDefaultToolNames\(orchestrationDefaultsSetting\)\s*:\s*null/
-    );
-    expect(source).toMatch(/const \{ getSettingObject, authedSettingsLoaded \} = useAdminSettings\(\);/);
+  it('forwards the ambient marker alongside enabledTools', () => {
+    // Without it the server cannot tell the user's ambient composer picks from a pinned
+    // selection, so it would REPLACE the org's agent-mode toolbelt with the picks - stripping
+    // `web_search` / `recharts` / `mermaid_chart` from every agentless run.
+    expect(source).toMatch(/agentExecution\.start\(\{[\s\S]*?\benabledToolsAreAmbient\b[\s\S]*?\}\);/);
   });
 
   it('withholds the intent-classifier admin gate until the AUTHED settings fetch has landed', () => {
-    // Same `mergeIntoDefaults` seed leak as the tool union above, one call site
-    // over: `orchestrationDefaults` seeds `intentClassifier.enabled: true`
-    // before the authed fetch resolves, so an org that explicitly disabled the
-    // classifier would still have it running during that window without this
-    // gate.
+    // `orchestrationDefaults` is not `publicSafe`, yet `mergeIntoDefaults` seeds it with the
+    // compiled-in schema default for the public query too - so it reads
+    // `intentClassifier.enabled: true` before the authed fetch resolves, and an org that
+    // explicitly disabled the classifier would still have it running during that window.
     expect(source).toMatch(/const intentClassifierAdminEnabled =\s*authedSettingsLoaded\s*&&\s*getSettingObject/);
   });
 
   it('assigns enabledTools inside the agent-executor branch and passes it to agentExecution.start', () => {
     const branchIdx = source.indexOf("routeTarget === 'agent_executor'");
-    const enabledToolsIdx = source.indexOf('const enabledTools =');
+    const enabledToolsIdx = source.indexOf('const { enabledTools, enabledToolsAreAmbient } =');
     const startIdx = source.indexOf('agentExecution.start(');
     expect(branchIdx).toBeGreaterThan(-1);
     expect(enabledToolsIdx).toBeGreaterThan(branchIdx);

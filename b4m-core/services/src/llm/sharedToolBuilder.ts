@@ -6,7 +6,12 @@
  * using the same pipeline.
  */
 
-import type { IChatHistoryItemDocument, ModelInfo } from '@bike4mind/common';
+import {
+  parseToolArtifactAttributes,
+  TOOL_ARTIFACT_EMITTERS,
+  type IChatHistoryItemDocument,
+  type ModelInfo,
+} from '@bike4mind/common';
 import { type BaseStorage } from '@bike4mind/utils';
 import {
   type ApiKeyTable,
@@ -52,6 +57,8 @@ export interface ToolBuilderDeps {
   suppressLakeArms?: ToolContext['suppressLakeArms'];
   /** Session lake scope, forwarded to the tool context (see ToolContext.sessionRetrievalTags). */
   sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
+  /** Lake-scope sidecar, forwarded to the tool context (see ToolContext.sessionLakeScopeExplicit). */
+  sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
   /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
   sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
   /**
@@ -272,11 +279,6 @@ const VALID_SIDE_EFFECT_TYPES = new Set([
   'populateDecomposition',
 ]);
 const TOOL_ARTIFACT_RE = /<artifact\s+([^>]*)>([\s\S]*?)<\/artifact>/gi;
-// Value is anchored to its own quote kind so a double-quoted value can contain
-// apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
-// body, group 3 the single-quoted one; exactly one matches. Must stay in sync
-// with ATTRIBUTE_REGEX in utils/artifactParser.ts and the client mirror.
-const TOOL_ATTR_RE = /(\w+)=(?:"([^"]*)"|'([^']*)')/g;
 
 // ---------------------------------------------------------------------------
 // Main function
@@ -323,6 +325,7 @@ export function buildSharedTools(
     fullyInlinedAttachmentIds,
     suppressLakeArms,
     sessionRetrievalTags,
+    sessionLakeScopeExplicit,
     sessionPreauthorizedLakeIds,
   } = deps;
 
@@ -341,6 +344,7 @@ export function buildSharedTools(
       fullyInlinedAttachmentIds,
       suppressLakeArms,
       sessionRetrievalTags,
+      sessionLakeScopeExplicit,
       sessionPreauthorizedLakeIds,
       questId: callbacks.questId,
       getAbortSignal,
@@ -356,6 +360,7 @@ export function buildSharedTools(
       image_generation: config.image_generation,
       edit_image: config.image_generation,
       audio_generation: config.audio_generation,
+      web_search: config.web_search,
     },
     model,
     imageProcessorLambdaName,
@@ -658,17 +663,26 @@ function wrapToolsForSentinels(
         }
 
         // Extract artifacts from tool results
-        if (callbacks.onArtifactExtracted && typeof result === 'string' && result.includes('<artifact')) {
+        const allowedArtifactType = TOOL_ARTIFACT_EMITTERS.get(toolName);
+        if (
+          callbacks.onArtifactExtracted &&
+          allowedArtifactType !== undefined &&
+          typeof result === 'string' &&
+          result.includes('<artifact')
+        ) {
           try {
             TOOL_ARTIFACT_RE.lastIndex = 0;
             let artifactMatch;
             while ((artifactMatch = TOOL_ARTIFACT_RE.exec(result)) !== null) {
               const [, attrsStr, content] = artifactMatch;
-              const attrs: Record<string, string> = {};
-              let attrMatch;
-              TOOL_ATTR_RE.lastIndex = 0;
-              while ((attrMatch = TOOL_ATTR_RE.exec(attrsStr)) !== null) {
-                attrs[attrMatch[1]] = attrMatch[2] ?? attrMatch[3];
+              const attrs = parseToolArtifactAttributes(attrsStr);
+
+              // Checked on the final value, so a repeated type= attribute cannot smuggle one past.
+              if (attrs.type !== allowedArtifactType) {
+                logger.warn(
+                  `[toolArtifact] Dropped ${JSON.stringify(attrs.type?.slice(0, 80))} artifact from ${toolName}: not the type it emits`
+                );
+                continue;
               }
 
               let metadata: Record<string, unknown> = {

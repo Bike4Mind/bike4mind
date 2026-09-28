@@ -95,4 +95,34 @@ describe('verifyJwtPayload', () => {
 
     expect(done).toHaveBeenCalledWith(null, false);
   });
+
+  it('stamps oauthGrant onto the user for a kind:oauth token (the marker oauthRouteGate keys default-deny on)', async () => {
+    // Wiring guard: dropping this stamping makes the route gate a no-op (grant undefined -> next()),
+    // silently opening every JWT-authed route to a relying-party OAuth token. The gate can only
+    // default-deny what verifyJwtPayload marks.
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, isSystem: false });
+    const done = vi.fn();
+
+    await verifyJwtPayload(
+      { id: 'user-1', tokenVersion: 0, kind: 'oauth', client_id: 'rp-1', scope: 'openid profile', aud: 'https://api' },
+      done
+    );
+
+    const [, user] = done.mock.calls[0];
+    expect((user as { oauthGrant?: unknown }).oauthGrant).toEqual({
+      clientId: 'rp-1',
+      scopes: ['openid', 'profile'],
+      aud: 'https://api',
+    });
+  });
+
+  it('leaves oauthGrant unset for a first-party session (no kind), so the gate is a no-op for it', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, isSystem: false });
+    const done = vi.fn();
+
+    await verifyJwtPayload({ id: 'user-1', tokenVersion: 0 }, done);
+
+    const [, user] = done.mock.calls[0];
+    expect((user as { oauthGrant?: unknown }).oauthGrant).toBeUndefined();
+  });
 });

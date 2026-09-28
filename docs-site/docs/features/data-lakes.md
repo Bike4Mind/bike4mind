@@ -44,6 +44,11 @@ Archiving and deleting are two separate reversal paths, and each has its own in-
 `Unarchiving` comes back from `Archived`, `Restoring` comes back from `Deleted`. Only one lifecycle
 action can hold a lake at a time.
 
+**A new Data Lake starts as `Draft`, and a draft lake is excluded from AI retrieval.** The assistant
+cannot find its files even after they finish uploading and indexing. Adding files does not publish a
+lake -- publishing is a deliberate step, so that no lake starts grounding answers without someone
+choosing it. Use **Publish** in the Data Lakes list once the lake is ready.
+
 ## Use Cases
 
 - **Domain-specific knowledge** -- upload medical literature, legal documents, or technical manuals and scope retrieval to authorized users

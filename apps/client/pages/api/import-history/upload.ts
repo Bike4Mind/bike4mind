@@ -44,7 +44,7 @@ const handler = baseApi({ maxBodySize: MAX_HISTORY_UPLOAD_BYTES })
       if (!req.ability?.can(Permission.create, Session)) throw new Error('Cannot create session');
 
       // Self-host gets the same-origin proxy below; hosted keeps the presign untouched. Minting
-      // one on self-host would be a wasted MinIO round trip: the resolver discards it, and the
+      // one on self-host would be discarded local signing work: the resolver discards it, and the
       // key it burns is not the key the PUT handler lands the bytes under.
       let url = '';
       if (process.env.B4M_SELF_HOST !== 'true') {

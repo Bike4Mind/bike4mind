@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { NotebookExportRequestSchema } from './api';
+import { NotebookExportRequestSchema, NotebookCurateRequestSchema, NotebookDownloadRequestSchema } from './api';
 
 const HEX = '507f1f77bcf86cd799439011';
 
@@ -75,5 +75,35 @@ describe('NotebookExportRequestSchema - notebookIds', () => {
     const ids = Array.from({ length: 51 }, () => HEX);
     expect(NotebookExportRequestSchema.safeParse({ notebookIds: ids }).success).toBe(false);
     expect(NotebookExportRequestSchema.safeParse({ notebookIds: ids.slice(0, 50) }).success).toBe(true);
+  });
+});
+
+// The sibling routes of the export endpoint: same directory, and the same
+// sessionIds -> BaseModel.findById path, which otherwise resolves a non-hex id to null.
+describe.each([
+  ['NotebookCurateRequestSchema', NotebookCurateRequestSchema],
+  ['NotebookDownloadRequestSchema', NotebookDownloadRequestSchema],
+])('%s - sessionIds', (_name, schema) => {
+  it('accepts a stringified ObjectId in either hex case', () => {
+    const parsed = schema.parse({ sessionIds: [HEX, HEX.toUpperCase()] });
+    expect(parsed.sessionIds).toEqual([HEX, HEX.toUpperCase()]);
+  });
+
+  it('rejects a non-hex id at the boundary, naming the field', () => {
+    // Without this, a non-hex id resolves to null in BaseModel.findById and the route answers a
+    // 404 naming the caller's typo as a missing row. This turns it into a 400 naming sessionIds.1.
+    const bad = schema.safeParse({ sessionIds: [HEX, 'not-an-objectid'] });
+    expect(bad.success).toBe(false);
+    expect(bad.error?.issues[0].path.join('.')).toBe('sessionIds.1');
+    expect(bad.error?.issues[0].message).toBe('must be a 24-character hex session id');
+  });
+
+  it('rejects an id of the right shape but the wrong length', () => {
+    expect(schema.safeParse({ sessionIds: [HEX.slice(0, 23)] }).success).toBe(false);
+    expect(schema.safeParse({ sessionIds: [HEX + 'a'] }).success).toBe(false);
+  });
+
+  it('still rejects an empty array, which names no notebook at all', () => {
+    expect(schema.safeParse({ sessionIds: [] }).success).toBe(false);
   });
 });

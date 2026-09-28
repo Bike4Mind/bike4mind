@@ -38,7 +38,7 @@ const summary = (over: Partial<OptionalPathRetrievalRate> = {}): OptionalPathRet
     turns: 8,
     retrievedTurns: 4,
     rate: 0.5,
-    byReason: { attached_files: 5, personal_corpus: 3 },
+    byReason: { attached_files: 5, personal_corpus: 3, no_lake_scope: 2 },
   },
   forcedTurns: 12,
   unclassifiedTurns: 7,
@@ -86,6 +86,7 @@ describe('RetrievalRateTab', () => {
     renderTab();
     expect((await screen.findByTestId('retrieval-rate-skip-attached-files')).textContent).toContain('5');
     expect(screen.getByTestId('retrieval-rate-skip-personal-corpus').textContent).toContain('3');
+    expect(screen.getByTestId('retrieval-rate-skip-no-lake-scope').textContent).toContain('2');
   });
 
   it('shows an empty state rather than a 0% rate when nothing is classifiable', async () => {
@@ -101,7 +102,7 @@ describe('RetrievalRateTab', () => {
             turns: 0,
             retrievedTurns: 0,
             rate: null,
-            byReason: { attached_files: 0, personal_corpus: 0 },
+            byReason: { attached_files: 0, personal_corpus: 0, no_lake_scope: 0 },
           },
         }),
       })
@@ -125,7 +126,7 @@ describe('RetrievalRateTab', () => {
             turns: 0,
             retrievedTurns: 0,
             rate: null,
-            byReason: { attached_files: 0, personal_corpus: 0 },
+            byReason: { attached_files: 0, personal_corpus: 0, no_lake_scope: 0 },
           },
           forcedTurns: 120,
         }),

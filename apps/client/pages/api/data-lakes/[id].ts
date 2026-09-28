@@ -79,11 +79,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
         const stats = await fabFileRepository.computeDataLakeStats(dataLakeService.registryMembershipScope(dataLake));
         return res.json({ ...redacted, fileCount: stats.fileCount, totalSizeBytes: stats.totalSizeBytes });
       } catch (error) {
-        // `.error` not `.warn`, and a metadata OBJECT not the raw Error: Logger.warn calls
-        // parseArgs without errorAware, and parseArgs excludes an Error from the metadata branch,
-        // so `warn(msg, err)` serializes it via JSON.stringify and emits a bare `{}` - no message,
-        // no stack, no lake id. That would make this degrade genuinely silent, which is the
-        // opposite of what the comment above promises.
+        // `.error` not `.warn`, since a stats-lookup failure here is worth surfacing at error
+        // level even though the endpoint still succeeds. `err` is the message, not the raw
+        // Error, so it stays out of Logger's metadata-lifting and reads as plain text.
         req.logger?.error('[dataLakes] registry lake stats unavailable; returning lake without counts', {
           err: error instanceof Error ? error.message : String(error),
           lakeId: dataLake.id,

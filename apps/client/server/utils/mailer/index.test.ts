@@ -70,6 +70,10 @@ describe('MailService', () => {
         auth: { user: 'user@example.com', pass: 'secret' },
         secure: true,
         requireTLS: false,
+        dnsTimeout: 5_000,
+        connectionTimeout: 10_000,
+        greetingTimeout: 10_000,
+        socketTimeout: 15_000,
       });
     });
   });

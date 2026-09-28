@@ -3,15 +3,17 @@ import { describe, expect, it } from 'vitest';
 import { defangRetrievedContent } from './renderRetrievedContentBlock';
 import {
   ALL_DATED_CLAIMS_EXPIRED_YEAR,
-  buildRetrievalConflictNote,
+  buildRetrievalConflictSignal,
   RETRIEVAL_CONFLICT_MAX_CHARS,
   type RetrievalPassage,
 } from './retrievalConflictNote';
 
 const passage = (fabFileId: string, text: string): RetrievalPassage => ({ fabFileId, text });
-const noteFor = (...passages: RetrievalPassage[]) => buildRetrievalConflictNote(passages);
+const noteFor = (...passages: RetrievalPassage[]) => buildRetrievalConflictSignal(passages).note;
+const conflictsFor = (...passages: RetrievalPassage[]) =>
+  Object.fromEntries(buildRetrievalConflictSignal(passages).conflictsByFileId);
 
-describe('buildRetrievalConflictNote', () => {
+describe('buildRetrievalConflictSignal', () => {
   it('returns empty for no passages', () => {
     expect(noteFor()).toBe('');
   });
@@ -257,7 +259,7 @@ describe('buildRetrievalConflictNote', () => {
     ]).flat();
 
   it('caps the id list and reports the overflow as a lower bound', () => {
-    const note = buildRetrievalConflictNote(disjointConflicts(6));
+    const note = buildRetrievalConflictSignal(disjointConflicts(6)).note;
 
     // Literals, not the constant: an assertion computed from RETRIEVAL_CONFLICT_MAX_IDS moves with it
     // and holds at any cap. Ids come out in serve order, so file-9/file-10 is the boundary.
@@ -341,7 +343,7 @@ describe('buildRetrievalConflictNote', () => {
   it('names exactly the cap without claiming an overflow', () => {
     // The boundary the overflow fixture steps past: at exactly the cap `overflow` is 0, and an
     // `overflow >= 0` comparison would render "and at least 0 more" here.
-    const note = buildRetrievalConflictNote(disjointConflicts(5));
+    const note = buildRetrievalConflictSignal(disjointConflicts(5)).note;
 
     expect(note).toContain('file-9)');
     expect(note).not.toContain('more');
@@ -398,5 +400,81 @@ describe('buildRetrievalConflictNote', () => {
     );
     // The second document overran the ceiling and was sliced, keeping its opening claim.
     expect(note).toContain('(metric-disagreement)');
+  });
+});
+
+// The reader's half of the same pass (#3041). Asserted against `conflictsByFileId` directly rather
+// than through a call site, because it is the shared contract all three retrieval channels stamp
+// onto `citables[].metadata.conflictsWith` - a per-site test would pin the stamping, not the shape.
+describe('buildRetrievalConflictSignal conflictsByFileId', () => {
+  it('is empty whenever there is no note to show', () => {
+    expect(conflictsFor()).toEqual({});
+    expect(conflictsFor(passage('file-a', 'Uptime is 99.9%.'), passage('file-a', 'Uptime is 95%.'))).toEqual({});
+    expect(conflictsFor(passage('file-a', 'Uptime is 99.9%.'), passage('file-b', 'Uptime is 99.9%.'))).toEqual({});
+  });
+
+  it('marks both halves of a witness pair, each pointing at the other', () => {
+    expect(conflictsFor(passage('file-a', 'Uptime is 99.9%.'), passage('file-b', 'Uptime is 95%.'))).toEqual({
+      'file-a': ['file-b'],
+      'file-b': ['file-a'],
+    });
+  });
+
+  it('leaves a document that is in no witness pair unmarked', () => {
+    // Third document mentions no metric at all, so it can never be a witness - and a badge on it
+    // would tell the reader to re-read a source that disagrees with nothing.
+    const conflicts = conflictsFor(
+      passage('file-a', 'Uptime is 99.9%.'),
+      passage('file-b', 'Uptime is 95%.'),
+      passage('file-c', 'The support desk is staffed on weekdays.')
+    );
+
+    expect(Object.keys(conflicts).sort()).toEqual(['file-a', 'file-b']);
+  });
+
+  it('keeps disjoint conflicts disjoint rather than one mutually-contradicting blob', () => {
+    expect(
+      conflictsFor(
+        passage('file-a', 'The metric0 is 10%.'),
+        passage('file-b', 'The metric0 is 90%.'),
+        passage('file-c', 'The metric1 is 10%.'),
+        passage('file-d', 'The metric1 is 90%.')
+      )
+    ).toEqual({
+      'file-a': ['file-b'],
+      'file-b': ['file-a'],
+      'file-c': ['file-d'],
+      'file-d': ['file-c'],
+    });
+  });
+
+  it('keeps the exact pairings after the note degrades to a flat id list', () => {
+    // Past RETRIEVAL_CONFLICT_MAX_IDS the note can only name one flat list of ids - a length bound
+    // on a sentence. The reader's channel has no sentence to bound, so each chip must still name
+    // exactly its own partner rather than inheriting the note's flattening.
+    const passages = Array.from({ length: 6 }, (_, i) => [
+      passage(`file-${2 * i}`, `The metric${i} is 10%.`),
+      passage(`file-${2 * i + 1}`, `The metric${i} is 90%.`),
+    ]).flat();
+    const signal = buildRetrievalConflictSignal(passages);
+    const conflicts = Object.fromEntries(signal.conflictsByFileId);
+
+    expect(signal.note).toContain(', and at least 2 more');
+    expect(Object.keys(conflicts)).toHaveLength(12);
+    expect(conflicts['file-0']).toEqual(['file-1']);
+    // The pair the note could not name at all is still marked on both chips.
+    expect(conflicts['file-10']).toEqual(['file-11']);
+    expect(signal.note).not.toContain('file-10');
+  });
+
+  it('never records a document with an empty partner list', () => {
+    const passages = Array.from({ length: 4 }, (_, i) => [
+      passage(`file-${2 * i}`, `The metric${i} is 10%.`),
+      passage(`file-${2 * i + 1}`, `The metric${i} is 90%.`),
+    ]).flat();
+
+    for (const partners of buildRetrievalConflictSignal(passages).conflictsByFileId.values()) {
+      expect(partners.length).toBeGreaterThan(0);
+    }
   });
 });

@@ -13,6 +13,7 @@
 import { randomUUID } from 'crypto';
 import { connectDB, AdminSettings } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
+import { WHATS_NEW_DEFAULT_REPOSITORY, WHATS_NEW_DEFAULT_TARGET_BRANCH } from '@bike4mind/common';
 import { Config } from '@server/utils/config';
 import { Resource } from 'sst';
 import { sendToQueue } from '@server/utils/sqs';
@@ -45,17 +46,18 @@ export async function handler() {
 
   const configSetting = await AdminSettings.findOne({ settingName: 'whatsNewConfig' });
   const configValue = configSetting?.settingValue as Record<string, unknown> | undefined;
-  const repository = (configValue?.repository as string) || 'MillionOnMars/lumina5';
-  const targetBranch = (configValue?.targetBranch as string) || 'main';
+  const repository = (configValue?.repository as string) || WHATS_NEW_DEFAULT_REPOSITORY;
+  const targetBranch = (configValue?.targetBranch as string) || WHATS_NEW_DEFAULT_TARGET_BRANCH;
 
   const todayUTC = new Date().toISOString().split('T')[0];
   const correlationId = randomUUID();
 
   logger.info('Collecting data for date', { targetDate: todayUTC, correlationId, repository, targetBranch });
 
-  // collectDataForDate calls GitHubService.forSystem() which now throws for transient
-  // failures (DB error, auth init). Catch here so the cron records a 'failed' status
-  // in AdminSettings rather than crashing the Lambda silently - the next daily run will retry.
+  // collectDataForDate throws for transient failures (DB error, auth init) and for the
+  // permanent case of a repository outside the connection's allowed list. Catch both so the
+  // cron records a 'failed' status in AdminSettings rather than crashing the Lambda silently:
+  // the transient cases retry on the next daily run, the permanent one stays visible until fixed.
   let collectedData: Awaited<ReturnType<typeof collectDataForDate>>;
   try {
     collectedData = await collectDataForDate(todayUTC, logger, { repository, targetBranch });

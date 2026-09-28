@@ -3,6 +3,22 @@ import type { CheckpointStore } from '../storage/CheckpointStore.js';
 import type { PermissionManager } from '../utils';
 import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 
+/**
+ * Where sandbox status and warnings are written. Interactive startup sends info
+ * to stdout and warnings to stderr; headless sends both to stderr because stdout
+ * carries its NDJSON protocol. Isolating this is what lets both entrypoints share
+ * the ONE wiring path below instead of hand-duplicating (and drifting) it.
+ */
+export interface SandboxLog {
+  info(line: string): void;
+  warn(line: string): void;
+}
+
+const consoleLog: SandboxLog = {
+  info: line => console.log(line),
+  warn: line => console.error(line),
+};
+
 export interface BuildSandboxInput {
   config: CliConfig;
   sessionId: string;
@@ -13,6 +29,8 @@ export interface BuildSandboxInput {
    * sandbox runtime creation to preserve the original startup parallelism.
    */
   checkpointStore: CheckpointStore;
+  /** Status/warning sink. Defaults to console (stdout info, stderr warnings). */
+  log?: SandboxLog;
 }
 
 export interface BuildSandboxResult {
@@ -22,13 +40,15 @@ export interface BuildSandboxResult {
 /**
  * Initialize the sandbox orchestrator for OS-level filesystem isolation, wire
  * the network-proxy event handler, attach the violation store, and start the
- * proxy when enabled.
+ * proxy when enabled. The SINGLE sandbox-wiring path for both the interactive
+ * shell and headless mode (which passes a stderr sink).
  *
  * Pure bootstrap seam: no React hooks, no Zustand state. Sandbox modules are
  * imported dynamically (as before) so the cost is only paid when init runs.
  */
 export async function buildSandbox(input: BuildSandboxInput): Promise<BuildSandboxResult> {
   const { config, sessionId, permissionManager, checkpointStore } = input;
+  const log = input.log ?? consoleLog;
 
   // Import all sandbox modules in parallel, then parallelize runtime init with checkpoint store
   const [
@@ -57,10 +77,10 @@ export async function buildSandbox(input: BuildSandboxInput): Promise<BuildSandb
   // to avoid referencing it before initialization
   proxyManager.onEvent(event => {
     if (event.type === 'blocked') {
-      console.error(
+      log.warn(
         `\n\x1b[41m\x1b[97m BLOCKED \x1b[0m \x1b[31mNetwork proxy denied connection to\x1b[0m \x1b[1m${event.domain}\x1b[0m \x1b[90m(${event.method})\x1b[0m`
       );
-      console.error(`\x1b[90m  Tip: /sandbox:trust-domain ${event.domain}\x1b[0m\n`);
+      log.warn(`\x1b[90m  Tip: /sandbox:trust-domain ${event.domain}\x1b[0m\n`);
 
       // Record network violation
       sandboxOrchestrator
@@ -84,17 +104,21 @@ export async function buildSandbox(input: BuildSandboxInput): Promise<BuildSandb
 
   if (sandboxConfig.enabled && sandboxConfig.mode !== 'disabled') {
     if (sandboxRuntime) {
-      console.log(`🔒 Sandbox: ${sandboxConfig.mode} (${sandboxRuntime.name})`);
+      log.info(`🔒 Sandbox: ${sandboxConfig.mode} (${sandboxRuntime.name})`);
     } else {
-      console.log('⚠️  Sandbox: enabled but runtime not available on this platform');
+      log.warn('⚠️  Sandbox: enabled but runtime not available on this platform');
     }
-    // Start network proxy if enabled
+    // Start the network proxy through the orchestrator's single lifecycle owner so
+    // it fails closed: if the proxy can't start, network is forced back off rather
+    // than leaving the runtime flag on with no proxy (which would grant raw egress).
     if (sandboxConfig.network.enabled) {
-      await proxyManager.start();
-      if (proxyManager.isRunning()) {
-        console.log(
+      const on = await sandboxOrchestrator.setNetworkEnabled(true);
+      if (on && proxyManager.isRunning()) {
+        log.info(
           `🌐 Network proxy: filtering on port ${proxyManager.getPort()} (${sandboxConfig.network.allowedDomains.length} domains)`
         );
+      } else {
+        log.warn('⚠️  Sandbox: network filtering requested but the proxy failed to start; egress disabled');
       }
     }
   }

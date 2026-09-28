@@ -3,23 +3,21 @@ import { dataLakeService } from '@bike4mind/services';
 import { type MigrationFile } from './index';
 
 /**
- * Migration: activate the lakes that were filled through a door that never activated them.
+ * Migration: repair the stats of the draft lakes that were filled through a door that never
+ * wrote them.
  *
- * Every lake is created in 'draft', and only batch creation used to flip it to 'active' - the
- * status the Discover catalog and the findActive* retrieval arms both require. A lake filled
- * through the tag toggle, Send to Data Lake, or a direct file create therefore stayed draft
- * forever, invisible to everyone but its owner. The live doors now activate through
- * `recomputeLakeStats`, but only when they next run, so a lake nobody touches again stays stuck.
+ * ORIGINALLY this also published those lakes: it leaned on `recomputeLakeStats`, which used to
+ * flip a draft lake to active whenever the recomputed fileCount was nonzero. That side effect is
+ * gone - publishing is now the explicit, owner/admin-only `promoteDataLake` door - so this pass
+ * only trues up fileCount/totalSizeBytes. Draft lakes stay draft, by design, and their owners
+ * publish them from the manager when they choose to.
  *
  * Runs the real `recomputeLakeStats` per candidate rather than a hand-rolled updateMany. Some
  * of these lakes were filled through a door that wrote no stats either, so a persisted
  * `fileCount` of 0 does not mean empty and is no predicate to select on - the aggregate has to
- * decide. Recomputing repairs the counts on the way past, and the activation then falls out of
- * the same code path the live doors use rather than a second copy of the rule.
+ * decide.
  *
- * Re-runnable, not a no-op: a lake that recomputes to 0 files stays draft and is scanned again.
- * The writes are idempotent - an already-active lake is not selected, and a repeat recompute
- * writes the same counts.
+ * Re-runnable: the writes are idempotent, and a repeat recompute writes the same counts.
  */
 
 const LOG = '[activate-draft-datalakes-with-files]';
@@ -35,7 +33,7 @@ const migration: MigrationFile = {
 
   up: async () => {
     let scanned = 0;
-    let activated = 0;
+    let withFiles = 0;
     let stillEmpty = 0;
     const failed: string[] = [];
 
@@ -52,8 +50,8 @@ const migration: MigrationFile = {
           db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
         });
         if (stats.fileCount > 0) {
-          activated++;
-          console.log(`${LOG} activated "${lake.name}" (${stats.fileCount} file(s))`);
+          withFiles++;
+          console.log(`${LOG} recomputed "${lake.name}" (${stats.fileCount} file(s); stays draft)`);
         } else {
           stillEmpty++;
         }
@@ -70,17 +68,16 @@ const migration: MigrationFile = {
     }
 
     console.log(
-      `${LOG} activated ${activated} lake(s); ${stillEmpty} still empty, ${failed.length} failed, ${scanned} scanned`
+      `${LOG} recomputed ${withFiles} draft lake(s) holding files; ${stillEmpty} still empty, ` +
+        `${failed.length} failed, ${scanned} scanned`
     );
     if (failed.length > 0) {
-      console.log(`${LOG} ${failed.length} lake(s) failed and stay draft until a door touches them:`);
+      console.log(`${LOG} ${failed.length} lake(s) failed and keep their stale counts until a door touches them:`);
       for (const line of failed) console.log(`  ${line}`);
     }
   },
 
-  // Irreversible on purpose. The transition is one-way by design and nothing records which pass
-  // performed it, so re-drafting every active lake with files would also hide lakes the live
-  // doors activated legitimately - re-creating the very bug this fixes.
+  // Irreversible on purpose: the prior counts were the stale ones this pass exists to correct.
   down: async () => {},
 };
 

@@ -206,6 +206,7 @@ describe('notebook round trip: artifacts', () => {
       fileStorageService: {
         getFileContent: async () => null,
         uploadFile: async () => {},
+        deleteFile: async () => null,
         getSignedUrl: async () => null,
       },
       logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },

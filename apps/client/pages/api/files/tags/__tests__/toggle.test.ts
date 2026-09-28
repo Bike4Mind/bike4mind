@@ -36,6 +36,7 @@ vi.mock('@bike4mind/database', () => ({
   // rather than omitted because this mock REPLACES the whole module: a missing export is an
   // import-time failure, not a silent undefined.
   lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
+  lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   dataLakeRepository: { name: 'dataLakes' },
   dataLakeAccessGrantRepository: {
     listByLake: vi.fn().mockResolvedValue([]),
@@ -105,6 +106,9 @@ describe('POST /api/files/tags/toggle', () => {
         // compile - `adminSettings` is optional, and the event repo degrades to writing nothing.
         db: expect.objectContaining({
           lakeConfigChangeEvents: expect.anything(),
+          // Same reasoning for the membership trail: a toggle joins and leaves lakes, and the
+          // service records nothing at all when this adapter is absent.
+          lakeMembershipChangeEvents: expect.anything(),
           adminSettings: expect.anything(),
         }),
       })

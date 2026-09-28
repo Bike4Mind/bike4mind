@@ -13,7 +13,10 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: {},
 }));
 
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services', async importOriginal => ({
+  // Real `userService.accountBlockReasons` drives the account-state gate; the rest of the barrel
+  // loads alongside it (its db/config deps are mocked here).
+  ...(await importOriginal<typeof import('@bike4mind/services')>()),
   // Real kill-switch + token-type comparisons so the tests exercise actual enforcement (not stubs).
   isTokenVersionCurrent: (a?: number, b?: number) => (a ?? 0) === (b ?? 0),
   isTokenTypeAcceptable: (t: unknown, expected: string) => t === undefined || t === expected,
@@ -243,6 +246,15 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
     await expect(verifyJwtToken(jwt.sign({ id: 'u1', typ: 'access' }, 'test-secret'))).resolves.toMatchObject({
       id: 'u1',
     });
+  });
+
+  it('rejects a relying-party OAuth access token before hitting the DB (oauthRouteGate does not cover this surface)', async () => {
+    // Wiring guard: this primitive backs the CLI/LLM surfaces the route gate never runs on, so the
+    // kind:oauth rejection here is the ONLY thing keeping a scope-bound OAuth token off them.
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', kind: 'oauth' }, 'test-secret'))).rejects.toThrow(
+      'OAuth access tokens are not accepted on this endpoint'
+    );
+    expect(User.findById).not.toHaveBeenCalled();
   });
 
   // A still-valid session JWT for a consented account must still be refused once the account is

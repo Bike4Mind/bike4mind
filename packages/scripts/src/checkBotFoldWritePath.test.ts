@@ -2620,7 +2620,7 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       ],
       ['Note changeset-only skip on a manual re-review', ['GH_TOKEN', 'PR', 'REPO']],
       ['Mint b4m-devtools read token', []],
-      ['Fetch bot-review skill from b4m-devtools (fail loud)', ['GH_TOKEN', 'DEST', 'OWNER']],
+      ['Fetch bot-review skill from b4m-devtools (fail loud)', ['GH_TOKEN', 'DEST', 'OWNER', 'SKILL_REF']],
       ['Record review start time', []],
       ['Install bubblewrap', []],
       ['Run /bot-review', []],
@@ -3646,5 +3646,20 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // protect a fold run from being cancelled. The `!cancelled()` gates above do that.
     const block = src.match(/^concurrency:\n(?:(?: {2}.*)?\n)+/m)?.[0] ?? '';
     expect(block).toMatch(/^ {2}cancel-in-progress: \$\{\{ github\.event\.label\.name != 'bot-fold' \}\}$/m);
+  });
+
+  it('fetches the skill at a pinned commit, never a moving ref', () => {
+    // There is no deploy step between b4m-devtools and this bot: the fetch is what ships.
+    // A branch ref here makes every merge over there live on the next review, and nothing
+    // downstream would notice - the fetch tests retrievability and non-emptiness, never
+    // content. Distinct from SKILL_SHA, which compares the fetched file against itself and
+    // so cannot see an upstream change at all.
+    const fetch = step(src, 'Fetch bot-review skill from b4m-devtools');
+    const ref = fetch.match(/^ {10}SKILL_REF: (\S+)$/m)?.[1];
+    expect(ref, 'the skill fetch declares no SKILL_REF').toBeTruthy();
+    expect(ref, 'SKILL_REF is not a full 40-character commit sha').toMatch(/^[0-9a-f]{40}$/);
+    // Both the URL and the log line read the pin, so a bump cannot leave one of them stale.
+    expect(withoutComments(fetch)).toMatch(/skill\.md\?ref=\$\{SKILL_REF\}"/);
+    expect(withoutComments(fetch)).toMatch(/from b4m-devtools@\$\{SKILL_REF\}"/);
   });
 });

@@ -354,6 +354,9 @@ async function findOrCreateProbeLake(userId: string): Promise<{ lakeId: string }
     datalakeTag: DATALAKE_TAG,
     createdByUserId: userId,
     status: 'active',
+    // Unlike the help-corpus cron, this lake is only ever seeded by a developer running this
+    // script by hand - never on a schedule - so 'curated' is the accurate declaration here.
+    origin: 'curated',
   });
   logger.log(`Created data lake "${LAKE_SLUG}" (${created.id}).`);
   return { lakeId: created.id };

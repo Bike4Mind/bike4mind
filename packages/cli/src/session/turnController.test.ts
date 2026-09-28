@@ -54,7 +54,10 @@ function makeCtx(overrides: Partial<TurnContext> = {}): TurnContext {
       add: vi.fn(async () => undefined),
       list: vi.fn(async () => [] as string[]),
     } as unknown as CommandHistoryStore,
-    customCommandStore: { getAllCommands: vi.fn(() => []) } as unknown as CustomCommandStore,
+    customCommandStore: {
+      getAllCommands: vi.fn(() => []),
+      getModelReachableCommands: vi.fn(() => []),
+    } as unknown as CustomCommandStore,
     messageBuilder: null,
     // autoCompact off keeps the compaction branch out of these transition tests.
     config: { preferences: { autoCompact: false } } as unknown as CliConfig,

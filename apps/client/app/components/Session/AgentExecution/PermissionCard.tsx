@@ -79,10 +79,10 @@ const PermissionCard: FC<PermissionCardProps> = ({ executionId }) => {
   }, [pending?.requestedAt]);
 
   const handleRespond = useCallback(
-    (approved: boolean, rememberForSession: boolean, toolName: string) => {
+    (approved: boolean, rememberForSession: boolean, toolName: string, toolCallId: string | undefined) => {
       if (responding.current) return;
       responding.current = true;
-      respondToPermission(executionId, toolName, approved, rememberForSession);
+      respondToPermission(executionId, toolName, approved, rememberForSession, toolCallId);
       // Optimistic clear so the card hides immediately; the server's next
       // event will reconcile the real status (running on approve, failed on deny).
       setPendingPermission(executionId, undefined);
@@ -159,7 +159,7 @@ const PermissionCard: FC<PermissionCardProps> = ({ executionId }) => {
           data-testid={`permission-approve-${executionId}`}
           color="success"
           size="sm"
-          onClick={() => handleRespond(true, false, pending.toolName)}
+          onClick={() => handleRespond(true, false, pending.toolName, pending.toolCallId)}
         >
           Approve
         </Button>
@@ -169,7 +169,7 @@ const PermissionCard: FC<PermissionCardProps> = ({ executionId }) => {
           color="neutral"
           size="sm"
           sx={outlinedActionSx}
-          onClick={() => handleRespond(true, true, pending.toolName)}
+          onClick={() => handleRespond(true, true, pending.toolName, pending.toolCallId)}
         >
           Allow for Session
         </Button>
@@ -182,7 +182,7 @@ const PermissionCard: FC<PermissionCardProps> = ({ executionId }) => {
           // reject action. Overriding --variant-outlinedColor (not color="danger")
           // keeps the border and hover neutral.
           sx={{ ...outlinedActionSx, '--variant-outlinedColor': 'var(--joy-palette-danger-outlinedColor)' }}
-          onClick={() => handleRespond(false, false, pending.toolName)}
+          onClick={() => handleRespond(false, false, pending.toolName, pending.toolCallId)}
         >
           Deny
         </Button>

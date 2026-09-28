@@ -32,6 +32,37 @@ export const SessionUpdateRequestSchema = z.object({
   // Data Lake mode toggles this on an existing session. surface is intentionally left out
   // (and unchanged) so the chat stays in the main sidebar list. See datalake-in-chat-mode design.
   forceKnowledgeRetrieval: z.boolean().optional(),
+  // The active lake set. Named `lakeScope`, deliberately NOT `retrievalTags` (the stored field
+  // this writes to) - a caller that echoes a whole session document back (a rename PUTs the
+  // stored session as-is) then carries a `retrievalTags: []` Mongoose hydrates onto every session
+  // that never touched this, and a same-named request field would read that echo as "ground on no
+  // lake" for every such write. Naming the request field something the stored document does not
+  // have makes that echo unspellable: `{ ...session, name }` has no `lakeScope` key to strip, so
+  // the parse (a plain z.object) silently drops it, exactly as it always dropped an unknown key.
+  //
+  // Tri-state on ONE field rather than exposing the stored `lakeScopeExplicit` sidecar: a caller
+  // who sent `[]` and forgot the flag would get the exact OPPOSITE of what they asked for (every
+  // lake instead of none), which is not a contract to hand anyone. updateSession derives the
+  // sidecar from which of the three arms this is.
+  //
+  // Not access-checked at this boundary on purpose - resolveLakeMemoryScope intersects these
+  // against the caller's entitled tags at retrieval time, so an unreachable tag narrows the
+  // scope rather than widening it, and rejecting it here would break the ordinary case of a
+  // caller echoing back a scope it has since lost one lake of.
+  lakeScope: z
+    .array(z.string())
+    .nullable()
+    .optional()
+    .describe(
+      'The data lakes this session grounds on, as lake tags (the `datalakeTag` of each lake from ' +
+        'GET /api/data-lakes). Send a list to ground only on those lakes, `[]` to ground on no ' +
+        'lake at all, or `null` to clear the choice so retrieval falls back to every lake you can ' +
+        'reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach ' +
+        'are ignored at retrieval time rather than rejected here. Narrowing the scope does not by ' +
+        'itself turn retrieval on: pair it with `forceKnowledgeRetrieval: true` for a session that ' +
+        'is not already grounded. Conversely `[]` leaves a grounded session nothing to retrieve ' +
+        'from, so its forced retrieval is skipped rather than run against every lake.'
+    ),
   // Defaults to true, matching what every caller did before this flag existed. Pass
   // false when the session gained a file WITHOUT the user asking for it to travel -
   // an upload that lands in notebook context by default has consented to this
@@ -68,6 +99,15 @@ export const SessionResponseSchema = z.object({
   artifactIds: z.array(z.string()).optional(),
   tags: z.array(SessionTagSchema).optional(),
   forceKnowledgeRetrieval: z.boolean().optional(),
+  // Both halves of the lake scope, because `retrievalTags` alone cannot be read back: Mongoose
+  // hydrates an unset array to [], so "grounds on no lake" and "never chose" are the same value
+  // on the wire. `lakeScopeExplicit` is what separates them, and a caller confirming a write
+  // needs the same distinction the retrieval path uses (see resolveLakeMemoryScope).
+  retrievalTags: z.array(z.string()).optional(),
+  lakeScopeExplicit: z
+    .boolean()
+    .optional()
+    .describe('True when `retrievalTags` is a deliberate choice, so an empty list means "no lake" rather than "any".'),
   lastUsedModel: z.string().nullish(),
   // Plain z.date(), not z.coerce.date(): these are always set on a session (ISession has
   // them as required Date fields), and coerce accepts null (Date(null) -> epoch) which

@@ -22,6 +22,8 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
     post: () => chain,
+    // The route chains rateLimit before .get; the capture harness only needs the chain back.
+    use: () => chain,
   };
   return {
     baseApi: (options: unknown) => {
@@ -133,8 +135,10 @@ describe('GET /api/feedback/rollup', () => {
     ['a reversed window', { from: at(7), to: at(0) }],
     ['an empty window', { from: at(0), to: at(0) }],
     ['a non-date bound', { from: 'last tuesday', to: at(7) }],
-    // 367, not FEEDBACK_ROLLUP_MAX_WINDOW_DAYS + 1: the over-cap window must be pinned to a
-    // literal so this fails if the constant is ever widened, rather than scaling with it.
+    // Literals, not FEEDBACK_ROLLUP_MAX_WINDOW_DAYS arithmetic: these must fail if the constant
+    // is ever widened, rather than scaling with it. A 366-day gap is already over the cap because
+    // both bounds are inclusive, so it covers 366 days plus the instant on `to`.
+    ['a window spanning exactly the day cap', { from: at(0), to: at(366) }],
     ['a window past the day cap', { from: at(0), to: at(367) }],
   ])('rejects %s', async (_label, query) => {
     const { req, res } = buildRequest(query, 'session-user');

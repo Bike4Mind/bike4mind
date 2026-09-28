@@ -55,7 +55,11 @@ function categorizeError(error: any): ToolErrorType {
  */
 export async function executeServerTool(
   request: ToolExecutionRequest,
-  adapters: GetEffectiveApiKeyAdapters
+  adapters: GetEffectiveApiKeyAdapters,
+  // Signs web_search image URLs - see WebSearchToolConfig.imageUrlSigningSecret. Omit only when
+  // the caller genuinely has no secret; performWebSearch degrades to no images rather than
+  // emitting an unverifiable URL.
+  imageUrlSigningSecret = ''
 ): Promise<ToolExecutionResult> {
   const startTime = Date.now();
 
@@ -69,7 +73,11 @@ export async function executeServerTool(
       }
 
       case 'web_search': {
-        const result = await performWebSearch({ db: adapters.db }, request.input as WebSearchParams);
+        const result = await performWebSearch(
+          { db: adapters.db },
+          request.input as WebSearchParams,
+          imageUrlSigningSecret
+        );
         content = result.formattedResults;
         break;
       }

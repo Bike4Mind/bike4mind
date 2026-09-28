@@ -1,5 +1,5 @@
 import { vi, describe, it, expect } from 'vitest';
-import { getEffectiveLLMApiKeys, getSearxngUrl, getWebSearchProviderSetting } from './getEffective';
+import { getEffectiveApiKey, getEffectiveLLMApiKeys, getSearxngUrl, getWebSearchProviderSetting } from './getEffective';
 import type { IAdminSettingsRepository, IApiKeyRepository, IApiKeyDocument } from '@bike4mind/common';
 import { ApiKeyType } from '@bike4mind/common';
 
@@ -9,6 +9,15 @@ const makeAdminSettingsRepo = (settings: Record<string, string | null> = {}): IA
     findBySettingNames: vi.fn(async (names: string[]) =>
       names.filter(n => n in settings && settings[n] !== null).map(n => ({ settingName: n, settingValue: settings[n] }))
     ),
+    findAll: vi.fn(async () => []),
+  }) as unknown as IAdminSettingsRepository;
+
+const makeAdminSettingsRepoByName = (settings: Record<string, string | null> = {}): IAdminSettingsRepository =>
+  ({
+    findBySettingName: vi.fn(async (name: string) =>
+      settings[name] == null ? null : { settingName: name, settingValue: settings[name] }
+    ),
+    findBySettingNames: vi.fn(async () => []),
     findAll: vi.fn(async () => []),
   }) as unknown as IAdminSettingsRepository;
 
@@ -217,6 +226,7 @@ describe('getEffectiveLLMApiKeys', () => {
           GEMINI_API_KEY: 'gm-env',
           OPENAI_API_KEY: 'sk-oai-env',
           XAI_API_KEY: 'xai-env',
+          BFL_API_KEY: 'bfl-env',
         },
         async () => {
           const result = await getEffectiveLLMApiKeys(null, {
@@ -228,8 +238,8 @@ describe('getEffectiveLLMApiKeys', () => {
           expect(result.gemini).toBe('gm-env');
           expect(result.openai).toBe('sk-oai-env');
           expect(result.xai).toBe('xai-env');
+          expect(result.bfl).toBe('bfl-env');
           // Only the documented .env.selfhost provider keys get the fallback.
-          expect(result.bfl).toBeNull();
           expect(result.voyageai).toBeNull();
         }
       );
@@ -382,5 +392,50 @@ describe('getSearxngUrl / getWebSearchProviderSetting', () => {
   it('returns the provider setting when set, else null', async () => {
     expect(await getWebSearchProviderSetting(adapters({ WebSearchProvider: 'searxng' }))).toBe('searxng');
     expect(await getWebSearchProviderSetting(adapters({}))).toBeNull();
+  });
+});
+
+describe('getEffectiveApiKey self-host env fallback', () => {
+  const withEnv = async (env: Record<string, string | undefined>, fn: () => Promise<void>) => {
+    const saved = Object.fromEntries(Object.keys(env).map(k => [k, process.env[k]]));
+    Object.entries(env).forEach(([k, v]) => (v === undefined ? delete process.env[k] : (process.env[k] = v)));
+    try {
+      await fn();
+    } finally {
+      Object.entries(saved).forEach(([k, v]) => (v === undefined ? delete process.env[k] : (process.env[k] = v)));
+    }
+  };
+
+  const adapters = (settings: Record<string, string | null> = {}) =>
+    ({
+      db: { apiKeys: makeApiKeyRepo(), adminSettings: makeAdminSettingsRepoByName(settings) },
+    }) as unknown as Parameters<typeof getEffectiveApiKey>[2];
+
+  it('resolves a provider key from .env under self-host, matching getEffectiveLLMApiKeys', async () => {
+    // Both resolvers answer for BFL on different paths (listing vs the chat image tool);
+    // if only one honors the env key, the picker offers a model the tool then refuses.
+    await withEnv({ B4M_SELF_HOST: 'true', BFL_API_KEY: 'bfl-env' }, async () => {
+      expect(await getEffectiveApiKey('user-1', { type: ApiKeyType.bfl }, adapters())).toBe('bfl-env');
+    });
+  });
+
+  it('prefers the admin demo key over the env fallback', async () => {
+    await withEnv({ B4M_SELF_HOST: 'true', BFL_API_KEY: 'bfl-env' }, async () => {
+      expect(await getEffectiveApiKey('user-1', { type: ApiKeyType.bfl }, adapters({ bflApiKey: 'bfl-admin' }))).toBe(
+        'bfl-admin'
+      );
+    });
+  });
+
+  it('ignores the env key outside self-host', async () => {
+    await withEnv({ B4M_SELF_HOST: undefined, BFL_API_KEY: 'bfl-env' }, async () => {
+      expect(await getEffectiveApiKey('user-1', { type: ApiKeyType.bfl }, adapters())).toBeUndefined();
+    });
+  });
+
+  it('leaves a non-LLM key type with no env fallback', async () => {
+    await withEnv({ B4M_SELF_HOST: 'true' }, async () => {
+      expect(await getEffectiveApiKey('user-1', { type: ApiKeyType.elevenlabs }, adapters())).toBeUndefined();
+    });
   });
 });

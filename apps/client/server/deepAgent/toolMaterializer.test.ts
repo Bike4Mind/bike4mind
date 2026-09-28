@@ -8,11 +8,21 @@ import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 // identity it is asked about, and that its answer is enforced), not its own key lookups, which
 // b4m-core/services/src/llm/toolAvailability.test.ts already covers.
 const resolveToolAvailabilityMock = vi.fn();
+const buildSharedToolsSpy = vi.hoisted(() => vi.fn());
 
-vi.mock('sst', () => ({ Resource: { ImageProcessor: { name: 'image-processor' } } }));
+vi.mock('sst', () => ({
+  Resource: { ImageProcessor: { name: 'image-processor' }, SECRET_ENCRYPTION_KEY: { value: 'test-secret' } },
+}));
 vi.mock('@bike4mind/services/llm', async importOriginal => {
   const actual = (await importOriginal()) as Record<string, unknown>;
-  return { ...actual, resolveToolAvailability: (...args: unknown[]) => resolveToolAvailabilityMock(...args) };
+  return {
+    ...actual,
+    resolveToolAvailability: (...args: unknown[]) => resolveToolAvailabilityMock(...args),
+    buildSharedTools: (...args: unknown[]) => {
+      buildSharedToolsSpy(...args);
+      return (actual.buildSharedTools as (...a: unknown[]) => unknown)(...args);
+    },
+  };
 });
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: vi.fn().mockResolvedValue({ _id: 'owner-1', id: 'owner-1' }) },
@@ -84,5 +94,13 @@ describe('createDeepAgentToolMaterializer', () => {
     resolveToolAvailabilityMock.mockResolvedValue({ weather_info: true });
     const tools = await materialize()(['weather_info', 'dice_roll'], 'owner-1');
     expect(tools.map(t => t.toolSchema.name)).toEqual(expect.arrayContaining(['weather_info', 'dice_roll']));
+  });
+
+  it('threads the real signing secret into web_search config so its image cards can verify', async () => {
+    await materialize()(['web_search'], 'owner-1');
+    const opts = buildSharedToolsSpy.mock.calls[0]?.[2] as {
+      config?: { web_search?: { imageUrlSigningSecret?: string } };
+    };
+    expect(opts?.config?.web_search?.imageUrlSigningSecret).toBe('test-secret');
   });
 });
