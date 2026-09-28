@@ -1,10 +1,10 @@
 import { expect } from 'vitest';
 
-// Same shape and constants as assertLinearGrowth in b4m-core/utils/src/artifactParser.test.ts.
-// Pick `small` so the linear code stays well under MIN_BASELINE_MS at 2x (the floored ratio is
-// then a ~75ms budget that load does not reach), while a quadratic scan is far above it.
+// Same best-of-3 and floored baseline as assertLinearGrowth in b4m-core/utils/src/artifactParser.test.ts,
+// but measured n against 4n with an 8x ceiling: linear lands near 4x and quadratic near 16x, so
+// CI runner noise cannot push one across the bound the way it could at 2x against 3x.
 const MIN_BASELINE_MS = 25;
-const GROWTH_RATIO_CEILING = 3;
+const GROWTH_RATIO_CEILING = 8;
 const SMALL_INPUT_MS_CEILING = 500;
 
 function bestOfThreeMs(input: string, run: (input: string) => unknown): number {
@@ -20,6 +20,6 @@ function bestOfThreeMs(input: string, run: (input: string) => unknown): number {
 export function expectLinearGrowth(build: (n: number) => string, run: (input: string) => unknown, small: number) {
   const baselineMs = bestOfThreeMs(build(small), run);
   expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
-  const doubledMs = bestOfThreeMs(build(small * 2), run);
-  expect(doubledMs / Math.max(baselineMs, MIN_BASELINE_MS)).toBeLessThan(GROWTH_RATIO_CEILING);
+  const quadrupledMs = bestOfThreeMs(build(small * 4), run);
+  expect(quadrupledMs / Math.max(baselineMs, MIN_BASELINE_MS)).toBeLessThan(GROWTH_RATIO_CEILING);
 }

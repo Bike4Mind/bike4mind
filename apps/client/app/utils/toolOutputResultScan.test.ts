@@ -84,11 +84,11 @@ function run(scan: (replacer: ResultReplacer) => string) {
   return { output, calls };
 }
 
-// Same shape and constants as assertLinearGrowth in b4m-core/utils/src/artifactParser.test.ts.
-// Each case's `small` keeps the scanner a few ms at 2x, far under the floored ~75ms budget,
-// while the old regex's baseline on the unclosed shapes is already hundreds of ms.
+// Same best-of-3 and floored baseline as assertLinearGrowth in b4m-core/utils/src/artifactParser.test.ts,
+// but measured n against 4n with an 8x ceiling: linear lands near 4x and quadratic near 16x, so
+// CI runner noise cannot push one across the bound the way it could at 2x against 3x.
 const MIN_BASELINE_MS = 25;
-const GROWTH_RATIO_CEILING = 3;
+const GROWTH_RATIO_CEILING = 8;
 const SMALL_INPUT_MS_CEILING = 500;
 
 function bestOfThreeMs(input: string, scan: Scan): number {
@@ -104,8 +104,8 @@ function bestOfThreeMs(input: string, scan: Scan): number {
 function expectLinearGrowth(build: (n: number) => string, scan: Scan, small: number) {
   const baselineMs = bestOfThreeMs(build(small), scan);
   expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
-  const doubledMs = bestOfThreeMs(build(small * 2), scan);
-  expect(doubledMs / Math.max(baselineMs, MIN_BASELINE_MS)).toBeLessThan(GROWTH_RATIO_CEILING);
+  const quadrupledMs = bestOfThreeMs(build(small * 4), scan);
+  expect(quadrupledMs / Math.max(baselineMs, MIN_BASELINE_MS)).toBeLessThan(GROWTH_RATIO_CEILING);
 }
 
 describe('tool-output result scanners', () => {

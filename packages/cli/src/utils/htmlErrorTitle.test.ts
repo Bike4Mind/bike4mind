@@ -19,9 +19,11 @@ function mulberry32(seed: number): () => number {
 
 const ALPHABET = ['<title>', '</title>', '<TITLE>', '</Title>', 'Error', ' ', 'x', '\n', '\r', '\u2028', '<', '/'];
 
-// Same shape and constants as assertLinearGrowth in b4m-core/utils/src/artifactParser.test.ts.
+// Same best-of-3 and floored baseline as assertLinearGrowth in b4m-core/utils/src/artifactParser.test.ts,
+// but measured n against 4n with an 8x ceiling: linear lands near 4x and quadratic near 16x, so
+// CI runner noise cannot push one across the bound the way it could at 2x against 3x.
 const MIN_BASELINE_MS = 25;
-const GROWTH_RATIO_CEILING = 3;
+const GROWTH_RATIO_CEILING = 8;
 const SMALL_INPUT_MS_CEILING = 500;
 
 function bestOfThreeMs(input: string): number {
@@ -58,7 +60,7 @@ describe('htmlErrorTitle', () => {
     const build = (n: number) => '<!DOCTYPE html>' + '<title>'.repeat(n);
     const baselineMs = bestOfThreeMs(build(8_000));
     expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
-    const doubledMs = bestOfThreeMs(build(16_000));
-    expect(doubledMs / Math.max(baselineMs, MIN_BASELINE_MS)).toBeLessThan(GROWTH_RATIO_CEILING);
+    const quadrupledMs = bestOfThreeMs(build(32_000));
+    expect(quadrupledMs / Math.max(baselineMs, MIN_BASELINE_MS)).toBeLessThan(GROWTH_RATIO_CEILING);
   });
 });
