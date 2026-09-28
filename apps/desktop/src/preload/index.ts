@@ -2,8 +2,10 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
 import type {
   ChatApprovalDecision,
+  ChatApprovalMode,
   ChatAttachmentInput,
   ChatPendingApproval,
+  ChatQueueEvent,
   ChatSessionStatusEvent,
   ChatStreamEvent,
   CreateCodeSessionRequest,
@@ -39,6 +41,8 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionModel, sessionId, model),
     setSessionPinned: (sessionId: string, pinned: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPinned, sessionId, pinned),
+    setApprovalMode: (sessionId: string, mode: ChatApprovalMode) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetApprovalMode, sessionId, mode),
     setSessionArchived: (sessionId: string, archived: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionArchived, sessionId, archived),
     listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSessions),
@@ -58,6 +62,14 @@ const api: DesktopApi = {
     sendMessage: (request: SendMessageRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatSendMessage, request),
     stopReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatStopReply, sessionId),
     continueReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatContinueReply, sessionId),
+    getQueuedMessages: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetQueued, sessionId),
+    cancelQueuedMessage: (sessionId: string, queuedId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatCancelQueued, sessionId, queuedId),
+    onQueueChanged: listener => {
+      const handler = (_event: unknown, queueEvent: ChatQueueEvent) => listener(queueEvent);
+      ipcRenderer.on(IPC_CHANNELS.chatQueueChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatQueueChanged, handler);
+    },
     pickAttachments: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatPickAttachments, sessionId),
     addAttachments: (sessionId: string, inputs: ChatAttachmentInput[]) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatAddAttachments, sessionId, inputs),

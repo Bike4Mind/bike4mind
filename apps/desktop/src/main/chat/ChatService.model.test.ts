@@ -87,7 +87,7 @@ describe('ChatService model selection', () => {
     const accepted = await service.send(id, 'hello');
 
     expect(accepted).toMatchObject({ ok: true });
-    expect(accepted.ok && accepted.notice).toMatch(/not available on this server/i);
+    expect(accepted.ok && !accepted.queued && accepted.notice).toMatch(/not available on this server/i);
     expect((await service.getSession(id))?.model).toBe('qwen3.5');
 
     await vi.waitUntil(() => post.mock.calls.length > 0, { timeout: 2000, interval: 5 });

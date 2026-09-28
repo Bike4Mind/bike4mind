@@ -3,9 +3,12 @@ import type {
   AddAttachmentsResult,
   BackgroundProcessInfo,
   ChatApprovalDecision,
+  ChatApprovalMode,
   ChatAttachmentInput,
   ChatModelCatalog,
   ChatPendingApproval,
+  ChatQueueEvent,
+  ChatQueuedMessage,
   ChatSession,
   ChatSessionStatusEvent,
   ChatSessionSummary,
@@ -43,6 +46,11 @@ export const IPC_CHANNELS = {
   chatListModels: 'chat:list-models',
   chatSetSessionModel: 'chat:set-session-model',
   chatSetSessionPinned: 'chat:set-session-pinned',
+  /**
+   * The one way an approval mode changes. Renderer -> main only, driven by the composer pill:
+   * there is deliberately no tool, no MCP surface and no model-facing path to this channel.
+   */
+  chatSetApprovalMode: 'chat:set-approval-mode',
   chatSetSessionArchived: 'chat:set-session-archived',
   chatListSessions: 'chat:list-sessions',
   chatCreateSession: 'chat:create-session',
@@ -58,6 +66,10 @@ export const IPC_CHANNELS = {
   chatSendMessage: 'chat:send-message',
   chatStopReply: 'chat:stop-reply',
   chatContinueReply: 'chat:continue-reply',
+  chatGetQueued: 'chat:get-queued',
+  chatCancelQueued: 'chat:cancel-queued',
+  /** main -> renderer push; one session's queue of typed-ahead messages changed. */
+  chatQueueChanged: 'chat:queue-changed',
   chatRespondToApproval: 'chat:respond-to-approval',
   chatPickAttachments: 'chat:pick-attachments',
   chatAddAttachments: 'chat:add-attachments',
@@ -113,6 +125,11 @@ export interface DesktopApi {
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
+    /**
+     * Set how much this conversation may do without asking. Called from the composer pill, in
+     * response to the user clicking it, and from nowhere else - see IPC_CHANNELS above.
+     */
+    setApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<ChatSessionSummary | null>;
     /** Move a conversation into or out of the sidebar's Archived section. Reversible. */
     setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null>;
     listSessions(): Promise<ChatSessionSummary[]>;
@@ -148,6 +165,16 @@ export interface DesktopApi {
      * message, so the events are indistinguishable from the turn never having stopped.
      */
     continueReply(sessionId: string): Promise<SendMessageResult>;
+    /**
+     * Messages typed ahead for this conversation, waiting for the live turn to finish. Read on
+     * open for the same reason as getSessionStatuses: the pushes below carry only CHANGES, and
+     * a window opening onto a session that was queued into elsewhere would see nothing.
+     */
+    getQueuedMessages(sessionId: string): Promise<ChatQueuedMessage[]>;
+    /** Take a queued message back; its text returns to the composer. Unknown ids are ignored. */
+    cancelQueuedMessage(sessionId: string, queuedId: string): Promise<void>;
+    /** Subscribe to queue changes; returns the unsubscribe. */
+    onQueueChanged(listener: (event: ChatQueueEvent) => void): () => void;
     /** Open the OS file picker and take in whatever is chosen. Resolves empty if the user cancels. */
     pickAttachments(sessionId: string): Promise<AddAttachmentsResult>;
     /** Take in dropped or pasted files. The bytes are written to disk before this resolves. */

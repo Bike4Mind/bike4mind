@@ -220,7 +220,10 @@ export function MessageThread({
   messages: ChatMessage[];
   /** Needed to read attachment bytes back; they are stored per conversation. */
   sessionId: string | null;
-  /** A reply is in flight for this conversation, so there is nothing to resume yet. */
+  /**
+   * A reply is in flight for this conversation, however this window came to know it - so there
+   * is nothing to resume, and the live line belongs at the foot of the last turn.
+   */
   streaming: boolean;
   onRespond: RespondToApproval;
   onContinue: () => void;

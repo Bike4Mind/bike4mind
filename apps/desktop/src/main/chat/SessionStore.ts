@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promise
 import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
 import type {
+  ChatApprovalMode,
   ChatMessage,
   ChatProject,
   ChatSession,
@@ -33,6 +34,31 @@ export function deriveTitle(prompt: string): string {
   return `${oneLine.slice(0, TITLE_MAX_LENGTH - 3).trimEnd()}...`;
 }
 
+/**
+ * A session file as it is stored, which carries one field the rest of the app never sees.
+ *
+ * `approvalModeLaunch` stamps a 'full' approval mode with the run of the app that chose it.
+ * A file written by an earlier run reads back as 'ask' - see `normalizeApprovalMode`.
+ */
+type StoredSession = ChatSession & { approvalModeLaunch?: string };
+
+/**
+ * The approval mode a stored session actually gets, which is not always the one on disk.
+ *
+ * 'ask' and 'auto' persist: re-choosing them after every relaunch is exactly the friction this
+ * task exists to remove, and both still stop for anything the classifier cannot prove.
+ *
+ * 'full' does not. It is the mode where nothing stands between a crafted prompt and a read of
+ * any file on the machine, and the user's reason for choosing it is almost always a particular
+ * piece of work they are sitting and watching. A 'full' that quietly outlived the app it was
+ * set in is a different thing from the one they chose, so it reads back as 'ask' - the safest
+ * landing, not the next one down. The pill says so on screen the moment they reopen the thread.
+ */
+function normalizeApprovalMode(value: unknown, stamp: unknown, launchId: string): ChatApprovalMode {
+  if (value === 'full') return stamp === launchId ? 'full' : 'ask';
+  return value === 'auto' ? 'auto' : 'ask';
+}
+
 /** Everything about a new session other than its model. */
 export interface CreateOptions {
   /**
@@ -48,6 +74,11 @@ export interface CreateOptions {
    * session that could be re-parented could be walked out of them.
    */
   origin?: ChatSessionOrigin;
+  /**
+   * What a spawned session inherits from its parent, already clamped by the caller. Absent
+   * means 'ask', which is what a conversation the user just started gets.
+   */
+  approvalMode?: ChatApprovalMode;
 }
 
 function summarize(session: ChatSession): ChatSessionSummary {
@@ -107,7 +138,12 @@ function normalizeOrigin(value: unknown): ChatSessionOrigin | null {
 export class SessionStore {
   constructor(
     private readonly baseDirectory: string,
-    private readonly defaultModel: string
+    private readonly defaultModel: string,
+    /**
+     * Identifies this run of the app. Only 'full' is scoped to it; a test simulates a relaunch
+     * by building a second store over the same directory with a different id.
+     */
+    private readonly launchId: string = randomUUID()
   ) {}
 
   /**
@@ -129,7 +165,7 @@ export class SessionStore {
    * call anyone can read.
    */
   async create(model?: string, options: CreateOptions = {}): Promise<ChatSessionSummary> {
-    const { project, origin, mode = project ? 'code' : 'chat' } = options;
+    const { project, origin, approvalMode = 'ask', mode = project ? 'code' : 'chat' } = options;
     const now = new Date().toISOString();
     const session: ChatSession = {
       id: randomUUID(),
@@ -140,6 +176,7 @@ export class SessionStore {
       createdAt: now,
       updatedAt: now,
       mode,
+      approvalMode,
       ...(project && mode === 'code' ? { project } : {}),
       ...(origin ? { origin } : {}),
       messages: [],
@@ -209,6 +246,40 @@ export class SessionStore {
     session.updatedAt = new Date().toISOString();
     await this.write(session);
     return summarize(session);
+  }
+
+  /**
+   * How much this conversation may do without asking.
+   *
+   * The ONLY writer of this field, and it is reached from exactly one place: the IPC channel
+   * the composer pill calls. No tool, no MCP server and no model output has a path to it -
+   * ToolContext carries no mode and HostContext has no setter - because a tool that could
+   * raise its own mode would let one crafted prompt grant itself the rest of the disk.
+   *
+   * Leaves `updatedAt` alone, as pinning does: this says nothing about when the conversation
+   * was last talked to, and bumping it would reorder the sidebar behind the user's back.
+   */
+  async setApprovalMode(id: string, approvalMode: ChatApprovalMode): Promise<ChatSessionSummary | null> {
+    const session = await this.get(id);
+    if (!session) return null;
+    session.approvalMode = approvalMode;
+    await this.write(session);
+    return summarize(session);
+  }
+
+  /**
+   * Read just the mode, for the gate.
+   *
+   * Read fresh at each gated call rather than captured when the turn started, so lowering the
+   * mode mid-turn takes effect on the very next tool rather than after the reply finishes.
+   * A session that has gone reads as 'ask', which fails closed.
+   */
+  async approvalMode(id: string): Promise<ChatApprovalMode> {
+    try {
+      return (await this.get(id))?.approvalMode ?? 'ask';
+    } catch {
+      return 'ask';
+    }
   }
 
   /**
@@ -359,6 +430,11 @@ export class SessionStore {
       // than being downgraded: it keeps the chips that can re-point it, and it is safe only
       // because such a session is granted no roots at all - see ChatService.resolveToolScope.
       mode: parsed.mode === 'code' ? 'code' : 'chat',
+      approvalMode: normalizeApprovalMode(
+        parsed.approvalMode,
+        (parsed as StoredSession).approvalModeLaunch,
+        this.launchId
+      ),
       ...(parsed.mode === 'code' && project ? { project } : {}),
       ...(parsed.pinned ? { pinned: true } : {}),
       ...(parsed.archived ? { archived: true } : {}),
@@ -370,11 +446,18 @@ export class SessionStore {
 
   private async write(session: ChatSession): Promise<void> {
     const path = this.filePath(session.id);
+    // Stamped on the way out rather than carried on ChatSession: a 'full' in hand is always
+    // one THIS run put there, because a stamp from an earlier run never parses back as 'full'.
+    // Any other mode omits the field, so the stamp cannot outlive the choice it describes.
+    const record: StoredSession = {
+      ...session,
+      ...(session.approvalMode === 'full' ? { approvalModeLaunch: this.launchId } : {}),
+    };
     await mkdir(this.baseDirectory, { recursive: true });
     // Write-then-rename, as the auth vault does: a crash mid-write would otherwise truncate a
     // conversation into unparseable JSON and lose the whole thread rather than one turn.
     const temporary = `${path}.tmp`;
-    await writeFile(temporary, JSON.stringify(session, null, 2), 'utf8');
+    await writeFile(temporary, JSON.stringify(record, null, 2), 'utf8');
     await rename(temporary, path);
   }
 }

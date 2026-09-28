@@ -3,7 +3,9 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, type WebContents } fr
 import { ChatModels } from '@bike4mind/common';
 import type {
   ChatApprovalDecision,
+  ChatApprovalMode,
   ChatAttachmentInput,
+  ChatQueueEvent,
   ChatSessionStatusEvent,
   ChatStreamEvent,
   CreateCodeSessionRequest,
@@ -20,6 +22,7 @@ import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
 import { ChatService } from './ChatService';
 import { MediaStore } from './media/MediaStore';
+import { MessageQueue } from './MessageQueue';
 import { registerMediaProtocol } from './media/protocol';
 import { ModelCatalog } from './ModelCatalog';
 import { SessionActivity } from './SessionActivity';
@@ -123,6 +126,10 @@ export function registerChat(auth: AuthService): RegisteredChat {
   // replying, and this turns the pair into the one status a sidebar row draws.
   const activity = new SessionActivity((event: ChatSessionStatusEvent) => send(IPC_CHANNELS.chatSessionStatus, event));
 
+  // Typed-ahead messages, on their own channel: this is per-session state that outlives any
+  // one reply, so it travels beside the status pushes rather than inside the reply stream.
+  const queue = new MessageQueue((event: ChatQueueEvent) => send(IPC_CHANNELS.chatQueueChanged, event));
+
   const approvals = new ApprovalGate({
     requested: sessionId => activity.approvalRequested(sessionId),
     settled: sessionId => activity.approvalSettled(sessionId),
@@ -150,6 +157,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     media,
     activity,
     artifacts,
+    queue,
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which is T4's invariant broken through a side door.
     protectedPaths: [userData],
@@ -168,6 +176,12 @@ export function registerChat(auth: AuthService): RegisteredChat {
   );
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPinned, (_event, sessionId: string, pinned: boolean) =>
     service.setSessionPinned(sessionId, pinned)
+  );
+  // Validated here rather than trusted, for the same reason the folder grant goes through a
+  // native picker: this is the only door to the approval mode, so an unrecognised value must
+  // not reach the store and land as something looser than the user asked for.
+  ipcMain.handle(IPC_CHANNELS.chatSetApprovalMode, (_event, sessionId: string, mode: ChatApprovalMode) =>
+    mode === 'ask' || mode === 'auto' || mode === 'full' ? service.setApprovalMode(sessionId, mode) : null
   );
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
   ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => service.sessionStatuses());
@@ -224,6 +238,10 @@ export function registerChat(auth: AuthService): RegisteredChat {
   );
   ipcMain.handle(IPC_CHANNELS.chatStopReply, (_event, sessionId: string) => service.stop(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatContinueReply, (_event, sessionId: string) => service.continueReply(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatGetQueued, (_event, sessionId: string) => service.queuedMessages(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatCancelQueued, (_event, sessionId: string, queuedId: string) =>
+    service.cancelQueued(sessionId, queuedId)
+  );
   ipcMain.handle(IPC_CHANNELS.chatRespondToApproval, (_event, approvalId: string, decision: ChatApprovalDecision) =>
     approvals.resolve(approvalId, decision)
   );

@@ -247,7 +247,7 @@ describe('ChatService tool loop', () => {
 
     events.length = 0;
     const resumed = await service.continueReply(id);
-    expect(resumed).toMatchObject({ ok: true, messageId: sent.ok ? sent.messageId : '' });
+    expect(resumed).toMatchObject({ ok: true, messageId: sent.ok && !sent.queued ? sent.messageId : '' });
     await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
 
     // The resumed request replays the interrupted turn's own tool call and its result, which is
@@ -262,7 +262,7 @@ describe('ChatService tool loop', () => {
     streams[1].write(frame('[DONE]'));
 
     const finished = await waitFor(events, 'done');
-    expect(finished).toMatchObject({ messageId: resumed.ok ? resumed.messageId : '', stopReason: undefined });
+    expect(finished).toMatchObject({ messageId: resumed.ok && !resumed.queued ? resumed.messageId : '', stopReason: undefined });
     // One message, both rounds, one blank line between them - and the budget stop cleared.
     expect(finished).toMatchObject({ content: 'Reading the config.\n\nDone.' });
 
