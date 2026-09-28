@@ -384,6 +384,60 @@ jobs:
           echo "setup_failed=$SETUP_FAILED" >> $GITHUB_OUTPUT
           echo "total=$TOTAL" >> $GITHUB_OUTPUT
 
+      # Shadow mode: stores the run for /status; the Slack post below still runs.
+      # Best-effort by design: scripts/qa-report.mjs exits 0 on every failure. Skipped
+      # on the same two states Notify Slack treats specially: a cancelled (superseded)
+      # run would store zeros as an infra error, and a preview skip ran nothing.
+      - name: Ingest QA run (shadow)
+        if: ${{ !cancelled() && steps.e2e.outputs.preview_skipped != 'true' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          QA_INGEST_URL: ${{ vars.QA_INGEST_URL }}
+          QA_INGEST_KEY: ${{ secrets.QA_INGEST_KEY }}
+          QA_PRODUCT: ${{ vars.QA_PRODUCT }}
+          QA_SUITE: ${{ inputs.suite_name || 'Full' }}
+          QA_ENV: ${{ steps.config.outputs.env_label }}
+          QA_TRIGGER: ${{ inputs.trigger_label }}
+          QA_SHA: ${{ steps.tested_sha.outputs.sha || github.sha }}
+          SHOW_CREDITS: ${{ inputs.show_credits }}
+        run: |
+          args=(--results apps/client/pw-results.json --report-dir apps/client/playwright-report --counts-out qa-counts.json)
+          # Same gate as the AI Credits Slack block: notebook.spec.ts writes credits.json on every suite.
+          if [ "$SHOW_CREDITS" = "true" ]; then
+            args+=(--credits apps/client/e2e/fixtures/credits.json)
+          fi
+          node scripts/qa-report.mjs "${args[@]}"
+
+      # Phase 4 gate: /status counts must match the Slack summary before the post is removed.
+      - name: Compare QA counts with the Slack summary (shadow)
+        if: ${{ !cancelled() && hashFiles('qa-counts.json') != '' }}
+        continue-on-error: true
+        env:
+          PASSED: ${{ steps.results.outputs.passed }}
+          FAILED: ${{ steps.results.outputs.failed }}
+          SKIPPED: ${{ steps.results.outputs.skipped }}
+          NOT_STARTED: ${{ steps.results.outputs.not_started }}
+          TOTAL: ${{ steps.results.outputs.total }}
+        run: |
+          MISMATCH=""
+          check() {
+            local got
+            got=$(jq -r ".$1" qa-counts.json)
+            [ "$got" = "$2" ] || MISMATCH="$MISMATCH $1(script=$got slack=$2)"
+          }
+          check passed "$PASSED"
+          check failed "$FAILED"
+          check skipped "$SKIPPED"
+          check notStarted "$NOT_STARTED"
+          check total "$TOTAL"
+          if [ -n "$MISMATCH" ]; then
+            echo "::warning::QA shadow counts differ from the Slack summary:$MISMATCH"
+            echo "QA shadow counts MISMATCH:$MISMATCH" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "QA shadow counts match the Slack summary" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Post e2e commit status
         # Stamp the tested staging SHA with the full-suite result so the prod-
         # promotion console can read a per-commit e2e signal. `success` only when
