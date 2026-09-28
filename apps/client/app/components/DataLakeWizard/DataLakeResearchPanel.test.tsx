@@ -363,6 +363,43 @@ describe('DataLakeResearchPanel', () => {
       expect((screen.getByTestId('datalake-research-name-input') as HTMLInputElement).value).toBe('Weekly sweep');
     });
 
+    // Every create session shares editingId '', so the guard has to tell sessions apart, not ids.
+    it('leaves a second new-configuration draft open when the first create settles', async () => {
+      let resolveCreate: () => void = () => {};
+      const onCreate = vi.fn(() => new Promise<void>(resolve => (resolveCreate = resolve)));
+      renderPanel({ onCreate });
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-cancel-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Monthly' } });
+
+      resolveCreate();
+      await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+      await Promise.resolve();
+      expect(screen.getByTestId('datalake-research-form')).toBeInTheDocument();
+      expect((screen.getByTestId('datalake-research-name-input') as HTMLInputElement).value).toBe('Monthly');
+    });
+
+    it('leaves a reopened edit of the same configuration open when the earlier update settles', async () => {
+      let resolveUpdate: () => void = () => {};
+      const onUpdate = vi.fn(() => new Promise<void>(resolve => (resolveUpdate = resolve)));
+      renderPanel({ configs: [config()], onUpdate });
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-cancel-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'dune erosion' } });
+
+      resolveUpdate();
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+      await Promise.resolve();
+      expect(screen.getByTestId('datalake-research-form')).toBeInTheDocument();
+      expect((screen.getByTestId('datalake-research-query-input') as HTMLTextAreaElement).value).toBe('dune erosion');
+    });
+
     it('closes without saving on cancel', () => {
       const spies = renderPanel();
       fireEvent.click(screen.getByTestId('datalake-research-new-btn'));

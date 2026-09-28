@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -342,6 +342,9 @@ export function DataLakeResearchPanel({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<ConfigDraft>(emptyDraft);
   const [draftBaseline, setDraftBaseline] = useState<ConfigDraft>(emptyDraft);
+  // Bumped each time the form opens, so a save settling late can tell whether its own session is still
+  // the one on screen. `editingId` cannot: every create is '', and re-editing a row reuses its id.
+  const formSession = useRef(0);
   const isDirty =
     editingId !== null && (Object.keys(draft) as (keyof ConfigDraft)[]).some(key => draft[key] !== draftBaseline[key]);
   // The cleanup reports clean on unmount too: Joy unmounts an inactive TabPanel, which drops the draft.
@@ -372,17 +375,20 @@ export function DataLakeResearchPanel({
     setDraft(emptyDraft());
     setDraftBaseline(emptyDraft());
     setEditingId('');
+    formSession.current += 1;
   };
   const openEdit = (config: IDataLakeResearchConfigDocument) => {
     setDraft(draftFromConfig(config));
     setDraftBaseline(draftFromConfig(config));
     setEditingId(config.id);
+    formSession.current += 1;
   };
   const closeForm = () => setEditingId(null);
 
   const submit = async () => {
     const submittedId = editingId;
     if (submittedId === null) return;
+    const session = formSession.current;
     const input = draftToInput(draft);
     try {
       if (submittedId) await onUpdate(submittedId, input);
@@ -392,7 +398,7 @@ export function DataLakeResearchPanel({
       return;
     }
     // Only close the form this save came from: it may have been cancelled, or another opened, meanwhile.
-    setEditingId(current => (current === submittedId ? null : current));
+    if (formSession.current === session) closeForm();
   };
 
   if (isLoading) {
