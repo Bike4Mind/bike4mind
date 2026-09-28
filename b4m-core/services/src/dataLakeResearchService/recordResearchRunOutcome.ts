@@ -13,7 +13,7 @@ export interface ResearchRunOutcomeAdapters extends LakeConfigAuditAdapters {
 }
 
 /**
- * Records a run reaching an outcome (#3298) - the History-tab half of "run start and outcome" that
+ * Records a run reaching an outcome - the History-tab half of "run start and outcome" that
  * `start-research-run` (recorded in `startResearchRun.ts`) covers the other half of.
  *
  * Called from `runLakeResearch.ts`, the background executor - there is no session behind a queued
