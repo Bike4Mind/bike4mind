@@ -294,6 +294,21 @@ export function useConversation(
         return;
       }
 
+      if (event.type === 'tool-progress') {
+        setMessages(current =>
+          current.map(message => {
+            if (message.id !== event.messageId) return message;
+            return {
+              ...message,
+              toolCalls: (message.toolCalls ?? []).map(call =>
+                call.id === event.callId ? { ...call, progress: event.text } : call
+              ),
+            };
+          })
+        );
+        return;
+      }
+
       // Only 'done' and 'error' end a reply. Stated rather than left to the fall-through,
       // because the background-process events arrive with no reply in flight at all, and
       // treating an unrecognised event as terminal would blank the streaming indicator.

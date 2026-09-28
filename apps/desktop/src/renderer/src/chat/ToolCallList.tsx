@@ -5,8 +5,14 @@ import CircularProgress from '@mui/joy/CircularProgress';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import type { ChatApprovalDecision, ChatToolCall, ChatToolStatus } from '@shared/chat';
+import type { ChatApprovalDecision, ChatToolCall, ChatToolNotice, ChatToolStatus } from '@shared/chat';
 import { DiffView } from './DiffView';
+import { MediaAttachments } from './MediaAttachment';
+
+/** Tools that spend credits on the server rather than doing something to this machine. */
+function isGeneration(name: string): boolean {
+  return name.startsWith('generate_');
+}
 
 const STATUS_COLOR: Record<ChatToolStatus, 'neutral' | 'success' | 'danger' | 'warning' | 'primary'> = {
   'awaiting-approval': 'primary',
@@ -36,8 +42,34 @@ const APPROVAL_QUESTION: Record<'create' | 'overwrite' | 'edit', string> = {
 /** The argument worth showing next to the tool name - almost always what it acted on. */
 function summarizeInput(call: ChatToolCall): string {
   const input = call.input ?? {};
-  const interesting = input.path ?? input.pattern ?? input.command ?? input.id;
+  const interesting = input.path ?? input.pattern ?? input.command ?? input.prompt ?? input.text ?? input.id;
   return typeof interesting === 'string' ? interesting : '';
+}
+
+/**
+ * A cost or provider outcome, on its own rather than inside the collapsed tool body.
+ *
+ * Running out of credits is a warning and not a failure of this app, and a substituted provider
+ * is not a failure at all - both would read wrong as red monospace error text, and both are
+ * things the user has to see without clicking anything.
+ */
+function NoticeBanner({ notice }: { notice: ChatToolNotice }) {
+  const outOfCredits = notice.kind === 'insufficient-credits';
+  return (
+    <Sheet
+      variant="soft"
+      color="warning"
+      sx={{ borderRadius: 'sm', px: 1.5, py: 1, mt: 0.5 }}
+      data-testid={outOfCredits ? 'chat-tool-credits-notice' : 'chat-tool-provider-notice'}
+    >
+      <Typography level="body-xs" fontWeight="lg">
+        {outOfCredits ? 'Out of credits' : 'A different provider was used'}
+      </Typography>
+      <Typography level="body-xs" sx={{ mt: 0.25 }}>
+        {notice.text}
+      </Typography>
+    </Sheet>
+  );
 }
 
 /**
@@ -67,9 +99,11 @@ function ApprovalPrompt({
       <Typography level="body-xs" fontWeight="lg">
         {diff
           ? APPROVAL_QUESTION[diff.operation]
-          : call.name === 'bash_background'
-            ? 'Start this in the background?'
-            : 'Run this command?'}
+          : isGeneration(call.name)
+            ? 'Generate this? It costs credits.'
+            : call.name === 'bash_background'
+              ? 'Start this in the background?'
+              : 'Run this command?'}
       </Typography>
 
       {diff ? (
@@ -100,7 +134,7 @@ function ApprovalPrompt({
 
       <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
         <Button size="sm" onClick={() => onRespond(approvalId, 'once')} data-testid="chat-tool-approve-once">
-          {diff ? 'Apply this change' : 'Allow once'}
+          {diff ? 'Apply this change' : isGeneration(call.name) ? 'Generate it' : 'Allow once'}
         </Button>
         <Button
           size="sm"
@@ -117,7 +151,7 @@ function ApprovalPrompt({
           onClick={() => onRespond(approvalId, 'deny')}
           data-testid="chat-tool-deny"
         >
-          {diff ? "Don't change it" : "Don't run"}
+          {diff ? "Don't change it" : isGeneration(call.name) ? "Don't generate" : "Don't run"}
         </Button>
       </Stack>
     </Sheet>
@@ -131,40 +165,58 @@ function ToolCall({ call, onRespond }: { call: ChatToolCall; onRespond: RespondT
     return <ApprovalPrompt call={call} approvalId={call.approvalId} onRespond={onRespond} />;
   }
 
-  return (
-    <Box
-      component="details"
-      sx={{ borderRadius: 'sm', bgcolor: 'background.level2', px: 1, py: 0.5 }}
-      data-testid="chat-tool-call"
-    >
-      <Stack component="summary" direction="row" spacing={1} alignItems="center" sx={{ cursor: 'pointer' }}>
-        {call.status === 'running' ? (
-          <CircularProgress size="sm" sx={{ '--CircularProgress-size': '14px' }} />
-        ) : (
-          <Chip size="sm" variant="soft" color={STATUS_COLOR[call.status]} data-testid="chat-tool-status">
-            {STATUS_LABEL[call.status]}
-          </Chip>
-        )}
-        <Typography level="body-xs" fontFamily="monospace">
-          {call.name}
-        </Typography>
-        {summary && (
-          <Typography level="body-xs" textColor="text.tertiary" noWrap sx={{ minWidth: 0 }}>
-            {summary}
-          </Typography>
-        )}
-      </Stack>
+  const media = call.media ?? [];
 
-      <Box sx={{ pt: 0.75 }}>
-        <Typography
-          level="body-xs"
-          fontFamily="monospace"
-          sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 260, overflowY: 'auto' }}
-          textColor={call.error ? 'danger.400' : 'text.secondary'}
-        >
-          {call.error ?? call.preview ?? 'Running...'}
-        </Typography>
+  return (
+    <Box>
+      <Box
+        component="details"
+        sx={{ borderRadius: 'sm', bgcolor: 'background.level2', px: 1, py: 0.5 }}
+        data-testid="chat-tool-call"
+      >
+        <Stack component="summary" direction="row" spacing={1} alignItems="center" sx={{ cursor: 'pointer' }}>
+          {call.status === 'running' ? (
+            <CircularProgress size="sm" sx={{ '--CircularProgress-size': '14px' }} />
+          ) : (
+            <Chip size="sm" variant="soft" color={STATUS_COLOR[call.status]} data-testid="chat-tool-status">
+              {STATUS_LABEL[call.status]}
+            </Chip>
+          )}
+          <Typography level="body-xs" fontFamily="monospace">
+            {call.name}
+          </Typography>
+          {/* While running, the progress line takes the slot the argument had: on a generation
+              it is the only thing that distinguishes "working" from "wedged", and the prompt is
+              already on screen above, in the approval the user just answered. */}
+          {call.status === 'running' && call.progress ? (
+            <Typography level="body-xs" textColor="text.secondary" noWrap data-testid="chat-tool-progress">
+              {call.progress}
+            </Typography>
+          ) : (
+            summary && (
+              <Typography level="body-xs" textColor="text.tertiary" noWrap sx={{ minWidth: 0 }}>
+                {summary}
+              </Typography>
+            )
+          )}
+        </Stack>
+
+        <Box sx={{ pt: 0.75 }}>
+          <Typography
+            level="body-xs"
+            fontFamily="monospace"
+            sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 260, overflowY: 'auto' }}
+            textColor={call.error ? 'danger.400' : 'text.secondary'}
+          >
+            {call.error ?? call.preview ?? call.progress ?? 'Running...'}
+          </Typography>
+        </Box>
       </Box>
+
+      {/* Outside the <details>, both of them: a generated image nobody can see until they
+          expand a collapsed row is not a rendered image, and "out of credits" is not a detail. */}
+      {call.notice && <NoticeBanner notice={call.notice} />}
+      <MediaAttachments media={media} />
     </Box>
   );
 }

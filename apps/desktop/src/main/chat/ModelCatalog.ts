@@ -52,6 +52,9 @@ export interface ModelCatalogDeps {
 export class ModelCatalog {
   private cache: { environmentUrl: string; models: ChatModelOption[]; expiresAt: number } | null = null;
 
+  /** Separate from `cache` because the two views are read on different paths; see listImageModels. */
+  private imageCache: { environmentUrl: string; models: string[]; expiresAt: number } | null = null;
+
   constructor(private readonly deps: ModelCatalogDeps) {}
 
   /** Cached models for the current environment, without a round trip. Null when nothing is cached. */
@@ -95,6 +98,46 @@ export class ModelCatalog {
     this.deps.logger.debug(`CHAT: ${models.length} model(s) available`);
     return { models };
   }
+
+  /**
+   * Image models this deployment offers, newest-listed first, for the image-generation tool.
+   *
+   * Fetched lazily and cached separately from the chat list: a turn that never generates an
+   * image must not pay for this, and the chat picker must not pay for it either. Same reasoning
+   * as `list` about never hardcoding a set - `/api/models` is assembled from the account's
+   * effective provider keys, so a stack with no image provider correctly offers none.
+   */
+  async listImageModels(): Promise<string[]> {
+    const environmentUrl = this.deps.getEnvironmentUrl();
+    const hit = this.imageCache;
+    if (hit && hit.environmentUrl === environmentUrl && Date.now() < hit.expiresAt) return hit.models;
+
+    const api = this.deps.getApiClient();
+    if (!api) return [];
+
+    let models: string[];
+    try {
+      const response = await api.get<{ models?: WireModel[] }>(MODELS_PATH);
+      models = selectImageModels(response?.models);
+    } catch (err) {
+      this.deps.logger.warn(`CHAT: image model lookup failed: ${err instanceof Error ? err.message : 'unknown'}`);
+      return [];
+    }
+
+    if (models.length > 0) {
+      this.imageCache = { environmentUrl, models, expiresAt: Date.now() + CACHE_TTL_MS };
+    }
+    return models;
+  }
+}
+
+/** Image-generation model ids from the server's catalog, in the order it listed them. */
+export function selectImageModels(wire: unknown): string[] {
+  if (!Array.isArray(wire)) return [];
+  return wire
+    .filter((model): model is WireModel => !!model && typeof model === 'object')
+    .filter(model => model.type === 'image' && typeof model.id === 'string')
+    .map(model => model.id as string);
 }
 
 /**
