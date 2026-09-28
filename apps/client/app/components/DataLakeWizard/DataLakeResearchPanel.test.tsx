@@ -459,6 +459,26 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.queryByTestId('datalake-research-run-totals')).toBeNull();
     });
 
+    // A judge that failed on some candidates still completes, but the card must say why the totals
+    // are thin rather than leaving "N could not be judged" as the only hint.
+    it('shows the judge error on a completed run alongside its totals', () => {
+      renderPanel({
+        runs: [
+          run({
+            error: 'The relevance judge (some-model) failed on 1 candidate: rate limited',
+            totals: { ...run().totals, searchHits: 2, judgeFailed: 1, proposed: 1 },
+          }),
+        ],
+      });
+      expect(screen.getByTestId('datalake-research-run-error').textContent).toMatch(/rate limited/);
+      expect(screen.getByTestId('datalake-research-run-totals').textContent).toMatch(/1 could not be judged/);
+    });
+
+    it('names the model that judged a run', () => {
+      renderPanel({ runs: [run({ judgeModel: 'gpt-4.1-mini' })] });
+      expect(screen.getByText(/judged by gpt-4\.1-mini/)).toBeTruthy();
+    });
+
     it('shows what a run spent, at a resolution a fraction of a cent survives', () => {
       renderPanel({ runs: [run({ spentMicroUsd: 300 })] });
       expect(screen.getByTestId('datalake-research-run-row').textContent).toMatch(/\$0\.0003/);

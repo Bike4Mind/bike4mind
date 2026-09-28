@@ -43,8 +43,9 @@ export const RESEARCH_RUN_PRODUCER = 'research_run';
  * started is visible immediately rather than appearing only once a worker picks it up.
  *
  * `completed` means the run finished its own loop, INCLUDING when it stopped early on a lever
- * (`stopReason`). A stopped-early run did the work it was allowed to do; only an unhandled failure
- * is `failed`.
+ * (`stopReason`). A stopped-early run did the work it was allowed to do. `failed` is an unhandled
+ * fault, an operator fact that makes the run impossible, or a judge that failed on every candidate
+ * it tried - the last because "nothing proposed" would otherwise read as "the web had nothing".
  */
 export const RESEARCH_RUN_STATUSES = ['queued', 'running', 'completed', 'failed'] as const;
 export type ResearchRunStatus = (typeof RESEARCH_RUN_STATUSES)[number];
@@ -225,7 +226,7 @@ export interface ResearchRunTotals {
   /** Candidates the judge scored below `minRelevance`. */
   belowRelevance: number;
   /**
-   * Candidates the judge could not score at all, because the model was unreachable. Counted apart
+   * Candidates the judge could not score at all: the model call failed or its response was unusable. Counted apart
    * from `belowRelevance` even though the candidate meets the same fate: a run whose judge is down
    * reports "20 hits, 20 below relevance, 0 proposed", which reads as "the web had nothing" and
    * sends a manager off to retune a query that was never the problem.
@@ -281,7 +282,17 @@ export interface IDataLakeResearchRun {
   /** What the run actually spent on relevance judgments, micro-USD. Reported next to the ceiling. */
   spentMicroUsd: number;
   totals: ResearchRunTotals;
-  /** Why a `failed` run failed, in terms a lake manager can act on. Never a raw stack. */
+  /**
+   * The judge model the run actually resolved, which is not always `levers.model`: that lever is
+   * absent on "Default" and falls back when the configured model is gone. Recorded so spend and
+   * quality trace to a model, and so changing the default does not rewrite history. Absent on a run
+   * that failed before resolving one.
+   */
+  judgeModel?: string | null;
+  /**
+   * Why a `failed` run failed, in terms a lake manager can act on. Never a raw stack. Also set on a
+   * `completed` run whose judge failed on some candidates, so a degraded run carries its cause.
+   */
   error?: string | null;
 }
 
@@ -311,6 +322,7 @@ export interface SettleResearchRunInput {
   stopReason?: ResearchRunStopReason;
   spentMicroUsd: number;
   totals: ResearchRunTotals;
+  judgeModel?: string;
   error?: string;
 }
 
@@ -349,7 +361,18 @@ export interface IDataLakeResearchRunRepository extends IBaseRepository<IDataLak
    * spend a second ceiling's worth of money.
    */
   claimForExecution(id: string, startedAt: Date): Promise<IDataLakeResearchRunDocument | null>;
-  settleRun(id: string, input: SettleResearchRunInput): Promise<void>;
+  /**
+   * The executor's own settle - matches `queued` or `running`. Returns false when the row was
+   * already terminal (settle was a no-op), true when it settled. A caller that does not hold the
+   * execution claim must use `settleQueuedRun` instead.
+   */
+  settleRun(id: string, input: SettleResearchRunInput): Promise<boolean>;
+  /**
+   * Settle for a caller that has NOT claimed the run - matches `queued` ONLY, so it can never
+   * overwrite a run the executor has already claimed (`running`) or resolved. Returns false when
+   * the row was not queued (the executor now owns it), true when it settled.
+   */
+  settleQueuedRun(id: string, input: SettleResearchRunInput): Promise<boolean>;
   /** Live progress while the loop runs, so the panel is not blank for a minute. */
   recordProgress(id: string, spentMicroUsd: number, totals: ResearchRunTotals): Promise<void>;
   /** How many runs a lake started since `since`. Backs the per-lake daily spend cap. */

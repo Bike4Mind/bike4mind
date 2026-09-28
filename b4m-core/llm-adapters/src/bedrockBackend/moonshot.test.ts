@@ -350,6 +350,30 @@ describe('MoonshotBedrockBackend live Bedrock shapes', () => {
     });
   });
 
+  it('non-streaming TOOL_USE chunkText never carries the raw arguments', () => {
+    // base.ts's non-streaming path now sends every choice's chunkText to the client as
+    // prose ahead of a chained tool call. chunkText must stay empty on Moonshot's
+    // structured TOOL_USE choices or the arguments leak as assistant text.
+    const { chunk } = backend.translateChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
+      choices: [
+        {
+          message: {
+            tool_calls: [
+              {
+                function: { name: 'get_weather', arguments: '{"city": "Paris"}' },
+                id: 'functions.get_weather:0',
+                type: 'function',
+              },
+            ],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+    });
+    const toolChoice = chunk.choices.find(c => c.statusEndReason === ChoiceEndReason.TOOL_USE);
+    expect('chunkText' in (toolChoice ?? {}) && toolChoice?.chunkText).toBe('');
+  });
+
   it('preserves the tool round-trip through getPayload so recursion is not mangled', () => {
     // getPayload used to drop the content:null assistant turn and remap role:tool
     // to system, so the model never learned its tool ran and looped.
@@ -494,6 +518,9 @@ describe('MoonshotBedrockBackend native tool-call tokens', () => {
     const joined = chunk.choices.map(c => ('chunkText' in c ? c.chunkText : '')).join('');
     expect(joined).toContain('<think>');
     expect(joined).not.toContain('<|');
+    // and the raw arguments never sit in the TOOL_USE choice's own chunkText, which
+    // base.ts's non-streaming path now sends to the client as prose
+    expect('chunkText' in (tool ?? {}) && tool?.chunkText).toBe('');
   });
 
   it('non-streaming: a native tool section still parses after a long monologue', () => {

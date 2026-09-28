@@ -1257,6 +1257,27 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
     await user.click(screen.getByTestId('datalake-settings-tab-settings'));
     expect(screen.getByTestId('datalake-settings-save-btn')).toBeInTheDocument();
   });
+
+  // Same shape as the Research draft: the half-typed reason is this panel's own state, so an
+  // unmount loses it. Unlike Research it reports no dirty state, so nothing would warn either.
+  it('keeps a half-typed decline reason while the curator visits another tab', async () => {
+    withQueue([queued()]);
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
+    await user.click(screen.getByTestId('datalake-proposal-decline-btn'));
+    await user.type(screen.getByTestId('datalake-proposal-decline-reason'), 'Paywalled');
+
+    await user.click(screen.getByTestId('datalake-settings-tab-settings'));
+    await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
+
+    expect(screen.getByTestId('datalake-proposal-decline-reason')).toHaveValue('Paywalled');
+  });
 });
 
 describe('DataLakeSettingsModal - Research tab', () => {
@@ -1294,6 +1315,22 @@ describe('DataLakeSettingsModal - Research tab', () => {
     expect(useDataLakeResearchConfigsMock).toHaveBeenCalledWith('lake-res-2', { enabled: false });
   });
 
+  // The panel is kept mounted for the curators who have the tab, so an offered-tab guard is the
+  // only thing keeping a hidden copy of it out of a reader's dialog. Needs a reader who reaches
+  // the Tabs at all: strip every tab and the dialog renders the bare settings form instead, which
+  // would pass this without the guard.
+  it('keeps the panel out of the dialog for a reader who has other tabs', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...readerLake, embeddingSpendMicroUsd: 0 }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-tab-spend')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-settings-tab-research')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-research-panel')).not.toBeInTheDocument();
+  });
+
   // The whole point of the tab-gated `enabled`: opening the modal must not pay for two reads a
   // manager who came for the Settings form will never look at.
   it('does not read the configurations until the tab is opened', async () => {
@@ -1318,9 +1355,11 @@ describe('DataLakeSettingsModal - Research tab', () => {
       </Wrapper>
     );
 
+    expect(screen.getByTestId('datalake-research-panel')).not.toBeVisible();
+
     await userEvent.click(screen.getByTestId('datalake-settings-tab-research'));
 
-    expect(await screen.findByTestId('datalake-research-panel')).toBeInTheDocument();
+    expect(await screen.findByTestId('datalake-research-panel')).toBeVisible();
     expect(screen.getByTestId('datalake-research-empty')).toBeInTheDocument();
   });
 
@@ -1354,6 +1393,73 @@ describe('DataLakeSettingsModal - Research tab', () => {
     await userEvent.click(await screen.findByTestId('datalake-research-run-btn'));
 
     expect(startResearchRunMutate).toHaveBeenCalledWith('config-1');
+  });
+
+  // The draft lives in the panel's own state, so anything that unmounts the panel takes with it
+  // work the curator never got the chance to save.
+  it('keeps an unsaved configuration draft while the curator visits another tab', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-research'));
+    await user.click(await screen.findByTestId('datalake-research-new-btn'));
+    await user.type(screen.getByTestId('datalake-research-name-input'), 'Weekly sweep');
+
+    await user.click(screen.getByTestId('datalake-settings-tab-settings'));
+    await user.click(screen.getByTestId('datalake-settings-tab-research'));
+
+    expect(screen.getByTestId('datalake-research-form')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-research-name-input')).toHaveValue('Weekly sweep');
+  });
+
+  // The quieter half of the same bug: the panel reports its dirty state, so an unmount reported
+  // clean and the close confirm stopped firing at the moment there was most to lose.
+  it('still warns on close when an unsaved draft was left behind on another tab', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={onClose} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-research'));
+    await user.click(await screen.findByTestId('datalake-research-new-btn'));
+    await user.type(screen.getByTestId('datalake-research-name-input'), 'Weekly sweep');
+    await user.click(screen.getByTestId('datalake-settings-tab-settings'));
+
+    await user.click(screen.getByTestId('datalake-settings-close-btn'));
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('datalake-discard-confirm')).toBeInTheDocument();
+  });
+
+  // The flip side of keeping the panel alive: a draft that outlived its own lake would be offered
+  // for saving against the next one. Same seed-once-per-lake rule the settings form already holds.
+  it('does not carry a draft over to a different lake', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-research'));
+    await user.click(await screen.findByTestId('datalake-research-new-btn'));
+    await user.type(screen.getByTestId('datalake-research-name-input'), 'Weekly sweep');
+
+    rerender(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-res-3' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-research'));
+    expect(screen.queryByTestId('datalake-research-form')).not.toBeInTheDocument();
   });
 });
 

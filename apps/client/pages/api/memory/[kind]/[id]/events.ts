@@ -80,11 +80,11 @@ const handler = baseApi().post(async (req, res) => {
   };
 
   const keys = createKeyProvider(memoryPrincipalKeyRepository);
-  // `startedAt` is this request's own arrival, so the shred fence cannot block it: an erase that
-  // landed earlier lifts the tombstone and re-keys, which is what makes "erase, then remember
-  // something new" work. The branch below is only reachable if an erase lands DURING this request.
+  // `startedAt` is this request's arrival (stamped by baseApi, not here): an erase that landed before
+  // it lifts the tombstone and re-keys, which is what makes "erase, then remember something new"
+  // work. The branch below is reachable only when an erase lands DURING this request.
   const sealed = await appendMemoryEvent(memoryLedgerRepository, keys, ownerUserId, eventInput, {
-    startedAt: new Date(),
+    startedAt: req.receivedAt,
   });
   if (!sealed) {
     // Refused, not failed - so a 409 with the reason rather than the 500 a thrown error would produce.

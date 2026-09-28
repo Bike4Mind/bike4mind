@@ -277,7 +277,7 @@ const runStateLabel = (run: IDataLakeResearchRunDocument): keyof typeof RUN_STAT
 const DROP_REASON_LABEL: Record<Exclude<keyof ResearchRunTotals, 'searchHits' | 'proposed'>, string> = {
   filteredBySource: 'blocked by source rules',
   belowRelevance: 'below the relevance floor',
-  judgeFailed: 'could not be judged (the model was unreachable)',
+  judgeFailed: 'could not be judged (the model call failed)',
   alreadyInLake: 'already in the lake',
   duplicatePending: 'already awaiting review',
   suppressedByTombstone: 'previously declined',
@@ -347,7 +347,9 @@ export function DataLakeResearchPanel({
   const formSession = useRef(0);
   const isDirty =
     editingId !== null && (Object.keys(draft) as (keyof ConfigDraft)[]).some(key => draft[key] !== draftBaseline[key]);
-  // The cleanup reports clean on unmount too: Joy unmounts an inactive TabPanel, which drops the draft.
+  // Cleanup reports clean so a dismissed panel cannot leave the host confirming edits that no
+  // longer exist. Must stay in sync with DataLakeSettingsModal: it passes `keepMounted` on this
+  // panel's TabPanel, because an unmount takes the draft with it.
   useEffect(() => {
     onDirtyChange?.(isDirty);
     return () => onDirtyChange?.(false);
@@ -789,10 +791,15 @@ export function DataLakeResearchPanel({
                   </Typography>
                   <Typography level="body-xs" textColor="text.tertiary">
                     {`${formatWhen(runStartedAt(run))} \u00b7 ${formatSpend(run.spentMicroUsd)}`}
+                    {run.judgeModel && ` \u00b7 judged by ${run.judgeModel}`}
                   </Typography>
                 </Stack>
-                {run.status === 'failed' && run.error && (
-                  <Typography level="body-xs" color="danger" data-testid="datalake-research-run-error">
+                {run.error && (
+                  <Typography
+                    level="body-xs"
+                    color={run.status === 'failed' ? 'danger' : 'warning'}
+                    data-testid="datalake-research-run-error"
+                  >
                     {run.error}
                   </Typography>
                 )}

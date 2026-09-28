@@ -1,3 +1,4 @@
+import { stripToolOutputMarker } from '../artifactParser';
 import { assemblyTokenBuffer, MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION } from './contextBudget';
 import {
   type AttachmentLakeAccess,
@@ -670,7 +671,7 @@ export async function fetchAndProcessPreviousMessages(
       const assistantContent: MessageContentObject[] = [];
 
       if (textReply) {
-        assistantContent.push({ type: 'text', text: textReply } as MessageContentText);
+        assistantContent.push({ type: 'text', text: stripToolOutputMarker(textReply) } as MessageContentText);
       }
 
       for (const fc of toolCalls) {
@@ -702,7 +703,7 @@ export async function fetchAndProcessPreviousMessages(
     else if (cur.replies && Array.isArray(cur.replies)) {
       // Do not include thoughts on the chat history. Only actual answers.
       const validReply = cur.replies.find((reply: string) => !reply.trim().startsWith('<think>'));
-      if (validReply) acc.push({ role: 'assistant', content: validReply });
+      if (validReply) acc.push({ role: 'assistant', content: stripToolOutputMarker(validReply) });
     }
 
     return acc;
@@ -792,7 +793,7 @@ export async function fetchAgentConversationHistory(
     // First reply that isn't a thinking block; matches the text-only fallback in
     // fetchAndProcessPreviousMessages so the agent sees the actual answer, not internal thoughts.
     const textReply = cur.replies?.find((reply: string) => !reply.trim().startsWith('<think>'));
-    if (textReply) acc.push({ role: 'assistant', content: textReply });
+    if (textReply) acc.push({ role: 'assistant', content: stripToolOutputMarker(textReply) });
     return acc;
   }, new Array<{ role: 'user' | 'assistant'; content: string }>());
 }

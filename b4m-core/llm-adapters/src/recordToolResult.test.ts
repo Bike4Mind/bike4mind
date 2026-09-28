@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   recordToolResult,
   truncateToolResult,
+  getFullToolResult,
   MAX_RECORDED_TOOL_RESULT_CHARS,
+  MAX_FULL_TOOL_RESULT_CHARS,
   TOOL_RESULT_TRUNCATION_NOTICE,
   type RecordableToolUse,
 } from './recordToolResult';
@@ -105,5 +107,27 @@ describe('recordToolResult', () => {
     const toolsUsed: RecordableToolUse[] = [{ name: 'web_search', id: 'call_1' }];
     recordToolResult(toolsUsed, { id: 'call_1', name: 'web_search' }, 'result', true);
     expect(toolsUsed[0].executionTime).toBeUndefined();
+  });
+
+  it('keeps the untruncated result readable in memory, capped at MAX_FULL_TOOL_RESULT_CHARS', () => {
+    const long = 'x'.repeat(MAX_RECORDED_TOOL_RESULT_CHARS + 50);
+    const toolsUsed: RecordableToolUse[] = [{ name: 'web_fetch', id: 'call_1' }];
+    recordToolResult(toolsUsed, { id: 'call_1', name: 'web_fetch' }, long, true);
+    expect(toolsUsed[0].returnValue?.endsWith(TOOL_RESULT_TRUNCATION_NOTICE)).toBe(true);
+    expect(getFullToolResult(toolsUsed[0])).toEqual({ text: long, truncated: false });
+
+    const huge = 'y'.repeat(MAX_FULL_TOOL_RESULT_CHARS + 10);
+    const second: RecordableToolUse[] = [{ name: 'web_fetch', id: 'call_2' }];
+    recordToolResult(second, { id: 'call_2', name: 'web_fetch' }, huge, true);
+    expect(getFullToolResult(second[0])?.text).toHaveLength(MAX_FULL_TOOL_RESULT_CHARS);
+    expect(getFullToolResult(second[0])?.truncated).toBe(true);
+  });
+
+  it('keeps the full result out of serialization and copies of the entry', () => {
+    const huge = 'y'.repeat(MAX_FULL_TOOL_RESULT_CHARS);
+    const toolsUsed: RecordableToolUse[] = [{ name: 'web_fetch', id: 'call_1' }];
+    recordToolResult(toolsUsed, { id: 'call_1', name: 'web_fetch' }, huge, true);
+    expect(JSON.stringify({ toolsUsed }).length).toBeLessThan(MAX_RECORDED_TOOL_RESULT_CHARS + 500);
+    expect(getFullToolResult({ ...toolsUsed[0] })).toBeUndefined();
   });
 });

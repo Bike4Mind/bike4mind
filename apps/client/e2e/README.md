@@ -145,6 +145,7 @@ setup → unauthenticated
 | **setup** | Creates test users, logs them in, saves browser state | None (creates auth) |
 | **unauthenticated** | Login and signup flows | None (tests auth UI) |
 | **websocket-auth** | WebSocket token gates (`typ`, tokenVersion revocation) | None (mints throwaway users) |
+| **credits** | Low-balance user; asserts the pre-flight credit gate renders the insufficient-credits notice, not a reply | `.auth/credits-user.json` (1-credit user) |
 | **admin** | Admin-only features (dashboard, settings) | `.auth/admin.json` |
 | **chromium** | Main test suite (everything except auth/signup/admin) | `.auth/user.json` |
 
