@@ -399,6 +399,19 @@ export interface ConvertCodeBlocksOptions {
 }
 
 export function convertCodeBlocksToArtifacts(content: string, options: ConvertCodeBlocksOptions = {}): string {
+  return transformCodeBlocks(content, options, false);
+}
+
+/**
+ * Rewrites only the spans convertCodeBlocksToArtifacts would promote AND isToolEcho flags,
+ * into marked fences; everything else stays byte-identical. For replies stored raw and
+ * parsed later (the agent path), where promoting here would change what gets persisted.
+ */
+export function markToolEchoes(content: string, isToolEcho: (body: string) => boolean): string {
+  return transformCodeBlocks(content, { isToolEcho }, true);
+}
+
+function transformCodeBlocks(content: string, options: ConvertCodeBlocksOptions, echoOnly: boolean): string {
   const mask = maskToolOutputRegions(content);
   content = mask.masked;
   const { isToolEcho } = options;
@@ -417,6 +430,7 @@ export function convertCodeBlocksToArtifacts(content: string, options: ConvertCo
   const reactCodeBlockRegex = /```(?:tsx?|javascript|jsx)([\s\S]*?)```/gi;
 
   content = content.replace(reactCodeBlockRegex, (match, codeContent) => {
+    if (echoOnly) return match;
     // Anchor requirement the old regex encoded inline: a declaration + component token
     // on one line. Without it, this fence is not a React component - leave it alone.
     if (!hasReactComponentLine(codeContent)) return match;
@@ -449,6 +463,7 @@ ${codeContent.trim()}
     if (!hasFullHtmlDocument(codeContent)) return match;
     const echoed = echoFence('html', codeContent, whole, offset, offset + match.length);
     if (echoed !== null) return echoed;
+    if (echoOnly) return match;
     const title = sanitizeHTMLTitle(extractHTMLTitle(codeContent), 'HTML Page');
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
@@ -467,6 +482,7 @@ ${codeContent.trim()}
     if (!/<[a-z][a-z0-9]*[\s/>]/i.test(codeContent)) return match;
     const echoed = echoFence('html', codeContent, whole, offset, offset + match.length);
     if (echoed !== null) return echoed;
+    if (echoOnly) return match;
     const title = sanitizeHTMLTitle(extractHTMLTitle(codeContent), 'HTML Snippet');
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
     return `<artifact identifier="${identifier}" type="text/html" title="${title}">
@@ -478,6 +494,7 @@ ${codeContent.trim()}
   const svgCodeBlockRegex = /```svg([\s\S]*?)```/gi;
 
   content = content.replace(svgCodeBlockRegex, (match, codeContent) => {
+    if (echoOnly) return match;
     // Not a complete <svg>...</svg> - leave the fence unchanged.
     if (!hasCompleteSvg(codeContent)) return match;
     const identifier = 'svg-graphic';
@@ -489,6 +506,7 @@ ${codeContent.trim()}
 
   // Detect Mermaid code blocks and mixed content.
   content = replaceMermaidFences(content, (fullMatch, codeContent) => {
+    if (echoOnly) return fullMatch;
     // Clean and validate the Mermaid syntax
     const { isValid, cleanedContent, errors } = validateMermaidSyntax(codeContent);
 
@@ -512,7 +530,7 @@ ${codeContent.trim()}
 
   content = content.replace(rawMermaidRegex, (fullMatch, mermaidContent) => {
     // Skip if this is already inside a code block or artifact
-    if (fullMatch.includes('```') || fullMatch.includes('<artifact')) {
+    if (echoOnly || fullMatch.includes('```') || fullMatch.includes('<artifact')) {
       return fullMatch;
     }
 
@@ -530,9 +548,9 @@ ${codeContent.trim()}
     }
   });
 
-  content = promoteToolCallJsonArtifact(content, echoFence);
+  content = promoteToolCallJsonArtifact(content, echoFence, echoOnly);
 
-  content = promoteBareHtmlDocument(content, echoFence);
+  content = promoteBareHtmlDocument(content, echoFence, echoOnly);
 
   return mask.restore(content);
 }
@@ -558,7 +576,7 @@ type EchoFence = (lang: string, body: string, whole: string, start: number, end:
  * MUST STAY IN SYNC with the twin copy in apps/client/app/utils/artifactParser.ts
  * so client render and server persistence never diverge.
  */
-function promoteToolCallJsonArtifact(content: string, echoFence: EchoFence): string {
+function promoteToolCallJsonArtifact(content: string, echoFence: EchoFence, echoOnly: boolean): string {
   // Fence labels a model uses for a tool call; a ```html fence is handled above.
   // The negative lookahead stops ```tool matching inside ```tool_calls etc.
   const fenceRegex = /```(json|tool_code|tool)(?![a-z0-9_])([\s\S]*?)```/gi;
@@ -567,7 +585,7 @@ function promoteToolCallJsonArtifact(content: string, echoFence: EchoFence): str
     (match, label: string, body: string, offset: number, whole: string) => {
       const artifact = toolCallJsonToArtifact(body);
       if (!artifact) return match;
-      return echoFence(label, body, whole, offset, offset + match.length) ?? artifact;
+      return echoFence(label, body, whole, offset, offset + match.length) ?? (echoOnly ? match : artifact);
     }
   );
   if (afterFences !== content) return afterFences;
@@ -579,7 +597,7 @@ function promoteToolCallJsonArtifact(content: string, echoFence: EchoFence): str
     if (artifact) {
       const start = content.indexOf(trimmed);
       const echoed = echoFence('json', trimmed, content, start, start + trimmed.length);
-      return content.replace(trimmed, () => echoed ?? artifact);
+      return content.replace(trimmed, () => echoed ?? (echoOnly ? trimmed : artifact));
     }
   }
   return content;
@@ -648,7 +666,7 @@ function looksLikeHtml(value: string): boolean {
  * otherwise render as raw HTML in the chat (parser gap B). Runs last so the
  * fence/artifact guards see all earlier conversions.
  */
-function promoteBareHtmlDocument(content: string, echoFence: EchoFence): string {
+function promoteBareHtmlDocument(content: string, echoFence: EchoFence, echoOnly: boolean): string {
   // Two forward cursors instead of one <html>...</html> pattern, and guard counts that
   // accumulate over the gap since the previous document instead of re-reading the whole
   // prefix: both of the old shapes re-scanned from the start of the message on every
@@ -688,8 +706,8 @@ function promoteBareHtmlDocument(content: string, echoFence: EchoFence): string 
     copiedTo = end;
     promoted = true;
     const echoed = echoFence('html', doc, content, start, end);
-    if (echoed !== null) {
-      out += echoed;
+    if (echoed !== null || echoOnly) {
+      out += echoed ?? doc;
       continue;
     }
     const title = sanitizeHTMLTitle(extractHTMLTitle(doc), 'HTML Page');

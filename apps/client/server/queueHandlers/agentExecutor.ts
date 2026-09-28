@@ -197,6 +197,7 @@ import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { emitMetric } from '@server/utils/cloudwatch';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
+import { createAgentToolEchoMarker, persistedExecutionSteps } from '@server/utils/markAgentToolEchoes';
 import { isHeadlessConnection } from '@server/utils/headlessConnection';
 import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
 import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
@@ -2990,10 +2991,13 @@ async function processExecution(
     if (enableArtifacts && execution.dagSpec) {
       try {
         const dagChildren = await agentExecutionRepository.findDagChildrenLean(executionId);
-        const childAnswers = dagChildren
-          .filter(c => c.status === 'completed')
-          .map(c => (c.result as { answer?: string } | undefined)?.answer ?? '');
-        const extraBlocks = collectDagChildArtifactBlocks({ parentAnswer: replyText, childAnswers });
+        const completedChildren = dagChildren.filter(c => c.status === 'completed');
+        const childAnswers = completedChildren.map(c => (c.result as { answer?: string } | undefined)?.answer ?? '');
+        const childSteps = completedChildren.map(c => persistedExecutionSteps(c));
+        // The parent may reproduce what a child quoted from the web, so its own reply is
+        // checked against every child's tool output too (its own steps are checked at persist).
+        replyText = createAgentToolEchoMarker(childSteps.flat())(replyText);
+        const extraBlocks = collectDagChildArtifactBlocks({ parentAnswer: replyText, childAnswers, childSteps });
         if (extraBlocks.length > 0) {
           replyText = `${replyText}\n\n${extraBlocks.join('\n\n')}`;
           logger.info('[Artifacts] Surfaced DAG subagent artifacts on parent completion', {

@@ -1,7 +1,12 @@
-import { TOOL_ARTIFACT_EMITTERS } from '@bike4mind/common';
 import { TOOL_RESULT_TRUNCATION_NOTICE } from '@bike4mind/llm-adapters';
 import type { ToolEchoSource } from '@bike4mind/utils';
 import type { ToolsUsedEntry } from './toolsUsedToFunctionCalls';
+
+/**
+ * Tools whose output is third-party web content. Only these count as echo sources: output from
+ * the user's own content (knowledge base, files) or an artifact emitter is meant to promote.
+ */
+export const TOOL_ECHO_SOURCE_TOOLS: ReadonlySet<string> = new Set(['web_fetch', 'web_search']);
 
 /** Total chars of tool output the echo matcher searches per reply. */
 export const MAX_TOOL_ECHO_HAYSTACK_CHARS = 400_000;
@@ -14,16 +19,13 @@ function stripWebFetchWindowMarker(text: string): string {
   return at !== -1 && text.endsWith(']') ? text.slice(0, at) : text;
 }
 
-/**
- * The tool outputs a reply may have quoted back, for createToolEchoMatcher. Tools in
- * TOOL_ARTIFACT_EMITTERS are skipped: their output is meant to become an artifact.
- */
+/** The web tool outputs a reply may have quoted back, for createToolEchoMatcher. */
 export function buildToolEchoSources(toolsUsed: readonly ToolsUsedEntry[]): ToolEchoSource[] {
   const sources: ToolEchoSource[] = [];
   let budget = MAX_TOOL_ECHO_HAYSTACK_CHARS;
   for (const tool of toolsUsed) {
     if (budget <= 0) break;
-    if (TOOL_ARTIFACT_EMITTERS.has(tool.name)) continue;
+    if (!TOOL_ECHO_SOURCE_TOOLS.has(tool.name)) continue;
     let text: string;
     let truncated: boolean;
     if (typeof tool.fullReturnValue === 'string' && tool.fullReturnValue !== '') {
@@ -45,4 +47,22 @@ export function buildToolEchoSources(toolsUsed: readonly ToolsUsedEntry[]): Tool
     sources.push({ text, truncated });
   }
   return sources;
+}
+
+/**
+ * buildToolEchoSources over persisted agent steps (AgentStep in @bike4mind/agents): an
+ * observation step carries the tool's result in `content` and its name in `metadata.toolName`.
+ */
+export function buildToolEchoSourcesFromSteps(steps: unknown): ToolEchoSource[] {
+  if (!Array.isArray(steps)) return [];
+  const toolsUsed: ToolsUsedEntry[] = [];
+  for (const step of steps) {
+    if (!step || typeof step !== 'object') continue;
+    const { type, content, metadata } = step as { type?: unknown; content?: unknown; metadata?: unknown };
+    const toolName =
+      metadata && typeof metadata === 'object' ? (metadata as { toolName?: unknown }).toolName : undefined;
+    if (type !== 'observation' || typeof content !== 'string' || typeof toolName !== 'string') continue;
+    toolsUsed.push({ name: toolName, returnValue: content });
+  }
+  return buildToolEchoSources(toolsUsed);
 }

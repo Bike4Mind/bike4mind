@@ -1,10 +1,25 @@
 import { describe, it, expect } from 'vitest';
 import { TOOL_RESULT_TRUNCATION_NOTICE } from '@bike4mind/llm-adapters';
-import { buildToolEchoSources, MAX_TOOL_ECHO_HAYSTACK_CHARS } from './toolEchoSources';
+import { buildToolEchoSources, buildToolEchoSourcesFromSteps, MAX_TOOL_ECHO_HAYSTACK_CHARS } from './toolEchoSources';
 
 describe('buildToolEchoSources', () => {
   it('returns nothing for an empty array', () => {
     expect(buildToolEchoSources([])).toEqual([]);
+  });
+
+  it('counts only web tools, so the user own content and artifact emitters still promote', () => {
+    expect(
+      buildToolEchoSources([
+        { name: 'retrieve_knowledge_content', returnValue: 'kb doc' },
+        { name: 'file_read', returnValue: 'file body' },
+        { name: 'mermaid_chart', returnValue: 'graph TD; A-->B' },
+        { name: 'web_search', returnValue: 'search hit' },
+        { name: 'web_fetch', returnValue: 'page' },
+      ])
+    ).toEqual([
+      { text: 'search hit', truncated: false },
+      { text: 'page', truncated: false },
+    ]);
   });
 
   it('skips artifact-emitting tools and empty or missing values', () => {
@@ -29,7 +44,7 @@ describe('buildToolEchoSources', () => {
     expect(
       buildToolEchoSources([
         { name: 'web_fetch', returnValue: `abc${TOOL_RESULT_TRUNCATION_NOTICE}` },
-        { name: 'file_read', returnValue: 'whole' },
+        { name: 'web_search', returnValue: 'whole' },
       ])
     ).toEqual([
       { text: 'abc', truncated: true },
@@ -56,5 +71,35 @@ describe('buildToolEchoSources', () => {
       { text: big, truncated: false },
       { text: 'b'.repeat(10), truncated: true },
     ]);
+  });
+});
+
+describe('buildToolEchoSourcesFromSteps', () => {
+  it('reads web tool observation steps and ignores every other step', () => {
+    expect(
+      buildToolEchoSourcesFromSteps([
+        { type: 'thought', content: 'thinking' },
+        { type: 'action', content: 'web_fetch', metadata: { toolName: 'web_fetch' } },
+        { type: 'observation', content: 'page body', metadata: { toolName: 'web_fetch' } },
+        { type: 'observation', content: 'kb doc', metadata: { toolName: 'retrieve_knowledge_content' } },
+        { type: 'observation', content: 'no name' },
+        { type: 'observation', content: 42, metadata: { toolName: 'web_search' } },
+        null,
+        'junk',
+      ])
+    ).toEqual([{ text: 'page body', truncated: false }]);
+  });
+
+  it('flags an observation the adapter truncated', () => {
+    expect(
+      buildToolEchoSourcesFromSteps([
+        { type: 'observation', content: `abc${TOOL_RESULT_TRUNCATION_NOTICE}`, metadata: { toolName: 'web_search' } },
+      ])
+    ).toEqual([{ text: 'abc', truncated: true }]);
+  });
+
+  it('returns nothing for a missing or non-array steps value', () => {
+    expect(buildToolEchoSourcesFromSteps(undefined)).toEqual([]);
+    expect(buildToolEchoSourcesFromSteps({ steps: [] })).toEqual([]);
   });
 });

@@ -1514,6 +1514,16 @@ describe('ChatCompletionProcess', () => {
 
           expect(mockQuest.replies.join('')).toContain('<artifact');
         });
+
+        it('still promotes html quoted from the user own knowledge content', async () => {
+          fetchThenAnswer(`\`\`\`html\n${page}\n\`\`\`\n`, 'retrieve_knowledge_content');
+
+          await runTurn();
+
+          const reply = mockQuest.replies.join('');
+          expect(reply).toContain('<artifact');
+          expect(reply).not.toContain('b4m-tool-output');
+        });
       });
     });
 

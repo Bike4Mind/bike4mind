@@ -7,6 +7,7 @@ import {
   maskToolOutputRegions,
   TOOL_OUTPUT_MARKER,
   stripToolOutputMarker,
+  markToolEchoes,
 } from './artifactParser';
 import { createToolEchoMatcher } from './toolEchoMatcher';
 
@@ -1188,5 +1189,45 @@ describe('stripToolOutputMarker', () => {
 
   it('returns unmarked text unchanged', () => {
     expect(stripToolOutputMarker('```html\n<p>x</p>\n```')).toBe('```html\n<p>x</p>\n```');
+  });
+});
+
+describe('markToolEchoes', () => {
+  const DOC =
+    '<!DOCTYPE html>\n<html><head><title>Fetched Page</title></head><body><p>Quoted verbatim from a web tool result.</p></body></html>';
+  const isToolEcho = createToolEchoMatcher([{ text: `Fetched:\n${DOC}`, truncated: false }]);
+  const AUTHORED_HTML =
+    '```html\n<!DOCTYPE html>\n<html><body><h1>Authored by the model itself</h1></body></html>\n```';
+  const MERMAID = '```mermaid\ngraph TD\n  A-->B\n```';
+  const REACT = '```tsx\nexport default function App() {\n  const [n] = useState(0);\n  return <div>{n}</div>;\n}\n```';
+
+  it('marks an echoed html fence and an echoed bare document', () => {
+    const fenced = markToolEchoes(`Page:\n\`\`\`html\n${DOC}\n\`\`\`\n`, isToolEcho);
+    expect(fenced).toMatch(new RegExp(`^~~~html ${TOOL_OUTPUT_MARKER}$`, 'm'));
+    expect(fenced).toContain(DOC);
+    const bare = markToolEchoes(`Page:\n${DOC}\n`, isToolEcho);
+    expect(bare).toMatch(new RegExp(`^~~~html ${TOOL_OUTPUT_MARKER}$`, 'm'));
+    expect(bare).not.toContain('<artifact');
+  });
+
+  it('leaves everything that is not an echo byte-identical', () => {
+    const reply = `Intro\n\n${AUTHORED_HTML}\n\n${MERMAID}\n\n${REACT}\n\nDone.`;
+    expect(markToolEchoes(reply, isToolEcho)).toBe(reply);
+    expect(markToolEchoes(reply, () => false)).toBe(reply);
+  });
+
+  it('marks the echo and keeps authored blocks promotable in the same reply', () => {
+    const reply = `${AUTHORED_HTML}\n\n\`\`\`html\n${DOC}\n\`\`\`\n\n${MERMAID}`;
+    const marked = markToolEchoes(reply, isToolEcho);
+    expect(marked).toContain(AUTHORED_HTML);
+    expect(marked).toContain(MERMAID);
+    const promoted = convertCodeBlocksToArtifacts(marked);
+    expect(promoted.match(/<artifact [^>]*>/g)).toHaveLength(2);
+    expect(promoted).toMatch(new RegExp(`^~~~html ${TOOL_OUTPUT_MARKER}$`, 'm'));
+  });
+
+  it('is idempotent on an already-marked reply', () => {
+    const once = markToolEchoes(`\`\`\`html\n${DOC}\n\`\`\``, isToolEcho);
+    expect(markToolEchoes(once, isToolEcho)).toBe(once);
   });
 });
