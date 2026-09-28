@@ -87,10 +87,13 @@ export const addSystemPrompts = async (
         pushShareable(file, { userId: projectUser.userId, permissions: projectUser.permissions, projectId });
       }
 
-      fileUpdates.push(db.fabFiles.update(file));
+      fileUpdates.push(db.fabFiles.update({ id: file.id, users: file.users }));
     }
 
-    await Promise.all([...fileUpdates, db.projects.update(project)]);
+    await Promise.all([
+      ...fileUpdates,
+      db.projects.update({ id: project.id, systemPrompts: project.systemPrompts, updatedAt: project.updatedAt }),
+    ]);
 
     return project;
   } catch (error) {

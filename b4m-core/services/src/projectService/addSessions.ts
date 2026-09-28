@@ -79,7 +79,12 @@ export const addSessions = async (
   const fileIds = await updateShareableSessions(user, { project, sessions }, adapters);
   project.fileIds = mergeIds(project.fileIds, fileIds);
 
-  await db.projects.update(project);
+  await db.projects.update({
+    id: project.id,
+    sessionIds: project.sessionIds,
+    fileIds: project.fileIds,
+    updatedAt: project.updatedAt,
+  });
 
   return sessions;
 };
@@ -106,7 +111,7 @@ const updateShareableSessions = async (
       pushShareable(session, { userId: user.userId, permissions: user.permissions, projectId: project.id });
     }
 
-    await db.sessions.update(session);
+    await db.sessions.update({ id: session.id, users: session.users });
 
     if (session.knowledgeIds && session.knowledgeIds.length > 0) {
       const files = await db.fabFiles.findAllByIds(session.knowledgeIds);

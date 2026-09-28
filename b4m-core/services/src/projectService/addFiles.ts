@@ -71,7 +71,7 @@ export const addFiles = async (
 
   await updateShareableFiles(user.id, { project, files }, adapters);
 
-  await db.projects.update(project);
+  await db.projects.update({ id: project.id, fileIds: project.fileIds, updatedAt: project.updatedAt });
 
   return project;
 };
@@ -97,6 +97,6 @@ export const updateShareableFiles = async (
       pushShareable(file, { userId: user.userId, permissions: user.permissions, projectId: project.id });
     }
 
-    await db.fabFiles.update(file);
+    await db.fabFiles.update({ id: file.id, users: file.users });
   }
 };

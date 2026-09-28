@@ -115,10 +115,10 @@ export const removeFiles = async (
       // else: access came solely from this project - drop the entry entirely.
     }
     file.users = nextUsers;
-    await db.fabFiles.update(file);
+    await db.fabFiles.update({ id: file.id, users: file.users });
   }
 
-  await db.projects.update(project);
+  await db.projects.update({ id: project.id, fileIds: project.fileIds, updatedAt: project.updatedAt });
 
   return project;
 };

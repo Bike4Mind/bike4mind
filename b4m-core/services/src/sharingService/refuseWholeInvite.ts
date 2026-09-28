@@ -66,6 +66,6 @@ export const refuseWholeInvite = async (
     }
   }
 
-  await db.invites.update(invite);
+  await db.invites.update({ id: invite.id, remaining: invite.remaining, recipients: invite.recipients });
   return db.invites.findById(invite.id);
 };

@@ -47,7 +47,7 @@ interface AcceptInviteAdapters {
     };
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
-      update: (data: IUserDocument) => Promise<unknown>;
+      update: (data: Partial<IUserDocument>) => Promise<unknown>;
     };
   };
 }
@@ -113,7 +113,12 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
   invite.accepted += 1;
   invite.remaining -= 1;
 
-  await db.invites.update(invite);
+  await db.invites.update({
+    id: invite.id,
+    recipients: invite.recipients,
+    accepted: invite.accepted,
+    remaining: invite.remaining,
+  });
 
   // Assumes the invite carries permissions.
   const inviteWithPermissions = invite as IInvite & { permissions: Permission[] };
@@ -151,7 +156,7 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
       if (!user.groups.includes(group.id)) {
         user.groups.push(group.id);
       }
-      await db.users.update(user);
+      await db.users.update({ id: user.id, groups: user.groups });
       break;
     }
     case InviteType.Session: {
@@ -192,12 +197,12 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
             }
 
             pushShareable(fabfile, { ...update, permissions: grantPermissions, sessionId: session.id });
-            await db.fabFiles.update(fabfile);
+            await db.fabFiles.update({ id: fabfile.id, users: fabfile.users });
           })
         );
       }
       pushShareable(session, update);
-      await db.sessions.update(session);
+      await db.sessions.update({ id: session.id, users: session.users });
       break;
     }
     case InviteType.FabFile: {
@@ -207,7 +212,7 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
       }
 
       pushShareable(fabfile, update);
-      await db.fabFiles.update(fabfile);
+      await db.fabFiles.update({ id: fabfile.id, users: fabfile.users });
       break;
     }
     case InviteType.Organization:
@@ -279,7 +284,7 @@ const acceptOrganization = async (
   // in the UI. Mirrors the InviteType.Group path above and organizationService.addMember,
   // which set the selected organization as a required side effect of joining.
   user.organizationId = organizationId;
-  await db.users.update(user);
+  await db.users.update({ id: user.id, organizationId: user.organizationId });
 };
 
 interface AcceptProjectParameters {
@@ -303,7 +308,7 @@ const acceptProject = async (
 
   pushShareable(project, { userId: user.id, permissions });
 
-  await db.projects.update(project);
+  await db.projects.update({ id: project.id, users: project.users });
 
   const files = await db.fabFiles.findAllByIds([
     ...project.fileIds,
@@ -313,11 +318,11 @@ const acceptProject = async (
 
   for (const file of files) {
     pushShareable(file, { userId: user.id, permissions, projectId });
-    await db.fabFiles.update(file);
+    await db.fabFiles.update({ id: file.id, users: file.users });
   }
   for (const session of sessions) {
     pushShareable(session, { userId: user.id, permissions, projectId });
-    await db.sessions.update(session);
+    await db.sessions.update({ id: session.id, users: session.users });
   }
 };
 

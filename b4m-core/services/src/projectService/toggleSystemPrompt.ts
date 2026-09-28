@@ -35,7 +35,7 @@ export const toggleSystemPrompt = async (
   project.systemPrompts[promptIndex].enabled = !project.systemPrompts[promptIndex].enabled;
   project.updatedAt = new Date();
 
-  await db.projects.update(project);
+  await db.projects.update({ id: project.id, systemPrompts: project.systemPrompts, updatedAt: project.updatedAt });
 
   return project;
 };
