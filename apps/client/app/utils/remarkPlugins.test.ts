@@ -34,6 +34,14 @@ describe('promoteInlineLatexDollars', () => {
       ['shell variable assignment', 'Set $HOME=$PWD in your shell config.'],
       ['shell path join', 'set $PATH/$SUBDIR as the search root'],
       ['braced shell variables', 'export DIR=${HOME}${SUFFIX} first'],
+      ['dangling equals before whitespace', 'If $DEBUG=$ is set to any value, verbose logging turns on.'],
+      ['dangling equals before a word with a space', 'Setting $DEBUG=$ true enables logging'],
+      ['dangling equals before a period', 'Set $HOME=$.'],
+      ['dangling equals before a comma', 'Given $HOME=$, we proceed.'],
+      ['dangling slash before whitespace', 'set $PATH/$ as the base then append.'],
+      ['dangling slash in a cost split', 'Cost splits as $20/$ per person, either way.'],
+      ['dangling slash before a paren', 'Tickets are $50/$ (either price).'],
+      ['dangling equals before a colon', 'Variable $CONFIG=$: check the docs.'],
     ])('%s', (_label, text) => {
       expect(promoteInlineLatexDollars(text)).toBe(text);
     });

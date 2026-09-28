@@ -25,11 +25,21 @@ const SINGLE_DOLLAR_SPAN = /(?<!\$)\$(?!\$)(?!\s)([^$\n]*[^$\n\s])(?<!\$)\$(?!\$
 const CODE_SPAN_SPLITTER = /(```[\s\S]*?```|`[^`\n]*`)/g;
 
 // A span's content counts as math if it has a LaTeX control sequence ("\times", "\frac", ...),
-// a structural math character (^, _, =, <, >, +, *, /, parens, braces), or is a bare
-// single-letter variable ("$x$"). A lone amount like "$5$" or "$1,000.50$" matches none of these
-// and is left as text.
+// an unambiguous structural math character (^, _, *, parens, braces), or is a bare single-letter
+// variable ("$x$"). A lone amount like "$5$" or "$1,000.50$" matches none of these and is left as
+// text.
+//
+// "=", "/", "+", "<", ">" are ambiguous on their own - shell assignment ("$HOME=$PWD"), path
+// joins ("$PATH/$SUBDIR") and redirects use them too - so they only count as math evidence when
+// followed by another character within the span. Real math always has an operand on both sides
+// ("x = 9", "n > 0", "x/y"); the false positives this rejects all dangle the operator as the very
+// last character of the content, immediately against the closing "$" (e.g. "$DEBUG=$ true",
+// "$PATH/$ as the base"), which is the tell that the "closing" $ is actually the start of an
+// unrelated token rather than the end of a math span.
 function looksLikeMath(content: string): boolean {
-  return /\\[a-zA-Z]/.test(content) || /[_^=<>+*/(){}]/.test(content) || /^[a-zA-Z]$/.test(content);
+  return (
+    /\\[a-zA-Z]/.test(content) || /[_^*(){}]/.test(content) || /^[a-zA-Z]$/.test(content) || /[=/+<>]./.test(content)
+  );
 }
 
 /**
