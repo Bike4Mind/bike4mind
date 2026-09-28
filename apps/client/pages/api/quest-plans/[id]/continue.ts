@@ -123,7 +123,7 @@ const handler = baseApi()
       // Auto-resume if paused
       if (existingPlan.state === 'paused') {
         existingPlan.state = 'active';
-        await questMasterPlanRepository.update(existingPlan);
+        await questMasterPlanRepository.update({ id: existingPlan.id, state: existingPlan.state });
       }
 
       const plan = await questMasterPlanRepository.continueInSession(planId, actualSessionId, userId);

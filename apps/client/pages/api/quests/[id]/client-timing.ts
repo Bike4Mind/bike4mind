@@ -37,7 +37,7 @@ const handler = baseApi().post(async (req: Request<{}, {}, { clientFirstTokenTim
   }
 
   const updatedQuest = await questRepository.update({
-    ...quest,
+    id: quest.id,
     promptMeta: {
       ...quest.promptMeta,
       performance: {

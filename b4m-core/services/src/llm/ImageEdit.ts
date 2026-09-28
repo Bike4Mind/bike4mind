@@ -230,7 +230,12 @@ export class ImageEditService {
       quest.replies = [];
       quest.status = undefined;
       quest.promptMeta = promptMeta;
-      await this.db.quests.update(quest);
+      await this.db.quests.update({
+        id: quest.id,
+        images: quest.images,
+        replies: quest.replies,
+        promptMeta: quest.promptMeta,
+      });
     } else {
       // Create the associated quest record.  We'll update this as we go.
       quest = await this.db.quests.create({
@@ -758,7 +763,14 @@ export class ImageEditService {
       quest.replies = [];
       quest.images = [path];
       quest.status = 'done';
-      await this.db.quests.update(quest);
+      await this.db.quests.update({
+        id: quest.id,
+        reply: quest.reply,
+        replies: quest.replies,
+        images: quest.images,
+        status: quest.status,
+        creditsUsed: quest.creditsUsed,
+      });
 
       // Remove prompt loading message on the client
       await clientMessageSender.sendToClient(userId, wsEndpoint, {

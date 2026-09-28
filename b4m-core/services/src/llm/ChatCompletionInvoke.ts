@@ -340,7 +340,23 @@ export class ChatCompletionInvoke {
             // the `$set` as an absence), which is what the `unset` option below is for. `null` is
             // not an option: ChatAckSchema types errorCode as an optional enum and rejects null.
             q.errorCode = undefined;
-            await this.db.quests.update(q, { unset: ['errorCode'] });
+            await this.db.quests.update(
+              {
+                id: q.id,
+                type: q.type,
+                reply: q.reply,
+                replies: q.replies,
+                questMasterReply: q.questMasterReply,
+                images: q.images,
+                prompt: q.prompt,
+                fabFileIds: q.fabFileIds,
+                timestamp: q.timestamp,
+                status: q.status,
+                promptMeta: q.promptMeta,
+                agentIds: q.agentIds,
+              },
+              { unset: ['errorCode'] }
+            );
             return q;
           })
         : this.db.quests.create({
@@ -479,7 +495,12 @@ export class ChatCompletionInvoke {
 
       quest.type = 'error';
       quest.reply = errorMessage;
-      await this.db.quests.update(quest);
+      await this.db.quests.update({
+        id: quest.id,
+        promptMeta: quest.promptMeta,
+        type: quest.type,
+        reply: quest.reply,
+      });
     }
     return quest;
   }

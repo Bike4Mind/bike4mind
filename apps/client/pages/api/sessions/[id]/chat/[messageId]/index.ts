@@ -98,7 +98,7 @@ const handler = baseApi()
       }
 
       const updatedMessage = await questRepository.update({
-        ...message,
+        id: message.id,
         ...allowedUpdates,
       });
 
