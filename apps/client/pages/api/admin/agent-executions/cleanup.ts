@@ -52,6 +52,13 @@ const handler = baseApi().post(async (req, res) => {
     '[AgentExecutionsCleanup]'
   );
 
+  // Same terminal-write problem the abandoned-sweep cron has: `markAbandoned`
+  // already made these executions terminal, so a settlement failure here has
+  // no other path back. The hourly cron's retry pass picks up the marker too.
+  if (quests.failedExecutionIds.length > 0) {
+    await agentExecutionRepository.markQuestSettlementFailed(quests.failedExecutionIds);
+  }
+
   Logger.info('[AgentExecutionsCleanup] Marked abandoned', {
     adminUserId,
     requested: executionIds.length,

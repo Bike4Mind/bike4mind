@@ -12,6 +12,7 @@ import {
 } from '@bike4mind/database';
 import { fileTagRepository } from '@bike4mind/database';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
@@ -63,6 +64,7 @@ const handler = baseApi().post(
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
         users: userRepository,
         ...lakeConfigAuditDb,
+        ...lakeMembershipAuditDb,
         ...settingsStores,
       },
       // The service re-gates every lake this toggle joins or leaves, so its actor has to stay as

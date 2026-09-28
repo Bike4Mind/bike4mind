@@ -116,7 +116,11 @@ describe('stranded-quest settling, end to end', () => {
     // The bubble is still stranded at this point - the sweep alone is the bug.
     expect((await questById(quest.id))?.status).toBe('pending');
 
-    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({ settled: 1, failed: false });
+    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({
+      settled: 1,
+      failed: false,
+      failedExecutionIds: [],
+    });
 
     const after = await questById(quest.id);
     expect(after?.status).toBe('done');
@@ -140,7 +144,7 @@ describe('stranded-quest settling, end to end', () => {
         logger,
         '[test]'
       )
-    ).toEqual({ settled: 1, failed: false });
+    ).toEqual({ settled: 1, failed: false, failedExecutionIds: [] });
 
     expect((await questById(quest.id))?.reply).toBe(ABANDONED_REPLY);
     const after = await agentExecutionRepository.findById(execution.id);
@@ -161,7 +165,11 @@ describe('stranded-quest settling, end to end', () => {
     });
 
     const swept = await agentExecutionRepository.cleanupStaleActive(userId, STALE_MS);
-    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({ settled: 1, failed: false });
+    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({
+      settled: 1,
+      failed: false,
+      failedExecutionIds: [],
+    });
 
     const after = await questById(quest.id);
     expect(after?.status).toBe('done');
@@ -184,7 +192,11 @@ describe('stranded-quest settling, end to end', () => {
 
     const swept = await agentExecutionRepository.cleanupStaleActive(userId, STALE_MS);
     expect(swept).toEqual([execution.id]);
-    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({ settled: 0, failed: false });
+    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({
+      settled: 0,
+      failed: false,
+      failedExecutionIds: [],
+    });
 
     const after = await questById(quest.id);
     expect(after?.status).toBe('done');
@@ -206,7 +218,11 @@ describe('stranded-quest settling, end to end', () => {
 
     const swept = await agentExecutionRepository.cleanupStaleActive(userId, STALE_MS);
     expect(swept).toEqual([]);
-    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({ settled: 0, failed: false });
+    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({
+      settled: 0,
+      failed: false,
+      failedExecutionIds: [],
+    });
 
     expect((await agentExecutionRepository.findById(execution.id))?.status).toBe('awaiting_dag_children');
     expect((await questById(quest.id))?.status).toBe('pending');
@@ -221,7 +237,11 @@ describe('stranded-quest settling, end to end', () => {
 
     const swept = await agentExecutionRepository.cleanupStaleActive(userId, STALE_MS);
     expect(swept).toEqual([dead.execution.id]);
-    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({ settled: 1, failed: false });
+    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({
+      settled: 1,
+      failed: false,
+      failedExecutionIds: [],
+    });
 
     expect((await questById(dead.quest.id))?.status).toBe('done');
     expect((await questById(live.quest.id))?.status).toBe('pending');

@@ -117,6 +117,18 @@ describe('getUserEntitlements', () => {
     ).resolves.toEqual(expect.arrayContaining(['sometag', 'partnerproduct:pro']));
     expect(mockPartnerEntitlements).toHaveBeenCalledWith('person@partner.com', true);
   });
+
+  it('resolves subscription-derived keys from a preloaded list without querying the repository', async () => {
+    await expect(getUserEntitlements(user, [{ priceId: 'price_pro' }])).resolves.toEqual(
+      expect.arrayContaining(['sometag', 'someproduct:pro'])
+    );
+    expect(findActive).not.toHaveBeenCalled();
+  });
+
+  it('treats a preloaded empty list as authoritative (no repository fallback)', async () => {
+    await expect(getUserEntitlements(user, [])).resolves.toEqual(['sometag', 'base']);
+    expect(findActive).not.toHaveBeenCalled();
+  });
 });
 
 describe('userHasEntitlement', () => {

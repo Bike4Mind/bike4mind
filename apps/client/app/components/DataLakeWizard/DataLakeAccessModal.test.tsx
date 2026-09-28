@@ -16,6 +16,7 @@ let viewState: {
 };
 let candidatesState: { data?: LakeOwnershipCandidateList; isLoading: boolean; isError?: boolean };
 const transferMutate = vi.fn();
+const cancelOfferMutate = vi.fn();
 const grantMutate = vi.fn();
 /** `mutateAsync`, because the confirm dialog awaits the DELETE to decide whether to close. */
 const revokeMutate = vi.fn();
@@ -27,6 +28,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useLakeAccessView: () => viewState,
   useLakeOwnershipCandidates: () => candidatesState,
   useTransferLakeOwnership: () => ({ mutateAsync: transferMutate, isPending: false }),
+  useCancelLakeOwnershipOffer: () => ({ mutateAsync: cancelOfferMutate, isPending: false }),
   useGrantLakeAccess: () => ({ mutateAsync: grantMutate, isPending: false }),
   useRevokeLakeAccess: () => ({ mutateAsync: revokeMutate, isPending: revokePending, variables: revokeVariables }),
   downloadLakeAccessCsv: (...args: unknown[]) => downloadCsv(...args),
@@ -289,17 +291,44 @@ describe('DataLakeAccessModal', () => {
       expect(screen.queryByTestId('datalake-access-transfer-btn')).not.toBeInTheDocument();
     });
 
-    it('transfers to the chosen member', async () => {
+    it('SENDS AN OFFER to the chosen member rather than transferring immediately', async () => {
       withCandidates();
-      transferMutate.mockResolvedValue({ newOwnerUserId: 'u9', demotedUserIds: ['u1'] });
+      transferMutate.mockResolvedValue({ offer: { id: 'o1' } });
       render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
 
       await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+      // The button says what it does: nothing has changed hands yet.
+      expect(screen.getByTestId('datalake-transfer-confirm-btn')).toHaveTextContent(/send offer/i);
       await userEvent.click(screen.getByTestId('datalake-transfer-owner-select'));
       await userEvent.click(screen.getByTestId('datalake-transfer-option-u9'));
       await userEvent.click(screen.getByTestId('datalake-transfer-confirm-btn'));
 
       expect(transferMutate).toHaveBeenCalledWith({ id: 'lake1', newOwnerUserId: 'u9' });
+    });
+
+    it('shows the pending offer with a cancel, in place of the picker', async () => {
+      withCandidates();
+      candidatesState.data = {
+        ...candidatesState.data!,
+        pendingOffer: {
+          id: 'o1',
+          recipientUserId: 'u9',
+          recipientName: 'Carol',
+          expiresAt: new Date('2026-10-01T00:00:00Z'),
+        },
+      };
+      cancelOfferMutate.mockResolvedValue({ offer: { id: 'o1', status: 'cancelled' } });
+      render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+
+      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+
+      expect(screen.getByTestId('datalake-transfer-pending')).toHaveTextContent(/Carol/);
+      // One live offer per lake: the picker and its confirm must not be offered again.
+      expect(screen.queryByTestId('datalake-transfer-owner-select')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('datalake-transfer-confirm-btn')).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByTestId('datalake-transfer-cancel-offer-btn'));
+      expect(cancelOfferMutate).toHaveBeenCalledWith({ id: 'lake1' });
     });
 
     it('cannot confirm before a new owner is chosen', async () => {

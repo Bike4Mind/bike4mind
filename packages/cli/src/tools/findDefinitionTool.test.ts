@@ -395,11 +395,14 @@ export const MAX_RETRIES = 5;
       await expect(tool.toolFn({ symbol_name: '' })).rejects.toThrow('symbol_name is required');
     });
 
-    it('should throw for path traversal', async () => {
+    it('should throw for path traversal (shared realpath validator)', async () => {
       const tool = createFindDefinitionTool();
-      await expect(tool.toolFn({ symbol_name: 'Foo', search_path: '../../../etc' })).rejects.toThrow(
-        'Path validation failed'
-      );
+      await expect(tool.toolFn({ symbol_name: 'Foo', search_path: '../../../etc' })).rejects.toThrow('Access denied');
+    });
+
+    it('should throw for an absolute search_path outside the workspace', async () => {
+      const tool = createFindDefinitionTool();
+      await expect(tool.toolFn({ symbol_name: 'Foo', search_path: '/etc' })).rejects.toThrow('Access denied');
     });
 
     it('should throw for non-existent search_path', async () => {

@@ -10,6 +10,7 @@ import { collectDataForDate } from '@server/services/whatsNewDataCollector';
 import { Logger } from '@bike4mind/observability';
 import type { WhatsNewGenerationPayload } from '@server/queueHandlers/types';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { WHATS_NEW_DEFAULT_REPOSITORY, WHATS_NEW_DEFAULT_TARGET_BRANCH } from '@bike4mind/common';
 
 // Rate limiting - 3 requests per minute to allow retries after gateway timeouts
 const BACKFILL_RATE_LIMIT = 3;
@@ -65,8 +66,8 @@ const handler = baseApi()
     // Read repository config from AdminSettings
     const configSetting = await AdminSettings.findOne({ settingName: 'whatsNewConfig' });
     const configValue = configSetting?.settingValue as Record<string, unknown> | undefined;
-    const repository = (configValue?.repository as string) || 'MillionOnMars/lumina5';
-    const targetBranch = (configValue?.targetBranch as string) || 'main';
+    const repository = (configValue?.repository as string) || WHATS_NEW_DEFAULT_REPOSITORY;
+    const targetBranch = (configValue?.targetBranch as string) || WHATS_NEW_DEFAULT_TARGET_BRANCH;
 
     // Process a single date - shared logic for both sequential and parallel paths
     const processDate = async (date: string): Promise<void> => {

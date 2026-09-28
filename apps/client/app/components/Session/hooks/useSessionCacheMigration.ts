@@ -34,11 +34,18 @@ import { useChatInput } from '@client/app/hooks/useChatInput';
  *   - `['sessions', id]`          - the session document
  *
  * Also clears the persisted `drafts[tmpId]` entry (useChatInput / localStorage)
- * in `migrateSession`, since that draft's lifecycle ends with the tmpId.
+ * in `migrateSession`, since that draft's lifecycle ends with the tmpId, and
+ * re-pins a pending briefcase launch from tmpId to realId (useProgrammaticSubmit
+ * holds launches while the current session is optimistic).
  */
 export type UseSessionCacheMigrationReturn = {
-  /** Move the paginated quest list from tmpId -> realId. No-op if no tmp data exists. */
-  migrateQuests: (tmpId: string, realId: string) => void;
+  /**
+   * Copy the paginated quest list from tmpId -> realId. No-op if no tmp data exists. The tmp entry
+   * is removed unless `keepTmp`: a view still on the tmpId URL reads it until the navigation to
+   * realId commits, and removing it first paints an empty notebook for that window - such a
+   * caller removes it with `cleanupOptimistic` once navigated.
+   */
+  migrateQuests: (tmpId: string, realId: string, options?: { keepTmp?: boolean }) => void;
   /** Write the real session document under realId, drop the synthetic tmp cache entry, and clear the empty tmpId draft. */
   migrateSession: (tmpId: string, realId: string, realSession: ISessionDocument) => void;
   /** Remove all optimistic cache entries for a tmpId (used when the new session is rolled back). */
@@ -49,12 +56,12 @@ export function useSessionCacheMigration(): UseSessionCacheMigrationReturn {
   const queryClient = useQueryClient();
 
   const migrateQuests = useCallback(
-    (tmpId: string, realId: string) => {
+    (tmpId: string, realId: string, options?: { keepTmp?: boolean }) => {
       // Move quests cache so SessionMiddle doesn't flash empty when the URL updates.
       const tmpQuestsData = queryClient.getQueryData(['quests', 'session', tmpId]);
       if (tmpQuestsData) {
         queryClient.setQueryData(['quests', 'session', realId], tmpQuestsData);
-        queryClient.removeQueries({ queryKey: ['quests', 'session', tmpId] });
+        if (!options?.keepTmp) queryClient.removeQueries({ queryKey: ['quests', 'session', tmpId] });
       }
     },
     [queryClient]
@@ -70,7 +77,10 @@ export function useSessionCacheMigration(): UseSessionCacheMigrationReturn {
       // harmless cruft, but without this it accumulates in the persisted drafts
       // map. Cleared here (rather than at send) so both resolve paths - the
       // session.created WS message and the send-response fallback - cover it.
-      useChatInput.getState().clearDraft(tmpId);
+      const chatInput = useChatInput.getState();
+      chatInput.clearDraft(tmpId);
+      const launch = chatInput.programmaticLaunch;
+      if (launch?.sessionId === tmpId) chatInput.setProgrammaticLaunch({ ...launch, sessionId: realId });
     },
     [queryClient]
   );

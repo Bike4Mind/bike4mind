@@ -35,8 +35,8 @@ const handler = baseApi().post<Request<unknown, GenerateFeaturedImageResponse, G
     }
 
     try {
-      let imageModelId: string;
-      let imageModelInfo: ModelInfo | undefined;
+      let imageModelId: string | null;
+      let imageModelInfo: ModelInfo | null | undefined;
 
       if (userImageModel) {
         // User specified an image model - validate it
@@ -76,6 +76,12 @@ const handler = baseApi().post<Request<unknown, GenerateFeaturedImageResponse, G
           );
         }
         imageLogger.info(`[Blog Image] Using operations image model: ${imageModelId}`);
+      }
+
+      // Re-asserted here (both branches above already guarantee this): narrows the type for
+      // every use below, which the if/else diamond above does not do on its own.
+      if (!imageModelId || !imageModelInfo) {
+        throw new BadRequestError('No image generation model available.');
       }
 
       // Handle prompt length limits for different models

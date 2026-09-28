@@ -365,7 +365,11 @@ ${
 - Attached Files: ${contextWindow.tokensBySource.fabFiles.toLocaleString()} (${((contextWindow.tokensBySource.fabFiles / contextWindow.inputTokens) * 100).toFixed(1)}%)
 - URL Content: ${contextWindow.tokensBySource.urlContent.toLocaleString()} (${((contextWindow.tokensBySource.urlContent / contextWindow.inputTokens) * 100).toFixed(1)}%)
 - Tool Schemas: ${contextWindow.tokensBySource.toolSchemas.toLocaleString()} (${((contextWindow.tokensBySource.toolSchemas / contextWindow.inputTokens) * 100).toFixed(1)}%)
-- User Prompt: ${contextWindow.tokensBySource.userPrompt.toLocaleString()} (${((contextWindow.tokensBySource.userPrompt / contextWindow.inputTokens) * 100).toFixed(1)}%)`
+- User Prompt: ${contextWindow.tokensBySource.userPrompt.toLocaleString()} (${((contextWindow.tokensBySource.userPrompt / contextWindow.inputTokens) * 100).toFixed(1)}%)${
+        contextWindow.tokensBySource.lakeRetrieval !== undefined
+          ? `\n- Lake Retrieval: ${contextWindow.tokensBySource.lakeRetrieval.toLocaleString()} (${((contextWindow.tokensBySource.lakeRetrieval / contextWindow.inputTokens) * 100).toFixed(1)}%)`
+          : ''
+      }`
     : '_(Basic telemetry — token breakdown not available)_'
 }
 
@@ -798,7 +802,7 @@ export function formatIssueBody(telemetry: ContextTelemetry, options: IssueBodyO
       sections.push(`| Source | Tokens | % |`);
       sections.push(`|--------|--------|---|`);
       const total = contextWindow.inputTokens;
-      const sources = [
+      const sources: { name: string; value: number; showZero?: boolean }[] = [
         { name: 'System Prompts', value: tokensBySource.systemPrompts },
         { name: 'Conversation History', value: tokensBySource.conversationHistory },
         { name: 'Mementos', value: tokensBySource.mementos },
@@ -807,8 +811,13 @@ export function formatIssueBody(telemetry: ContextTelemetry, options: IssueBodyO
         { name: 'Tool Schemas', value: tokensBySource.toolSchemas },
         { name: 'User Prompt', value: tokensBySource.userPrompt },
       ];
+      // A recorded zero is a measurement and gets a row; an unrecorded bucket (older telemetry)
+      // has no row at all, so the table never passes off unknown lake volume as none.
+      if (tokensBySource.lakeRetrieval !== undefined) {
+        sources.push({ name: 'Lake Retrieval', value: tokensBySource.lakeRetrieval, showZero: true });
+      }
       for (const source of sources) {
-        if (source.value > 0) {
+        if (source.value > 0 || source.showZero) {
           sections.push(
             `| ${source.name} | ${source.value.toLocaleString()} | ${((source.value / total) * 100).toFixed(1)}% |`
           );

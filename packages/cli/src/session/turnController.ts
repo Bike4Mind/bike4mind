@@ -142,7 +142,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     const systemPrompt = buildSystemPrompt(config?.preferences.promptVariant ?? 'current', {
       contextContent: contextContent,
       agentStore: agentStore || undefined,
-      customCommands: customCommandStore.getAllCommands(),
+      customCommands: customCommandStore.getModelReachableCommands(),
       enableSkillTool: config?.preferences.enableSkillTool !== false,
       additionalDirectories: additionalDirectories,
       featureModulePrompts: featureRegistry?.getSystemPromptSections() || undefined,

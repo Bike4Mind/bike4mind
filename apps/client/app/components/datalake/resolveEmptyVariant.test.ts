@@ -7,7 +7,7 @@ const base: EmptyVariantInputs = {
   lakesLoading: false,
   lakeCount: 1,
   manageableLakeCount: 1,
-  hasSelectedLake: false,
+  selectedLakeCount: 0,
   isScopeEmpty: false,
 };
 
@@ -49,7 +49,7 @@ describe('resolveEmptyVariant', () => {
         lakesError: true,
         lakeCount: 0,
         manageableLakeCount: 0,
-        hasSelectedLake: true,
+        selectedLakeCount: 1,
         isScopeEmpty: true,
       })
     ).toBe('lakes-error');
@@ -69,19 +69,17 @@ describe('resolveEmptyVariant', () => {
   });
 
   it('reports an empty SELECTED lake as lake-empty, so the offer is add-files not create-lake', () => {
-    expect(resolveEmptyVariant({ ...base, lakeCount: 2, hasSelectedLake: true, isScopeEmpty: true })).toBe(
-      'lake-empty'
-    );
+    expect(resolveEmptyVariant({ ...base, lakeCount: 2, selectedLakeCount: 1, isScopeEmpty: true })).toBe('lake-empty');
   });
 
   it('stays neutral for a selected lake that does have content', () => {
-    expect(resolveEmptyVariant({ ...base, hasSelectedLake: true, isScopeEmpty: false })).toBe('no-selection');
+    expect(resolveEmptyVariant({ ...base, selectedLakeCount: 1, isScopeEmpty: false })).toBe('no-selection');
   });
 
   it('says the lakes are empty rather than pointing at a tree branch that does not exist', () => {
     // no-selection reads "pick a branch from the tree", so it may only be used when the tree HAS
     // branches. With lakes present but no files anywhere, there is nothing to point at.
-    expect(resolveEmptyVariant({ ...base, lakeCount: 2, hasSelectedLake: false, isScopeEmpty: true })).toBe(
+    expect(resolveEmptyVariant({ ...base, lakeCount: 2, selectedLakeCount: 0, isScopeEmpty: true })).toBe(
       'all-lakes-empty'
     );
   });
@@ -91,7 +89,14 @@ describe('resolveEmptyVariant', () => {
     // tree had no lake list to be honest about. It has one now, so each signal must come through.
     expect(resolveEmptyVariant({ ...base, lakesError: true })).toBe('lakes-error');
     expect(resolveEmptyVariant({ ...base, lakeCount: 0, manageableLakeCount: 0 })).toBe('no-lakes');
-    expect(resolveEmptyVariant({ ...base, hasSelectedLake: true, isScopeEmpty: true })).toBe('lake-empty');
+    expect(resolveEmptyVariant({ ...base, selectedLakeCount: 1, isScopeEmpty: true })).toBe('lake-empty');
+  });
+
+  it('uses the plural empty state for a multi-lake scope, which the singular copy misnames', () => {
+    // "This lake has no files yet" over a three-lake scope names a lake the user did not pick.
+    expect(resolveEmptyVariant({ ...base, lakeCount: 3, selectedLakeCount: 3, isScopeEmpty: true })).toBe(
+      'lakes-empty'
+    );
     // The one that stays neutral, and for the same reason it always did: nothing is known yet.
     expect(resolveEmptyVariant({ ...base, lakesLoading: true })).toBe('no-selection');
   });

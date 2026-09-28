@@ -332,6 +332,9 @@ export default function RetrievalRateTab() {
               <Typography level="body-sm" data-testid="retrieval-rate-skip-personal-corpus">
                 Personal corpus: {summary.forcedSuppressed.byReason.personal_corpus.toLocaleString()}
               </Typography>
+              <Typography level="body-sm" data-testid="retrieval-rate-skip-no-lake-scope">
+                No lake scope: {summary.forcedSuppressed.byReason.no_lake_scope.toLocaleString()}
+              </Typography>
             </Stack>
             <Typography level="body-xs" textColor="text.secondary" sx={{ mt: 1 }}>
               These turns had forced retrieval enabled, but a rule suppressed it and left the model on the offered tool

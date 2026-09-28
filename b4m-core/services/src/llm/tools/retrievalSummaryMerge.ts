@@ -104,6 +104,12 @@ function mergeInjected(
  *   asserting its own narrower scope must not widen the recorded one. `??` rather than `||` so a
  *   recorded empty scope - "the session had no lake" - survives instead of falling through to the
  *   other side.
+ * - excludedLakes: first-writer-wins pass-through, same reasoning and same seed as lakeScope. Only
+ *   the seed writes it, from EITHER the account-wide `excludedByAccessCount` (a session with no
+ *   real narrowing) or the per-turn-targeted `measureIdentityNamedExclusion` (a session narrowed
+ *   to a specific lake, #3055 review) - never both, and never combined, so which one ran is not
+ *   this merge's concern. Not summed: whichever ran is this turn's one measurement, so a second
+ *   write would double-count the identical exclusion rather than report a new one.
  * - answerability: existing-wins pass-through, and it is here to PRESERVE rather than to combine.
  *   Nothing in a turn writes it - the offline replay backfills it straight to Mongo - so a
  *   two-sided merge is not reachable. What IS reachable is a later runtime write on a quest that
@@ -150,6 +156,7 @@ export function mergeRetrievalSummary(
     existing.knowledgeBaseGuidanceInjected ?? incoming.knowledgeBaseGuidanceInjected;
   const answerability = existing.answerability ?? incoming.answerability;
   const lakeScope = existing.lakeScope ?? incoming.lakeScope;
+  const excludedLakes = existing.excludedLakes ?? incoming.excludedLakes;
   const injectedLakePromptIds =
     existing.injectedLakePromptIds || incoming.injectedLakePromptIds
       ? [...new Set([...(existing.injectedLakePromptIds ?? []), ...(incoming.injectedLakePromptIds ?? [])])]
@@ -174,6 +181,7 @@ export function mergeRetrievalSummary(
     ...(knowledgeBaseGuidanceInjected !== undefined ? { knowledgeBaseGuidanceInjected } : {}),
     ...(answerability !== undefined ? { answerability } : {}),
     ...(lakeScope !== undefined ? { lakeScope } : {}),
+    ...(excludedLakes !== undefined ? { excludedLakes } : {}),
     surfaces: [...new Set([...existing.surfaces, ...incoming.surfaces])],
     dataLakeTags: [...new Set([...existing.dataLakeTags, ...incoming.dataLakeTags])],
     // Union of the two ARMS' contributing lakes, and absent only when neither arm could attribute

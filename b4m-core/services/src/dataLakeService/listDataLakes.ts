@@ -14,6 +14,7 @@ import type {
 import {
   DATA_LAKES,
   DATA_LAKE_TRANSITIONAL_STATUSES,
+  DEFAULT_DATA_LAKE_ORIGIN,
   strandedCutoffMsFor,
   resolveRetryAction,
   toDataLakeConfig,
@@ -380,6 +381,10 @@ const toFallbackConfig = (
   overlay?: FallbackOverlay
 ): ManageableDataLakeConfig => ({
   ...toDataLakeConfig(dl),
+  // Registry entries carry no origin field, so the spread above leaves it undefined and the client
+  // has to guess. Stamp the same value resolveFallbackLake hardcodes on the write path, so both
+  // representations of a fallback lake agree.
+  origin: DEFAULT_DATA_LAKE_ORIGIN,
   canManage: false,
   canRebuild: ctx.isAdmin,
   canManageSettings: ctx.isAdmin,

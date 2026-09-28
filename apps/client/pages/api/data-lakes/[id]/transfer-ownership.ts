@@ -6,34 +6,37 @@ import {
   withTransaction,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
-  userRepository,
   organizationRepository,
+  userRepository,
 } from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
+import { lakeOwnershipOfferDb } from '@server/dataLakes/lakeOwnershipOfferDb';
+import { sendLakeOwnershipOfferEmail } from '@server/utils/dataLakeOwnershipOfferNotifier';
 
 const TransferOwnershipInput = z.object({
   newOwnerUserId: z.string().min(1),
 });
 
 /**
- * GET  /api/data-lakes/:id/transfer-ownership -> { data: LakeOwnershipCandidateList }
- * POST /api/data-lakes/:id/transfer-ownership  { newOwnerUserId }
+ * GET    /api/data-lakes/:id/transfer-ownership -> { data: LakeOwnershipCandidateList, pendingOffer }
+ * POST   /api/data-lakes/:id/transfer-ownership  { newOwnerUserId } -> { offer }
+ * DELETE /api/data-lakes/:id/transfer-ownership  -> { offer }
  *
- * The GET is the option set behind the transfer picker: who this caller may hand the lake to. It is
- * on the same route as the action deliberately - one resource, one access gate, and the candidate
- * rule shared with the POST's validation (`lakeOwnershipCandidates`) rather than re-derived, so the
- * UI can never offer a teammate the POST would reject. It returns an EMPTY list rather than a 403
- * when the caller may read but not transfer, so the modal simply shows no control.
+ * BREAKING: POST no longer transfers ownership. It opens a PENDING OFFER that the recipient must
+ * accept; ownership is unchanged until then. An owner grant carries the lake's `systemPrompt` into
+ * the holder's turns (#2495), so pushing one onto an unwitting member was an injection channel, not
+ * just a surprising role change - the offer is what makes the recipient a party to it. The old
+ * synchronous behaviour is gone, not deprecated.
  *
- * The POST transfers a lake's ownership to another user. Ownership is carried by an owner-role access grant
- * (not `createdByUserId`, which stays the immutable creator), so this upserts an owner grant for the
- * new owner and demotes prior owners to curator. Access-gated first (not-found-style denial), then
- * the service enforces the narrower transfer authorization (platform admin, current effective owner,
- * or an admin of the lake's org - the orphaned-creator succession path) and validates the new owner.
+ * The GET is the option set behind the transfer picker plus (when one is open) the pending offer, so
+ * the dialog can show "waiting on X" with a cancel. It returns an EMPTY list rather than a 403 when
+ * the caller may read but not transfer, so the modal simply shows no control.
+ *
+ * Access-gated first (not-found-style denial), then the service enforces the narrower transfer
+ * authorization (platform admin, current effective owner, or an admin of the lake's org).
  */
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_OR_SHARE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -41,8 +44,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_OR_SHARE_SCOPES })
     const { id } = req.query;
     const ctx = await toAccessContext(req);
 
-    // Same not-found-style read gate as the POST: a lake the caller cannot see is not disclosed.
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+    // Same not-found-style read gate as the writes: a lake the caller cannot see is not disclosed.
+    // The grants come back with it so the pending-offer disclosure below costs no extra read.
+    const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
@@ -53,8 +57,20 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_OR_SHARE_SCOPES })
         organizations: organizationRepository,
       },
     });
+    const offer = await dataLakeService.findPendingLakeOwnershipOffer(lake.id, { db: lakeOwnershipOfferDb });
+    // Disclose the live offer only to someone who could have made it, or to its offerer. The row names
+    // who is about to become owner, which a mere reader of the lake (a reader grantee, an org member on
+    // an org-visible lake, a `datalake:read` key) has no business learning - the member roster this
+    // dialog lists is manager-only for the same reason.
+    const pendingOffer =
+      offer &&
+      (dataLakeService.resolveLakeTransferAuthority(lake, ctx, grants).allowed ||
+        offer.recipientUserId === ctx.userId ||
+        offer.offeredByUserId === ctx.userId)
+        ? offer
+        : null;
 
-    return res.json({ data });
+    return res.json({ data, pendingOffer });
   })
   .post(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
     assertDataLakeShareScope(req);
@@ -64,39 +80,52 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_OR_SHARE_SCOPES })
 
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
 
-    // Transaction: the grant read this transfer decides from, and the grant writes it then makes,
-    // must be one unit. `transferLakeOwnership` is adapter-injected and connection-free by design,
-    // so it takes no session itself and its docblock names this route as where the wrapping
-    // belongs. Two things need it. Within the transfer, a failure mid-loop otherwise leaves the
-    // lake with two effective owners and no audit row to explain it. Across operations, a departure
-    // (`lapseDepartedMemberLakeAccess`, the only other writer of an `owner` grant) can commit
-    // between this gate and these writes - and the demotion loop below would then resurrect the
-    // member who just left, by upserting them to `curator` with `expiresAt: null` over the row the
-    // departure expired. Both paths being transactional is what turns that into a write conflict
-    // Mongo aborts and retries, at which point the gate re-reads the grants and sees the departure.
-    // The gate therefore has to be INSIDE the callback: a retry must re-read, not reuse the
-    // snapshot that was already stale.
-    const result = await withTransaction(async () => {
-      // Resolve + access-gate the lake first, so a caller who can't even see it gets a not-found
-      // (no existence leak). The service then applies the stricter transfer authorization, to the
-      // grants this gate already read rather than a second copy of them.
+    // The gate has to be INSIDE the callback: the offer's authorization is decided from the lake and
+    // the grants, and a transaction retry must re-read rather than reuse a snapshot that another
+    // transfer (or a departure) has already superseded. The service then records the offer and stops
+    // - no grant is touched here.
+    const offer = await withTransaction(async () => {
       const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
         db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
       });
 
-      return dataLakeService.transferLakeOwnership(actor, lake, grants, newOwnerUserId, {
-        db: {
-          dataLakes: dataLakeRepository,
-          dataLakeAccessGrants: dataLakeAccessGrantRepository,
-          users: userRepository,
-          organizations: organizationRepository,
-          ...lakeConfigAuditDb,
-        },
-        logger: req.logger,
+      return dataLakeService.offerLakeOwnership(actor, lake, grants, newOwnerUserId, {
+        db: lakeOwnershipOfferDb,
       });
     });
 
-    return res.json(result);
+    // AFTER commit, never inside it: a slow or failing SMTP call must not hold the transaction open,
+    // and the notifier swallows its own failures so a mail problem cannot fail the offer.
+    await sendLakeOwnershipOfferEmail(
+      {
+        kind: 'offered',
+        toUserId: offer.recipientUserId,
+        dataLakeId: offer.dataLakeId,
+        ...(req.user?.name || req.user?.username ? { counterpartName: req.user.name || req.user.username } : {}),
+        expiresAt: offer.expiresAt,
+      },
+      { logger: req.logger }
+    );
+
+    return res.json({ offer });
+  })
+  .delete(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
+    assertDataLakeShareScope(req);
+    const { id } = req.query;
+    const ctx = await toAccessContext(req);
+    const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
+
+    // Gated like the GET: cancelling is open to the offerer and to anyone who currently holds
+    // transfer authority, which is a fact about this lake and its grants.
+    const offer = await withTransaction(async () => {
+      const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
+        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      });
+
+      return dataLakeService.cancelLakeOwnershipOffer(actor, lake, grants, { db: lakeOwnershipOfferDb });
+    });
+
+    return res.json({ offer });
   });
 
 export const config = {

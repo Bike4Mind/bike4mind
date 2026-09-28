@@ -30,7 +30,7 @@ describe('useSessionCacheMigration', () => {
 
   beforeEach(() => {
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    useChatInput.setState({ drafts: {} });
+    useChatInput.setState({ drafts: {}, programmaticLaunch: null });
   });
 
   describe('migrateQuests', () => {
@@ -43,6 +43,17 @@ describe('useSessionCacheMigration', () => {
 
       expect(queryClient.getQueryData(['quests', 'session', REAL_ID])).toEqual(questsData);
       expect(queryClient.getQueryData(['quests', 'session', TMP_ID])).toBeUndefined();
+    });
+
+    it('keeps the tmp entry readable when asked, for a view still on the tmpId URL', () => {
+      const questsData = makeQuestsData(['q1']);
+      queryClient.setQueryData(['quests', 'session', TMP_ID], questsData);
+
+      const result = renderMigration();
+      result.current.migrateQuests(TMP_ID, REAL_ID, { keepTmp: true });
+
+      expect(queryClient.getQueryData(['quests', 'session', REAL_ID])).toEqual(questsData);
+      expect(queryClient.getQueryData(['quests', 'session', TMP_ID])).toEqual(questsData);
     });
 
     it('is a no-op when there is no tmp quest cache (no empty entry created under realId)', () => {
@@ -93,6 +104,27 @@ describe('useSessionCacheMigration', () => {
       result.current.migrateSession(TMP_ID, REAL_ID, makeSession(REAL_ID));
 
       expect(useChatInput.getState().getDraft(REAL_ID)).toBe('work in progress');
+    });
+
+    it('re-pins a pending briefcase launch from tmpId to realId', () => {
+      useChatInput.setState({
+        programmaticLaunch: { promptId: 'p', dispatchNonce: 'n', promptContent: 'go', sessionId: TMP_ID },
+      });
+
+      const result = renderMigration();
+      result.current.migrateSession(TMP_ID, REAL_ID, makeSession(REAL_ID));
+
+      expect(useChatInput.getState().programmaticLaunch).toMatchObject({ dispatchNonce: 'n', sessionId: REAL_ID });
+    });
+
+    it('leaves a launch pinned to another session untouched', () => {
+      const launch = { promptId: 'p', dispatchNonce: 'n', promptContent: 'go', sessionId: 'other' };
+      useChatInput.setState({ programmaticLaunch: launch });
+
+      const result = renderMigration();
+      result.current.migrateSession(TMP_ID, REAL_ID, makeSession(REAL_ID));
+
+      expect(useChatInput.getState().programmaticLaunch).toBe(launch);
     });
   });
 

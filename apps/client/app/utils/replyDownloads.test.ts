@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
+import { LOCATION_MAP_LANGUAGE, SEARCH_RESULT_CARDS_LANGUAGE } from '@bike4mind/common';
 import { buildReplyDownloads } from './replyDownloads';
 
 describe('buildReplyDownloads', () => {
@@ -129,5 +130,27 @@ describe('buildReplyDownloads', () => {
   it('skips a tiny one-line fence', () => {
     const reply = ['```python', 'x = 1', '```'].join('\n');
     expect(buildReplyDownloads(reply, 'msg-11')).toEqual([]);
+  });
+
+  it('never offers the model-authored image-card fence as a download', () => {
+    const reply = [
+      'Here are three.',
+      '```' + SEARCH_RESULT_CARDS_LANGUAGE,
+      '{"cards":[{"name":"Orient Bambino","note":"A default pick.","images":["https://cdn.example.com/a.jpg"]}]}',
+      '```',
+      'All three are automatics.',
+    ].join('\n');
+    expect(buildReplyDownloads(reply, 'msg-12')).toEqual([]);
+  });
+
+  it('never offers the model-authored map fence as a download', () => {
+    const reply = [
+      'Dinner nearby:',
+      '```' + LOCATION_MAP_LANGUAGE,
+      '{"places":[{"id":"ChIJa","name":"Barr"},',
+      '{"id":"ChIJb","name":"Kadeau"}]}',
+      '```',
+    ].join('\n');
+    expect(buildReplyDownloads(reply, 'msg-13')).toEqual([]);
   });
 });

@@ -8,16 +8,20 @@ import {
   OrgFeedbackMember,
   OrgFeedbackMemberCount,
   OrgFeedbackReport,
+  ORG_FEEDBACK_BY_TAG_LIMIT,
   OrgMemberPopulation,
 } from '@bike4mind/common';
 import { FeedbackModel } from './FeedbackModel';
+import { buildFeedbackWindowFilter } from './FeedbackRollupQueries';
 import { userRepository } from '../auth/UserModel';
 import { convertPipelineForDocumentDB, executeFacetCompatible } from '../../utils/documentdb-compat';
 
 /** Bucket key standing in for a row whose grouped field was never set. */
 const UNSPECIFIED = 'unspecified';
 
-const BY_TAG_LIMIT = 50;
+/** One key past the ceiling is fetched so truncation is a fact read off the returned rows rather
+ * than a guess, matching `ARM_FETCH_LIMIT` in the personal rollup builder. */
+const BY_TAG_FETCH_LIMIT = ORG_FEEDBACK_BY_TAG_LIMIT + 1;
 
 // any: a $group _id is either a field path or an aggregation expression, and Mongoose's typed
 // PipelineStage union does not admit both here. See documentdb-compat's module header.
@@ -38,6 +42,10 @@ const emptyCounts = () => ({
   byType: [],
   byStatus: [],
   byTag: [],
+  // Explicitly false, never left off: absence of this key is the contract's marker for a report
+  // serialized before the field existed, and the summary worker copies it straight into an S3
+  // artifact that no later producer fix can repair.
+  byTagTruncated: false,
   byMember: [],
 });
 
@@ -90,13 +98,16 @@ export async function orgFeedbackReport(params: {
 
   const basePipeline = [
     {
-      $match: {
-        // The stamp is an ObjectId on the schema; a raw string here matches zero rows silently.
-        organizationId: new mongoose.Types.ObjectId(organizationId),
-        userId: { $in: members.userIds },
-        createdAt: { $gte: from, $lte: to },
-        ...(subject ? { subject } : {}),
-      },
+      $match: buildFeedbackWindowFilter(
+        {
+          // The stamp is an ObjectId on the schema; a raw string here matches zero rows silently.
+          organizationId: new mongoose.Types.ObjectId(organizationId),
+          userId: { $in: members.userIds },
+          ...(subject ? { subject } : {}),
+        },
+        from,
+        to
+      ),
     },
   ];
 
@@ -122,11 +133,16 @@ export async function orgFeedbackReport(params: {
     // Tags are free-form, so their key space is unbounded - capped, unlike the groupings above,
     // whose keys are enum-sized and whose member list is bounded by the org's seat cap.
     byTag: [
-      { $unwind: '$tags' },
+      // $setUnion before $unwind, matching the personal rollup's tags arm: the create contract
+      // does not dedupe tags, so a report tagged the same thing twice would otherwise count twice
+      // here and once there, and the two byTag breakdowns would not reconcile. The $isArray guard
+      // keeps a non-array `tags` from hard-erroring every arm of this $facet, not just this one.
+      { $addFields: { tags: { $setUnion: [{ $cond: [{ $isArray: '$tags' }, '$tags', []] }, []] } } },
+      { $unwind: { path: '$tags', preserveNullAndEmptyArrays: false } },
       { $group: { _id: '$tags', count: { $sum: 1 } } },
       { $project: { _id: 0, key: '$_id', count: 1 } },
       { $sort: { count: -1 as const, key: 1 as const } },
-      { $limit: BY_TAG_LIMIT },
+      { $limit: BY_TAG_FETCH_LIMIT },
     ],
     byMember: [
       { $group: { _id: '$userId', count: { $sum: 1 } } },
@@ -149,6 +165,7 @@ export async function orgFeedbackReport(params: {
   );
 
   const byMemberRows: { userId: string; count: number }[] = result?.byMember ?? [];
+  const byTagRows = buckets(result?.byTag);
 
   return {
     range,
@@ -157,7 +174,8 @@ export async function orgFeedbackReport(params: {
     bySubject: buckets(result?.bySubject),
     byType: buckets(result?.byType),
     byStatus: buckets(result?.byStatus),
-    byTag: buckets(result?.byTag),
+    byTag: byTagRows.slice(0, ORG_FEEDBACK_BY_TAG_LIMIT),
+    byTagTruncated: byTagRows.length > ORG_FEEDBACK_BY_TAG_LIMIT,
     byMember: byMemberRows.map<OrgFeedbackMemberCount>(row => ({
       userId: row.userId,
       displayName: names.get(row.userId) ?? row.userId,
@@ -232,11 +250,12 @@ export async function orgFeedbackItems(params: {
   // everything rather than nothing.
   if (members.userIds.length === 0) return { items: [], total: 0, limit, offset };
 
-  const filter = {
-    ...drilldownScope(organizationId, members.userIds),
-    createdAt: { $gte: from, $lte: to },
-    ...(subject ? { subject } : {}),
-  };
+  // One filter object for both the page and its total, so the two cannot disagree on the window.
+  const filter = buildFeedbackWindowFilter(
+    { ...drilldownScope(organizationId, members.userIds), ...(subject ? { subject } : {}) },
+    from,
+    to
+  );
 
   // `_id` breaks the tie: `createdAt` alone is not unique, and an unstable sort silently repeats
   // or skips rows across pages.

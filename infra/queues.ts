@@ -57,6 +57,22 @@ const lakeMemoryQueue = new sst.aws.Queue('lakeMemoryQueue', {
   },
 });
 
+// Model-driven lake inconsistency detection (#3057). Reads a lake's documents through an LLM to find
+// contradictions no pattern rule can see. Off the request path because the pass makes several
+// sequential LLM calls and cannot fit the frontend Lambda's 60s budget. retry: 2 like lake memory -
+// the findings write is an upsert keyed on (lakeId, detector, kind, subject), so a redelivery
+// re-asserts rows rather than duplicating them, which makes a retry safe.
+const lakeInconsistencyModelQueueDLQ = new sst.aws.Queue('lakeInconsistencyModelQueueDLQ', {});
+const lakeInconsistencyModelQueue = new sst.aws.Queue('lakeInconsistencyModelQueue', {
+  // Must exceed the handler's 10-minute timeout (below) or SQS redelivers mid-run and a duplicate
+  // run bills the same LLM work concurrently.
+  visibilityTimeout: '12 minutes',
+  dlq: {
+    queue: lakeInconsistencyModelQueueDLQ.arn,
+    retry: 2,
+  },
+});
+
 // Google Drive -> data lake ingest (#1589). Walks a connected Drive folder, fetches/exports each
 // file, and lands bytes in fabFileBucket for the existing chunk/vectorize pipeline. Long ingest, so
 // a generous timeout; idempotent by driveFileId, so a dropped run is safe to retry.
@@ -696,7 +712,7 @@ const questExportQueueSubscription = questExportQueue.subscribe(
 
 // Data Lake Cleanup Queue
 // Background phase-2 hard-delete sweep for a soft-deleted lake, offloaded off the request path.
-// Pure Mongo (no buckets/websocket), so DB secrets are all it needs.
+// Links fabFileBucket because the sweep deletes each purged file's stored objects; no websocket.
 const dataLakeCleanupQueueDLQ = new sst.aws.Queue('dataLakeCleanupQueueDLQ', {});
 const dataLakeCleanupQueue = new sst.aws.Queue('dataLakeCleanupQueue', {
   visibilityTimeout: '12 minutes', // > the 10-minute handler timeout + margin
@@ -711,7 +727,7 @@ const dataLakeCleanupQueueSubscription = dataLakeCleanupQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets],
+    link: [...allSecrets, fabFileBucket],
     logging: {
       retention: '3 days',
     },
@@ -760,6 +776,30 @@ const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
     // run sends the next slice's message to its own queue), so it needs Resource.lakeMemoryQueue.url and
     // the sqs:SendMessage grant that linking the queue confers.
     link: [...allSecrets, websocketApi, lakeMemoryQueue],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
+// Model inconsistency detection subscription (#3057). 10 minutes, matching lake memory: the run makes
+// up to ceil(MODEL_INCONSISTENCY_MEMBER_SAMPLE / MODEL_INCONSISTENCY_BATCH_SIZE) sequential LLM calls,
+// each able to take the SmallLLMService timeout twice over, so its worst case is minutes rather than
+// seconds (the queue's visibilityTimeout is 12 min above to stay ahead of it). The detector checks the
+// remaining clock between batches and stops cleanly rather than being killed mid-call. No self-link:
+// this handler does not re-enqueue - the pass is bounded to one sample per run by design.
+// SINGLE_RECORD_BATCH so one lake fails in isolation and DLQs on its own.
+const lakeInconsistencyModelQueueSubscription = lakeInconsistencyModelQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/lakeInconsistencyModelDetection.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi],
     logging: {
       retention: '3 days',
     },
@@ -1446,6 +1486,7 @@ export {
   dataLakeTaxonomyQueue,
   dataLakeResearchQueue,
   lakeMemoryQueue,
+  lakeInconsistencyModelQueue,
   driveLakeIngestQueue,
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
@@ -1476,6 +1517,7 @@ export {
   dataLakeTaxonomyQueueDLQ,
   dataLakeResearchQueueDLQ,
   lakeMemoryQueueDLQ,
+  lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
@@ -1508,6 +1550,7 @@ export {
   dataLakeTaxonomyQueueSubscription,
   dataLakeResearchQueueSubscription,
   lakeMemoryQueueSubscription,
+  lakeInconsistencyModelQueueSubscription,
   driveLakeIngestQueueSubscription,
   liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,

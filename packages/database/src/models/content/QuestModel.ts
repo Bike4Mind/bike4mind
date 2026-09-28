@@ -115,6 +115,14 @@ const AnswerabilityProbeSchema = subSchema({
   probedAt: { type: Date, required: true },
 });
 
+// Count + reason only (#3055) - no lake id/name field belongs here even informally, since the
+// caller may not be permitted to know the excluded lake exists. No enum on `reason`, matching the
+// file header's rule: Zod (RetrievalSummarySchema, promptMeta.ts) is the validating contract.
+const ExcludedLakesSchema = subSchema({
+  count: { type: Number, required: true },
+  reason: { type: String, required: true },
+});
+
 // Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
 // auto-vivification of `surfaces`/`dataLakeTags` as empty arrays, which would fail the Zod
 // re-parse since `attempted` is required). Top-level on promptMeta, not nested under
@@ -155,6 +163,9 @@ const RetrievalSummarySchema = subSchema({
   // Same shape and the same default:undefined reason as preauthorizedLakeIdsUsed above - its
   // per-arm sibling, which the two overlap by design (see both fields on the Zod side).
   grantedLakeIdsUsed: { type: [String], required: false, default: undefined },
+  // default: undefined for the same auto-vivification reason as `injected` above - and here it
+  // also preserves the presence contract that absence means NOT RECORDED, never "nothing excluded".
+  excludedLakes: { type: ExcludedLakesSchema, required: false, default: undefined },
 });
 
 // Partial-grounding-coverage detail. subSchema + default:undefined for the same reason as
@@ -963,7 +974,9 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    * the quest, so without this the UI spins forever on a run the backend knows
    * is dead. Returns only the content fields the terminal-patch decision reads
    * (`terminalRecoveryFor`), not whole quest documents - a sweep can match many
-   * rows and the checkpoint/context fields are large.
+   * rows and the checkpoint/context fields are large. `agentExecutionId` is
+   * included so a caller whose write to a specific quest fails can attribute
+   * that failure back to the execution that owns it.
    *
    * `done` and `stopped` are the terminal statuses; anything else (`pending`,
    * `running`) is still claiming to be live. Terminal quests are excluded rather
@@ -977,7 +990,16 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const docs = await this.model
       .find(
         { agentExecutionId: { $in: agentExecutionIds }, status: { $nin: TERMINAL_QUEST_STATUSES } },
-        { _id: 1, reply: 1, replies: 1, images: 1, videos: 1, structuredReplies: 1, toolResults: 1 }
+        {
+          _id: 1,
+          agentExecutionId: 1,
+          reply: 1,
+          replies: 1,
+          images: 1,
+          videos: 1,
+          structuredReplies: 1,
+          toolResults: 1,
+        }
       )
       .lean<Array<Omit<UnfinishedQuestView, 'id'> & { _id: mongoose.Types.ObjectId }>>();
     return docs.map(({ _id, ...content }) => ({ ...content, id: _id.toString() }));
@@ -1225,7 +1247,7 @@ export const questRepository = new QuestRepository(Quest);
  */
 export type UnfinishedQuestView = { id: string } & Pick<
   IChatHistoryItem,
-  'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
+  'agentExecutionId' | 'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
 >;
 
 /**

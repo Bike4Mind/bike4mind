@@ -80,6 +80,7 @@ const publishedLake = {
   status: 'active',
   isPublic: true,
   systemPrompt: PROMPT,
+  origin: 'connector-fed',
 };
 
 const makeRes = () => {
@@ -106,6 +107,9 @@ describe('GET /api/data-lakes/[id] - editor-only redaction is wired into the han
     // Everything a reader is entitled to still comes back.
     expect(body.name).toBe('Published Lake');
     expect(body.datalakeTag).toBe('datalake:lake1');
+    // origin is reader-visible: it tells a reader whether a connector fills this lake, which
+    // is a property of the corpus they are searching (see redactLakeForActor.ts).
+    expect(body.origin).toBe('connector-fed');
   });
 
   it('returns systemPrompt to the lake owner', async () => {

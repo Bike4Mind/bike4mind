@@ -1,4 +1,5 @@
 import { Logger } from '@bike4mind/observability';
+import { stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
 /**
  * AST-based Markdown to Slack Block Kit converter.
  *
@@ -107,11 +108,15 @@ function tableToList(table: Table): List {
  *
  * Returns clean Markdown with tables converted to lists and links in Slack format.
  */
-export function processMarkdownForSlack(markdown: string): SlackFormattedResult {
+export function processMarkdownForSlack(markdown: string, citables?: CitableSource[]): SlackFormattedResult {
+  // Stripped before any AST/block-splitting work runs: a `code` node would otherwise pass the
+  // fenced JSON through to Slack unchanged, and splitTextIntoBlocks (called by the sender on
+  // this function's output) isn't fence-aware and could split mid-JSON-block besides.
+  const cleanedMarkdown = stripSearchResultCardFences(markdown, citables);
   try {
     const processor = unified().use(remarkParse).use(remarkGfm).use(remarkStringify);
 
-    const tree = processor.parse(markdown) as Root;
+    const tree = processor.parse(cleanedMarkdown) as Root;
 
     // Replace table nodes with list nodes in-place
     tree.children = tree.children.map(node => {
@@ -132,6 +137,6 @@ export function processMarkdownForSlack(markdown: string): SlackFormattedResult 
     return { text };
   } catch (error) {
     Logger.globalInstance.error('[processMarkdownForSlack] Remark parsing failed, returning raw markdown:', error);
-    return { text: markdown };
+    return { text: cleanedMarkdown };
   }
 }

@@ -43,10 +43,17 @@ declare global {
       /**
        * The authenticated user, plus the transient auth claims `verifyJwtPayload` attaches from
        * the access-token JWT (never persisted on the document): `sid` (session id, for per-device
-       * logout), `mfaPending`, and `impersonatedBy`. All optional - API-key auth sets `user`
-       * without them, and legacy/mfaPending tokens omit `sid`.
+       * logout), `mfaPending`, `impersonatedBy`, and `oauthGrant` (present ONLY for a relying-party
+       * `kind:'oauth'` access token - the marker oauthRouteGate/admitsOptionalAuthUser default-deny
+       * on). All optional - API-key auth sets `user` without them, and legacy/mfaPending tokens omit
+       * `sid`.
        */
-      user: IUserDocument & { sid?: string; mfaPending?: boolean; impersonatedBy?: string };
+      user: IUserDocument & {
+        sid?: string;
+        mfaPending?: boolean;
+        impersonatedBy?: string;
+        oauthGrant?: { clientId: string; scopes: string[]; aud?: string | string[] };
+      };
       ability?: Ability;
       /**
        * Per-request memoized entitlement keys (Quest 3). Set ONLY by

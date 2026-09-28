@@ -1,5 +1,7 @@
 import {
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
+  createThinkMarkerEscaper,
+  escapeThinkMarkers,
   IMessage,
   isUserInitiatedAbort,
   ModelBackend,
@@ -477,6 +479,7 @@ export class OllamaBackend implements ICompletionBackend {
       // Modern Ollama streams reasoning in a separate `thinking` field rather
       // than inline <think> tags; track whether we've opened a wrapper for it.
       let thinkingFieldOpen = false;
+      const thinkEscaper = createThinkMarkerEscaper();
 
       for await (const chunk of response) {
         if (chunk.message.tool_calls?.length) {
@@ -492,11 +495,12 @@ export class OllamaBackend implements ICompletionBackend {
             piece += '<think>';
             thinkingFieldOpen = true;
           }
-          piece += thinkPiece;
+          piece += thinkEscaper.push(thinkPiece);
         }
         const contentPiece = chunk.message.content || '';
         if (contentPiece) {
           if (thinkingFieldOpen) {
+            piece += thinkEscaper.flush();
             piece += '</think>';
             thinkingFieldOpen = false;
           }
@@ -511,6 +515,7 @@ export class OllamaBackend implements ICompletionBackend {
         // Non-reasoning models (e.g. qwen2.5-coder) emit neither, so nothing is
         // appended for them.
         if (chunk.done && (thinkingFieldOpen || (startedThinking && !stoppedThinking))) {
+          if (thinkingFieldOpen) piece += thinkEscaper.flush();
           piece = `${piece}</think>`;
           thinkingFieldOpen = false;
         }
@@ -534,7 +539,7 @@ export class OllamaBackend implements ICompletionBackend {
       // Prepend reasoning (from the separate thinking field) as a <think> block
       // so it renders consistently with the streaming path.
       const think = response.message.thinking || '';
-      content = (think ? `<think>${think}</think>` : '') + (response.message.content || '');
+      content = (think ? `<think>${escapeThinkMarkers(think)}</think>` : '') + (response.message.content || '');
       inputTokens = response.prompt_eval_count || 0;
       outputTokens = response.eval_count || 0;
       doneReason = response.done_reason;

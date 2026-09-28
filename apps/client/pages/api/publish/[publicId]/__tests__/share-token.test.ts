@@ -85,13 +85,58 @@ describe('POST /api/publish/[publicId]/share-token', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ shareToken: 'TESTTOKEN', shareUrl: '/a/TESTTOKEN' });
     expect(mockFindOneAndUpdate).toHaveBeenCalledOnce();
-    const [filter, update] = mockFindOneAndUpdate.mock.calls[0] as [
+    // The update is an aggregation PIPELINE (a one-stage array), not an update document, so the
+    // scalar write and the shareTokens[] mirror can land in one conflict-free write - see the
+    // handler's comment. Hence [0].$set rather than .$set.
+    const [filter, pipeline] = mockFindOneAndUpdate.mock.calls[0] as [
       Record<string, unknown>,
-      { $set: Record<string, unknown> },
+      { $set: Record<string, unknown> }[],
     ];
     expect(filter.shareToken).toEqual({ $exists: false }); // precondition: mint only when absent
-    expect(update.$set.shareToken).toBe('TESTTOKEN');
-    expect(update.$set.shareTokenUpdatedAt).toBeInstanceOf(Date);
+    expect(pipeline[0].$set.shareToken).toBe('TESTTOKEN');
+    expect(pipeline[0].$set.shareTokenUpdatedAt).toBeInstanceOf(Date);
+  });
+
+  // The pipeline's shareTokens stage, shaped for assertion: $concatArrays is [existing, [new]],
+  // where `existing` is a raw $map stage on a rotate and the appended entry is a plain object.
+  interface SharePipelineStage {
+    $set: {
+      shareToken: string;
+      shareTokenUpdatedAt: Date;
+      shareTokens: {
+        $concatArrays: [
+          { $map?: { in: { $cond: unknown[] } } },
+          { _id?: unknown; token?: string; revokedAt?: Date | null; viewCount?: number }[],
+        ];
+      };
+    };
+  }
+
+  it('mirrors the minted token into shareTokens[] in the SAME write', async () => {
+    // One write, or a crash between two could leave the scalar and the array disagreeing about
+    // which links are live.
+    const { promise } = run();
+    await promise;
+    const [, pipeline] = mockFindOneAndUpdate.mock.calls[0] as [unknown, SharePipelineStage[]];
+    const appended = pipeline[0].$set.shareTokens.$concatArrays[1][0];
+    expect(appended.token).toBe('TESTTOKEN');
+    expect(appended.revokedAt).toBeNull();
+    expect(appended.viewCount).toBe(0);
+    // A pipeline update bypasses Mongoose casting, so the handler must supply the _id itself -
+    // without it the entry has no handle for the owner UI to revoke by.
+    expect(appended._id).toBeDefined();
+  });
+
+  it('a rotate revokes the outgoing entry in the same write as the append', async () => {
+    mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareToken: 'OUTGOING' });
+    const { promise } = run({ body: { regenerate: true } });
+    await promise;
+    const [, pipeline] = mockFindOneAndUpdate.mock.calls[0] as [unknown, SharePipelineStage[]];
+    const [kept, appended] = pipeline[0].$set.shareTokens.$concatArrays;
+    // Existing entries are mapped, stamping revokedAt on the one matching the outgoing token;
+    // splitting this into a second write would let a crash leave a rotated-away link live.
+    expect(kept.$map?.in.$cond[0]).toEqual({ $eq: ['$$entry.token', 'OUTGOING'] });
+    expect(appended[0].token).toBe('TESTTOKEN');
   });
 
   it('is idempotent: returns the existing token without a write', async () => {
@@ -154,6 +199,51 @@ describe('DELETE /api/publish/[publicId]/share-token', () => {
     const { res, promise } = run({ method: 'DELETE', user: { id: 'intruder' } });
     await promise;
     expect(res._getStatusCode()).toBe(403);
+  });
+
+  // On a NON-public artifact the token is the gate's only enforcing surface: revoking it
+  // would strand a gate nothing honors - the same state PATCH refuses to create.
+  it('refuses to revoke while a gate on a private artifact has no other enforcing surface', async () => {
+    mockLoad.mockResolvedValue({
+      publicId: 'pub1',
+      ownerId: 'owner1',
+      shareToken: 'EXISTING',
+      visibility: 'private',
+      accessGate: { kind: 'passphrase', passphraseHash: 'x' },
+    });
+    const { res, promise } = run({ method: 'DELETE' });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().code).toBe('REVOKE_WOULD_ORPHAN_GATE');
+    expect(mockUpdateOne).not.toHaveBeenCalled();
+  });
+
+  it('allows the revoke when the artifact is public - visibility still enforces the gate', async () => {
+    mockLoad.mockResolvedValue({
+      publicId: 'pub1',
+      ownerId: 'owner1',
+      shareToken: 'EXISTING',
+      visibility: 'public',
+      accessGate: { kind: 'passphrase', passphraseHash: 'x' },
+    });
+    const { res, promise } = run({ method: 'DELETE' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdateOne).toHaveBeenCalled();
+  });
+
+  it('allows the revoke on an ungated private artifact', async () => {
+    mockLoad.mockResolvedValue({
+      publicId: 'pub1',
+      ownerId: 'owner1',
+      shareToken: 'EXISTING',
+      visibility: 'private',
+      accessGate: null,
+    });
+    const { res, promise } = run({ method: 'DELETE' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdateOne).toHaveBeenCalled();
   });
 });
 

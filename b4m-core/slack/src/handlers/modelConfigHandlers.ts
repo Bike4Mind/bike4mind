@@ -14,6 +14,7 @@ import { AppHomeBuilder } from '../views/AppHomeBuilder';
 import { AppHomeDataService, AppHomeNotebook } from '../services/AppHomeDataService';
 import { buildOrgModelDefaultsModal, parseOrgModelDefaultsSubmission } from '../modals/OrgModelDefaultsModal';
 import { buildChannelModelConfigModal, parseChannelModelConfigSubmission } from '../modals/ChannelModelConfigModal';
+import { openModalThenLoad } from '../modals/openModalThenLoad';
 import { findUserBySlackId } from './user-lookup';
 
 /** Base payload structure for view_submission events. Individual modal parse functions define their own, more specific value shapes. */
@@ -86,22 +87,20 @@ export async function handleOrgDefaultsEdit(
     return { text: 'Please link your account and ensure your organization is set up.' };
   }
 
+  const organizationId = dbUser.organizationId;
   try {
-    const { Organization } = getSlackDb();
-    const org = await (Organization as any)
-      .findById(dbUser.organizationId)
-      .select('preferredModel temperature maxTokens')
-      .lean();
-
-    const client = new WebClient(botToken);
-    await client.views.open({
-      trigger_id: triggerId,
-      view: await buildOrgModelDefaultsModal({
-        organizationId: dbUser.organizationId,
+    await openModalThenLoad(new WebClient(botToken), triggerId, 'Org Model Defaults', async () => {
+      const { Organization } = getSlackDb();
+      const org = await (Organization as any)
+        .findById(organizationId)
+        .select('preferredModel temperature maxTokens')
+        .lean();
+      return buildOrgModelDefaultsModal({
+        organizationId,
         preferredModel: org?.preferredModel,
         temperature: org?.temperature,
         maxTokens: org?.maxTokens,
-      }),
+      });
     });
     return {};
   } catch (error) {
@@ -191,11 +190,9 @@ export async function handleChannelConfigAdd(
   }
 
   try {
-    const client = new WebClient(botToken);
-    await client.views.open({
-      trigger_id: triggerId,
-      view: await buildChannelModelConfigModal({ slackTeamId }),
-    });
+    await openModalThenLoad(new WebClient(botToken), triggerId, 'Channel Config', () =>
+      buildChannelModelConfigModal({ slackTeamId })
+    );
     return {};
   } catch (error) {
     Logger.error('[Slack Interactive] Failed to open channel config modal', { error });
@@ -222,12 +219,10 @@ export async function handleChannelConfigEdit(
   }
 
   try {
-    const { slackChannelConfigRepository } = getSlackDb();
-    const existing = await (slackChannelConfigRepository as any).findByChannelId(channelId);
-    const client = new WebClient(botToken);
-    await client.views.open({
-      trigger_id: triggerId,
-      view: await buildChannelModelConfigModal({
+    await openModalThenLoad(new WebClient(botToken), triggerId, 'Edit Channel Config', async () => {
+      const { slackChannelConfigRepository } = getSlackDb();
+      const existing = await (slackChannelConfigRepository as any).findByChannelId(channelId);
+      return buildChannelModelConfigModal({
         slackTeamId,
         channelId,
         preferredModel: existing?.preferredModel,
@@ -235,7 +230,7 @@ export async function handleChannelConfigEdit(
         maxTokens: existing?.maxTokens,
         githubOwner: existing?.githubOwner,
         githubRepo: existing?.githubRepo,
-      }),
+      });
     });
     return {};
   } catch (error) {

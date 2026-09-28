@@ -1,18 +1,21 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
+import { computeMcpContentHash } from '@bike4mind/infra';
 import { lambdaVpc } from './vpc';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { router, appUrlForLambdaEnv } from './router';
 import { secrets } from './secrets';
 
-// Calculate content hash from git tree - changes immediately when MCP/Common/Hearth code changes
-// Matches the content hash pattern used in ci.yml for caching
-// This is a workaround for SST not detecting copyFiles content changes
-const MCP_CONTENT_HASH = execSync(
-  "git ls-tree -r HEAD b4m-core/mcp b4m-core/common b4m-core/hearth | awk '{print $3}' | sort | md5sum | awk '{print $1}'"
-)
-  .toString()
-  .trim()
-  .slice(0, 8);
+// Workspace code the bundle carries, hashed into MCP_VERSION so a code-only change redeploys the
+// handler: SST does not notice copyFiles CONTENT changes. Keep in sync with the b4m-core/* entries
+// in copyFiles below - a package copied but not listed here stops moving the version.
+// infra/__tests__/contentHashCoverage.test.ts asserts that correspondence in both directions, and
+// holds any exclusion to a dependency artifact under node_modules. Read one path at a time and
+// hashed in @bike4mind/infra, where the ways it can go quietly constant are testable; nothing
+// imports this file. See mcpContentHash.ts for which ways and why.
+const MCP_CONTENT_HASH = computeMcpContentHash({
+  paths: ['b4m-core/mcp', 'b4m-core/common', 'b4m-core/hearth'],
+  readTree: path => execFileSync('git', ['ls-tree', '-r', 'HEAD', path]).toString(),
+});
 
 export const mcpHandler = new sst.aws.Function('mcpHandler', {
   handler: 'apps/client/server/utils/mcpCall.handler',
@@ -46,12 +49,10 @@ export const mcpHandler = new sst.aws.Function('mcpHandler', {
     MCP_VERSION: MCP_CONTENT_HASH,
   },
   // Copy workspace packages to node_modules structure for proper ESM resolution
-  // Node.js ESM requires @scope/package structure at runtime, not workspace paths
+  // Node.js ESM requires @scope/package structure at runtime, not workspace paths.
+  // No tiktoken_bg.wasm, unlike the LLM-executing Lambdas (infra/toolRuntimeAssets.ts): tiktoken
+  // reads it from next to its own JS, and neither this bundle nor `install` carries that JS.
   copyFiles: [
-    {
-      from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
-      to: 'tiktoken_bg.wasm',
-    },
     {
       from: 'b4m-core/mcp/dist',
       to: 'node_modules/@bike4mind/mcp/dist',

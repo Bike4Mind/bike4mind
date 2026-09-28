@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { isReservedTagPrefix } from '@bike4mind/common';
-import type { TaxonomyStatus } from '@bike4mind/common';
+import type { DataLakeStatus, TaxonomyStatus } from '@bike4mind/common';
 import type { FolderTreeNode, WizardFile } from '../utils/folderTreeParser';
 import { deriveTagPrefixFromLakeName } from '../hooks/data/dataLakeSlug';
 import {
@@ -91,6 +91,11 @@ export interface UploadProgress {
    * optionalSteps.taxonomy is true.
    */
   taxonomyStatus?: TaxonomyStatus;
+  /**
+   * Lifecycle status of the lake this run committed into (#3222). From the create response or the
+   * target lake, never assumed - absent means a fallback lake, which always serves.
+   */
+  lakeStatus?: DataLakeStatus;
 }
 
 // ── Defaults ────────────────────────────────────────────────────────────────
@@ -138,6 +143,7 @@ const freshSession = () => ({
   hashingProgress: { total: 0, completed: 0, status: 'idle' as const },
   targetLake: null as WizardTargetLake | null,
   pendingDriveFolder: null as PendingDriveFolder | null,
+  recoverableLake: null as RecoverableLake | null,
 });
 
 // ── Store ───────────────────────────────────────────────────────────────────
@@ -168,6 +174,12 @@ export interface WizardTargetLake {
   organizationId: string | null;
   /** Whether the caller may manage this lake. Same gate as above - the status route 404s otherwise. */
   canManage: boolean;
+  /**
+   * Lake lifecycle, so appending files to a lake that is still `draft` discloses on the Complete
+   * screen that the new files ground nothing yet (#3222). Optional because `DataLakeConfig.status`
+   * is: a built-in fallback lake has no document and always serves.
+   */
+  status?: DataLakeStatus;
 }
 
 /**
@@ -187,6 +199,7 @@ export const toWizardTargetLake = (lake: {
   requiredEntitlement?: string;
   organizationId?: string | null;
   canManage?: boolean;
+  status?: DataLakeStatus;
 }): WizardTargetLake => ({
   id: lake.id,
   slug: lake.slug,
@@ -196,7 +209,33 @@ export const toWizardTargetLake = (lake: {
   requiredEntitlement: lake.requiredEntitlement,
   organizationId: lake.organizationId ?? null,
   canManage: lake.canManage ?? false,
+  status: lake.status,
 });
+
+/**
+ * The lake a create-mode `runBatchUpload` created and then archived after every file in the
+ * batch failed to upload, remembered so a same-session retry with the SAME tag prefix can
+ * restore and reuse it instead of hitting the prefix claim the archived lake still holds.
+ * A retry submitted with a different tag prefix doesn't need this - nothing claims
+ * the new prefix, so createWizardLake succeeds on its own.
+ */
+export interface RecoverableLake {
+  id: string;
+  tagPrefix: string;
+  /**
+   * The account scope the lake was created under (undefined = personal), since the account
+   * switcher stays reachable behind the wizard modal. Prefix claims are scoped per owner
+   * (findCollidingPrefixLakes), so a retry from a DIFFERENT scope must not reuse this lake -
+   * and doesn't need to: nothing in the new scope claims the prefix.
+   */
+  organizationId?: string;
+  /**
+   * Set once the unarchive has landed. The steps after it can still fail, and re-issuing an
+   * unarchive against a lake already back in 'active' status is a 400 - which, not being the
+   * 404 that means "really gone", would leave every later retry stuck on the same refusal.
+   */
+  restored?: boolean;
+}
 
 interface DataLakeWizardStore {
   // State
@@ -220,6 +259,8 @@ interface DataLakeWizardStore {
   targetLake: WizardTargetLake | null;
   /** Drive folder chosen during create, connected on commit once the lake has an id. */
   pendingDriveFolder: PendingDriveFolder | null;
+  /** See RecoverableLake. Non-null only after a create-mode total-upload-failure rollback. */
+  recoverableLake: RecoverableLake | null;
   /** Drives the Data Lakes management panel (list + lifecycle), distinct from the wizard. */
   isManagerOpen: boolean;
   /** Which manager tab to show on open: the caller's own lakes, or the public discover catalog. */
@@ -265,6 +306,7 @@ interface DataLakeWizardStore {
 
   // Upload step
   updateUploadProgress: (progress: Partial<UploadProgress>) => void;
+  setRecoverableLake: (lake: RecoverableLake | null) => void;
 
   // Reset
   resetWizard: () => void;
@@ -285,6 +327,7 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   hashingProgress: { total: 0, completed: 0, status: 'idle' as const },
   targetLake: null,
   pendingDriveFolder: null,
+  recoverableLake: null,
   isManagerOpen: false,
   managerTab: 'mine',
   managerLakeId: null,
@@ -434,6 +477,8 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
     set(state => ({
       uploadProgress: { ...state.uploadProgress, ...progress },
     })),
+
+  setRecoverableLake: lake => set({ recoverableLake: lake }),
 
   // ── Reset ───────────────────────────────────────────────────────────────
 

@@ -46,6 +46,12 @@ vi.mock('./awsBackend', () => ({
     this._mock = 'aws';
   }),
 }));
+vi.mock('./localImageBackend', () => ({
+  LocalImageBackend: vi.fn(function (this: any, baseUrl: string) {
+    this._mock = 'local-image';
+    this.baseUrl = baseUrl;
+  }),
+}));
 vi.mock('./bedrockBackend/anthropic', () => ({
   default: vi.fn(function (this: any) {
     this._mock = 'bedrock-anthropic';
@@ -195,10 +201,10 @@ describe('getLlmByModel', () => {
       expect(result.key).toBe('bfl-key');
     });
 
-    it('returns BFLBackend with demo-key when no key is provided', () => {
-      const result = getLlmByModel({}, { modelInfo, logger }) as any;
-      expect(result._mock).toBe('bfl');
-      expect(result.key).toBe('demo-key');
+    it('returns null when no key is provided', () => {
+      // A 'demo-key' stand-in here dispatched a keyless deployment's image generation
+      // straight into a provider 403; every other keyed backend returns null instead.
+      expect(getLlmByModel({}, { modelInfo, logger })).toBeNull();
     });
 
     it('throws when key is "expired"', () => {
@@ -226,6 +232,23 @@ describe('getLlmByModel', () => {
     it('returns AWSBackend regardless of api keys', () => {
       const modelInfo = makeModelInfo({ backend: 'aws' });
       expect((getLlmByModel({}, { modelInfo, logger }) as any)._mock).toBe('aws');
+    });
+  });
+
+  describe('local-image backend', () => {
+    // Discovered local-image/<checkpoint> records carry no adapterFamily (see
+    // localImageBackend.ts's getModelInfo), so they only ever reach this legacy
+    // switch - never backendForAdapterFamily.
+    const modelInfo = makeModelInfo({ backend: 'local-image', id: 'local-image/sd15' as ModelInfo['id'] });
+
+    it('returns LocalImageBackend when a base URL is present', () => {
+      const result = getLlmByModel({ 'local-image': 'http://sd:7860' }, { modelInfo, logger }) as any;
+      expect(result._mock).toBe('local-image');
+      expect(result.baseUrl).toBe('http://sd:7860');
+    });
+
+    it('returns null when no base URL is provided', () => {
+      expect(getLlmByModel({}, { modelInfo, logger })).toBeNull();
     });
   });
 

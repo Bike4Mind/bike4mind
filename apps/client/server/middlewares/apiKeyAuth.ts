@@ -12,6 +12,7 @@ import { getClientIp } from '@server/utils/ip';
 import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
 import { createHash } from 'crypto';
 import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
+import { assertAccountStateUsable } from '@server/cli/auth';
 
 /** Staging is irrelevant to a route that declares no gate; reuse one empty set. */
 const NO_STAGED_SCOPES: ReadonlySet<string> = new Set<string>();
@@ -30,8 +31,12 @@ const hashApiKeyForLogging = (apiKey: string): string => {
  * @param requiredScopes - When provided, the authenticated key must hold at
  *   least one of these scopes (OR / "any of" semantics) or the request is
  *   rejected with 403. Omitted -> no scope requirement (any valid key passes).
+ * @param alsoRequiredScopes - When provided, the key must ALSO hold every one
+ *   of these scopes (AND / "all of" semantics), independent of how
+ *   requiredScopes resolves. No staging grace period - see decideScopeGate's
+ *   doc comment (apiKeyScopeGate.ts).
  */
-export const apiKeyAuth = (requiredScopes?: ApiKeyScope[]) => {
+export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: ApiKeyScope[]) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     // If already authenticated via JWT, skip API key auth
     if (req.user) {
@@ -94,7 +99,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[]) => {
           });
         }
       }
-      const gate = decideScopeGate(requiredScopes, validation.scopes, staged);
+      const gate = decideScopeGate(requiredScopes, validation.scopes, staged, alsoRequiredScopes);
       if (gate.outcome !== 'allow') {
         // A scope 403 fires before req.apiKeyInfo is set, so log from `validation`
         // (never the raw key) - otherwise the only trace is errorHandler's generic warn.
@@ -106,6 +111,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[]) => {
           userId: validation.userId,
           heldScopes: validation.scopes,
           requiredScopes,
+          alsoRequiredScopes,
           endpoint: req.originalUrl,
         };
         if (gate.outcome === 'stagedAllow') {
@@ -117,18 +123,11 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[]) => {
       }
 
       const user = await User.findById(validation.userId);
-      if (!user || user.isBanned) {
+      if (!user) {
         throw new UnauthorizedError('User not found or banned');
       }
-      if (user.disputePending) {
-        throw new ForbiddenError('Account suspended pending dispute resolution. Please contact support.');
-      }
-      // Block API-key access for accounts suspended for repeated content-policy violations.
-      if (user.moderation?.status === 'suspended') {
-        throw new ForbiddenError(
-          'Your account is suspended for repeated content-policy violations. Please contact support to appeal.'
-        );
-      }
+      // The same gate the JWT/CLI/WebSocket surfaces use, so the two cannot drift.
+      assertAccountStateUsable(user);
 
       req.user = user;
       req.apiKeyInfo = {

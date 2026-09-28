@@ -8,6 +8,7 @@ import {
   dataLakeAccessGrantRepository,
   fabFileRepository,
   fabFileChunkRepository,
+  userRepository,
 } from '@bike4mind/database';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
@@ -15,13 +16,14 @@ import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { sendToQueue } from '@server/utils/sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { disableDriveConnectionForLake, enableDriveConnectionForLake } from '@server/integrations/google/drive/common';
 
 const LifecycleInput = z.object({
-  action: z.enum(['archive', 'unarchive', 'restore', 'delete', 'cleanup']),
+  action: z.enum(['archive', 'unarchive', 'restore', 'delete', 'cleanup', 'promote', 'demote']),
 });
 
 /**
@@ -95,10 +97,33 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             fabFiles: fabFileRepository,
+            users: userRepository,
             ...lakeConfigAuditDb,
           },
           enableDriveConnection: async ({ dataLakeId }) => {
             await enableDriveConnectionForLake(dataLakeId);
+          },
+          logger: req.logger,
+        });
+        return res.json(result);
+      }
+      case 'promote': {
+        const result = await dataLakeService.promoteDataLake(actor, lake.id, {
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            ...lakeConfigAuditDb,
+          },
+          logger: req.logger,
+        });
+        return res.json(result);
+      }
+      case 'demote': {
+        const result = await dataLakeService.demoteDataLake(actor, lake.id, {
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            ...lakeConfigAuditDb,
           },
           logger: req.logger,
         });
@@ -111,7 +136,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             fabFiles: fabFileRepository,
+            users: userRepository,
             ...lakeConfigAuditDb,
+            // A restore puts the lake's files back inside every lake read, which is a membership
+            // join the change log has to carry - the delete side already logged their removals.
+            ...lakeMembershipAuditDb,
           },
           enableDriveConnection: async ({ dataLakeId }) => {
             await enableDriveConnectionForLake(dataLakeId);
@@ -128,7 +157,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
             batches: dataLakeBatchRepository,
             fabFiles: fabFileRepository,
             fabFileChunks: fabFileChunkRepository,
+            users: userRepository,
             ...lakeConfigAuditDb,
+            // The teardown's soft delete takes every member file out of every lake read, which is
+            // a membership departure - the restore door records the matching rejoins.
+            ...lakeMembershipAuditDb,
           },
           retrievalIndex: retrievalIndex(),
           disableDriveConnection: async ({ dataLakeId }) => {

@@ -567,6 +567,88 @@ describe('planCatalogWrites', () => {
     expect(result.rows[0].patch).toMatchObject({ adapterFamily: 'openai-chat' });
   });
 
+  describe('a feed-reported releaseDate', () => {
+    const withReleaseDate = (releaseDate?: string) => [
+      { name: 'openai', kind: 'provider' as const, records: [gpt6()] },
+      {
+        name: 'models.dev',
+        kind: 'aggregator' as const,
+        records: [{ modelId: 'gpt-6', patch: { supportsTools: true, ...(releaseDate ? { releaseDate } : {}) } }],
+      },
+    ];
+
+    it('claims presentation for a model no seed or operator row presents', () => {
+      const result = plan({ resolveDispatch: dispatchable, contributions: withReleaseDate('2026-09-01') });
+
+      expect(result.rows[0].patch).toMatchObject({ releaseDate: '2026-09-01' });
+      expect(result.rows[0].ownedGroups).toContain('presentation');
+      expect(result.rows[0].contributors).toContainEqual({ group: 'presentation', source: 'models.dev' });
+      expect(result.dropped.map(drop => drop.reason)).not.toContain('field "releaseDate" is seed- or operator-owned');
+    });
+
+    it('keeps the date in force when a later run reports none', () => {
+      const first = plan({ resolveDispatch: dispatchable, contributions: withReleaseDate('2026-09-01') });
+      const second = plan({
+        resolveDispatch: dispatchable,
+        base: asBase(first.rows),
+        priorDiscoveryGroups: new Map([['gpt-6', first.rows[0].ownedGroups]]),
+        contributions: [
+          { name: 'openai', kind: 'provider', records: [gpt6({ contextWindow: 1_000_000 })] },
+          { name: 'models.dev', kind: 'aggregator', records: [{ modelId: 'gpt-6', patch: { supportsTools: true } }] },
+        ],
+      });
+
+      expect(second.rows[0].patch).toMatchObject({ releaseDate: '2026-09-01' });
+      expect(second.rows[0].ownedGroups).toContain('presentation');
+    });
+
+    it('leaves a seeded presentation group alone, date and all', () => {
+      const seeded = seedRow({ id: 'gpt-6', description: 'Seeded copy.', releaseDate: '2026-08-15' }, ['presentation']);
+      const first = plan({ resolveDispatch: dispatchable });
+      const result = plan({
+        resolveDispatch: dispatchable,
+        base: asBase(first.rows, [seeded]),
+        presentationOwnedElsewhere: new Set(['gpt-6']),
+        contributions: withReleaseDate('2026-09-01'),
+      });
+
+      for (const row of result.rows) {
+        expect(row.ownedGroups).not.toContain('presentation');
+        expect((row.patch as Record<string, unknown>).releaseDate).not.toBe('2026-09-01');
+      }
+    });
+
+    describe('once a seed row presents a model discovery already dated', () => {
+      const first = plan({ resolveDispatch: dispatchable, contributions: withReleaseDate('2026-09-01') });
+      const seeded = seedRow({ id: 'gpt-6', description: 'Seeded copy.' }, ['presentation']);
+      const later = (provider: DiscoveredModel) =>
+        plan({
+          resolveDispatch: dispatchable,
+          base: asBase(first.rows, [seeded]),
+          priorDiscoveryGroups: new Map([['gpt-6', first.rows[0].ownedGroups]]),
+          presentationOwnedElsewhere: new Set(['gpt-6']),
+          contributions: [
+            { name: 'openai', kind: 'provider', records: [provider] },
+            {
+              name: 'models.dev',
+              kind: 'aggregator',
+              records: [{ modelId: 'gpt-6', patch: { releaseDate: '2026-09-01' } }],
+            },
+          ],
+        });
+
+      it('appends no row just to give the group up, since the seed row already wins it at merge', () => {
+        expect(later(gpt6()).rows).toHaveLength(0);
+        expect(asBase(first.rows, [seeded]).get('gpt-6')?.record).toMatchObject({ description: 'Seeded copy.' });
+        expect(asBase(first.rows, [seeded]).get('gpt-6')?.record).not.toHaveProperty('releaseDate');
+      });
+
+      it('leaves the group out of the next row it writes for another reason', () => {
+        expect(later(gpt6({ contextWindow: 1_000_000 })).rows[0].ownedGroups).not.toContain('presentation');
+      });
+    });
+  });
+
   it('leaves the lifecycle and auto-disable of an already-active model alone', () => {
     const base = asBase(
       [],

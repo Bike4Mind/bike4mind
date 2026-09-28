@@ -67,15 +67,17 @@ type ChatOutcome =
  * member, so an unverified model is left exactly as it is.
  *
  * The two fields are verified separately, and the answer says which: only a 200
- * proves maxTokensParam, so the route that reaches /v1/responses through a 400
- * carries `maxTokensParamVerified: false` and the write path declines the guess
- * (see planOne in catalogWrite.ts).
+ * proves maxTokensParam. The route that reaches /v1/responses through a 400
+ * makes one more chat call without tools to prove it, and carries
+ * `maxTokensParamVerified: false` when that call cannot, so the write path
+ * declines the guess (see planOne in catalogWrite.ts).
  */
 export async function probeOpenAiDispatch(modelId: string, deps: DispatchProbeDeps): Promise<DispatchProbeResult> {
   let maxTokensParam = predictMaxTokensParam(modelId);
   let outcome = await callChat(modelId, maxTokensParam, deps);
-  if (outcome === 'wrong-token-param') {
-    maxTokensParam = maxTokensParam === 'max_tokens' ? 'max_completion_tokens' : 'max_tokens';
+  const flipped = outcome === 'wrong-token-param';
+  if (flipped) {
+    maxTokensParam = otherParam(maxTokensParam);
     outcome = await callChat(modelId, maxTokensParam, deps);
   }
 
@@ -89,17 +91,32 @@ export async function probeOpenAiDispatch(modelId: string, deps: DispatchProbeDe
   // open. maxTokensParam rides along either way: completeViaResponses sends
   // max_output_tokens, but the terminal no-tools turn of a responses-transport
   // model falls back to the chat path, which reads this field. Only the 200
-  // ('no-tool-call') proves the parameter - the 400 was about something else
-  // and left it untested - so the answer carries which of the two happened.
+  // ('no-tool-call') proves the parameter; the 400 was about something else
+  // and left it untested, which the tool-free call below settles.
   const responses = await callResponses(modelId, deps);
   if (responses === 'retryable') return { retryable: true };
-  return responses === 'function-call'
-    ? {
-        answer: answerFor('openai-responses', maxTokensParam, 'responses', outcome === 'no-tool-call'),
-        retryable: false,
-      }
-    : { retryable: false };
+  if (responses !== 'function-call') return { retryable: false };
+  if (outcome === 'no-tool-call') {
+    return { answer: answerFor('openai-responses', maxTokensParam, 'responses', true), retryable: false };
+  }
+
+  // A model that calls functions on chat only with reasoning disabled 400s the
+  // forced call above for a reason unrelated to the token parameter.
+  let plain = await callChatPlain(modelId, maxTokensParam, deps);
+  // A flip already made on a 400 naming the first parameter is not undone.
+  if (plain === 'wrong-token-param' && !flipped) {
+    maxTokensParam = otherParam(maxTokensParam);
+    plain = await callChatPlain(modelId, maxTokensParam, deps);
+  }
+  if (plain === 'retryable') return { retryable: true };
+  return {
+    answer: answerFor('openai-responses', maxTokensParam, 'responses', plain === 'accepted'),
+    retryable: false,
+  };
 }
+
+const otherParam = (param: MaxTokensParam): MaxTokensParam =>
+  param === 'max_tokens' ? 'max_completion_tokens' : 'max_tokens';
 
 const answerFor = (
   adapterFamily: NonNullable<DispatchAnswer['adapterFamily']>,
@@ -152,6 +169,30 @@ async function callChat(
     return 'tools-unsupported';
   }
   return isRetryableStatus(response.status) ? 'retryable' : 'gone';
+}
+
+/** Tool-free chat call whose only job is to prove the endpoint accepts `maxTokensParam`. */
+async function callChatPlain(
+  modelId: string,
+  maxTokensParam: MaxTokensParam,
+  deps: DispatchProbeDeps
+): Promise<'accepted' | 'wrong-token-param' | 'refused' | 'retryable'> {
+  const response = await post('/v1/chat/completions', deps, {
+    model: modelId,
+    messages: [{ role: 'user', content: 'Reply with OK.' }],
+    [maxTokensParam]: PROBE_MAX_TOKENS,
+  });
+
+  if (!response) return 'retryable';
+  // Any 200 proves the parameter, including one the cap truncated.
+  if (response.status === 200) return 'accepted';
+  if (response.status === 400) {
+    return complainsAbout(parse(response.text), maxTokensParam) ? 'wrong-token-param' : 'refused';
+  }
+  // Unlike the forced call, this body carries no tool_choice a gateway could refuse,
+  // so a 422 is a verdict on the request rather than a reason to retry.
+  if (response.status === 422) return 'refused';
+  return isRetryableStatus(response.status) ? 'retryable' : 'refused';
 }
 
 /** 'function-call' only for a 200 carrying the output item openaiBackend reads. */

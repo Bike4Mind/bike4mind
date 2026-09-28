@@ -15,6 +15,14 @@ export enum ApiKeyScope {
    *  call chat/completions - a leaked bridge key has the narrow blast
    *  radius of a sprite-spawning credential, not a billable AI key. */
   CC_BRIDGE = 'cc-bridge:connect',
+  /**
+   * Read the key owner's OWN commercial state - tier, credit balance, entitlement
+   * keys - via `GET /api/v1/me`. Split from the AI scopes on purpose: a key minted
+   * to generate text has no business enumerating what its owner has paid for. It
+   * gates only `GET /api/v1/me` and adds no other reach, so it carries the `:read`
+   * suffix that puts it in the New-Key modal's read-only preset.
+   */
+  ME_READ = 'me:read',
   ADMIN = 'admin:*',
   MARKETING_REPORTS_READ = 'marketing-reports:read',
   MARKETING_REPORTS_WRITE = 'marketing-reports:write',

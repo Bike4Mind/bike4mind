@@ -177,3 +177,23 @@ export interface PremiumRouteIndexing {
  * identity change. Never declare one that also matches a core key.
  */
 export type PremiumLocalStorageKeyPrefixes = string[];
+
+/** What core hands a reply accessory about the reply it sits under. */
+export interface PremiumReplyAccessoryProps {
+  /** The reply's quest id - the same key the UI side-effect bus dispatches as `dedupeKey`. */
+  questId: string;
+  sessionId: string;
+}
+
+/**
+ * A premium component rendered at the foot of a completed assistant reply, above the
+ * suggested-navigation block. Contributed via `b4mContributions.replyAccessoryExport`
+ * (a module default-exporting the component) and consumed by `PromptReplies` through
+ * the generated `premiumReplyAccessories.generated.ts`.
+ *
+ * Every reply renders every contributor, so an accessory must return `null` for a
+ * reply it has nothing to say about - which is nearly all of them - and must not
+ * fetch per reply to find that out. Same annotate-both-forms rule as routes/nav: the
+ * absent (open-core fork) form is an empty array.
+ */
+export type PremiumReplyAccessory = ComponentType<PremiumReplyAccessoryProps>;

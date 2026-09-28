@@ -57,7 +57,9 @@ vi.mock('@server/services/publish/publishGateToken', () => ({
 
 import handler from '../owner';
 
-type Principal = { id: string; isAdmin?: boolean; mfaPending?: boolean } | undefined;
+type Principal =
+  | { id: string; isAdmin?: boolean; mfaPending?: boolean; oauthGrant?: { scopes: string[]; clientId: string } }
+  | undefined;
 
 const run = (body: unknown, user: Principal) => {
   const { req, res } = createMocks({ method: 'POST', body });
@@ -133,6 +135,36 @@ describe('POST /api/publish/gate/owner - who is admitted', () => {
     gated();
 
     const { res, promise } = run({ path: '/p/u/scope/slug' }, { id: 'root', isAdmin: true, mfaPending: true });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(mocks.setCookie).not.toHaveBeenCalled();
+  });
+
+  // Same hazard as mfaPending, different marker: a relying-party OAuth access token stamps
+  // oauthGrant onto req.user. optionalAuth filters it, but this route keeps its own check because
+  // it is `auth: false` and oauthRouteGate never runs here. An openid-only OAuth token acting as
+  // the owner (or admin) must not walk away with a credential-free proof cookie.
+  it('401s an OAuth token even when it IS the owner', async () => {
+    gated();
+
+    const { res, promise } = run(
+      { path: '/p/u/scope/slug' },
+      { id: 'owner1', oauthGrant: { scopes: ['openid'], clientId: 'c1' } }
+    );
+    await promise;
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(mocks.setCookie).not.toHaveBeenCalled();
+  });
+
+  it('401s an OAuth token carrying an admin subject, who would otherwise unlock every gated artifact', async () => {
+    gated();
+
+    const { res, promise } = run(
+      { path: '/p/u/scope/slug' },
+      { id: 'root', isAdmin: true, oauthGrant: { scopes: ['openid'], clientId: 'c1' } }
+    );
     await promise;
 
     expect(res._getStatusCode()).toBe(401);

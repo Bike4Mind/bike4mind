@@ -1,5 +1,12 @@
 import { REACT_BLESSED_SCRIPT_PATHS, PUBLISH_REACT_DEP_SCRIPTS } from '@bike4mind/common';
 import { checkHasDefaultExport } from '@client/app/utils/artifactParser';
+import {
+  braceSpan,
+  findRelativeImport,
+  scanImportStatements,
+  stripTypeOnlyImports,
+  type ImportStatement,
+} from '@client/app/utils/importStatements';
 import { LUCIDE_WRAPPER_FN } from '@client/app/utils/reactArtifactDeps';
 import { PUBLISH_HOST } from './validateBundle';
 
@@ -8,8 +15,9 @@ import { PUBLISH_HOST } from './validateBundle';
  * self-contained, INERT, eval-free HTML bundle the existing publisher can serve unchanged.
  *
  * This is the SERVER-SIDE counterpart of the in-app render at
- * `apps/client/pages/api/react-artifact-sandbox.ts` (inert mode): same import-rewrite +
- * default-export unwrap + hook-injection steps, and the same transpiler (`@babel/standalone`,
+ * `apps/client/pages/api/react-artifact-sandbox.ts` (inert mode): same import scan (the rewrite
+ * callbacks differ, see replaceImportStatements below) + default-export unwrap + hook-injection
+ * steps, and the same transpiler (`@babel/standalone`,
  * classic runtime) - but the JSX->`React.createElement` step runs once here at publish instead of
  * in the browser, so the published bundle matches the chat preview. The emitted
  * bundle uses only an inline `<script>` (no eval/new Function/document.write/string timers) plus
@@ -66,51 +74,31 @@ function getBabel(): Promise<typeof import('@babel/standalone')> {
   return babelPromise;
 }
 
-// Any relative reference (import/export-from, side-effect import, require) points at a sibling
-// file the single-file bundle can't resolve - reject like the in-app sandbox does.
-const REL_IMPORT_PATTERNS: readonly RegExp[] = [
-  /(?:import|export)\b[^;'"]*\bfrom\s*['"](\.\.?\/[^'"]+)['"]/,
-  /\bimport\s*['"](\.\.?\/[^'"]+)['"]/,
-  /\brequire\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/,
-];
+const WS = /\s/;
 
-function findRelativeImport(source: string): string | null {
-  for (const pattern of REL_IMPORT_PATTERNS) {
-    const m = source.match(pattern);
-    if (m) return m[1];
+// Statement boundaries, the type-only strip and the relative-import guard come from
+// @client/app/utils/importStatements, whose factory source the sandbox preview
+// (apps/client/pages/api/react-artifact-sandbox.ts) evaluates in the browser, so preview and publish
+// find the same imports by construction. The import-rewrite callback below is NOT shared: the
+// sandbox keeps its own (it drops every react import, where this one binds non-hook names).
+export { findRelativeImport, stripTypeOnlyImports };
+
+// Uses the module's scanImportStatements binding (not the factory-internal one) so the survivor
+// tests can stub the scan and prove findSurvivingEsmImport catches what it misses.
+function replaceImportStatements(
+  source: string,
+  opts: { typeKeyword?: boolean; consumeTrailing?: boolean },
+  replace: (statement: ImportStatement, text: string) => string
+): string {
+  const statements = scanImportStatements(source, opts);
+  if (!statements.length) return source;
+  let out = '';
+  let at = 0;
+  for (const statement of statements) {
+    out += source.slice(at, statement.index) + replace(statement, source.slice(statement.index, statement.end));
+    at = statement.end;
   }
-  return null;
-}
-
-/**
- * Remove TypeScript type-only import syntax, which carries no runtime binding. The import rewrite
- * and dependency scan below are regex passes that run BEFORE Babel's typescript preset, so they'd
- * otherwise emit broken `const { type Foo } = ...` or gate a type-only package as a missing runtime
- * dep. Runs on the raw source so the whole pipeline (relative-import guard, dep gating, rewrite)
- * sees value imports only. Idempotent. Kept in sync with the sandbox preview
- * (react-artifact-sandbox.ts).
- *
- * Handles: whole-clause `import type { X } from 'm'` / `import type X from 'm'` (dropped), and
- * inline `import { type X, y } from 'm'` -> `import { y } from 'm'`. A binding literally named
- * `type` (`import type from 'm'`, `import { type as T } from 'm'`) is preserved - `type` is only
- * a modifier when followed by another binding identifier that is not `as`.
- */
-export function stripTypeOnlyImports(source: string): string {
-  return source
-    .replace(/import\s+type\s+[\s\S]*?\s+from\s+['"][^'"]+['"]\s*;?/g, '')
-    .replace(/import\s+([\s\S]*?)\s+from\s+['"][^'"]+['"]\s*;?/g, (stmt: string, clause: string) => {
-      const braceMatch = clause.match(/\{([\s\S]*?)\}/);
-      if (!braceMatch) return stmt;
-      const kept = braceMatch[1]
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean)
-        .filter(spec => !/^type\s+(?!as\b)\w/.test(spec));
-      // No value bindings left and no default/namespace before the brace -> whole import was type-only.
-      const beforeBrace = clause.slice(0, clause.indexOf('{')).replace(/,\s*$/, '').trim();
-      if (!kept.length && !beforeBrace) return '';
-      return stmt.replace(/\{[\s\S]*?\}/, `{ ${kept.join(', ')} }`);
-    });
+  return out + source.slice(at);
 }
 
 /** React APIs pre-injected as bare globals in the bootstrap (see HOOK_GLOBALS). A named import of
@@ -132,8 +120,8 @@ const HOOK_GLOBAL_NAMES: readonly string[] = [
  *    NOT already covered by HOOK_GLOBALS (useLayoutEffect, useId, forwardRef, memo, ...) are bound
  *    from `React` so they resolve instead of throwing ReferenceError at first render.
  *  - other modules map to `require('pkg')`, handling default / named / namespace / mixed forms.
- * Uses lazy `[\s\S]*?` (not greedy `[^;]+`) so adjacent semicolon-less imports (valid via ASI) are
- * not conflated into one broken match. Exported for unit tests.
+ * Statement boundaries come from scanImportStatements, so adjacent semicolon-less imports (valid
+ * via ASI) are not conflated into one broken match. Exported for unit tests.
  */
 export function rewriteImportsToRequire(rawSource: string): string {
   const source = stripTypeOnlyImports(rawSource); // TS type imports have no runtime binding
@@ -149,10 +137,10 @@ export function rewriteImportsToRequire(rawSource: string): string {
         return m ? `${m[1]}: ${m[2]}` : spec;
       })
       .join(', ');
-  return source.replace(/import\s+([\s\S]*?)\s+from\s+['"]([^'"]+)['"]/g, (_match, clauseRaw: string, mod: string) => {
+  const rewritten = replaceImportStatements(source, {}, ({ clause: clauseRaw, specifier: mod }) => {
     const clause = clauseRaw.trim();
-    const namedMatch = clause.match(/\{([\s\S]*)\}/);
-    const namedRaw = namedMatch ? namedMatch[1].trim() : '';
+    const named = braceSpan(clause, true);
+    const namedRaw = named ? clause.slice(named.open + 1, named.close).trim() : '';
     const nsMatch = clause.match(/\*\s+as\s+(\w+)/);
     const defMatch = clause.match(/^(\w+)\b/); // leading bare identifier = default binding
     const hasDefault = !!defMatch && !clause.startsWith('{') && !clause.startsWith('*');
@@ -180,17 +168,65 @@ export function rewriteImportsToRequire(rawSource: string): string {
     if (hasDefault) return `const ${defMatch![1]} = require('${mod}');`;
     return `const ${clause} = require('${mod}');`;
   });
+
+  // The shape above is always rewritable, so a survivor means the scanner missed one. Failing the
+  // publish beats serving a page that dies with "Cannot use import statement outside a module".
+  const survivor = findSurvivingEsmImport(rewritten);
+  if (survivor) {
+    throw new ReactArtifactTranspileError(
+      `Could not rewrite an ESM import for a script bundle: ${JSON.stringify(survivor.slice(0, 120))}`
+    );
+  }
+  return rewritten;
+}
+
+/**
+ * A line-initial `import ... from '<spec>'` still present after the rewrite. Deliberately NOT built
+ * on scanImportStatements - a check sharing the scanner could never catch a gap in it. Each
+ * statement is bounded by the first `;` or quote after it and the cursor only advances, so this
+ * stays linear on the `from`-less input that made the original regexes quadratic.
+ *
+ * The leading class is the one assertPublishableDependencies uses: every whitespace character
+ * except a line terminator, so an import indented with \f or U+00A0 is still line-initial here.
+ *
+ * Known blind spot: a survivor that isn't line-initial (e.g. after a `;` on the same line) escapes
+ * this pattern. Narrow in practice - scanImportStatements has no line anchor and already rewrites
+ * those, so this only misses one if the scanner has separately failed on that input.
+ */
+function findSurvivingEsmImport(code: string): string | null {
+  const lineInitialImport = /^[^\S\n\r\u2028\u2029]*import\s/gm;
+  let m: RegExpExecArray | null;
+  while ((m = lineInitialImport.exec(code)) !== null) {
+    const importEnd = m.index + m[0].length - 1; // the mandatory whitespace char after `import`
+    let p = importEnd;
+    while (p < code.length && code[p] !== ';' && code[p] !== "'" && code[p] !== '"') p++;
+    let r = p + 1;
+    if (p < code.length && code[p] !== ';') {
+      while (r < code.length && code[r] !== "'" && code[r] !== '"') r++;
+      let q = p;
+      while (q > importEnd && WS.test(code[q - 1])) q--;
+      // The full rewritable shape: a non-empty quoted specifier, and `\s+` on BOTH sides of the
+      // clause. A one-space `import from 'x'`, a `}from 'm'` and an empty `from ''` are none of
+      // them rewritable nor scanner matches, so none may trip the net.
+      const quoted = r > p + 1 && r < code.length;
+      if (quoted && q < p && code.slice(q - 4, q) === 'from' && q - 4 - importEnd >= 2 && WS.test(code[q - 5])) {
+        return code.slice(m.index, r + 1);
+      }
+    }
+    // Resume just past the clause terminator, not past `r`: the quote scan for `r` may cross a
+    // line terminator, and skipping to it would step over a line-initial import on the next line.
+    // Runs stay disjoint either way (the next start is past this statement's first quote/`;`).
+    lineInitialImport.lastIndex = p + 1;
+  }
+  return null;
 }
 
 /** Module specifiers from real `import ... from '...'` statements (non-relative only). */
 function extractImportedModules(rawSource: string): string[] {
   const source = stripTypeOnlyImports(rawSource); // don't gate a type-only import as a runtime dep
   const mods = new Set<string>();
-  const re = /import\s+[\s\S]*?\s+from\s+['"]([^'"]+)['"]/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(source)) !== null) {
-    const mod = m[1];
-    if (!mod.startsWith('.') && !mod.startsWith('/')) mods.add(mod);
+  for (const { specifier } of scanImportStatements(source)) {
+    if (!specifier.startsWith('.') && !specifier.startsWith('/')) mods.add(specifier);
   }
   return [...mods];
 }
@@ -205,7 +241,11 @@ export function assertPublishableDependencies(source: string): void {
   // Bare side-effect imports (`import 'x';`) match neither extractImportedModules nor the rewrite,
   // so they would survive into the classic inline <script> and blank the page (parse error before
   // the render try/catch). Reject cleanly instead.
-  if (/^\s*import\s+['"]/m.test(source)) {
+  // The leading run excludes line terminators rather than spelling out [ \t]: /m already anchors
+  // ^ at every line start, so a run that crossed one only re-reached a position ^ matches anyway,
+  // and excluding them is what stops a file of bare newlines from rescanning to end at each start.
+  // Every other \s character stays in, so \f, \v and \u00a0 before an import still match.
+  if (/^[^\S\n\r\u2028\u2029]*import\s+['"]/m.test(source)) {
     throw new ReactArtifactTranspileError(
       'Side-effect imports (import "...") are not supported. Import a default or named binding, or inline the code.'
     );
@@ -215,6 +255,26 @@ export function assertPublishableDependencies(source: string): void {
       throw new UnsupportedReactDependencyError(dep);
     }
   }
+}
+
+/**
+ * Unwrap the default export into the local the bootstrap reads. Handles BOTH forms
+ * checkHasDefaultExport accepts - `export default X` and `export { X as default }` - because Babel
+ * (preset-react only) leaves module syntax untouched, so an unhandled `export { ... }` would
+ * survive into the classic inline <script> and fail to parse (silently blanking the page).
+ * Anchored to line-start (`m`): Babel emits top-level exports at column 0, so this rewrites the
+ * real statement but NOT a literal "export default ..." embedded in a string / JSX text. The
+ * leading run excludes line terminators for the reason spelled out on the side-effect guard above,
+ * and both forms keep it in a capture so the statement's indentation survives the rewrite.
+ * Exported for unit tests.
+ */
+export function unwrapDefaultExport(transformed: string): string {
+  return transformed
+    .replace(/^([^\S\n\r\u2028\u2029]*)export\s+default\s+/gm, '$1const __DEFAULT_EXPORT__ = ')
+    .replace(
+      /^([^\S\n\r\u2028\u2029]*)export\s*\{\s*([A-Za-z_$][\w$]*)\s+as\s+default\s*\}\s*;?/gm,
+      '$1const __DEFAULT_EXPORT__ = $2;'
+    );
 }
 
 /**
@@ -257,15 +317,7 @@ export async function transpileReactSource(source: string): Promise<string> {
     throw new ReactArtifactTranspileError('JSX transform produced no output.');
   }
 
-  // Unwrap the default export into a local the bootstrap reads. Handle BOTH forms that
-  // checkHasDefaultExport accepts - `export default X` and `export { X as default }` - because
-  // Babel (preset-react only) leaves module syntax untouched, so an unhandled `export { ... }`
-  // would survive into the classic inline <script> and fail to parse (silently blanking the page).
-  const unwrapped = transformed
-    // Anchored to line-start (`m`): Babel emits top-level exports at column 0, so this rewrites the
-    // real statement but NOT a literal "export default ..." embedded in a string / JSX text.
-    .replace(/^(\s*)export\s+default\s+/gm, '$1const __DEFAULT_EXPORT__ = ')
-    .replace(/^\s*export\s*\{\s*([A-Za-z_$][\w$]*)\s+as\s+default\s*\}\s*;?/gm, 'const __DEFAULT_EXPORT__ = $1;');
+  const unwrapped = unwrapDefaultExport(transformed);
 
   // Authoritative default-export check: checkHasDefaultExport (the pre-check) is intentionally
   // lenient (unanchored) and matches "export default" even inside a string, so a source whose only
