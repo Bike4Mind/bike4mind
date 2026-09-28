@@ -38,6 +38,30 @@ describe('rateLimit middleware', () => {
     expect(next).toHaveBeenCalledWith(); // no error → allowed
   });
 
+  it('counts against a caller-supplied subject instead of the user, for a per-resource cap', async () => {
+    // A per-user cap on an expensive per-resource action bounds one caller, not the resource: N
+    // principals with rights to it each get the full allowance. `subject` is what lets a route bound
+    // the resource itself.
+    const next = vi.fn();
+    await rateLimit({ limit: 6, windowMs: 60_000, bucket: 'b', subject: () => 'lake:lake-9' })(
+      makeReq(),
+      makeRes(),
+      next
+    );
+
+    expect(tryIncrementMock).toHaveBeenCalledWith('rate-limit:lake:lake-9:b', 6, 60_000);
+    expect(next).toHaveBeenCalledWith();
+  });
+
+  it('falls back to the default subject when the resolver returns undefined', async () => {
+    // Falling back can only make the limit STRICTER (the caller's own bucket); it must never leave
+    // the request uncounted.
+    const next = vi.fn();
+    await rateLimit({ limit: 6, windowMs: 60_000, bucket: 'b', subject: () => undefined })(makeReq(), makeRes(), next);
+
+    expect(tryIncrementMock).toHaveBeenCalledWith('rate-limit:user-1:b', 6, 60_000);
+  });
+
   it('resolves the limit per request when given a resolver function', async () => {
     const next = vi.fn();
     const limitResolver = vi.fn(async () => 42);

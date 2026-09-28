@@ -2,6 +2,7 @@ import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { ChatModelName } from '../../models';
 import { IConversationContext } from './SessionTypes';
+import type { PersistedSessionSummaryTrigger } from '../../constants/sessionSummary';
 import { Permission } from './ShareableDocumentTypes';
 
 /**
@@ -161,7 +162,7 @@ export interface IAdminSupportSession {
   hasSummary: boolean;
   summaryAt?: Date;
   summaryModelId?: ChatModelName;
-  summaryTrigger?: string;
+  summaryTrigger?: PersistedSessionSummaryTrigger;
   hasContextSummary: boolean;
   contextSummaryAt?: Date;
   contextSummaryModelId?: ChatModelName;

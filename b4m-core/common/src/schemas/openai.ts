@@ -1,4 +1,4 @@
-import { ImageModels } from '../models';
+import { IMAGE_SIZE_CONSTRAINTS, ImageModels } from '../models';
 import { z } from 'zod';
 import { BFL_IMAGE_MODELS } from './bfl';
 import { XAI_IMAGE_MODELS } from './xai';
@@ -53,16 +53,11 @@ export const ALL_IMAGE_MODELS = [
   ...GEMINI_IMAGE_MODELS,
 ] as const;
 
-export const OPENAI_GPT_IMAGE_1_IMAGE_SIZES = ['1024x1024', '1024x1536', '1536x1024'] as const;
+export const OPENAI_GPT_IMAGE_1_IMAGE_SIZES = IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes;
+/** The UI presets plus the tier's non-resolution `autoSize`, which the picker cannot render. */
 export const OPENAI_GPT_IMAGE_2_IMAGE_SIZES = [
-  '1024x1024',
-  '1536x1024',
-  '1024x1536',
-  '2048x2048',
-  '2048x1152',
-  '3840x2160',
-  '2160x3840',
-  'auto',
+  ...IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.sizes,
+  IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.autoSize,
 ] as const;
 export const BFL_IMAGE_SIZES = ['1024x768'] as const;
 
@@ -82,6 +77,11 @@ export type ImageSizeFromSchema = z.infer<typeof ImageSizeSchema>;
 // because OpenAI chooses the render effort per request and image credits are held once, before
 // the call, with no reconciliation afterwards. On gpt-image-2 @1024x1024 that is $0.211 rather
 // than the $0.053 a mid-tier request costs. Pass an explicit tier to pay for that tier.
+//
+// OMITTING the field is not the same as 'auto': a GPT-Image generation with no quality is
+// rendered and billed at 'medium'. The tier is pinned on the way to OpenAI rather than left to
+// its auto-selection, so a bare request costs what it says and renders what it costs. Ask for
+// 'auto' if you want OpenAI to choose the effort.
 export const OPENAI_IMAGE_QUALITIES = ['standard', 'hd', 'low', 'medium', 'high', 'auto'] as const;
 export const OpenAIImageQualitySchema = z.enum(OPENAI_IMAGE_QUALITIES);
 export type OpenAIImageQuality = z.infer<typeof OpenAIImageQualitySchema>;

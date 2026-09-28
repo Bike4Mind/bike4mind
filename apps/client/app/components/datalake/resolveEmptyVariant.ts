@@ -7,7 +7,8 @@
  * `lakes-error` is separate from `no-lakes` on purpose - a failed read must never render as a
  * confident zero.
  */
-export type DataLakeEmptyVariant = 'no-selection' | 'no-lakes' | 'lakes-error' | 'lake-empty' | 'all-lakes-empty';
+export type DataLakeEmptyVariant =
+  'no-selection' | 'no-lakes' | 'lakes-error' | 'lake-empty' | 'lakes-empty' | 'all-lakes-empty';
 
 export interface EmptyVariantInputs {
   /** The lake-list read failed. Takes precedence over every other signal. */
@@ -23,8 +24,12 @@ export interface EmptyVariantInputs {
    * retire first-run guidance entirely. "No lakes of your own" is the question being asked.
    */
   manageableLakeCount: number;
-  /** Whether a specific lake is currently scoped. */
-  hasSelectedLake: boolean;
+  /**
+   * How many lakes the scope names. A COUNT rather than a boolean because the empty-scope copy
+   * differs at one ("this lake has no files") and several ("these lakes have none"), and a
+   * boolean made the multi-lake scope borrow the singular's wording.
+   */
+  selectedLakeCount: number;
   /** Nothing to browse in the CURRENT scope - says nothing about how many lakes exist. */
   isScopeEmpty: boolean;
 }
@@ -56,14 +61,15 @@ export function resolveEmptyVariant({
   lakesLoading,
   lakeCount,
   manageableLakeCount,
-  hasSelectedLake,
+  selectedLakeCount,
   isScopeEmpty,
 }: EmptyVariantInputs): DataLakeEmptyVariant {
   if (lakesError) return 'lakes-error';
   if (lakesLoading) return 'no-selection';
   if (lakeCount === 0) return 'no-lakes';
   if (isScopeEmpty) {
-    if (hasSelectedLake) return 'lake-empty';
+    if (selectedLakeCount === 1) return 'lake-empty';
+    if (selectedLakeCount > 1) return 'lakes-empty';
     // Nothing to browse AND nothing of the caller's own: a genuine first run, even though a
     // read-only built-in lake is listed. Gated on isScopeEmpty so this can never appear beside a
     // populated tree - "create your first lake" over someone else's browsable content is its own lie.

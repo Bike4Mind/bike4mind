@@ -1132,19 +1132,35 @@ describe('retrieve_knowledge_content untrusted-content delimiter (#1659)', () =>
   });
 
   /**
-   * #2236 names only the search and forced-retrieval headers, but this is the third channel that
-   * heads retrieved content for the model. A dateless header here would let one turn cite the same
-   * document dated via search and undated via retrieve.
+   * The header must stay undated even for a file that HAS a `createdAt`, which every stored file
+   * does: that timestamp is when the file was uploaded, so heading a decade-old document with it
+   * tells the model the document is recent. Asserting the whole header line rather than just the
+   * absence of ' - dated' keeps this from passing vacuously if the header shape is rewritten.
    */
-  it('heads the document with its date, and omits the clause when it has none', async () => {
-    const dated = await runById(retrievableCtx('body', { createdAt: new Date('2026-08-14T09:30:00.000Z') }));
-    expect(dated).toContain(`### Handbook.pdf (ID: ${FILE_ID}) - dated 2026-08-14`);
-    // The suffix must not create a second header or defang ours.
-    expect(dated.match(/^### /gm)).toHaveLength(1);
+  it('heads the document undated even when the file carries an upload timestamp', async () => {
+    const withUploadTime = await runById(retrievableCtx('body', { createdAt: new Date('2026-08-14T09:30:00.000Z') }));
+    expect(withUploadTime).toContain(`### Handbook.pdf (ID: ${FILE_ID})\nTags:`);
+    expect(withUploadTime).not.toMatch(/dated|2026-08-14/);
+    expect(withUploadTime.match(/^### /gm)).toHaveLength(1);
 
-    const undated = await runById(retrievableCtx('body'));
-    expect(undated).toContain(`### Handbook.pdf (ID: ${FILE_ID})\n`);
-    expect(undated).not.toContain(' - dated');
+    const noUploadTime = await runById(retrievableCtx('body'));
+    expect(noUploadTime).toContain(`### Handbook.pdf (ID: ${FILE_ID})\nTags:`);
+  });
+
+  /**
+   * Regression guard for #3047/#3113: a previous attempt at dated headers silently dropped the
+   * date on this exact channel. `documentDate` (#3048) is distinct from `createdAt` above - it is
+   * the document's own authored vintage, not upload time - and must reach the header when present.
+   */
+  it('appends the document date clause when the file carries a documentDate (#3048)', async () => {
+    const out = await runById(retrievableCtx('body', { documentDate: new Date('2019-03-04T00:00:00.000Z') }));
+    expect(out).toContain(`### Handbook.pdf (ID: ${FILE_ID}) - dated 2019-03-04\n`);
+  });
+
+  it('heads the document undated when documentDate is explicitly null', async () => {
+    const out = await runById(retrievableCtx('body', { documentDate: null }));
+    expect(out).toContain(`### Handbook.pdf (ID: ${FILE_ID})\nTags:`);
+    expect(out).not.toContain('dated');
   });
 
   it('leaves the retrieved-count line outside the block', async () => {
@@ -1457,7 +1473,17 @@ describe('retrieve_knowledge_content cross-document conflict note', () => {
     };
   }
 
-  async function runQuery(byFileId: Record<string, string>) {
+  /** The chips shipped alongside the note - the reader's half of the same signal. */
+  function citablesFrom(ctx: ReturnType<typeof makeContext>) {
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const withCitables = calls.find(([payload]) => payload?.promptMeta?.citables);
+    return (withCitables?.[0].promptMeta.citables ?? []) as Array<{
+      id: string;
+      metadata?: { conflictsWith?: string[] };
+    }>;
+  }
+
+  async function runQueryWithContext(byFileId: Record<string, string>) {
     const ctx = makeContext({
       retrievalFilter: undefined,
       db: {
@@ -1469,8 +1495,30 @@ describe('retrieve_knowledge_content cross-document conflict note', () => {
       data: Object.keys(byFileId).map(id => makeFile({ id, fileName: `${id}.pdf` })),
     });
     const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
-    return (await tool.toolFn({ query: 'uptime' })) as string;
+    return { out: (await tool.toolFn({ query: 'uptime' })) as string, ctx };
   }
+
+  async function runQuery(byFileId: Record<string, string>) {
+    return (await runQueryWithContext(byFileId)).out;
+  }
+
+  it('marks both conflicting documents on the citation chips (#3041)', async () => {
+    // The statusUpdate that ships these chips fires before the note is even assembled, so this also
+    // pins that the detector runs early enough to reach them.
+    const { ctx } = await runQueryWithContext({ 'file-a': 'Uptime is 99.9%.', 'file-b': 'Uptime is 95%.' });
+
+    const citables = citablesFrom(ctx);
+    expect(citables.map(c => c.id)).toEqual(['file-a', 'file-b']);
+    expect(citables.find(c => c.id === 'file-a')?.metadata?.conflictsWith).toEqual(['file-b']);
+    expect(citables.find(c => c.id === 'file-b')?.metadata?.conflictsWith).toEqual(['file-a']);
+  });
+
+  it('leaves the chips unmarked when the documents agree', async () => {
+    const { ctx } = await runQueryWithContext({ 'file-a': 'Uptime is 99.9%.', 'file-b': 'Uptime is 99.9%.' });
+
+    // Absent, not an empty array: a chip carrying `conflictsWith: []` would badge with no partner.
+    for (const citable of citablesFrom(ctx)) expect(citable.metadata?.conflictsWith).toBeUndefined();
+  });
 
   it('keeps the note at column 0, outside the untrusted block', async () => {
     const out = await runQuery({ 'file-a': 'Uptime is 99.9%.', 'file-b': 'Uptime is 95%.' });

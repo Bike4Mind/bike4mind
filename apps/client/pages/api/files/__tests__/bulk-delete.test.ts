@@ -159,8 +159,11 @@ describe('bulk-delete - data-lake stats', () => {
     await run([owned.id, shared.id], res);
 
     // The unshared file's lake must not be dragged into the recompute: its membership never moved.
-    expect(h.findByDatalakeTag).toHaveBeenCalledTimes(1);
+    // Asserted by which tag is looked up, not by a call count: an owned delete now resolves its
+    // own member lakes a second time to record the membership `removed` event.
     expect(h.findByDatalakeTag).toHaveBeenCalledWith(LAKE.datalakeTag);
+    expect(h.findByDatalakeTag).not.toHaveBeenCalledWith('datalake:orga:other-lake');
+    expect(h.setStats).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -170,7 +173,9 @@ describe('bulk-delete - data-lake stats', () => {
  * the attribution can be pinned - drop the route's `auditPrincipal` line and every other suite
  * stays green while key-driven deletes are recorded as the owning human's own edit.
  */
-describe('bulk-delete - auto-activate attribution', () => {
+// A bulk delete that leaves a lake with members no longer publishes a draft lake as a
+// side effect - only the explicit promoteDataLake door does.
+describe('bulk-delete - draft lakes stay draft', () => {
   const FILE_ID = '507f1f77bcf86cd799439011';
 
   beforeEach(() => {
@@ -182,32 +187,19 @@ describe('bulk-delete - auto-activate attribution', () => {
     h.findByDatalakeTag.mockResolvedValue({ ...LAKE, status: 'draft' });
     h.computeDataLakeStats.mockResolvedValue({ fileCount: 2, totalSizeBytes: 200, totalChunkedChars: 0 });
     h.setStats.mockResolvedValue(undefined);
-    h.activateIfDraft.mockResolvedValue(true);
     h.recordConfigChange.mockResolvedValue({});
     const file = memberFile(FILE_ID);
     h.findById.mockResolvedValue(file);
     h.findByIdAndUserId.mockResolvedValue(file);
   });
 
-  const recorded = () => {
-    expect(h.recordConfigChange).toHaveBeenCalledTimes(1);
-    return h.recordConfigChange.mock.calls[0][0];
-  };
-
-  it('names the deleting user as the principal on a session request', async () => {
+  it("corrects a draft lake's stats on bulk delete without publishing it", async () => {
     const { res } = makeRes();
     await run([FILE_ID], res);
-    expect(recorded()).toMatchObject({ action: 'auto-activate', principalKind: 'user', principalId: OWNER });
-  });
 
-  it('names the KEY, not the human it acts for, on an API-key request', async () => {
-    const { res } = makeRes();
-    await run([FILE_ID], res, { apiKeyInfo: { keyId: 'key-abc' } });
-    expect(recorded()).toMatchObject({
-      principalKind: 'apiKey',
-      principalId: 'key-abc',
-      onBehalfOfUserId: OWNER,
-    });
+    expect(h.setStats).toHaveBeenCalledWith(LAKE.id, expect.anything());
+    expect(h.activateIfDraft).not.toHaveBeenCalled();
+    expect(h.recordConfigChange).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'auto-activate' }));
   });
 });
 

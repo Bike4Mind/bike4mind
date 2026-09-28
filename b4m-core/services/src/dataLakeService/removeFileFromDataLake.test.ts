@@ -119,6 +119,28 @@ describe('removeFileFromDataLake', () => {
       totalSizeBytes: 0,
       totalChunkedChars: 0,
       restoreTokenMinted: false,
+      statsUpdated: true,
+    });
+  });
+
+  it('a throwing stats recompute is warned and swallowed, reporting the removal as committed', async () => {
+    const { db, logger } = makeAdapters();
+    db.fabFiles.computeDataLakeStats.mockRejectedValue(new Error('setStats boom'));
+
+    const result = await removeFileFromDataLake(actor, 'lake1', 'f1', { db, logger });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringMatching(/stats recompute failed/i),
+      expect.objectContaining({ dataLakeId: 'lake1', fabFileId: 'f1' })
+    );
+    expect(db.lakeMembershipRemovals.upsertRemoval).toHaveBeenCalled();
+    expect(result).toEqual({
+      success: true,
+      fileCount: 0,
+      totalSizeBytes: 0,
+      totalChunkedChars: 0,
+      restoreTokenMinted: true,
+      statsUpdated: false,
     });
   });
 });

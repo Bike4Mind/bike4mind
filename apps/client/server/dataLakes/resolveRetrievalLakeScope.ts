@@ -60,6 +60,10 @@ export function withStaticRegistryBypass(
     // despite the similar name - and so skip that derivation's reachability intersection, for
     // admin/developer callers only.
     lakeViewComplete: scope.lakeViewComplete,
+    // Carried through unchanged, same reason as lakeViewComplete: widening a privileged caller's
+    // reach via the static registry says nothing about how many DB lakes their own org/tags
+    // surfaced but couldn't pass the gate for (#3055).
+    excludedByAccessCount: scope.excludedByAccessCount,
     dataLakeTags: dedupe([...scope.dataLakeTags, ...registry.map(lake => lake.datalakeTag)]),
     dataLakeTagPrefixes: dedupe([...scope.dataLakeTagPrefixes, ...registry.map(lake => lake.fileTagPrefix)]),
     scopedTagPrefixes: scope.scopedTagPrefixes,
@@ -191,6 +195,13 @@ export async function resolveRetrievalLakeScopeForUser(
     },
     user: { id: user.id, tags: user.tags ?? [] },
     entitlementKeys,
+    // The subscription/registry arm propagates a failure instead of degrading to `[]`, so this path
+    // has no short key list to vouch for there. NOT true of the partner arm: partnerRules' rule load
+    // fails closed to an empty map, so a rules-DB outage silently drops partner-granted keys and
+    // this `true` overstates them. Deriving it needs that arm to surface its own degradation first.
+    // A future swallow-and-degrade here must set this from the value it degrades on, not leave the
+    // `true` standing.
+    entitlementKeysResolved: true,
     logger: opts.logger,
   });
 

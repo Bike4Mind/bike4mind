@@ -34,7 +34,12 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CodeIcon from '@mui/icons-material/Code';
 import { toast } from 'sonner';
-import { WhatsNewConfig, WHATS_NEW_VALIDATION_LIMITS } from '@bike4mind/common';
+import {
+  WhatsNewConfig,
+  WHATS_NEW_VALIDATION_LIMITS,
+  WHATS_NEW_DEFAULT_REPOSITORY,
+  WHATS_NEW_DEFAULT_TARGET_BRANCH,
+} from '@bike4mind/common';
 import {
   getDefaultTemplateString,
   TEMPLATE_VARIABLE_DOCS,
@@ -83,8 +88,8 @@ export const AdminWhatsNewConfiguration: React.FC = () => {
     maxCommitMessageLength: 200,
     maxPRBodyLength: 500,
     maxChangelogLength: 1000,
-    repository: 'MillionOnMars/lumina5',
-    targetBranch: 'prod',
+    repository: WHATS_NEW_DEFAULT_REPOSITORY,
+    targetBranch: WHATS_NEW_DEFAULT_TARGET_BRANCH,
   });
 
   useEffect(() => {
@@ -229,7 +234,7 @@ export const AdminWhatsNewConfiguration: React.FC = () => {
         <FormControl error={!!config.repository && !/^[\w.-]+\/[\w.-]+$/.test(config.repository)}>
           <FormLabel>Repository</FormLabel>
           <Input
-            value={config.repository || 'MillionOnMars/lumina5'}
+            value={config.repository || WHATS_NEW_DEFAULT_REPOSITORY}
             onChange={e => setConfig({ ...config, repository: e.target.value })}
             placeholder="e.g., YourOrg/your-repo"
             data-testid="whats-new-repository-input"
@@ -243,7 +248,7 @@ export const AdminWhatsNewConfiguration: React.FC = () => {
         <FormControl error={!!config.targetBranch && !/^[\w./-]+$/.test(config.targetBranch)}>
           <FormLabel>Target Branch</FormLabel>
           <Input
-            value={config.targetBranch || 'prod'}
+            value={config.targetBranch || WHATS_NEW_DEFAULT_TARGET_BRANCH}
             onChange={e => setConfig({ ...config, targetBranch: e.target.value })}
             placeholder="e.g., prod, main"
             data-testid="whats-new-target-branch-input"

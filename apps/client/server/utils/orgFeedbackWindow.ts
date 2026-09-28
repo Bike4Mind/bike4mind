@@ -1,19 +1,23 @@
 // The date window shared by the org feedback report and its drill-down list, so a cell's count
 // and the rows behind it can never disagree about which days they cover.
 
-import { dayjs } from '@bike4mind/common';
+import { dayjs, FEEDBACK_ROLLUP_MAX_WINDOW_DAYS } from '@bike4mind/common';
 import { assertDateInRange, dateParam } from '@server/utils/dateParam';
 import { BadRequestError } from '@server/utils/errors';
 import { z } from 'zod';
 
+// Same length as the personal rollup's FEEDBACK_ROLLUP_DEFAULT_WINDOW_DAYS
+// (app/utils/feedbackRollupWindow.ts), so the two views open on the same stretch of time.
 const DEFAULT_WINDOW_DAYS = 30;
 
 // Shared by the counts route and the LLM summary route: a year of feedback is already more
 // than one prompt can carry, and these routes run the $facet aggregate and its paged sibling,
 // which are the most expensive reads in this area - byDay alone emits one row per day of whatever
 // range the caller asks for, so leaving them unbounded while the cheaper path is capped gets it
-// backwards.
-export const MAX_WINDOW_DAYS = 365;
+// backwards. One constant for every feedback window, re-exported under the name these routes and
+// their tests already import. This is what moved the org ceiling from a local 365 to 366 covered
+// days; the comparison below did not move it.
+export const MAX_WINDOW_DAYS = FEEDBACK_ROLLUP_MAX_WINDOW_DAYS;
 const MAX_WINDOW_MS = MAX_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 
 const windowSchema = z.object({
@@ -24,7 +28,11 @@ const windowSchema = z.object({
 /** The one place both window helpers below enforce ordering and the ceiling. */
 function assertWindowBounds(fromDate: Date, toDate: Date): void {
   if (fromDate > toDate) throw new BadRequestError('Invalid range: from must not be after to');
-  if (toDate.getTime() - fromDate.getTime() > MAX_WINDOW_MS) {
+  // Both bounds are inclusive, so the gap measures one instant less than the coverage it stands
+  // for. `>=` is the rule FeedbackRollupQuerySchema applies to the same constant; both callers
+  // below round `to` out to 23:59:59.999, so the gap never lands on the boundary and `>` would
+  // read the same here - it is written this way so the two sides state one rule, not two.
+  if (toDate.getTime() - fromDate.getTime() >= MAX_WINDOW_MS) {
     throw new BadRequestError(`Range must not exceed ${MAX_WINDOW_DAYS} days`);
   }
 }

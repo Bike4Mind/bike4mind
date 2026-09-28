@@ -51,6 +51,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   lakeMembershipDecisionRepository: {},
   lakeMembershipRemovalRepository: {},
+  lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@server/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: { dataLakeConfigChanges: {} } }));

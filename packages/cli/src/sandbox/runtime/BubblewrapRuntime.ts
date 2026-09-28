@@ -73,9 +73,13 @@ export class BubblewrapRuntime implements SandboxRuntime {
     // Write restrictions: if writeOnlyToWorkingDir, make home read-only
     // (already done above with --ro-bind for home)
 
-    // Namespace isolation
+    // Namespace isolation. Egress is fail-closed: share the net namespace only
+    // when network is explicitly enabled (proxy handles filtering). --unshare-all
+    // already unshares net, so in the disabled case --unshare-net changes nothing
+    // and is emitted purely as an explicit, greppable marker of intent; --share-net
+    // is what actually re-grants the namespace when enabled.
     args.push('--unshare-all');
-    args.push('--share-net'); // Keep network access (proxy handles filtering in future)
+    args.push(options.networkEnabled ? '--share-net' : '--unshare-net');
     args.push('--die-with-parent');
 
     // Seccomp profile (optional)

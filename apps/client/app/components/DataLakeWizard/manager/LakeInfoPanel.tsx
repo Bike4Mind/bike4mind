@@ -16,6 +16,8 @@ import AddIcon from '@mui/icons-material/Add';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import PeopleOutlineIcon from '@mui/icons-material/PeopleOutline';
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
+import PublishOutlinedIcon from '@mui/icons-material/PublishOutlined';
+import UnpublishedOutlinedIcon from '@mui/icons-material/UnpublishedOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
@@ -26,6 +28,8 @@ import { TREE_SCROLL_SX } from '@client/app/components/datalake/treeChrome';
 import {
   useArchiveDataLake,
   usePermanentDeleteDataLake,
+  usePromoteDataLake,
+  useDemoteDataLake,
   useUnderChunkedCount,
   useRechunkDataLake,
   useLakeConvergencePlan,
@@ -36,14 +40,17 @@ import {
 } from '@client/app/hooks/data/dataLakes';
 import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined';
 import { toast } from 'sonner';
+import { useTranslation } from 'react-i18next';
 import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import useStartChatWithLake from '@client/app/hooks/useStartChatWithLake';
 import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptyState';
 import LakeHealthBadge from '@client/app/components/datalake/LakeHealthBadge';
 import DuplicateAdmissionsChip from '@client/app/components/datalake/DuplicateAdmissionDialog';
+import LakeFindingsChip from '@client/app/components/datalake/LakeFindingsDialog';
 import LakeDriveStatusChip from '@client/app/components/datalake/LakeDriveStatusChip';
 import { lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
 import type { IDataLakeBatchSummary } from '@bike4mind/common';
+import AddExistingFilesModal from './AddExistingFilesModal';
 import type { ManagerLake } from './shared';
 
 // Right pane: selected lake's details + management actions
@@ -83,10 +90,16 @@ export function LakeInfoPanel({
   onDeleted: () => void;
 }) {
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
+  const { t } = useTranslation();
   const archiveLake = useArchiveDataLake();
   const deleteLake = usePermanentDeleteDataLake();
+  const promoteLake = usePromoteDataLake();
+  const demoteLake = useDemoteDataLake();
   const startChatWithLake = useStartChatWithLake();
   const [startingChat, setStartingChat] = useState(false);
+  // Mounted only while open so the picker's file query does not fire (and page through the
+  // caller's whole knowledge base) until it is actually needed.
+  const [addExistingOpen, setAddExistingOpen] = useState(false);
   const visibility = lakeVisibilityLabel(lake);
   // "Rebuild passages": gated on canRebuild, NOT canManage - a fallback (built-in) lake has no
   // document to manage but can still be rebuilt by an admin (see assertLakeRebuildAccess). Only
@@ -188,6 +201,7 @@ export function LakeInfoPanel({
             variant="soft"
             color="primary"
             startDecorator={<ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />}
+            aria-label={`Start chat with ${lake.name}`}
             data-testid={`datalake-startchat-btn-${lake.id}`}
             loading={startingChat}
             onClick={async () => {
@@ -215,6 +229,7 @@ export function LakeInfoPanel({
                 variant="soft"
                 color="primary"
                 startDecorator={<AddIcon sx={{ fontSize: 16 }} />}
+                aria-label={`Add files to ${lake.name}`}
                 data-testid={`datalake-addfiles-btn-${lake.id}`}
                 onClick={() => openWizardForLake(toWizardTargetLake(lake))}
                 sx={{ flexShrink: 0, fontSize: '13px' }}
@@ -223,9 +238,21 @@ export function LakeInfoPanel({
               </Button>
               <Button
                 size="sm"
+                variant="soft"
+                color="primary"
+                startDecorator={<AddIcon sx={{ fontSize: 16 }} />}
+                data-testid={`datalake-addexisting-btn-${lake.id}`}
+                onClick={() => setAddExistingOpen(true)}
+                sx={{ flexShrink: 0, fontSize: '13px' }}
+              >
+                {t('file_browser.add_existing_title', 'Add existing files')}
+              </Button>
+              <Button
+                size="sm"
                 variant="outlined"
                 color="neutral"
                 startDecorator={<SettingsOutlinedIcon sx={{ fontSize: 16 }} />}
+                aria-label={`Settings for ${lake.name}`}
                 data-testid={`datalake-settings-btn-${lake.id}`}
                 onClick={onOpenSettings}
                 sx={{ flexShrink: 0, fontSize: '13px' }}
@@ -245,6 +272,43 @@ export function LakeInfoPanel({
                   Access
                 </Button>
               </Tooltip>
+              {/* Draft is excluded from grounding until an owner or admin explicitly publishes it
+                  - adding files no longer does this as a side effect. An ABSENT status counts as
+                  draft here, matching promoteDataLake and activateIfDraft's `$in: ['draft', null]`:
+                  a lake written before the field existed is just as invisible to retrieval, so it
+                  must still get the affordance. */}
+              {(!lake.status || lake.status === 'draft') && (
+                <Tooltip title="Publish this lake so it starts grounding answers" size="sm">
+                  <Button
+                    size="sm"
+                    variant="soft"
+                    color="success"
+                    startDecorator={<PublishOutlinedIcon sx={{ fontSize: 16 }} />}
+                    data-testid={`datalake-promote-btn-${lake.id}`}
+                    loading={promoteLake.isPending}
+                    onClick={() => promoteLake.mutate(lake.id)}
+                    sx={{ flexShrink: 0, fontSize: '13px' }}
+                  >
+                    Publish
+                  </Button>
+                </Tooltip>
+              )}
+              {lake.status === 'active' && (
+                <Tooltip title="Move back to draft - stops this lake from grounding answers" size="sm">
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    color="neutral"
+                    startDecorator={<UnpublishedOutlinedIcon sx={{ fontSize: 16 }} />}
+                    data-testid={`datalake-demote-btn-${lake.id}`}
+                    loading={demoteLake.isPending}
+                    onClick={() => demoteLake.mutate(lake.id)}
+                    sx={{ flexShrink: 0, fontSize: '13px' }}
+                  >
+                    Move to draft
+                  </Button>
+                </Tooltip>
+              )}
               <Tooltip title="Archive (restorable from the manager home)" size="sm">
                 <Button
                   size="sm"
@@ -261,6 +325,9 @@ export function LakeInfoPanel({
               </Tooltip>
             </>
           )}
+          {lake.canManage && addExistingOpen && (
+            <AddExistingFilesModal lake={lake} open onClose={() => setAddExistingOpen(false)} />
+          )}
           {/* A fallback lake's narrower settings editor (currently grounding mode only), same shape
               as the Rebuild gate below: canManageSettings is a NARROWER flag than canManage, so a
               fallback lake (canManage always false) can still get here. `!lake.canManage` excludes
@@ -272,6 +339,7 @@ export function LakeInfoPanel({
               variant="outlined"
               color="neutral"
               startDecorator={<SettingsOutlinedIcon sx={{ fontSize: 16 }} />}
+              aria-label={`Settings for ${lake.name}`}
               data-testid={`datalake-fallback-settings-btn-${lake.id}`}
               onClick={onOpenFallbackSettings}
               sx={{ flexShrink: 0, fontSize: '13px' }}
@@ -506,6 +574,20 @@ export function LakeInfoPanel({
               {armCounts.metaCount} by lake tag, {armCounts.prefixOnlyCount} by content prefix
             </Chip>
           )}
+          {/* The DECLARATION (who may fill this lake), distinct from the Drive chip below it, which
+              reports whether a folder is actually attached. A lake can be connector-fed with no
+              connection yet. */}
+          {lake.origin === 'connector-fed' && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="neutral"
+              sx={{ fontSize: '11px' }}
+              data-testid={`datalake-origin-chip-${lake.id}`}
+            >
+              Connector-fed
+            </Chip>
+          )}
           {/* Attached-source marker: this panel is where a user comes to inspect or delete a lake,
               and it previously gave no sign a Drive folder was feeding it (#1645). */}
           <LakeDriveStatusChip lakeId={lake.id} organizationId={lake.organizationId} />
@@ -517,6 +599,10 @@ export function LakeInfoPanel({
               is blind to what the owner already decided; this reads the ruling-aware door and is the
               affordance that acts. Gated on canManage to match that door, which refuses a reader. */}
           <DuplicateAdmissionsChip lakeId={lake.id} lakeName={lake.name} canManage={!!lake.canManage} />
+          {/* Cross-document contradictions (#3044): the lake retrieves perfectly and still answers
+              wrongly, because two of its documents disagree. A different axis from the duplicate
+              chip beside it - those are two copies of ONE document, these are two documents. */}
+          <LakeFindingsChip lakeId={lake.id} lakeName={lake.name} canManage={!!lake.canManage} />
           {/* Lake memory: manage-gated state chip + build/rebuild trigger, next to the
               retrievability badge above - a different axis of "can this lake answer well" (extracted
               facts vs raw passages). Hidden entirely while off (no chip for a state nobody can act on). */}

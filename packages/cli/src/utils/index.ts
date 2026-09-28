@@ -1,4 +1,11 @@
-export { generateCliTools, type AgentContext } from './toolsAdapter';
+export {
+  generateCliTools,
+  wrapTools,
+  wrapToolWithPermission,
+  type AgentContext,
+  type WrapToolDeps,
+  type PermissionPromptKind,
+} from './toolsAdapter';
 export { PermissionManager } from './PermissionManager';
 export { generateFileDiffPreview, generateFileCreatePreview, generateFileDeletePreview } from './diffPreview';
 export {

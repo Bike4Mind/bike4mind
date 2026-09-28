@@ -72,7 +72,7 @@ function knowledgeFile(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function makeService(overrides: Record<string, unknown> = {}, uploaded: string[] = []) {
+function makeService(overrides: Record<string, unknown> = {}, uploaded: string[] = [], deleted: string[] = []) {
   const adapters = {
     sessionRepository: createSessionWrites(),
     chatHistoryRepository: createChatHistoryWrites(),
@@ -87,6 +87,9 @@ function makeService(overrides: Record<string, unknown> = {}, uploaded: string[]
     fileStorageService: {
       uploadFile: async (path: string) => {
         uploaded.push(path);
+      },
+      deleteFile: async (path: string) => {
+        deleted.push(path);
       },
     },
     logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
@@ -138,6 +141,7 @@ describe('notebook import writes knowledge files', () => {
         uploadFile: async (_path: string, bytes: Buffer) => {
           written.push(bytes);
         },
+        deleteFile: async () => {},
       },
     }).importNotebooks(
       USER,
@@ -215,7 +219,9 @@ describe('notebook import writes knowledge files', () => {
   it('warns once, not twice, when a file has an unknown type and also fails to write', async () => {
     // Content resolves, so the upload succeeds and the loop reaches the write - which then fails
     // on the missing required `fileName`. That is the only ordering where both warnings compete.
-    const result = await makeService().importNotebooks(
+    const uploaded: string[] = [];
+    const deleted: string[] = [];
+    const result = await makeService({}, uploaded, deleted).importNotebooks(
       USER,
       payload([knowledgeFile({ type: 'SOMETHING_NEWER', name: undefined })]) as never,
       OPTIONS as never
@@ -226,6 +232,11 @@ describe('notebook import writes knowledge files', () => {
     expect(await FabFile.countDocuments({})).toBe(0);
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings?.[0]).toContain('Failed to import knowledge file');
+    // The row never landed, so the object the upload left behind is removed. Without `name` the
+    // entry is named by its export id rather than reported as `"undefined"`.
+    expect(result.warnings?.[0]).toContain('kf-1');
+    expect(uploaded).toHaveLength(1);
+    expect(deleted).toEqual(uploaded);
   });
 
   it('leaves an imported file pending for an out-of-band scan, never stamped clean', async () => {

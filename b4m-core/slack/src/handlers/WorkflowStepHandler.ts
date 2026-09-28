@@ -1,7 +1,7 @@
 import { SQSService } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { SlackClient } from '../SlackClient';
-import { ChatModels, IChatHistoryItem, IUserDocument } from '@bike4mind/common';
+import { ChatModels, IChatHistoryItem, IUserDocument, stripSearchResultCardFences } from '@bike4mind/common';
 import { ChatCompletionInvoke } from '@bike4mind/services/llm';
 import { getSlackDeps, getSlackDb } from '../di/registry';
 
@@ -623,13 +623,15 @@ export class WorkflowStepHandler {
         const quest = await (Quest as any).findById(questId);
 
         if (quest?.status === 'done') {
-          // Return the first reply if available
+          // Return the first reply if available. Stripped here so both callers below
+          // (`outputs.response`, `notificationMessage`) - neither of which has a card
+          // renderer - never see raw model-authored card JSON.
           const response = quest.replies?.[0] || quest.reply || null;
           this.logger.debug('[WorkflowStep] Quest completed', {
             questId,
             hasResponse: !!response,
           });
-          return response;
+          return response ? stripSearchResultCardFences(response, quest.promptMeta?.citables) : response;
         }
 
         if (quest?.status === 'stopped') {

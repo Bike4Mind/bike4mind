@@ -2,6 +2,7 @@ import { IBaseRepository } from './BaseTypes';
 
 export enum TaskScheduleStatus {
   PENDING = 'pending',
+  PROCESSING = 'processing',
   COMPLETED = 'completed',
   FAILED = 'failed',
 }
@@ -46,6 +47,11 @@ export interface IBaseTaskSchedule {
    */
   processDate?: Date;
   /**
+   * The date and time the schedule task was claimed for processing. Doubles as the lease start:
+   * a PROCESSING row whose claim is older than the lease is claimable again.
+   */
+  claimedAt?: Date;
+  /**
    * The date and time the schedule task was created
    */
   createdAt: Date;
@@ -89,5 +95,12 @@ export type ITaskSchedulePayloadMap = {
 
 export type ITaskSchedule = ITaskScheduleResearchTask | ITaskScheduleCustomTask;
 export interface ITaskScheduleRepository extends IBaseRepository<ITaskSchedule> {
-  findAllStatusPendingByProcessDateLessThan: (processDate: Date) => Promise<ITaskSchedule[]>;
+  /**
+   * Atomically take ownership of a single due schedule, flipping it to PROCESSING and stamping
+   * `claimedAt`. Eligible rows are PENDING, or PROCESSING with a claim older than
+   * `leaseExpiredBefore` (an owner that died mid-handler). Returns null when nothing is claimable.
+   * Callers must not read-then-write instead: only the atomic swap keeps overlapping schedulers
+   * from dispatching the same schedule twice.
+   */
+  claimDueTaskSchedule: (processDate: Date, leaseExpiredBefore: Date) => Promise<ITaskSchedule | null>;
 }

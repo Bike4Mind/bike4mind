@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createGetFileStructureTool } from '../index';
-import { mkdtemp, writeFile, rm } from 'fs/promises';
+import { mkdtemp, writeFile, rm, mkdir, symlink, realpath } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -189,7 +189,6 @@ module.exports = { formatName };
     const tool = createGetFileStructureTool();
     const result = await tool.toolFn({ path: '../../../etc/passwd' });
 
-    expect(result).toContain('Error');
     expect(result).toContain('Access denied');
   });
 
@@ -224,5 +223,48 @@ module.exports = { formatName };
     expect(tool.toolSchema.name).toBe('get_file_structure');
     expect(tool.toolSchema.parameters.required).toContain('path');
     expect(tool.toolSchema.parameters.properties).toHaveProperty('path');
+  });
+});
+
+describe('createGetFileStructureTool path confinement (shared realpath validator)', () => {
+  let testDir: string;
+  let originalCwd: string;
+  let outsideDir: string;
+
+  beforeAll(async () => {
+    originalCwd = process.cwd();
+    testDir = await realpath(await mkdtemp(join(tmpdir(), 'gfs-confine-')));
+    process.chdir(testDir);
+    await writeFile(join(testDir, 'a.ts'), 'export const a = 1;\n');
+
+    outsideDir = join(testDir, '..', 'gfs-outside');
+    await mkdir(outsideDir, { recursive: true });
+    await writeFile(join(outsideDir, 'secret.ts'), 'export const secret = 1;\n');
+    // A symlink inside the workspace pointing at the outside dir.
+    await symlink(outsideDir, join(testDir, 'link'));
+  });
+
+  afterAll(async () => {
+    process.chdir(originalCwd);
+    await rm(testDir, { recursive: true, force: true });
+    await rm(outsideDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('denies a symlinked path that resolves outside the workspace', async () => {
+    const tool = createGetFileStructureTool();
+    const result = await tool.toolFn({ path: 'link/secret.ts' });
+    expect(result).toContain('Access denied');
+  });
+
+  it('denies an absolute path outside the workspace', async () => {
+    const tool = createGetFileStructureTool();
+    const result = await tool.toolFn({ path: '/etc/hosts' });
+    expect(result).toContain('Access denied');
+  });
+
+  it('honors an explicitly granted directory', async () => {
+    const tool = createGetFileStructureTool([outsideDir]);
+    const result = await tool.toolFn({ path: join(outsideDir, 'secret.ts') });
+    expect(result).not.toContain('Access denied');
   });
 });

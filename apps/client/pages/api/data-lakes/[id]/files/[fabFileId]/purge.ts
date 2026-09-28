@@ -6,6 +6,7 @@ import {
   changeStorageSize,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
+  dataLakeFindingRepository,
   fabFileRepository,
   fabFileChunkRepository,
   sessionRepository,
@@ -95,6 +96,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
           fabFiles: fabFileRepository,
           fabFileChunks: fabFileChunkRepository,
           sessions: sessionRepository,
+          dataLakeFindings: dataLakeFindingRepository,
           ...lakeConfigAuditDb,
         },
         // Undefined everywhere except self-host OpenSearch - Atlas's vector index lives on the

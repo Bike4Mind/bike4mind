@@ -80,43 +80,64 @@ export function buildApiKeyTable(keys: EffectiveLLMKeys): ApiKeyTable {
 }
 
 /**
- * Listing backends that take no credential. They still need real AWS credentials
- * at dispatch, which a self-host install does not have (its AWS_ACCESS_KEY_ID is
- * the local MinIO credential), so `isSelfHost` withholds them rather than
- * offering choices that can only fail once selected.
+ * The key table for a caller that holds one credential and knows which backend it
+ * belongs to (the syncModelDescriptions script). Keyed by the stated backend, never
+ * by the model id: `deepseek-r1:latest` is an Ollama pull and `moonshot.kimi-*` is
+ * Bedrock, so id text cannot say whose key it is. The AWS-IAM backends get an empty
+ * table - there is no key to pass.
  */
-const KEYLESS_LISTING_BACKENDS: readonly string[] = [ModelBackend.Bedrock, ModelBackend.AWS];
+export function apiKeyTableForBackend(backend: ModelBackend, apiKey: string): ApiKeyTable {
+  return LISTING_KIND[backend] === 'keyless' ? {} : { [backend]: apiKey };
+}
 
 /**
- * Backends with a listing constructor that takes a credential. VoyageAI is
- * deliberately absent: it has no entry in the getAvailableModels fan-out at all,
- * so no caller can list it and a catalog row naming it must fail closed.
+ * How getAvailableModels constructs each backend's listing. Total over
+ * ModelBackend, so a new provider is a compile error here instead of a silent
+ * fail-closed omission.
+ *
+ * - `keyless`: takes no credential. Still needs real AWS credentials at dispatch,
+ *   which a self-host install does not have (its AWS_ACCESS_KEY_ID is the local
+ *   MinIO credential), so `isSelfHost` withholds them rather than offering choices
+ *   that can only fail once selected.
+ * - `keyed`: constructed with a credential from resolveListingKey.
+ * - `unlisted`: no entry in the getAvailableModels fan-out at all (VoyageAI), so no
+ *   caller can list it and a catalog row naming it must fail closed.
  */
-const KEYED_LISTING_BACKENDS: readonly string[] = [
-  ModelBackend.OpenAI,
-  ModelBackend.Anthropic,
-  ModelBackend.Gemini,
-  ModelBackend.Ollama,
-  ModelBackend.BFL,
-  ModelBackend.XAI,
-  ModelBackend.Kimi,
-  ModelBackend.DeepSeek,
-  ModelBackend.LocalImage,
-];
+const LISTING_KIND: Readonly<Record<ModelBackend, 'keyless' | 'keyed' | 'unlisted'>> = {
+  [ModelBackend.Bedrock]: 'keyless',
+  [ModelBackend.AWS]: 'keyless',
+  [ModelBackend.OpenAI]: 'keyed',
+  [ModelBackend.Anthropic]: 'keyed',
+  [ModelBackend.Gemini]: 'keyed',
+  [ModelBackend.Ollama]: 'keyed',
+  [ModelBackend.BFL]: 'keyed',
+  [ModelBackend.XAI]: 'keyed',
+  [ModelBackend.Kimi]: 'keyed',
+  [ModelBackend.DeepSeek]: 'keyed',
+  [ModelBackend.LocalImage]: 'keyed',
+  [ModelBackend.VoyageAI]: 'unlisted',
+};
+
+/** Catalog rows carry a plain string backend, which may name no enum member. */
+const listingKindOf = (backend: string) =>
+  Object.hasOwn(LISTING_KIND, backend) ? LISTING_KIND[backend as ModelBackend] : 'unlisted';
 
 /**
  * The credential getAvailableModels constructs the listing backend for `backend`
- * with, or null when this context cannot construct one. The two special cases
- * live here rather than at the construction site so the seeded tier and the
- * catalog tier cannot disagree about who is reachable:
+ * with, or null when this context cannot construct one. The one special case
+ * lives here rather than at the construction site so the seeded tier and the
+ * catalog tier cannot disagree about who is reachable: local-image falls back to
+ * IMAGE_GEN_BASE_URL only under self-host, so a hosted deploy that happens to set
+ * the var never enumerates free local models.
  *
- * - BFL always resolves (no key falls back to the demo key), matching
- *   `new BFLBackend('demo-key')` in both getAvailableModels and getLlmByModel.
- * - local-image falls back to IMAGE_GEN_BASE_URL only under self-host, so a
- *   hosted deploy that happens to set the var never enumerates free local models.
+ * BFL used to resolve unconditionally through a 'demo-key' literal, which listed
+ * the Flux models on a deployment holding no BFL credential. They then survived
+ * the client's accessibility check (which reads this catalog) and could be picked
+ * as the default image model, so the first generation died on a provider 403. The
+ * invariant SELF_HOST.md states - only providers with a key appear in the picker -
+ * is what a keyless BFL has to honor too.
  */
 export function resolveListingKey(backend: ModelBackend, ctx: BackendGateContext): string | null {
-  if (backend === ModelBackend.BFL) return ctx.apiKeys?.bfl || 'demo-key';
   if (backend === ModelBackend.LocalImage) {
     const envUrl = ctx.isSelfHost ? process.env.IMAGE_GEN_BASE_URL : undefined;
     return ctx.apiKeys?.[ModelBackend.LocalImage] || envUrl || null;
@@ -132,7 +153,8 @@ export function resolveListingKey(backend: ModelBackend, ctx: BackendGateContext
  * build cannot list fail closed.
  */
 export function isBackendUsable(backend: string, ctx: BackendGateContext): boolean {
-  if (KEYLESS_LISTING_BACKENDS.includes(backend)) return !ctx.isSelfHost;
-  if (!KEYED_LISTING_BACKENDS.includes(backend)) return false;
+  const kind = listingKindOf(backend);
+  if (kind === 'keyless') return !ctx.isSelfHost;
+  if (kind === 'unlisted') return false;
   return resolveListingKey(backend as ModelBackend, ctx) !== null;
 }

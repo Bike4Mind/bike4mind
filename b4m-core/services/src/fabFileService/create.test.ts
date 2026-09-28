@@ -78,6 +78,19 @@ describe('createFabFile - extension-first MIME resolution', () => {
     expect(created.mimeType).toBe(SupportedFabFileMimeTypes.SH);
   });
 
+  // Regression: the Mermaid preview card's disk-icon "Save as Mermaid file" upload sent
+  // `<name>_<ts>.mmd` as text/plain and was refused with "File type .mmd is not supported"
+  // because `.mmd` was missing from the extension table.
+  it('accepts a Mermaid diagram source file (.mmd) saved as text/plain', async () => {
+    const created = await createFabFile(
+      'u1',
+      { ...base, fileName: 'flowchart_1234567890.mmd', mimeType: 'text/plain' },
+      resolvingAdapters()
+    );
+
+    expect(created.mimeType).toBe(SupportedFabFileMimeTypes.TXT_PLAIN);
+  });
+
   // Inverted deliberately: a digit tail used to be exempted as a date/version fragment, which
   // meant renaming any binary to 'payload.1' got it admitted as plain text. Every dot-tail is
   // an extension now, so it must resolve or the file is refused.
@@ -559,6 +572,28 @@ describe('createFabFile - lake fallback-tag stamp at create time (#2397)', () =>
       { name: 'datalake:project-docs', strength: 1 },
       { name: 'proj:onboarding', strength: 1 },
     ]);
+  });
+
+  // The upload and Slack doors record no membership event, so diffLakeMembership reads the join
+  // time off this stamp; a create that inherited an older time would count as having sat through.
+  it('stamps createdAt at the moment of a lake create', async () => {
+    vi.useFakeTimers({ now: new Date('2026-06-10T12:00:00Z'), toFake: ['Date'] });
+    try {
+      const result = await createFabFile(
+        'u1',
+        {
+          ...base,
+          fileName: 'notes.txt',
+          mimeType: 'text/plain',
+          tags: [{ name: 'datalake:project-docs', strength: 1 }],
+        },
+        mockAdapters()
+      );
+
+      expect(result.createdAt).toEqual(new Date('2026-06-10T12:00:00Z'));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('leaves a create with no tags at all untouched (no dataLakes round trip)', async () => {

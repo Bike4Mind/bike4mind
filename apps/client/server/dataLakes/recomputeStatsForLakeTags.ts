@@ -22,9 +22,9 @@ export type AttributedActor = dataLakeService.ManageActor & { auditPrincipal: La
  *   `users` array and touches neither `tags` nor `userId`, so neither membership arm moves.
  * - Joining, through `recomputeStatsForUploadedFile`, once an upload's bytes actually land. The
  *   upload doors stamp a lake's meta-tag on a row they create before the browser sends anything,
- *   and neither runs a membership service, so without that call the lake's counts stay stale and
- *   a lake still in 'draft' never activates. See `recomputeLakeStats`, which owns the transition,
- *   and that helper for why the count cannot be taken at create time.
+ *   and neither runs a membership service, so without that call the lake's counts stay stale. See
+ *   that helper for why the count cannot be taken at create time. Status is untouched either way -
+ *   a draft lake stays draft until `promoteDataLake` publishes it.
  *
  * Takes the tags of ALL affected files at once and recomputes each distinct lake a single time,
  * which is what keeps a bulk delete of N files in one lake from running N identical aggregations.
@@ -54,14 +54,10 @@ export const recomputeStatsForLakeTags = async (
       warn?: (msg: string, ...args: unknown[]) => void;
     };
     /**
-     * The signed-in user, when the calling door has one. Optional because the doors differ: the
-     * file DELETE routes act for a request and pass it, while the upload path arrives from an S3
-     * event or storage webhook with no user at all. Omitted, a draft -> active flip records under
-     * a `system` principal, which is the honest answer rather than an invented one.
-     *
-     * An `AttributedActor` rather than the bare pair, so a route under `baseApi()` carries
-     * `auditPrincipal` and has a key-driven flip recorded as the KEY instead of its owning human
-     * (see `lakeConfigAuditPrincipal`).
+     * CURRENTLY UNUSED, and kept only so the doors that already resolve one keep compiling: it
+     * existed to attribute the draft -> active flip this recompute used to cause, and that flip
+     * is gone (publishing is `promoteDataLake`). Drop it - along with `AttributedActor` and the
+     * `actor` every calling route builds for it - once nothing else here needs a principal.
      */
     actor?: AttributedActor;
   }
@@ -82,15 +78,12 @@ export const recomputeStatsForLakeTags = async (
         if (!lake) return;
         // The lake DOCUMENT, not a narrower shape: recomputeLakeStats derives the two-signal
         // membership scope from it, and a partial one silently counts the meta-tag arm alone.
-        // `actor` forwarded when the calling door had one, so a user-driven flip is attributed to
-        // the person rather than to `system`. The rung stays `system` regardless - see
-        // recomputeLakeStats: `activateIfDraft` performs no authorization check, so nothing
-        // authorized this write and naming a rung would be an invention.
-        await dataLakeService.recomputeLakeStats(
-          lake,
-          { db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb }, logger },
-          actor ? { actor } : undefined
-        );
+        // No `actor` forwarded: recomputeLakeStats only ever corrects the count now -
+        // publishing a draft lake is the explicit, separately-audited `promoteDataLake` door.
+        await dataLakeService.recomputeLakeStats(lake, {
+          db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb },
+          logger,
+        });
       } catch (error) {
         logger.error('Error recomputing data lake stats after a file write:', { error, metaTag });
       }

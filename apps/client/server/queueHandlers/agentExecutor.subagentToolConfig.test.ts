@@ -51,4 +51,9 @@ describe('buildSubagentToolConfig', () => {
     const result = buildSubagentToolConfig({ model: 'claude-sonnet-4-6', audioConfig: undefined });
     expect(result.audio_generation).toBeUndefined();
   });
+
+  it('threads imageUrlSigningSecret into web_search config so subagent web_search cards can verify', () => {
+    const result = buildSubagentToolConfig({ model: 'claude-sonnet-4-6', imageUrlSigningSecret: 'a-secret' });
+    expect(result.web_search).toEqual({ imageUrlSigningSecret: 'a-secret' });
+  });
 });

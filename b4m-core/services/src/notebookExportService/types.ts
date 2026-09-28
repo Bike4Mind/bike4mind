@@ -1,4 +1,4 @@
-import type { PromptMeta, KnowledgeType } from '@bike4mind/common';
+import type { PromptMeta, KnowledgeType, ChatHistoryItemType, CitableSource } from '@bike4mind/common';
 
 // Notebook Export/Import Types
 // This defines the standardized format for exporting and importing notebooks/chat sessions
@@ -59,10 +59,11 @@ export interface ExportedChatMessage {
   id: string;
   timestamp: string; // ISO timestamp
   /**
-   * Mirrors IChatHistoryItemDocument['type']. `voice_transcript` was missing here: stored rows
-   * carry it, so exports already contained a value this contract did not admit.
+   * Derived from CHAT_HISTORY_ITEM_TYPES rather than restated: `voice_transcript` was once
+   * missing from the hand-written copy here, so exports carried a value this contract did
+   * not admit.
    */
-  type: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
+  type: ChatHistoryItemType;
 
   // User input
   prompt: string;
@@ -88,6 +89,8 @@ export interface ExportedChatMessage {
     /** Projected by the mapper: the full groups carry raw prompt text this export must not ship. */
     performance?: { totalResponseTime?: number };
     context?: { contextWindowUsage?: NonNullable<PromptMeta['context']>['contextWindowUsage'] };
+    /** Needed to resolve a `b4m_map` fence's place ids when the exporter strips card fences. */
+    citables?: CitableSource[];
   };
 
   // Status and interaction

@@ -67,6 +67,8 @@ interface ResearchTaskProcessAdapters {
       | 'findByDatalakeTag'
       | 'findActiveByUserTags'
       | 'findActiveByUserTagsAndEntitlements'
+      // #3055's count-only companion query - see getDynamicDataLakeTags.ts's DataLakeAccessContext.
+      | 'countGateExcludedLakes'
       | 'findById'
       | 'find'
       // Anchors the ownership-supersession read that narrows the retrieval creator arm - see

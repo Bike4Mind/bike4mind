@@ -47,6 +47,73 @@ describe('SessionUpdateRequestSchema', () => {
   it('rejects a wrong-typed field instead of coercing it', () => {
     expect(SessionUpdateRequestSchema.safeParse({ forceKnowledgeRetrieval: 'true' }).success).toBe(false);
   });
+
+  /**
+   * The lake scope is a TRI-state on one field, and the three arms must stay distinguishable
+   * after parsing - that distinction is the contract (#3043), and updateSession derives the
+   * stored `lakeScopeExplicit` sidecar from which arm this is.
+   */
+  describe('lakeScope', () => {
+    it('keeps an explicit empty list distinguishable from an omitted one', () => {
+      const emptied = SessionUpdateRequestSchema.safeParse({ lakeScope: [] });
+      const omitted = SessionUpdateRequestSchema.safeParse({});
+      expect(emptied.success && emptied.data.lakeScope).toEqual([]);
+      // Not `[]` and not null: absent. A schema default here would collapse the two arms and
+      // silently ground every untouched PUT on nothing.
+      expect(omitted.success && 'lakeScope' in omitted.data).toBe(false);
+    });
+
+    it('accepts null, the spelling that clears the scope back to every reachable lake', () => {
+      const result = SessionUpdateRequestSchema.safeParse({ lakeScope: null });
+      expect(result.success && result.data.lakeScope).toBeNull();
+    });
+
+    it('accepts a named set of lake tags', () => {
+      const result = SessionUpdateRequestSchema.safeParse({ lakeScope: ['datalake:research', 'datalake:legal'] });
+      expect(result.success && result.data.lakeScope).toEqual(['datalake:research', 'datalake:legal']);
+    });
+
+    it('rejects a bare string instead of coercing it into a one-lake scope', () => {
+      expect(SessionUpdateRequestSchema.safeParse({ lakeScope: 'datalake:research' }).success).toBe(false);
+    });
+
+    it('does not accept lakeScopeExplicit from a caller - the service derives it', () => {
+      // Exposing the sidecar would let a caller send `[]` without it and get the OPPOSITE scope.
+      const result = SessionUpdateRequestSchema.safeParse({ lakeScopeExplicit: true });
+      expect(result.success && 'lakeScopeExplicit' in result.data).toBe(false);
+    });
+
+    /**
+     * The regression both PR reviews flagged: `retrievalTags` is the STORED field name, and a
+     * whole-session echo (a rename PUTs the session back as-is) carries the Mongoose-hydrated
+     * `retrievalTags: []` on every session that never chose a scope. Naming the request field
+     * `lakeScope` instead means that echo has no key this schema declares, so it is dropped
+     * rather than read as "ground on no lake".
+     */
+    it('drops an echoed retrievalTags rather than reading it as the lake scope', () => {
+      const result = SessionUpdateRequestSchema.safeParse({ name: 'renamed', retrievalTags: [] });
+      expect(result.success && 'retrievalTags' in result.data).toBe(false);
+      expect(result.success && 'lakeScope' in result.data).toBe(false);
+    });
+  });
+});
+
+describe('SessionResponseSchema lake scope', () => {
+  it('returns both halves, since retrievalTags alone cannot be read back', () => {
+    // Mongoose hydrates an unset array to [], so "grounds on no lake" and "never chose" are the
+    // same value on the wire; lakeScopeExplicit is what separates them.
+    const result = SessionResponseSchema.safeParse({
+      id: 's1',
+      name: 'n',
+      userId: 'u1',
+      retrievalTags: [],
+      lakeScopeExplicit: true,
+      firstCreated: new Date(),
+      lastUpdated: new Date(),
+    });
+    expect(result.success && result.data.retrievalTags).toEqual([]);
+    expect(result.success && result.data.lakeScopeExplicit).toBe(true);
+  });
 });
 
 describe('SessionIdParamSchema', () => {

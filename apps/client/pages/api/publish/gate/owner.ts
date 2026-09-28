@@ -48,17 +48,16 @@ const handler = baseApi({ auth: false })
     // No credential -> nothing to check. The prompt shell treats this as "show the form",
     // which is the right destination for every anonymous viewer.
     //
-    // A pre-MFA (mfaPending) session is degraded to anonymous here, deliberately and not for
-    // free: optionalAuth does NOT filter it (unlike its sibling optionalJwtAuth, whose comment
-    // at :35-42 describes this exact hazard), because the JWT strategy stamps mfaPending onto
-    // req.user and returns SUCCESS - and the full-auth chain's own mfaPending gate
-    // (server/auth/auth.ts) never runs on an `auth: false` route like this one. Without the
-    // check, a first-factor-only session could mint a proof cookie that then needs NO credential
-    // at all: it outlives the 10-minute mfaPending token by two hours and carries no identity, so
-    // a tokenVersion bump - this codebase's revocation mechanism - could not reach it. For an
-    // admin principal that would be every passphrase-gated artifact in the system.
-    const principal = req.user as (Express.User & { mfaPending?: boolean }) | undefined;
-    if (!principal?.id || principal.mfaPending) {
+    // A pre-MFA (mfaPending) session OR a relying-party OAuth access token (oauthGrant) is degraded
+    // to anonymous here. optionalAuth now filters both at the middleware (via admitsOptionalAuthUser),
+    // but this route keeps its own belt-and-suspenders check because it is `auth: false`, so the
+    // full-auth chain's mfaPending gate and oauthRouteGate never run on it: without the check, an
+    // admitted first-factor-only session OR an openid-only OAuth token could mint a proof cookie
+    // that then needs NO credential at all - it outlives the short-lived source token by two hours
+    // and carries no identity, so a tokenVersion bump (this codebase's revocation mechanism) could
+    // not reach it. For an admin principal that would be every passphrase-gated artifact in the system.
+    const principal = req.user;
+    if (!principal?.id || principal.mfaPending || principal.oauthGrant) {
       return res.status(401).json({ error: 'Authentication required' });
     }
 

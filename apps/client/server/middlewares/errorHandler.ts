@@ -11,12 +11,17 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
     let errorObj = error as { name: string; message?: string };
 
     // A cast on `_id` is the caller handing us a junk resource id, which is a genuine 404.
-    // A CastError raised on any other field (a side effect, a non-lookup field) is a
-    // server-side bug and must stay a 5xx so it is logged at `error` and alarms.
+    // A CastError on any other field stays a 5xx, logged at `error`, so it alarms. That is
+    // usually a server-side bug, but not always: a route that lets an unvalidated
+    // query-string id reach a filter lands here too.
     // Mongoose reports `path` as the leaf name for a cast inside a subdocument *schema*
     // (`sub._id` and `subs._id` both arrive as `_id`), so those are indistinguishable from a
-    // top-level id and still become a 404. A plain nested object is not a schema and does
-    // arrive dotted (`nested._id`), so it falls through to a 500.
+    // top-level id and become a 404 - but only until something casts the dotted subpath
+    // (`{ $set: { 'subs.$._id': id } }`), which caches it and makes the same query report
+    // `subs._id` for the rest of the process, flipping that 404 to a 500. Nothing does that
+    // today. A plain nested object is not a schema and always arrives dotted (`nested._id`),
+    // so it falls through to a 500.
+    // All measured in packages/database/src/__test__/mongooseCastErrorPath.integration.test.ts.
     if (errorObj.name === 'CastError') {
       if ((errorObj as { path?: string }).path === '_id') {
         errorObj = new NotFoundError('Resource not found');

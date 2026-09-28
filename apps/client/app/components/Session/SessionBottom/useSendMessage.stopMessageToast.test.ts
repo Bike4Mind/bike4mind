@@ -19,7 +19,8 @@ import { resolve } from 'path';
  */
 describe('useSendMessage - handleStopMessage toast (regression)', () => {
   const source = readFileSync(resolve(__dirname, 'useSendMessage.ts'), 'utf8');
-  const handleStopMessageMatch = source.match(/const handleStopMessage[\s\S]*?\n {2}\};/);
+  // The request and its toasts live in sendStop; handleStopMessage only routes to it.
+  const handleStopMessageMatch = source.match(/const sendStop = [\s\S]*?const handleStopMessage[\s\S]*?\n {2}\};/);
 
   it('locates handleStopMessage in the source', () => {
     expect(handleStopMessageMatch).not.toBeNull();
@@ -33,5 +34,15 @@ describe('useSendMessage - handleStopMessage toast (regression)', () => {
 
   it('still toasts on a failed cancellation (no inline error surface exists)', () => {
     expect(handleStopMessageSource).toContain("toast.error('Error cancelling generation')");
+  });
+
+  it('holds a Stop that is too early for stop-reply instead of sending it and toasting its failure', () => {
+    const handler = handleStopMessageSource.slice(handleStopMessageSource.indexOf('const handleStopMessage'));
+    expect(handler).toMatch(
+      /if \(!canStopNow\(currentSessionId, chatCompletion\)\) \{[\s\S]*?deferredStop\.request\(chatCompletion\);\s*return;\s*\}\s*await sendStop\(currentSessionId\);/
+    );
+    expect(handleStopMessageSource).toMatch(
+      /const held = deferredStop\.resolve\(chatCompletion\);\s*if \(held\) void sendStop\(held\.sessionId, held\.beforeStop\);/
+    );
   });
 });

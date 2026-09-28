@@ -678,6 +678,7 @@ describe('scoped retrieval settings are caller-altitude, not per-lake (#2624, #2
       'PauseLakeConvergence',
       'LakeConvergenceBulkChangeSharePct',
       'EnforceLakeAdmission',
+      'EnforceLakeOriginOnIngest',
     ];
 
     const declaringLake = (Object.keys(settingsMap) as SettingKey[]).filter(key =>

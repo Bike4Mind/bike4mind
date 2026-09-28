@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { randomUUID } from 'node:crypto';
 import { Quest, PublishedArtifact, Session } from '@bike4mind/database';
-import { PublishReplyRequestSchema, type PublishResult, visibleReplyText } from '@bike4mind/common';
+import { PublishReplyRequestSchema, type PublishResult, type CitableSource, visibleReplyText } from '@bike4mind/common';
 import { resolveVisibility, checkScopePermission, checkPublishQuota, type PublishUser } from '@server/services/publish';
 import { parseArtifactsWithFallback } from '@client/app/utils/artifactParser';
 
@@ -70,11 +70,12 @@ const handler = baseApi().post(async (req, res) => {
   // `structuredReplies` - mirror the UI's extractReplies so a published reply
   // matches what the user sees on screen.
   const quest = await Quest.findOne({ _id: body.messageId, sessionId: body.sessionId })
-    .select('reply replies structuredReplies')
+    .select('reply replies structuredReplies promptMeta.citables')
     .lean<{
       reply?: string | null;
       replies?: string[] | null;
       structuredReplies?: Array<{ content?: unknown }> | null;
+      promptMeta?: { citables?: CitableSource[] } | null;
     } | null>();
   if (!quest) {
     return res.status(404).json({ error: 'Reply not found' });
@@ -163,6 +164,7 @@ const handler = baseApi().post(async (req, res) => {
         size: { totalBytes: Buffer.byteLength(markdown), fileCount: 0 },
         manifest: [],
         renderedBody: markdown,
+        citables: quest.promptMeta?.citables ?? undefined,
         publishedAt: now,
       },
       $setOnInsert: { ownerId: userId },

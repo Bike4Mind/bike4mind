@@ -279,6 +279,17 @@ export async function updateOptimisticQuest(
   // collection subscription during the race window (same pattern as createOptimisticQuest)
   if (sessionId) {
     useStreamingState.getState().startStreaming(sessionId);
+    // Reset the cached quest BEFORE the request: its first 'running' frame can beat the
+    // response, and a cache still reading the previous run's 'done' makes the composer's
+    // reconciliation (useStreamingMessageMerge) end the new run on sight. The catch below
+    // still overwrites it with the error on failure.
+    updateSingleQueryDataFast(
+      queryClient,
+      ['quests', 'session', sessionId],
+      'write',
+      { id: questId, ...updates } as IChatHistoryItemDocument,
+      { keysAllowedToCreate: [] }
+    );
   }
 
   try {

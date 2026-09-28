@@ -177,11 +177,31 @@ describe('sessionOperations', () => {
       const result = await stopReply('s1', ability);
 
       expect(QuestMock.findOneAndUpdate).toHaveBeenCalledWith(
-        { _id: 'q9' },
+        { _id: 'q9', status: { $nin: ['done', 'stopped'] } },
         { status: 'stopped', statusMessage: 'Generation cancelled by user' },
         { new: true }
       );
       expect(result).toMatchObject({ status: 'stopped' });
+    });
+
+    it('leaves a quest that already finished untouched', async () => {
+      QuestMock.findOne.mockReturnValueOnce({ sort: vi.fn().mockResolvedValue({ id: 'q9', status: 'done' }) });
+      SessionMock.findOne.mockResolvedValueOnce({ id: 's1' });
+
+      const result = await stopReply('s1', ability);
+
+      expect(QuestMock.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ status: 'done' });
+    });
+
+    it('returns the quest as read when it finishes between the read and the guarded write', async () => {
+      QuestMock.findOne.mockReturnValueOnce({ sort: vi.fn().mockResolvedValue({ id: 'q9', status: 'running' }) });
+      SessionMock.findOne.mockResolvedValueOnce({ id: 's1' });
+      QuestMock.findOneAndUpdate.mockResolvedValueOnce(null);
+
+      const result = await stopReply('s1', ability);
+
+      expect(result).toMatchObject({ id: 'q9', status: 'running' });
     });
 
     it('is a no-op update when the latest quest is already stopped', async () => {

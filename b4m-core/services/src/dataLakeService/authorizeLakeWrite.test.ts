@@ -1,4 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { SettingScopeLevel, type IScopedSetting, type ScopeRef } from '@bike4mind/common';
+import { BadRequestError, invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 import {
   assertBatchBelongsToLake,
   assertCanWriteDataLakeTags,
@@ -8,6 +10,13 @@ import {
   extractDataLakeMetaTags,
   extractStaticRegistryPrefixedTags,
 } from './authorizeLakeWrite';
+
+// Both settings caches are module-level and would otherwise leak one test's platform table into
+// the next, resolving every lever to a coded default.
+beforeEach(() => {
+  invalidateSettingsCache();
+  invalidateScopedSettingsCache();
+});
 
 const LAKE = {
   id: 'lake-1',
@@ -110,6 +119,124 @@ describe('assertCanWriteDataLakeTags - the same rule at the write gate', () => {
         assertCanWriteDataLakeTags({ userId: 'someone', isAdmin: false }, ['datalake:opti-knowledge'], dbWith(null))
       ).rejects.toThrow("Only an admin can change this data lake's files");
     });
+  });
+});
+
+/**
+ * Settings stores backing the resolver. `platform` supplies the platform row for each key; the
+ * scoped overlay is left empty unless a test wires one, which is the default (report-only) install.
+ */
+const settingsDb = (platform: Record<string, string>, overrides: Array<Partial<IScopedSetting>> = []) => ({
+  adminSettings: {
+    findBySettingNames: vi.fn(async (names: string[]) =>
+      names.filter(n => platform[n] != null).map(n => ({ settingName: n, settingValue: platform[n] }))
+    ),
+    findAll: vi.fn(async () =>
+      Object.entries(platform).map(([settingName, settingValue]) => ({ settingName, settingValue }))
+    ),
+  },
+  scopedSettings: {
+    findOverrides: vi.fn(
+      async (scopes: ScopeRef[], names: string[]) =>
+        overrides.filter(
+          o =>
+            names.includes(o.settingName as string) &&
+            scopes.some(s => s.scopeLevel === o.scopeLevel && s.scopeId === o.scopeId)
+        ) as IScopedSetting[]
+    ),
+  },
+});
+
+const ADMIN = { userId: 'admin-1', isAdmin: true, administeredOrgIds: [] };
+
+const lakeDoc = (origin: 'curated' | 'connector-fed') => ({
+  id: 'lake-1',
+  name: 'Acme Docs',
+  datalakeTag: 'datalake:acme-docs',
+  createdByUserId: 'owner-1',
+  organizationId: 'org-1',
+  origin,
+});
+
+const dbFor = (
+  origin: 'curated' | 'connector-fed',
+  platform: Record<string, string> = {},
+  overrides: Array<Partial<IScopedSetting>> = []
+) => ({
+  dataLakes: { findByDatalakeTag: vi.fn(async () => lakeDoc(origin)) },
+  ...settingsDb(platform, overrides),
+});
+
+/** An `EnforceLakeOriginOnIngest` override at the LAKE rung - the rung the setting's own
+ * description calls the one that matters, since it is resolved through `scopeForLake`. */
+const originOverrideForLake = (lakeId: string, value: 'true' | 'false'): Partial<IScopedSetting> => ({
+  scopeLevel: SettingScopeLevel.Lake as IScopedSetting['scopeLevel'],
+  scopeId: lakeId,
+  settingName: 'EnforceLakeOriginOnIngest',
+  settingValue: value,
+});
+
+describe('assertCanWriteDataLakeTags unattended arm', () => {
+  it('refuses an unattended write to a curated lake', async () => {
+    await expect(
+      assertCanWriteDataLakeTags(ADMIN, ['datalake:acme-docs'], { db: dbFor('curated'), unattended: true })
+    ).rejects.toThrow(BadRequestError);
+  });
+
+  it('allows an unattended write to a connector-fed lake', async () => {
+    await expect(
+      assertCanWriteDataLakeTags(ADMIN, ['datalake:acme-docs'], { db: dbFor('connector-fed'), unattended: true })
+    ).resolves.toBeUndefined();
+  });
+
+  it('allows a human write to a curated lake (flag omitted)', async () => {
+    await expect(
+      assertCanWriteDataLakeTags(ADMIN, ['datalake:acme-docs'], { db: dbFor('curated') })
+    ).resolves.toBeUndefined();
+  });
+
+  it('resolves no setting at all when the flag is omitted', async () => {
+    const db = dbFor('curated');
+    await assertCanWriteDataLakeTags(ADMIN, ['datalake:acme-docs'], { db });
+    // The eight human callers must pay no new read - platform and scoped alike.
+    expect(db.adminSettings.findAll).not.toHaveBeenCalled();
+    expect(db.scopedSettings.findOverrides).not.toHaveBeenCalled();
+  });
+
+  it('allows an unattended write when EnforceLakeOriginOnIngest is off at the platform rung', async () => {
+    const db = dbFor('curated', { EnforceLakeOriginOnIngest: 'false' });
+    await expect(
+      assertCanWriteDataLakeTags(ADMIN, ['datalake:acme-docs'], { db, unattended: true })
+    ).resolves.toBeUndefined();
+  });
+
+  it('lets an unattended write through when EnforceLakeOriginOnIngest is overridden off at the LAKE rung', async () => {
+    // Pins scopeForLake(lake), not just the platform default: a regression that resolved a
+    // lake-less scope would leave every per-lake opt-out silently inert while this test's
+    // sibling above (a platform-rung override) stayed green.
+    const db = dbFor('curated', {}, [originOverrideForLake('lake-1', 'false')]);
+    await expect(
+      assertCanWriteDataLakeTags(ADMIN, ['datalake:acme-docs'], { db, unattended: true })
+    ).resolves.toBeUndefined();
+  });
+
+  it('keeps checking after the first lake is exempted, refusing on a later curated lake', async () => {
+    // Connector-fed tag ordered first: a loop that stopped at the first exemption instead of
+    // continuing to check the rest would resolve this write, not reject it.
+    const exemptTag = 'datalake:exempt-lake';
+    const curatedTag = 'datalake:curated-lake';
+    const lakesByTag: Record<string, ReturnType<typeof lakeDoc>> = {
+      [exemptTag]: { ...lakeDoc('connector-fed'), id: 'lake-exempt', datalakeTag: exemptTag },
+      [curatedTag]: { ...lakeDoc('curated'), id: 'lake-curated', datalakeTag: curatedTag },
+    };
+    const db = {
+      dataLakes: { findByDatalakeTag: vi.fn(async (tag: string) => lakesByTag[tag]) },
+      ...settingsDb({}),
+    };
+
+    await expect(assertCanWriteDataLakeTags(ADMIN, [exemptTag, curatedTag], { db, unattended: true })).rejects.toThrow(
+      BadRequestError
+    );
   });
 });
 

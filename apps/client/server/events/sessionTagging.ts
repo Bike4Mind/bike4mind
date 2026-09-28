@@ -78,11 +78,12 @@ function parseTagsFromLLMResponse(text: string | undefined | null): Array<{ name
 
 export const handler = withEventContext(async (event, logger) => {
   const body = SessionEvents.Tag.schema.parse(event.properties);
-  const { sessionId, userId } = body;
+  const { sessionId, userId, requesterId } = body;
 
   logger.updateMetadata({
     sessionId,
     userId,
+    requesterId,
   });
 
   const session = await sessionRepository.findById(sessionId);
@@ -96,6 +97,16 @@ export const handler = withEventContext(async (event, logger) => {
     logger.error(`User not found`);
     return;
   }
+
+  // Whose update access the writes re-check: the requester of a sharee-triggered job, else the
+  // billed user. Resolved before the LLM call so a vanished requester costs nothing.
+  const writer = requesterId ? await userRepository.findById(requesterId) : user;
+  if (!writer) {
+    logger.warn(`Requester ${requesterId} not found, skipping tagging for session ${sessionId}`);
+    return;
+  }
+  // tag.ts authorizes the requester with CASL, which grants update on a global-write session.
+  const writeOpts = requesterId ? { includeGlobalWrite: true } : undefined;
 
   logger.info(`Handling tagging job for session ${sessionId} (as user ${user.id})`);
 
@@ -117,10 +128,11 @@ export const handler = withEventContext(async (event, logger) => {
     }
   }
 
-  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
-  logger.info(`Using operations model for tagging: ${modelInfo.name} (${modelInfo.backend})`);
-
-  // Find the first Quest document submitted by the user from the Session
+  // A Quest from this Session (unsorted - only existence matters here), looked up BEFORE the
+  // operations model is resolved. The no-quest branch below writes nothing, so it never closes
+  // the spider's `!taggedAt` gate and the notebook is re-dispatched on every pass; resolving
+  // admin settings, provider keys and the model catalog above this point would pay for all of
+  // that on every pass, for zero completions.
   const quest = await questRepository.findOne({ sessionId: session.id });
   if (!quest) {
     // Deliberately writes nothing. `taggedAt` records that tags were derived from a notebook's
@@ -130,6 +142,9 @@ export const handler = withEventContext(async (event, logger) => {
     logger.info(`No quests found for session ${sessionId} - nothing to tag yet`);
     return;
   }
+
+  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
+  logger.info(`Using operations model for tagging: ${modelInfo.name} (${modelInfo.backend})`);
 
   // Ask an LLM to tag the user's first Quest
   logger.info(`Tagging based on Quest ${quest.id}`);
@@ -190,12 +205,38 @@ export const handler = withEventContext(async (event, logger) => {
     // Persist ONLY the tag fields. The read-to-write window spans a full LLM
     // completion; a whole-session write would revert any share revocation,
     // visibility change or soft-delete the owner made during it.
-    await sessionRepository.update({ id: session.id, tags: session.tags, taggedAt: session.taggedAt });
+    // `tagLastAttemptAt` is cleared rather than left behind: an import overwrite reopens the gate
+    // by nulling `taggedAt`, and a stale stamp would then hold the re-tag off for a whole backoff.
+    // The write re-checks update access and not-deleted, so a revocation or delete during the
+    // completion drops the result instead of landing it.
+    const written = await sessionRepository.updateWithUpdateAccess(
+      writer,
+      {
+        id: session.id,
+        tags: session.tags,
+        taggedAt: session.taggedAt,
+        tagLastAttemptAt: null,
+      },
+      writeOpts
+    );
+    if (!written) logger.warn(`Session ${sessionId} no longer writable by ${writer.id}, skipping tag write`);
   } else {
-    // Logged, not thrown, and deliberately writes nothing. This branch fires on an empty as well
-    // as an unparseable completion, both transient, so neither the tags already on the session nor
-    // the spider's `!taggedAt` gate may be touched: a stamp would turn one bad completion into a
-    // permanent "already tagged", and a wipe would destroy tags a clone or an import carried in.
+    // Records that a completion was spent and yielded nothing - NOT that the notebook is tagged.
+    // `recordSessionOperationalUsage` above has already billed, so writing nothing here is what
+    // made a notebook the model can never tag cost a call on every run. `taggedAt` and `tags` stay
+    // untouched: a stamp would turn one bad completion into a permanent "already tagged" and a
+    // wipe would destroy tags a clone or an import carried in. The backoff bounds the spend and
+    // still reopens, so nothing is abandoned (see TAG_RETRY_BACKOFF_MS).
+    session.tagLastAttemptAt = new Date();
+    const written = await sessionRepository.updateWithUpdateAccess(
+      writer,
+      {
+        id: session.id,
+        tagLastAttemptAt: session.tagLastAttemptAt,
+      },
+      writeOpts
+    );
+    if (!written) logger.warn(`Session ${sessionId} no longer writable by ${writer.id}, skipping attempt stamp`);
     logger.warn(`Failed to parse tags from LLM response for session ${sessionId}`);
     logger.debug(`Raw LLM response: ${tagsText?.substring(0, 500)}${(tagsText?.length || 0) > 500 ? '...' : ''}`);
   }

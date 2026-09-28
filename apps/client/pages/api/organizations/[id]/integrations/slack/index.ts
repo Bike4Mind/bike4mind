@@ -7,31 +7,10 @@
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { organizationRepository } from '@bike4mind/database/infra';
 import { orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
 import { NotFoundError } from '@bike4mind/utils';
 import { IOrgSlackWorkspaceDocument, IOrgSlackWorkspaceResponse } from '@bike4mind/common';
-
-/**
- * Verify user is org owner or system admin.
- * Only org owner (not manager) can manage Slack integration.
- */
-async function verifyOrgOwnerAccess(user: { id: string; isAdmin: boolean }, orgId: string) {
-  if (user.isAdmin) {
-    const org = await organizationRepository.findById(orgId);
-    if (!org) throw new NotFoundError('Organization not found');
-    return org;
-  }
-
-  const org = await organizationRepository.findById(orgId);
-  if (!org) throw new NotFoundError('Organization not found');
-
-  if (org.userId !== user.id) {
-    throw new NotFoundError('Organization not found');
-  }
-
-  return org;
-}
+import { verifyOrgOwner } from '@server/utils/orgAccess';
 
 function toResponse(
   doc: IOrgSlackWorkspaceDocument & { createdAt: Date; updatedAt: Date }
@@ -57,7 +36,7 @@ const handler = baseApi()
       const orgId = req.query.id!;
       const user = req.user!;
 
-      await verifyOrgOwnerAccess(user, orgId);
+      await verifyOrgOwner(user, orgId);
 
       const workspace = await orgSlackWorkspaceRepository.findByOrganizationId(orgId);
       if (!workspace) {
@@ -74,7 +53,7 @@ const handler = baseApi()
       const orgId = req.query.id!;
       const user = req.user!;
 
-      await verifyOrgOwnerAccess(user, orgId);
+      await verifyOrgOwner(user, orgId);
 
       const workspace = await orgSlackWorkspaceRepository.findByOrganizationId(orgId);
       if (!workspace) {

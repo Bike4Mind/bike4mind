@@ -31,7 +31,7 @@ import {
   SpiderDependencies,
   SpiderOperation,
 } from './spider';
-import { ISessionDocument } from '@bike4mind/common';
+import { ISessionDocument, TAG_RETRY_BACKOFF_MS } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import mongoose from 'mongoose';
 
@@ -128,6 +128,27 @@ describe('Spider - determineSessionOperations', () => {
       expect(result.messageCount).toBe(true);
       expect(result.curation).toBe(true);
       expect(result.summarize).toBe(true);
+    });
+
+    // The backoff bounds a notebook the model can never tag: the handler bills before it parses,
+    // so without this the same notebook buys a completion on every run.
+    it('should skip tagging inside the retry backoff', () => {
+      const session = createMockSession({ tagLastAttemptAt: new Date(Date.now() - TAG_RETRY_BACKOFF_MS / 2) });
+      const result = determineSessionOperations(session, allOperations);
+
+      expect(result.tags).toBe(false);
+      // Scoped to tagging: the other legs settle on their own terms and must not be held back.
+      expect(result.summarize).toBe(true);
+      expect(result.curation).toBe(true);
+    });
+
+    // Bounded, not abandoned. No operator or automated path clears `taggedAt`, so a terminal cap
+    // would strand the notebook; the window reopening keeps a transient bad completion recoverable.
+    it('should tag again once the retry backoff has elapsed', () => {
+      const session = createMockSession({ tagLastAttemptAt: new Date(Date.now() - TAG_RETRY_BACKOFF_MS - 1000) });
+      const result = determineSessionOperations(session, allOperations);
+
+      expect(result.tags).toBe(true);
     });
 
     it('should only enable messageCount for fully processed session', () => {
@@ -280,8 +301,15 @@ describe('Spider - processSession', () => {
 
       expect(deps.sessionRepository.populateMessageCounts).toHaveBeenCalledWith([session]);
       expect(deps.publishCuration).toHaveBeenCalled();
-      expect(deps.publishSummarize).toHaveBeenCalled();
       expect(deps.publishTag).toHaveBeenCalled();
+
+      // 'manual' means someone asked for this one notebook's summary, so a bulk sweep must not
+      // claim it - telling the two apart is the whole point of the stamped trigger.
+      expect(deps.publishSummarize).toHaveBeenCalledWith({
+        sessionId: session.id,
+        userId: config.userId,
+        trigger: 'spider',
+      });
     });
 
     it('should skip already-processed operations', async () => {
@@ -497,6 +525,17 @@ describe('Spider - processAllSessions', () => {
     expect(stats.notebooksCurated).toBe(0);
     expect(stats.notebooksSummarized).toBe(0);
     expect(stats.notebooksTagged).toBe(0);
+  });
+
+  it('should stamp queued summarizations with the spider trigger', async () => {
+    const sessions = [createMockSession({ name: 'Test Notebook' })];
+    const config = createJobConfig({ totalNotebooks: 1, operations: ['summarize'] });
+
+    const promise = processAllSessions(sessions, config, deps);
+    await vi.runAllTimersAsync();
+    await promise;
+
+    expect(deps.publishSummarize).toHaveBeenCalledWith(expect.objectContaining({ trigger: 'spider' }));
   });
 
   it('should work with dry-run mode', async () => {

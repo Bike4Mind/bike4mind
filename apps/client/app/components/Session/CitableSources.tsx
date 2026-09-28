@@ -6,30 +6,35 @@ import {
   Storage as DatasetIcon,
   Extension as McpIcon,
   WarningAmberRounded as TruncatedIcon,
+  CompareArrowsRounded as ConflictIcon,
 } from '@mui/icons-material';
 import { CitableSource, CitableSourceType } from '@bike4mind/common';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useNavigate } from '@tanstack/react-router';
 import { useCitationInteraction } from './CitationInteractionContext';
+import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import { citedPassageOf } from '@client/app/components/Knowledge/citedPassage';
+import { ExpandCollapseButton } from './ExpandCollapseButton';
 
 interface CitableSourcesProps {
   citables: CitableSource[];
-  /** Maximum height in pixels before scrolling */
-  maxHeight?: number;
 }
+
+/** Sources shown before the reader asks for the rest. Enough to see the list has substance. */
+const COLLAPSED_COUNT = 3;
 
 const getIconForType = (type: CitableSourceType) => {
   switch (type) {
     case 'web_url':
-      return <WebIcon sx={{ fontSize: '1rem', color: 'text.tertiary' }} />;
+      return <WebIcon sx={{ fontSize: '1.25rem', color: 'text.tertiary' }} />;
     case 'document':
-      return <DocumentIcon sx={{ fontSize: '1rem', color: 'text.tertiary' }} />;
+      return <DocumentIcon sx={{ fontSize: '1.25rem', color: 'text.tertiary' }} />;
     case 'dataset':
-      return <DatasetIcon sx={{ fontSize: '1rem', color: 'text.tertiary' }} />;
+      return <DatasetIcon sx={{ fontSize: '1.25rem', color: 'text.tertiary' }} />;
     case 'mcp':
-      return <McpIcon sx={{ fontSize: '1rem', color: 'text.tertiary' }} />;
+      return <McpIcon sx={{ fontSize: '1.25rem', color: 'text.tertiary' }} />;
     default:
-      return <WebIcon sx={{ fontSize: '1rem', color: 'text.tertiary' }} />;
+      return <WebIcon sx={{ fontSize: '1.25rem', color: 'text.tertiary' }} />;
   }
 };
 
@@ -47,7 +52,32 @@ const getFaviconUrl = (url: string): string | null => {
   }
 };
 
-const CitableSourceItem: FC<{ source: CitableSource }> = ({ source }) => {
+/** Names listed in the conflict tooltip before it degrades to a count. Keeps one line readable. */
+const CONFLICT_NAMES_SHOWN = 2;
+
+/**
+ * Titles of the other cited sources this one provably disagrees with (#3041).
+ *
+ * Resolved against the rendered chips rather than read off the chip itself: the detector stamps
+ * `fabFileId`s, and only a sibling chip knows the title behind one. An unresolvable id is still a
+ * real conflict - its partner may not have survived the dedup above - so it degrades to a count
+ * rather than dropping a true signal.
+ *
+ * `Array.isArray` because `metadata` is an open bag filled from a stored document: a malformed
+ * value must render no badge, never throw inside the reply.
+ */
+const conflictingTitlesOf = (source: CitableSource, titleById: Map<string, string>): string[] => {
+  const ids = source.metadata?.conflictsWith;
+  if (!Array.isArray(ids)) return [];
+  const named = ids.map(id => titleById.get(id)).filter((title): title is string => !!title);
+  const unnamed = ids.length - named.length;
+  return unnamed > 0 ? [...named, `${unnamed} further source${unnamed === 1 ? '' : 's'}`] : named;
+};
+
+const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[] }> = ({
+  source,
+  conflictingTitles,
+}) => {
   const [faviconError, setFaviconError] = useState(false);
   const navigate = useNavigate();
   // Opt-in host override: when a surface provides onCitationClick (e.g. the
@@ -89,6 +119,11 @@ const CitableSourceItem: FC<{ source: CitableSource }> = ({ source }) => {
     handleHostClick ??
     (isInternal
       ? () => {
+          // Hand the reader's destination the passage this chip cited, so the viewer can mark it
+          // instead of dropping them at the top of the document (#3038). Written on EVERY internal
+          // click, clearing on a chip that carries no passage: a leftover anchor from the previous
+          // citation would otherwise mark a stale extent in the newly-opened file.
+          setSessionLayout({ citedPassage: citedPassageOf(source) });
           const url = new URL(source.url!, window.location.origin);
           navigate({ to: url.pathname as never, search: Object.fromEntries(url.searchParams) as never });
         }
@@ -106,35 +141,58 @@ const CitableSourceItem: FC<{ source: CitableSource }> = ({ source }) => {
   const isTruncated = source.metadata?.truncated === true;
   const truncationCap = typeof source.metadata?.cap === 'number' ? source.metadata.cap : undefined;
 
+  // Retrieval found this source stating a value another cited source states differently (#3041) -
+  // the same finding the model was warned about, so the reader is not the only one left unaware.
+  // Worded as "may disagree" deliberately: the detector is a pattern match over prose and its own
+  // contract is that a finding means "worth a human's eye", never a proven contradiction
+  // (b4m-core/common/src/constants/corpusInconsistency.ts). Holds for a future kind joining the
+  // asserted list too, which is why the wording names no specific kind.
+  const conflictTooltip = conflictingTitles.length
+    ? `May disagree with ${conflictingTitles.slice(0, CONFLICT_NAMES_SHOWN).join(', ')}` +
+      `${conflictingTitles.length > CONFLICT_NAMES_SHOWN ? ` and ${conflictingTitles.length - CONFLICT_NAMES_SHOWN} more` : ''}. ` +
+      'This is a heuristic match over the retrieved passages, not a proven contradiction - read the sources before relying on either.'
+    : '';
+
   return (
     <Box
       component={renderAsButton ? 'button' : source.url ? 'a' : 'div'}
       type={renderAsButton ? 'button' : undefined}
       href={!renderAsButton ? source.url : undefined}
+      data-testid="citable-source-chip"
       onClick={handleClick}
       target={!renderAsButton && source.url ? '_blank' : undefined}
       rel={!renderAsButton && source.url ? 'noopener noreferrer' : undefined}
-      sx={{
+      sx={theme => ({
         display: 'flex',
         alignItems: 'center',
-        gap: 1.5,
-        p: 1,
-        borderRadius: 'sm',
-        bgcolor: 'background.level1',
-        border: '1px solid',
-        borderColor: 'divider',
-        transition: 'all 0.2s',
-        textDecoration: 'none',
-        cursor: source.url ? 'pointer' : 'default',
-        flexShrink: 0,
-        background: 'none',
+        gap: '12px',
+        py: 1.25,
+        px: '16px',
         width: '100%',
         textAlign: 'left',
-        '&:hover': {
-          bgcolor: 'background.level2',
-          borderColor: 'primary.outlinedBorder',
-        },
-      }}
+        textDecoration: 'none',
+        // The artifact-card frame (see ArtifactPreviewCard), so a source reads as the same
+        // family as every other framed thing a reply produces. It previously set
+        // background.level1 and hovered to level2 - neither of which this theme defines -
+        // and then killed both with `background: 'none'` on the next line, so the row had
+        // no fill at all.
+        backgroundColor: theme.palette.reading.cardBase,
+        backgroundImage: `linear-gradient(180deg, ${theme.palette.reading.cardTintTop}, ${theme.palette.reading.cardTintBottom})`,
+        borderRadius: '8px',
+        borderWidth: 1,
+        borderStyle: 'solid',
+        borderColor: theme.palette.reading.cardLine,
+        transition: 'all 0.2s ease-in-out',
+        cursor: source.url ? 'pointer' : 'default',
+        // A source with nowhere to go does not lift: the same hover on a dead row is a
+        // promise the click cannot keep.
+        ...(source.url && {
+          '&:hover': {
+            transform: 'translateY(-2px)',
+            boxShadow: 'sm',
+          },
+        }),
+      })}
     >
       {/* Favicon or fallback icon */}
       <Box
@@ -153,8 +211,8 @@ const CitableSourceItem: FC<{ source: CitableSource }> = ({ source }) => {
             alt=""
             onError={() => setFaviconError(true)}
             style={{
-              width: 16,
-              height: 16,
+              width: 20,
+              height: 20,
               borderRadius: '2px',
             }}
           />
@@ -192,15 +250,33 @@ const CitableSourceItem: FC<{ source: CitableSource }> = ({ source }) => {
               </Typography>
             )}
           </Typography>
+          {/* Both badges below pin placement="top": chips are full-width and stack, so Joy's
+              default bottom lands the box on the next chip down. Note this does not clear the
+              conflict case entirely - conflicts are stamped symmetrically, so the lower chip of
+              a pair now opens over the partner above it. No placement clears both on a stacked
+              list; removing it needs a design change, not a prop (#3290). */}
           {isTruncated && (
             <Tooltip
               size="sm"
+              placement="top"
               title={`Content truncated${
                 truncationCap ? ` at ${truncationCap.toLocaleString()} chars` : ''
               } - the model saw a partial read of this source`}
             >
               <TruncatedIcon
                 data-testid="citable-truncated-badge"
+                sx={{ fontSize: '0.9rem', color: 'warning.500', flexShrink: 0 }}
+              />
+            </Tooltip>
+          )}
+          {conflictTooltip && (
+            <Tooltip size="sm" placement="top" title={conflictTooltip}>
+              <ConflictIcon
+                data-testid="citable-conflict-badge"
+                // The Tooltip only names the conflict to a reader who can hover it. titleAccess is
+                // what puts the same sentence on the accessibility tree (SvgIcon renders it as
+                // <title> and drops its default aria-hidden), so the signal is not sight-only.
+                titleAccess={conflictTooltip}
                 sx={{ fontSize: '0.9rem', color: 'warning.500', flexShrink: 0 }}
               />
             </Tooltip>
@@ -229,10 +305,19 @@ const CitableSourceItem: FC<{ source: CitableSource }> = ({ source }) => {
 };
 
 /**
- * CitableSources - Displays a scrollable list of sources referenced in AI responses
- * Shows web search results, documents, datasets, and MCP tool results
+ * The sources a reply drew on: web results, documents, datasets and MCP tool results.
+ *
+ * A bare list, not a card. Each source carries the artifact frame itself, and wrapping
+ * framed rows in another frame read as a box of boxes.
+ *
+ * Bounded by COUNT rather than by height. It used to cap at 200px and scroll inside, which
+ * put a nested scroll region between the reply and the next turn - the reader had to find
+ * the inner scroller to reach a source the text cited. It uses the reply's own rounded
+ * Show More pill, not the bare control a code card carries - that one sits INSIDE an
+ * artifact frame, and this list has no frame of its own to sit in.
  */
-const CitableSources: FC<CitableSourcesProps> = ({ citables, maxHeight = 200 }) => {
+const CitableSources: FC<CitableSourcesProps> = ({ citables }) => {
+  const [expanded, setExpanded] = useState(false);
   // Citables accumulate across multiple tool calls (e.g. several search_knowledge_base
   // invocations returning overlapping files), so the same source can appear more than
   // once. Dedupe by a stable identity before rendering - otherwise repeated ids produce
@@ -249,23 +334,22 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables, maxHeight = 200 }) 
     return out;
   }, [citables]);
 
+  // Built off the DEDUPED list so a title resolves to the chip actually rendered for that id.
+  const titleById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const source of uniqueCitables) if (source.id) map.set(source.id, source.title);
+    return map;
+  }, [uniqueCitables]);
+
   if (uniqueCitables.length === 0) {
     return null;
   }
 
+  const visible = expanded ? uniqueCitables : uniqueCitables.slice(0, COLLAPSED_COUNT);
+  const hiddenCount = uniqueCitables.length - COLLAPSED_COUNT;
+
   return (
-    <Box
-      sx={{
-        mt: 1.5,
-        mb: 1,
-        p: 1.5,
-        borderRadius: 'sm',
-        bgcolor: 'background.surface',
-        border: '1px solid',
-        borderColor: 'divider',
-      }}
-      data-testid="citable-sources"
-    >
+    <Box sx={{ mt: 1.5, mb: 1 }} data-testid="citable-sources">
       <Typography
         level="body-xs"
         sx={{
@@ -279,33 +363,26 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables, maxHeight = 200 }) 
         Sources ({uniqueCitables.length})
       </Typography>
 
-      <Stack
-        spacing={0.75}
-        sx={{
-          maxHeight,
-          overflowY: 'auto',
-          pr: 0.5, // Space for scrollbar
-          // Custom scrollbar styling
-          '&::-webkit-scrollbar': {
-            width: '6px',
-          },
-          '&::-webkit-scrollbar-track': {
-            bgcolor: 'background.level1',
-            borderRadius: '3px',
-          },
-          '&::-webkit-scrollbar-thumb': {
-            bgcolor: 'neutral.400',
-            borderRadius: '3px',
-            '&:hover': {
-              bgcolor: 'neutral.500',
-            },
-          },
-        }}
-      >
-        {uniqueCitables.map((source, index) => (
-          <CitableSourceItem key={source.id || source.url || index} source={source} />
+      {/* The whole gap to the pill below. It does NOT add to the pill's own 8px top margin:
+          block-level siblings collapse to the larger of the two, so this value alone is what
+          shows. */}
+      <Stack spacing={1} sx={{ mb: '16px' }}>
+        {visible.map((source, index) => (
+          <CitableSourceItem
+            key={source.id || source.url || index}
+            source={source}
+            conflictingTitles={conflictingTitlesOf(source, titleById)}
+          />
         ))}
       </Stack>
+
+      <ExpandCollapseButton
+        needsTruncation={hiddenCount > 0}
+        isExpanded={expanded}
+        onToggle={() => setExpanded(v => !v)}
+        collapsedLabel={`Show ${hiddenCount} More`}
+        testId="citable-sources-show-more-btn"
+      />
     </Box>
   );
 };

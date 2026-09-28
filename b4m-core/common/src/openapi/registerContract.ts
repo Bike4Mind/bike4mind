@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import { getOpenApiMetadata } from '@asteasolutions/zod-to-openapi';
 import { registry } from './registry';
 import { SECURITY_REQUIREMENT, JWT_SECURITY_REQUIREMENT } from './security';
 import { ErrorResponse, DEPRECATED_NAME_METADATA } from './schemas';
@@ -40,6 +41,62 @@ function annotateInheritedName(schema: z.ZodTypeAny): z.ZodTypeAny {
   const inherited = objectSchema.shape?.name;
   if (!inherited || inherited !== ApiErrorSchema.shape.name || !objectSchema.extend) return schema;
   return objectSchema.extend({ name: inherited.openapi(DEPRECATED_NAME_METADATA) });
+}
+
+/**
+ * zod-to-openapi derives a parameter's `required`/nullable-ness from
+ * `schema.safeParse(undefined)`/`schema.safeParse(null)` (its `isOptionalSchema`/
+ * `isNullableSchema`). For a bare `z.coerce.*` field this is wrong: `Number(null)`,
+ * `String(null)`, etc. all coerce successfully, so a genuinely required
+ * `z.coerce.number()` query param gets documented as optional and nullable
+ * (`type: ['number', 'null']`) even though an HTTP query/path value is always either
+ * a string or absent - never a literal JSON `null`.
+ *
+ * Rather than reimplement zod-to-openapi's required/nullable/type/format/checks
+ * derivation, hand it a same-shaped schema with `coerce` turned off - `def.checks`/
+ * `def.format` carry over untouched, so only the required/nullable reporting changes.
+ * Only a *bare* `z.coerce.*` field is touched: `.optional()`/`.nullable()`/`.default()`
+ * wrap it in an outer node whose own `def.coerce` is undefined, so a deliberately
+ * optional or nullable coerced field is left alone.
+ *
+ * `.openapi()` metadata (description, example, a `param` override, ...) is registered
+ * against the schema *object*, not its def, so a fresh instance built straight from the
+ * def would silently lose whatever the field's own `.openapi()` call attached - carry
+ * it forward explicitly.
+ */
+function undoCoercionForOpenApi(schema: z.ZodTypeAny): z.ZodTypeAny {
+  const internals = (schema as unknown as { _zod?: { def?: Record<string, unknown> } })._zod;
+  if (internals?.def?.coerce !== true) return schema;
+  // `.clone(def)` is zod v4's own supported rebuild path (unlike reflecting on
+  // `schema.constructor`, which assumes a `(def) => instance` signature zod doesn't
+  // promise to keep) - `_zod.def` is still fine to read, that part is documented
+  // library-author-facing internals.
+  const cloneable = schema as unknown as { clone: (def: Record<string, unknown>) => z.ZodTypeAny };
+  const cloned = cloneable.clone({ ...internals.def, coerce: false });
+  return cloned.openapi(getOpenApiMetadata(schema));
+}
+
+/**
+ * Apply {@link undoCoercionForOpenApi} across a `pathParams`/`queryParams` object
+ * schema's fields. Structural rather than plain `z.ZodObject` access for the same
+ * reason as {@link annotateInheritedName}: shape values widen to `$ZodType`, which
+ * does not carry `.safeExtend()`'s precise return type - cast back to `T` at the end,
+ * since `.safeExtend()` on a `ZodObject` always yields another `ZodObject`. `.safeExtend()`
+ * rather than `.extend()`: zod 4 refuses to overwrite keys with `.extend()` on an object
+ * that carries a `.refine()` (e.g. a `from <= to` range check), and throws at spec
+ * generation instead - `.safeExtend()` is the same override, minus that restriction.
+ */
+function withAccurateCoercedParams<T extends z.ZodObject<z.ZodRawShape>>(objectSchema: T | undefined): T | undefined {
+  const shapeAndExtend = objectSchema as unknown as
+    | { shape?: Record<string, z.ZodTypeAny>; safeExtend?: (shape: Record<string, z.ZodTypeAny>) => z.ZodTypeAny }
+    | undefined;
+  if (!shapeAndExtend?.shape || !shapeAndExtend.safeExtend) return objectSchema;
+  const overrides: Record<string, z.ZodTypeAny> = {};
+  for (const [key, fieldSchema] of Object.entries(shapeAndExtend.shape)) {
+    const fixed = undoCoercionForOpenApi(fieldSchema);
+    if (fixed !== fieldSchema) overrides[key] = fixed;
+  }
+  return Object.keys(overrides).length > 0 ? (shapeAndExtend.safeExtend(overrides) as T) : objectSchema;
 }
 
 /**
@@ -117,16 +174,16 @@ export function registerContract(contract: EndpointContract): void {
     };
   }
 
-  // Any NON-streaming contract with a request body OR path params returns 422 on
-  // validation failure. Body validation: both adapters guarantee it (Next: ZodError
-  // -> errorHandler -> UnprocessableEntity; Lambda: safeParse -> 422). Path-param
-  // validation currently only runs on the Next adapter (see the `pathParams` doc
-  // comment in api-contract/types.ts) - documenting 422 here regardless is still
-  // correct for every contract actually served today. Auto-document it (unless the
-  // contract declares its own 422). Streaming endpoints are excluded: they open
-  // the stream first, so a bad body arrives as an in-band SSE `error` event, not
-  // a 422 JSON body.
-  if ((contract.request || contract.pathParams) && !contract.streaming && !responses['422']) {
+  // Any NON-streaming contract with a request body, path params, or query params
+  // returns 422 on validation failure. Body validation: both adapters guarantee it
+  // (Next: ZodError -> errorHandler -> UnprocessableEntity; Lambda: safeParse ->
+  // 422). Path/query-param validation currently only runs on the Next adapter (see
+  // the `pathParams`/`queryParams` doc comments in api-contract/types.ts) -
+  // documenting 422 here regardless is still correct for every contract actually
+  // served today. Auto-document it (unless the contract declares its own 422).
+  // Streaming endpoints are excluded: they open the stream first, so a bad body
+  // arrives as an in-band SSE `error` event, not a 422 JSON body.
+  if ((contract.request || contract.pathParams || contract.queryParams) && !contract.streaming && !responses['422']) {
     responses['422'] = {
       description: 'Request failed validation.',
       content: { 'application/json': { schema: ErrorResponse } },
@@ -156,11 +213,13 @@ export function registerContract(contract: EndpointContract): void {
   }
 
   const requestSchema = contract.requestDoc ?? contract.request;
-  // No `.openapi(name)` here: zod-to-openapi always inlines `request.params` into the
-  // operation's `parameters` array rather than a referenceable component, so a name
-  // would never appear in the output - passing the schema directly is equivalent and
-  // doesn't imply a component that doesn't exist.
-  const params = contract.pathParams;
+  // No `.openapi(name)` here: zod-to-openapi always inlines `request.params`/
+  // `request.query` into the operation's `parameters` array rather than a
+  // referenceable component, so a name would never appear in the output - passing
+  // the schema directly is equivalent and doesn't imply a component that doesn't
+  // exist.
+  const params = withAccurateCoercedParams(contract.pathParams);
+  const query = withAccurateCoercedParams(contract.queryParams);
 
   registry.registerPath({
     method: contract.method,
@@ -171,9 +230,10 @@ export function registerContract(contract: EndpointContract): void {
     tags: contract.tags,
     security,
     request:
-      requestSchema || params
+      requestSchema || params || query
         ? {
             ...(params && { params }),
+            ...(query && { query }),
             ...(requestSchema && {
               body: {
                 required: true,

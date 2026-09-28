@@ -7,12 +7,14 @@ import {
   IUserRepository,
   Permission,
   IFriendshipModelAdapter,
+  IUserApiKeyRepository,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, secureParameters } from '@bike4mind/utils';
 import { sendFriendRequest } from '../friendshipService/sendFriendRequest';
 import { addCredits } from '../creditService/addCredits';
 import { subtractCredits } from '../creditService/subtractCredits';
 import { MODERATION_POLICY } from './moderationPolicy';
+import { entersBlockedState } from './accountState';
 
 export const adminUpdateUserSchema = updateUserSchema.extend({
   id: z.string(),
@@ -63,6 +65,8 @@ export interface AdminUpdateUserAdapters {
       update: (organization: Partial<IOrganizationDocument> & { id: string }) => Promise<unknown>;
     };
     friendship: IFriendshipModelAdapter;
+    // Required: a ban, dispute or suspension must deactivate the user's API keys.
+    userApiKeys: Pick<IUserApiKeyRepository, 'deactivateAllByUserId'>;
     /**
      * Optional: when provided, a `currentCredits` change is routed through the
      * audited credit ledger (addCredits/subtractCredits) instead of a raw
@@ -126,6 +130,13 @@ export async function adminUpdateUser(
   // so they never land as stray top-level fields on the user doc.
   const previousBalance = user.currentCredits ?? 0;
   const { moderationStatus, creditReason, creditDelta: signedDelta, ...baseParams } = params;
+  // Which moderation statuses block (only `suspended`) lives in accountState.ts, shared with the
+  // Stripe dispute path and the client use-time gate.
+  const enteringBlockedState = entersBlockedState(user, {
+    isBanned: params.isBanned ?? user.isBanned,
+    disputePending: params.disputePending ?? user.disputePending,
+    moderation: { status: moderationStatus ?? user.moderation?.status },
+  });
   // A signed `creditDelta` is applied verbatim (no interim-spend refund). Absolute
   // `currentCredits` falls back to delta-from-snapshot.
   const rawDelta =
@@ -139,11 +150,12 @@ export async function adminUpdateUser(
   // it is already negative, `-previousBalance` is a positive floor that would invert a
   // deduction into a credit, so apply the delta verbatim in that case.
   const creditDelta = previousBalance >= 0 ? Math.max(rawDelta, -previousBalance) : rawDelta;
-  // Stamp a purchase timestamp only for a net grant; a deduction must not count as a purchase.
-  const lastCreditsPurchasedAt = creditDelta > 0 ? new Date() : user.lastCreditsPurchasedAt;
   const auditCreditChange = creditDelta !== 0 && !!db.creditTransactions;
 
-  const builtParams = { ...baseParams, lastCreditsPurchasedAt };
+  // Stamp a purchase timestamp only for a net grant: a deduction is not a purchase, and carrying
+  // the field on every other admin save would $set the read snapshot back over a concurrent
+  // purchase stamp (addCredits only stamps for type === 'purchase', so an admin grant needs this).
+  const builtParams = creditDelta > 0 ? { ...baseParams, lastCreditsPurchasedAt: new Date() } : baseParams;
   const builtUser = applyBaseUserUpdates(user, builtParams);
   // Persist ONLY the fields this request changed, never a spread of the read snapshot -
   // that is what let an admin save round-trip (and revert) a concurrent tokenVersion bump
@@ -240,6 +252,11 @@ export async function adminUpdateUser(
       throttledUntil:
         moderationStatus === 'throttled' ? new Date(Date.now() + MODERATION_POLICY.throttleDurationMs) : null,
     });
+  }
+
+  // Leaving the state later does not reactivate keys; the user mints new ones.
+  if (enteringBlockedState) {
+    await db.userApiKeys.deactivateAllByUserId(params.id);
   }
 
   const finalUser = await db.users.findById(params.id);

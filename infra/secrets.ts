@@ -158,6 +158,11 @@ export const secrets = {
   // Migration to standalone Overwatch = repoint OVERWATCH_INGEST_URL + re-mint key. Zero code change.
   OVERWATCH_INGEST_URL: new sst.Secret('OVERWATCH_INGEST_URL', 'not-configured'),
   OVERWATCH_INGEST_KEY: new sst.Secret('OVERWATCH_INGEST_KEY', 'not-configured'),
+  // Ingest keys for the other Overwatch products this deployment serves (premium overlays), as JSON:
+  // {"<productId>": "<ingest key>"}. Each key is minted in Overwatch bound to its own productId, since
+  // the ingest endpoint rejects an event whose productId is not the key's. Adding a product is a
+  // secret change, not a code change. Set per-stage like the key above.
+  OVERWATCH_PRODUCT_INGEST_KEYS: new sst.Secret('OVERWATCH_PRODUCT_INGEST_KEYS', 'not-configured'),
   // b4m-side kill switch for analytics emission. Set to 'false' to silence emission without
   // touching the receiver. Separate from OVERWATCH_INGEST_ENABLED (receiver-side).
   B4M_ANALYTICS_ENABLED: new sst.Secret('B4M_ANALYTICS_ENABLED', 'true'),

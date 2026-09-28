@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { OpenAIImageCostCalculator } from './OpenAIImageCostCalculator';
+import { OMITTED_QUALITY_TIER, OpenAIImageCostCalculator } from './OpenAIImageCostCalculator';
 import { ImageModels } from '@bike4mind/common';
 
 describe('OpenAIImageCostCalculator', () => {
@@ -171,10 +171,40 @@ describe('OpenAIImageCostCalculator', () => {
           );
         });
 
-        // An omitted quality is a different case: it stays on the medium default (see #2899's
-        // scope note), so a change to one must not silently drag the other along.
+        // An omitted quality is the other half of the same root cause and is answered the other
+        // way round (#3007): its price does not move, the dispatch sites pin the forwarded tier
+        // to match it instead. So a change to 'auto' must not silently drag this along.
         it('leaves an omitted quality on the medium default', () => {
           expect(calculator.getCost({ model, quality: undefined, size: '1024x1024' })).toBe(medium1024);
+        });
+      });
+    }
+  });
+
+  // #3007: an omitted quality is not repriced - it is pinned on dispatch to the tier billed
+  // here, so the render matches the charge. OMITTED_QUALITY_TIER is the single value both
+  // halves read; these fail if the price and the pin are ever edited apart.
+  describe('omitted quality is priced at OMITTED_QUALITY_TIER', () => {
+    const models = [
+      ImageModels.GPT_IMAGE_1,
+      ImageModels.GPT_IMAGE_1_5,
+      ImageModels.GPT_IMAGE_1_MINI,
+      ImageModels.GPT_IMAGE_2,
+    ] as const;
+
+    for (const model of models) {
+      describe(model, () => {
+        it.each(['1024x1024', '1024x1536', '1536x1024'] as const)(
+          'charges an omitted quality exactly what the pinned tier costs at %s',
+          size => {
+            expect(calculator.getCost({ model, quality: undefined, size })).toBe(
+              calculator.getCost({ model, quality: OMITTED_QUALITY_TIER, size })
+            );
+          }
+        );
+
+        it('agrees with the pinned tier when the size also falls back', () => {
+          expect(calculator.getCost({ model })).toBe(calculator.getCost({ model, quality: OMITTED_QUALITY_TIER }));
         });
       });
     }

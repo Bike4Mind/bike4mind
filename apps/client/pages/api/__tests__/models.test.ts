@@ -139,12 +139,18 @@ describe('/api/models provider coverage', () => {
 
 describe('/api/models parity with getAvailableModels', () => {
   it('filters private models out of the picker response', async () => {
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ ...noKeys, bfl: 'bfl-key' });
     const models = await callRoute('user-1');
 
     expect(models.some(m => m.id === PRIVATE_BFL_MODEL)).toBe(false);
-    // Control: the same always-constructed BFL listing still contributes.
+    // Control: a keyed BFL listing still contributes its public model.
     expect(models.some(m => m.id === PUBLIC_BFL_MODEL)).toBe(true);
     expect(models.every(m => !m.private)).toBe(true);
+  });
+
+  it('omits BFL entirely when no BFL key is configured', async () => {
+    const models = await callRoute('user-1');
+    expect(models.some(m => m.id === PUBLIC_BFL_MODEL)).toBe(false);
   });
 
   it('omits Bedrock and AWS under self-host and offers them otherwise', async () => {

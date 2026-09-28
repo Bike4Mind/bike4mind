@@ -25,6 +25,8 @@ export type RecordableToolUse = {
   id?: string;
   returnValue?: string;
   success?: boolean;
+  /** Wall-clock ms the tool took to run, success or failure. Undefined when the caller has none. */
+  executionTime?: number;
 };
 
 export function truncateToolResult(observation: string): string {
@@ -45,7 +47,8 @@ export function recordToolResult(
   toolsUsed: RecordableToolUse[],
   call: { id?: string; name: string },
   observation: string,
-  success: boolean
+  success: boolean,
+  executionTimeMs?: number
 ): void {
   const wantId = call.id || undefined;
   const entry = toolsUsed.find(
@@ -61,4 +64,7 @@ export function recordToolResult(
   }
   entry.returnValue = truncateToolResult(String(observation));
   entry.success = success;
+  // Left undefined (rather than defaulted to e.g. 0) when the caller has no timing - see
+  // RecordableToolUse's doc comment.
+  if (executionTimeMs !== undefined) entry.executionTime = executionTimeMs;
 }

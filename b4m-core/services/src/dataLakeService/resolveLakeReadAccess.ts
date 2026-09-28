@@ -155,6 +155,57 @@ export function resolveLakeReadAccess(
   };
 }
 
+/** `resolveEnforceReadGrantsResult`'s answer - see that function's doc for `readSucceeded`'s contract. */
+export interface EnforceReadGrantsResult {
+  /** The ENFORCED decision - identical to what `resolveEnforceReadGrants` returns alone. */
+  enforced: boolean;
+  /**
+   * False only when the underlying flag read THREW and `enforced` is therefore the fail-closed
+   * default, not the platform's real setting - a caller measuring telemetry (not gating retrieval)
+   * off `enforced` needs this to tell "off" from "unknown" (#3155). True for an unwired `settings`
+   * too: an absent adapter has nothing to fail, matching the same "unwired is not degraded" contract
+   * `getDynamicDataLakeAccess`'s `excludedByAccessCountPrerequisitesComplete` already keeps.
+   */
+  readSucceeded: boolean;
+}
+
+/**
+ * `resolveEnforceReadGrants`, plus whether the read that produced it actually succeeded. Exists
+ * because that function's `false` return is ambiguous by design (report-only vs. read-failed), which
+ * every RETRIEVAL caller wants (a failed read must gate exactly like a real OFF) but a caller
+ * measuring gate-EXCLUSION telemetry from the same `includeReaders` value cannot: a failed read here
+ * silently narrows `grantedLakeReachFor`'s reach (reader/org grants excluded), which would make an
+ * exclusion count OVER-count a lake the caller actually holds a grant on. See the two
+ * `getDynamicDataLakeTags.ts` call sites for how `readSucceeded` feeds that count's own
+ * prerequisites-complete gate.
+ */
+export async function resolveEnforceReadGrantsResult(
+  settings: Pick<IAdminSettingsRepository, 'getSettingsValue'> | undefined,
+  logger?: LakeAccessLogger,
+  turnScope?: object
+): Promise<EnforceReadGrantsResult> {
+  if (!settings) return { enforced: false, readSucceeded: true };
+  try {
+    // `getSettingsValue` caches nothing (AdminSettingsModel round-trips to Mongo per call), so a
+    // resolver that runs per TOOL CALL re-reads this flag every time. `turnScope` collapses that to
+    // one read per turn; omitting it keeps the read unmemoized, which is what the once-per-request
+    // browse and manage callers want.
+    //
+    // The MEMO SEES THE RAW READ, deliberately, so the throw below still reaches the catch on every
+    // attempt and the rejection is evicted rather than cached. Memoizing this function's own return
+    // instead would cache the report-only `false` a transient failure produces, holding retrieval
+    // narrowed for the rest of the turn with nothing left to say why.
+    const readFlag = () => settings.getSettingsValue(ENFORCE_LAKE_READ_GRANTS_KEY).then(value => value === true);
+    const enforced = turnScope
+      ? await enforceFlagByTurn(turnScope, ENFORCE_LAKE_READ_GRANTS_KEY, readFlag)
+      : await readFlag();
+    return { enforced, readSucceeded: true };
+  } catch (err) {
+    logger?.warn?.('[lakeReadGrantCutover] enforce-flag read failed; treating as report-only', err);
+    return { enforced: false, readSucceeded: false };
+  }
+}
+
 /**
  * Whether read-grant resolution is ENFORCED right now - the platform setting alone. Two states remain:
  * ENFORCE (the setting is ON, which includes a missing row, since `getSettingsValue` falls back to
@@ -176,29 +227,17 @@ export function resolveLakeReadAccess(
  *
  * Pass `turnScope` from a caller that runs per TOOL CALL to collapse the flag read to one per turn -
  * see the call site for why the memo wraps the raw read rather than this function's answer.
+ *
+ * A caller that also needs to tell "off" apart from "read failed" (telemetry, not gating) wants
+ * `resolveEnforceReadGrantsResult` instead - this is a thin wrapper over it for the callers that
+ * only ever wanted the enforced boolean.
  */
 export async function resolveEnforceReadGrants(
   settings: Pick<IAdminSettingsRepository, 'getSettingsValue'> | undefined,
   logger?: LakeAccessLogger,
   turnScope?: object
 ): Promise<boolean> {
-  if (!settings) return false;
-  try {
-    // `getSettingsValue` caches nothing (AdminSettingsModel round-trips to Mongo per call), so a
-    // resolver that runs per TOOL CALL re-reads this flag every time. `turnScope` collapses that to
-    // one read per turn; omitting it keeps the read unmemoized, which is what the once-per-request
-    // browse and manage callers want.
-    //
-    // The MEMO SEES THE RAW READ, deliberately, so the throw below still reaches the catch on every
-    // attempt and the rejection is evicted rather than cached. Memoizing this function's own return
-    // instead would cache the report-only `false` a transient failure produces, holding retrieval
-    // narrowed for the rest of the turn with nothing left to say why.
-    const readFlag = () => settings.getSettingsValue(ENFORCE_LAKE_READ_GRANTS_KEY).then(value => value === true);
-    return turnScope ? await enforceFlagByTurn(turnScope, ENFORCE_LAKE_READ_GRANTS_KEY, readFlag) : await readFlag();
-  } catch (err) {
-    logger?.warn?.('[lakeReadGrantCutover] enforce-flag read failed; treating as report-only', err);
-    return false;
-  }
+  return (await resolveEnforceReadGrantsResult(settings, logger, turnScope)).enforced;
 }
 
 /** Grant-repo slice the id resolution needs: one principal's active grants. */
