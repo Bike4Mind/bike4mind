@@ -255,7 +255,7 @@ describe('approveDataLakeProposal', () => {
     expect(admitSource).not.toHaveBeenCalled();
   });
 
-  // #3298: approving a proposal left no trace in the lake's History tab - reviewDataLakeProposal
+  // Approving a proposal left no trace in the lake's History tab - reviewDataLakeProposal
   // never called recordLakeConfigChange at all.
   it('records an approve-proposal history event naming the source and the reviewer', async () => {
     const { deps, record } = adapters();
