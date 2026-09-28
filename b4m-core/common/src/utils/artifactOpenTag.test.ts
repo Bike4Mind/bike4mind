@@ -70,16 +70,23 @@ const GROWTH_SMALL_N = 10_000;
 
 describe('scanArtifactOpenTag', () => {
   it.each(['one', 'run'] as const)('matches the old %s regex at every position of seeded fuzz input', leading => {
+    // Compared as JSON with one expect at the end: an expect per position made this test
+    // seconds long, which hit the timeout under suite load.
     const rand = mulberry32(leading === 'one' ? 1 : 2);
-    for (let i = 0; i < 5000; i++) {
+    const mismatches: string[] = [];
+    for (let i = 0; i < 5000 && mismatches.length < 5; i++) {
       const text = randomText(rand);
       const memo: ArtifactTagMemo = {};
       for (let at = 0; at < text.length; at++) {
-        const expected = oldTag(text, at, leading);
-        expect(scanArtifactOpenTag(text, at, leading, memo)).toEqual(expected);
-        expect(scanArtifactOpenTag(text, at, leading)).toEqual(expected);
+        const expected = JSON.stringify(oldTag(text, at, leading));
+        const withMemo = JSON.stringify(scanArtifactOpenTag(text, at, leading, memo));
+        const withoutMemo = JSON.stringify(scanArtifactOpenTag(text, at, leading));
+        if (withMemo !== expected || withoutMemo !== expected) {
+          mismatches.push(JSON.stringify({ text, at, expected, withMemo, withoutMemo }));
+        }
       }
     }
+    expect(mismatches).toEqual([]);
   });
 
   it('reads U+00A0 and newlines as whitespace and skips a quoted >', () => {
