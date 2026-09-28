@@ -175,6 +175,28 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     expect(mockInvoke).not.toHaveBeenCalled();
   });
 
+  it('ignores a caller-sent intent/promptEnhancement: both come from the prompt resolver', async () => {
+    const { req, res } = fire({
+      apiKey: null,
+      body: {
+        prompt: 'a red bicycle on a white background',
+        model: 'gpt-image-1',
+        intent: 'continuation',
+        promptEnhancement: { originalPrompt: 'x', enhancedPrompt: 'y', promptWasEnhanced: true },
+      },
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          intent: 'fresh',
+          promptEnhancement: expect.objectContaining({ originalPrompt: 'a red bicycle on a white background' }),
+        }),
+      })
+    );
+  });
+
   it('serves the legacy /api/ai/generate-image path with the same handler', () => {
     expect(legacyHandler).toBe(handler);
   });

@@ -2258,39 +2258,6 @@
               null
             ]
           },
-          "intent": {
-            "type": "string",
-            "enum": [
-              "fresh",
-              "continuation"
-            ]
-          },
-          "promptEnhancement": {
-            "type": "object",
-            "properties": {
-              "originalPrompt": {
-                "type": "string"
-              },
-              "enhancedPrompt": {
-                "type": "string"
-              },
-              "promptWasEnhanced": {
-                "type": "boolean"
-              },
-              "intent": {
-                "type": "string",
-                "enum": [
-                  "fresh",
-                  "continuation"
-                ]
-              }
-            },
-            "required": [
-              "originalPrompt",
-              "enhancedPrompt",
-              "promptWasEnhanced"
-            ]
-          },
           "sessionName": {
             "type": "string"
           },

@@ -128,7 +128,7 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
       usedRewrittenPrompt: shouldUseRewrittenPrompt,
     });
 
-    req.logger.log(`[DEBUG API] ✅ imageGeneration.invoke completed in ${endTime - startTime}ms`);
+    req.logger.log(`[DEBUG API] imageGeneration.invoke completed in ${endTime - startTime}ms`);
 
     await Promise.all(asyncPromises);
 
@@ -143,7 +143,7 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
 
     return res.json(response);
   } catch (error) {
-    req.logger.error(`[DEBUG API] ❌ Error in generate-image endpoint:`, {
+    req.logger.error(`[DEBUG API] Error in generate-image endpoint:`, {
       error,
       errorMessage: error instanceof Error ? error.message : 'Unknown error',
       userId: req.user?.id,
