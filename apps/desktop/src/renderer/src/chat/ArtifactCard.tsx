@@ -4,7 +4,7 @@ import Chip from '@mui/joy/Chip';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import type { ChatArtifact } from '@shared/chat';
+import type { ChatArtifact, ChatArtifactView } from '@shared/chat';
 import { HtmlArtifactFrame } from './HtmlArtifactFrame';
 import { ChevronIcon } from './icons';
 
@@ -32,8 +32,11 @@ import { ChevronIcon } from './icons';
  */
 const RENDERED_TYPES = new Set(['html', 'svg']);
 
-/** What the type chip says. An unlisted type shows its raw value rather than being hidden. */
-const TYPE_LABEL: Record<string, string> = {
+/**
+ * What the type chip says. An unlisted type shows its raw value rather than being hidden.
+ * Exported so the library panel labels a stored artifact the same way the transcript does.
+ */
+export const TYPE_LABEL: Record<string, string> = {
   html: 'HTML',
   svg: 'SVG',
   react: 'React',
@@ -90,7 +93,7 @@ function SvgArtifact({ content, title }: { content: string; title: string }) {
 }
 
 /** Where the server's copy of this artifact ended up, in the words the outcome deserves. */
-function SaveStatus({ artifact }: { artifact: ChatArtifact }) {
+function SaveStatus({ artifact }: { artifact: ChatArtifactView }) {
   const save = artifact.save;
   if (!save) return null;
 
@@ -120,7 +123,7 @@ function SaveStatus({ artifact }: { artifact: ChatArtifact }) {
  * line, while an artifact is the deliverable itself. The source disclosure below it borrows the
  * tool row's shape - a summary line and a chevron - so the two read as the same family.
  */
-export function ArtifactCard({ artifact }: { artifact: ChatArtifact }) {
+export function ArtifactCard({ artifact }: { artifact: ChatArtifactView }) {
   const [showSource, setShowSource] = useState(false);
   const rendered = RENDERED_TYPES.has(artifact.type);
   const note = rendered ? undefined : SOURCE_ONLY_NOTE[artifact.type];

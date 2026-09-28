@@ -15,7 +15,7 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatSessionMode, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { groupSessions, orderedSessions, type ProjectGroup } from './grouping';
-import { MoreIcon, PanelLeftIcon, PlusIcon, SearchIcon, SlidersIcon } from './icons';
+import { ArtifactIcon, MoreIcon, PanelLeftIcon, PlusIcon, SearchIcon, SlidersIcon } from './icons';
 import { ModeSwitcher } from './ModeSwitcher';
 import { SessionBadge } from './SessionBadge';
 
@@ -193,9 +193,8 @@ function ProjectHeader({
  * sessions under a header per project, Chat sessions in one flat list - and the account strip.
  *
  * Adapted from Claude Code desktop's layout, with its nav entries dropped rather than shipped
- * as dead links: "Artifacts" has nothing to point at, because desktop conversations are local
- * and produce none, and "Customize" and "More" were removed on the user's instruction. New is
- * the only nav entry left, and it behaves identically in both modes.
+ * as dead links: "Customize" and "More" were removed on the user's instruction. "Artifacts"
+ * came back once replies started producing them. New behaves identically in both modes.
  */
 export function SessionList({
   sessions,
@@ -208,6 +207,7 @@ export function SessionList({
   onToggleCollapsed,
   onSelect,
   onCreate,
+  onOpenArtifacts,
   onCreateInProject,
   onDelete,
   onTogglePin,
@@ -225,6 +225,7 @@ export function SessionList({
   onToggleCollapsed: () => void;
   onSelect: (sessionId: string) => void;
   onCreate: () => void;
+  onOpenArtifacts: () => void;
   onCreateInProject: (directory: string) => void;
   onDelete: (sessionId: string) => void;
   onTogglePin: (session: ChatSessionSummary) => void;
@@ -349,6 +350,9 @@ export function SessionList({
         {/* One label and one behaviour in both modes: it makes a session and opens nothing.
             A Code session starts unbound and its chip row is where a project is chosen. */}
         <NavItem icon={<PlusIcon />} label="New" onClick={onCreate} testId="chat-new-session-btn" />
+        {/* Not scoped to the open session: the list is the server's, so it spans machines and
+            outlives the local session files. */}
+        <NavItem icon={<ArtifactIcon />} label="Artifacts" onClick={onOpenArtifacts} testId="chat-artifacts-btn" />
         <Box sx={{ px: 0.5, pt: 0.5 }}>
           <Input
             size="sm"

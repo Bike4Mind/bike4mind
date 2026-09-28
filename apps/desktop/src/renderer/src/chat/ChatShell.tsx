@@ -6,6 +6,7 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatProject, ChatSessionMode } from '@shared/chat';
+import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { BackgroundProcessPanel } from './BackgroundProcessPanel';
 import { Composer } from './Composer';
 import { MessageThread } from './MessageThread';
@@ -96,6 +97,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   const catalog = useModelCatalog();
   const statuses = useSessionStatuses();
   const [collapsed, setCollapsed] = useState(false);
+  const [showArtifacts, setShowArtifacts] = useState(false);
   const draft = useAttachmentDraft(activeId);
 
   const onFilesDropped = useCallback(
@@ -163,6 +165,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
    * and no way back in. Nothing is asked up front now, so there is nothing left to cancel.
    */
   const onCreate = useCallback(async () => {
+    setShowArtifacts(false);
     if (mode !== 'code') {
       setActiveId(await create());
       return;
@@ -183,6 +186,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
     async (directory: string) => {
       const sibling = sessions.find(session => session.project?.directory === directory)?.project;
       if (!sibling) return;
+      setShowArtifacts(false);
       const created = await createCode({
         directory: sibling.directory,
         branch: sibling.branch,
@@ -234,8 +238,14 @@ export function ChatShell({ account }: { account?: ReactNode }) {
         statuses={statuses}
         collapsed={collapsed}
         onToggleCollapsed={() => setCollapsed(current => !current)}
-        onSelect={setActiveId}
+        onSelect={sessionId => {
+          // The library takes over the same pane the transcript lives in, so picking a
+          // conversation has to put it back or the click reads as doing nothing.
+          setShowArtifacts(false);
+          setActiveId(sessionId);
+        }}
         onCreate={() => void onCreate()}
+        onOpenArtifacts={() => setShowArtifacts(true)}
         onCreateInProject={directory => void onCreateInProject(directory)}
         onDelete={sessionId => void onDelete(sessionId)}
         onTogglePin={session => void togglePin(session)}
@@ -243,91 +253,98 @@ export function ChatShell({ account }: { account?: ReactNode }) {
         footer={account}
       />
 
-      <Stack sx={{ flex: 1, minWidth: 0 }}>
-        <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
-          <Box sx={{ ...contentColumnSx, py: 1.25 }}>
-            {conversation.session ? (
-              <>
-                <SessionHeader title={conversation.session.title} onRename={title => void conversation.rename(title)} />
-                {conversation.session.project && <WorkingDirectoryLine project={conversation.session.project} />}
-              </>
-            ) : (
-              <Typography level="title-sm" textColor="text.tertiary">
-                No conversation open
-              </Typography>
-            )}
+      {showArtifacts ? (
+        <ArtifactLibraryPanel onClose={() => setShowArtifacts(false)} />
+      ) : (
+        <Stack sx={{ flex: 1, minWidth: 0 }}>
+          <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
+            <Box sx={{ ...contentColumnSx, py: 1.25 }}>
+              {conversation.session ? (
+                <>
+                  <SessionHeader
+                    title={conversation.session.title}
+                    onRename={title => void conversation.rename(title)}
+                  />
+                  {conversation.session.project && <WorkingDirectoryLine project={conversation.session.project} />}
+                </>
+              ) : (
+                <Typography level="title-sm" textColor="text.tertiary">
+                  No conversation open
+                </Typography>
+              )}
+            </Box>
           </Box>
-        </Box>
 
-        <MessageThread
-          messages={conversation.messages}
-          sessionId={activeId}
-          onRespond={conversation.respondToApproval}
-        />
+          <MessageThread
+            messages={conversation.messages}
+            sessionId={activeId}
+            onRespond={conversation.respondToApproval}
+          />
 
-        {conversation.sendError && (
-          <Alert size="sm" color="danger" variant="soft" sx={contentColumnSx} data-testid="chat-send-error">
-            {conversation.sendError}
-          </Alert>
-        )}
+          {conversation.sendError && (
+            <Alert size="sm" color="danger" variant="soft" sx={contentColumnSx} data-testid="chat-send-error">
+              {conversation.sendError}
+            </Alert>
+          )}
 
-        {conversation.notice && (
-          <Alert
-            size="sm"
-            color="warning"
-            variant="soft"
-            sx={{ ...contentColumnSx, cursor: 'pointer' }}
-            onClick={conversation.dismissNotice}
-            data-testid="chat-notice"
-          >
-            {conversation.notice}
-          </Alert>
-        )}
+          {conversation.notice && (
+            <Alert
+              size="sm"
+              color="warning"
+              variant="soft"
+              sx={{ ...contentColumnSx, cursor: 'pointer' }}
+              onClick={conversation.dismissNotice}
+              data-testid="chat-notice"
+            >
+              {conversation.notice}
+            </Alert>
+          )}
 
-        <BackgroundProcessPanel processes={background.processes} onStop={background.stop} />
+          <BackgroundProcessPanel processes={background.processes} onStop={background.stop} />
 
-        {codeError && (
-          <Alert
-            size="sm"
-            color="danger"
-            variant="soft"
-            sx={{ ...contentColumnSx, cursor: 'pointer' }}
-            onClick={clearCodeError}
-            data-testid="chat-code-create-error"
-          >
-            {codeError}
-          </Alert>
-        )}
+          {codeError && (
+            <Alert
+              size="sm"
+              color="danger"
+              variant="soft"
+              sx={{ ...contentColumnSx, cursor: 'pointer' }}
+              onClick={clearCodeError}
+              data-testid="chat-code-create-error"
+            >
+              {codeError}
+            </Alert>
+          )}
 
-        {/* Every Code session, bound or not. The chips are how a project is chosen, so gating
+          {/* Every Code session, bound or not. The chips are how a project is chosen, so gating
             them on one already being chosen is what made them unreachable. */}
-        {conversation.session?.mode === 'code' && (
-          <SessionChips project={conversation.session.project ?? null} binding={conversation.project} />
-        )}
+          {conversation.session?.mode === 'code' && (
+            <SessionChips project={conversation.session.project ?? null} binding={conversation.project} />
+          )}
 
-        <Composer
-          sessionId={activeId}
-          disabled={!activeId || creatingCode}
-          streaming={conversation.streaming}
-          attachments={draft}
-          blockedReason={blockedReason}
-          notReady={unbound ? 'No folder' : null}
-          placeholder={
-            conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'
-          }
-          onSend={text => void onSend(text)}
-          onStop={conversation.stop}
-          footer={
-            <ModelPicker
-              catalog={catalog}
-              modelId={conversation.session?.model ?? null}
-              disabled={!activeId}
-              onSelect={model => void conversation.setModel(model)}
-            />
-          }
-          status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
-        />
-      </Stack>
+          <Composer
+            sessionId={activeId}
+            disabled={!activeId || creatingCode}
+            streaming={conversation.streaming}
+            attachments={draft}
+            blockedReason={blockedReason}
+            notReady={unbound ? 'No folder' : null}
+            placeholder={
+              conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'
+            }
+            onSend={text => void onSend(text)}
+            onStop={conversation.stop}
+            footer={
+              <ModelPicker
+                catalog={catalog}
+                modelId={conversation.session?.model ?? null}
+                disabled={!activeId}
+                onSelect={model => void conversation.setModel(model)}
+              />
+            }
+            status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
+          />
+        </Stack>
+      )}
     </Box>
   );
 }

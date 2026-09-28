@@ -177,7 +177,8 @@ export interface AddAttachmentsResult {
 }
 
 /**
- * What an <artifact> block in a reply became.
+ * Everything the artifact card needs to draw one, whether it came out of a reply or back off
+ * the server.
  *
  * Only a subset is RENDERED (see the renderer's ArtifactCard): an artifact body is code the
  * model wrote, and this app has a filesystem and a shell behind its preload bridge, so a type
@@ -185,21 +186,65 @@ export interface AddAttachmentsResult {
  * source. `type` is the server's ArtifactType vocabulary, held as a plain string so this file
  * stays free of core imports (see the header).
  */
-export interface ChatArtifact {
-  /** Stable id, and the id of the server row when one was written. */
+export interface ChatArtifactView {
   id: string;
-  /** The model's own `identifier` attribute, when it gave one. Its handle for an update. */
-  identifier?: string;
   /** Server artifact type: 'html', 'react', 'svg', 'mermaid', 'code', 'python', ... */
   type: string;
-  /** The `type` attribute verbatim, so the markup can be rebuilt for the next turn. */
-  mimeType: string;
   title: string;
   /** The body, verbatim. Never rendered as markup except through an isolated frame. */
   content: string;
-  language?: string;
-  /** How the copy on the server went. Absent until a save has been attempted. */
+  /**
+   * How the copy on the server went. Only a reply's artifact carries one - a row read back out
+   * of the library is on the server by definition, so saying so there would be noise.
+   */
   save?: ChatArtifactSave;
+}
+
+/** What an <artifact> block in a reply became, with the fields only a reply's artifact has. */
+export interface ChatArtifact extends ChatArtifactView {
+  /** The model's own `identifier` attribute, when it gave one. Its handle for an update. */
+  identifier?: string;
+  /** The `type` attribute verbatim, so the markup can be rebuilt for the next turn. */
+  mimeType: string;
+  language?: string;
+}
+
+/**
+ * One row of the artifact library, WITHOUT its body.
+ *
+ * `GET /api/artifacts` returns artifact documents only - the bodies live in their own
+ * collection and come back from `GET /api/artifacts/{id}?includeContent=true`. That split is
+ * kept rather than papered over: a library of fifty artifacts should not pull fifty HTML files
+ * across to draw a list of titles.
+ */
+export interface ChatArtifactSummary {
+  id: string;
+  title: string;
+  type: string;
+  /** ISO timestamp from the server row. */
+  createdAt: string;
+  description?: string;
+}
+
+/**
+ * The answer to `listArtifacts`.
+ *
+ * `error` set means the library could not be READ - offline, signed out, server error - and
+ * says nothing about what is stored. An empty list with no error is the other case: the server
+ * answered and this account has no desktop artifact yet. The panel distinguishes them, because
+ * "try again" is only useful advice for the first.
+ */
+export interface ChatArtifactLibrary {
+  artifacts: ChatArtifactSummary[];
+  /** Total matching rows on the server, which may exceed what `artifacts` holds. */
+  total: number;
+  error?: string;
+}
+
+/** The answer to `readArtifact`: the body for one row, or why it could not be fetched. */
+export interface ChatArtifactContent {
+  artifact?: ChatArtifactView;
+  error?: string;
 }
 
 /**
