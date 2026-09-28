@@ -13,10 +13,10 @@ const makeAdapters = () => {
 
 describe('recordResearchRunOutcome', () => {
   // A run reaching an outcome left no trace in the lake's History tab.
-  it('records a completed outcome under the system rung, naming the run query', async () => {
+  it('records a completed outcome under the system rung, naming the run query and id', async () => {
     const { adapters, record } = makeAdapters();
 
-    await recordResearchRunOutcome(lake(), 'coastal erosion', 'completed', adapters);
+    await recordResearchRunOutcome(lake(), 'coastal erosion', 'completed', 'run-1', adapters);
 
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -25,7 +25,7 @@ describe('recordResearchRunOutcome', () => {
         dataLakeId: 'lake-1',
         manageRung: 'system',
         action: 'complete-research-run',
-        changes: [{ field: 'researchRun', kind: 'literal', after: 'completed: coastal erosion' }],
+        changes: [{ field: 'researchRun', kind: 'literal', after: 'completed: coastal erosion (run run-1)' }],
       })
     );
   });
@@ -33,12 +33,26 @@ describe('recordResearchRunOutcome', () => {
   it('records a failed outcome the same way', async () => {
     const { adapters, record } = makeAdapters();
 
-    await recordResearchRunOutcome(lake(), 'coastal erosion', 'failed', adapters);
+    await recordResearchRunOutcome(lake(), 'coastal erosion', 'failed', 'run-1', adapters);
 
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'complete-research-run',
-        changes: [{ field: 'researchRun', kind: 'literal', after: 'failed: coastal erosion' }],
+        changes: [{ field: 'researchRun', kind: 'literal', after: 'failed: coastal erosion (run run-1)' }],
+      })
+    );
+  });
+
+  // Two runs of the same unedited config share a query - the run id is what tells their History
+  // rows apart, and what pairs a `started` row with the right `completed`/`failed` row.
+  it('encodes the run id, so two runs of the same query do not read as one', async () => {
+    const { adapters, record } = makeAdapters();
+
+    await recordResearchRunOutcome(lake(), 'coastal erosion', 'completed', 'run-2', adapters);
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changes: [{ field: 'researchRun', kind: 'literal', after: 'completed: coastal erosion (run run-2)' }],
       })
     );
   });
@@ -48,7 +62,7 @@ describe('recordResearchRunOutcome', () => {
   it('never attributes the write to the lake creator, even though nothing else authorized it', async () => {
     const { adapters, record } = makeAdapters();
 
-    await recordResearchRunOutcome(lake({ createdByUserId: 'owner-1' }), 'q', 'completed', adapters);
+    await recordResearchRunOutcome(lake({ createdByUserId: 'owner-1' }), 'q', 'completed', 'run-1', adapters);
 
     expect(record.mock.calls[0][0]).not.toMatchObject({ principalKind: 'user', principalId: 'owner-1' });
   });
@@ -57,6 +71,6 @@ describe('recordResearchRunOutcome', () => {
     const { adapters, record } = makeAdapters();
     record.mockRejectedValue(new Error('replica set stepped down'));
 
-    await expect(recordResearchRunOutcome(lake(), 'q', 'completed', adapters)).resolves.toBeUndefined();
+    await expect(recordResearchRunOutcome(lake(), 'q', 'completed', 'run-1', adapters)).resolves.toBeUndefined();
   });
 });
