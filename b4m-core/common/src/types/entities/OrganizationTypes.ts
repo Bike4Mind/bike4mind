@@ -202,6 +202,9 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
    */
   ensureUserDetails(organizationId: string, member: { id: string; email: string; name: string }): Promise<void>;
 
+  /** Atomically `$pull` a member from users/userDetails/adminUserIds and vacate managerId if theirs. */
+  removeMember(organizationId: string, userId: string): Promise<void>;
+
   /**
    * Update a user's usage details within an organization.
    * Uses $inc for creditsDelta (atomic increment) and $set for lastCreditUsedAt.

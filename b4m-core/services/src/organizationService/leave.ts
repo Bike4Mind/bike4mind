@@ -51,7 +51,7 @@ export const leave = async (
   organization.adminUserIds = purged.adminUserIds;
   organization.managerId = purged.managerId;
 
-  await adapters.db.organizations.update(organization);
+  await adapters.db.organizations.removeMember(organization.id, user.id);
 
   // If the org they just left was their currently-selected org, clear it. Otherwise org-scoped
   // access (data-lake AccessContext, team-wide prompts) would still be inferred from a stale

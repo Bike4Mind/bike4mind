@@ -267,10 +267,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * matches no doc and returns null - the caller routes that to the same 'at-capacity' outcome the
    * Stripe path already uses (an admin is alerted to add seats), rather than raising past the ceiling.
    */
-  async addMemberRaisingSeats(
-    organizationId: string,
-    member: IUserShare
-  ): Promise<IOrganizationDocument | null> {
+  async addMemberRaisingSeats(organizationId: string, member: IUserShare): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOneAndUpdate(
       {
         _id: organizationId,
@@ -304,10 +301,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * Returns the PRE-image ({ new: false }); null means already a member, org gone, OR at capacity -
    * the caller re-reads to tell those apart.
    */
-  async addMemberIfUnderCeiling(
-    organizationId: string,
-    member: IUserShare
-  ): Promise<IOrganizationDocument | null> {
+  async addMemberIfUnderCeiling(organizationId: string, member: IUserShare): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOneAndUpdate(
       {
         _id: organizationId,
@@ -509,6 +503,19 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * must seed the row so `users[]` and `userDetails[]` stay in sync at the grant point
    * (schema comment above).
    */
+  /**
+   * Atomically drop a member from `users`, `userDetails` and `adminUserIds`, and vacate
+   * `managerId` if they held it. Targeted `$pull`s rather than a whole-doc write, so a concurrent
+   * add or credit `$inc` on another member survives. Idempotent (safe under a withTransaction retry).
+   */
+  async removeMember(organizationId: string, userId: string): Promise<void> {
+    await this.organizationModel.updateOne(
+      { _id: organizationId },
+      { $pull: { users: { userId }, userDetails: { id: userId }, adminUserIds: userId } }
+    );
+    await this.organizationModel.updateOne({ _id: organizationId, managerId: userId }, { $set: { managerId: null } });
+  }
+
   async ensureUserDetails(organizationId: string, member: { id: string; email: string; name: string }): Promise<void> {
     await this.organizationModel.updateOne(
       { _id: organizationId, 'userDetails.id': { $ne: member.id } },

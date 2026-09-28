@@ -152,7 +152,7 @@ const handler = baseApi()
 
           // Deduct credits from user
           user.currentCredits = (user.currentCredits || 0) - agentData.currentCredits;
-          await userRepository.update(user);
+          await userRepository.incrementCredits(user.id, -agentData.currentCredits);
           updatedUserCredits = user.currentCredits;
 
           console.log(

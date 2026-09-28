@@ -98,7 +98,8 @@ describe('registerUser', () => {
         status: RegInviteStatusType.used,
         usedbyId: 'newUserId',
         usageHistory: [expect.objectContaining({ userId: 'newUserId' })],
-      })
+      }),
+      undefined
     );
   });
 
@@ -237,6 +238,7 @@ describe('registerUser', () => {
     expect(updatedUnlimitedInvite?.status).toBe(RegInviteStatusType.open);
     expect(updatedUnlimitedInvite?.used).toBeUndefined();
     expect(updatedUnlimitedInvite?.usedbyId).toBeUndefined();
+    expect(mockAdapters.db.registrationInvites.update.mock.calls.at(-1)?.[1]).toEqual({ unset: ['used', 'usedbyId'] });
     expect(updatedUnlimitedInvite?.usageHistory?.length).toBe(2);
   });
 

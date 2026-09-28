@@ -17,7 +17,7 @@ interface RequestEmailChangeAdapters {
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
       findByEmail: (email: string) => Promise<IUserDocument | null>;
-      update: (user: IUserDocument) => Promise<unknown>;
+      update: (user: Partial<IUserDocument>) => Promise<unknown>;
     };
   };
   mailer: {
@@ -60,7 +60,14 @@ export const requestEmailChange = async (
   // Reset used flag when generating new token
   user.pendingEmailUsed = null;
 
-  await db.users.update(user);
+  await db.users.update({
+    id: user.id,
+    pendingEmail: user.pendingEmail,
+    pendingEmailToken: user.pendingEmailToken,
+    pendingEmailSentAt: user.pendingEmailSentAt,
+    pendingEmailExpires: user.pendingEmailExpires,
+    pendingEmailUsed: user.pendingEmailUsed,
+  });
 
   // Send security notification to current email address. An emailless account
   // (OAuth signup whose provider did not assert a verified email) is using this

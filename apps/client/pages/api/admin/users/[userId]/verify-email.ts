@@ -42,13 +42,14 @@ const handler = baseApi({ auth: true })
         }
 
         // Update user email verification status
-        user.emailVerified = true;
-        user.emailVerifiedAt = new Date();
-        user.emailVerificationToken = null;
-        user.emailVerificationExpires = null;
-        user.emailVerificationSentAt = null;
-
-        await userRepository.update(user);
+        await userRepository.update({
+          id: user.id,
+          emailVerified: true,
+          emailVerifiedAt: new Date(),
+          emailVerificationToken: null,
+          emailVerificationExpires: null,
+          emailVerificationSentAt: null,
+        });
 
         // Log admin action with audit trail
         await logAuditEvent(

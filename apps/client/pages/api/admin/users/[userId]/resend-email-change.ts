@@ -147,8 +147,7 @@ const handler = baseApi({ auth: true })
       });
 
       // Update the resent timestamp
-      user.pendingEmailSentAt = new Date();
-      await userRepository.update(user);
+      await userRepository.update({ id: user.id, pendingEmailSentAt: new Date() });
 
       // Log admin action
       await logAuditEvent(

@@ -516,6 +516,17 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     );
   }
 
+  /** Atomic, floor-at-zero decrement, so a concurrent change to the counter is not reverted. */
+  async decrementReferralsAvailable(userId: string, count: number): Promise<void> {
+    await this.model.updateOne({ _id: userId }, [
+      {
+        $set: {
+          numReferralsAvailable: { $max: [0, { $subtract: [{ $ifNull: ['$numReferralsAvailable', 0] }, count] }] },
+        },
+      },
+    ]);
+  }
+
   async incrementTokenVersion(userId: string): Promise<number> {
     const updated = await this.model.findByIdAndUpdate(userId, { $inc: { tokenVersion: 1 } }, { new: true });
     // A null result means the user was deleted between the caller's findById and this $inc.

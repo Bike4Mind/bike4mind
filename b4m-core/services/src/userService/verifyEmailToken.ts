@@ -14,7 +14,7 @@ interface VerifyEmailTokenAdapters {
   db: {
     users: {
       findByEmailVerificationToken: (token: string) => Promise<IUserDocument | null>;
-      update: (user: IUserDocument) => Promise<unknown>;
+      update: (user: Partial<IUserDocument>) => Promise<unknown>;
     };
   };
 }
@@ -45,14 +45,15 @@ export const verifyEmailToken = async (
     throw new BadRequestError('Verification token has expired. Please request a new one.');
   }
 
-  // Mark token as used FIRST (prevents race conditions)
-  user.emailVerificationUsed = true;
-  user.emailVerified = true;
-  user.emailVerifiedAt = new Date();
-  // Clear the verification token fields
-  user.emailVerificationToken = null;
-  user.emailVerificationSentAt = null;
-  user.emailVerificationExpires = null;
-
-  await db.users.update(user);
+  await db.users.update({
+    id: user.id,
+    // Mark token as used FIRST (prevents race conditions)
+    emailVerificationUsed: true,
+    emailVerified: true,
+    emailVerifiedAt: new Date(),
+    // Clear the verification token fields
+    emailVerificationToken: null,
+    emailVerificationSentAt: null,
+    emailVerificationExpires: null,
+  });
 };
