@@ -252,7 +252,10 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // Credit warning conditions - extracted for readability
   const creditsExhausted = effectiveCredits <= 0 || creditsExhaustedByVoice;
   const isLowCredits = effectiveCredits > 0 && effectiveCredits < LOW_CREDITS_THRESHOLD && !creditsExhaustedByVoice;
-  const showCreditOverlay = enforceCredits && (creditsExhausted || (isLowCredits && !lowCreditsWarningDismissed));
+  // Out of credits replaces the message box outright (see CreditsWarning); only the
+  // low-credits notice still overlays it, so only that one needs the box to hold its height.
+  const creditsBlocked = enforceCredits && creditsExhausted && hasModels;
+  const showCreditOverlay = enforceCredits && isLowCredits && !lowCreditsWarningDismissed;
 
   // FilePond expects the max file size as an MB string, e.g. '100MB'
   const maxFileSizeForFilePond = `${maxFileSize}MB`;
@@ -622,118 +625,121 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                   turns={compactedTurns}
                   onDismiss={() => setCompactionNoteDismissed(true)}
                 />
-                <Stack
-                  className="session-bottom-input-row"
-                  direction="row"
-                  spacing={2}
-                  alignItems="center"
-                  sx={{ position: 'relative', paddingTop: '10px' }}
-                >
-                  <Box
-                    className="session-bottom-editor-wrapper"
-                    sx={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      width: '100%',
-                      padding: '8px 0px',
-                      flex: 1,
-                      overflow: 'visible',
-                      position: 'relative',
-                      minHeight: showCreditOverlay ? '60px' : undefined,
-                      transition: 'box-shadow 300ms, outline 300ms',
-                      boxShadow: rephraseGlow
-                        ? '0 0 0 2px rgba(59,130,246,0.3), 0 0 12px rgba(59,130,246,0.45)'
-                        : undefined,
-                      outline: rephraseGlow ? '2px solid rgba(59,130,246,0.35)' : undefined,
-                      borderRadius: '8px',
-                    }}
+                {creditsBlocked ? (
+                  <CreditsWarning show />
+                ) : (
+                  <Stack
+                    className="session-bottom-input-row"
+                    direction="row"
+                    spacing={2}
+                    alignItems="center"
+                    sx={{ position: 'relative', paddingTop: '10px' }}
                   >
-                    <CreditsWarning show={creditsExhausted && enforceCredits && hasModels} />
-                    <LowCreditsWarning
-                      show={isLowCredits && !lowCreditsWarningDismissed && enforceCredits && hasModels}
-                      currentCredits={effectiveCredits}
-                      onDismiss={() => setLowCreditsWarningDismissed(true)}
-                    />
-                    {/* Slash command suggestions */}
-                    {showSlashSuggestions && (
-                      <SlashCommandSuggestions
-                        input={chatInputValue}
-                        onSelectSuggestion={(suggestion: string, selectionRange?: { start: number; end: number }) => {
-                          setChatInputValue(suggestion);
-                          setShowSlashSuggestions(false);
-
-                          // If there's a selection range (placeholder), select it after React and Lexical update
-                          if (selectionRange && lexicalInputRef.current) {
-                            // Use longer timeout to ensure Lexical has fully synced the new value
-                            setTimeout(() => {
-                              lexicalInputRef.current?.focus();
-                              lexicalInputRef.current?.setSelection(selectionRange.start, selectionRange.end);
-                            }, 50);
-                          } else {
-                            // No selection range, just focus at the end
-                            setTimeout(() => {
-                              lexicalInputRef.current?.focus();
-                            }, 50);
-                          }
-                        }}
-                        onVisibilityChange={() => {}}
+                    <Box
+                      className="session-bottom-editor-wrapper"
+                      sx={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        width: '100%',
+                        padding: '8px 0px',
+                        flex: 1,
+                        overflow: 'visible',
+                        position: 'relative',
+                        minHeight: showCreditOverlay ? '60px' : undefined,
+                        transition: 'box-shadow 300ms, outline 300ms',
+                        boxShadow: rephraseGlow
+                          ? '0 0 0 2px rgba(59,130,246,0.3), 0 0 12px rgba(59,130,246,0.45)'
+                          : undefined,
+                        outline: rephraseGlow ? '2px solid rgba(59,130,246,0.35)' : undefined,
+                        borderRadius: '8px',
+                      }}
+                    >
+                      <LowCreditsWarning
+                        show={isLowCredits && !lowCreditsWarningDismissed && enforceCredits && hasModels}
+                        currentCredits={effectiveCredits}
+                        onDismiss={() => setLowCreditsWarningDismissed(true)}
                       />
-                    )}
+                      {/* Slash command suggestions */}
+                      {showSlashSuggestions && (
+                        <SlashCommandSuggestions
+                          input={chatInputValue}
+                          onSelectSuggestion={(suggestion: string, selectionRange?: { start: number; end: number }) => {
+                            setChatInputValue(suggestion);
+                            setShowSlashSuggestions(false);
 
-                    <LexicalChatInput
-                      ref={lexicalInputRef}
-                      value={chatInputValue}
-                      onChange={handleInputChange}
-                      onSubmit={handleEditorSubmit}
-                      onPaste={handlePaste}
-                      placeholder={`${t('session.typeYourMessage')}...`}
-                      agents={lexicalAgents}
-                    />
+                            // If there's a selection range (placeholder), select it after React and Lexical update
+                            if (selectionRange && lexicalInputRef.current) {
+                              // Use longer timeout to ensure Lexical has fully synced the new value
+                              setTimeout(() => {
+                                lexicalInputRef.current?.focus();
+                                lexicalInputRef.current?.setSelection(selectionRange.start, selectionRange.end);
+                              }, 50);
+                            } else {
+                              // No selection range, just focus at the end
+                              setTimeout(() => {
+                                lexicalInputRef.current?.focus();
+                              }, 50);
+                            }
+                          }}
+                          onVisibilityChange={() => {}}
+                        />
+                      )}
 
-                    {contextMeter.show ? (
-                      <Box
-                        sx={{
-                          position: 'absolute',
-                          mr: 20,
-                          // Passive readout: must stay below composer popovers (attach
-                          // menu zIndex 1000 in AttachFileButton.tsx, slash/mention
-                          // suggestions), or it intercepts their clicks.
-                          zIndex: 1,
-                          backgroundColor: 'background.surface',
-                          borderRadius: '6px',
-                          padding: '4px 8px',
-                        }}
-                      >
-                        <Tooltip title="Assembled context size for this notebook (last turn)">
-                          <Typography
-                            sx={theme => ({
-                              color: contextMeter.danger ? 'red' : theme.palette.text.primary,
-                              textAlign: 'right',
-                              leadingTrim: 'both',
-                              textEdge: 'cap',
-                              fontSize: '14px',
-                              fontStyle: 'normal',
-                              fontWeight: '400',
-                              lineHeight: '100%',
-                              display: 'flex',
-                              flexDirection: 'column',
-                              alignItems: 'flex-end',
-                            })}
-                            variant="plain"
-                            level="body-xs"
-                          >
-                            <Box component="span" sx={{ fontWeight: '500' }}>
-                              {contextMeter.primary}
-                            </Box>
-                            <Box component="span" sx={{ opacity: 0.7, fontSize: '12px', mt: 0.5 }}>
-                              {contextMeter.secondary}
-                            </Box>
-                          </Typography>
-                        </Tooltip>
-                      </Box>
-                    ) : null}
-                  </Box>
-                </Stack>
+                      <LexicalChatInput
+                        ref={lexicalInputRef}
+                        value={chatInputValue}
+                        onChange={handleInputChange}
+                        onSubmit={handleEditorSubmit}
+                        onPaste={handlePaste}
+                        placeholder={`${t('session.typeYourMessage')}...`}
+                        agents={lexicalAgents}
+                      />
+
+                      {contextMeter.show ? (
+                        <Box
+                          sx={{
+                            position: 'absolute',
+                            mr: 20,
+                            // Passive readout: must stay below composer popovers (attach
+                            // menu zIndex 1000 in AttachFileButton.tsx, slash/mention
+                            // suggestions), or it intercepts their clicks.
+                            zIndex: 1,
+                            backgroundColor: 'background.surface',
+                            borderRadius: '6px',
+                            padding: '4px 8px',
+                          }}
+                        >
+                          <Tooltip title="Assembled context size for this notebook (last turn)">
+                            <Typography
+                              sx={theme => ({
+                                color: contextMeter.danger ? 'red' : theme.palette.text.primary,
+                                textAlign: 'right',
+                                leadingTrim: 'both',
+                                textEdge: 'cap',
+                                fontSize: '14px',
+                                fontStyle: 'normal',
+                                fontWeight: '400',
+                                lineHeight: '100%',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'flex-end',
+                              })}
+                              variant="plain"
+                              level="body-xs"
+                            >
+                              <Box component="span" sx={{ fontWeight: '500' }}>
+                                {contextMeter.primary}
+                              </Box>
+                              <Box component="span" sx={{ opacity: 0.7, fontSize: '12px', mt: 0.5 }}>
+                                {contextMeter.secondary}
+                              </Box>
+                            </Typography>
+                          </Tooltip>
+                        </Box>
+                      ) : null}
+                    </Box>
+                  </Stack>
+                )}
               </Box>
             </Grid>
           </Grid>
