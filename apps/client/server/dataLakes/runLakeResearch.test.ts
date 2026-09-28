@@ -105,6 +105,7 @@ beforeEach(() => {
     totals: { ...emptyResearchRunTotals(), searchHits: 3, proposed: 1 },
     spentMicroUsd: 800,
     stopReason: 'exhausted',
+    judgeStepFailed: false,
   });
   h.recordResearchRunOutcome.mockResolvedValue(undefined);
   h.recordOperationalUsage.mockResolvedValue(undefined);
@@ -126,8 +127,71 @@ describe('runLakeResearch', () => {
 
     expect(h.settleRun).toHaveBeenCalledWith(
       'run-1',
-      expect.objectContaining({ status: 'completed', stopReason: 'exhausted', spentMicroUsd: 800 })
+      expect.objectContaining({ status: 'completed', stopReason: 'exhausted', spentMicroUsd: 800, error: undefined })
     );
+  });
+
+  // "Default" leaves `levers.model` unset, so without this a run cannot be traced to the model that
+  // judged it, and changing the default would silently rewrite its history.
+  it('records the resolved default judge model on the run', async () => {
+    await runLakeResearch('run-1', logger);
+
+    expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ judgeModel: 'default-judge-model' }));
+  });
+
+  it('records the judge model on a run that dies mid-flight too', async () => {
+    h.executeResearchRun.mockRejectedValue(new Error('boom'));
+
+    await expect(runLakeResearch('run-1', logger)).rejects.toThrow(/boom/);
+
+    expect(h.settleRun).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({ status: 'failed', judgeModel: 'default-judge-model' })
+    );
+  });
+
+  describe('a failing judge', () => {
+    it('settles as failed, naming the model and its error, when every judgment failed', async () => {
+      h.executeResearchRun.mockResolvedValue({
+        totals: { ...emptyResearchRunTotals(), searchHits: 10, judgeFailed: 10 },
+        spentMicroUsd: 0,
+        stopReason: 'exhausted',
+        judgeStepFailed: true,
+        judgeError: 'model access denied',
+      });
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.settleRun).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({
+          status: 'failed',
+          totals: expect.objectContaining({ judgeFailed: 10, belowRelevance: 0 }),
+          error:
+            'The relevance judge (default-judge-model) failed on every candidate it tried (10), so nothing was proposed: model access denied',
+        })
+      );
+    });
+
+    it('completes a partly-failed run but carries the judge error, so the card shows it as degraded', async () => {
+      h.executeResearchRun.mockResolvedValue({
+        totals: { ...emptyResearchRunTotals(), searchHits: 3, judgeFailed: 1, proposed: 2 },
+        spentMicroUsd: 500,
+        stopReason: 'exhausted',
+        judgeStepFailed: false,
+        judgeError: 'rate limited',
+      });
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.settleRun).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({
+          status: 'completed',
+          error: 'The relevance judge (default-judge-model) failed on 1 candidate: rate limited',
+        })
+      );
+    });
   });
 
   // A run reaching an outcome left no trace in the lake's History tab.
@@ -370,6 +434,13 @@ describe('runLakeResearch', () => {
     it('falls back and warns when the configured model is gone', async () => {
       expect((await judgeWith('a-retired-model'))?.model).toBe('default-judge-model');
       expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/falling back/), expect.anything());
+    });
+
+    // Discovery disables a model that cannot be dispatched (e.g. a profile-only Bedrock id); a
+    // config saved before that still names it, and would otherwise fail every judgment.
+    it('falls back when the configured model is disabled', async () => {
+      h.getAvailableModels.mockResolvedValue([{ id: 'gpt-4.1-mini' }, { id: 'a-disabled-model', disabled: true }]);
+      expect((await judgeWith('a-disabled-model'))?.model).toBe('default-judge-model');
     });
 
     it('uses the default when the config names no model', async () => {

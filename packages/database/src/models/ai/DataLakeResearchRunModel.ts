@@ -64,6 +64,7 @@ const DataLakeResearchRunSchema = new Schema<IDataLakeResearchRunDocument>(
     stopReason: { type: String, enum: RESEARCH_RUN_STOP_REASONS, default: null },
     spentMicroUsd: { type: Number, default: 0 },
     totals: { type: ResearchRunTotalsSchema, default: () => emptyResearchRunTotals() },
+    judgeModel: { type: String, default: null },
     error: { type: String, default: null },
   },
   {
@@ -146,7 +147,7 @@ class DataLakeResearchRunRepository
    * executor already resolved for real does not gain a second, contradictory outcome row.
    */
   async settleRun(id: string, input: SettleResearchRunInput): Promise<boolean> {
-    const { status, completedAt, stopReason, spentMicroUsd, totals, error } = input;
+    const { status, completedAt, stopReason, spentMicroUsd, totals, judgeModel, error } = input;
     // Guarded to the in-flight statuses so a settle racing an already-terminal run (e.g. an
     // enqueue-failure settle that lands after the executor already claimed and finished the same
     // row) is a no-op instead of overwriting a real outcome and leaving a second, contradictory
@@ -160,6 +161,7 @@ class DataLakeResearchRunRepository
           stopReason: stopReason ?? null,
           spentMicroUsd,
           totals,
+          judgeModel: judgeModel ?? null,
           error: error ?? null,
         },
       }

@@ -15,7 +15,7 @@ import { getAvailableModels, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { fetchAndParseURL } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
-import type { ResearchRunTotals } from '@bike4mind/common';
+import type { ResearchRunTotals, SettleResearchRunInput } from '@bike4mind/common';
 import { lakeConfigAuditDb } from './lakeConfigAuditDb';
 
 /**
@@ -61,6 +61,26 @@ async function fetchSourceForProposal(url: string, logger: Logger) {
   }
 }
 
+/** Provider errors can carry a whole request echo; the run card needs the gist, not the payload. */
+const JUDGE_ERROR_MAX_CHARS = 300;
+
+/**
+ * The run card's account of a judge that failed on `failedCount` candidates. Names the model and
+ * the first error, because "the model failed" is only actionable when it says which model and how.
+ */
+export function describeJudgeFailure(
+  model: string,
+  failedCount: number,
+  judgeError: string | undefined,
+  allFailed: boolean
+): string {
+  const scope = allFailed
+    ? `every candidate it tried (${failedCount}), so nothing was proposed`
+    : `${failedCount} candidate${failedCount === 1 ? '' : 's'}`;
+  const cause = judgeError ? `: ${judgeError.slice(0, JUDGE_ERROR_MAX_CHARS)}` : '';
+  return `The relevance judge (${model}) failed on ${scope}${cause}`;
+}
+
 /**
  * Execute one queued run end to end. Idempotent at the claim: a redelivery of a run that already
  * ran finds it non-`queued` and returns `claimed: false` without spending anything.
@@ -73,8 +93,13 @@ export async function runLakeResearch(
   const claimed = await dataLakeResearchRunRepository.claimForExecution(runId, new Date());
   if (!claimed) return { claimed: false };
 
-  const settle = (input: Parameters<typeof dataLakeResearchRunRepository.settleRun>[1]) =>
-    dataLakeResearchRunRepository.settleRun(runId, input);
+  // Set once the judge model resolves, and stamped on every settle from then on - including a
+  // fault's. Also read by `recordSpend` below, so the eventual usage event names the real
+  // model/provider rather than a guess - undefined here means no judgment ever ran.
+  let judgeModel: string | undefined;
+
+  const settle = (input: Omit<SettleResearchRunInput, 'judgeModel'>) =>
+    dataLakeResearchRunRepository.settleRun(runId, { ...input, judgeModel });
 
   /**
    * The claim is a one-way door, so EVERY path from here on has to settle: a run left `running`
@@ -119,9 +144,6 @@ export async function runLakeResearch(
   // is needed.
   let spentMicroUsd = 0;
   let totals: ResearchRunTotals = claimed.totals;
-  // Resolved once the judge model is known (inside the try below), so the eventual usage event
-  // names the real model/provider rather than a guess - undefined here means no judgment ever ran.
-  let judgeModel: string | undefined;
   let judgeProvider: string | undefined;
 
   // A run reaching an outcome left no trace in the lake's History tab. `.catch()` here is
@@ -241,12 +263,14 @@ export async function runLakeResearch(
     const models = await getAvailableModels(apiKeyTable);
     const judgeService = new dataLakeResearchService.RelevanceJudgeService(logger);
     // Resolved once, against the live catalog: a config naming a model this deployment has since
-    // retired falls back rather than failing the whole run.
+    // retired or disabled falls back rather than failing the whole run. Disabled counts because the
+    // picker drops disabled models, but a config saved before the model was disabled still names it.
     const configuredModel = claimed.levers.model;
     const model =
-      configuredModel && models.some(m => m.id === configuredModel)
+      configuredModel && models.some(m => m.id === configuredModel && !m.disabled)
         ? configuredModel
         : dataLakeResearchService.RELEVANCE_JUDGE_DEFAULT_MODEL;
+    judgeModel = model;
     if (configuredModel && model !== configuredModel) {
       logger.warn('[lakeResearch] configured judge model is unavailable; falling back', {
         runId,
@@ -254,7 +278,6 @@ export async function runLakeResearch(
         model,
       });
     }
-    judgeModel = model;
     judgeProvider = models.find(m => m.id === model)?.backend;
 
     const ports: dataLakeResearchService.ResearchRunPorts = {
@@ -295,25 +318,40 @@ export async function runLakeResearch(
     const result = await dataLakeResearchService.executeResearchRun(claimed.levers, runId, ports);
     executionSucceeded = true;
 
+    const judgeFailure =
+      result.totals.judgeFailed > 0
+        ? describeJudgeFailure(model, result.totals.judgeFailed, result.judgeError, result.judgeStepFailed)
+        : undefined;
+
+    // A judge that failed on everything is a failed run, not an empty web - see `judgeStepFailed`.
+    // Settled rather than thrown: a model that cannot judge fails the same way on every redelivery.
+    const outcome: 'completed' | 'failed' = result.judgeStepFailed ? 'failed' : 'completed';
     await settle({
-      status: 'completed',
+      status: outcome,
       completedAt: new Date(),
       stopReason: result.stopReason,
       spentMicroUsd: result.spentMicroUsd,
       totals: result.totals,
+      error: judgeFailure,
     });
-    await recordRunEffects('completed', result.spentMicroUsd);
-    logger.log('[lakeResearch] run finished', { runId, stopReason: result.stopReason, ...result.totals });
+    await recordRunEffects(outcome, result.spentMicroUsd);
+    logger.log('[lakeResearch] run finished', {
+      runId,
+      judgeModel: model,
+      stopReason: result.stopReason,
+      judgeStepFailed: result.judgeStepFailed,
+      ...result.totals,
+    });
     return { claimed: true };
   } catch (error) {
     if (executionSucceeded) {
-      // The run itself succeeded and spent money - what threw was the terminal `completed` settle
-      // write (e.g. a step-down/connection reset on the updateOne), not the run. We cannot tell
-      // whether that write actually landed server-side before the ack was lost, so re-settling or
-      // re-recording `failed` here would either silently overwrite a real `completed` row or
-      // permanently misreport a run that worked - and `claimForExecution` only reclaims `queued`
-      // rows, so a wrong `failed` could never self-heal via redelivery. Rethrow as-is: no further
-      // settle/audit write, so the queue surfaces the fault instead of the run's history lying.
+      // The run itself succeeded and spent money - what threw was the terminal settle write (e.g. a
+      // step-down/connection reset on the updateOne), not the run. We cannot tell whether that write
+      // actually landed server-side before the ack was lost, so re-settling or re-recording here
+      // would either silently overwrite a real outcome row or permanently misreport a run that
+      // worked - and `claimForExecution` only reclaims `queued` rows, so a wrong `failed` could
+      // never self-heal via redelivery. Rethrow as-is: no further settle/audit write, so the queue
+      // surfaces the fault instead of the run's history lying.
       logger.error('[lakeResearch] run completed but recording its outcome failed; leaving the run unresolved', {
         runId,
         error,

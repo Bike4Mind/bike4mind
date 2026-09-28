@@ -18,6 +18,14 @@ describe('evaluatePromotion', () => {
     expect(evaluate()).toEqual({ promote: true, blockedBy: [] });
   });
 
+  it('blocks a model its source disabled, reporting the source reason over its own', () => {
+    const decision = evaluate({ sourceDisabledReason: 'not entitled in this AWS account', hasTrustedPrice: false });
+
+    expect(decision.promote).toBe(false);
+    expect(decision.blockedBy).toEqual(['disabled-by-source', 'no-trusted-price']);
+    expect(decision.autoDisabledReason).toBe('not entitled in this AWS account');
+  });
+
   it('blocks a record with no adapter family', () => {
     const decision = evaluate({ record: testRecord({ adapterFamily: undefined }) });
 
