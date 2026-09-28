@@ -37,8 +37,21 @@ export function spendsCredits(toolName: string): boolean {
  * With none of these present the argv is exactly the whitespace split below, which is what
  * makes the per-token checks meaningful. A quote or a `$(` and they stop meaning anything, so
  * their presence alone is enough to send the command to the user.
+ *
+ * `*` and `?` are in here for the same reason, not because a glob is dangerous: the shell
+ * expands it into filenames this module never saw, so the path check below would be asserting
+ * containment for arguments that do not exist yet. One of them could be a symlink out.
  */
-const SHELL_CONTROL = /[;&|`$(){}<>\\'"~!#[\]\n\r]/;
+const SHELL_CONTROL = /[;&|`$(){}<>\\'"~!#[\]*?\n\r]/;
+
+/**
+ * Arguments that make any command follow a symlink out of the folder it was pointed at.
+ *
+ * The path check proves the NAMED path is inside a granted root, and `resolveWithinRoots`
+ * resolves a symlink given by name. It cannot speak for a link the command discovers while
+ * walking, which is exactly what these turn on.
+ */
+const FOLLOWS_SYMLINKS: readonly string[] = ['-L', '-R', '--dereference', '--dereference-recursive', '--follow'];
 
 /** Absent `subcommands` means the executable is inert whatever it is asked to do. */
 interface InertCommand {
@@ -173,6 +186,7 @@ async function assessCommand(input: Record<string, unknown>, context: ToolContex
     : undefined;
   if (!inert) return 'sensitive';
 
+  if (FOLLOWS_SYMLINKS.some(flag => rest.includes(flag))) return 'sensitive';
   if (inert.forbiddenArguments?.some(flag => rest.includes(flag))) return 'sensitive';
 
   if (inert.subcommands) {

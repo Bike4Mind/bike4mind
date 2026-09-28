@@ -69,6 +69,13 @@ describe('assessApprovalRisk', () => {
       ['a backgrounded command', 'git status &'],
       ['quoting', 'cat "/etc/hosts"'],
       ['a newline', 'git status\ncat /etc/hosts'],
+      // The shell expands these into names this module never checked, one of which could be a
+      // symlink pointing out of the granted root.
+      ['a glob', 'cat *.txt'],
+      ['a single-character glob', 'cat note?.txt'],
+      ['a flag that follows symlinks while walking', 'grep -R secret .'],
+      ['ls following a symlink', 'ls -L .'],
+      ['find following symlinks', 'find -L . -name x'],
     ])('asks for %s', async (_label, command) => {
       expect(await shell(command)).toBe('sensitive');
     });
