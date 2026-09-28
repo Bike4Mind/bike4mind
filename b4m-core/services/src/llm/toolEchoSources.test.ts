@@ -40,6 +40,12 @@ describe('buildToolEchoSources', () => {
     ).toEqual([{ text: 'abcdef', truncated: false }]);
   });
 
+  it('flags a fullReturnValue that was cut at its cap as truncated', () => {
+    expect(
+      buildToolEchoSources([{ name: 'web_fetch', fullReturnValue: 'abcdef', fullReturnValueTruncated: true }])
+    ).toEqual([{ text: 'abcdef', truncated: true }]);
+  });
+
   it('falls back to returnValue, dropping the truncation notice and flagging it truncated', () => {
     expect(
       buildToolEchoSources([

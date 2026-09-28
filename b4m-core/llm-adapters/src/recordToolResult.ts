@@ -33,6 +33,8 @@ export type RecordableToolUse = {
    * so it is not persisted.
    */
   fullReturnValue?: string;
+  /** True when `fullReturnValue` was cut at MAX_FULL_TOOL_RESULT_CHARS. */
+  fullReturnValueTruncated?: boolean;
   success?: boolean;
   /** Wall-clock ms the tool took to run, success or failure. Undefined when the caller has none. */
   executionTime?: number;
@@ -43,8 +45,12 @@ export function truncateToolResult(observation: string): string {
   return observation.slice(0, MAX_RECORDED_TOOL_RESULT_CHARS) + TOOL_RESULT_TRUNCATION_NOTICE;
 }
 
-export function fullToolResult(observation: unknown): string {
-  return String(observation).slice(0, MAX_FULL_TOOL_RESULT_CHARS);
+export function fullToolResult(observation: unknown): { fullReturnValue: string; fullReturnValueTruncated: boolean } {
+  const text = String(observation);
+  return {
+    fullReturnValue: text.slice(0, MAX_FULL_TOOL_RESULT_CHARS),
+    fullReturnValueTruncated: text.length > MAX_FULL_TOOL_RESULT_CHARS,
+  };
 }
 
 /**
@@ -76,7 +82,7 @@ export function recordToolResult(
     return;
   }
   entry.returnValue = truncateToolResult(String(observation));
-  entry.fullReturnValue = fullToolResult(observation);
+  Object.assign(entry, fullToolResult(observation));
   entry.success = success;
   // Left undefined (rather than defaulted to e.g. 0) when the caller has no timing - see
   // RecordableToolUse's doc comment.

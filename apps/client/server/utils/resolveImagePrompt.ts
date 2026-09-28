@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { IChatHistoryItemDocument, PromptIntent } from '@bike4mind/common';
 import { getEffectiveApiKeyByBackend, OperationsModelService } from '@client/services/operationsModelService';
 import { serializeError } from './serializeError';
+import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 
 export const HISTORY_LOOKBACK = 6;
 const REPLY_TRUNCATE_CHARS = 250;
@@ -63,7 +64,7 @@ Output: {"intent":"fresh","rewrittenPrompt":"A stock photo of a sunset beach."}`
 const truncateReply = (s: string): string =>
   s.length <= REPLY_TRUNCATE_CHARS ? s : s.slice(0, REPLY_TRUNCATE_CHARS - 1).trimEnd() + '…';
 
-const collapseWhitespace = (s: string): string => s.replace(/\s+/g, ' ').trim();
+const collapseWhitespace = (s: string): string => stripToolOutputMarker(s).replace(/\s+/g, ' ').trim();
 
 /** Best-effort extraction of an assistant reply from a quest document, regardless of where it lives. */
 const extractReply = (msg: IChatHistoryItemDocument): string => {

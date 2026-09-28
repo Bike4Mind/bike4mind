@@ -5,6 +5,7 @@ export type ToolsUsedEntry = {
   returnValue?: string;
   /** In-memory only (see RecordableToolUse in llm-adapters); never mapped onto functionCalls. */
   fullReturnValue?: string;
+  fullReturnValueTruncated?: boolean;
   success?: boolean;
   /** Wall-clock ms the tool took to run, success or failure. Undefined when the backend has none. */
   executionTime?: number;

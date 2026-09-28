@@ -30,7 +30,7 @@ export function buildToolEchoSources(toolsUsed: readonly ToolsUsedEntry[]): Tool
     let truncated: boolean;
     if (typeof tool.fullReturnValue === 'string' && tool.fullReturnValue !== '') {
       text = tool.fullReturnValue;
-      truncated = false;
+      truncated = tool.fullReturnValueTruncated === true;
     } else if (typeof tool.returnValue === 'string' && tool.returnValue !== '') {
       truncated = tool.returnValue.endsWith(TOOL_RESULT_TRUNCATION_NOTICE);
       text = truncated ? tool.returnValue.slice(0, -TOOL_RESULT_TRUNCATION_NOTICE.length) : tool.returnValue;

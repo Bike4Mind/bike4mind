@@ -1463,6 +1463,9 @@ describe('ChatCompletionProcess', () => {
         const page =
           '<!DOCTYPE html>\n<html>\n<head><title>Fetched page</title></head>\n<body><h1>Hello from the fetched page</h1><p>Body text.</p></body>\n</html>';
 
+        const htmlArtifacts = () =>
+          ((mockQuest.promptMeta.artifacts ?? []) as Array<{ type: string }>).filter(a => a.type === 'html');
+
         function fetchThenAnswer(answer: string, toolName = 'web_fetch') {
           setupTurn(async cb => {
             const toolsUsed: Array<Record<string, unknown>> = [];
@@ -1483,6 +1486,7 @@ describe('ChatCompletionProcess', () => {
           const reply = mockQuest.replies.join('');
           expect(reply).toContain('~~~html b4m-tool-output');
           expect(reply).not.toContain('<artifact');
+          expect(htmlArtifacts()).toHaveLength(0);
         });
 
         it('keeps a bare echoed html document as a marked code block', async () => {
@@ -1493,6 +1497,7 @@ describe('ChatCompletionProcess', () => {
           const reply = mockQuest.replies.join('');
           expect(reply).toContain('b4m-tool-output');
           expect(reply).not.toContain('<artifact');
+          expect(htmlArtifacts()).toHaveLength(0);
         });
 
         it('still promotes model-authored html that no tool returned', async () => {
@@ -1505,6 +1510,7 @@ describe('ChatCompletionProcess', () => {
           const reply = mockQuest.replies.join('');
           expect(reply).toContain('<artifact');
           expect(reply).not.toContain('b4m-tool-output');
+          expect(htmlArtifacts()).toHaveLength(1);
         });
 
         it('still promotes html returned by an artifact-emitting tool', async () => {

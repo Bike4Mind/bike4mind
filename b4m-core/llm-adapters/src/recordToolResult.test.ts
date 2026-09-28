@@ -114,10 +114,12 @@ describe('recordToolResult', () => {
     recordToolResult(toolsUsed, { id: 'call_1', name: 'web_fetch' }, long, true);
     expect(toolsUsed[0].returnValue?.endsWith(TOOL_RESULT_TRUNCATION_NOTICE)).toBe(true);
     expect(toolsUsed[0].fullReturnValue).toBe(long);
+    expect(toolsUsed[0].fullReturnValueTruncated).toBe(false);
 
     const huge = 'y'.repeat(MAX_FULL_TOOL_RESULT_CHARS + 10);
     const second: RecordableToolUse[] = [{ name: 'web_fetch', id: 'call_2' }];
     recordToolResult(second, { id: 'call_2', name: 'web_fetch' }, huge, true);
     expect(second[0].fullReturnValue).toHaveLength(MAX_FULL_TOOL_RESULT_CHARS);
+    expect(second[0].fullReturnValueTruncated).toBe(true);
   });
 });

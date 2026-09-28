@@ -402,7 +402,7 @@ export class OllamaBackend implements ICompletionBackend {
           // observations[i] is already a string here (executeToolsBatch<string>), but keeping
           // the same guard means a future change to that generic can't silently drop it.
           returnValue: truncateToolResult(String(observations[i])),
-          fullReturnValue: fullToolResult(observations[i]),
+          ...fullToolResult(observations[i]),
           success: outcomes[i].ok,
         })),
       ];
