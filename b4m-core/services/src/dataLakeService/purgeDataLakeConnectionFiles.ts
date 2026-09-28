@@ -20,7 +20,10 @@ import {
  * GitHub connector this helper is deliberately shaped for - supplies its own equivalent finder),
  * so this stays uncoupled from any one connector's lookup predicate.
  */
-export type PurgeableConnectionFile = Pick<IFabFileDocument, 'id' | 'userId' | 'fileSize' | 'filePath' | 'versions'>;
+export type PurgeableConnectionFile = Pick<
+  IFabFileDocument,
+  'id' | 'userId' | 'fileSize' | 'filePath' | 'versions' | 'tags'
+>;
 
 export interface PurgeDataLakeConnectionFilesAdapters {
   db: {
@@ -39,6 +42,20 @@ export interface PurgeDataLakeConnectionFilesAdapters {
   retrievalIndex?: RetrievalIndexPort;
   /** The object store holding each file's bytes. Optional for the same reason as cleanupDeletedDataLake's `storage`: a host that never wires it is unaffected structurally, but every purged file's bytes are then orphaned and still billed - see the unwired warning below. */
   storage?: { delete: (path: string) => Promise<unknown> };
+  /**
+   * Crypto-shred the facts each deleted file contributed to the memory ledger - the per-document
+   * sibling of `purgeDataLakeDocument`'s own `shredDocumentMemory` port (see that adapter for the
+   * full contract: resolving a file's OTHER member lakes from its tags is the host's job there, and
+   * here). Optional for the same reason it is optional there (the service cannot reach the ledger
+   * repository) and because it is new scope over this sweep's original file/chunk/index/storage
+   * contract - a host that leaves it unwired keeps recalling beliefs sourced from a Drive-purged
+   * document, the same gap `purgeDataLakeDocument` had before that port existed. Called ONCE PER
+   * deleted file (not batched, unlike `dataLakeFindings` above), gated on THAT file's own
+   * `hardDeleteOneById` succeeding - mirroring the single-document door's gate on `documentDeleted`
+   * rather than the whole sweep's outcome, so one file's storage-delete failure in a chunk cannot
+   * skip or block another file's shred in the same `Promise.all`.
+   */
+  shredDocumentMemory?: (args: { tagNames: string[]; fabFileId: string; ownerUserId: string }) => Promise<void>;
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
   /** Bounds peak concurrency of the per-file delete fan-out, mirroring cleanupDeletedDataLake's chunked sweep. */
   chunkSize?: number;
@@ -90,7 +107,14 @@ const DEFAULT_CHUNK_SIZE = 100;
 export const purgeDataLakeConnectionFiles = async (
   scope: DataLakeMembershipScope,
   files: PurgeableConnectionFile[],
-  { db, retrievalIndex, storage, logger, chunkSize = DEFAULT_CHUNK_SIZE }: PurgeDataLakeConnectionFilesAdapters
+  {
+    db,
+    retrievalIndex,
+    storage,
+    shredDocumentMemory,
+    logger,
+    chunkSize = DEFAULT_CHUNK_SIZE,
+  }: PurgeDataLakeConnectionFilesAdapters
 ): Promise<PurgeDataLakeConnectionFilesResult> => {
   if (files.length === 0) {
     return { filesPurged: 0, storageObjectsDeleted: 0 };
@@ -139,6 +163,10 @@ export const purgeDataLakeConnectionFiles = async (
           await db.fabFileChunks.deleteManyByFabFileId(file.id);
           if (deletedByThisCall) {
             deletedFiles.push({ id: file.id, userId: file.userId, fileSize: file.fileSize });
+            const tagNames = (file.tags ?? [])
+              .map(tag => tag?.name)
+              .filter((name): name is string => typeof name === 'string');
+            await shredDocumentMemory?.({ tagNames, fabFileId: file.id, ownerUserId: file.userId });
           }
         })
       );
