@@ -6,29 +6,22 @@ import { STATUS_LABEL } from './sessionStatus';
 
 const sweep = keyframes({ from: { transform: 'rotate(0deg)' }, to: { transform: 'rotate(360deg)' } });
 
-/** Matches the row's text block height, so numbered and unnumbered rows line up. */
-const BADGE_SIZE = 18;
+/** Wide enough for the ring and the square; the idle dot sits centred inside it. */
+const BADGE_SIZE = 14;
 
 /**
- * The leading slot on a session row: what the session is doing, and its quick-switch number.
+ * The leading marker on a session row: what that session is doing.
  *
- * ONE slot rather than two. The reference numbers the first nine rows and dots the rest, and
- * status has to share that space or every row grows a second marker that is blank on almost
- * all of them. So the number says which row this is, and the shape drawn around it says what
- * the row is doing - they are different channels and never compete for the same pixels.
- *
- * The three states differ in SILHOUETTE before they differ in colour - bare circle, ringed
+ * The three states differ in SILHOUETTE before they differ in colour - hollow dot, ringed
  * circle, rounded square - because a status told only in colour is lost to a colour-blind user
  * and drifts between the two b4m themes. Colour is the redundant second cue and the label the
  * third: every badge names its state in words for a screen reader and on hover.
  *
- * 'needs-action' keeps the digit rather than replacing it with a glyph, so the row the user
- * most needs to reach is still the row they can reach by number.
+ * Idle keeps the reference's small hollow dot, so a quiet sidebar stays quiet and only a row
+ * that is actually doing something draws the eye.
  */
-export function SessionBadge({ index, status }: { index: number | null; status: ChatSessionStatus }) {
+export function SessionBadge({ status }: { status: ChatSessionStatus }) {
   const label = STATUS_LABEL[status];
-  const numbered = index !== null;
-  const needsAction = status === 'needs-action';
 
   return (
     <Box
@@ -55,41 +48,36 @@ export function SessionBadge({ index, status }: { index: number | null; status: 
             borderColor: 'neutral.outlinedBorder',
             borderTopColor: 'primary.solidBg',
             animation: `${sweep} 900ms linear infinite`,
-            // With motion off the ring still has to read as different from the idle circle, so
-            // it closes into a solid one rather than simply standing still mid-sweep.
+            // With motion off the ring still has to read as different from the idle dot, so it
+            // closes into a solid one rather than simply standing still mid-sweep.
             '@media (prefers-reduced-motion: reduce)': { animation: 'none', borderColor: 'primary.solidBg' },
           }}
         />
       )}
 
-      {needsAction && <Box sx={{ position: 'absolute', inset: 0, borderRadius: '5px', bgcolor: 'warning.solidBg' }} />}
+      {status === 'needs-action' && (
+        <>
+          <Box sx={{ position: 'absolute', inset: 0, borderRadius: '4px', bgcolor: 'warning.solidBg' }} />
+          <Typography
+            level="body-xs"
+            sx={{
+              position: 'relative',
+              fontSize: '9px',
+              lineHeight: 1,
+              fontWeight: 'lg',
+              color: 'warning.solidColor',
+            }}
+          >
+            !
+          </Typography>
+        </>
+      )}
 
-      {numbered ? (
-        <Typography
-          level="body-xs"
-          sx={{
-            position: 'relative',
-            fontSize: '10px',
-            lineHeight: 1,
-            fontWeight: 'lg',
-            fontVariantNumeric: 'tabular-nums',
-            color: needsAction ? 'warning.solidColor' : 'text.tertiary',
-          }}
-        >
-          {index}
-        </Typography>
-      ) : needsAction ? (
-        <Typography
-          level="body-xs"
-          sx={{ position: 'relative', fontSize: '10px', lineHeight: 1, fontWeight: 'lg', color: 'warning.solidColor' }}
-        >
-          !
-        </Typography>
-      ) : status === 'done' ? (
+      {status === 'done' && (
         <Box
-          sx={{ width: 7, height: 7, borderRadius: '50%', border: '1px solid', borderColor: 'neutral.outlinedBorder' }}
+          sx={{ width: 6, height: 6, borderRadius: '50%', border: '1px solid', borderColor: 'neutral.outlinedBorder' }}
         />
-      ) : null}
+      )}
     </Box>
   );
 }

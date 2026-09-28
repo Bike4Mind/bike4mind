@@ -47,23 +47,15 @@ export function groupSessions(sessions: readonly ChatSessionSummary[], mode: Cha
   return { pinned, projects: [...byDirectory.values()], loose };
 }
 
-/** How many rows carry a quick-switch number. Past this the reference shows a plain dot. */
+/** How many rows the modifier-plus-digit shortcut reaches. */
 export const QUICK_SWITCH_LIMIT = 9;
 
 /**
  * Every row the sidebar draws, in the order it draws them.
  *
- * The quick-switch numbers are positions in THIS list, so they have to come from the same
- * order the eye reads: numbering each section on its own would put a "1" at the top of the
- * pinned block and another at the top of every project.
+ * The quick-switch shortcut counts positions in THIS list, so it has to come from the same
+ * order the eye reads rather than from any one section.
  */
 export function orderedSessions(sections: SidebarSections): ChatSessionSummary[] {
   return [...sections.pinned, ...sections.projects.flatMap(group => group.sessions), ...sections.loose];
-}
-
-/** sessionId -> its 1-based quick-switch number, for the first QUICK_SWITCH_LIMIT rows only. */
-export function quickSwitchIndices(ordered: readonly ChatSessionSummary[]): ReadonlyMap<string, number> {
-  const indices = new Map<string, number>();
-  ordered.slice(0, QUICK_SWITCH_LIMIT).forEach((session, position) => indices.set(session.id, position + 1));
-  return indices;
 }
