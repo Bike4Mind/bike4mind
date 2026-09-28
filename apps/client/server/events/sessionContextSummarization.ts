@@ -6,6 +6,7 @@ import { ChatModelName, IMessage, MessageContentObject } from '@bike4mind/common
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@server/events/recordSessionOperationalUsage';
 import mongoose from 'mongoose';
+import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 
 export const handler = withEventContext(async (event, logger) => {
   const body = SessionEvents.ContextSummarize.schema.parse(event.properties);
@@ -69,7 +70,7 @@ export const handler = withEventContext(async (event, logger) => {
         lines.push(`A: ${parts.join('\n') || '(no reply)'}`);
       } else {
         // Priority 2: plain text reply
-        lines.push(`A: ${quest.reply || quest.replies?.join('\n') || '(no reply)'}`);
+        lines.push(`A: ${stripToolOutputMarker(quest.reply || quest.replies?.join('\n') || '(no reply)')}`);
       }
 
       return lines.join('\n');

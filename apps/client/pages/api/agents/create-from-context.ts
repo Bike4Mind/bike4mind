@@ -12,6 +12,7 @@ import {
 } from '@bike4mind/database';
 import { IAgent, IChatHistoryItemDocument, IFabFileDocument, Permission, isImageAttachment } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError, getFileContent, getSettingsByNames } from '@bike4mind/utils';
+import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { getFilesStorage } from '@server/utils/storage';
@@ -183,7 +184,7 @@ async function generateAgentFromContext(
           : '') ||
         '';
       if (userPrompt) return `user: ${userPrompt}`;
-      if (assistantReply) return `assistant: ${assistantReply}`;
+      if (assistantReply) return `assistant: ${stripToolOutputMarker(String(assistantReply))}`;
       return '';
     })
     .filter(line => line)

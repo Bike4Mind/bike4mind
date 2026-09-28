@@ -297,3 +297,14 @@ describe('resolveCorrectionContext', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 });
+
+describe('buildCorrectionContextMessages - tool output marker', () => {
+  it.each([
+    ['replies', { prompt: 'q', replies: ['~~~html b4m-tool-output\n<p>quoted</p>\n~~~'] }],
+    ['reply', { prompt: 'q', reply: '~~~html b4m-tool-output\n<p>quoted</p>\n~~~' }],
+  ])('drops the marker from a quoted %s answer', (_label, turn) => {
+    const quote = quoteOf(turn as CorrectedTurn);
+    expect(quote).toContain('<p>quoted</p>');
+    expect(quote).not.toContain('b4m-tool-output');
+  });
+});

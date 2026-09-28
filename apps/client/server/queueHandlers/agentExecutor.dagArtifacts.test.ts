@@ -63,3 +63,29 @@ describe('collectDagChildArtifactBlocks', () => {
     expect(blocks).toEqual([]);
   });
 });
+
+describe('collectDagChildArtifactBlocks tool echoes', () => {
+  const PAGE =
+    '<!DOCTYPE html>\n<html><head><title>Fetched</title></head><body><p>Quoted verbatim from the fetched web page.</p></body></html>';
+  const echoAnswer = `Fetched:\n\`\`\`html\n${PAGE}\n\`\`\``;
+
+  it('does not bubble up web tool output a child quoted back', () => {
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: 'Summary.',
+      childAnswers: [echoAnswer, `Chart:\n${artifact('sales-chart')}`],
+      childSteps: [[{ type: 'observation', content: PAGE, metadata: { toolName: 'web_fetch' } }], undefined],
+    });
+    expect(blocks).toEqual([artifact('sales-chart')]);
+  });
+
+  it('still bubbles up the same html when the child authored it or read it from non-web content', () => {
+    const fromFile = collectDagChildArtifactBlocks({
+      parentAnswer: 'Summary.',
+      childAnswers: [echoAnswer],
+      childSteps: [[{ type: 'observation', content: PAGE, metadata: { toolName: 'file_read' } }]],
+    });
+    const noSteps = collectDagChildArtifactBlocks({ parentAnswer: 'Summary.', childAnswers: [echoAnswer] });
+    expect(fromFile).toHaveLength(1);
+    expect(noSteps).toEqual(fromFile);
+  });
+});

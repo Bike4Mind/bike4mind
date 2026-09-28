@@ -101,7 +101,8 @@ import { ToolBuilder } from './tools/ToolBuilder';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
 import { resolveAggregateToolModel, settleToolCallCredits } from './settleToolCredits';
 import { resolvePersonalCorpusOnly } from './resolvePersonalCorpusOnly';
-import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
+import { toolsUsedToFunctionCalls, type ToolsUsedEntry } from './toolsUsedToFunctionCalls';
+import { buildToolEchoSources } from './toolEchoSources';
 import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedReplyAccumulator';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { resolveCorrectionContext } from './buildCorrectionContext';
@@ -4265,6 +4266,9 @@ export class ChatCompletionProcess {
 
       try {
         const modelInferenceStartTime = Date.now();
+        // The live array the backend mutates (recordToolResult stamps results in place), so it
+        // still holds the final tool result at post_process when no callback followed it.
+        let echoToolsUsed: ToolsUsedEntry[] = [];
 
         // Loop covers the primary attempt plus up to MAX_FALLBACK_HOPS cross-model hops
         // (same-model overload/timeout retries below re-enter without advancing fallbackAttempt).
@@ -4311,6 +4315,7 @@ export class ChatCompletionProcess {
             // annotation compiled fine (the extras are optional) but hid returnValue/success from
             // TypeScript entirely, defeating toolsUsedToFunctionCalls's whole reason for existing.
             let toolsUsed: NonNullable<CompletionInfo['toolsUsed']> = [];
+            echoToolsUsed = toolsUsed;
 
             // Get idle timeout settings for Anthropic streaming hang detection
             const enableIdleTimeout = getSettingsValue('EnableStreamIdleTimeout', defaultAdminSettings) === true;
@@ -4407,6 +4412,8 @@ export class ChatCompletionProcess {
               },
               async (streamedTexts, completionInfo) => {
                 toolsUsed = completionInfo?.toolsUsed || [];
+                // Not reset by a text-only callback, which carries no toolsUsed.
+                if (completionInfo?.toolsUsed) echoToolsUsed = completionInfo.toolsUsed;
                 // Include tool ID for Anthropic API tool pairing reconstruction
                 quest.promptMeta!.functionCalls = toolsUsedToFunctionCalls(
                   toolsUsed,
@@ -4890,7 +4897,8 @@ export class ChatCompletionProcess {
         if (artifactsEnabled) {
           // The barrel is the only export path for these two; there is no artifactParser subpath
           // that carries them, so this import stays as-is.
-          const { parseArtifacts, convertCodeBlocksToArtifacts } = await import('@bike4mind/utils');
+          const { parseArtifacts, convertCodeBlocksToArtifacts, createToolEchoMatcher } =
+            await import('@bike4mind/utils');
           // The detector DOES have its own subpath, so use it here too - same reasoning as the
           // client: nothing should pull the whole of @bike4mind/utils for a dependency-free scan.
           //
@@ -4919,8 +4927,11 @@ export class ChatCompletionProcess {
           // worth a storage change on this path. If per-reply metadata ever lands, scope this with it.
           const elisionHits: Array<{ confidence: 'high' | 'low'; signals: string[] }> = [];
 
+          const echoSources = buildToolEchoSources(echoToolsUsed);
+          const convertOptions = echoSources.length > 0 ? { isToolEcho: createToolEchoMatcher(echoSources) } : {};
+
           quest.replies = quest.replies?.map(reply => {
-            const processedReply = convertCodeBlocksToArtifacts(reply);
+            const processedReply = convertCodeBlocksToArtifacts(reply, convertOptions);
             const { artifacts } = parseArtifacts(processedReply);
 
             // Guarded because this runs inside the try whose catch RE-THROWS, and the outer handler

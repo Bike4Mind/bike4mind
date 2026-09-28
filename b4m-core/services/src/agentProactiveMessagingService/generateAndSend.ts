@@ -1,4 +1,5 @@
 import { BaseStorage } from '@bike4mind/utils';
+import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import {
   getLlmByModel,
   getAvailableModels,
@@ -294,7 +295,7 @@ function buildProactiveMessageMessages({
       if ((msg.replies || []).length > 0) {
         messages.push({
           role: 'assistant',
-          content: (msg.replies || []).join('\n\n'),
+          content: stripToolOutputMarker((msg.replies || []).join('\n\n')),
         });
       }
     }

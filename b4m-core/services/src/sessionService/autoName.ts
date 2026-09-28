@@ -1,6 +1,7 @@
 import { IChatHistoryItemRepository, ISessionRepository, sanitizeSessionTitle } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
+import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import { z } from 'zod';
 
 const autoNameParameterSchema = z.object({
@@ -39,7 +40,7 @@ export async function autoName(params: AutoNameParameters, adapters: AutoNameAda
 
   const content = recentHistory
     .map(quest => {
-      const reply = quest.reply || quest.replies?.join('\n') || '';
+      const reply = stripToolOutputMarker(quest.reply || quest.replies?.join('\n') || '');
       const hasReply = reply.trim().length > 0;
 
       // For queries without replies (e.g., image generation), just show the request
