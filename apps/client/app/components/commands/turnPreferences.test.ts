@@ -26,21 +26,32 @@ describe('selectTurnPreferences', () => {
 describe('secondary send paths forward the composer preferences', () => {
   const read = (relativePath: string) => readFileSync(resolve(__dirname, relativePath), 'utf8');
 
+  const spreadsTurnPreferences = /\.\.\.turnPreferences\b/;
+
+  // Brace-matched from the opener's `{`, so a nested callback or object literal in the args
+  // doesn't cut the call site short. `opener` must end with the args object's `{`.
   const callSites = (source: string, opener: string) =>
     source
       .split(opener)
       .slice(1)
-      .map(rest => rest.slice(0, rest.indexOf('});')));
+      .map(rest => {
+        let depth = 1;
+        for (let index = 0; index < rest.length; index++) {
+          if (rest[index] === '{') depth++;
+          else if (rest[index] === '}' && --depth === 0) return rest.slice(0, index);
+        }
+        throw new Error(`Unbalanced braces after ${opener}`);
+      });
 
   it('every QuestMasterReply handleLLMCommand call spreads turnPreferences', () => {
     const sites = callSites(read('../GenAI/QuestMasterReply.tsx'), 'handleLLMCommand({');
     expect(sites).toHaveLength(4);
-    for (const site of sites) expect(site).toMatch(/^\s*\.\.\.turnPreferences,\s*$/m);
+    for (const site of sites) expect(site).toMatch(spreadsTurnPreferences);
   });
 
   it('the SessionMiddle edit/retry resend spreads turnPreferences', () => {
     const sites = callSites(read('../Session/SessionMiddle.tsx'), 'handleCommand(commandHandlers, {');
     expect(sites).toHaveLength(1);
-    expect(sites[0]).toMatch(/^\s*\.\.\.turnPreferences,\s*$/m);
+    expect(sites[0]).toMatch(spreadsTurnPreferences);
   });
 });
