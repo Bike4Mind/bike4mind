@@ -89,9 +89,9 @@ async function evaluateMath(params: MathParams): Promise<string> {
       Logger.globalInstance.log('🔢 Math Tool: Detected equation, processing...');
 
       // Extract equation from various solve() formats
-      const solveMatch = expression.match(/solve\s*\(\s*([^,=]+)\s*=\s*([^,)]+)\s*(?:,\s*([a-zA-Z]\w*))?\s*\)/);
+      const solveMatch = matchSolveCall(expression);
       if (solveMatch) {
-        const [, leftSide, rightSide] = solveMatch;
+        const [leftSide, rightSide] = solveMatch;
         expression = `${leftSide.trim()} = ${rightSide.trim()}`;
         Logger.globalInstance.log('🔢 Math Tool: Extracted equation from solve():', expression);
       }
@@ -267,6 +267,63 @@ function solveQuadratic(equation: string, variable: string): string | null {
     Logger.globalInstance.log('🔢 Math Tool: Quadratic formula method failed:', error);
     return null;
   }
+}
+
+const WHITESPACE = /\s/;
+
+/** First index >= i whose char is in `stops` (or s.length); amortized linear over nondecreasing i. */
+function forwardFinder(s: string, stops: string): (i: number) => number {
+  let from = s.length + 1;
+  let at = s.length;
+  return i => {
+    if (i < from || i > at) {
+      from = i;
+      at = i;
+      while (at < s.length && !stops.includes(s[at])) at++;
+    }
+    return at;
+  };
+}
+
+/** `,\s*([a-zA-Z]\w*)\s*\)` read from just after the comma: the variable name, or null. */
+function matchVariableTail(s: string, i: number): string | null {
+  while (i < s.length && WHITESPACE.test(s[i])) i++;
+  const start = i;
+  if (!/[a-zA-Z]/.test(s[i] ?? '')) return null;
+  while (i < s.length && /\w/.test(s[i])) i++;
+  const name = s.slice(start, i);
+  while (i < s.length && WHITESPACE.test(s[i])) i++;
+  return s[i] === ')' ? name : null;
+}
+
+/**
+ * First match of /solve\s*\(([^,=]+)=([^,)]+)(?:,\s*([a-zA-Z]\w*)\s*)?\)/ as [left, right, variable],
+ * untrimmed. Every regex form rescans the rest of the input from each repeated `solve(` opener, so
+ * this caches the next stop character across openers.
+ */
+export function matchSolveCall(s: string): [string, string, string | undefined] | null {
+  const nextEqualsOrComma = forwardFinder(s, '=,');
+  const nextCommaOrParen = forwardFinder(s, ',)');
+  let tailAt = -1;
+  let tail: string | null = null;
+  for (let at = s.indexOf('solve'); at !== -1; at = s.indexOf('solve', at + 1)) {
+    let i = at + 5;
+    while (i < s.length && WHITESPACE.test(s[i])) i++;
+    if (s[i] !== '(') continue;
+    const equals = nextEqualsOrComma(i + 1);
+    if (equals === i + 1 || s[equals] !== '=') continue;
+    const stop = nextCommaOrParen(equals + 1);
+    if (stop === equals + 1 || stop === s.length) continue;
+    const left = s.slice(i + 1, equals);
+    const right = s.slice(equals + 1, stop);
+    if (s[stop] === ')') return [left, right, undefined];
+    if (stop !== tailAt) {
+      tailAt = stop;
+      tail = matchVariableTail(s, stop + 1);
+    }
+    if (tail !== null) return [left, right, tail];
+  }
+  return null;
 }
 
 export const mathTool: ToolDefinition = {
