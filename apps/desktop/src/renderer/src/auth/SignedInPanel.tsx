@@ -4,7 +4,6 @@ import Button from '@mui/joy/Button';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
-import { FolderAccess } from '../chat/FolderAccess';
 import { RuntimeInfo } from '../components/RuntimeInfo';
 
 /**
@@ -69,8 +68,6 @@ export function SignedInPanel({ state }: { state: AuthState }) {
           Sign out
         </Button>
       </Stack>
-
-      <FolderAccess />
 
       <Box component="details">
         <Typography component="summary" level="body-xs" textColor="text.tertiary" sx={{ cursor: 'pointer' }}>

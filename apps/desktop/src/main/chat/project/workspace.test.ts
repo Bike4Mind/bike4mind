@@ -1,0 +1,160 @@
+import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { containerDirectory, git, listBranches, listWorktrees, projectDisplayName } from './git';
+import { resolveWorkspace, worktreeFolderName } from './workspace';
+
+/**
+ * Real git repositories in a temp directory rather than a mocked child_process: the whole
+ * value of this module is that it drives git correctly, and a mock would only assert that the
+ * arguments match what was written here.
+ *
+ * The fixture is the user's own layout - <container>/.bare beside <container>/main - because
+ * that is what decides where a worktree lands. An ordinary clone is covered separately below.
+ */
+async function bareLayoutRepository(): Promise<{ container: string; main: string }> {
+  // realpath because on macOS tmpdir() is a symlink into /private and git reports resolved paths.
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-project-')));
+
+  const source = join(root, 'source');
+  await mkdir(source, { recursive: true });
+  await git(source, ['init', '--initial-branch=main', '--quiet']);
+  await git(source, ['config', 'user.email', 'test@example.com']);
+  await git(source, ['config', 'user.name', 'Test']);
+  await writeFile(join(source, 'README.md'), 'hello\n', 'utf8');
+  await git(source, ['add', '.']);
+  await git(source, ['commit', '--quiet', '-m', 'first']);
+
+  const container = join(root, 'project');
+  await mkdir(container, { recursive: true });
+  await git(container, ['clone', '--bare', '--quiet', source, '.bare']);
+
+  const bare = join(container, '.bare');
+  const main = join(container, 'main');
+  await git(bare, ['worktree', 'add', '--quiet', main, 'main']);
+  await git(main, ['config', 'user.email', 'test@example.com']);
+  await git(main, ['config', 'user.name', 'Test']);
+
+  return { container, main };
+}
+
+describe('worktreeFolderName', () => {
+  it("turns a branch's slashes into '+' so it is one directory entry", () => {
+    expect(worktreeFolderName('fix/some-branch')).toBe('fix+some-branch');
+    expect(worktreeFolderName('feat/a/b')).toBe('feat+a+b');
+    expect(worktreeFolderName('main')).toBe('main');
+  });
+});
+
+describe('project inspection', () => {
+  it('lists the real branches, checked-out one first', async () => {
+    const { main } = await bareLayoutRepository();
+    await git(main, ['branch', 'feat/one']);
+    await git(main, ['branch', 'feat/two']);
+
+    expect(await listBranches(main)).toEqual(['main', 'feat/one', 'feat/two']);
+  });
+
+  it('names the container as the parent of the shared git dir', async () => {
+    const { container, main } = await bareLayoutRepository();
+    expect(await containerDirectory(main)).toBe(container);
+  });
+
+  /**
+   * In the bare-repo layout the directory a user picks IS <container>/main, so a plain basename
+   * would label every project "main" in the sidebar.
+   */
+  it('names the project after its container, not the checkout folder', async () => {
+    const { main } = await bareLayoutRepository();
+    expect(await projectDisplayName(main)).toBe('project');
+  });
+
+  it('names an ordinary clone after its own folder', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-plain-')));
+    const repo = join(root, 'myrepo');
+    await mkdir(repo, { recursive: true });
+    await git(repo, ['init', '--initial-branch=main', '--quiet']);
+
+    expect(await projectDisplayName(repo)).toBe('myrepo');
+  });
+});
+
+describe('resolveWorkspace', () => {
+  let container: string;
+  let main: string;
+
+  beforeEach(async () => {
+    ({ container, main } = await bareLayoutRepository());
+  });
+
+  it('creates the worktree inside the container, never as a ../ sibling', async () => {
+    const resolved = await resolveWorkspace(main, 'feat/thing');
+
+    expect(resolved.outcome).toBe('created');
+    expect(resolved.workingDirectory).toBe(join(container, 'feat+thing'));
+    // The guard that matters: the path stays under the project's own container, so nothing is
+    // scattered beside unrelated projects.
+    expect(resolved.workingDirectory.startsWith(`${container}/`)).toBe(true);
+  });
+
+  it('creates the branch when it does not exist yet', async () => {
+    const resolved = await resolveWorkspace(main, 'feat/brand-new');
+
+    const head = (await git(resolved.workingDirectory, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+    expect(head).toBe('feat/brand-new');
+  });
+
+  it('checks out an existing branch rather than refusing it', async () => {
+    await git(main, ['branch', 'feat/already']);
+    const resolved = await resolveWorkspace(main, 'feat/already');
+
+    expect(resolved.outcome).toBe('created');
+    expect((await git(resolved.workingDirectory, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()).toBe('feat/already');
+  });
+
+  it('reuses a worktree that already exists for that branch instead of failing', async () => {
+    const first = await resolveWorkspace(main, 'feat/twice');
+    const second = await resolveWorkspace(main, 'feat/twice');
+
+    expect(second).toEqual({ workingDirectory: first.workingDirectory, outcome: 'reused' });
+    expect((await listWorktrees(main)).filter(entry => entry.branch === 'feat/twice')).toHaveLength(1);
+  });
+
+  /**
+   * git allows a branch in exactly one worktree, so picking the branch the main checkout is on
+   * has to resolve TO the main checkout. The caller surfaces the resolved path, so this never
+   * silently claims an isolation it did not get.
+   */
+  it('resolves the main checkout when its own branch is chosen', async () => {
+    const resolved = await resolveWorkspace(main, 'main');
+
+    expect(resolved).toEqual({ workingDirectory: main, outcome: 'reused' });
+  });
+
+  it('refuses a path already occupied by something that is not a worktree', async () => {
+    await mkdir(join(container, 'feat+taken'), { recursive: true });
+    await writeFile(join(container, 'feat+taken', 'notes.txt'), 'mine\n', 'utf8');
+
+    await expect(resolveWorkspace(main, 'feat/taken')).rejects.toThrow(/already exists but is not a git worktree/);
+  });
+});
+
+describe('resolveWorkspace in an ordinary clone', () => {
+  it('puts the worktree beside the checkout, which is where the shell helper puts it too', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-plain-')));
+    const repo = join(root, 'repo');
+    await mkdir(repo, { recursive: true });
+    await git(repo, ['init', '--initial-branch=main', '--quiet']);
+    await git(repo, ['config', 'user.email', 'test@example.com']);
+    await git(repo, ['config', 'user.name', 'Test']);
+    await writeFile(join(repo, 'README.md'), 'hello\n', 'utf8');
+    await git(repo, ['add', '.']);
+    await git(repo, ['commit', '--quiet', '-m', 'first']);
+
+    const resolved = await resolveWorkspace(repo, 'feat/inside');
+
+    // git-common-dir is <repo>/.git here, so the container is <repo> itself.
+    expect(resolved.workingDirectory).toBe(join(repo, 'feat+inside'));
+  });
+});

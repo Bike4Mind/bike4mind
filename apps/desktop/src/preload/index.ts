@@ -1,6 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
-import type { ChatApprovalDecision, ChatAttachmentInput, ChatStreamEvent, SendMessageRequest } from '@shared/chat';
+import type {
+  ChatApprovalDecision,
+  ChatAttachmentInput,
+  ChatStreamEvent,
+  CreateCodeSessionRequest,
+  SendMessageRequest,
+} from '@shared/chat';
 import { IPC_CHANNELS, type DesktopApi } from '@shared/ipc';
 
 // Written out one method per channel rather than a generic invoke(channel, ...args)
@@ -28,8 +34,17 @@ const api: DesktopApi = {
     listModels: (force?: boolean) => ipcRenderer.invoke(IPC_CHANNELS.chatListModels, force ?? false),
     setSessionModel: (sessionId: string, model: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionModel, sessionId, model),
+    setSessionPinned: (sessionId: string, pinned: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPinned, sessionId, pinned),
     listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSessions),
     createSession: () => ipcRenderer.invoke(IPC_CHANNELS.chatCreateSession),
+    createCodeSession: (request: CreateCodeSessionRequest) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatCreateCodeSession, request),
+    pickProjectDirectory: () => ipcRenderer.invoke(IPC_CHANNELS.chatPickProjectDirectory),
+    inspectProject: (directory: string) => ipcRenderer.invoke(IPC_CHANNELS.chatInspectProject, directory),
+    addContextDirectory: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatAddContextDirectory, sessionId),
+    removeContextDirectory: (sessionId: string, directory: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatRemoveContextDirectory, sessionId, directory),
     getSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetSession, sessionId),
     renameSession: (sessionId: string, title: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatRenameSession, sessionId, title),

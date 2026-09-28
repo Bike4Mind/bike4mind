@@ -38,11 +38,18 @@ export function isWithin(root: string, candidate: string): boolean {
  * checked instead - that is what makes "create a file here" verifiable without creating it
  * first, while still resolving any symlinked parent along the way.
  */
-export async function resolveWithinRoots(requested: string, roots: readonly string[]): Promise<string> {
+export async function resolveWithinRoots(
+  requested: string,
+  roots: readonly string[],
+  baseDirectory?: string
+): Promise<string> {
   if (!requested) throw new PathAccessDenied(requested);
   if (roots.length === 0) throw new PathAccessDenied(requested);
 
-  const lexical = isAbsolute(requested) ? resolve(requested) : resolve(requested);
+  // A relative path resolves against the SESSION's working directory, not process.cwd() -
+  // which for a packaged Electron app is wherever the app happened to be launched from, and
+  // is never somewhere the user granted.
+  const lexical = isAbsolute(requested) || !baseDirectory ? resolve(requested) : resolve(baseDirectory, requested);
   const realRoots = await Promise.all(roots.map(root => realpath(root).catch(() => resolve(root))));
 
   const real = await realpathNearest(lexical);

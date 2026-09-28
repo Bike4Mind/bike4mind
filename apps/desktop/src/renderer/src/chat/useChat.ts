@@ -6,6 +6,7 @@ import type {
   ChatModelOption,
   ChatSession,
   ChatSessionSummary,
+  CreateCodeSessionRequest,
 } from '@shared/chat';
 
 export interface SessionsController {
@@ -13,7 +14,14 @@ export interface SessionsController {
   loading: boolean;
   reload: () => Promise<void>;
   create: () => Promise<string>;
+  /** Start a Code session. Resolves null when main refused; `codeError` then says why. */
+  createCode: (request: CreateCodeSessionRequest) => Promise<string | null>;
+  /** Set while a Code session is being created - resolving a worktree can take a moment. */
+  creatingCode: boolean;
+  codeError: string | null;
+  clearCodeError: () => void;
   remove: (sessionId: string) => Promise<void>;
+  togglePin: (session: ChatSessionSummary) => Promise<void>;
   /** Apply a summary main just returned, so the sidebar reorders without a full reload. */
   apply: (summary: ChatSessionSummary) => void;
 }
@@ -21,6 +29,8 @@ export interface SessionsController {
 export function useSessions(): SessionsController {
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [creatingCode, setCreatingCode] = useState(false);
+  const [codeError, setCodeError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     const next = await window.b4m.chat.listSessions();
@@ -38,6 +48,22 @@ export function useSessions(): SessionsController {
     return created.id;
   }, []);
 
+  const createCode = useCallback(async (request: CreateCodeSessionRequest) => {
+    setCreatingCode(true);
+    setCodeError(null);
+    try {
+      const result = await window.b4m.chat.createCodeSession(request);
+      if (!result.ok) {
+        setCodeError(result.error);
+        return null;
+      }
+      setSessions(current => [result.session, ...current]);
+      return result.session.id;
+    } finally {
+      setCreatingCode(false);
+    }
+  }, []);
+
   const remove = useCallback(async (sessionId: string) => {
     await window.b4m.chat.deleteSession(sessionId);
     setSessions(current => current.filter(session => session.id !== sessionId));
@@ -47,7 +73,59 @@ export function useSessions(): SessionsController {
     setSessions(current => [summary, ...current.filter(session => session.id !== summary.id)]);
   }, []);
 
-  return { sessions, loading, reload, create, remove, apply };
+  // Patched in place rather than moved to the front: pinning does not touch `updatedAt`, so
+  // reordering the row here would disagree with what the next reload shows.
+  const togglePin = useCallback(async (session: ChatSessionSummary) => {
+    const updated = await window.b4m.chat.setSessionPinned(session.id, !session.pinned);
+    if (!updated) return;
+    setSessions(current => current.map(entry => (entry.id === updated.id ? updated : entry)));
+  }, []);
+
+  const clearCodeError = useCallback(() => setCodeError(null), []);
+
+  return {
+    sessions,
+    loading,
+    reload,
+    create,
+    createCode,
+    creatingCode,
+    codeError,
+    clearCodeError,
+    remove,
+    togglePin,
+    apply,
+  };
+}
+
+/**
+ * Which sessions have a reply in flight, for the sidebar's status dots.
+ *
+ * Subscribed globally rather than derived from the open conversation: main streams replies for
+ * every session at once, so a dot driven by the active conversation alone would show every
+ * background session as idle - which is the one thing the dot exists to contradict.
+ */
+export function useRunningSessions(): ReadonlySet<string> {
+  const [running, setRunning] = useState<ReadonlySet<string>>(() => new Set());
+
+  useEffect(() => {
+    return window.b4m.chat.onStreamEvent(event => {
+      // The background-* events outlive the turn that started one, so they say nothing about
+      // whether a REPLY is streaming and must not clear the dot.
+      if (event.type === 'background-output' || event.type === 'background-status') return;
+      setRunning(current => {
+        const isStart = event.type === 'start';
+        if (isStart === current.has(event.sessionId)) return current;
+        const next = new Set(current);
+        if (isStart) next.add(event.sessionId);
+        else if (event.type === 'done' || event.type === 'error') next.delete(event.sessionId);
+        else return current;
+        return next;
+      });
+    });
+  }, []);
+
+  return running;
 }
 
 export interface ModelCatalogController {

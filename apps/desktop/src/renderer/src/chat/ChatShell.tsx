@@ -1,18 +1,24 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
+import Chip from '@mui/joy/Chip';
 import Input from '@mui/joy/Input';
 import Stack from '@mui/joy/Stack';
+import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
+import type { ChatProject, ChatSessionMode, CreateCodeSessionRequest } from '@shared/chat';
 import { BackgroundProcessPanel } from './BackgroundProcessPanel';
 import { Composer } from './Composer';
+import { FolderAccess } from './FolderAccess';
 import { MessageThread } from './MessageThread';
 import { contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
+import { ModeSwitcher } from './ModeSwitcher';
+import { NewCodeSessionDialog } from './NewCodeSessionDialog';
 import { SessionList } from './SessionList';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
-import { useConversation, useModelCatalog, useSessions } from './useChat';
+import { useConversation, useModelCatalog, useRunningSessions, useSessions } from './useChat';
 import { useFileDrop } from './useFileDrop';
 
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
@@ -62,12 +68,42 @@ function SessionHeader({ title, onRename }: { title: string; onRename: (title: s
   );
 }
 
+/**
+ * Where a Code session is grounded, under its title. The working directory is shown whenever it
+ * differs from the project, because that difference IS the workspace toggle: a user who cannot
+ * see it has no way to tell which checkout their commands just ran in.
+ */
+function ProjectBar({ project }: { project: ChatProject }) {
+  const relocated = project.workingDirectory !== project.directory;
+  return (
+    <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mt: 0.25 }} data-testid="chat-project-bar">
+      <Chip size="sm" variant="soft" color="primary">
+        {project.name}
+      </Chip>
+      {project.branch && (
+        <Chip size="sm" variant="soft" color="neutral" data-testid="chat-project-branch">
+          {project.branch}
+        </Chip>
+      )}
+      <Tooltip title={project.workingDirectory} size="sm" variant="soft" placement="bottom-start">
+        <Typography level="body-xs" textColor="text.tertiary" noWrap data-testid="chat-project-cwd">
+          {relocated ? `worktree: ${project.workingDirectory}` : project.directory}
+        </Typography>
+      </Tooltip>
+    </Stack>
+  );
+}
+
 export function ChatShell({ account }: { account?: ReactNode }) {
-  const { sessions, loading, create, remove, apply } = useSessions();
+  const { sessions, loading, create, createCode, creatingCode, codeError, clearCodeError, remove, togglePin, apply } =
+    useSessions();
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [mode, setMode] = useState<ChatSessionMode>('chat');
+  const [codeDialogOpen, setCodeDialogOpen] = useState(false);
   const conversation = useConversation(activeId, apply);
   const background = useBackgroundProcesses(activeId);
   const catalog = useModelCatalog();
+  const running = useRunningSessions();
   const draft = useAttachmentDraft(activeId);
 
   const onFilesDropped = useCallback(
@@ -103,15 +139,57 @@ export function ChatShell({ account }: { account?: ReactNode }) {
     [conversation, draft]
   );
 
-  // Open the most recent conversation on first load so the app lands somewhere useful rather
-  // than on an empty pane. Only until the user picks one - after that, their choice stands.
+  // Open the most recent conversation of the current mode, so the app lands somewhere useful
+  // rather than on an empty pane and switching mode does not leave a session open that the
+  // sidebar no longer lists. Only reselects when the open one is not in this mode; past that,
+  // the user's choice stands.
   useEffect(() => {
-    if (!loading && !activeId && sessions.length > 0) setActiveId(sessions[0].id);
-  }, [loading, activeId, sessions]);
+    if (loading) return;
+    const open = sessions.find(session => session.id === activeId);
+    if (open?.mode === mode) return;
+    setActiveId(sessions.find(session => session.mode === mode)?.id ?? null);
+  }, [loading, activeId, sessions, mode]);
 
   const onCreate = useCallback(async () => {
+    if (mode === 'code') {
+      clearCodeError();
+      setCodeDialogOpen(true);
+      return;
+    }
     setActiveId(await create());
-  }, [create]);
+  }, [mode, create, clearCodeError]);
+
+  const onCreateCode = useCallback(
+    async (request: CreateCodeSessionRequest) => {
+      const created = await createCode(request);
+      if (!created) return;
+      setCodeDialogOpen(false);
+      setActiveId(created);
+    },
+    [createCode]
+  );
+
+  /**
+   * Another session in the same project, from the group header's "+".
+   *
+   * It reuses the existing binding rather than reopening the dialog: the project, branch and
+   * workspace choice are what define the group, so asking for them again to land in the same
+   * group would be a form to fill in with the only answer that works.
+   */
+  const onCreateInProject = useCallback(
+    async (directory: string) => {
+      const sibling = sessions.find(session => session.project?.directory === directory)?.project;
+      if (!sibling) return;
+      const created = await createCode({
+        directory: sibling.directory,
+        branch: sibling.branch,
+        workspace: sibling.workspace,
+        contextDirectories: sibling.contextDirectories,
+      });
+      if (created) setActiveId(created);
+    },
+    [sessions, createCode]
+  );
 
   const onDelete = useCallback(
     async (sessionId: string) => {
@@ -146,25 +224,39 @@ export function ChatShell({ account }: { account?: ReactNode }) {
 
       <SessionList
         sessions={sessions}
+        mode={mode}
         loading={loading}
         activeId={activeId}
+        runningIds={running}
         onSelect={setActiveId}
         onCreate={() => void onCreate()}
+        onCreateInProject={directory => void onCreateInProject(directory)}
         onDelete={sessionId => void onDelete(sessionId)}
+        onTogglePin={session => void togglePin(session)}
+        more={<FolderAccess />}
         footer={account}
       />
 
       <Stack sx={{ flex: 1, minWidth: 0 }}>
         <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
-          <Box sx={{ ...contentColumnSx, py: 1.25 }}>
-            {conversation.session ? (
-              <SessionHeader title={conversation.session.title} onRename={title => void conversation.rename(title)} />
-            ) : (
-              <Typography level="title-sm" textColor="text.tertiary">
-                No conversation open
-              </Typography>
-            )}
-          </Box>
+          <Stack direction="row" sx={{ ...contentColumnSx, py: 1.25, alignItems: 'flex-start', gap: 1 }}>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              {conversation.session ? (
+                <>
+                  <SessionHeader
+                    title={conversation.session.title}
+                    onRename={title => void conversation.rename(title)}
+                  />
+                  {conversation.session.project && <ProjectBar project={conversation.session.project} />}
+                </>
+              ) : (
+                <Typography level="title-sm" textColor="text.tertiary">
+                  No conversation open
+                </Typography>
+              )}
+            </Box>
+            <ModeSwitcher mode={mode} onChange={setMode} />
+          </Stack>
         </Box>
 
         <MessageThread
@@ -213,6 +305,14 @@ export function ChatShell({ account }: { account?: ReactNode }) {
           }
         />
       </Stack>
+
+      <NewCodeSessionDialog
+        open={codeDialogOpen}
+        onClose={() => setCodeDialogOpen(false)}
+        onCreate={request => void onCreateCode(request)}
+        error={codeError}
+        busy={creatingCode}
+      />
     </Box>
   );
 }

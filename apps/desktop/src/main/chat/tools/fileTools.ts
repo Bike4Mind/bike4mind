@@ -20,8 +20,13 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${units[unit]}`;
 }
 
-/** Where a relative pattern is anchored: the single granted root, when there is exactly one. */
+/**
+ * Where a relative pattern is anchored: the session's working directory, or the single granted
+ * root when there is exactly one and no working directory. A Code session always has one, so
+ * "search this project" needs no path even with several folders granted.
+ */
 function defaultBase(context: ToolContext): string {
+  if (context.workingDirectory) return context.workingDirectory;
   if (context.roots.length === 1) return context.roots[0];
   throw new Error(
     `Specify "path": several folders are granted (${context.roots.join(', ')}), so a relative pattern is ambiguous.`
@@ -72,7 +77,7 @@ export const fileRead: ToolDefinition = {
     },
   },
   async run(input, context) {
-    const target = await resolveWithinRoots(requireString(input, 'path'), context.roots);
+    const target = await resolveWithinRoots(requireString(input, 'path'), context.roots, context.workingDirectory);
     const info = await stat(target);
     if (info.isDirectory()) throw new Error(`${target} is a directory. Use glob_files to list it.`);
 
@@ -105,7 +110,7 @@ export const globFiles: ToolDefinition = {
   },
   async run(input, context) {
     const requested = typeof input.path === 'string' && input.path ? input.path : defaultBase(context);
-    const base = await resolveWithinRoots(requested, context.roots);
+    const base = await resolveWithinRoots(requested, context.roots, context.workingDirectory);
     const pattern = typeof input.pattern === 'string' && input.pattern ? input.pattern : '*';
 
     const found: { path: string; size: number; modified: number }[] = [];
@@ -153,7 +158,7 @@ export const grepSearch: ToolDefinition = {
   },
   async run(input, context) {
     const requested = typeof input.path === 'string' && input.path ? input.path : defaultBase(context);
-    const base = await resolveWithinRoots(requested, context.roots);
+    const base = await resolveWithinRoots(requested, context.roots, context.workingDirectory);
 
     let expression: RegExp;
     try {

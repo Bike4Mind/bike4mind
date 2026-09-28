@@ -1,17 +1,23 @@
 import { randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type {
   ChatAttachment,
   ChatMessage,
   ChatModelCatalog,
   ChatModelOption,
+  ChatProject,
   ChatSession,
   ChatSessionSummary,
   ChatStreamEvent,
   ChatToolCall,
   ChatUsage,
+  CreateCodeSessionRequest,
+  CreateCodeSessionResult,
   SendMessageResult,
 } from '@shared/chat';
+import { projectDisplayName } from './project/git';
+import { resolveWorkspace } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
 import { DEFAULT_COMPLETIONS_PATH, streamCompletion, type CompletionMessage } from './completions';
@@ -109,9 +115,79 @@ export class ChatService {
     return this.deps.store.create(this.pickModel(catalog.models) ?? undefined);
   }
 
+  /**
+   * Start a Code session grounded in a project directory.
+   *
+   * The workspace is resolved BEFORE the session is written, so a worktree that cannot be
+   * created leaves nothing behind: there is no session whose tools would then fall back to
+   * some other folder.
+   */
+  async createCodeSession(request: CreateCodeSessionRequest): Promise<CreateCodeSessionResult> {
+    const directory = resolve(request.directory);
+    const branch = request.branch.trim();
+
+    let workingDirectory = directory;
+    let reusedWorkspace = false;
+    if (request.workspace) {
+      if (!branch) return { ok: false, error: 'Pick a branch for the workspace to run on.' };
+      try {
+        const resolved = await resolveWorkspace(directory, branch);
+        workingDirectory = resolved.workingDirectory;
+        reusedWorkspace = resolved.outcome === 'reused';
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : 'Could not prepare the workspace.' };
+      }
+    }
+
+    const catalog = await this.listModels();
+    const session = await this.deps.store.create(this.pickModel(catalog.models) ?? undefined, {
+      directory,
+      name: await projectDisplayName(directory),
+      branch,
+      workspace: request.workspace,
+      workingDirectory,
+      contextDirectories: (request.contextDirectories ?? []).map(entry => resolve(entry)),
+    });
+
+    return { ok: true, session, ...(reusedWorkspace ? { reusedWorkspace } : {}) };
+  }
+
+  /**
+   * The folders this session's tools may touch, and where they run.
+   *
+   * A Code session's own directories are added to the global grants rather than replacing
+   * them: the user picked the project in a native dialog, which is the same act of consent the
+   * "Share a folder" button represents, so re-granting the project they just chose would be
+   * pure ceremony. The global grants stay because tools are not Code-only - a Code session can
+   * still be pointed at a reference checkout the user shared earlier.
+   */
+  private async resolveToolScope(
+    session: ChatSession
+  ): Promise<{ roots: readonly string[]; workingDirectory?: string }> {
+    const granted = await this.deps.access.list();
+    const project = session.project;
+    if (!project) return { roots: granted };
+
+    const owned = [project.workingDirectory, ...project.contextDirectories];
+    const roots = [...owned, ...granted.filter(root => !owned.includes(root))];
+    return { roots, workingDirectory: project.workingDirectory };
+  }
+
   /** Pin this conversation to a model. Not validated against the catalog: see `reconcileModel`. */
   setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null> {
     return this.deps.store.setModel(sessionId, model);
+  }
+
+  setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null> {
+    return this.deps.store.setPinned(sessionId, pinned);
+  }
+
+  addContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null> {
+    return this.deps.store.addContextDirectory(sessionId, resolve(directory));
+  }
+
+  removeContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null> {
+    return this.deps.store.removeContextDirectory(sessionId, directory);
   }
 
   getSession(sessionId: string): Promise<ChatSession | null> {
@@ -306,13 +382,13 @@ export class ChatService {
 
     try {
       const endpoint = await this.resolveEndpoint(api);
-      const roots = await this.deps.access.list();
+      const { roots, workingDirectory } = await this.resolveToolScope(session);
       const tools = toolsForRequest(roots);
       const wire = await toCompletionMessages(
         session,
         (attachment: ChatAttachment) => this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null)
       );
-      wire.unshift(buildSystemMessage(roots));
+      wire.unshift(buildSystemMessage(roots, session.project));
 
       for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
         const requested: RequestedTool[] = [];
@@ -345,7 +421,7 @@ export class ChatService {
         if (requested.length === 0) break;
 
         thinking = turnThinking;
-        const settled = await this.runTools(requested, roots, sessionId, replyId, controller.signal);
+        const settled = await this.runTools(requested, roots, workingDirectory, sessionId, replyId, controller.signal);
         toolCalls.push(...settled);
 
         // Anthropic's shape: ONE assistant turn carrying the reasoning, any text and every
@@ -418,6 +494,7 @@ export class ChatService {
   private async runTools(
     requested: readonly RequestedTool[],
     roots: readonly string[],
+    workingDirectory: string | undefined,
     sessionId: string,
     messageId: string,
     signal: AbortSignal
@@ -441,6 +518,7 @@ export class ChatService {
 
         const context: ToolContext = {
           roots,
+          workingDirectory,
           signal,
           protectedPaths: this.deps.protectedPaths,
           sessionId,
@@ -581,7 +659,31 @@ export class ChatService {
  *    invented a filename and byte count rather than saying it could not look. Saying "you have
  *    no access" explicitly is what stops that, so this is never omitted.
  */
-function buildSystemMessage(roots: readonly string[]): CompletionMessage {
+/**
+ * What a Code session tells the model about where it is.
+ *
+ * The worktree line is not decoration: the branch is checked out at a path that is NOT the
+ * project directory the user talks about, so a model told only the project path would keep
+ * proposing commands against the wrong checkout.
+ */
+function projectPreamble(project: ChatProject): string[] {
+  const lines = [
+    `This conversation is about the project ${project.name}, at ${project.directory}.`,
+    `Commands run in ${project.workingDirectory} unless you name another folder, and a relative`,
+    'path resolves against it.',
+  ];
+  if (project.workspace && project.workingDirectory !== project.directory) {
+    lines.push(
+      `That is a git worktree for the branch ${project.branch}, not the main checkout. Work there:`,
+      'changes made in the project directory itself would be on a different branch.'
+    );
+  } else if (project.branch) {
+    lines.push(`The branch is ${project.branch}.`);
+  }
+  return lines;
+}
+
+function buildSystemMessage(roots: readonly string[], project?: ChatProject): CompletionMessage {
   if (roots.length === 0) {
     return {
       role: 'system',
@@ -601,6 +703,7 @@ function buildSystemMessage(roots: readonly string[]): CompletionMessage {
     content: [
       'You can read and change files on the user machine, and run bash commands on it, with the',
       'provided tools.',
+      ...(project ? projectPreamble(project) : []),
       'These folders are shared with you, including everything beneath them:',
       ...roots.map(root => `  ${root}`),
       'Always pass absolute paths. Any path outside those folders is denied;',

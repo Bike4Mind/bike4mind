@@ -117,7 +117,7 @@ export const bashBackground: ToolDefinition = {
       throw new Error('Commands cannot be run on this machine: the macOS sandbox is unavailable.');
     }
 
-    const cwd = await resolveCwd(input, context.roots);
+    const cwd = await resolveCwd(input, context.roots, context.workingDirectory);
     const started = await registry.start({
       sessionId,
       command,

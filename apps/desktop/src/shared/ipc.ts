@@ -8,6 +8,9 @@ import type {
   ChatSession,
   ChatSessionSummary,
   ChatStreamEvent,
+  CreateCodeSessionRequest,
+  CreateCodeSessionResult,
+  ProjectInspection,
   SendMessageRequest,
   SendMessageResult,
   ToolAccessState,
@@ -35,8 +38,14 @@ export const IPC_CHANNELS = {
   authStateChanged: 'auth:state-changed',
   chatListModels: 'chat:list-models',
   chatSetSessionModel: 'chat:set-session-model',
+  chatSetSessionPinned: 'chat:set-session-pinned',
   chatListSessions: 'chat:list-sessions',
   chatCreateSession: 'chat:create-session',
+  chatCreateCodeSession: 'chat:create-code-session',
+  chatPickProjectDirectory: 'chat:pick-project-directory',
+  chatInspectProject: 'chat:inspect-project',
+  chatAddContextDirectory: 'chat:add-context-directory',
+  chatRemoveContextDirectory: 'chat:remove-context-directory',
   chatGetSession: 'chat:get-session',
   chatRenameSession: 'chat:rename-session',
   chatDeleteSession: 'chat:delete-session',
@@ -89,8 +98,20 @@ export interface DesktopApi {
     listModels(force?: boolean): Promise<ChatModelCatalog>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
+    /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
+    setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
     listSessions(): Promise<ChatSessionSummary[]>;
+    /** Start a Chat session: no project, the mode everything before this was. */
     createSession(): Promise<ChatSessionSummary>;
+    /** Start a Code session, creating or adopting its worktree first when one is asked for. */
+    createCodeSession(request: CreateCodeSessionRequest): Promise<CreateCodeSessionResult>;
+    /** Open the OS folder picker for a project root. Null when the user cancels. */
+    pickProjectDirectory(): Promise<string | null>;
+    /** Read a directory's branches for the New Code session dialog. */
+    inspectProject(directory: string): Promise<ProjectInspection>;
+    /** Grant one more folder to a Code session. Opens the folder picker; null when cancelled. */
+    addContextDirectory(sessionId: string): Promise<ChatSessionSummary | null>;
+    removeContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null>;
     /** Null when the session is gone (deleted in another window, or a stale id). */
     getSession(sessionId: string): Promise<ChatSession | null>;
     renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
