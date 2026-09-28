@@ -181,3 +181,50 @@ export function grantChange(
   if (beforeValue === afterValue) return null;
   return literalChange('accessGrant', beforeValue, afterValue);
 }
+
+/**
+ * One proposal-review decision, as a change entry. The reviewed row lives in `DataLakeProposal`, so
+ * - exactly like `grantChange` above - `diffLakeConfig` can never see this and it is synthesized
+ * onto the derived `proposalReview` field.
+ *
+ * The SOURCE URL is encoded into the value rather than carried separately, for the same reason
+ * `grantChange` bakes the principal into its string: the action (`approve-proposal` /
+ * `decline-proposal` / `restore-proposal`) already says WHAT happened, so the field's before/after
+ * pair only needs to say WHICH queued source it happened to. `before` is always unset - a proposal
+ * is reviewed exactly once per decision, so there is no prior value on this field to show.
+ */
+export function proposalReviewChange(
+  sourceUrl: string,
+  decision: 'approved' | 'declined' | 'restored'
+): ILakeConfigLiteralChange {
+  return literalChange('proposalReview', undefined, `${decision}: ${sourceUrl}`);
+}
+
+/**
+ * A saved research configuration's create/update/delete, as a change entry - the same
+ * derived-field, value-encoded pattern as `proposalReviewChange` above, since a config lives in its
+ * own collection and never on the lake document. The NAME is what a curator recognizes a config by
+ * in the list, so it is the identifier encoded here rather than the (longer, less scannable) query.
+ */
+export function researchConfigChange(
+  configName: string,
+  decision: 'created' | 'updated' | 'deleted'
+): ILakeConfigLiteralChange {
+  return literalChange('researchConfig', undefined, `${decision}: ${configName}`);
+}
+
+/**
+ * A research run reaching a lifecycle point (started, then completed or failed), as a change entry
+ * - same pattern again. Encodes the run's own QUERY, not the config's name: the background
+ * executor that records the outcome half (`recordResearchRunOutcome`, called from
+ * `runLakeResearch.ts`) only ever has the run's levers snapshot to work from, never the config
+ * document - using the same identifier here is what lets a reader match a `start-research-run` row
+ * to the `complete-research-run` row it belongs to. A failure's reason lives on the run row's own
+ * `error` field, not here.
+ */
+export function researchRunChange(
+  query: string,
+  outcome: 'started' | 'completed' | 'failed'
+): ILakeConfigLiteralChange {
+  return literalChange('researchRun', undefined, `${outcome}: ${query}`);
+}
