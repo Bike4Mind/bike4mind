@@ -64,7 +64,7 @@
         "status": "active"
       },
       "autoDisabled": true,
-      "autoDisabledReason": "served only through a cross-region inference profile; use its region-prefixed id"
+      "autoDisabledReason": "not invocable on demand; use its region-prefixed inference profile id"
     }
   },
   {

@@ -101,6 +101,20 @@ describe('bedrock normalization', () => {
     );
   });
 
+  it('disables a provisioned-throughput-only model, whose bare id fails on demand too', () => {
+    const [record] = normalizeBedrockModels({
+      summaries: [{ ...summaries[0], inferenceTypesSupported: ['PROVISIONED'] }],
+    });
+    expect(record.patch).toMatchObject({ autoDisabled: true });
+  });
+
+  it('leaves a model alone when it is invocable on demand as well as by profile', () => {
+    const [record] = normalizeBedrockModels({
+      summaries: [{ ...summaries[0], inferenceTypesSupported: ['ON_DEMAND', 'INFERENCE_PROFILE'] }],
+    });
+    expect(record.patch).not.toHaveProperty('autoDisabled');
+  });
+
   it('leaves a model alone when Bedrock did not say how it can be invoked', () => {
     const [record] = normalizeBedrockModels({
       summaries: [{ ...summaries[0], inferenceTypesSupported: undefined }],
