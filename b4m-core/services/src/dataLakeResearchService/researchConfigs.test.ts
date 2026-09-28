@@ -284,6 +284,37 @@ describe('updateResearchConfig', () => {
 
     expect(record).not.toHaveBeenCalled();
   });
+
+  // Round-2 finding: comparing via JSON.stringify of two object literals broke exactly this case -
+  // `normalizeResearchLevers` omits `model`/`recencyDays` from its return object entirely when
+  // they're unset rather than inserting them in their "natural" position, so the two sides'
+  // stringified key order differed even though every value matched, and a byte-identical resubmit
+  // of the DEFAULT config still recorded a history event.
+  it('does not record a history event on an idempotent resubmit of the default config (no model, no recencyDays)', async () => {
+    const defaultStored = storedConfig({ model: undefined, recencyDays: undefined });
+    const { adapters, record } = makeAdapters({ findByIdInLake: vi.fn(async () => defaultStored) });
+
+    await updateResearchConfig(
+      'config-1',
+      lake(),
+      actor(),
+      NO_GRANTS,
+      {
+        name: defaultStored.name,
+        query: defaultStored.query,
+        maxResults: defaultStored.maxResults,
+        maxProposals: defaultStored.maxProposals,
+        allowedDomains: defaultStored.allowedDomains,
+        blockedDomains: defaultStored.blockedDomains,
+        minRelevance: defaultStored.minRelevance,
+        costCeilingMicroUsd: defaultStored.costCeilingMicroUsd,
+        proposedTags: defaultStored.proposedTags,
+      },
+      adapters
+    );
+
+    expect(record).not.toHaveBeenCalled();
+  });
 });
 
 describe('deleteResearchConfig', () => {
