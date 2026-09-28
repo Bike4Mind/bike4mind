@@ -764,6 +764,7 @@ export function useSendMessage({
           organizationId,
           researchMode,
           skipAutoOffers,
+          agentMode: effectiveAgentMode,
           deepResearchConfig,
           imageConfig: imageSettings,
           audioConfig: audioSettings,
