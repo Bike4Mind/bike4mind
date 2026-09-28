@@ -55,7 +55,9 @@ export interface RecursiveArtifactGuard<Cb extends LooseCompletionCallback> {
    * identifier matches an already-delivered artifact removed) to the real callback. Always
    * emits exactly once, even when the buffered text ends up empty, so the terminal
    * token/usage/stopReason metadata that call carries (read by credit/billing attribution) is
-   * never silently dropped. */
+   * never silently dropped. A second call is a no-op - `flush` never clears `buffer`, so without
+   * this guard a re-flush would resend the entire buffered reply text AND the terminal `meta` a
+   * second time (duplicate text on the client, double-counted usage), not merely a stale total. */
   flush: () => Promise<void>;
 }
 
@@ -102,7 +104,10 @@ export function createRecursiveArtifactGuard<Cb extends LooseCompletionCallback>
   const markDelivered = (markup: string) => {
     deliveredMarkup += markup;
   };
+  let flushed = false;
   const flush = async () => {
+    if (flushed) return;
+    flushed = true;
     const cleaned = stripDeliveredArtifactBlocks(buffer, deliveredMarkup).trim();
     await cb(cleaned ? [cleaned] : [], meta);
   };

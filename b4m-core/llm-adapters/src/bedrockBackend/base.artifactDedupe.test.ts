@@ -94,6 +94,18 @@ const mermaidTool: ICompletionOptionTools = {
   toolFn: async () => MERMAID_ARTIFACT,
 };
 
+const RECHARTS_ARTIFACT =
+  '<artifact identifier="chart-1" type="application/vnd.ant.recharts" title="Bar">{"data":[]}</artifact>';
+
+const rechartsTool: ICompletionOptionTools = {
+  toolSchema: {
+    name: 'recharts',
+    description: 'Generate a chart',
+    parameters: { type: 'object', properties: { definition: { type: 'string' } }, required: ['definition'] },
+  },
+  toolFn: async () => RECHARTS_ARTIFACT,
+};
+
 function nonStreamingToolCallChunk() {
   return {
     choices: [
@@ -130,6 +142,36 @@ function streamingToolCallTurn(): unknown[] {
     {
       choices: [{ index: 0, status: ChoiceStatus.STREAM, chunkText: JSON.stringify({ definition: 'graph TD;A-->B' }) }],
     },
+    {
+      choices: [
+        {
+          index: 0,
+          status: ChoiceStatus.END,
+          statusEndReason: ChoiceEndReason.STOP,
+          usage: { input_tokens: 10, output_tokens: 2 },
+        },
+      ],
+    },
+  ];
+}
+
+/**
+ * Intro text streamed as its OWN chunks before the tool name appears, followed by a second
+ * tool call - unlike streamingToolCallTurn, this is the "chained tool call" shape: the text
+ * chunks arrive while `func.some(f => f.name)` is still false (see base.ts's streaming loop),
+ * so they reach the client normally; only once the tool name lands does base.ts start treating
+ * further chunkText as that tool's own parameters and skip the text callback.
+ */
+function streamingTextThenToolCallTurn(
+  text: string,
+  name: string,
+  id: string,
+  params: Record<string, unknown>
+): unknown[] {
+  return [
+    { choices: [{ index: 0, status: ChoiceStatus.STREAM, chunkText: text }] },
+    { choices: [{ index: 0, status: ChoiceStatus.STREAM, tool: { name, id } }] },
+    { choices: [{ index: 0, status: ChoiceStatus.STREAM, chunkText: JSON.stringify(params) }] },
     {
       choices: [
         {
@@ -281,5 +323,47 @@ describe('BaseBedrockBackend does not duplicate an echoed tool artifact card (#3
       .join('');
     expect(clientText).toContain('identifier="mermaid-1"');
     expect(clientText).toContain('identifier="mermaid-2"');
+  });
+
+  it('pin: a chained tool call artifact reaches the client AFTER the text that introduces it, not before (streaming)', async () => {
+    // Mirrors anthropicBackend.artifactDedupe.test.ts / geminiBackend.artifactDedupe.test.ts's
+    // identical pin. The streaming path (unlike non-streaming, see base.ts's own "Skip callback
+    // when there is a tool being streamed" comment) can only buffer/order text that arrives
+    // BEFORE the tool name appears in the stream - constructed here as its own chunks ahead of
+    // the second tool call's announcement, which is how a real chained turn streams.
+    const backend = new TestBedrockBackend();
+    const turns = [
+      streamingToolCallTurn(),
+      streamingTextThenToolCallTurn("Here's the second chart:", 'recharts', 'call_2', { definition: '{}' }),
+      streamingTextTurn('Done.'),
+    ];
+    let callIndex = 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _bedrockRuntime: any })._bedrockRuntime = {
+      send: async () => {
+        const turn = turns[callIndex++];
+        if (!turn) throw new Error('no more mocked turns');
+        return { body: asBedrockStreamBody(turn) };
+      },
+    };
+
+    const messages: IMessage[] = [{ role: 'user', content: 'a simple process flow diagram' }];
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      TEST_MODEL,
+      messages,
+      { stream: true, tools: [mermaidTool, rechartsTool], executeTools: true } as Partial<ICompletionOptions>,
+      cb
+    );
+
+    const clientText = calls
+      .flatMap(c => c.text)
+      .filter((r): r is string => typeof r === 'string')
+      .join('');
+    const introIndex = clientText.indexOf("Here's the second chart:");
+    const chartIndex = clientText.indexOf('identifier="chart-1"');
+    expect(introIndex).toBeGreaterThanOrEqual(0);
+    expect(chartIndex).toBeGreaterThan(introIndex);
   });
 });
