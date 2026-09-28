@@ -124,7 +124,7 @@ export async function runLakeResearch(
   let judgeModel: string | undefined;
   let judgeProvider: string | undefined;
 
-  // #3298: a run reaching an outcome left no trace in the lake's History tab. `.catch()` here is
+  // A run reaching an outcome left no trace in the lake's History tab. `.catch()` here is
   // deliberate belt-and-suspenders: `recordLakeConfigChange` itself is already best-effort and
   // never throws, but `recordRunEffects` below awaits this alongside `recordSpend` via
   // `Promise.all`, so ANY future addition to this call that could reject (a query, a lookup) would
@@ -138,7 +138,7 @@ export async function runLakeResearch(
       })
       .catch(err => logger.warn(`[lakeResearch] outcome record failed: ${err}`));
 
-  // #3298: the judge's own cost never reached a UsageEvent, so it never showed up on the Spend
+  // The judge's own cost never reached a UsageEvent, so it never showed up on the Spend
   // tab even though the runs API reported it. Recorded ONCE per run (not per judged candidate) -
   // one ledger row per run is what the "By feature" breakdown on the Spend tab groups against,
   // matching how the runs list itself reports a single total rather than a row per judgment.
