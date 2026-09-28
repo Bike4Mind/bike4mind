@@ -143,7 +143,7 @@ describe('startResearchRun', () => {
         principalId: ACTOR,
         dataLakeId: LAKE,
         action: 'start-research-run',
-        changes: [{ field: 'researchRun', kind: 'literal', after: 'started: coastal erosion' }],
+        changes: [{ field: 'researchRun', kind: 'literal', after: 'started: coastal erosion (run run-1)' }],
       })
     );
   });
