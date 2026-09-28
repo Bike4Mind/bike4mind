@@ -84,12 +84,11 @@ export function filterToolArtifactMarkup(toolName: string, text: string): string
  * True when `text` holds at least one complete `<artifact>` block of `toolName`'s pinned type -
  * the outcome sharedToolBuilder's extraction actually delivers to the client. Shares
  * scanArtifactTags with that extraction (rather than re-parsing openers with the reply-parser
- * grammar filterToolArtifactMarkup uses), so this stays extraction-equivalent by construction
- * instead of by two independently maintained tag grammars.
+ * grammar filterToolArtifactMarkup uses), and mirrors extraction's case-sensitive entry gate.
  */
 export function hasDeliverablePinnedArtifact(toolName: string, text: string): boolean {
   const allowedType = TOOL_ARTIFACT_EMITTERS.get(toolName);
-  if (allowedType === undefined) return false;
+  if (allowedType === undefined || !text.includes('<artifact')) return false;
   return scanArtifactTags(text, true).some(({ attrs }) => parseToolArtifactAttributes(attrs).type === allowedType);
 }
 

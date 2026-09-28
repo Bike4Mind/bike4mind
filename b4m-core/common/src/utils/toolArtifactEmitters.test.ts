@@ -220,6 +220,16 @@ describe('hasDeliverablePinnedArtifact: must agree with what sharedToolBuilder a
     expect(hasDeliverablePinnedArtifact('mermaid_chart', MERMAID_ARTIFACT)).toBe(true);
   });
 
+  it('is false for an upper-case opener that sharedToolBuilder does not extract', () => {
+    const upperCaseArtifact = MERMAID_ARTIFACT.replace('<artifact', '<ARTIFACT');
+    expect(hasDeliverablePinnedArtifact('mermaid_chart', upperCaseArtifact)).toBe(false);
+  });
+
+  it('finds an upper-case block when another opener enables extraction', () => {
+    const upperCaseArtifact = MERMAID_ARTIFACT.replace('<artifact', '<ARTIFACT');
+    expect(hasDeliverablePinnedArtifact('mermaid_chart', `${upperCaseArtifact}\n<artifact!`)).toBe(true);
+  });
+
   it('is true when a valid pinned block is followed by a later malformed opener', () => {
     const text = `${MERMAID_ARTIFACT}\n<artifact identifier="x" type="text/html" title="Open"><p>x</p>`;
     expect(hasDeliverablePinnedArtifact('mermaid_chart', text)).toBe(true);

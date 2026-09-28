@@ -94,6 +94,11 @@ describe('stripUnstreamedToolResult: delivered vs removed must agree with what e
     expect(result).toBe(ARTIFACT_DELIVERED_PLACEHOLDER);
   });
 
+  it('reports REMOVED when extraction skips an upper-case opener', () => {
+    const upperCaseArtifact = MERMAID_ARTIFACT.replace('<artifact', '<ARTIFACT');
+    expect(stripUnstreamedToolResult('mermaid_chart', upperCaseArtifact)).toBe(ARTIFACT_REMOVED_PLACEHOLDER);
+  });
+
   it('still reports DELIVERED when a valid pinned block is followed by a later malformed opener', () => {
     // filterToolArtifactMarkup would bail to null on the trailing malformed opener and read this
     // as REMOVED, even though sharedToolBuilder's scanArtifactTags already delivered the first block.
