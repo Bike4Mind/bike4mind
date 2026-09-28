@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ChatApprovalDecision,
   ChatAttachment,
@@ -8,6 +8,7 @@ import type {
   ChatSessionStatus,
   ChatSessionSummary,
   CreateCodeSessionRequest,
+  UpdateProjectRequest,
 } from '@shared/chat';
 import { applyStatusEvents } from './sessionStatus';
 
@@ -191,6 +192,26 @@ export function useModelCatalog(): ModelCatalogController {
   return { models, loading, error, reload };
 }
 
+export interface ProjectBindingError {
+  message: string;
+  /** Refused on timing rather than validity: the same change works once the session is idle. */
+  busy: boolean;
+}
+
+/** Everything the chip row above the composer can change about a Code session's grounding. */
+export interface ProjectBindingController {
+  /** Set while a change is in flight - resolving a worktree can take a moment. */
+  busy: boolean;
+  error: ProjectBindingError | null;
+  dismissError: () => void;
+  /** Open the folder picker, then re-root the session on whatever is chosen. */
+  pickDirectory: () => Promise<void>;
+  setBranch: (branch: string) => Promise<void>;
+  setWorkspace: (workspace: boolean) => Promise<void>;
+  addContextDirectory: () => Promise<void>;
+  removeContextDirectory: (directory: string) => Promise<void>;
+}
+
 export interface ConversationController {
   session: ChatSession | null;
   messages: ChatMessage[];
@@ -205,6 +226,8 @@ export interface ConversationController {
   rename: (title: string) => Promise<void>;
   /** Pin this conversation to a model; it is used from the next turn on. */
   setModel: (model: string) => Promise<void>;
+  /** Where this Code session is grounded, for the chip row. Inert on a Chat session. */
+  project: ProjectBindingController;
   /** Answer a tool call waiting at the approval gate. Nothing has run until this is called. */
   respondToApproval: (approvalId: string, decision: ChatApprovalDecision) => void;
 }
@@ -225,6 +248,8 @@ export function useConversation(
   const [streaming, setStreaming] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [projectBusy, setProjectBusy] = useState(false);
+  const [projectError, setProjectError] = useState<ProjectBindingError | null>(null);
 
   // Read inside the IPC subscription, which must not be torn down and rebuilt per session
   // change: a rebuild between 'start' and the first 'delta' would drop tokens.
@@ -234,6 +259,7 @@ export function useConversation(
   useEffect(() => {
     setSendError(null);
     setNotice(null);
+    setProjectError(null);
     if (!sessionId) {
       setSession(null);
       setMessages([]);
@@ -406,6 +432,86 @@ export function useConversation(
 
   const dismissNotice = useCallback(() => setNotice(null), []);
 
+  // A summary main just wrote, folded into both the open conversation and the sidebar row.
+  const applySummary = useCallback(
+    (updated: ChatSessionSummary) => {
+      setSession(current => (current ? { ...current, project: updated.project } : current));
+      onSummaryChanged(updated);
+    },
+    [onSummaryChanged]
+  );
+
+  const changeProject = useCallback(
+    async (change: Omit<UpdateProjectRequest, 'sessionId'>) => {
+      if (!sessionId) return;
+      setProjectBusy(true);
+      setProjectError(null);
+      try {
+        const result = await window.b4m.chat.updateProject({ sessionId, ...change });
+        if (!result.ok) {
+          setProjectError({ message: result.error, busy: !!result.busy });
+          return;
+        }
+        applySummary(result.session);
+      } finally {
+        setProjectBusy(false);
+      }
+    },
+    [sessionId, applySummary]
+  );
+
+  const pickDirectory = useCallback(async () => {
+    const directory = await window.b4m.chat.pickProjectDirectory();
+    if (!directory) return;
+    const inspected = await window.b4m.chat.inspectProject(directory);
+    // The workspace choice does not travel: it named a worktree of the repository being left,
+    // and carrying it across would create one in a repository the user has only just pointed at.
+    await changeProject({ directory, branch: inspected.currentBranch ?? '', workspace: false });
+  }, [changeProject]);
+
+  const setBranch = useCallback((branch: string) => changeProject({ branch }), [changeProject]);
+  const setWorkspace = useCallback((workspace: boolean) => changeProject({ workspace }), [changeProject]);
+
+  const addContextDirectory = useCallback(async () => {
+    if (!sessionId) return;
+    const updated = await window.b4m.chat.addContextDirectory(sessionId);
+    if (updated) applySummary(updated);
+  }, [sessionId, applySummary]);
+
+  const removeContextDirectory = useCallback(
+    async (directory: string) => {
+      if (!sessionId) return;
+      const updated = await window.b4m.chat.removeContextDirectory(sessionId, directory);
+      if (updated) applySummary(updated);
+    },
+    [sessionId, applySummary]
+  );
+
+  const dismissProjectError = useCallback(() => setProjectError(null), []);
+
+  const project = useMemo<ProjectBindingController>(
+    () => ({
+      busy: projectBusy,
+      error: projectError,
+      dismissError: dismissProjectError,
+      pickDirectory,
+      setBranch,
+      setWorkspace,
+      addContextDirectory,
+      removeContextDirectory,
+    }),
+    [
+      projectBusy,
+      projectError,
+      dismissProjectError,
+      pickDirectory,
+      setBranch,
+      setWorkspace,
+      addContextDirectory,
+      removeContextDirectory,
+    ]
+  );
+
   return {
     session,
     messages,
@@ -417,6 +523,7 @@ export function useConversation(
     stop,
     rename,
     setModel,
+    project,
     respondToApproval,
   };
 }

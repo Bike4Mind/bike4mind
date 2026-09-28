@@ -18,6 +18,8 @@ import type {
   CreateCodeSessionRequest,
   CreateCodeSessionResult,
   SendMessageResult,
+  UpdateProjectRequest,
+  UpdateProjectResult,
 } from '@shared/chat';
 import { projectDisplayName } from './project/git';
 import { resolveWorkspace } from './project/workspace';
@@ -183,6 +185,72 @@ export class ChatService {
     });
 
     return { ok: true, session, ...(reusedWorkspace ? { reusedWorkspace } : {}) };
+  }
+
+  /**
+   * Move an existing Code session onto a different directory, branch or workspace choice.
+   *
+   * Refused outright while the session is busy, rather than warned about. The working
+   * directory is what roots this session's shell commands, file tools and anything they
+   * started: repointing it under a streaming reply would have the rest of that turn run
+   * somewhere the first half did not, and repointing it while a background process is alive
+   * would leave a dev server running in a checkout the conversation no longer claims - with no
+   * handle left in the UI that names where it actually is. Both clear on their own, so this is
+   * a wait rather than a dead end.
+   *
+   * The workspace is resolved BEFORE anything is written, for the same reason createCodeSession
+   * does it: a worktree that cannot be made must leave the session exactly as it was.
+   */
+  async updateProject(request: UpdateProjectRequest): Promise<UpdateProjectResult> {
+    const session = await this.deps.store.get(request.sessionId);
+    if (!session?.project) return { ok: false, error: 'This conversation is not grounded in a project.' };
+
+    if (this.active.has(request.sessionId)) {
+      return { ok: false, busy: true, error: 'Wait for this reply to finish before changing where it runs.' };
+    }
+    const running = (this.deps.background?.list(request.sessionId) ?? []).filter(
+      process => process.status === 'running'
+    );
+    if (running.length > 0) {
+      const names = running.map(process => process.command).join(', ');
+      return {
+        ok: false,
+        busy: true,
+        error: `Still running in ${session.project.workingDirectory}: ${names}. Stop it before changing where this session runs.`,
+      };
+    }
+
+    const current = session.project;
+    const directory = request.directory ? resolve(request.directory) : current.directory;
+    const movedProject = directory !== current.directory;
+    // A branch name means nothing in a repository it does not belong to, so moving the project
+    // without naming a branch drops the old one rather than carrying it across.
+    const branch = (request.branch ?? (movedProject ? '' : current.branch)).trim();
+    const workspace = request.workspace ?? current.workspace;
+
+    let workingDirectory = directory;
+    if (workspace) {
+      if (!branch) return { ok: false, error: 'Pick a branch for the workspace to run on.' };
+      try {
+        workingDirectory = (await resolveWorkspace(directory, branch)).workingDirectory;
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : 'Could not prepare the workspace.' };
+      }
+    }
+
+    const updated = await this.deps.store.setProject(request.sessionId, {
+      directory,
+      name: movedProject ? await projectDisplayName(directory) : current.name,
+      branch,
+      workspace,
+      workingDirectory,
+      // Folders granted for the old project are dropped with it: they were chosen as context
+      // for that codebase, and silently carrying them into another one widens the tools' reach
+      // past anything the user agreed to here.
+      contextDirectories: movedProject ? [] : current.contextDirectories,
+    });
+    if (!updated) return { ok: false, error: 'This conversation is no longer available.' };
+    return { ok: true, session: updated };
   }
 
   /**

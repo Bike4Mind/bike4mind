@@ -96,6 +96,39 @@ export function FolderIcon() {
   );
 }
 
+/** A commit on a branch line: the git-branch glyph, for the branch chip. */
+export function BranchIcon() {
+  return (
+    <Glyph>
+      <circle cx="4.5" cy="4" r="1.6" />
+      <circle cx="4.5" cy="12" r="1.6" />
+      <circle cx="11.5" cy="4" r="1.6" />
+      <path d="M4.5 5.6v4.8M9.9 4h-.4a5 5 0 00-5 5v1.4" />
+    </Glyph>
+  );
+}
+
+/** Add one more folder to the session's context. */
+export function FolderPlusIcon() {
+  return (
+    <Glyph>
+      <path d="M2 4.5A1.5 1.5 0 013.5 3h2.4l1.3 1.6h5.3A1.5 1.5 0 0114 6.1v5.4A1.5 1.5 0 0112.5 13h-9A1.5 1.5 0 012 11.5z" />
+      <path d="M8 6.8v3.4M6.3 8.5h3.4" />
+    </Glyph>
+  );
+}
+
+/** Which b4m backend answers. A server, not a laptop: this app's agent always runs here. */
+export function ServerIcon() {
+  return (
+    <Glyph>
+      <rect x="2.5" y="3" width="11" height="4" rx="1.2" />
+      <rect x="2.5" y="9" width="11" height="4" rx="1.2" />
+      <path d="M5 5h.01M5 11h.01" />
+    </Glyph>
+  );
+}
+
 export function MoreIcon() {
   return (
     <Glyph>

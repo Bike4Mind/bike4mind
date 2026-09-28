@@ -468,3 +468,28 @@ export type CreateCodeSessionResult =
       /** Set when an existing worktree was adopted. */ reusedWorkspace?: boolean;
     }
   | { ok: false; error: string };
+
+/**
+ * A change to what an EXISTING Code session is grounded in. Every field is optional; an
+ * omitted one is left as it is.
+ *
+ * Separate from CreateCodeSessionRequest because the two are not the same act. Creating binds
+ * a fresh conversation to a directory; this one moves a conversation that has already been
+ * running commands somewhere - see UpdateProjectResult.busy for what that costs.
+ */
+export interface UpdateProjectRequest {
+  sessionId: string;
+  /** A different project root. Changing it invalidates the branch, which the caller re-reads. */
+  directory?: string;
+  branch?: string;
+  workspace?: boolean;
+}
+
+/**
+ * `busy: true` is a refusal on grounds of timing rather than validity: a reply is streaming or
+ * a background process is still alive in the CURRENT working directory, and repointing the
+ * session would leave that process running in a folder the session no longer claims. The same
+ * request succeeds once the session is idle.
+ */
+export type UpdateProjectResult =
+  { ok: true; session: ChatSessionSummary } | { ok: false; error: string; busy?: boolean };

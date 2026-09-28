@@ -7,6 +7,7 @@ import type {
   ChatStreamEvent,
   CreateCodeSessionRequest,
   SendMessageRequest,
+  UpdateProjectRequest,
 } from '@shared/chat';
 import { IPC_CHANNELS, type DesktopApi } from '@shared/ipc';
 
@@ -41,6 +42,7 @@ const api: DesktopApi = {
     createSession: () => ipcRenderer.invoke(IPC_CHANNELS.chatCreateSession),
     createCodeSession: (request: CreateCodeSessionRequest) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatCreateCodeSession, request),
+    updateProject: (request: UpdateProjectRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatUpdateProject, request),
     pickProjectDirectory: () => ipcRenderer.invoke(IPC_CHANNELS.chatPickProjectDirectory),
     inspectProject: (directory: string) => ipcRenderer.invoke(IPC_CHANNELS.chatInspectProject, directory),
     addContextDirectory: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatAddContextDirectory, sessionId),

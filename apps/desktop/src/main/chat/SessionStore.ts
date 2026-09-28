@@ -193,6 +193,21 @@ export class SessionStore {
     return summarize(session);
   }
 
+  /**
+   * Re-ground a Code session. The caller has already resolved `workingDirectory` - this only
+   * records the decision, so a worktree that could not be prepared never reaches disk.
+   *
+   * Leaves `updatedAt` alone: changing where a conversation is rooted says nothing about when
+   * it was last talked to, and bumping it would reorder the sidebar behind the user's back.
+   */
+  async setProject(id: string, project: ChatProject): Promise<ChatSessionSummary | null> {
+    const session = await this.get(id);
+    if (!session?.project) return null;
+    session.project = project;
+    await this.write(session);
+    return summarize(session);
+  }
+
   /** Grant one more folder to a Code session alone. No-op for a Chat session, which has no project. */
   async addContextDirectory(id: string, directory: string): Promise<ChatSessionSummary | null> {
     const session = await this.get(id);
