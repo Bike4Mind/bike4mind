@@ -292,6 +292,13 @@ describe('runLakeResearch', () => {
       expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/falling back/), expect.anything());
     });
 
+    // Discovery disables a model that cannot be dispatched (e.g. a profile-only Bedrock id); a
+    // config saved before that still names it, and would otherwise fail every judgment.
+    it('falls back when the configured model is disabled', async () => {
+      h.getAvailableModels.mockResolvedValue([{ id: 'gpt-4.1-mini' }, { id: 'a-disabled-model', disabled: true }]);
+      expect((await judgeWith('a-disabled-model'))?.model).toBe('default-judge-model');
+    });
+
     it('uses the default when the config names no model', async () => {
       expect((await judgeWith(undefined))?.model).toBe('default-judge-model');
     });

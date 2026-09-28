@@ -111,6 +111,17 @@ export interface BedrockFacts {
   availability?: ReadonlyMap<string, BedrockAvailability>;
 }
 
+/**
+ * Bedrock lists some models (every Claude 4.x among them) under a bare foundation-model id it will
+ * only serve through a cross-region inference profile (`us.`/`global.`-prefixed). The bare id is
+ * rejected by every InvokeModel/Converse call, so offering it guarantees a dispatch failure; the
+ * profile id is a separate catalog row this source never touches. An absent field is "did not say".
+ */
+const isInferenceProfileOnly = (summary: BedrockFoundationModelSummary): boolean => {
+  const types = summary.inferenceTypesSupported ?? [];
+  return types.includes('INFERENCE_PROFILE') && !types.includes('ON_DEMAND');
+};
+
 export function normalizeBedrockModels({ summaries, availability }: BedrockFacts): DiscoveredModel[] {
   const records: DiscoveredModel[] = [];
 
@@ -129,6 +140,7 @@ export function normalizeBedrockModels({ summaries, availability }: BedrockFacts
       (entitlement.authorizationStatus === 'NOT_AUTHORIZED' ||
         entitlement.entitlementAvailability === 'NOT_AVAILABLE' ||
         entitlement.regionAvailability === 'NOT_AVAILABLE');
+    const profileOnly = isInferenceProfileOnly(summary);
     const lifecycle = lifecycleOf(summary);
 
     records.push(
@@ -149,12 +161,16 @@ export function normalizeBedrockModels({ summaries, availability }: BedrockFacts
             typeof summary?.responseStreamingSupported === 'boolean' ? summary.responseStreamingSupported : undefined,
           supportsVision: inputs.length > 0 ? inputs.includes('IMAGE') : undefined,
           lifecycle,
-          // Only ever set true. An unentitled model is disabled with a reason; a
-          // model we never asked about, or one whose check failed, is left alone,
-          // because clearing this flag on no evidence would re-enable a model the
-          // account cannot call.
-          autoDisabled: unauthorized ? true : undefined,
-          autoDisabledReason: unauthorized ? 'not entitled in this AWS account' : undefined,
+          // Only ever set true. An unentitled or profile-only model is disabled with
+          // a reason; a model we never asked about, or one whose check failed, is
+          // left alone, because clearing this flag on no evidence would re-enable a
+          // model the account cannot call.
+          autoDisabled: unauthorized || profileOnly ? true : undefined,
+          autoDisabledReason: unauthorized
+            ? 'not entitled in this AWS account'
+            : profileOnly
+              ? 'served only through a cross-region inference profile; use its region-prefixed id'
+              : undefined,
         }),
       })
     );

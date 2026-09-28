@@ -167,10 +167,11 @@ export async function runLakeResearch(
     const models = await getAvailableModels(apiKeyTable);
     const judgeService = new dataLakeResearchService.RelevanceJudgeService(logger);
     // Resolved once, against the live catalog: a config naming a model this deployment has since
-    // retired falls back rather than failing the whole run.
+    // retired or disabled falls back rather than failing the whole run. Disabled counts because the
+    // picker drops disabled models, but a config saved before the model was disabled still names it.
     const configuredModel = claimed.levers.model;
     const model =
-      configuredModel && models.some(m => m.id === configuredModel)
+      configuredModel && models.some(m => m.id === configuredModel && !m.disabled)
         ? configuredModel
         : dataLakeResearchService.RELEVANCE_JUDGE_DEFAULT_MODEL;
     judgeModel = model;
