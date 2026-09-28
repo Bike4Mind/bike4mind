@@ -151,15 +151,27 @@ export class ChatService {
   }
 
   /**
-   * Start a Code session grounded in a project directory.
+   * Start a Code session, with or without a project directory.
+   *
+   * A request naming no directory creates an UNBOUND session: a real conversation in Code mode
+   * with nowhere to run yet, which the chip row then points at a folder. That state exists so
+   * that creating a session never depends on the user completing a native dialog - cancelling
+   * one used to produce nothing at all.
    *
    * The workspace is resolved BEFORE the session is written, so a worktree that cannot be
    * created leaves nothing behind: there is no session whose tools would then fall back to
    * some other folder.
    */
   async createCodeSession(request: CreateCodeSessionRequest): Promise<CreateCodeSessionResult> {
+    const catalog = await this.listModels();
+    const model = this.pickModel(catalog.models) ?? undefined;
+
+    if (!request.directory) {
+      return { ok: true, session: await this.deps.store.create(model, undefined, 'code') };
+    }
+
     const directory = resolve(request.directory);
-    const branch = request.branch.trim();
+    const branch = (request.branch ?? '').trim();
 
     let workingDirectory = directory;
     let reusedWorkspace = false;
@@ -174,12 +186,11 @@ export class ChatService {
       }
     }
 
-    const catalog = await this.listModels();
-    const session = await this.deps.store.create(this.pickModel(catalog.models) ?? undefined, {
+    const session = await this.deps.store.create(model, {
       directory,
       name: await projectDisplayName(directory),
       branch,
-      workspace: request.workspace,
+      workspace: request.workspace === true,
       workingDirectory,
       contextDirectories: (request.contextDirectories ?? []).map(entry => resolve(entry)),
     });
@@ -203,7 +214,7 @@ export class ChatService {
    */
   async updateProject(request: UpdateProjectRequest): Promise<UpdateProjectResult> {
     const session = await this.deps.store.get(request.sessionId);
-    if (!session?.project) return { ok: false, error: 'This conversation is not grounded in a project.' };
+    if (session?.mode !== 'code') return { ok: false, error: 'Only a Code session is grounded in a project.' };
 
     if (this.active.has(request.sessionId)) {
       return { ok: false, busy: true, error: 'Wait for this reply to finish before changing where it runs.' };
@@ -216,17 +227,20 @@ export class ChatService {
       return {
         ok: false,
         busy: true,
-        error: `Still running in ${session.project.workingDirectory}: ${names}. Stop it before changing where this session runs.`,
+        error: `Still running in ${session.project?.workingDirectory}: ${names}. Stop it before changing where this session runs.`,
       };
     }
 
     const current = session.project;
-    const directory = request.directory ? resolve(request.directory) : current.directory;
-    const movedProject = directory !== current.directory;
+    const directory = request.directory ? resolve(request.directory) : current?.directory;
+    if (!directory) return { ok: false, error: 'Choose a project folder for this conversation first.' };
+    // An unbound session is "moved" by its first binding, which is what drops the branch and
+    // context folders it never had - the same rule that applies to moving between projects.
+    const movedProject = directory !== current?.directory;
     // A branch name means nothing in a repository it does not belong to, so moving the project
     // without naming a branch drops the old one rather than carrying it across.
-    const branch = (request.branch ?? (movedProject ? '' : current.branch)).trim();
-    const workspace = request.workspace ?? current.workspace;
+    const branch = (request.branch ?? (movedProject ? '' : (current?.branch ?? ''))).trim();
+    const workspace = request.workspace ?? current?.workspace ?? false;
 
     let workingDirectory = directory;
     if (workspace) {
@@ -240,14 +254,14 @@ export class ChatService {
 
     const updated = await this.deps.store.setProject(request.sessionId, {
       directory,
-      name: movedProject ? await projectDisplayName(directory) : current.name,
+      name: movedProject || !current ? await projectDisplayName(directory) : current.name,
       branch,
       workspace,
       workingDirectory,
       // Folders granted for the old project are dropped with it: they were chosen as context
       // for that codebase, and silently carrying them into another one widens the tools' reach
       // past anything the user agreed to here.
-      contextDirectories: movedProject ? [] : current.contextDirectories,
+      contextDirectories: movedProject ? [] : (current?.contextDirectories ?? []),
     });
     if (!updated) return { ok: false, error: 'This conversation is no longer available.' };
     return { ok: true, session: updated };
@@ -258,17 +272,24 @@ export class ChatService {
    *
    * A Code session's own directories are added to the global grants rather than replacing
    * them: the user picked the project in a native dialog, which is the same act of consent the
-   * "Share a folder" button represents, so re-granting the project they just chose would be
+   * sidebar's folder card represents, so re-granting the project they just chose would be
    * pure ceremony. The global grants stay because tools are not Code-only - a Code session can
    * still be pointed at a reference checkout the user shared earlier.
+   *
+   * A Code session with NO project is the one case that gets nothing, not even the global
+   * grants. It has no working directory, and every path tool falls back to `roots[0]` when it
+   * has none - so handing it the grants would root an agent's shell commands in whichever
+   * folder the user happened to share first. An empty root set makes each tool refuse instead
+   * (paths.resolveWithinRoots and shellTools.resolveCwd both reject one). `send` already
+   * refuses the turn outright; this is the second lock on the same door.
    */
   private async resolveToolScope(
     session: ChatSession
   ): Promise<{ roots: readonly string[]; workingDirectory?: string }> {
-    const granted = await this.deps.access.list();
     const project = session.project;
-    if (!project) return { roots: granted };
+    if (!project) return { roots: session.mode === 'code' ? [] : await this.deps.access.list() };
 
+    const granted = await this.deps.access.list();
     const owned = [project.workingDirectory, ...project.contextDirectories];
     const roots = [...owned, ...granted.filter(root => !owned.includes(root))];
     return { roots, workingDirectory: project.workingDirectory };
@@ -359,6 +380,14 @@ export class ChatService {
     // turn after appending it would leave the prompt in the thread with no reply coming.
     const existing = await this.deps.store.get(sessionId);
     if (!existing) return { ok: false, error: 'That conversation no longer exists.' };
+
+    // Refused in main, not merely disabled in the UI. A Code session with no project has no
+    // working directory, and a turn is the only thing that can make its tools run - so the
+    // turn is where the state is stopped, rather than trusting every tool to notice.
+    if (existing.mode === 'code' && !existing.project) {
+      return { ok: false, error: 'Choose a project folder for this conversation before sending a message.' };
+    }
+
     const { session: reconciled, notice } = await this.reconcileModel(existing);
 
     const attached = await this.resolveAttachments(sessionId, attachments);
@@ -877,7 +906,8 @@ function buildSystemMessage(roots: readonly string[], media: boolean, project?: 
         'been revoked and you cannot rely on it.',
         'Never claim to have read, listed or searched a file, and never invent a file name, size,',
         'path or contents. If asked about local files, say plainly that you have no access and ask',
-        'the user to grant a folder with the "Share a folder" button.',
+        'the user to give this conversation a folder: a Code session takes one from the folder chip',
+        'above the message box, and the sidebar card shares one with every conversation.',
         ...(media ? MEDIA_GUIDANCE : []),
       ].join('\n'),
     };
@@ -892,7 +922,7 @@ function buildSystemMessage(roots: readonly string[], media: boolean, project?: 
       'These folders are shared with you, including everything beneath them:',
       ...roots.map(root => `  ${root}`),
       'Always pass absolute paths. Any path outside those folders is denied;',
-      'if you need one, ask the user to share it with the "Share a folder" button.',
+      'if you need one, ask the user to add it from the chip row above the message box.',
       'Running a command needs the user to approve it first, and they see the exact command, so',
       'prefer one clear command over several speculative ones. If they decline, accept it and ask',
       'what they would like instead rather than trying a variation of the same command.',

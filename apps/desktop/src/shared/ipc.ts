@@ -110,16 +110,19 @@ export interface DesktopApi {
     listSessions(): Promise<ChatSessionSummary[]>;
     /** Start a Chat session: no project, the mode everything before this was. */
     createSession(): Promise<ChatSessionSummary>;
-    /** Start a Code session, creating or adopting its worktree first when one is asked for. */
+    /**
+     * Start a Code session, creating or adopting its worktree first when one is asked for.
+     * A request with no `directory` creates an UNBOUND session, which the chip row then binds.
+     */
     createCodeSession(request: CreateCodeSessionRequest): Promise<CreateCodeSessionResult>;
     /**
-     * Re-ground a Code session that already exists: a different directory, branch or workspace
-     * choice. Refused while the session is busy - see UpdateProjectResult.
+     * Ground a Code session that already exists: its first directory, or a different directory,
+     * branch or workspace choice. Refused while the session is busy - see UpdateProjectResult.
      */
     updateProject(request: UpdateProjectRequest): Promise<UpdateProjectResult>;
     /** Open the OS folder picker for a project root. Null when the user cancels. */
     pickProjectDirectory(): Promise<string | null>;
-    /** Read a directory's branches for the New Code session dialog. */
+    /** Read a directory's branches, for the branch chip. */
     inspectProject(directory: string): Promise<ProjectInspection>;
     /** Grant one more folder to a Code session. Opens the folder picker; null when cancelled. */
     addContextDirectory(sessionId: string): Promise<ChatSessionSummary | null>;
