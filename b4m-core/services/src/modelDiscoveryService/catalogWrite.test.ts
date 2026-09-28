@@ -89,6 +89,68 @@ describe('planCatalogWrites', () => {
     });
   });
 
+  // A source that disabled the model this run (Bedrock: not invocable on demand, not entitled) has
+  // already answered the invocability question; promotion must not flip it back to enabled.
+  it('does not promote a model its source disabled this run, and keeps the source reason', () => {
+    const result = plan({
+      resolveDispatch: dispatchable,
+      contributions: [
+        {
+          name: 'openai',
+          kind: 'provider',
+          records: [
+            {
+              ...gpt6({ autoDisabled: true, autoDisabledReason: 'not invocable on demand' }),
+              pricing: { inputPerMTok: 2, outputPerMTok: 8 },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result.diff[0]).toMatchObject({
+      promoted: false,
+      lifecycleStatus: 'discovered',
+      blockedBy: ['disabled-by-source'],
+    });
+    expect(result.rows[0].patch).toMatchObject({
+      autoDisabled: true,
+      autoDisabledReason: 'not invocable on demand',
+    });
+  });
+
+  // The prod shape: a bare Bedrock id promoted on an earlier run is ACTIVE, so promotion never
+  // re-decides it. The source's disable still has to land on the row, or the fix never reaches it.
+  it('disables an already-active model when its source disables it', () => {
+    const priced = { name: 'openai', kind: 'provider' as const };
+    const first = plan({
+      resolveDispatch: dispatchable,
+      contributions: [{ ...priced, records: [{ ...gpt6(), pricing: { inputPerMTok: 2, outputPerMTok: 8 } }] }],
+    });
+    expect(first.diff[0]).toMatchObject({ promoted: true, lifecycleStatus: 'active' });
+
+    const second = plan({
+      resolveDispatch: dispatchable,
+      base: asBase(first.rows),
+      contributions: [
+        {
+          ...priced,
+          records: [
+            {
+              ...gpt6({ autoDisabled: true, autoDisabledReason: 'not invocable on demand' }),
+              pricing: { inputPerMTok: 2, outputPerMTok: 8 },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(second.rows[0].patch).toMatchObject({
+      autoDisabled: true,
+      autoDisabledReason: 'not invocable on demand',
+    });
+  });
+
   it('never writes the operator-owned disabled fields', () => {
     const patch = plan({ resolveDispatch: dispatchable }).rows[0].patch as Record<string, unknown>;
 
