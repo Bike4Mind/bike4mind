@@ -17,8 +17,10 @@ export const remarkGfmNoSingleTilde: [typeof remarkGfm, { singleTilde: false }] 
 // delimiter shape as the gate: opening `$` not followed by whitespace, closing `$` not preceded
 // by whitespace and not followed by a digit. That last check is what rejects currency runs like
 // "$5 to $10", "$124 and $150 per seat", and "~$15M ... ~$40M" - each has another amount right
-// after the "closing" dollar. Content still has to pass `looksLikeMath` below to be promoted.
-const SINGLE_DOLLAR_SPAN = /(?<!\$)\$(?!\$)(?!\s)([^$\n]*[^$\n\s])(?<!\$)\$(?!\$)(?!\d)/g;
+// after the "closing" dollar. We widen pandoc's digit rule to any word char or `{` so shell
+// variables ("$HOME=$PWD", "$PATH/$SUBDIR", "${A}${B}") are rejected the same way; the cost is
+// that "$n$th" stays literal. Content still has to pass `looksLikeMath` below to be promoted.
+const SINGLE_DOLLAR_SPAN = /(?<!\$)\$(?!\$)(?!\s)([^$\n]*[^$\n\s])(?<!\$)\$(?!\$)(?![\w{])/g;
 // Splits on fenced code blocks and inline code spans so `$` inside code is never touched.
 const CODE_SPAN_SPLITTER = /(```[\s\S]*?```|`[^`\n]*`)/g;
 

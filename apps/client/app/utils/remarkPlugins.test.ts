@@ -31,6 +31,9 @@ describe('promoteInlineLatexDollars', () => {
       ['range with "and"', 'between $3 and $4 each'],
       ['amount with a slash suffix', 'the plan is $20/month'],
       ['hyphenated amount range', 'shipping is $5-$10'],
+      ['shell variable assignment', 'Set $HOME=$PWD in your shell config.'],
+      ['shell path join', 'set $PATH/$SUBDIR as the search root'],
+      ['braced shell variables', 'export DIR=${HOME}${SUFFIX} first'],
     ])('%s', (_label, text) => {
       expect(promoteInlineLatexDollars(text)).toBe(text);
     });
