@@ -7,6 +7,7 @@ import type {
   ChatMessage,
   ChatModelCatalog,
   ChatModelOption,
+  ChatPendingApproval,
   ChatProject,
   ChatQueuedMessage,
   ChatSession,
@@ -22,6 +23,9 @@ import type {
   UpdateProjectRequest,
   UpdateProjectResult,
 } from '@shared/chat';
+import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
+import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
+import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
 import { projectDisplayName } from './project/git';
 import { resolveWorkspace } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
@@ -32,7 +36,7 @@ import type { MediaStore } from './media/MediaStore';
 import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
 import type { SessionActivity } from './SessionActivity';
-import type { SessionStore } from './SessionStore';
+import { isValidSessionId, type SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import type { ApprovalGate } from './tools/ApprovalGate';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
@@ -40,7 +44,10 @@ import { findTool, toolsForRequest } from './tools/registry';
 import {
   capOutput,
   type ApprovalPrompt,
+  type HostContext,
+  type HostSessionView,
   type MediaContext,
+  type SpawnOutcome,
   type ToolContext,
   type ToolDefinition,
   type ToolReporter,
@@ -68,6 +75,28 @@ const MAX_TOOL_TURNS = 10;
 
 /** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
 type TurnOutcome = 'completed' | 'aborted' | 'failed';
+
+/**
+ * How many agent-spawned sessions may have a reply in flight at once, across the whole app.
+ *
+ * One of the two caps that make spawning safe, and neither is sufficient alone: the depth cap
+ * stops a chain, and this stops a fan. Without both, one session spawning sessions is a fork
+ * bomb that spends the user real credits, so this is a correctness bound rather than a tuning
+ * knob - a refusal here is the right outcome, not a queue to drain.
+ *
+ * Counts autonomous runs only. A user typing into a spawned session is not rationed.
+ */
+const MAX_CONCURRENT_SPAWNED = 3;
+
+/**
+ * How deep the spawn chain may go. A session the user made is depth 0, so this admits a child
+ * and a grandchild and refuses the next one.
+ *
+ * Read off the child's stored `origin.depth` rather than walked back up the parent chain,
+ * because a parent can be deleted mid-run and a cap that stops being enforceable when a row
+ * disappears is not a cap.
+ */
+const MAX_SPAWN_DEPTH = 2;
 
 export interface ChatServiceLogger {
   debug(message: string): void;
@@ -105,6 +134,11 @@ export interface ChatServiceDeps {
    * then get the old behaviour: a send during a reply is refused outright.
    */
   queue?: MessageQueue;
+  /**
+   * Copies emitted artifacts to the server. Absent in tests, and in that case a reply's
+   * artifacts are still parsed and shown - they simply exist only on this machine.
+   */
+  artifacts?: ArtifactPublisher;
   /** Null whenever no session is usable, which is how a signed-out send is refused. */
   getApiClient(): AuthenticatedApiClient | null;
   /** Identifies the cached completions endpoint; changing environments invalidates it. */
@@ -129,6 +163,26 @@ interface RequestedTool {
 export class ChatService {
   /** One in-flight reply per session; the value aborts it. */
   private readonly active = new Map<string, AbortController>();
+
+  /**
+   * Spawned sessions whose seeded run has not finished, and who to tell when it does.
+   *
+   * Only the AUTONOMOUS turn is tracked. A later turn the user types into the same session is
+   * an ordinary conversation and neither counts against the concurrency cap nor reports back.
+   */
+  private readonly spawnWatch = new Map<string, { parentSessionId: string }>();
+
+  /**
+   * Spawns that have passed the cap check but whose session does not exist yet.
+   *
+   * Counted separately and incremented SYNCHRONOUSLY, because the model can ask for several
+   * spawns in one turn and `runTools` runs them in parallel: two creates that both awaited
+   * before either was visible would both pass a check made against `spawnWatch` alone.
+   */
+  private spawnReservations = 0;
+
+  /** Finished children waiting for their parent to be idle, so a report never splits a turn. */
+  private readonly childReports = new Map<string, string[]>();
 
   /** Resolved serverConfig fields, cached per environment URL (it is one round trip). */
   private serverConfigCache: { environmentUrl: string; config: ResolvedServerConfig } | null = null;
@@ -155,6 +209,21 @@ export class ChatService {
    */
   cancelQueued(sessionId: string, queuedId: string): void {
     this.deps.queue?.cancel(sessionId, queuedId);
+  }
+
+  /**
+   * Every tool call waiting on the user, in any conversation.
+   *
+   * Read by the cross-session inbox. An autonomous session raises approvals inside a
+   * conversation nobody is looking at, so the answer has to be reachable from wherever the user
+   * actually is - see ChatPendingApproval.
+   */
+  pendingApprovals(): ChatPendingApproval[] {
+    return this.deps.approvals?.pendingApprovals() ?? [];
+  }
+
+  setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null> {
+    return this.deps.store.setArchived(sessionId, archived);
   }
 
   listModels(force = false): Promise<ChatModelCatalog> {
@@ -190,7 +259,7 @@ export class ChatService {
     const model = this.pickModel(catalog.models) ?? undefined;
 
     if (!request.directory) {
-      return { ok: true, session: await this.deps.store.create(model, undefined, 'code') };
+      return { ok: true, session: await this.deps.store.create(model, { mode: 'code' }) };
     }
 
     const directory = resolve(request.directory);
@@ -210,12 +279,14 @@ export class ChatService {
     }
 
     const session = await this.deps.store.create(model, {
-      directory,
-      name: await projectDisplayName(directory),
-      branch,
-      workspace: request.workspace === true,
-      workingDirectory,
-      contextDirectories: (request.contextDirectories ?? []).map(entry => resolve(entry)),
+      project: {
+        directory,
+        name: await projectDisplayName(directory),
+        branch,
+        workspace: request.workspace === true,
+        workingDirectory,
+        contextDirectories: (request.contextDirectories ?? []).map(entry => resolve(entry)),
+      },
     });
 
     return { ok: true, session, ...(reusedWorkspace ? { reusedWorkspace } : {}) };
@@ -361,6 +432,14 @@ export class ChatService {
     await this.deps.store.delete(sessionId);
     this.deps.activity?.forget(sessionId);
     this.deps.queue?.forget(sessionId);
+    // A deleted session is neither a child that can still report nor a parent that can still be
+    // told. Dropping the watch here is also what gives its concurrency slot back, so deleting a
+    // running spawned session does not leak one for the rest of the run.
+    this.spawnWatch.delete(sessionId);
+    this.childReports.delete(sessionId);
+    for (const [childId, watch] of this.spawnWatch) {
+      if (watch.parentSessionId === sessionId) this.spawnWatch.delete(childId);
+    }
   }
 
   /**
@@ -483,6 +562,13 @@ export class ChatService {
         if (this.active.get(sessionId) !== controller) return;
         this.active.delete(sessionId);
         this.deps.activity?.replyEnded(sessionId);
+        // All three need the session to be idle, and this is the moment it becomes so: a
+        // spawned run gives its concurrency slot back and reports to its parent, and a parent
+        // that was mid-turn takes delivery of anything that finished while it was busy.
+        void this.settleSpawnedTurn(sessionId);
+        void this.flushChildReports(sessionId);
+        // Last, because a child report can itself start a turn on this session. flushQueue
+        // stands down when one is running, and that turn's own ending flushes the queue.
         this.settleQueue(sessionId, outcome);
       });
 
@@ -595,12 +681,13 @@ export class ChatService {
       const serverConfig = await this.resolveServerConfig(api);
       const { roots, workingDirectory } = await this.resolveToolScope(session);
       const media = this.buildMediaContext(session, api, serverConfig.cdnUrl);
-      const tools = toolsForRequest({ roots, media: !!media });
+      const host = this.buildHostContext(session);
+      const tools = toolsForRequest({ roots, media: !!media, host: !!host });
       const wire = await toCompletionMessages(
         session,
         (attachment: ChatAttachment) => this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null)
       );
-      wire.unshift(buildSystemMessage(roots, !!media, session.project));
+      wire.unshift(buildSystemMessage(roots, !!media, !!host, session.project));
 
       for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
         const requested: RequestedTool[] = [];
@@ -644,9 +731,7 @@ export class ChatService {
         thinking = turnThinking;
         const settled = await this.runTools(
           requested,
-          roots,
-          workingDirectory,
-          media,
+          { roots, workingDirectory, media, host, title: session.title },
           sessionId,
           replyId,
           controller.signal
@@ -679,23 +764,35 @@ export class ChatService {
 
       if (controller.signal.aborted) stopReason = 'aborted';
 
+      // Artifacts are resolved BEFORE the message is stored or announced, so the thread never
+      // shows raw <artifact> markup that is then replaced, and a reloaded conversation reads
+      // back exactly what the live one showed. An aborted reply is included on purpose: a
+      // complete artifact followed by a stop is still a complete artifact.
+      const parsed = extractArtifacts(content);
+      const artifacts =
+        parsed.artifacts.length > 0 && this.deps.artifacts
+          ? await this.deps.artifacts.publish(parsed.artifacts, sessionId)
+          : parsed.artifacts;
+
       await this.deps.store.appendMessage(sessionId, {
         id: replyId,
         role: 'assistant',
-        content,
+        content: parsed.content,
         createdAt: new Date().toISOString(),
         stopReason,
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(thinking ? { thinking } : {}),
+        ...(artifacts.length > 0 ? { artifacts } : {}),
       });
       this.deps.emit({
         type: 'done',
         sessionId,
         messageId: replyId,
-        content,
+        content: parsed.content,
         stopReason,
         usage,
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        ...(artifacts.length > 0 ? { artifacts } : {}),
       });
       // A truncated reply ('max_tokens', 'tool_turn_limit') still counts as completed: the model
       // answered and the user can read it. Only the user's own stop is 'aborted'.
@@ -771,13 +868,19 @@ export class ChatService {
    */
   private async runTools(
     requested: readonly RequestedTool[],
-    roots: readonly string[],
-    workingDirectory: string | undefined,
-    media: MediaContext | undefined,
+    scope: {
+      roots: readonly string[];
+      workingDirectory: string | undefined;
+      media: MediaContext | undefined;
+      host: HostContext | undefined;
+      /** The conversation's title, so a cross-session approval names it rather than its id. */
+      title: string;
+    },
     sessionId: string,
     messageId: string,
     signal: AbortSignal
   ): Promise<ChatToolCall[]> {
+    const { roots, workingDirectory, media, host } = scope;
     return Promise.all(
       requested.map(async request => {
         const call: ChatToolCall = {
@@ -821,12 +924,13 @@ export class ChatService {
           sessionId,
           background: this.deps.background,
           ...(media ? { media } : {}),
+          ...(host ? { host } : {}),
           report,
         };
 
         // Asked BEFORE 'running' is announced, so the UI never shows a command as under way
         // while it is still waiting on the user, and nothing has run if they say no.
-        const denial = await this.awaitApproval(tool, call, context, sessionId, messageId, signal);
+        const denial = await this.awaitApproval(tool, call, context, sessionId, scope.title, messageId, signal);
         if (denial) return denial;
 
         this.deps.emit({ type: 'tool-start', sessionId, messageId, call });
@@ -850,6 +954,218 @@ export class ChatService {
         return settled;
       })
     );
+  }
+
+  /**
+   * The app-control surface for one Code session, or undefined when there is nothing to scope to.
+   *
+   * Everything it offers is bounded by the caller's own project: it can see and change the
+   * conversations in that project and no others. The one capability that creates something -
+   * `spawn` - copies the caller's project binding verbatim, so the child's folder grants are
+   * exactly the parent's. There is deliberately no argument through which a directory, a branch
+   * or a worktree could be named: an agent that can pick where its child runs can grant itself
+   * a root the user never approved, and the whole family rests on it not being able to.
+   */
+  private buildHostContext(session: ChatSession): HostContext | undefined {
+    const project = session.project;
+    if (!project) return undefined;
+
+    const addressable = async (sessionId: string): Promise<ChatSession | null> => {
+      if (!isValidSessionId(sessionId)) return null;
+      const target = await this.deps.store.get(sessionId);
+      // Project identity, not the working directory: two sessions in one project may sit in
+      // different worktrees and are still the same group in the sidebar.
+      if (!target?.project || target.project.directory !== project.directory) return null;
+      return target;
+    };
+
+    return {
+      spawn: (prompt, title) => this.spawnSession(session, prompt, title),
+
+      listSessions: async ({ includeArchived }) => {
+        const all = await this.deps.store.list();
+        return all
+          .filter(entry => entry.project?.directory === project.directory)
+          .filter(entry => includeArchived || !entry.archived)
+          .map(entry => this.toHostView(entry));
+      },
+
+      readSession: async sessionId => {
+        const target = await addressable(sessionId);
+        return target ? renderTranscript(target) : null;
+      },
+
+      setArchived: async (sessionId, archived) => {
+        if (!(await addressable(sessionId))) return null;
+        const updated = await this.deps.store.setArchived(sessionId, archived);
+        return updated ? this.toHostView(updated) : null;
+      },
+
+      deleteSession: async sessionId => {
+        if (!(await addressable(sessionId))) return false;
+        await this.deleteSession(sessionId);
+        return true;
+      },
+
+      describeSession: async sessionId => (await addressable(sessionId))?.title ?? null,
+    };
+  }
+
+  private toHostView(entry: ChatSessionSummary): HostSessionView {
+    return {
+      id: entry.id,
+      title: entry.title,
+      messageCount: entry.messageCount,
+      updatedAt: entry.updatedAt,
+      archived: entry.archived === true,
+      ...(entry.origin ? { spawnedBy: entry.origin.parentSessionId } : {}),
+      status: this.deps.activity?.statusOf(entry.id) ?? 'done',
+    };
+  }
+
+  /**
+   * Create a session under the caller's project and set it running on `prompt`.
+   *
+   * Both caps are checked here and nowhere else, and the concurrency one reserves its slot
+   * BEFORE the first await: `runTools` runs a turn's tool calls in parallel, so two spawns
+   * asked for together would otherwise both read the count as it was before either of them.
+   *
+   * The child is created with the parent's model and the parent's project exactly as stored -
+   * in particular its already-resolved `workingDirectory`, so spawning never creates a worktree
+   * and never moves a checkout. A failure after the reservation releases it; a success hands it
+   * to `spawnWatch`, which releases it when the seeded run ends.
+   */
+  private async spawnSession(parent: ChatSession, prompt: string, title?: string): Promise<SpawnOutcome> {
+    const project = parent.project;
+    if (!project) {
+      return { ok: false, reason: 'no-project', message: 'Only a Code session, which has a project, can start one.' };
+    }
+
+    const seed = prompt.trim();
+    if (!seed) {
+      return { ok: false, reason: 'empty-prompt', message: 'A new session needs a prompt to work on.' };
+    }
+
+    const depth = (parent.origin?.depth ?? 0) + 1;
+    if (depth > MAX_SPAWN_DEPTH) {
+      return {
+        ok: false,
+        reason: 'depth',
+        message:
+          `Sessions may only be nested ${MAX_SPAWN_DEPTH} deep and this one is already at the limit. ` +
+          'Do the work in this conversation instead; asking again will not help.',
+      };
+    }
+
+    if (this.spawnLoad() >= MAX_CONCURRENT_SPAWNED) {
+      return {
+        ok: false,
+        reason: 'concurrency',
+        message:
+          `${MAX_CONCURRENT_SPAWNED} started sessions are already running, which is the limit. ` +
+          'Wait for one to finish before starting another, or do this work here.',
+      };
+    }
+    this.spawnReservations++;
+
+    try {
+      const child = await this.deps.store.create(parent.model, {
+        // Copied field by field rather than spread, so a field added to ChatProject later has
+        // to be considered here: this object IS the child access to the filesystem.
+        project: {
+          directory: project.directory,
+          name: project.name,
+          branch: project.branch,
+          workspace: project.workspace,
+          workingDirectory: project.workingDirectory,
+          contextDirectories: [...project.contextDirectories],
+        },
+        origin: { parentSessionId: parent.id, depth, seedPrompt: seed },
+      });
+
+      const named = title?.trim() ? await this.deps.store.rename(child.id, title.trim()) : null;
+
+      // Registered before the seed is sent: `send` resolves once the turn is accepted, and the
+      // reply can finish - and look for its watch entry - before the await below returns.
+      this.spawnWatch.set(child.id, { parentSessionId: parent.id });
+
+      const sent = await this.send(child.id, seed);
+      if (!sent.ok) {
+        this.spawnWatch.delete(child.id);
+        await this.deleteSession(child.id);
+        return { ok: false, reason: 'no-project', message: `The new session could not start: ${sent.error}` };
+      }
+
+      this.deps.logger.debug(`CHAT: spawned ${child.id} from ${parent.id} at depth ${depth}`);
+      return { ok: true, session: named ?? child };
+    } finally {
+      this.spawnReservations--;
+    }
+  }
+
+  /** Autonomous runs in flight, counting the ones whose session is still being created. */
+  private spawnLoad(): number {
+    return this.spawnReservations + this.spawnWatch.size;
+  }
+
+  /**
+   * A spawned session finished its seeded run: give the slot back and tell the parent.
+   *
+   * The parent is told through its transcript rather than by resuming it. Resuming would mean
+   * the app starting a turn - and spending credits - with nobody having typed anything, which
+   * is the unattended behaviour this task deliberately does not build. What lands instead is a
+   * message the user reads and the model sees on the next turn either of them takes.
+   */
+  private async settleSpawnedTurn(sessionId: string): Promise<void> {
+    const watch = this.spawnWatch.get(sessionId);
+    if (!watch) return;
+    this.spawnWatch.delete(sessionId);
+
+    const child = await this.deps.store.get(sessionId);
+    if (!child) return;
+    await this.deliverChildReport(watch.parentSessionId, describeChildOutcome(child));
+  }
+
+  /**
+   * Queue a finished child report for its parent, delivering it as soon as the parent is idle.
+   *
+   * Never appended into a turn that is running: the wire history is rebuilt from the stored
+   * messages, and dropping a message in between a prompt and the reply it is still streaming
+   * would leave two user turns back to back in the thread that replays next time.
+   *
+   * Queue first and then check, rather than the reverse - the parent can go idle between the
+   * two, and the flush that would have carried this one has already run by then.
+   */
+  private async deliverChildReport(parentSessionId: string, text: string): Promise<void> {
+    const queued = this.childReports.get(parentSessionId) ?? [];
+    queued.push(text);
+    this.childReports.set(parentSessionId, queued);
+    if (!this.active.has(parentSessionId)) await this.flushChildReports(parentSessionId);
+  }
+
+  private async flushChildReports(sessionId: string): Promise<void> {
+    const queued = this.childReports.get(sessionId);
+    if (!queued || queued.length === 0) return;
+    this.childReports.delete(sessionId);
+
+    for (const text of queued) {
+      const message: ChatMessage = {
+        id: randomUUID(),
+        role: 'user',
+        content: text,
+        createdAt: new Date().toISOString(),
+        system: true,
+      };
+      const updated = await this.deps.store.appendMessage(sessionId, message);
+      // The parent can have been deleted while its child was still running. The child keeps its
+      // own row and its own transcript - it is a conversation in its own right - so the report
+      // is simply dropped rather than the run being wasted.
+      if (!updated) {
+        this.deps.logger.debug(`CHAT: dropped a spawned-session report for ${sessionId}, which is gone`);
+        return;
+      }
+      this.deps.emit({ type: 'message', sessionId, message });
+    }
   }
 
   /**
@@ -895,6 +1211,7 @@ export class ChatService {
     call: ChatToolCall,
     context: ToolContext,
     sessionId: string,
+    sessionTitle: string,
     messageId: string,
     signal: AbortSignal
   ): Promise<ChatToolCall | null> {
@@ -919,22 +1236,39 @@ export class ChatService {
       return refused;
     }
 
-    if (gate.isStanding(sessionId, prompt.key)) return null;
+    // An irreversible tool is asked every time, whatever was answered before: the standing set
+    // is keyed on what a call WOULD do, and for something with no undo that is not a good
+    // enough reason to skip asking. The gate refuses to record one for these either.
+    if (!prompt.irreversible && gate.isStanding(sessionId, prompt.key)) return null;
 
-    const decision = await gate.request(sessionId, prompt.key, signal, approvalId => {
-      this.deps.emit({
-        type: 'tool-start',
-        sessionId,
-        messageId,
-        call: {
-          ...call,
-          status: 'awaiting-approval',
-          approvalId,
-          approvalDetail: prompt.detail,
-          ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
-        },
-      });
-    });
+    const decision = await gate.request(
+      sessionId,
+      prompt.key,
+      signal,
+      {
+        sessionTitle,
+        toolName: call.name,
+        detail: prompt.detail,
+        ...(prompt.diff ? { diff: prompt.diff } : {}),
+        ...(prompt.irreversible ? { irreversible: true } : {}),
+      },
+      approvalId => {
+        this.deps.emit({
+          type: 'tool-start',
+          sessionId,
+          messageId,
+          call: {
+            ...call,
+            status: 'awaiting-approval',
+            approvalId,
+            approvalDetail: prompt.detail,
+            ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
+            ...(prompt.irreversible ? { approvalIrreversible: true } : {}),
+          },
+        });
+      },
+      { remember: !prompt.irreversible }
+    );
 
     if (decision !== 'deny') return null;
 
@@ -1018,7 +1352,12 @@ function projectPreamble(project: ChatProject): string[] {
  *    invented a filename and byte count rather than saying it could not look. Saying "you have
  *    no access" explicitly is what stops that, so this is never omitted.
  */
-function buildSystemMessage(roots: readonly string[], media: boolean, project?: ChatProject): CompletionMessage {
+function buildSystemMessage(
+  roots: readonly string[],
+  media: boolean,
+  host: boolean,
+  project?: ChatProject
+): CompletionMessage {
   if (roots.length === 0) {
     return {
       role: 'system',
@@ -1031,6 +1370,9 @@ function buildSystemMessage(roots: readonly string[], media: boolean, project?: 
         'the user to give this conversation a folder: a Code session takes one from the folder chip',
         'above the message box, and the sidebar card shares one with every conversation.',
         ...(media ? MEDIA_GUIDANCE : []),
+        ...(host ? HOST_GUIDANCE : []),
+        '',
+        DESKTOP_ARTIFACT_PROMPT,
       ].join('\n'),
     };
   }
@@ -1058,6 +1400,9 @@ function buildSystemMessage(roots: readonly string[], media: boolean, project?: 
       'Never invent a file name, size or contents, or the output of a command: if a tool did not',
       'return it, you do not know it.',
       ...(media ? MEDIA_GUIDANCE : []),
+      ...(host ? HOST_GUIDANCE : []),
+      '',
+      DESKTOP_ARTIFACT_PROMPT,
     ].join('\n'),
   };
 }
@@ -1079,6 +1424,90 @@ const MEDIA_GUIDANCE: readonly string[] = [
   'The result is shown or played to the USER and is never returned to you: you cannot see the',
   'image or hear the audio. Never describe what a generated image depicts or how audio sounds.',
 ];
+
+/**
+ * What the model has to know about the app-control tools.
+ *
+ * Three things, and the first two are the ones that cost real money if it gets them wrong. A
+ * spawned session is not a subroutine - it does not return a value into this turn, and a model
+ * that treats it as one starts a second when the first "did not answer". And it starts with an
+ * empty conversation: everything said here is invisible to it, so a prompt like "carry on with
+ * that" spawns a session that cannot possibly know what "that" is.
+ */
+const HOST_GUIDANCE: readonly string[] = [
+  'You can also work with the conversations in this project: session_list and session_read see',
+  'them, session_spawn starts one, session_archive tidies one away and session_delete removes',
+  'one permanently. They reach this project only, and a spawned session can read and change',
+  'exactly the folders you can - it cannot be given others.',
+  'A session you spawn runs on its own and does NOT report back into this turn. Finish your',
+  'answer without it. Later, this conversation is told THAT it finished - never what it said,',
+  'so use session_read on its id when you need that. Never start a second session because the',
+  'first has not answered yet, and never start several to try',
+  'variations of one task - each one spends the user credits and each one asks them to approve',
+  'it first.',
+  'A spawned session starts with an EMPTY conversation and cannot see anything said here, so its',
+  'prompt has to carry the whole task: what to do, which files, and what "done" means.',
+  'Prefer session_archive over session_delete. Deleting cannot be undone, the user is asked every',
+  'single time, and you should only ever reach for it when they have asked for that particular',
+  'conversation to be deleted.',
+];
+
+/** One session as plain text, for session_read. Mirrors what the thread shows, minus the chrome. */
+function renderTranscript(session: ChatSession): string {
+  const lines = [`Conversation: ${session.title}`, `Last updated: ${session.updatedAt}`, ''];
+
+  for (const message of session.messages) {
+    const speaker = message.system ? 'App' : message.role === 'user' ? 'User' : 'Assistant';
+    lines.push(`--- ${speaker} ---`);
+    if (message.content) lines.push(message.content);
+    // Named, not inlined. An artifact body is the largest thing a reply can carry, and a
+    // transcript is read to find out WHAT a conversation did; without this line a session whose
+    // whole answer was an artifact reads as though it produced nothing.
+    for (const artifact of message.artifacts ?? []) {
+      lines.push(`[artifact ${artifact.type}: ${artifact.title}]`);
+    }
+    for (const call of message.toolCalls ?? []) {
+      lines.push(`[tool ${call.name} -> ${call.status}]`);
+    }
+    if (message.error) lines.push(`[failed: ${message.error}]`);
+    lines.push('');
+  }
+
+  if (session.messages.length === 0) lines.push('(nothing has been said in it yet)');
+  return lines.join('\n');
+}
+
+/**
+ * What a finished spawned session tells its parent.
+ *
+ * The child's own output is NOT carried across. A spawned session runs on a prompt the parent
+ * wrote, and piping its reply straight back in would put text the parent never read - produced
+ * by a model the user was not watching - into the next request as though the user had typed it.
+ * `stopReason` is stated when it means the run did not simply finish, because "it stopped after
+ * too many tool calls" and "it answered" are very different things to build a next step on.
+ *
+ * `session_read` is how the parent gets the content, deliberately: one more tool call, held to
+ * the same project scope, and visible in the transcript as a thing that was asked for.
+ */
+function describeChildOutcome(child: ChatSession): string {
+  const last = [...child.messages].reverse().find(message => message.role === 'assistant');
+  const header = `The session you started, "${child.title}" (${child.id}), has finished.`;
+  const read = `Read it with session_read (${child.id}) if you need what it produced.`;
+
+  if (!last) return `${header}\nIt produced no reply. ${read}`;
+  if (last.error) return `${header}\nIt failed: ${last.error}`;
+
+  const note =
+    last.stopReason === 'tool_turn_limit'
+      ? ' It stopped at the tool-call limit rather than finishing, so its work may be incomplete.'
+      : last.stopReason === 'max_tokens'
+        ? ' Its reply was cut off at the length limit.'
+        : last.stopReason === 'aborted'
+          ? ' It was stopped before it finished.'
+          : '';
+
+  return `${header}${note}\n${read}`;
+}
 
 /**
  * Add one round trip's reported usage to the turn's running total.
@@ -1126,14 +1555,18 @@ async function toCompletionMessages(
 
   for (const message of session.messages) {
     const calls = message.toolCalls ?? [];
+    // Artifact markup is stripped out of the stored text, so it has to go back in here: a model
+    // that cannot see the artifact it just wrote cannot revise it.
+    const text = restoreArtifactMarkup(message);
+
     if (calls.length === 0) {
       const attachments = message.attachments ?? [];
       if (attachments.length > 0) {
-        const content = await toAttachedContent(message.content, attachments, readAttachment);
+        const content = await toAttachedContent(text, attachments, readAttachment);
         if (content.length > 0) wire.push({ role: message.role, content });
         continue;
       }
-      if (message.content.length > 0) wire.push({ role: message.role, content: message.content });
+      if (text.length > 0) wire.push({ role: message.role, content: text });
       continue;
     }
 
@@ -1141,7 +1574,7 @@ async function toCompletionMessages(
       role: 'assistant',
       content: [
         ...(message.thinking ?? []),
-        ...(message.content ? [{ type: 'text', text: message.content }] : []),
+        ...(text ? [{ type: 'text', text }] : []),
         ...calls.map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input })),
       ],
     });

@@ -13,6 +13,14 @@ export interface SidebarSections {
   projects: ProjectGroup[];
   /** Chat sessions, which have no project and sit outside the groups. */
   loose: ChatSessionSummary[];
+  /**
+   * Archived conversations, in one collapsed section at the bottom regardless of project.
+   *
+   * Out of everything above rather than greyed out inside it: archiving is how a project group
+   * that has accumulated twenty finished sessions becomes readable again, which it does not if
+   * the rows are still there.
+   */
+  archived: ChatSessionSummary[];
 }
 
 /**
@@ -26,7 +34,11 @@ export interface SidebarSections {
  * worked on now rises to the top - the same rule the flat list already used for rows.
  */
 export function groupSessions(sessions: readonly ChatSessionSummary[], mode: ChatSessionMode): SidebarSections {
-  const visible = sessions.filter(session => session.mode === mode);
+  const inMode = sessions.filter(session => session.mode === mode);
+  // Archiving outranks pinning: a pinned session that is then archived has been put away, and
+  // leaving it at the top would make archive the one action with no visible effect.
+  const archived = inMode.filter(session => session.archived);
+  const visible = inMode.filter(session => !session.archived);
   const pinned = visible.filter(session => session.pinned);
   const rest = visible.filter(session => !session.pinned);
 
@@ -44,7 +56,7 @@ export function groupSessions(sessions: readonly ChatSessionSummary[], mode: Cha
     else byDirectory.set(project.directory, { directory: project.directory, name: project.name, sessions: [session] });
   }
 
-  return { pinned, projects: [...byDirectory.values()], loose };
+  return { pinned, projects: [...byDirectory.values()], loose, archived };
 }
 
 /** How many rows the modifier-plus-digit shortcut reaches. */
@@ -57,5 +69,7 @@ export const QUICK_SWITCH_LIMIT = 9;
  * order the eye reads rather than from any one section.
  */
 export function orderedSessions(sections: SidebarSections): ChatSessionSummary[] {
+  // Archived rows are left out: the shortcut counts what the sidebar draws, and those sit
+  // behind a disclosure that is shut by default.
   return [...sections.pinned, ...sections.projects.flatMap(group => group.sessions), ...sections.loose];
 }

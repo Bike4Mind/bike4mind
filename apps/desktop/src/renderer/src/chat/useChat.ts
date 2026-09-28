@@ -4,6 +4,7 @@ import type {
   ChatAttachment,
   ChatMessage,
   ChatModelOption,
+  ChatPendingApproval,
   ChatQueuedMessage,
   ChatSession,
   ChatSessionStatus,
@@ -29,6 +30,7 @@ export interface SessionsController {
   clearCodeError: () => void;
   remove: (sessionId: string) => Promise<void>;
   togglePin: (session: ChatSessionSummary) => Promise<void>;
+  toggleArchived: (session: ChatSessionSummary) => Promise<void>;
   /** Apply a summary main just returned, so the sidebar reorders without a full reload. */
   apply: (summary: ChatSessionSummary) => void;
 }
@@ -88,6 +90,14 @@ export function useSessions(): SessionsController {
     setSessions(current => current.map(entry => (entry.id === updated.id ? updated : entry)));
   }, []);
 
+  // Patched in place rather than moved, for the same reason pinning is: archiving does not
+  // touch `updatedAt`, and the row is about to change section anyway.
+  const toggleArchived = useCallback(async (session: ChatSessionSummary) => {
+    const updated = await window.b4m.chat.setSessionArchived(session.id, !session.archived);
+    if (!updated) return;
+    setSessions(current => current.map(entry => (entry.id === updated.id ? updated : entry)));
+  }, []);
+
   const clearCodeError = useCallback(() => setCodeError(null), []);
 
   return {
@@ -101,6 +111,7 @@ export function useSessions(): SessionsController {
     clearCodeError,
     remove,
     togglePin,
+    toggleArchived,
     apply,
   };
 }
@@ -146,6 +157,41 @@ export function useSessionStatuses(): ReadonlyMap<string, ChatSessionStatus> {
   }, []);
 
   return statuses;
+}
+
+/**
+ * Every tool call waiting on the user, in any conversation.
+ *
+ * Pushed whole from main rather than derived from the stream events this window witnessed, for
+ * the reason the status map is: an autonomous session parks at the approval gate without ever
+ * addressing this window, and a request nobody can see is a run that has silently stalled.
+ */
+export function usePendingApprovals(): ChatPendingApproval[] {
+  const [pending, setPending] = useState<ChatPendingApproval[]>([]);
+
+  useEffect(() => {
+    let live = true;
+    let pushed = false;
+
+    const unsubscribe = window.b4m.chat.onPendingApprovals(next => {
+      pushed = true;
+      setPending(next);
+    });
+
+    // Subscribing first is what stops a change landing in the gap being missed; the snapshot is
+    // then only useful if no push has already superseded it.
+    void window.b4m.chat.getPendingApprovals().then(snapshot => {
+      if (!live || pushed) return;
+      setPending(snapshot);
+    });
+
+    return () => {
+      live = false;
+      unsubscribe();
+    };
+  }, []);
+
+  return pending;
 }
 
 export interface ModelCatalogController {
@@ -421,6 +467,15 @@ export function useConversation(
         return;
       }
 
+      // A message that arrived without anyone typing it - a spawned session reporting back.
+      // Appended rather than folded into a streaming reply: it belongs to no turn in flight.
+      if (event.type === 'message') {
+        setMessages(current =>
+          current.some(message => message.id === event.message.id) ? current : [...current, event.message]
+        );
+        return;
+      }
+
       // Only 'done' and 'error' end a reply. Stated rather than left to the fall-through,
       // because the background-process events arrive with no reply in flight at all, and
       // treating an unrecognised event as terminal would blank the streaming indicator.
@@ -434,9 +489,13 @@ export function useConversation(
           return event.type === 'done'
             ? {
                 ...message,
+                // `content` REPLACES the streamed text rather than extending it: main strips
+                // the artifact markup out of the reply, so the deltas that carried it are
+                // exactly what has to be dropped here.
                 content: event.content,
                 stopReason: event.stopReason,
                 toolCalls: event.toolCalls ?? message.toolCalls,
+                artifacts: event.artifacts ?? message.artifacts,
               }
             : { ...message, error: event.message };
         })

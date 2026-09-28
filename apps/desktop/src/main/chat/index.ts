@@ -17,6 +17,8 @@ import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { AttachmentStore } from './AttachmentStore';
 import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
+import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
+import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
 import { ChatService } from './ChatService';
 import { MediaStore } from './media/MediaStore';
 import { MessageQueue } from './MessageQueue';
@@ -102,6 +104,8 @@ export function registerChat(auth: AuthService): RegisteredChat {
   const attachments = new AttachmentStore(join(userData, 'attachments'), logger, shrinkImage);
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
+  registerArtifactProtocol();
+  const artifacts = new ArtifactPublisher(() => auth.getApiClient(), logger);
   const models = new ModelCatalog({
     logger,
     getApiClient: () => auth.getApiClient(),
@@ -128,6 +132,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
   const approvals = new ApprovalGate({
     requested: sessionId => activity.approvalRequested(sessionId),
     settled: sessionId => activity.approvalSettled(sessionId),
+    changed: () => send(IPC_CHANNELS.chatPendingApprovals, approvals.pendingApprovals()),
   });
 
   // Output and status go out on the same channel as reply tokens: a background process is
@@ -150,6 +155,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     background,
     media,
     activity,
+    artifacts,
     queue,
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which is T4's invariant broken through a side door.
@@ -160,6 +166,10 @@ export function registerChat(auth: AuthService): RegisteredChat {
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
+  ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (_event, sessionId: string, archived: boolean) =>
+    service.setSessionArchived(sessionId, archived)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatGetPendingApprovals, () => service.pendingApprovals());
   ipcMain.handle(IPC_CHANNELS.chatSetSessionModel, (_event, sessionId: string, model: string) =>
     service.setSessionModel(sessionId, model)
   );

@@ -15,7 +15,7 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatSessionMode, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { groupSessions, orderedSessions, type ProjectGroup } from './grouping';
-import { MoreIcon, PanelLeftIcon, PlusIcon, SearchIcon, SlidersIcon } from './icons';
+import { ChevronIcon, MoreIcon, PanelLeftIcon, PlusIcon, SearchIcon, SlidersIcon } from './icons';
 import { ModeSwitcher } from './ModeSwitcher';
 import { SessionBadge } from './SessionBadge';
 
@@ -59,12 +59,14 @@ interface RowProps {
   onSelect: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
   onTogglePin: (session: ChatSessionSummary) => void;
+  onToggleArchived: (session: ChatSessionSummary) => void;
 }
 
-function SessionRow({ session, activeId, statuses, onSelect, onDelete, onTogglePin }: RowProps) {
+function SessionRow({ session, activeId, statuses, onSelect, onDelete, onTogglePin, onToggleArchived }: RowProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const status = statuses.get(session.id) ?? 'done';
   const needsAction = status === 'needs-action';
+  const spawned = !!session.origin;
 
   return (
     <ListItem
@@ -97,6 +99,9 @@ function SessionRow({ session, activeId, statuses, onSelect, onDelete, onToggleP
               <MenuItem onClick={() => onTogglePin(session)} data-testid="chat-pin-session-btn">
                 {session.pinned ? 'Unpin' : 'Pin'}
               </MenuItem>
+              <MenuItem onClick={() => onToggleArchived(session)} data-testid="chat-archive-session-btn">
+                {session.archived ? 'Unarchive' : 'Archive'}
+              </MenuItem>
               <MenuItem color="danger" onClick={() => onDelete(session.id)} data-testid="chat-delete-session-btn">
                 Delete
               </MenuItem>
@@ -113,12 +118,27 @@ function SessionRow({ session, activeId, statuses, onSelect, onDelete, onToggleP
         sx={{ pr: 4, ...(needsAction && { boxShadow: 'inset 2px 0 0 var(--joy-palette-warning-solidBg)' }) }}
         data-testid="chat-session-item"
         data-session-status={status}
+        data-session-spawned={spawned ? 'true' : undefined}
       >
         <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center', minWidth: 0, width: '100%' }}>
           <SessionBadge status={status} />
           <Typography level="body-sm" noWrap sx={{ minWidth: 0 }}>
             {session.title}
           </Typography>
+          {/* A session the agent started is marked, because the user did not open it and will
+              not recognise the title. It sits after the title so a long one still truncates. */}
+          {spawned && (
+            <Tooltip title="Started by the agent" size="sm" variant="soft" placement="top">
+              <Typography
+                level="body-xs"
+                textColor="text.tertiary"
+                sx={{ flexShrink: 0 }}
+                data-testid="chat-session-spawned-mark"
+              >
+                agent
+              </Typography>
+            </Tooltip>
+          )}
         </Stack>
       </ListItemButton>
     </ListItem>
@@ -211,6 +231,7 @@ export function SessionList({
   onCreateInProject,
   onDelete,
   onTogglePin,
+  onToggleArchived,
   card,
   footer,
 }: {
@@ -228,6 +249,7 @@ export function SessionList({
   onCreateInProject: (directory: string) => void;
   onDelete: (sessionId: string) => void;
   onTogglePin: (session: ChatSessionSummary) => void;
+  onToggleArchived: (session: ChatSessionSummary) => void;
   /** The dismissible card slot above the account strip. */
   card?: ReactNode;
   footer?: ReactNode;
@@ -240,8 +262,14 @@ export function SessionList({
     return sessions.filter(session => session.title.toLowerCase().includes(needle));
   }, [sessions, query]);
 
+  const [archivedOpen, setArchivedOpen] = useState(false);
+
   const sections = useMemo(() => groupSessions(matching, mode), [matching, mode]);
-  const empty = sections.pinned.length === 0 && sections.projects.length === 0 && sections.loose.length === 0;
+  const empty =
+    sections.pinned.length === 0 &&
+    sections.projects.length === 0 &&
+    sections.loose.length === 0 &&
+    sections.archived.length === 0;
 
   const ordered = useMemo(() => orderedSessions(sections), [sections]);
 
@@ -282,7 +310,7 @@ export function SessionList({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const rowProps = { activeId, statuses, onSelect, onDelete, onTogglePin };
+  const rowProps = { activeId, statuses, onSelect, onDelete, onTogglePin, onToggleArchived };
 
   if (collapsed) {
     return (
@@ -407,6 +435,32 @@ export function SessionList({
                     <SessionRow key={session.id} session={session} {...rowProps} />
                   ))}
                 </List>
+              </Box>
+            )}
+
+            {/* Shut by default, and counted on the header: an archived conversation is still
+                there to get back, which is the whole difference from deleting one. */}
+            {sections.archived.length > 0 && (
+              <Box data-testid="sidebar-archived">
+                <Button
+                  fullWidth
+                  size="sm"
+                  variant="plain"
+                  color="neutral"
+                  onClick={() => setArchivedOpen(open => !open)}
+                  endDecorator={<ChevronIcon open={archivedOpen} />}
+                  sx={{ justifyContent: 'flex-start', mt: 1, fontWeight: 'md' }}
+                  data-testid="sidebar-archived-btn"
+                >
+                  <Box sx={{ flex: 1, textAlign: 'left' }}>Archived ({sections.archived.length})</Box>
+                </Button>
+                {archivedOpen && (
+                  <List size="sm" sx={{ '--ListItem-radius': '6px', gap: 0.25 }}>
+                    {sections.archived.map(session => (
+                      <SessionRow key={session.id} session={session} {...rowProps} />
+                    ))}
+                  </List>
+                )}
               </Box>
             )}
           </>
