@@ -31,6 +31,16 @@ describe('bash_execute', () => {
     expect(result).toContain('[exit 3]');
   });
 
+  /**
+   * Regression: the blanket write denial covers /dev/null too, so before this every command
+   * using `2>/dev/null` came back littered with "Operation not permitted".
+   */
+  it('redirects to /dev/null without tripping the write denial', async () => {
+    const result = await bashExecute.run({ command: 'echo visible; echo hidden 2>/dev/null' }, context);
+    expect(result).not.toMatch(/Operation not permitted/i);
+    expect(result).toContain('visible');
+  });
+
   it('writes inside a granted root', async () => {
     await bashExecute.run({ command: 'echo written > allowed.txt' }, context);
     await expect(readFile(join(root, 'allowed.txt'), 'utf8')).resolves.toContain('written');

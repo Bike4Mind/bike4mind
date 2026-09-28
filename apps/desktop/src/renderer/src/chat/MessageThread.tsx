@@ -76,8 +76,6 @@ function AssistantTurn({
 
   return (
     <Box sx={{ minWidth: 0 }} data-testid="chat-message-assistant">
-      <ToolCallList calls={toolCalls} onRespond={onRespond} />
-
       {awaitingFirstToken ? (
         <CircularProgress size="sm" data-testid="chat-awaiting-reply" />
       ) : (
@@ -89,6 +87,10 @@ function AssistantTurn({
           </Typography>
         )
       )}
+
+      {/* After the text, which is the order it arrives in: the model says what it is about to
+          do, then asks for the tool. Above it, an approval prompt appears before its reason. */}
+      <ToolCallList calls={toolCalls} onRespond={onRespond} />
 
       {message.error && (
         <Alert size="sm" color="danger" variant="soft" sx={{ mt: 1 }} data-testid="chat-message-error">

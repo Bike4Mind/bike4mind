@@ -23,6 +23,25 @@ const NEVER_READABLE = [
   '/etc/shadow',
 ];
 
+/**
+ * Character devices a command must be able to write to.
+ *
+ * `(deny file-write*)` covers these too, and without them `2>/dev/null` - the single commonest
+ * thing in a shell command - fails with "Operation not permitted" on every redirect. Named one
+ * by one rather than allowing /dev wholesale, which would also hand over the disk devices.
+ */
+const WRITABLE_DEVICES = [
+  '/dev/null',
+  '/dev/zero',
+  '/dev/random',
+  '/dev/urandom',
+  '/dev/stdin',
+  '/dev/stdout',
+  '/dev/stderr',
+  '/dev/tty',
+  '/dev/dtracehelper',
+];
+
 export interface SandboxedCommand {
   executable: string;
   args: string[];
@@ -73,6 +92,8 @@ export function buildProfile(writableRoots: readonly string[], alwaysDenied: rea
     `(allow file-write* (subpath "${escapeProfilePath(tmpdir())}"))`,
     '(allow file-write* (subpath "/tmp"))',
     '(allow file-write* (subpath "/private/tmp"))',
+    ...WRITABLE_DEVICES.map(device => `(allow file-write* (literal "${device}"))`),
+    '(allow file-write* (subpath "/dev/fd"))',
     '',
   ];
 

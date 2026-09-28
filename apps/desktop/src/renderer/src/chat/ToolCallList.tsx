@@ -152,7 +152,7 @@ function ToolCall({ call, onRespond }: { call: ChatToolCall; onRespond: RespondT
 export function ToolCallList({ calls, onRespond }: { calls: ChatToolCall[]; onRespond: RespondToApproval }) {
   if (calls.length === 0) return null;
   return (
-    <Stack spacing={0.5} sx={{ mb: 1 }}>
+    <Stack spacing={0.5} sx={{ mt: 1 }}>
       {calls.map(call => (
         <ToolCall key={call.id} call={call} onRespond={onRespond} />
       ))}
