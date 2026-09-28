@@ -52,6 +52,18 @@ describe('DriveConnectAction', () => {
     expect(screen.getByTestId('drive-connect-btn')).not.toBeDisabled();
   });
 
+  it('says what the grant can read before the user reaches Google consent', () => {
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('drive-access-disclosure')).toHaveTextContent(/whole Google Drive/);
+    expect(screen.getByTestId('drive-access-disclosure')).toHaveTextContent(/Only the folder you pick is ingested/);
+  });
+
+  it('drops the disclosure once a folder is connected', () => {
+    h.connection.current = connected();
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.queryByTestId('drive-access-disclosure')).toBeNull();
+  });
+
   it('disables the action when the status query errors (personal lake / non-manager)', () => {
     // A 403/404 from the status endpoint must not render an enabled button that can only ever fail.
     h.isError.current = true;

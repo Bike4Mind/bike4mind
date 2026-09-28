@@ -11,6 +11,7 @@ import {
 } from '@client/app/hooks/data/googleDrive';
 import { describeDriveConnection } from '@client/app/hooks/data/driveConnectionDisplay';
 import { useDriveFolderPicker } from '@client/app/hooks/data/useDriveFolderPicker';
+import DriveAccessDisclosure from './DriveAccessDisclosure';
 
 /** The specific server `error` message off an axios failure, if the response carried one. */
 function serverError(e: unknown): string | undefined {
@@ -158,15 +159,19 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
   }
 
   return (
-    <Button
-      data-testid="drive-connect-btn"
-      variant="outlined"
-      color="neutral"
-      startDecorator={<CloudIcon />}
-      loading={isPicking || connect.isPending}
-      onClick={openFolderPicker}
-    >
-      Connect Google Drive
-    </Button>
+    <Stack gap={0.5}>
+      <Button
+        data-testid="drive-connect-btn"
+        variant="outlined"
+        color="neutral"
+        startDecorator={<CloudIcon />}
+        loading={isPicking || connect.isPending}
+        onClick={openFolderPicker}
+        sx={{ alignSelf: 'flex-start' }}
+      >
+        Connect Google Drive
+      </Button>
+      <DriveAccessDisclosure />
+    </Stack>
   );
 }
