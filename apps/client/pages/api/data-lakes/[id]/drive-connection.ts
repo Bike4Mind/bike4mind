@@ -1,10 +1,21 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { dataLakeRepository, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
-import type { IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
-import { releaseDriveConnection } from '@server/integrations/google/drive/common';
+import {
+  dataLakeFindingRepository,
+  dataLakeRepository,
+  fabFileChunkRepository,
+  fabFileRepository,
+  orgGoogleDriveConnectionRepository,
+  userRepository,
+} from '@bike4mind/database';
+import { dataLakeService } from '@bike4mind/services';
+import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
+import type { IDataLakeDocument, IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
+import { releaseDriveConnection, disableDriveConnectionForLake } from '@server/integrations/google/drive/common';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { getFilesStorage } from '@server/utils/storage';
 import { NotFoundError } from '@server/utils/errors';
 import { Request } from 'express';
 
@@ -12,8 +23,11 @@ import { Request } from 'express';
  * Safe, credential-free view of a connection for the lake owner/manager. The refresh token is
  * `select: false` so it never reaches here anyway; this narrows further to just what the wizard
  * needs to show connection state and offer re-sync/disconnect.
+ *
+ * `fileCount` rides along so the disconnect-confirmation dialog can warn how many documents a
+ * disconnect will delete without a separate round trip.
  */
-function toSafeConnection(c: IOrgGoogleDriveConnectionDocument) {
+function toSafeConnection(c: IOrgGoogleDriveConnectionDocument, fileCount: number) {
   return {
     id: c.id,
     driveFolderId: c.driveFolderId,
@@ -23,11 +37,12 @@ function toSafeConnection(c: IOrgGoogleDriveConnectionDocument) {
     lastError: c.lastError ?? null,
     lastUsedAt: c.lastUsedAt ?? null,
     connectedAt: c.connectedAt ?? null,
+    fileCount,
   };
 }
 
 /** Resolve the lake and assert the caller is an org owner/manager (mirrors the drive-sync gate). */
-async function resolveOrgLake(req: Request): Promise<{ lakeId: string; organizationId: string }> {
+async function resolveOrgLake(req: Request): Promise<{ lake: IDataLakeDocument; organizationId: string }> {
   const { id } = req.query as { id: string };
   const lake = await dataLakeRepository.findById(id);
   // A Drive connection only exists for an org-scoped lake; a personal/fallback lake reads as not-found.
@@ -35,7 +50,46 @@ async function resolveOrgLake(req: Request): Promise<{ lakeId: string; organizat
     throw new NotFoundError('Data lake not found');
   }
   await verifyOrgAccess(req.user, lake.organizationId);
-  return { lakeId: lake.id, organizationId: lake.organizationId };
+  return { lake, organizationId: lake.organizationId };
+}
+
+/**
+ * Sweep everything the just-disconnected connection ingested into this lake: FabFile rows, their
+ * chunks, retrieval-index entries and stored objects - see purgeDataLakeConnectionFiles. A
+ * connection-scoped subset of the lake, not the lake itself: a sibling connection's files and any
+ * manually-uploaded file in the same lake are untouched.
+ *
+ * Called AFTER the connection is disabled (stops the poll from re-claiming it) but BEFORE
+ * releaseDriveConnection hard-deletes the row - unlike cleanupDeletedDataLake's own release-then-
+ * sweep ordering (its step 1c), this door's sweep can itself throw partway, and the row must still
+ * resolve on a retried DELETE so a failed purge can be retried instead of stranding the remainder.
+ */
+async function purgeDriveIngestedFiles(
+  lake: IDataLakeDocument,
+  driveConnectionId: string,
+  logger: { warn: (msg: string, ...args: unknown[]) => void }
+): Promise<void> {
+  const files = await fabFileRepository.findByDriveConnectionIdInDataLake(driveConnectionId, lake.datalakeTag);
+  if (files.length === 0) return;
+  await dataLakeService.purgeDataLakeConnectionFiles(dataLakeService.lakeMembershipScope(lake), files, {
+    db: {
+      fabFiles: fabFileRepository,
+      fabFileChunks: fabFileChunkRepository,
+      users: userRepository,
+      dataLakeFindings: dataLakeFindingRepository,
+    },
+    // Undefined everywhere except self-host OpenSearch - Atlas's vector index lives on the
+    // FabFileChunk collection itself, so the chunk delete already removes it (same wiring as the
+    // phase-2 lake sweep in dataLakeCleanup.ts).
+    retrievalIndex: selfHostOpenSearchEnabled()
+      ? dataLakeService.openSearchRetrievalIndex({
+          db: { fabFileChunks: fabFileChunkRepository },
+          searchIndex: FabFileChunkSearchIndex,
+        })
+      : undefined,
+    storage: getFilesStorage(),
+    logger,
+  });
 }
 
 /**
@@ -90,12 +144,16 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     }
     await verifyOrgAccess(req.user, lake.organizationId);
     const conn = await findLakeConnection(lake.id, lake.organizationId);
-    return res.json({ connection: conn ? toSafeConnection(conn) : null });
+    if (!conn) {
+      return res.json({ connection: null });
+    }
+    const fileCount = await fabFileRepository.countByDriveConnectionIdInDataLake(conn.id, lake.datalakeTag);
+    return res.json({ connection: toSafeConnection(conn, fileCount) });
   })
   .delete(async (req: Request, res) => {
     assertDataLakeWriteScope(req);
-    const { lakeId, organizationId } = await resolveOrgLake(req);
-    const conn = await findLakeConnection(lakeId, organizationId);
+    const { lake, organizationId } = await resolveOrgLake(req);
+    const conn = await findLakeConnection(lake.id, organizationId);
     if (conn) {
       // Don't hard-delete under a live ingest: the running handler still holds the connection it
       // loaded and would keep creating FabFiles stamped with a driveConnectionId that no longer
@@ -105,6 +163,16 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
           .status(409)
           .json({ error: 'A sync is in progress for this folder. Try disconnecting again once it finishes.' });
       }
+      // Disable BEFORE purging: the hourly poll only re-enqueues an ingest for an ENABLED
+      // connection, so this stops it from racing the sweep below and re-creating the very files
+      // being deleted - without disabling first, a poll firing mid-purge could do exactly that.
+      await disableDriveConnectionForLake(lake.id);
+      // Purge what this connection ingested BEFORE releasing the row: purgeDriveIngestedFiles can
+      // throw partway (a storage.delete blip, a self-host retrieval-index failure), and the row
+      // must still resolve on a retried DELETE so findLakeConnection can find it again - releasing
+      // first would hard-delete the row and strand any files the sweep did not reach with no
+      // surface left to purge them by.
+      await purgeDriveIngestedFiles(lake, conn.id, req.logger);
       // Through the release seam, not the bare repo delete: it revokes the org-owned credential at
       // Google first, so disconnecting here does not leave the grant live behind a deleted row.
       await releaseDriveConnection(conn.id, organizationId);
