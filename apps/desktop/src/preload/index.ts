@@ -5,6 +5,7 @@ import type {
   ChatApprovalMode,
   ChatAttachmentInput,
   ChatPendingApproval,
+  ChatQueueEvent,
   ChatSessionStatusEvent,
   ChatStreamEvent,
   CreateCodeSessionRequest,
@@ -60,6 +61,14 @@ const api: DesktopApi = {
     deleteSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatDeleteSession, sessionId),
     sendMessage: (request: SendMessageRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatSendMessage, request),
     stopReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatStopReply, sessionId),
+    getQueuedMessages: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetQueued, sessionId),
+    cancelQueuedMessage: (sessionId: string, queuedId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatCancelQueued, sessionId, queuedId),
+    onQueueChanged: listener => {
+      const handler = (_event: unknown, queueEvent: ChatQueueEvent) => listener(queueEvent);
+      ipcRenderer.on(IPC_CHANNELS.chatQueueChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatQueueChanged, handler);
+    },
     pickAttachments: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatPickAttachments, sessionId),
     addAttachments: (sessionId: string, inputs: ChatAttachmentInput[]) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatAddAttachments, sessionId, inputs),

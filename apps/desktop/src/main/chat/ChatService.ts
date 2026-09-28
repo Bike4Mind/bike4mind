@@ -10,6 +10,7 @@ import type {
   ChatModelOption,
   ChatPendingApproval,
   ChatProject,
+  ChatQueuedMessage,
   ChatSession,
   ChatSessionStatusEvent,
   ChatSessionSummary,
@@ -33,6 +34,7 @@ import type { AttachmentStore } from './AttachmentStore';
 import { DEFAULT_COMPLETIONS_PATH, streamCompletion, type CompletionMessage } from './completions';
 import { MediaApiClient } from './media/MediaApiClient';
 import type { MediaStore } from './media/MediaStore';
+import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
 import type { SessionActivity } from './SessionActivity';
 import { isValidSessionId, type SessionStore } from './SessionStore';
@@ -72,6 +74,9 @@ interface ResolvedServerConfig {
  * whatever it has said, flagged so the UI can show it was cut short rather than finished.
  */
 const MAX_TOOL_TURNS = 10;
+
+/** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
+type TurnOutcome = 'completed' | 'aborted' | 'failed';
 
 /**
  * How many agent-spawned sessions may have a reply in flight at once, across the whole app.
@@ -126,6 +131,11 @@ export interface ChatServiceDeps {
    * is known; the approval gate feeds it the other half.
    */
   activity?: SessionActivity;
+  /**
+   * Messages typed during a live turn. Absent in tests that never send one mid-reply, which
+   * then get the old behaviour: a send during a reply is refused outright.
+   */
+  queue?: MessageQueue;
   /**
    * Copies emitted artifacts to the server. Absent in tests, and in that case a reply's
    * artifacts are still parsed and shown - they simply exist only on this machine.
@@ -188,6 +198,19 @@ export class ChatService {
   /** Every session that is busy right now, for a renderer that has just mounted. */
   sessionStatuses(): ChatSessionStatusEvent[] {
     return this.deps.activity?.snapshot() ?? [];
+  }
+
+  /** What one conversation has waiting, for a renderer opening it. */
+  queuedMessages(sessionId: string): ChatQueuedMessage[] {
+    return this.deps.queue?.list(sessionId) ?? [];
+  }
+
+  /**
+   * Take a queued message back. The text returns to the composer rather than vanishing - see
+   * ChatQueueReturnReason - which is also how "edit it" works: cancel, then type.
+   */
+  cancelQueued(sessionId: string, queuedId: string): void {
+    this.deps.queue?.cancel(sessionId, queuedId);
   }
 
   /**
@@ -422,6 +445,7 @@ export class ChatService {
     await this.deps.media?.forgetSession(sessionId);
     await this.deps.store.delete(sessionId);
     this.deps.activity?.forget(sessionId);
+    this.deps.queue?.forget(sessionId);
     // A deleted session is neither a child that can still report nor a parent that can still be
     // told. Dropping the watch here is also what gives its concurrency slot back, so deleting a
     // running spawned session does not leak one for the rest of the run.
@@ -456,17 +480,23 @@ export class ChatService {
    * invoke left pending for the length of a generation looks like a hung renderer - the same
    * reasoning as the auth sign-in channel.
    */
-  async send(sessionId: string, text: string, attachments: readonly ChatAttachment[] = []): Promise<SendMessageResult> {
+  async send(
+    sessionId: string,
+    text: string,
+    attachments: readonly ChatAttachment[] = [],
+    /**
+     * Set on the flush path only: the queue entry this turn IS. It stops a message coming out
+     * of the queue from falling back into it - that would move it to the tail and reorder the
+     * user's own turns - and names the entry to confirm once the turn is accepted.
+     */
+    released?: ChatQueuedMessage
+  ): Promise<SendMessageResult> {
     const prompt = text.trim();
     // An attachment is a message on its own: "look at this" with a screenshot needs no prose.
     if (!prompt && attachments.length === 0) return { ok: false, error: 'Type a message first.' };
     if (attachments.length > MAX_ATTACHMENTS_PER_TURN) {
       return { ok: false, error: `Only ${MAX_ATTACHMENTS_PER_TURN} attachments fit in one message.` };
     }
-    if (this.active.has(sessionId)) return { ok: false, error: 'This conversation is still replying.' };
-
-    const api = this.deps.getApiClient();
-    if (!api) return { ok: false, error: 'Sign in to send a message.' };
 
     // Reconciled BEFORE the prompt is stored, because the vision check below has to run against
     // the model that will actually answer - including a substitute picked here - and refusing a
@@ -480,6 +510,30 @@ export class ChatService {
     if (existing.mode === 'code' && !existing.project) {
       return { ok: false, error: 'Choose a project folder for this conversation before sending a message.' };
     }
+
+    /**
+     * Typing ahead. Decided HERE rather than in the renderer: a reply that finishes between a
+     * renderer-side "is it streaming?" check and this call would otherwise queue a message
+     * behind a turn that has already ended, and nothing would ever release it.
+     *
+     * The checks above run first so an impossible message is refused now rather than after a
+     * wait. The ones below do not: they depend on the model, and the model is reconciled
+     * against the server's catalog at the moment the turn actually goes out. A queued message
+     * refused then comes back to the composer - see flushQueue.
+     */
+    if (this.active.has(sessionId)) {
+      if (!this.deps.queue || released) return { ok: false, error: 'This conversation is still replying.' };
+      // Against the MERGED total: this send joins whatever is already waiting, so the cap has
+      // to be read against the turn that will actually go out.
+      const pending = this.deps.queue.list(sessionId)[0]?.attachments?.length ?? 0;
+      if (pending + attachments.length > MAX_ATTACHMENTS_PER_TURN) {
+        return { ok: false, error: `Only ${MAX_ATTACHMENTS_PER_TURN} attachments fit in one message.` };
+      }
+      return { ok: true, queued: true, message: this.deps.queue.enqueue(sessionId, prompt, attachments) };
+    }
+
+    const api = this.deps.getApiClient();
+    if (!api) return { ok: false, error: 'Sign in to send a message.' };
 
     const { session: reconciled, notice } = await this.reconcileModel(existing);
 
@@ -502,23 +556,39 @@ export class ChatService {
     // reference was added to the composer and then removed. See AttachmentStore.prune.
     void this.pruneAttachments(session);
 
+    // Before the reply starts, so the prompt reaches the thread above the reply that answers
+    // it: runReply emits 'start' the moment it is called.
+    if (released) this.deps.queue?.sent(sessionId, released.id, userMessage);
+
     const replyId = randomUUID();
     const controller = new AbortController();
     this.active.set(sessionId, controller);
     this.deps.activity?.replyStarted(sessionId);
 
-    void this.runReply(session, replyId, api, controller).finally(() => {
-      // Only clear if still ours: a delete-then-recreate could have installed a newer one, and
-      // telling activity this reply ended would then mark a live one idle.
-      if (this.active.get(sessionId) !== controller) return;
-      this.active.delete(sessionId);
-      this.deps.activity?.replyEnded(sessionId);
-      // Both of these need the session to be idle, and this is the moment it becomes so: a
-      // spawned run gives its concurrency slot back and reports to its parent, and a parent
-      // that was mid-turn takes delivery of anything that finished while it was busy.
-      void this.settleSpawnedTurn(sessionId);
-      void this.flushChildReports(sessionId);
-    });
+    void this.runReply(session, replyId, api, controller)
+      // runReply already catches, so this only covers a throw from its own bookkeeping. A turn
+      // whose end cannot be classified is treated as failed, which HOLDS the queue rather than
+      // firing it - the safe direction when the outcome is unknown.
+      .catch(() => 'failed' as const)
+      .then(async outcome => {
+        // Only clear if still ours: a delete-then-recreate could have installed a newer one, and
+        // telling activity this reply ended would then mark a live one idle.
+        if (this.active.get(sessionId) !== controller) return;
+        this.active.delete(sessionId);
+        this.deps.activity?.replyEnded(sessionId);
+        // All three need the session to be idle, and this is the moment it becomes so: a
+        // spawned run gives its concurrency slot back and reports to its parent, and a parent
+        // that was mid-turn takes delivery of anything that finished while it was busy.
+        // Reporting to the PARENT writes a different session's file, so it needs no ordering here.
+        void this.settleSpawnedTurn(sessionId);
+
+        // Awaited, and before the queue: both append to THIS session, and appendMessage is a
+        // read-modify-write with no lock of its own - overlapping them would let the later
+        // write drop the earlier message. Ordering them here is cheaper than a store-wide lock
+        // and keeps the report above the turn that answers it.
+        await this.flushChildReports(sessionId).catch(() => undefined);
+        this.settleQueue(sessionId, outcome);
+      });
 
     return { ok: true, messageId: replyId, ...(notice ? { notice } : {}) };
   }
@@ -593,20 +663,29 @@ export class ChatService {
   private async pruneAttachments(session: ChatSession): Promise<void> {
     const store = this.deps.attachments;
     if (!store) return;
-    const referenced = new Set(
-      session.messages.flatMap(message => (message.attachments ?? []).map(attachment => attachment.id))
-    );
+    // The queue is consulted as well as the thread: a queued message's files are on disk and
+    // referenced by nothing persisted, so pruning on the thread alone would delete the
+    // attachments of a message that has not been sent yet.
+    const referenced = new Set([
+      ...session.messages.flatMap(message => (message.attachments ?? []).map(attachment => attachment.id)),
+      ...(this.deps.queue?.attachmentIds(session.id) ?? []),
+    ]);
     await store.prune(session.id, referenced).catch(err => {
       this.deps.logger.debug(`CHAT: pruning attachments failed: ${err instanceof Error ? err.message : 'unknown'}`);
     });
   }
 
+  /**
+   * Stream one reply. The return value is what the queue turns on, so it names the three ends
+   * a turn can have rather than leaving them to be inferred from the events: only 'completed'
+   * releases a queued message.
+   */
   private async runReply(
     session: ChatSession,
     replyId: string,
     api: AuthenticatedApiClient,
     controller: AbortController
-  ): Promise<void> {
+  ): Promise<TurnOutcome> {
     const sessionId = session.id;
     this.deps.emit({ type: 'start', sessionId, messageId: replyId });
 
@@ -733,6 +812,9 @@ export class ChatService {
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(artifacts.length > 0 ? { artifacts } : {}),
       });
+      // A truncated reply ('max_tokens', 'tool_turn_limit') still counts as completed: the model
+      // answered and the user can read it. Only the user's own stop is 'aborted'.
+      return controller.signal.aborted ? 'aborted' : 'completed';
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.deps.logger.warn(`CHAT: reply failed: ${message}`);
@@ -748,7 +830,53 @@ export class ChatService {
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
       });
       this.deps.emit({ type: 'error', sessionId, messageId: replyId, message });
+      return 'failed';
     }
+  }
+
+  /**
+   * Hand the queue whatever the turn just did.
+   *
+   * Anchored to the reply promise rather than to a status, which is what keeps a queued
+   * message from jumping the approval gate: a turn parked at the gate has not resolved, so
+   * this has not run. The gate cannot be raced because it is not consulted.
+   *
+   * A turn that did not succeed does not release the queue at all. Stopping a reply is the
+   * user changing their mind about the answer they were queueing against, and an errored turn
+   * would usually just take the queued message into the same wall - so both give the text back
+   * to the composer, where the user decides whether it still says what they meant.
+   */
+  private settleQueue(sessionId: string, outcome: TurnOutcome): void {
+    if (outcome === 'completed') {
+      this.flushQueue(sessionId);
+      return;
+    }
+    this.deps.queue?.releaseAll(sessionId, outcome === 'aborted' ? 'stopped' : 'failed');
+  }
+
+  /**
+   * Send the oldest queued message as the next turn.
+   *
+   * The turn it starts installs this same hook, so a queue of several drains FIFO on its own -
+   * each message is a turn of its own, in the order it was typed, and one that fails stops the
+   * chain and returns the rest.
+   */
+  private flushQueue(sessionId: string): void {
+    const queue = this.deps.queue;
+    // A newer turn is already running (the user sent one by hand in the gap): its own ending
+    // flushes this, so taking a message out now would only put it behind that turn again.
+    if (!queue || this.active.has(sessionId)) return;
+
+    const next = queue.takeNext(sessionId);
+    if (!next) return;
+
+    void this.send(sessionId, next.text, next.attachments ?? [], next).then(result => {
+      if (result.ok) return;
+      // Its turn came and main refused it - signed out since, or a model reconciled to one that
+      // cannot read the image it carries. It is out of the queue by now, so it is handed back
+      // explicitly, ahead of anything still waiting behind it.
+      queue.giveBack(sessionId, [next], 'refused', result.error);
+    });
   }
 
   /**

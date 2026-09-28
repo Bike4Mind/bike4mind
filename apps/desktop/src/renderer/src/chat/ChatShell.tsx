@@ -141,6 +141,18 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   // ever reaches it.
   const unbound = conversation.session?.mode === 'code' && !conversation.session.project;
 
+  /**
+   * Whether this conversation has a turn open, for the composer's controls.
+   *
+   * `conversation.streaming` alone is what THIS window witnessed, and it is deliberately false
+   * after a reload or a session switch (see useConversation) - so the composer would offer Send
+   * and hide Stop while main was still replying. The sidebar's status is main's own answer for
+   * every session at once, so it covers exactly that gap. 'needs-action' counts: a turn parked
+   * at the approval gate is still a turn, and the next message still queues behind it.
+   */
+  const sessionStatus = activeId ? statuses.get(activeId) : undefined;
+  const turnOpen = conversation.streaming || sessionStatus === 'processing' || sessionStatus === 'needs-action';
+
   // What the turn in flight is doing, read off the reply being streamed into the thread. Only
   // the last message can be that reply, so nothing earlier is consulted.
   const inFlight = conversation.messages[conversation.messages.length - 1];
@@ -343,7 +355,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
         <Composer
           sessionId={activeId}
           disabled={!activeId || creatingCode}
-          streaming={conversation.streaming}
+          streaming={turnOpen}
           attachments={draft}
           blockedReason={blockedReason}
           notReady={unbound ? 'No folder' : null}
@@ -352,6 +364,10 @@ export function ChatShell({ account }: { account?: ReactNode }) {
           }
           onSend={text => void onSend(text)}
           onStop={conversation.stop}
+          queued={conversation.queued}
+          onCancelQueued={conversation.cancelQueued}
+          returned={conversation.returned}
+          onReturnedConsumed={conversation.clearReturned}
           leading={
             <ApprovalModePill
               mode={conversation.session?.approvalMode ?? 'ask'}
