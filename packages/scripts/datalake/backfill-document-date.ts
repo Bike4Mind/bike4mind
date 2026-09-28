@@ -20,6 +20,9 @@
  * as null (what a Reprocess would write) without downloading it, and counted separately. Recovering
  * those needs Drive's createdTime, which a Drive re-sync captures and this script does not fetch.
  *
+ * A row whose bytes are gone (no filePath, or a deleted S3 object) is left untouched and listed
+ * separately: nothing can date it, and counting it as a failure would fail every rerun.
+ *
  * Dry-run by default: it still downloads and extracts, so the summary shows what would be written.
  * Pass --execute to write.
  *
@@ -50,7 +53,7 @@ type CandidateFile = Pick<
   'filePath' | 'mimeType' | 'sourceType' | 'driveMd5Checksum' | 'documentDate' | 'documentDateSource'
 > & { _id: Types.ObjectId };
 
-type Outcome = 'dated' | 'undated' | 'editors-unrecoverable' | 'raced' | 'failed';
+type Outcome = 'dated' | 'undated' | 'editors-unrecoverable' | 'bytes-missing' | 'raced' | 'failed';
 
 // Only sizes the chunks, which are thrown away; it has no bearing on which date is extracted.
 const CHUNKER_MODEL = OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL;
@@ -87,8 +90,13 @@ async function processFile(
   const pinned = fabFilesService.resolveDocumentDateWithoutContent(file);
   const isEditorsFile = pinned !== undefined;
 
-  const resolved =
-    pinned ?? fabFilesService.resolveDocumentDate(file, await extractDocumentDate(file, deps.chunker, deps.storage));
+  let resolved = pinned;
+  if (!resolved) {
+    const content = await readStoredBytes(file, deps.storage);
+    if (!content) return 'bytes-missing';
+    await deps.chunker.chunkFile(content, file.mimeType);
+    resolved = fabFilesService.resolveDocumentDate(file, deps.chunker.getDocumentDate());
+  }
 
   if (opts.execute) {
     // Native driver, not Model.updateOne: FabFileSchema's timestamps would otherwise bump updatedAt,
@@ -104,11 +112,19 @@ async function processFile(
   return resolved.documentDate ? 'dated' : 'undated';
 }
 
-async function extractDocumentDate(file: CandidateFile, chunker: SmartChunker, storage: S3Storage) {
-  if (!file.filePath) throw new Error('FabFile has no filePath');
-  const content = await storage.getContentAsBuffer(file.filePath);
-  await chunker.chunkFile(content, file.mimeType);
-  return chunker.getDocumentDate();
+/**
+ * The file's stored bytes, or `undefined` when the row points at nothing (no filePath, or an S3 key
+ * that no longer exists). Those are permanent data problems no content pass can date, so they are
+ * reported and left untouched rather than counted as failures that would fail every rerun.
+ */
+async function readStoredBytes(file: CandidateFile, storage: S3Storage): Promise<Buffer | undefined> {
+  if (!file.filePath) return undefined;
+  try {
+    return await storage.getContentAsBuffer(file.filePath);
+  } catch (error) {
+    if (error instanceof Error && error.name === 'NoSuchKey') return undefined;
+    throw error;
+  }
 }
 
 async function main(opts: Options): Promise<number> {
@@ -117,11 +133,19 @@ async function main(opts: Options): Promise<number> {
   console.log(`Connected (stage: ${Resource.App.stage}), mode: ${opts.execute ? 'EXECUTE' : 'DRY-RUN'}`);
 
   const storage = new S3Storage(Resource.fabFileBucket.name);
-  // The chunker logs every extraction step at info; per-file progress is reported below instead.
-  const chunker = new SmartChunker(CHUNKER_MODEL, storage, new Logger({ minLevel: 'warn' }));
+  // The chunker's info/warn lines are about chunk sizing, which this script discards; errors still surface.
+  const chunker = new SmartChunker(CHUNKER_MODEL, storage, new Logger({ minLevel: 'error' }));
 
-  const counts: Record<Outcome, number> = { dated: 0, undated: 0, 'editors-unrecoverable': 0, raced: 0, failed: 0 };
+  const counts: Record<Outcome, number> = {
+    dated: 0,
+    undated: 0,
+    'editors-unrecoverable': 0,
+    'bytes-missing': 0,
+    raced: 0,
+    failed: 0,
+  };
   const failures: string[] = [];
+  const missingBytes: string[] = [];
   let processed = 0;
   let afterId: Types.ObjectId | undefined;
 
@@ -139,7 +163,9 @@ async function main(opts: Options): Promise<number> {
 
     for (const file of page) {
       try {
-        counts[await processFile(file, opts, { chunker, storage })]++;
+        const outcome = await processFile(file, opts, { chunker, storage });
+        counts[outcome]++;
+        if (outcome === 'bytes-missing') missingBytes.push(file._id.toString());
       } catch (error) {
         // One unreadable file must not abort a corpus-wide sweep; it is left undated, so a rerun
         // retries it, and main() exits non-zero so the failure is not mistaken for a clean run.
@@ -156,8 +182,10 @@ async function main(opts: Options): Promise<number> {
   console.log(
     `\n${verb} a date on ${counts.dated} file(s) and null on ${counts.undated} with no recoverable date; ` +
       `${counts['editors-unrecoverable']} unpinned Drive Editors file(s) set null without a download; ` +
+      `${counts['bytes-missing']} skipped (stored bytes missing); ` +
       `${counts.raced} skipped (changed by a concurrent pass); ${counts.failed} failed.`
   );
+  if (missingBytes.length > 0) console.log(`Missing-bytes file ids: ${missingBytes.join(', ')}`);
   if (failures.length > 0) console.log(`Failed file ids: ${failures.join(', ')}`);
   return failures.length > 0 ? 1 : 0;
 }
