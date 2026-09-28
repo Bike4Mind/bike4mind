@@ -114,6 +114,16 @@ describe('errorHandler - CastError only means 404 when the cast was on `_id`', (
     expect(JSON.stringify(json.mock.calls[0][0])).not.toContain('Feedback');
   });
 
+  // The marker is what the production log query counts before the rule is removed, so its
+  // text is load-bearing: rename it only together with that query.
+  it('logs the original cast message under a stable marker, and still answers 404', () => {
+    const { req, res, status } = makeReqRes();
+    errorHandler(castError('_id'), req, res);
+    expect(status).toHaveBeenCalledWith(404);
+    expect(req.logger.warn).toHaveBeenCalledWith(`[cast-id-remap] POST /api/chat: ${castError('_id').message}`);
+    expect(req.logger.error).not.toHaveBeenCalled();
+  });
+
   it('leaves a cast on any other field a 500 and logs it as a server error', () => {
     const { req, res, status } = makeReqRes();
     errorHandler(castError('userId'), req, res);
