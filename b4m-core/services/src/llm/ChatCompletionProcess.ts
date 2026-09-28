@@ -1085,6 +1085,8 @@ export class ChatCompletionProcess {
         // #3155: lets the exclusion-telemetry count tell a legitimately empty entitlement list
         // apart from a failed lookup - see `entitlementResolutionFailed`'s own doc.
         entitlementKeysResolved: resolved,
+        // The one caller that reads the account-wide count (the retrieval summary's excludedLakes).
+        measureExcludedByAccessCount: true,
         // Without this, a countGateExcludedLakes failure warns into a void: the resolver
         // swallows it internally (never throws), so this call's own try/catch never sees it.
         logger: this.logger,

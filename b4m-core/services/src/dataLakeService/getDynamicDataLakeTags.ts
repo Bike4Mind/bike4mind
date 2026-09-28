@@ -111,7 +111,8 @@ export interface DataLakeAccessContext {
    *   otherwise. A count cannot express its own doubt: an entitlement-gated lake the caller really
    *   holds the key for is indistinguishable from an excluded one once the keys degrade to the
    *   fail-safe `[]`, so an unvouched context must get no number rather than a confident wrong one.
-   *   Costs nothing where a host does not state it, because nothing else reads those counts.
+   *   The account-wide count additionally needs `measureExcludedByAccessCount` - vouching for the
+   *   keys says the count WOULD be trustworthy, not that this caller reads it.
    *
    * `MeasurableDataLakeAccessContext` below carries the same rule in the type for the identity-
    * scoped measurement, whose parameter can require it without breaking a structural host.
@@ -121,6 +122,16 @@ export interface DataLakeAccessContext {
    * (see `EntitlementResolution`), and this field cannot see that.
    */
   entitlementKeysResolved?: boolean;
+  /**
+   * Opt-in for the account-wide `excludedByAccessCount` query, which is an extra DB round trip on
+   * every resolve. Only `ChatCompletionProcess.getDataLakeAccessContext` reads the result (the
+   * retrieval-summary telemetry); every other vouched host (lake-memory card, forced retrieval,
+   * lake-prompt injection, `resolveRetrievalLakeScope`) needs `entitlementKeysResolved` for
+   * `lakeViewComplete` but would throw the number away. Separate from that flag for exactly this
+   * reason. Still requires `entitlementKeysResolved: true` - opting in never buys an untrustworthy
+   * count. `measureIdentityNamedExclusion` does not read this: calling it is its own opt-in.
+   */
+  measureExcludedByAccessCount?: boolean;
   /** Optional; only used to report a swallowed dataLakes read failure (see below). */
   logger?: Logger;
 }
@@ -322,6 +333,8 @@ export async function getDynamicDataLakeAccess(
    * count trusts, so a degraded input produces a confidently WRONG number rather than an honest
    * failure; see `excludedByAccessCountPrerequisitesComplete` at this function's call site for the
    * four failure directions this guards against.
+   *
+   * Never measured unless the caller sets `measureExcludedByAccessCount` (see its doc).
    */
   excludedByAccessCount?: number;
   /**
@@ -595,38 +608,40 @@ export async function getDynamicDataLakeAccess(
     // a successful query - see `excludedByAccessCountPrerequisitesComplete`'s own doc for why
     // running the count on a degraded input would produce a confidently wrong number in either
     // direction rather than the honest "unknown" this field's contract requires.
+    // Not requested means skipped silently: no warn even on a failed prerequisite, because no
+    // number was going to be reported for that failure to corrupt.
     //
-    // Skipped entirely on the attachment pass. That pass is a SECOND resolution in the same
-    // turn, and every one of its consumers builds an `AttachmentLakeAccess` from the tag/prefix/lake
-    // buckets alone - none reads this count. The count is also status-scoped to ACTIVE lakes and
-    // `includeDraftLakes` does not touch it, so re-running it here would spend a second whole-account
-    // query to recompute the identical number. Leaving the field `undefined` is the honest
-    // "not measured" its own contract already defines, not a false zero.
-    // Not warned when skipped for the attachment pass: unlike the degraded-prerequisite branch
-    // below, nothing failed - that pass was never asking the question.
-    const measureExclusionCount = !opts.includeDraftLakes && excludedByAccessCountPrerequisitesComplete;
-    if (measureExclusionCount) {
-      try {
-        excludedByAccessCount = await context.db.dataLakes.countGateExcludedLakes(
-          userTags,
-          entitlementKeys,
-          organizationIds,
-          userId,
-          // supersededOwnLakeIds (#3055): withholds the owner-bypass exemption from a lake
-          // whose ownership has since moved off the caller - see countGateExcludedLakes's own doc.
-          { ...reach, supersededOwnLakeIds: [...supersededOwnLakeIds] }
+    // Also skipped on the attachment pass, even when the shared context requests the count. That
+    // pass is a SECOND resolution in the same turn off the same context, and every one of its
+    // consumers builds an `AttachmentLakeAccess` from the tag/prefix/lake buckets alone - none reads
+    // this count. The count is also status-scoped to ACTIVE lakes and `includeDraftLakes` does not
+    // touch it, so re-running it here would spend a second whole-account query to recompute the
+    // identical number. Leaving the field `undefined` is the honest "not measured" its own contract
+    // already defines, not a false zero.
+    if (context.measureExcludedByAccessCount === true && !opts.includeDraftLakes) {
+      if (excludedByAccessCountPrerequisitesComplete) {
+        try {
+          excludedByAccessCount = await context.db.dataLakes.countGateExcludedLakes(
+            userTags,
+            entitlementKeys,
+            organizationIds,
+            userId,
+            // supersededOwnLakeIds (#3055): withholds the owner-bypass exemption from a lake
+            // whose ownership has since moved off the caller - see countGateExcludedLakes's own doc.
+            { ...reach, supersededOwnLakeIds: [...supersededOwnLakeIds] }
+          );
+        } catch (err) {
+          context.logger?.warn('[dataLakes] gate-excluded-lake count failed; reporting as unknown', err);
+        }
+      } else if (countPrerequisiteReadFailed) {
+        // Only an actual read failure warns. A host that simply never stated entitlement completeness
+        // also skips the count, silently: that is its standing contract, not a per-turn incident, and
+        // logging it every turn would bury the failures this line is here to surface.
+        context.logger?.warn(
+          '[dataLakes] gate-excluded-lake count skipped; an entitlement, enforce-flag, grant-exemption, ' +
+            'or supersession prerequisite read failed this turn'
         );
-      } catch (err) {
-        context.logger?.warn('[dataLakes] gate-excluded-lake count failed; reporting as unknown', err);
       }
-    } else if (!opts.includeDraftLakes && countPrerequisiteReadFailed) {
-      // Only an actual read failure warns. A host that simply never stated entitlement completeness
-      // also skips the count, silently: that is its standing contract, not a per-turn incident, and
-      // logging it every turn would bury the failures this line is here to surface.
-      context.logger?.warn(
-        '[dataLakes] gate-excluded-lake count skipped; an entitlement, enforce-flag, grant-exemption, ' +
-          'or supersession prerequisite read failed this turn'
-      );
     }
   }
   const accessibleLakes = getAccessibleDataLakes(userTags, dynamicDataLakes, entitlementKeys);
