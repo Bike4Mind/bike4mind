@@ -237,7 +237,7 @@ describe('LakeConfigHistorySection', () => {
     expect(screen.getByText('off -> on')).toBeInTheDocument();
   });
 
-  // #3298: a reviewer's approve/decline/restore decision left no trace in this tab at all.
+  // A reviewer's approve/decline/restore decision left no trace in this tab at all.
   it('renders a proposal-review decision with its action label and source', () => {
     renderSection({
       view: view({
