@@ -285,9 +285,17 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // Resolve the artifact.
   let artifact: PublishedArtifactLean | null = null;
   if (resolved.kind === 'share') {
+    // Both storage shapes, mirroring PublishedArtifactRepository.findByShareToken (which this
+    // path cannot use - it needs a lean read). The `$elemMatch` pins token and `revokedAt: null`
+    // to the SAME entry, or a revoked link would resolve on a still-live sibling's strength.
+    // Keep the legacy scalar branch until the 20260921130000_backfill-share-tokens backfill has
+    // run everywhere: array-only resolution would 404 every pre-backfill link.
     artifact = await PublishedArtifact.findOne({
-      shareToken: resolved.shareToken,
       deletedAt: null,
+      $or: [
+        { shareToken: resolved.shareToken },
+        { shareTokens: { $elemMatch: { token: resolved.shareToken, revokedAt: null } } },
+      ],
     }).lean<PublishedArtifactLean>();
   } else if (resolved.kind === 'bundle') {
     artifact = await PublishedArtifact.findOne({
@@ -483,6 +491,14 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       ? { gateKind: 'domain' as const, sourceIp: getClientIp(req), viewerEmailDomain: access.viewerEmailDomain }
       : undefined;
 
+  // Per-link view counting (#3255 step 2). Computed once here and threaded to every
+  // bumpViewCount call the way gateViewAudit is, so no branch recomputes it. Undefined for a
+  // row the backfill has not reached yet (it resolved through the legacy scalar): such a view
+  // still serves and still bumps the artifact counters, just without a per-link count.
+  const shareTokenEntryId = isShare
+    ? (artifact.shareTokens ?? []).find(entry => entry?.token === shareToken && !entry.revokedAt)?._id
+    : undefined;
+
   if (isShare) {
     // No-sign-in links are unlisted capabilities: stop the token leaking to third
     // parties via the Referer header on any outbound link the artifact author
@@ -535,7 +551,13 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
               replyBodyForExport(artifact)
             )
           : renderViewerPage(artifact, { noindex: true, noReferrer: isShare, standalone: true });
-      bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
+      bumpViewCount(
+        artifact,
+        req.user as { id?: string } | undefined,
+        req.headers['user-agent'],
+        gateViewAudit,
+        shareTokenEntryId
+      );
       return sendExport(res, exportFormat, artifact.title, body, exportCacheControl);
     }
     // Reply/fabfile artifact sub-document (`?a={index}`): serve one embedded HTML/SVG artifact as a
@@ -638,7 +660,13 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     );
     res.setHeader('Cache-Control', isShare ? SHARE_CACHE_CONTROL : cacheControlFor(effectiveVisibility));
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
+    bumpViewCount(
+      artifact,
+      req.user as { id?: string } | undefined,
+      req.headers['user-agent'],
+      gateViewAudit,
+      shareTokenEntryId
+    );
     return res.status(200).send(page);
   }
 
@@ -759,7 +787,13 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       assetMode: 'inline',
       assets: collected.assets,
     });
-    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
+    bumpViewCount(
+      artifact,
+      req.user as { id?: string } | undefined,
+      req.headers['user-agent'],
+      gateViewAudit,
+      shareTokenEntryId
+    );
     return sendExport(res, exportFormat, artifact.title, exportHtml, exportCacheControl);
   }
 
@@ -822,7 +856,13 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
-    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
+    bumpViewCount(
+      artifact,
+      req.user as { id?: string } | undefined,
+      req.headers['user-agent'],
+      gateViewAudit,
+      shareTokenEntryId
+    );
     return res.status(200).send(srcdoc);
   }
 
@@ -941,7 +981,13 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   res.setHeader('Content-Security-Policy', buildWrapperCsp(req, isolatedSrc ? artifactHost : '', embedGrants));
   res.setHeader('Cache-Control', bundleCacheControl);
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
+  bumpViewCount(
+    artifact,
+    req.user as { id?: string } | undefined,
+    req.headers['user-agent'],
+    gateViewAudit,
+    shareTokenEntryId
+  );
   return res.status(200).send(wrapperPage);
 });
 
@@ -1313,6 +1359,10 @@ interface PublishedArtifactLean {
    *  even after the source Quest changes or is deleted. Reply source only. */
   citables?: CitableSource[];
   source: { kind: 'bundle' | 'reply' | 'fabfile' };
+  /** Legacy single share link; still the source of truth during the rollout. */
+  shareToken?: string | null;
+  /** Every share link ever minted. Only the entry that served THIS request is counted. */
+  shareTokens?: Array<{ _id?: unknown; token?: string; revokedAt?: Date | null }>;
   sha256Index?: string;
   versions?: Array<{ sha256Index: string }>;
 }
@@ -1373,14 +1423,33 @@ function bumpViewCount(
   userAgent?: string,
   // #408: when the served view passed a gate, record per-account attribution
   // alongside the aggregate counter. Only set for authenticated gate views.
-  gateView?: { gateKind: 'domain'; sourceIp?: string; viewerEmailDomain?: string }
+  gateView?: { gateKind: 'domain'; sourceIp?: string; viewerEmailDomain?: string },
+  // #3255: `_id` of the shareTokens[] entry this request resolved through, when the request
+  // came in on a share link and that entry exists. Absent for /p/* views and for pre-backfill
+  // rows that still resolve through the legacy scalar.
+  shareTokenEntryId?: unknown
 ): void {
   const isAuthed = !!viewer?.id;
   const isOwner = isAuthed && String(viewer!.id) === String(artifact.ownerId);
   const isCrawler = !!userAgent && CRAWLER_UA_RE.test(userAgent);
   const countsAsExternal = isAuthed && !isOwner && !isCrawler;
-  const inc = countsAsExternal ? { viewCount: 1, externalViewCount: 1 } : { viewCount: 1 };
-  void PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: inc }).catch(() => undefined);
+  const inc: Record<string, number> = countsAsExternal ? { viewCount: 1, externalViewCount: 1 } : { viewCount: 1 };
+  // The per-link counter needs its own definition, NOT externalViewCount's: a share link exists
+  // so the viewer does NOT sign in, so requiring authentication would leave it at zero forever.
+  // Anonymous-inclusive, owner-excluded, crawler-excluded.
+  const countsAsShareView = !!shareTokenEntryId && !isOwner && !isCrawler;
+  void (
+    countsAsShareView
+      ? PublishedArtifact.updateOne(
+          { publicId: artifact.publicId },
+          {
+            $inc: { ...inc, 'shareTokens.$[entry].viewCount': 1 },
+            $set: { 'shareTokens.$[entry].lastViewedAt': new Date() },
+          },
+          { arrayFilters: [{ 'entry._id': shareTokenEntryId }] }
+        )
+      : PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: inc })
+  ).catch(() => undefined);
   // Audit non-owner authenticated gate views only: the point is who OTHER than the
   // owner reached a gated artifact, and the owner bypasses their own gate anyway.
   if (gateView && viewer?.id && !isOwner) {
