@@ -7,20 +7,10 @@ import Typography from '@mui/joy/Typography';
 import { APP_NAME } from '@client/config/general';
 import { loadMetaPixel } from '@client/app/utils/metaPixel';
 import { loadRedditPixel } from '@client/app/utils/redditPixel';
-import { readConsentRegion, readSharedConsent } from '@client/app/utils/consentRegion';
-
-const CONSENT_KEY = 'cookie_consent';
+import { CONSENT_KEY, resolveConsent } from '@client/app/utils/consentRegion';
+import { flushUtmCapture } from '@client/app/utils/utmCapture';
 
 declare function gtag(...args: unknown[]): void;
-
-function getStoredConsent(): 'granted' | 'denied' | null {
-  try {
-    const raw = localStorage.getItem(CONSENT_KEY);
-    return raw === 'granted' || raw === 'denied' ? raw : null;
-  } catch {
-    return null;
-  }
-}
 
 /** Point the trackers at a consent state. Deliberately does not persist it, so an
  * auto-allow is re-derived each load rather than freezing the answer for someone
@@ -35,6 +25,9 @@ function activateConsent(value: 'granted' | 'denied') {
   if (value === 'granted') {
     loadRedditPixel();
     loadMetaPixel();
+    // The campaign this visitor landed on, held unwritten since module load if they were
+    // still being asked at the time. No-op once written, or when there was none.
+    flushUtmCapture();
   }
 }
 
@@ -52,19 +45,16 @@ export function CookieConsentBanner() {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    // Precedence: this origin's decision, then one made on the marketing site, then
-    // the region. Only the first two are decisions; the region is a default for a
-    // visitor who has made none, so it must never override someone who declined on
-    // the other host - they cannot come back and decline again here (#3184).
-    const decision = getStoredConsent() ?? readSharedConsent();
-    if (decision !== null) {
-      activateConsent(decision);
-      return;
-    }
-    // Outside the opt-in region the marketing site grants by default and shows
-    // nothing, so asking here would be one journey asking halfway through.
-    if (readConsentRegion() === 'row') {
-      activateConsent('granted');
+    // Precedence lives in resolveConsent, shared with every other non-essential feature
+    // that has to gate on the same answer (utmCapture's attribution cookies): this
+    // origin's decision, then one made on the marketing site, then the region. The region
+    // is only a default for a visitor who has made no decision anywhere, so it never
+    // overrides someone who declined on the other host - they cannot come back and
+    // decline again here (#3184). Outside the opt-in region the marketing site grants by
+    // default and shows nothing, so asking here would be one journey asking halfway through.
+    const state = resolveConsent();
+    if (state !== 'unset') {
+      activateConsent(state);
       return;
     }
     setVisible(true);
