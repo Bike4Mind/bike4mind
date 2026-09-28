@@ -293,16 +293,6 @@ describe('BaseBedrockBackend does not duplicate an echoed tool artifact card (#3
   it('pin: a chained tool call turn delivers its own intro text, ahead of the artifact it introduces', async () => {
     // Regression: the non-streaming path only sent a turn's text after its tool-call branch,
     // which returns early, so an intro sharing a chunk with a chained tool call was dropped.
-    const RECHARTS_ARTIFACT =
-      '<artifact identifier="chart-1" type="application/vnd.ant.recharts" title="Bar">{"data":[]}</artifact>';
-    const rechartsTool: ICompletionOptionTools = {
-      toolSchema: {
-        name: 'recharts',
-        description: 'Generate a chart',
-        parameters: { type: 'object', properties: { definition: { type: 'string' } }, required: ['definition'] },
-      },
-      toolFn: async () => RECHARTS_ARTIFACT,
-    };
     const backend = new TestBedrockBackend();
     let callIndex = 0;
     const bodies = [

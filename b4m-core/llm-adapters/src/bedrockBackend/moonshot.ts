@@ -299,11 +299,14 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
             // Non-streaming: the message carries complete tool calls and the base
             // reads `tool.parameters` directly, so emit the full args as a TOOL_USE
             // end (one choice per call so several parallel calls can assemble).
+            // chunkText stays empty here: base.ts's non-streaming path now sends every
+            // choice's chunkText to the client as prose ahead of a chained tool call, and
+            // the raw arguments must never be mistaken for that intro text.
             choices.push({
               status: ChoiceStatus.END,
               statusEndReason: ChoiceEndReason.TOOL_USE,
               index: idx,
-              chunkText: call.function?.arguments || '',
+              chunkText: '',
               tool: {
                 id: call.id || '',
                 name: call.function?.name || '',
@@ -425,7 +428,8 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
             status: ChoiceStatus.END,
             statusEndReason: ChoiceEndReason.TOOL_USE,
             index: call.index,
-            chunkText: call.arguments,
+            // chunkText stays empty; see the structured-call branch above for why.
+            chunkText: '',
             tool: { id: call.id, name: call.name, parameters: call.arguments },
             ...(usageAttached ? {} : usageForIndex),
           });
