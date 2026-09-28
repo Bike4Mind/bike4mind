@@ -51,6 +51,25 @@ export function useDisconnectGoogleDrive() {
   });
 }
 
+/** Fast cadence while a connection's ingest is actively in flight. */
+export const DRIVE_CONNECTION_ACTIVE_POLL_MS = 4_000;
+
+/**
+ * Never stops polling once a connection exists: a fresh connect writes `status: 'connected'`
+ * immediately (see drive-sync.ts), before the queued ingest job claims it into 'syncing' moments
+ * later (OrgGoogleDriveConnectionModel.claimForSync) and releases it back to 'connected' when
+ * done. A single settled read landing in that pre-claim gap would otherwise cache `fileCount: 0`
+ * forever, since nothing else invalidates this query once the component stops remounting - this
+ * idle cadence is what eventually catches the real, post-ingest count.
+ */
+export const DRIVE_CONNECTION_IDLE_POLL_MS = 20_000;
+
+/** Exported so the interval logic is unit-testable without mounting the query. */
+export function driveConnectionPollInterval(connection: LakeDriveConnection | null | undefined): number | false {
+  if (!connection) return false;
+  return connection.status === 'syncing' ? DRIVE_CONNECTION_ACTIVE_POLL_MS : DRIVE_CONNECTION_IDLE_POLL_MS;
+}
+
 /**
  * The current Drive connection feeding a lake (null when none, including a personal lake - the
  * route resolves 200 with a null connection for those rather than 404). `isError` is therefore a
@@ -69,6 +88,7 @@ export function useLakeDriveConnection(dataLakeId?: string, enabled = true) {
       );
       return response.data.connection;
     },
+    refetchInterval: query => (enabled ? driveConnectionPollInterval(query.state.data) : false),
   });
 }
 
