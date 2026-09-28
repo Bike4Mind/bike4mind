@@ -6,11 +6,11 @@ import { QUICK_SWITCH_LIMIT } from './grouping';
 const MODIFIER = navigator.platform.toLowerCase().includes('mac') ? 'Cmd' : 'Ctrl';
 
 const SHORTCUTS: [string, string][] = [
-  [`${MODIFIER} 1-${QUICK_SWITCH_LIMIT}`, 'Jump to a numbered conversation'],
+  [`${MODIFIER} 1-${QUICK_SWITCH_LIMIT}`, 'Jump to the nth conversation'],
   [`${MODIFIER} B`, 'Show or hide the sidebar'],
 ];
 
-/** What the numbers on the first nine rows are for, since nothing else on screen says so. */
+/** The sidebar's keyboard shortcuts, which nothing else on screen advertises. */
 export function SidebarShortcuts() {
   return (
     <Stack spacing={0.5} data-testid="sidebar-shortcuts">

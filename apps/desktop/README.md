@@ -47,16 +47,40 @@ the IPC contract in `src/shared/ipc.ts` states the invariant that channels may r
 
 ## Chat and Code modes
 
-Every conversation has a mode, chosen with the segmented control at the top right.
+Every conversation has a mode, chosen with the segmented control at the top of the sidebar.
 
 - **Chat** is the default, and is what every conversation before modes existed reads back as.
   It is grounded in nothing in particular: its tools use the folders granted under **More**.
-- **Code** adds project grounding. A new Code session asks for a project directory, a branch, a
-  workspace toggle and any extra context directories, and its conversations group under that
-  project in the sidebar.
+- **Code** adds project grounding. Starting one asks for a project directory and nothing else;
+  it opens on that repository's current branch, in the checkout itself, and its conversations
+  group under the project in the sidebar.
 
 **Tools are not the difference.** Both modes carry the same file, shell and background-process
 tools. Code mode's distinction is *where* they run.
+
+### The chip row
+
+A Code session's grounding sits above the composer as a row of pills - the backend, the project
+directory, the branch paired with a worktree checkbox, and the folders granted for context -
+and every one of them is editable mid-session. It is a persistent surface rather than a setup
+step, because what it shows is where the *next* turn's commands will run.
+
+The first chip names the b4m backend (the environment from `src/main/auth/environment.ts`), not
+where the agent runs: the agent is this app's main process and has nowhere else to be, so a
+local/remote switch would offer a choice that does not exist. That setting is app-wide, which
+the chip's tooltip says.
+
+**Changing the branch, worktree or directory is refused while the session is busy** - a reply
+streaming, or a background process still alive in the current working directory. The working
+directory roots this session's shell commands and everything they started, so repointing it
+under a running turn would have the rest of that turn run somewhere the first half did not, and
+repointing it past a live dev server would leave that server in a checkout the conversation no
+longer claims. Both conditions clear on their own, so it is a wait rather than a dead end;
+`ChatService.project.test.ts` pins both the refusal and that it leaves the binding untouched.
+
+Moving to a *different* repository drops the branch and the context folders with it: a branch
+name means nothing in a repository it does not belong to, and folders chosen as context for one
+codebase are not consent to read them alongside another.
 
 ### The workspace toggle is a git worktree
 
@@ -83,8 +107,8 @@ Three cases it handles rather than failing:
 - **The branch does not exist** - created from `origin/main` (then `origin/master`, then
   `HEAD`), `--no-track`, matching the shell helper's default.
 - **The branch is the one the main checkout is on** - resolves *to* the main checkout, since
-  git permits nothing else. The resolved path is shown in the header, so the app never claims
-  an isolation it did not get.
+  git permits nothing else. The resolved path is shown under the session title whenever it
+  differs from the project directory, so the app never claims an isolation it did not get.
 
 **Deleting a session never deletes its worktree.** A worktree can hold uncommitted work, and
 deleting a conversation must not be a way to lose code. Removing one stays a git operation the

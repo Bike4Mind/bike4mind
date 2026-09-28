@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
+import Dropdown from '@mui/joy/Dropdown';
 import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
+import Menu from '@mui/joy/Menu';
+import MenuButton from '@mui/joy/MenuButton';
+import MenuItem from '@mui/joy/MenuItem';
 import List from '@mui/joy/List';
 import ListItem from '@mui/joy/ListItem';
 import ListItemButton from '@mui/joy/ListItemButton';
@@ -10,21 +14,12 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatSessionMode, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
-import { groupSessions, orderedSessions, quickSwitchIndices, type ProjectGroup } from './grouping';
+import { groupSessions, orderedSessions, type ProjectGroup } from './grouping';
 import { ChevronIcon, MoreIcon, PanelLeftIcon, PlusIcon, SearchIcon, SlidersIcon } from './icons';
+import { ModeSwitcher } from './ModeSwitcher';
 import { SessionBadge } from './SessionBadge';
 
 export const SIDEBAR_WIDTH = 280;
-
-function relativeDay(iso: string): string {
-  const then = new Date(iso);
-  if (Number.isNaN(then.getTime())) return '';
-  const days = Math.floor((Date.now() - then.getTime()) / 86_400_000);
-  if (days <= 0) return then.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-  if (days === 1) return 'Yesterday';
-  if (days < 7) return `${days} days ago`;
-  return then.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
 
 /** A primary nav entry: leading icon, label, and whatever trailing affordance it needs. */
 function NavItem({
@@ -61,64 +56,69 @@ interface RowProps {
   session: ChatSessionSummary;
   activeId: string | null;
   statuses: ReadonlyMap<string, ChatSessionStatus>;
-  indices: ReadonlyMap<string, number>;
   onSelect: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
   onTogglePin: (session: ChatSessionSummary) => void;
 }
 
-function SessionRow({ session, activeId, statuses, indices, onSelect, onDelete, onTogglePin }: RowProps) {
+function SessionRow({ session, activeId, statuses, onSelect, onDelete, onTogglePin }: RowProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
   const status = statuses.get(session.id) ?? 'done';
   const needsAction = status === 'needs-action';
 
   return (
     <ListItem
+      sx={{
+        // Hidden until the row is hovered, focused, or its own menu is open. Focus counts as
+        // much as hover: revealing on hover alone would put the row's only actions out of
+        // reach of the keyboard, and the open menu takes focus into a portal, so it has to
+        // hold the row open by itself.
+        '--row-actions-opacity': menuOpen ? 1 : 0,
+        '&:hover, &:focus-within': { '--row-actions-opacity': 1 },
+      }}
       endAction={
-        <Stack direction="row" spacing={0.25}>
-          <IconButton
-            size="sm"
-            variant="plain"
-            color="neutral"
-            aria-label={session.pinned ? `Unpin ${session.title}` : `Pin ${session.title}`}
-            onClick={() => onTogglePin(session)}
-            data-testid="chat-pin-session-btn"
-          >
-            <Typography level="body-xs">{session.pinned ? '*' : '+'}</Typography>
-          </IconButton>
-          <IconButton
-            size="sm"
-            variant="plain"
-            color="neutral"
-            aria-label={`Delete ${session.title}`}
-            onClick={() => onDelete(session.id)}
-            data-testid="chat-delete-session-btn"
-          >
-            <Typography level="body-xs">x</Typography>
-          </IconButton>
-        </Stack>
+        <Box sx={{ opacity: 'var(--row-actions-opacity)', transition: 'opacity 120ms' }}>
+          <Dropdown open={menuOpen} onOpenChange={(_event, open) => setMenuOpen(open)}>
+            <MenuButton
+              slots={{ root: IconButton }}
+              slotProps={{
+                root: {
+                  size: 'sm',
+                  variant: 'plain',
+                  color: 'neutral',
+                  'aria-label': `Options for ${session.title}`,
+                  'data-testid': 'chat-session-menu-btn',
+                },
+              }}
+            >
+              <MoreIcon />
+            </MenuButton>
+            <Menu size="sm" placement="bottom-end">
+              <MenuItem onClick={() => onTogglePin(session)} data-testid="chat-pin-session-btn">
+                {session.pinned ? 'Unpin' : 'Pin'}
+              </MenuItem>
+              <MenuItem color="danger" onClick={() => onDelete(session.id)} data-testid="chat-delete-session-btn">
+                Delete
+              </MenuItem>
+            </Menu>
+          </Dropdown>
+        </Box>
       }
     >
       <ListItemButton
         selected={session.id === activeId}
         onClick={() => onSelect(session.id)}
-        // An inset shadow rather than a border, so the row a user must answer is obvious while
-        // scanning a long list without its text shifting 2px away from every other row.
-        // Joy pins endAction to the right edge over the content, so the title needs room kept
-        // for it or every long name runs underneath the pin and delete buttons.
-        sx={{ pr: 7, ...(needsAction && { boxShadow: 'inset 2px 0 0 var(--joy-palette-warning-solidBg)' }) }}
+        // Room kept for the menu button, which Joy pins over the content: without it a long
+        // title runs underneath the moment the row is hovered.
+        sx={{ pr: 4, ...(needsAction && { boxShadow: 'inset 2px 0 0 var(--joy-palette-warning-solidBg)' }) }}
         data-testid="chat-session-item"
         data-session-status={status}
       >
-        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', minWidth: 0, width: '100%' }}>
-          <SessionBadge index={indices.get(session.id) ?? null} status={status} />
-          <Stack sx={{ minWidth: 0 }}>
-            <Typography level="body-sm" noWrap>
-              {session.title}
-            </Typography>
-            <Typography level="body-xs" textColor="text.tertiary">
-              {relativeDay(session.updatedAt)}
-            </Typography>
-          </Stack>
+        <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center', minWidth: 0, width: '100%' }}>
+          <SessionBadge status={status} />
+          <Typography level="body-sm" noWrap sx={{ minWidth: 0 }}>
+            {session.title}
+          </Typography>
         </Stack>
       </ListItemButton>
     </ListItem>
@@ -200,6 +200,7 @@ function ProjectHeader({
 export function SessionList({
   sessions,
   mode,
+  onModeChange,
   loading,
   activeId,
   statuses,
@@ -217,6 +218,7 @@ export function SessionList({
 }: {
   sessions: ChatSessionSummary[];
   mode: ChatSessionMode;
+  onModeChange: (mode: ChatSessionMode) => void;
   loading: boolean;
   activeId: string | null;
   /** What each session is doing, pushed from main. Absent means idle. */
@@ -250,7 +252,6 @@ export function SessionList({
   const empty = sections.pinned.length === 0 && sections.projects.length === 0 && sections.loose.length === 0;
 
   const ordered = useMemo(() => orderedSessions(sections), [sections]);
-  const indices = useMemo(() => quickSwitchIndices(ordered), [ordered]);
 
   // Read inside the key handler so the listener is bound once rather than rebuilt on every
   // keystroke in the search box, which re-orders this list.
@@ -258,10 +259,11 @@ export function SessionList({
   target.current = { ordered, onSelect, onToggleCollapsed };
 
   /**
-   * The numbers on the rows are a promise that they do something, so they do: the modifier
-   * plus 1-9 opens the nth row, counted the way the sidebar draws them, and the same list the
-   * search box is currently filtering. Bound on the window rather than the sidebar, because a
-   * user reaching for it is almost always typing in the composer at the time.
+   * The modifier plus 1-9 opens the nth row, counted the way the sidebar draws them and
+   * filtered the way the search box currently has them. Nothing on the rows advertises this
+   * any more - the numbered badges are gone - so More is where it is written down. Bound on
+   * the window rather than the sidebar, because a user reaching for it is almost always
+   * typing in the composer at the time.
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -288,7 +290,7 @@ export function SessionList({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const rowProps = { activeId, statuses, indices, onSelect, onDelete, onTogglePin };
+  const rowProps = { activeId, statuses, onSelect, onDelete, onTogglePin };
 
   if (collapsed) {
     return (
@@ -346,6 +348,10 @@ export function SessionList({
           <PanelLeftIcon />
         </IconButton>
       </Stack>
+
+      <Box sx={{ px: 1.5, pb: 1 }}>
+        <ModeSwitcher mode={mode} onChange={onModeChange} />
+      </Box>
 
       <Stack spacing={0.25} sx={{ px: 1, pb: 1 }}>
         <NavItem
