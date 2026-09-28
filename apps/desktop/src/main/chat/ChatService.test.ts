@@ -7,6 +7,7 @@ import type { ChatStreamEvent } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
+import type { AccessStore } from './tools/AccessStore';
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -40,6 +41,8 @@ describe('ChatService', () => {
 
     service = new ChatService({
       store,
+      // No granted roots, so no tools are declared - these cases exercise plain replies.
+      access: { list: async () => [] } as unknown as AccessStore,
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () => apiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
@@ -168,7 +171,8 @@ describe('ChatService', () => {
 
     const { id } = await service.createSession();
     await service.send(id, 'one');
-    await waitFor(events, 'start');
+    // The POST, not the 'start' event: 'start' fires before the endpoint is resolved.
+    await vi.waitUntil(() => post.mock.calls.length === 1, { timeout: 2000, interval: 5 });
 
     expect(post.mock.calls[0][0]).toBe('/api/ai/v1/completions');
   });

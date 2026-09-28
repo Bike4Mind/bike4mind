@@ -120,12 +120,34 @@ export function useConversation(
         return;
       }
 
+      if (event.type === 'tool-start' || event.type === 'tool-end') {
+        setMessages(current =>
+          current.map(message => {
+            if (message.id !== event.messageId) return message;
+            const existing = message.toolCalls ?? [];
+            const known = existing.some(call => call.id === event.call.id);
+            return {
+              ...message,
+              toolCalls: known
+                ? existing.map(call => (call.id === event.call.id ? event.call : call))
+                : [...existing, event.call],
+            };
+          })
+        );
+        return;
+      }
+
       setStreaming(false);
       setMessages(current =>
         current.map(message => {
           if (message.id !== event.messageId) return message;
           return event.type === 'done'
-            ? { ...message, content: event.content, stopReason: event.stopReason }
+            ? {
+                ...message,
+                content: event.content,
+                stopReason: event.stopReason,
+                toolCalls: event.toolCalls ?? message.toolCalls,
+              }
             : { ...message, error: event.message };
         })
       );

@@ -5,16 +5,27 @@ import type {
   ChatSession,
   ChatSessionSummary,
   ChatStreamEvent,
+  ChatToolCall,
   ChatUsage,
   SendMessageResult,
 } from '@shared/chat';
 import { DEFAULT_COMPLETIONS_PATH, streamCompletion, type CompletionMessage } from './completions';
 import type { SessionStore } from './SessionStore';
+import type { AccessStore } from './tools/AccessStore';
+import { findTool, toolsForRequest } from './tools/registry';
+import { capOutput } from './tools/types';
 
 /** Only the field this client reads from `GET /api/settings/serverConfig`. */
 interface ServerTransportConfig {
   sseCompletionsUrl?: string;
 }
+
+/**
+ * Ceiling on tool round trips within a single user turn. A model that keeps calling tools
+ * without concluding would otherwise bill and run forever; hitting the cap ends the turn with
+ * whatever it has said, flagged so the UI can show it was cut short rather than finished.
+ */
+const MAX_TOOL_TURNS = 10;
 
 export interface ChatServiceLogger {
   debug(message: string): void;
@@ -23,6 +34,7 @@ export interface ChatServiceLogger {
 
 export interface ChatServiceDeps {
   store: SessionStore;
+  access: AccessStore;
   logger: ChatServiceLogger;
   /** Null whenever no session is usable, which is how a signed-out send is refused. */
   getApiClient(): AuthenticatedApiClient | null;
@@ -31,12 +43,19 @@ export interface ChatServiceDeps {
   emit(event: ChatStreamEvent): void;
 }
 
+/** One model-requested tool call, as it arrives on the wire. */
+interface RequestedTool {
+  id?: string;
+  name: string;
+  arguments?: string;
+}
+
 /**
- * Owns conversations and the reply stream.
+ * Owns conversations, the reply stream, and the tool loop.
  *
  * Streaming runs HERE, in main, and not in the renderer: the request carries the access
- * token, and T4's invariant is that tokens never leave this process. Reply text reaches the
- * renderer as IPC pushes instead - see the note on `send`.
+ * token, and T4's invariant is that tokens never leave this process. Tools run here for the
+ * same reason plus a second one - they touch the filesystem, which a sandboxed renderer cannot.
  */
 export class ChatService {
   /** One in-flight reply per session; the value aborts it. */
@@ -79,7 +98,7 @@ export class ChatService {
   }
 
   /**
-   * Accept a turn: persist the prompt, then stream the reply in the background.
+   * Accept a turn: persist the prompt, then run the reply in the background.
    *
    * Resolves once the turn is accepted rather than when the reply finishes, because an IPC
    * invoke left pending for the length of a generation looks like a hung renderer - the same
@@ -127,28 +146,74 @@ export class ChatService {
     let content = '';
     let stopReason: string | undefined;
     let usage: ChatUsage | undefined;
+    const toolCalls: ChatToolCall[] = [];
+    let thinking: unknown[] | undefined;
 
     try {
       const endpoint = await this.resolveEndpoint(api);
+      const roots = await this.deps.access.list();
+      const tools = toolsForRequest(roots);
+      const wire = toCompletionMessages(session);
+      const preamble = buildSystemMessage(roots);
+      if (preamble) wire.unshift(preamble);
 
-      await streamCompletion(
-        api.getAxiosInstance(),
-        endpoint,
-        { model: session.model, messages: toCompletionMessages(session) },
-        event => {
-          // `error` never reaches here (the transport throws on it); `meta` carries no reply.
-          if (event.type === 'error' || event.type === 'meta') return;
-          // tool_use is not expected (no tools are declared) but its `text` is still reply
-          // text; taking it keeps a server-side surprise from silently dropping content.
-          if (event.text) {
-            content += event.text;
-            this.deps.emit({ type: 'delta', sessionId, messageId: replyId, text: event.text });
-          }
-          if (event.stopReason) stopReason = event.stopReason;
-          if (event.usage) usage = event.usage;
-        },
-        controller.signal
-      );
+      for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
+        const requested: RequestedTool[] = [];
+        let turnText = '';
+        let turnThinking: unknown[] | undefined;
+
+        await streamCompletion(
+          api.getAxiosInstance(),
+          endpoint,
+          { model: session.model, messages: wire, tools },
+          event => {
+            // `error` never reaches here (the transport throws on it); `meta` carries no reply.
+            if (event.type === 'error' || event.type === 'meta') return;
+            if (event.text) {
+              content += event.text;
+              turnText += event.text;
+              this.deps.emit({ type: 'delta', sessionId, messageId: replyId, text: event.text });
+            }
+            if (event.type === 'tool_use') {
+              if (event.tools) requested.push(...event.tools);
+              if (event.thinking) turnThinking = event.thinking;
+            }
+            if (event.stopReason) stopReason = event.stopReason;
+            if (event.usage) usage = event.usage;
+          },
+          controller.signal
+        );
+
+        if (controller.signal.aborted) break;
+        if (requested.length === 0) break;
+
+        thinking = turnThinking;
+        const settled = await this.runTools(requested, roots, sessionId, replyId, controller.signal);
+        toolCalls.push(...settled);
+
+        // Anthropic's shape: ONE assistant turn carrying the reasoning, any text and every
+        // tool_use block, answered by ONE user turn of matching tool_result blocks. Splitting
+        // them per tool would misrepresent parallel calls as a sequence.
+        wire.push({
+          role: 'assistant',
+          content: [
+            ...(turnThinking ?? []),
+            ...(turnText ? [{ type: 'text', text: turnText }] : []),
+            ...settled.map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input })),
+          ],
+        });
+        wire.push({
+          role: 'user',
+          content: settled.map(call => ({
+            type: 'tool_result',
+            tool_use_id: call.id,
+            content: call.error ?? call.preview ?? '',
+            ...(call.error ? { is_error: true } : {}),
+          })),
+        });
+
+        if (turn === MAX_TOOL_TURNS - 1) stopReason = 'tool_turn_limit';
+      }
 
       if (controller.signal.aborted) stopReason = 'aborted';
 
@@ -158,8 +223,18 @@ export class ChatService {
         content,
         createdAt: new Date().toISOString(),
         stopReason,
+        ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        ...(thinking ? { thinking } : {}),
       });
-      this.deps.emit({ type: 'done', sessionId, messageId: replyId, content, stopReason, usage });
+      this.deps.emit({
+        type: 'done',
+        sessionId,
+        messageId: replyId,
+        content,
+        stopReason,
+        usage,
+        ...(toolCalls.length > 0 ? { toolCalls } : {}),
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.deps.logger.warn(`CHAT: reply failed: ${message}`);
@@ -172,9 +247,58 @@ export class ChatService {
         content,
         createdAt: new Date().toISOString(),
         error: message,
+        ...(toolCalls.length > 0 ? { toolCalls } : {}),
       });
       this.deps.emit({ type: 'error', sessionId, messageId: replyId, message });
     }
+  }
+
+  /**
+   * Run every tool the model asked for, in parallel, reporting each to the UI as it starts and
+   * finishes. A tool that throws is reported back to the MODEL as a failed result rather than
+   * aborting the turn: "that path is not granted" is something it can act on.
+   */
+  private async runTools(
+    requested: readonly RequestedTool[],
+    roots: readonly string[],
+    sessionId: string,
+    messageId: string,
+    signal: AbortSignal
+  ): Promise<ChatToolCall[]> {
+    return Promise.all(
+      requested.map(async request => {
+        const call: ChatToolCall = {
+          id: request.id ?? randomUUID(),
+          name: request.name,
+          input: parseArguments(request.arguments),
+          status: 'running',
+        };
+        this.deps.emit({ type: 'tool-start', sessionId, messageId, call });
+
+        const tool = findTool(request.name);
+        let settled: ChatToolCall;
+        if (!tool) {
+          settled = { ...call, status: 'error', error: `Unknown tool: ${request.name}` };
+        } else {
+          try {
+            const result = await tool.run(call.input, { roots, signal });
+            settled = { ...call, status: 'done', preview: capOutput(result) };
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            this.deps.logger.debug(`CHAT: tool ${request.name} failed: ${message}`);
+            settled = {
+              ...call,
+              // A refusal is its own state: the UI says "denied", not "something broke".
+              status: err instanceof Error && err.name === 'PathAccessDenied' ? 'denied' : 'error',
+              error: message,
+            };
+          }
+        }
+
+        this.deps.emit({ type: 'tool-end', sessionId, messageId, call: settled });
+        return settled;
+      })
+    );
   }
 
   /**
@@ -205,14 +329,78 @@ export class ChatService {
 }
 
 /**
+ * Tell the model which folders it can actually reach.
+ *
+ * Without this it has to guess a path from the user's wording - asking about "my Downloads
+ * folder" produced a call against a plainly invented path, which is denied and wastes a whole
+ * tool turn. Naming the roots turns guesswork into a lookup.
+ *
+ * Returns undefined when nothing is granted: no tools are declared in that case, so a
+ * preamble describing file access would only invite offers the client cannot honour.
+ */
+function buildSystemMessage(roots: readonly string[]): CompletionMessage | undefined {
+  if (roots.length === 0) return undefined;
+  return {
+    role: 'system',
+    content: [
+      'You can read files on the user machine with the provided tools.',
+      'These folders are shared with you, including everything beneath them:',
+      ...roots.map(root => `  ${root}`),
+      'Always pass absolute paths. Any path outside those folders is denied;',
+      'if you need one, ask the user to share it with the "Share a folder" button.',
+    ].join('\n'),
+  };
+}
+
+/** Tool arguments arrive as a raw JSON string; a malformed one becomes an empty object. */
+function parseArguments(raw: string | undefined): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
  * The whole thread as the wire wants it. This endpoint is stateless, so every turn resends the
  * full history - there is no server-side conversation to append to.
+ *
+ * A turn that ran tools is rebuilt into the pair the provider expects (assistant tool_use,
+ * then user tool_result), so a reloaded conversation continues exactly like a live one.
  *
  * A failed turn's placeholder is dropped rather than sent: replaying an empty assistant message
  * would teach the model that empty replies are acceptable, and some providers reject one outright.
  */
 function toCompletionMessages(session: ChatSession): CompletionMessage[] {
-  return session.messages
-    .filter(message => message.content.length > 0)
-    .map(message => ({ role: message.role, content: message.content }));
+  const wire: CompletionMessage[] = [];
+
+  for (const message of session.messages) {
+    const calls = message.toolCalls ?? [];
+    if (calls.length === 0) {
+      if (message.content.length > 0) wire.push({ role: message.role, content: message.content });
+      continue;
+    }
+
+    wire.push({
+      role: 'assistant',
+      content: [
+        ...(message.thinking ?? []),
+        ...(message.content ? [{ type: 'text', text: message.content }] : []),
+        ...calls.map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input })),
+      ],
+    });
+    wire.push({
+      role: 'user',
+      content: calls.map(call => ({
+        type: 'tool_result',
+        tool_use_id: call.id,
+        content: call.error ?? call.preview ?? '',
+        ...(call.error ? { is_error: true } : {}),
+      })),
+    });
+  }
+
+  return wire;
 }

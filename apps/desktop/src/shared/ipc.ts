@@ -1,5 +1,12 @@
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
-import type { ChatSession, ChatSessionSummary, ChatStreamEvent, SendMessageRequest, SendMessageResult } from './chat';
+import type {
+  ChatSession,
+  ChatSessionSummary,
+  ChatStreamEvent,
+  SendMessageRequest,
+  SendMessageResult,
+  ToolAccessState,
+} from './chat';
 
 /**
  * IPC contract shared by the main process and the preload bridge.
@@ -30,6 +37,9 @@ export const IPC_CHANNELS = {
   chatStopReply: 'chat:stop-reply',
   /** main -> renderer push; reply tokens as they arrive. */
   chatStreamEvent: 'chat:stream-event',
+  toolsGetAccess: 'tools:get-access',
+  toolsGrantAccess: 'tools:grant-access',
+  toolsRevokeAccess: 'tools:revoke-access',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -69,5 +79,11 @@ export interface DesktopApi {
     stopReply(sessionId: string): Promise<void>;
     /** Subscribe to reply progress; returns the unsubscribe. */
     onStreamEvent(listener: (event: ChatStreamEvent) => void): () => void;
+  };
+  tools: {
+    getAccess(): Promise<ToolAccessState>;
+    /** Opens the OS folder picker. Resolves unchanged if the user cancels. */
+    grantAccess(): Promise<ToolAccessState>;
+    revokeAccess(root: string): Promise<ToolAccessState>;
   };
 }

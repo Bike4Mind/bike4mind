@@ -7,10 +7,13 @@ import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { ChatMessage } from '@shared/chat';
+import { ToolCallList } from './ToolCallList';
 
 function Bubble({ message, streaming }: { message: ChatMessage; streaming: boolean }) {
   const isUser = message.role === 'user';
-  const awaitingFirstToken = streaming && !isUser && message.content.length === 0 && !message.error;
+  const toolCalls = message.toolCalls ?? [];
+  const awaitingFirstToken =
+    streaming && !isUser && message.content.length === 0 && toolCalls.length === 0 && !message.error;
 
   return (
     <Stack direction="row" justifyContent={isUser ? 'flex-end' : 'flex-start'}>
@@ -20,14 +23,18 @@ function Bubble({ message, streaming }: { message: ChatMessage; streaming: boole
         sx={{ px: 1.75, py: 1.25, borderRadius: 'md', maxWidth: '78%', minWidth: 0 }}
         data-testid={isUser ? 'chat-message-user' : 'chat-message-assistant'}
       >
+        {!isUser && <ToolCallList calls={toolCalls} />}
+
         {awaitingFirstToken ? (
           <CircularProgress size="sm" data-testid="chat-awaiting-reply" />
         ) : (
           // pre-wrap, not a markdown renderer: the model emits newlines and indentation that
           // collapse to a single line without it. Rendering markdown is its own task.
-          <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-            {message.content}
-          </Typography>
+          message.content.length > 0 && (
+            <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {message.content}
+            </Typography>
+          )
         )}
 
         {message.error && (
@@ -39,6 +46,11 @@ function Bubble({ message, streaming }: { message: ChatMessage; streaming: boole
         {message.stopReason === 'max_tokens' && (
           <Chip size="sm" color="warning" variant="soft" sx={{ mt: 1 }} data-testid="chat-truncated-chip">
             Cut off at the length limit
+          </Chip>
+        )}
+        {message.stopReason === 'tool_turn_limit' && (
+          <Chip size="sm" color="warning" variant="soft" sx={{ mt: 1 }} data-testid="chat-tool-limit-chip">
+            Stopped after too many tool calls
           </Chip>
         )}
         {message.stopReason === 'aborted' && (
@@ -53,7 +65,8 @@ function Bubble({ message, streaming }: { message: ChatMessage; streaming: boole
 
 export function MessageThread({ messages, streaming }: { messages: ChatMessage[]; streaming: boolean }) {
   const bottom = useRef<HTMLDivElement>(null);
-  const lastContent = messages[messages.length - 1]?.content.length ?? 0;
+  const last = messages[messages.length - 1];
+  const lastContent = (last?.content.length ?? 0) + (last?.toolCalls?.length ?? 0);
 
   // Keyed on the growing last message too, so the view follows tokens as they stream in.
   useEffect(() => {

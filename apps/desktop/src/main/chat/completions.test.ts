@@ -112,7 +112,7 @@ describe('streamCompletion', () => {
     expect(post).not.toHaveBeenCalled();
   });
 
-  it('asks for a stream and declares no tools, since it runs no tool loop', async () => {
+  it('asks for a stream, declaring no tools when the caller passes none', async () => {
     const stream = new PassThrough();
     const { instance, post } = fakeAxios(stream);
 
@@ -122,9 +122,32 @@ describe('streamCompletion', () => {
 
     const [url, body, config] = post.mock.calls[0];
     expect(url).toBe('/c');
-    expect(body).toMatchObject({ model: 'm', options: { stream: true } });
-    expect(body.options.tools).toBeUndefined();
+    expect(body).toMatchObject({ model: 'm', options: { stream: true, tools: [] } });
     expect(config.responseType).toBe('stream');
+  });
+
+  it('forwards declared tools in the envelope the endpoint expects', async () => {
+    const stream = new PassThrough();
+    const { instance, post } = fakeAxios(stream);
+    const tools = [{ toolSchema: { name: 'file_read', description: 'x', parameters: { type: 'object' } } }];
+
+    const done = streamCompletion(instance, '/c', { ...REQUEST, tools }, () => {});
+    stream.write(frame('[DONE]'));
+    await done;
+
+    expect(post.mock.calls[0][1].options.tools).toEqual(tools);
+  });
+
+  it('passes structured tool_result content through untouched', async () => {
+    const stream = new PassThrough();
+    const { instance, post } = fakeAxios(stream);
+    const content = [{ type: 'tool_result', tool_use_id: 'c1', content: 'result' }];
+
+    const done = streamCompletion(instance, '/c', { model: 'm', messages: [{ role: 'user', content }] }, () => {});
+    stream.write(frame('[DONE]'));
+    await done;
+
+    expect(post.mock.calls[0][1].messages[0].content).toEqual(content);
   });
 
   it('names an expired session on a 401 instead of leaking a bare status', async () => {

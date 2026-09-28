@@ -6,14 +6,21 @@ import { parseStreamEvent, type CompletionStreamEvent } from './streamEvents';
 /** Same-origin default; a self-host stack overrides it with `sseCompletionsUrl` from serverConfig. */
 export const DEFAULT_COMPLETIONS_PATH = '/api/ai/v1/completions';
 
+/**
+ * `content` is a string for an ordinary turn, or an array of provider-shaped blocks
+ * (`tool_use`, `tool_result`, reasoning) when a turn carries tool traffic. The endpoint
+ * accepts both - see CompletionMessageSchema in @bike4mind/common.
+ */
 export interface CompletionMessage {
   role: ChatRole | 'system';
-  content: string;
+  content: string | unknown[];
 }
 
 export interface CompletionRequest {
   model: string;
   messages: CompletionMessage[];
+  /** Declared tools. The model may ASK for these; running them is this client's job. */
+  tools?: { toolSchema: unknown }[];
 }
 
 /**
@@ -42,9 +49,9 @@ export async function streamCompletion(
       {
         model: request.model,
         messages: request.messages,
-        // No `tools`: the agent/tool loop on this endpoint is the CALLER's to run (the model
-        // emits tool_use and the client executes), and this client does not run one.
-        options: { stream: true },
+        // The tool loop on this endpoint belongs to the CALLER: the model emits tool_use and
+        // this client executes it locally, then sends the result back as another turn.
+        options: { stream: true, tools: request.tools ?? [] },
       },
       { responseType: 'stream', signal }
     );

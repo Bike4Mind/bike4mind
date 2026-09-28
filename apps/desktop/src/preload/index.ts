@@ -39,6 +39,11 @@ const api: DesktopApi = {
       return () => ipcRenderer.removeListener(IPC_CHANNELS.chatStreamEvent, handler);
     },
   },
+  tools: {
+    getAccess: () => ipcRenderer.invoke(IPC_CHANNELS.toolsGetAccess),
+    grantAccess: () => ipcRenderer.invoke(IPC_CHANNELS.toolsGrantAccess),
+    revokeAccess: (root: string) => ipcRenderer.invoke(IPC_CHANNELS.toolsRevokeAccess, root),
+  },
 };
 
 // Key must stay in sync with the Window declaration in src/preload/index.d.ts.
