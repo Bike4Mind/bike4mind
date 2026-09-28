@@ -463,6 +463,21 @@ describe('approveDataLakeProposal - admission runs the real lake-tag gate', () =
     expect(releaseClaim).not.toHaveBeenCalled();
   });
 
+  // Pins the rung the History row is recorded under, not just that the approval succeeds - dropping
+  // the `grants` `resolveReviewable` returns would still let this approval through (the admission
+  // door re-gates independently) while silently mis-attributing the write to owner/system.
+  it('records the approval under the curator manage rung, not owner or system', async () => {
+    const admitSource = admitVia({
+      ...lakeDb,
+      dataLakeAccessGrants: grantsFor(curatorGrant),
+    } as never);
+    const { deps, record } = adapters({ lake: orgLake, admitSource, grants: curatorGrant });
+
+    await approveDataLakeProposal('prop-1', ctx({ userId: CURATOR }), deps);
+
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ manageRung: 'grant-curator' }));
+  });
+
   it('lets an ORG ADMIN of the lake org complete an approval', async () => {
     // Rung 4 needs `administeredOrgIds`, which cannot be read off a user document - so it only works
     // because the adapter forwards the actor's set through createFabFile.
