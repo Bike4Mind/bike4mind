@@ -37,6 +37,7 @@ export async function recordResearchRunOutcome(
   lake: LakeConfigAuditLakeRef,
   query: string,
   outcome: 'completed' | 'failed',
+  runId: string,
   { db, logger }: ResearchRunOutcomeAdapters
 ): Promise<void> {
   await recordLakeConfigChange(
@@ -45,7 +46,7 @@ export async function recordResearchRunOutcome(
       lake,
       manageRung: 'system',
       action: 'complete-research-run',
-      changes: [researchRunChange(query, outcome)],
+      changes: [researchRunChange(query, outcome, runId)],
     },
     { db, logger }
   );
