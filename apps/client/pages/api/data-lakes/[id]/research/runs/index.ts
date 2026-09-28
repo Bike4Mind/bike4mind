@@ -74,15 +74,14 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       // below, and must not skip the outcome record that follows.
       //
       // `sendToQueue` can reject after the message actually landed (an ack lost to a timeout) - if
-      // the executor claimed the run in that window, `settleRun` is a guarded no-op (see its own
-      // comment) and resolves false. That specific case skips the outcome record below: the
-      // executor's own `recordResearchRunOutcome` in `runLakeResearch.ts` already owns this run's
-      // real outcome, and writing a second, contradictory one here would leave two outcome rows in
-      // History. A `settleRun` call that outright fails is a different, unknown case - the outcome
-      // record below still runs for it, same as before.
+      // the executor claimed the run in that window, it owns the row (`running`), not this route.
+      // `settleQueuedRun` matches ONLY `queued`, so in that case it is a no-op and resolves false -
+      // this route must not settle (or record an outcome for) a run the executor is already
+      // handling. A `settleQueuedRun` call that outright fails is a different, unknown case - the
+      // outcome record below still runs for it, same as before.
       let alreadySettledElsewhere = false;
       await dataLakeResearchRunRepository
-        .settleRun(run.id, {
+        .settleQueuedRun(run.id, {
           status: 'failed',
           completedAt: new Date(),
           spentMicroUsd: 0,
