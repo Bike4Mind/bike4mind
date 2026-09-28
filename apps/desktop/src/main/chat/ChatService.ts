@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type {
+  ChatMedia,
   ChatMessage,
   ChatModelCatalog,
   ChatModelOption,
@@ -8,21 +9,39 @@ import type {
   ChatSessionSummary,
   ChatStreamEvent,
   ChatToolCall,
+  ChatToolNotice,
   ChatUsage,
   SendMessageResult,
 } from '@shared/chat';
 import { DEFAULT_COMPLETIONS_PATH, streamCompletion, type CompletionMessage } from './completions';
+import { MediaApiClient } from './media/MediaApiClient';
+import type { MediaStore } from './media/MediaStore';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
 import type { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import type { ApprovalGate } from './tools/ApprovalGate';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { findTool, toolsForRequest } from './tools/registry';
-import { capOutput, type ApprovalPrompt, type ToolContext, type ToolDefinition } from './tools/types';
+import {
+  capOutput,
+  type ApprovalPrompt,
+  type MediaContext,
+  type ToolContext,
+  type ToolDefinition,
+  type ToolReporter,
+} from './tools/types';
 
-/** Only the field this client reads from `GET /api/settings/serverConfig`. */
+/** The fields this client reads from `GET /api/settings/serverConfig`. */
 interface ServerTransportConfig {
   sseCompletionsUrl?: string;
+  /** Base for generated-file URLs. A relative path on self-host, an absolute CDN URL on hosted. */
+  cdnUrl?: string;
+}
+
+/** What one serverConfig lookup yields, cached together because it is one round trip. */
+interface ResolvedServerConfig {
+  endpoint: string;
+  cdnUrl: string;
 }
 
 /**
@@ -52,6 +71,8 @@ export interface ChatServiceDeps {
   approvals?: ApprovalGate;
   /** Owns long-running commands. Absent in tests, which then have no background tools. */
   background?: BackgroundProcessRegistry;
+  /** Where generated images and audio land. Absent in tests, which then have no generation tools. */
+  media?: MediaStore;
   /** Paths kept out of reach of shell commands whatever the user granted. See tools/sandbox.ts. */
   protectedPaths?: readonly string[];
   /** Null whenever no session is usable, which is how a signed-out send is refused. */
@@ -79,8 +100,8 @@ export class ChatService {
   /** One in-flight reply per session; the value aborts it. */
   private readonly active = new Map<string, AbortController>();
 
-  /** Resolved completions endpoint, cached per environment URL (serverConfig is one round trip). */
-  private endpointCache: { environmentUrl: string; endpoint: string } | null = null;
+  /** Resolved serverConfig fields, cached per environment URL (it is one round trip). */
+  private serverConfigCache: { environmentUrl: string; config: ResolvedServerConfig } | null = null;
 
   constructor(private readonly deps: ChatServiceDeps) {}
 
@@ -128,6 +149,9 @@ export class ChatService {
     this.stop(sessionId);
     this.deps.approvals?.forgetSession(sessionId);
     await this.deps.background?.killSession(sessionId);
+    // The generated media goes with it: nothing else references those files once the
+    // conversation that displayed them is gone, and they are the largest thing this app writes.
+    await this.deps.media?.forgetSession(sessionId);
     await this.deps.store.delete(sessionId);
   }
 
@@ -232,11 +256,12 @@ export class ChatService {
     let thinking: unknown[] | undefined;
 
     try {
-      const endpoint = await this.resolveEndpoint(api);
+      const serverConfig = await this.resolveServerConfig(api);
       const roots = await this.deps.access.list();
-      const tools = toolsForRequest(roots);
+      const media = this.buildMediaContext(session, api, serverConfig.cdnUrl);
+      const tools = toolsForRequest({ roots, media: !!media });
       const wire = toCompletionMessages(session);
-      wire.unshift(buildSystemMessage(roots));
+      wire.unshift(buildSystemMessage(roots, !!media));
 
       for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
         const requested: RequestedTool[] = [];
@@ -245,7 +270,7 @@ export class ChatService {
 
         await streamCompletion(
           api.getAxiosInstance(),
-          endpoint,
+          serverConfig.endpoint,
           { model: session.model, messages: wire, tools },
           event => {
             // `error` never reaches here (the transport throws on it); `meta` carries no reply.
@@ -269,7 +294,7 @@ export class ChatService {
         if (requested.length === 0) break;
 
         thinking = turnThinking;
-        const settled = await this.runTools(requested, roots, sessionId, replyId, controller.signal);
+        const settled = await this.runTools(requested, roots, media, sessionId, replyId, controller.signal);
         toolCalls.push(...settled);
 
         // Anthropic's shape: ONE assistant turn carrying the reasoning, any text and every
@@ -342,6 +367,7 @@ export class ChatService {
   private async runTools(
     requested: readonly RequestedTool[],
     roots: readonly string[],
+    media: MediaContext | undefined,
     sessionId: string,
     messageId: string,
     signal: AbortSignal
@@ -363,12 +389,32 @@ export class ChatService {
           return unknown;
         }
 
+        // Collected as the tool runs and folded onto the settled call. The media and the notice
+        // are kept even when the call then FAILS: a generation can produce a notice worth
+        // showing ("out of credits") precisely because it did not produce anything else.
+        const attachments: ChatMedia[] = [];
+        let notice: ChatToolNotice | undefined;
+        const report: ToolReporter = {
+          progress: text => this.deps.emit({ type: 'tool-progress', sessionId, messageId, callId: call.id, text }),
+          media: item => attachments.push(item),
+          notice: value => {
+            notice = value;
+          },
+        };
+        const decorate = (settled: ChatToolCall): ChatToolCall => ({
+          ...settled,
+          ...(attachments.length > 0 ? { media: attachments } : {}),
+          ...(notice ? { notice } : {}),
+        });
+
         const context: ToolContext = {
           roots,
           signal,
           protectedPaths: this.deps.protectedPaths,
           sessionId,
           background: this.deps.background,
+          ...(media ? { media } : {}),
+          report,
         };
 
         // Asked BEFORE 'running' is announced, so the UI never shows a command as under way
@@ -381,22 +427,53 @@ export class ChatService {
         let settled: ChatToolCall;
         try {
           const result = await tool.run(call.input, context);
-          settled = { ...call, status: 'done', preview: capOutput(result) };
+          settled = decorate({ ...call, status: 'done', preview: capOutput(result) });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.deps.logger.debug(`CHAT: tool ${request.name} failed: ${message}`);
-          settled = {
+          settled = decorate({
             ...call,
             // A refusal is its own state: the UI says "denied", not "something broke".
             status: err instanceof Error && err.name === 'PathAccessDenied' ? 'denied' : 'error',
             error: message,
-          };
+          });
         }
 
         this.deps.emit({ type: 'tool-end', sessionId, messageId, call: settled });
         return settled;
       })
     );
+  }
+
+  /**
+   * What the generation tools need for this turn, or undefined when nothing can be generated.
+   *
+   * Built per turn rather than per app, because it closes over the conversation: the b4m
+   * notebook the generations are filed under belongs to this conversation, and the local
+   * session id decides which media folder the bytes land in.
+   */
+  private buildMediaContext(
+    session: ChatSession,
+    api: AuthenticatedApiClient,
+    cdnUrl: string
+  ): MediaContext | undefined {
+    const store = this.deps.media;
+    const models = this.deps.models;
+    if (!store) return undefined;
+
+    let remoteSessionId = session.remoteSessionId;
+    return {
+      client: new MediaApiClient(api),
+      store,
+      cdnUrl,
+      notebookName: session.title,
+      listImageModels: () => models?.listImageModels() ?? Promise.resolve([]),
+      getRemoteSessionId: () => remoteSessionId,
+      setRemoteSessionId: async value => {
+        remoteSessionId = value;
+        await this.deps.store.setRemoteSessionId(session.id, value);
+      },
+    };
   }
 
   /**
@@ -468,19 +545,24 @@ export class ChatService {
   }
 
   /**
-   * Where to POST completions. Hosted deploys route the same-origin path to the ChatCompletion
-   * service, but a self-host stack has no CDN doing that and advertises the service's own
-   * origin as `sseCompletionsUrl` instead. A failed lookup is non-fatal - the same-origin path
-   * is the right guess for the deploys that omit the field.
+   * Where to POST completions, and where generated files are served from.
+   *
+   * Hosted deploys route the same-origin completions path to the ChatCompletion service, but a
+   * self-host stack has no CDN doing that and advertises the service's own origin as
+   * `sseCompletionsUrl` instead. `cdnUrl` is the sibling question for generated media: absolute
+   * on a hosted CDN, and the relative local file-proxy path on self-host. A failed lookup is
+   * non-fatal - the same-origin path is the right guess for deploys that omit the field, and an
+   * empty `cdnUrl` only means image generation falls back to the URLs the quest itself carries.
    */
-  private async resolveEndpoint(api: AuthenticatedApiClient): Promise<string> {
+  private async resolveServerConfig(api: AuthenticatedApiClient): Promise<ResolvedServerConfig> {
     const environmentUrl = this.deps.getEnvironmentUrl();
-    if (this.endpointCache?.environmentUrl === environmentUrl) return this.endpointCache.endpoint;
+    if (this.serverConfigCache?.environmentUrl === environmentUrl) return this.serverConfigCache.config;
 
-    let endpoint = DEFAULT_COMPLETIONS_PATH;
+    const config: ResolvedServerConfig = { endpoint: DEFAULT_COMPLETIONS_PATH, cdnUrl: '' };
     try {
-      const config = await api.get<ServerTransportConfig>('/api/settings/serverConfig');
-      if (config?.sseCompletionsUrl) endpoint = config.sseCompletionsUrl;
+      const served = await api.get<ServerTransportConfig>('/api/settings/serverConfig');
+      if (served?.sseCompletionsUrl) config.endpoint = served.sseCompletionsUrl;
+      if (served?.cdnUrl) config.cdnUrl = served.cdnUrl;
     } catch (err) {
       this.deps.logger.debug(
         `CHAT: serverConfig lookup failed, using ${DEFAULT_COMPLETIONS_PATH}: ${
@@ -489,8 +571,8 @@ export class ChatService {
       );
     }
 
-    this.endpointCache = { environmentUrl, endpoint };
-    return endpoint;
+    this.serverConfigCache = { environmentUrl, config };
+    return config;
   }
 }
 
@@ -505,7 +587,7 @@ export class ChatService {
  *    invented a filename and byte count rather than saying it could not look. Saying "you have
  *    no access" explicitly is what stops that, so this is never omitted.
  */
-function buildSystemMessage(roots: readonly string[]): CompletionMessage {
+function buildSystemMessage(roots: readonly string[], media: boolean): CompletionMessage {
   if (roots.length === 0) {
     return {
       role: 'system',
@@ -516,6 +598,7 @@ function buildSystemMessage(roots: readonly string[]): CompletionMessage {
         'Never claim to have read, listed or searched a file, and never invent a file name, size,',
         'path or contents. If asked about local files, say plainly that you have no access and ask',
         'the user to grant a folder with the "Share a folder" button.',
+        ...(media ? MEDIA_GUIDANCE : []),
       ].join('\n'),
     };
   }
@@ -541,9 +624,28 @@ function buildSystemMessage(roots: readonly string[]): CompletionMessage {
       'earlier session is still up, and stop what you no longer need with bash_kill.',
       'Never invent a file name, size or contents, or the output of a command: if a tool did not',
       'return it, you do not know it.',
+      ...(media ? MEDIA_GUIDANCE : []),
     ].join('\n'),
   };
 }
+
+/**
+ * What the model has to know about the generation tools, in both access states.
+ *
+ * Two things, both learned the same way the file guidance was. The tools spend real money, so
+ * the model must not reach for one speculatively or retry a refusal. And their output goes to
+ * the USER, not into the conversation - a model that has just "generated an image" will
+ * otherwise describe what is in it, which it cannot possibly know.
+ */
+const MEDIA_GUIDANCE: readonly string[] = [
+  'You can also generate images and audio on the Bike4Mind server with generate_image,',
+  'generate_speech, generate_sound_effect and generate_music.',
+  'Each of these SPENDS THE USER CREDITS and each asks them to approve it first, so use one only',
+  'when the user has asked for that thing - never to check whether it works, and never as a',
+  'flourish alongside a text answer. If they decline, do not try a variation; ask what they want.',
+  'The result is shown or played to the USER and is never returned to you: you cannot see the',
+  'image or hear the audio. Never describe what a generated image depicts or how audio sounds.',
+];
 
 /** Tool arguments arrive as a raw JSON string; a malformed one becomes an empty object. */
 function parseArguments(raw: string | undefined): Record<string, unknown> {

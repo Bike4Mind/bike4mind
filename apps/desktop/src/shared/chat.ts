@@ -50,6 +50,43 @@ export interface ChatDiff {
 }
 
 /**
+ * A generated image or audio clip, ready for the renderer to load.
+ *
+ * `url` is always a `b4m-media://` URL served by the main process out of this app's own media
+ * folder - never a data URL, and never the backend's URL. The bytes are fetched once in main
+ * and written to disk there: the renderer runs under a CSP that admits neither `data:` media
+ * nor an arbitrary remote origin, and inlining megabytes of base64 into a persisted
+ * conversation would mean re-reading them on every session switch.
+ */
+export interface ChatMedia {
+  kind: 'image' | 'audio';
+  url: string;
+  mimeType: string;
+  byteLength: number;
+  /** What produced it: the image prompt, or the spoken text. Used as the alt text and caption. */
+  caption: string;
+  /**
+   * Id of the browsable copy the server kept, when it kept one. This app cannot open it, but it
+   * is how the user finds the same file in the web app's file browser.
+   */
+  fabFileId?: string;
+}
+
+/**
+ * An outcome of a server-backed tool that costs money, surfaced on its own rather than folded
+ * into the result text.
+ *
+ * Both of these are things the user is entitled to see without expanding a tool call:
+ * 'insufficient-credits' means they were charged nothing and the work did not happen, and
+ * 'provider-substituted' means a different vendor - so a different voice - produced what they
+ * are about to hear.
+ */
+export interface ChatToolNotice {
+  kind: 'insufficient-credits' | 'provider-substituted';
+  text: string;
+}
+
+/**
  * One tool the model asked for, and what running it produced.
  *
  * The loop runs in the main process: the model names a tool, main executes it locally and
@@ -76,6 +113,16 @@ export interface ChatToolCall {
    * user sees it before answering; nothing has been written while this is on screen.
    */
   approvalDiff?: ChatDiff;
+  /**
+   * Latest progress line while `status` is 'running'. Only the tools that take tens of seconds
+   * report one: image generation polls a server-side job, and a bare spinner is
+   * indistinguishable from a hang once it has been turning for half a minute.
+   */
+  progress?: string;
+  /** Images or audio the tool produced, shown inline beneath it. */
+  media?: ChatMedia[];
+  /** A cost or provider outcome worth its own line; see ChatToolNotice. */
+  notice?: ChatToolNotice;
 }
 
 /**
@@ -183,6 +230,17 @@ export interface ChatSessionSummary extends ChatSessionMeta {
 
 export interface ChatSession extends ChatSessionMeta {
   messages: ChatMessage[];
+  /**
+   * The b4m notebook this conversation files its generations under, created lazily by the
+   * server on the first one.
+   *
+   * Desktop conversations are otherwise purely local (see the header). Image generation is the
+   * exception: `POST /api/ai/generate-image` is notebook-scoped and creates one when given no
+   * id, so without this every image would leave a separate stray notebook in the web app - and
+   * the server's prompt resolver, which reads that notebook's history, could never bind a
+   * follow-up like "make it darker" to the image before it.
+   */
+  remoteSessionId?: string;
 }
 
 /**
@@ -203,6 +261,7 @@ export type ChatStreamEvent =
   | { type: 'delta'; sessionId: string; messageId: string; text: string }
   | { type: 'tool-start'; sessionId: string; messageId: string; call: ChatToolCall }
   | { type: 'tool-end'; sessionId: string; messageId: string; call: ChatToolCall }
+  | { type: 'tool-progress'; sessionId: string; messageId: string; callId: string; text: string }
   | {
       type: 'done';
       sessionId: string;

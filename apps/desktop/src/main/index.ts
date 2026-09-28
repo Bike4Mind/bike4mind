@@ -4,9 +4,14 @@ import { IPC_CHANNELS, type AppInfo } from '@shared/ipc';
 import appIcon from '../../build/icon.png?asset';
 import { registerAuth } from './auth';
 import { registerChat } from './chat';
+import { registerMediaScheme } from './chat/media/protocol';
 
 // electron-vite sets this in dev only; a packaged build loads the renderer off disk.
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL;
+
+// Before `whenReady`, which is the only point a scheme's privileges can still be declared;
+// the handler that serves it is installed later, in registerChat.
+registerMediaScheme();
 
 function buildAppInfo(): AppInfo {
   return {

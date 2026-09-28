@@ -6,6 +6,8 @@ import { IPC_CHANNELS } from '@shared/ipc';
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ChatService } from './ChatService';
+import { MediaStore } from './media/MediaStore';
+import { registerMediaProtocol } from './media/protocol';
 import { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import { AccessStore } from './tools/AccessStore';
@@ -45,6 +47,8 @@ export function registerChat(auth: AuthService): RegisteredChat {
   const store = new SessionStore(join(userData, 'sessions'), PREFERRED_MODEL);
   const access = new AccessStore(join(userData, 'tool-access.json'));
   const approvals = new ApprovalGate();
+  const media = new MediaStore(join(userData, 'media'));
+  registerMediaProtocol(media);
   const models = new ModelCatalog({
     logger,
     getApiClient: () => auth.getApiClient(),
@@ -74,6 +78,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     preferredModel: PREFERRED_MODEL,
     approvals,
     background,
+    media,
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which is T4's invariant broken through a side door.
     protectedPaths: [userData],

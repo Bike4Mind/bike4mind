@@ -1,24 +1,23 @@
 import { bashBackground, bashKill, bashList, bashOutput } from './backgroundTools';
 import { fileRead, globFiles, grepSearch } from './fileTools';
+import { generateImageTool, generateMusicTool, generateSoundEffectTool, generateSpeechTool } from './mediaTools';
 import { bashExecute } from './shellTools';
 import { fileEdit, fileWrite } from './writeTools';
 import type { ToolDefinition, ToolSchema } from './types';
 
 /**
- * The tools this client offers the model.
+ * The tools that act on this machine.
  *
  * Reads run unattended; `bash_execute` runs code and the write tools change files, so each
  * declares `approval` and ChatService holds it at the gate until the user answers. A write
- * additionally shows the user the diff it would apply before they answer. The server-side
- * tools (web_search and friends) are a later stage, and are added here only once each has its
- * gate rather than being declared early and refused at run time.
+ * additionally shows the user the diff it would apply before they answer.
  *
  * `bash_background` runs code too and is gated the same way. The three tools around it -
  * `bash_output`, `bash_list`, `bash_kill` - only inspect or stop processes the user has
  * already approved, so they are not gated: a second dialog to stop a dev server would just
  * make the safe action the slow one.
  */
-const TOOLS: readonly ToolDefinition[] = [
+const LOCAL_TOOLS: readonly ToolDefinition[] = [
   fileRead,
   globFiles,
   grepSearch,
@@ -31,7 +30,22 @@ const TOOLS: readonly ToolDefinition[] = [
   bashKill,
 ];
 
-const BY_NAME = new Map(TOOLS.map(tool => [tool.schema.name, tool]));
+/**
+ * The tools that call the Bike4Mind server: image generation and the three Audio-tag
+ * operations.
+ *
+ * Their availability has nothing to do with the folder grant - they touch no files the user
+ * owns - so they are offered whenever there is a signed-in session to spend against. Every one
+ * of them is gated, for cost rather than safety; see mediaTools.ts.
+ */
+const MEDIA_TOOLS: readonly ToolDefinition[] = [
+  generateImageTool,
+  generateSpeechTool,
+  generateSoundEffectTool,
+  generateMusicTool,
+];
+
+const BY_NAME = new Map([...LOCAL_TOOLS, ...MEDIA_TOOLS].map(tool => [tool.schema.name, tool]));
 
 export function findTool(name: string): ToolDefinition | undefined {
   return BY_NAME.get(name);
@@ -40,11 +54,13 @@ export function findTool(name: string): ToolDefinition | undefined {
 /**
  * Tool declarations for the request body, in the endpoint's `{ toolSchema }` envelope.
  *
- * Returns nothing when no folder is granted: declaring file tools the model can only be
- * denied teaches it to keep retrying, and an undeclared tool is a cleaner "not available"
- * than a tool that always fails.
+ * The two families are declared independently, because they become available for unrelated
+ * reasons. No granted folder means no local tools at all: declaring file tools the model can
+ * only be denied teaches it to keep retrying, and an undeclared tool is a cleaner "not
+ * available" than one that always fails. The generation tools need only a signed-in session,
+ * so they are offered to a user who has shared nothing.
  */
-export function toolsForRequest(roots: readonly string[]): { toolSchema: ToolSchema }[] {
-  if (roots.length === 0) return [];
-  return TOOLS.map(tool => ({ toolSchema: tool.schema }));
+export function toolsForRequest(options: { roots: readonly string[]; media: boolean }): { toolSchema: ToolSchema }[] {
+  const available = [...(options.roots.length > 0 ? LOCAL_TOOLS : []), ...(options.media ? MEDIA_TOOLS : [])];
+  return available.map(tool => ({ toolSchema: tool.schema }));
 }
