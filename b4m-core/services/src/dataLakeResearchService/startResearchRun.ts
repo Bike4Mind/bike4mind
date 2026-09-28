@@ -106,8 +106,10 @@ export async function startResearchRun(
       // The QUERY, not the config's name: `recordResearchRunOutcome` (the matching outcome event,
       // recorded later from the background executor) only has the run's own levers snapshot to work
       // from, never the config document - using the same identifier here is what lets a reader match
-      // a `start-research-run` row to the `complete-research-run` row it belongs to.
-      changes: [researchRunChange(config.query, 'started')],
+      // a `start-research-run` row to the `complete-research-run` row it belongs to. Read from
+      // `run.levers` (the normalized snapshot just created above), not `config.query` directly, so
+      // the two rows are guaranteed to agree even for a config saved before a normalization change.
+      changes: [researchRunChange(run.levers.query, 'started')],
     },
     { db, logger }
   );
