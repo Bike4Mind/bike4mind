@@ -906,9 +906,15 @@ importers:
       '@bike4mind/fab-pipeline':
         specifier: workspace:*
         version: link:../../b4m-core/fab-pipeline
+      '@bike4mind/infra':
+        specifier: workspace:*
+        version: link:../../b4m-core/infra
       '@bike4mind/llm-adapters':
         specifier: workspace:*
         version: link:../../b4m-core/llm-adapters
+      '@bike4mind/memory':
+        specifier: workspace:*
+        version: link:../../b4m-core/memory
       '@bike4mind/observability':
         specifier: workspace:*
         version: link:../../b4m-core/observability
