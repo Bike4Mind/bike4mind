@@ -38,9 +38,19 @@ const FRAME_HEIGHT = 420;
  */
 export function HtmlArtifactFrame({ content, title }: { content: string; title: string }) {
   const frame = useRef<HTMLIFrameElement>(null);
+  const sent = useRef(false);
   const [failed, setFailed] = useState(false);
 
+  const send = () => {
+    // The frame swaps its whole document in, which fires `load` a SECOND time; without this the
+    // artifact would be posted again into a document that no longer has the listener.
+    if (sent.current) return;
+    sent.current = true;
+    frame.current?.contentWindow?.postMessage({ type: 'artifact-html', content }, '*');
+  };
+
   useEffect(() => {
+    sent.current = false;
     setFailed(false);
 
     const onMessage = (event: MessageEvent) => {
@@ -48,11 +58,13 @@ export function HtmlArtifactFrame({ content, title }: { content: string; title: 
       // which is not something to check against. No other window holds a handle to this frame.
       if (event.source !== frame.current?.contentWindow) return;
       if ((event.data as { type?: string } | null)?.type !== 'artifact-sandbox-ready') return;
-      frame.current?.contentWindow?.postMessage({ type: 'artifact-html', content }, '*');
+      send();
     };
 
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
+    // `send` is rebuilt every render around the current `content`, so the handler registered
+    // here always posts the same body the effect was re-run for.
   }, [content]);
 
   if (failed) {
@@ -70,6 +82,12 @@ export function HtmlArtifactFrame({ content, title }: { content: string; title: 
       src={SANDBOX_URL}
       sandbox={FRAME_SANDBOX}
       title={title}
+      // `load` is the reliable trigger, and the ready message above is the backstop rather than
+      // the other way round. The frame announces itself from an inline script that runs while
+      // this component is still committing, so a listener attached in the effect can miss it
+      // outright - which is what left a mounted frame blank. `load` fires after that script has
+      // run, so the frame's own listener is certainly up by the time this posts.
+      onLoad={send}
       onError={() => setFailed(true)}
       sx={{ display: 'block', width: '100%', height: FRAME_HEIGHT, border: 'none', bgcolor: 'common.white' }}
       data-testid="chat-artifact-frame"

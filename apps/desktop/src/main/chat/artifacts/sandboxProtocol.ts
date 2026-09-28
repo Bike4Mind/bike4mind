@@ -70,7 +70,13 @@ const SANDBOX_CSP = [
   "child-src 'none'",
   "form-action 'none'",
   "base-uri 'none'",
-  "frame-ancestors 'self'",
+  // No `frame-ancestors`, which the server route this is ported from does set. There it reads
+  // 'self' and matches, because the page doing the framing is served from the same origin. Here
+  // the embedder is the renderer - http://localhost:5175 under electron-vite, file:// in a
+  // packaged build - and the frame is b4m-artifact:, so 'self' can never match and the directive
+  // blocks every artifact from rendering at all. Naming both renderer origins instead would be a
+  // rule that silently stops matching the day either changes. It guards nothing here in any
+  // case: a custom scheme registered by this app is not navigable from any page outside it.
 ].join('; ');
 
 /**
