@@ -13,7 +13,8 @@ import { dataLakeService } from '@bike4mind/services';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import type { IDataLakeDocument, IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
-import { releaseDriveConnection, disableDriveConnectionForLake } from '@server/integrations/google/drive/common';
+import { releaseDriveConnection } from '@server/integrations/google/drive/common';
+import { shredMemoryForLakeTags } from '@server/dataLakes/shredMemoryForLakeTags';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { getFilesStorage } from '@server/utils/storage';
 import { NotFoundError } from '@server/utils/errors';
@@ -55,22 +56,32 @@ async function resolveOrgLake(req: Request): Promise<{ lake: IDataLakeDocument; 
 
 /**
  * Sweep everything the just-disconnected connection ingested into this lake: FabFile rows, their
- * chunks, retrieval-index entries and stored objects - see purgeDataLakeConnectionFiles. A
- * connection-scoped subset of the lake, not the lake itself: a sibling connection's files and any
- * manually-uploaded file in the same lake are untouched.
+ * chunks, retrieval-index entries, stored objects and lake-memory beliefs - see
+ * purgeDataLakeConnectionFiles. A connection-scoped subset of the lake, not the lake itself: a
+ * sibling connection's files and any manually-uploaded file in the same lake are untouched.
  *
  * Called AFTER the connection is disabled (stops the poll from re-claiming it) but BEFORE
  * releaseDriveConnection hard-deletes the row - unlike cleanupDeletedDataLake's own release-then-
  * sweep ordering (its step 1c), this door's sweep can itself throw partway, and the row must still
  * resolve on a retried DELETE so a failed purge can be retried instead of stranding the remainder.
+ *
+ * Recomputes the lake's persisted fileCount/totalSizeBytes after the sweep, mirroring
+ * purgeDataLakeDocument's own call - otherwise those numbers (rendered on DataLakeDiscoverPanel and
+ * the public-lake browse route) drift stale after a disconnect until some unrelated batch happens
+ * to recompute them.
  */
 async function purgeDriveIngestedFiles(
   lake: IDataLakeDocument,
   driveConnectionId: string,
-  logger: { warn: (msg: string, ...args: unknown[]) => void }
+  logger: {
+    info: (msg: string, ...args: unknown[]) => void;
+    warn: (msg: string, ...args: unknown[]) => void;
+    error: (msg: string, ...args: unknown[]) => void;
+  }
 ): Promise<void> {
   const files = await fabFileRepository.findByDriveConnectionIdInDataLake(driveConnectionId, lake.datalakeTag);
   if (files.length === 0) return;
+  const purgingLake = { id: lake.id, datalakeTag: lake.datalakeTag, createdByUserId: lake.createdByUserId };
   await dataLakeService.purgeDataLakeConnectionFiles(dataLakeService.lakeMembershipScope(lake), files, {
     db: {
       fabFiles: fabFileRepository,
@@ -88,7 +99,19 @@ async function purgeDriveIngestedFiles(
         })
       : undefined,
     storage: getFilesStorage(),
+    // Per-document lake-memory shred, mirroring purgeDataLakeDocument's own shredDocumentMemory
+    // wiring: without it, a Drive-purged document's extracted facts keep reaching live system
+    // prompts through recallLakeMemory forever - the same gap the whole-lake purge already closes
+    // with its own (broader-brush) shredMemory. Reads are already orphan-safe (recallLakeMemory and
+    // the profile route both drop beliefs whose source file is gone), so this was a retention-only
+    // gap, not a leak, but every other permanent-delete path on this lake already closes it.
+    shredDocumentMemory: async ({ tagNames, fabFileId, ownerUserId }) => {
+      await shredMemoryForLakeTags(tagNames, fabFileId, ownerUserId, purgingLake, { logger });
+    },
     logger,
+  });
+  await dataLakeService.recomputeLakeStats(lake, {
+    db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
   });
 }
 
@@ -158,15 +181,20 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       // Don't hard-delete under a live ingest: the running handler still holds the connection it
       // loaded and would keep creating FabFiles stamped with a driveConnectionId that no longer
       // resolves, while the UI reads "Disconnected". Make the user wait out (or the claim go stale).
-      if (conn.status === 'syncing') {
+      //
+      // Disabling and the syncing check are ONE atomic compare-and-set (disableIfNotSyncing), not a
+      // snapshot read (the `conn` above) followed by an unconditional disable: a message already on
+      // the ingest queue could otherwise win claimForSync in the gap between the read and the write,
+      // create FabFiles past the purge's snapshot below, and have its row hard-deleted by release -
+      // stranding those files exactly like the bug this purge exists to fix. claimForSync's own
+      // `enabled` guard is the other half - either this disable wins or that claim already did, never
+      // both.
+      const disabled = await orgGoogleDriveConnectionRepository.disableIfNotSyncing(conn.id);
+      if (!disabled) {
         return res
           .status(409)
           .json({ error: 'A sync is in progress for this folder. Try disconnecting again once it finishes.' });
       }
-      // Disable BEFORE purging: the hourly poll only re-enqueues an ingest for an ENABLED
-      // connection, so this stops it from racing the sweep below and re-creating the very files
-      // being deleted - without disabling first, a poll firing mid-purge could do exactly that.
-      await disableDriveConnectionForLake(lake.id);
       // Purge what this connection ingested BEFORE releasing the row: purgeDriveIngestedFiles can
       // throw partway (a storage.delete blip, a self-host retrieval-index failure), and the row
       // must still resolve on a retried DELETE so findLakeConnection can find it again - releasing
