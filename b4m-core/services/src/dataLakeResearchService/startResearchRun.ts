@@ -4,6 +4,13 @@ import type {
   IDataLakeResearchRunRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { researchRunChange } from '../dataLakeService/diffLakeConfig';
+import type { LakeGrant, ManageActor } from '../dataLakeService/manageRule';
+import {
+  recordLakeConfigChange,
+  type LakeConfigAuditAdapters,
+  type LakeConfigAuditLakeRef,
+} from '../dataLakeService/recordLakeConfigChange';
 import { normalizeResearchLevers } from './researchLevers';
 
 /**
@@ -15,10 +22,12 @@ import { normalizeResearchLevers } from './researchLevers';
  * configuration is a saved object.
  */
 
-export interface StartResearchRunAdapters {
-  db: {
+export interface StartResearchRunAdapters extends LakeConfigAuditAdapters {
+  db: LakeConfigAuditAdapters['db'] & {
     dataLakeResearchConfigs: Pick<IDataLakeResearchConfigRepository, 'findByIdInLake' | 'recordRunStarted'>;
     dataLakeResearchRuns: Pick<IDataLakeResearchRunRepository, 'createRun' | 'countActiveByLake' | 'countStartedSince'>;
+    // REQUIRED - see the matching note on ResearchConfigAdapters.
+    lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
   };
   now?: () => Date;
 }
@@ -34,10 +43,13 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export async function startResearchRun(
   configId: string,
-  dataLakeId: string,
-  actorUserId: string,
-  { db, now = () => new Date() }: StartResearchRunAdapters
+  lake: LakeConfigAuditLakeRef,
+  actor: ManageActor,
+  grants: readonly LakeGrant[],
+  { db, logger, now = () => new Date() }: StartResearchRunAdapters
 ): Promise<IDataLakeResearchRunDocument> {
+  const dataLakeId = lake.id;
+  const actorUserId = actor.userId;
   const config = await db.dataLakeResearchConfigs.findByIdInLake(configId, dataLakeId);
   if (!config) throw new NotFoundError('Research configuration not found');
 
@@ -81,6 +93,27 @@ export async function startResearchRun(
   // After the run row exists, so a failure here costs a stale "last run" timestamp rather than a
   // run the user started and cannot see. Best-effort inside the repository for the same reason.
   await db.dataLakeResearchConfigs.recordRunStarted(configId, startedAt);
+
+  // `grants` comes from the caller's own gate (assertLakeResearchManage), not re-fetched here -
+  // the gate and the recorded manage rung must agree on the same grant set, the same reasoning
+  // reviewDataLakeProposal's resolveReviewable applies to its own reused grants.
+  await recordLakeConfigChange(
+    {
+      actor,
+      lake,
+      grants,
+      action: 'start-research-run',
+      // The QUERY, not the config's name: `recordResearchRunOutcome` (the matching outcome event,
+      // recorded later from the background executor) only has the run's own levers snapshot to work
+      // from, never the config document - using the same identifier here is what lets a reader match
+      // a `start-research-run` row to the `complete-research-run` row it belongs to. Read from
+      // `run.levers` (the normalized snapshot just created above), not `config.query` directly, so
+      // the two rows are guaranteed to agree even for a config saved before a normalization change.
+      // `run.id` disambiguates two runs of the same config with an unedited (so identical) query.
+      changes: [researchRunChange(run.levers.query, 'started', run.id)],
+    },
+    { db, logger }
+  );
 
   return run;
 }
