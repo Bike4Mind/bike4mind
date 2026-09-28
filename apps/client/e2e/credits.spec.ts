@@ -3,7 +3,7 @@ import { TIMEOUTS } from './constants';
 
 // The credits user starts with 1 credit (credits.setup.ts). The server's pre-flight reservation
 // prices PREFLIGHT_RESERVATION_OUTPUT_TOKENS of output and usdToCredits rounds up with a floor of 1
-// (b4m-core/common/src/pricing.ts), so for any model priced above ~$0.012/M output the reservation
+// (b4m-core/common/src/pricing.ts), so for any model priced above ~$0.03/M output the reservation
 // exceeds the balance and ChatCompletionProcess throws InsufficientCreditsError before calling the
 // model. PromptReplies then renders InsufficientCreditsNotice in place of the reply container.
 // Assumes enforceCredits is on (the hosted default); with it off the gate never fires.
@@ -26,17 +26,13 @@ test.describe('Credit enforcement', () => {
     await modelSelector.selectTextModel('GPT-4.1 Mini', { disableSmartTools: true });
 
     // Below LOW_CREDITS_THRESHOLD the low-credits overlay covers the chat input, so the click in
-    // sendMessage would be intercepted. Bounded and optional: its absence must not mask the real
-    // assertion below (e.g. the negative control with a full balance).
-    const lowCreditsWarning = page.getByTestId('session-low-credits-warning');
-    const overlayShown = await lowCreditsWarning
-      .waitFor({ state: 'visible', timeout: TIMEOUTS.VISIBLE })
-      .then(() => true)
-      .catch(() => false);
-    if (overlayShown) {
-      await page.getByTestId('low-credits-warning-dismiss').click();
-      await expect(lowCreditsWarning).toBeHidden({ timeout: TIMEOUTS.ELEMENT_STATE });
-    }
+    // sendMessage would be intercepted. Its dismissal is component state, so a reload inside
+    // sendMessage's retry loop (ChatPage.typeAndWaitForSendReady) re-mounts it; a locator handler
+    // re-dismisses it before every action. It never fires when the overlay is absent (e.g. the
+    // negative control with a full balance), so it cannot mask the assertions below.
+    await page.addLocatorHandler(page.getByTestId('session-low-credits-warning'), async overlay => {
+      await overlay.getByTestId('low-credits-warning-dismiss').click();
+    });
 
     // Not sendMessageAndWaitForResponse: it waits on a reply container that must never render.
     await chatPage.sendMessage('Say hi.');
