@@ -12,7 +12,8 @@ import { KNOWN_UNPOSTURED } from './apiKeyScopePostureLedger';
  * choice for every new route. A route is "postured" when its source declares any of:
  *  - `requiredScopes:` / `alsoRequiredScopes:` (API keys must carry those scopes),
  *  - `auth: 'jwtOnly'` (the API-key chain is skipped, keys are rejected),
- *  - `auth: false` (no auth chain at all, so no API-key surface).
+ *  - `auth: false` (no baseApi auth chain), unless the file mounts an unscoped `apiKeyAuth()`
+ *    or `.use(optionalAuth)` itself, which re-opens the API-key surface.
  *
  * pages/api/admin/** is excluded: adminApiKeyScopeCoverage.test.ts owns that tree with the
  * stricter exactly-`[ApiKeyScope.ADMIN]` check and its own ledger.
@@ -30,6 +31,8 @@ const ROUTES_DIR = path.join(__dirname, '..', '..', 'pages', 'api');
 // upgrade path if that ceiling ever hides a real gap. It also checks presence, not value, so a
 // `requiredScopes: undefined` (or a conditional that can yield undefined) passes as postured.
 const POSTURES = [/\b(requiredScopes|alsoRequiredScopes)\s*:/, /\bauth:\s*'jwtOnly'/, /\bauth:\s*false\b/];
+// A hand-mounted unscoped key shim re-opens the API-key chain even under auth: false.
+const UNSCOPED_KEY_SURFACES = [/\bapiKeyAuth\(\s*\)/, /\.use\(\s*optionalAuth\s*\)/];
 
 function routeFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
@@ -47,7 +50,7 @@ const rel = (f: string) => path.relative(ROUTES_DIR, f).split(path.sep).join('/'
 // Strip line comments first so a commented-out `// requiredScopes: [...]` does not count.
 const isPostured = (f: string) => {
   const src = readFileSync(f, 'utf8').replace(/\/\/[^\n]*/g, '');
-  return POSTURES.some(re => re.test(src));
+  return !UNSCOPED_KEY_SURFACES.some(re => re.test(src)) && POSTURES.some(re => re.test(src));
 };
 
 describe('baseApi routes declare an API-key scope posture', () => {
