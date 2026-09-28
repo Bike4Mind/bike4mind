@@ -14,7 +14,7 @@ import type { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import type { ApprovalGate } from './tools/ApprovalGate';
 import { findTool, toolsForRequest } from './tools/registry';
-import { capOutput, type ToolDefinition } from './tools/types';
+import { capOutput, type ApprovalPrompt, type ToolContext, type ToolDefinition } from './tools/types';
 
 /** Only the field this client reads from `GET /api/settings/serverConfig`. */
 interface ServerTransportConfig {
@@ -288,16 +288,18 @@ export class ChatService {
           return unknown;
         }
 
+        const context: ToolContext = { roots, signal, protectedPaths: this.deps.protectedPaths };
+
         // Asked BEFORE 'running' is announced, so the UI never shows a command as under way
         // while it is still waiting on the user, and nothing has run if they say no.
-        const denial = await this.awaitApproval(tool, call, sessionId, messageId, signal);
+        const denial = await this.awaitApproval(tool, call, context, sessionId, messageId, signal);
         if (denial) return denial;
 
         this.deps.emit({ type: 'tool-start', sessionId, messageId, call });
 
         let settled: ChatToolCall;
         try {
-          const result = await tool.run(call.input, { roots, signal, protectedPaths: this.deps.protectedPaths });
+          const result = await tool.run(call.input, context);
           settled = { ...call, status: 'done', preview: capOutput(result) };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -326,20 +328,46 @@ export class ChatService {
   private async awaitApproval(
     tool: ToolDefinition,
     call: ChatToolCall,
+    context: ToolContext,
     sessionId: string,
     messageId: string,
     signal: AbortSignal
   ): Promise<ChatToolCall | null> {
     const gate = this.deps.approvals;
-    const prompt = tool.approval?.(call.input);
-    if (!gate || !prompt || gate.isStanding(sessionId, prompt.key)) return null;
+    if (!gate || !tool.approval) return null;
+
+    // Building the prompt reads the filesystem for a write tool, and a refusal there - a path
+    // outside every granted folder, a binary file - has to settle the call WITHOUT asking. A
+    // denial the user is invited to click through is not a denial.
+    let prompt: ApprovalPrompt;
+    try {
+      prompt = await tool.approval(call.input, context);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const refused: ChatToolCall = {
+        ...call,
+        status: err instanceof Error && err.name === 'PathAccessDenied' ? 'denied' : 'error',
+        error: message,
+      };
+      this.deps.emit({ type: 'tool-start', sessionId, messageId, call });
+      this.deps.emit({ type: 'tool-end', sessionId, messageId, call: refused });
+      return refused;
+    }
+
+    if (gate.isStanding(sessionId, prompt.key)) return null;
 
     const decision = await gate.request(sessionId, prompt.key, signal, approvalId => {
       this.deps.emit({
         type: 'tool-start',
         sessionId,
         messageId,
-        call: { ...call, status: 'awaiting-approval', approvalId, approvalDetail: prompt.detail },
+        call: {
+          ...call,
+          status: 'awaiting-approval',
+          approvalId,
+          approvalDetail: prompt.detail,
+          ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
+        },
       });
     });
 
@@ -410,7 +438,8 @@ function buildSystemMessage(roots: readonly string[]): CompletionMessage {
   return {
     role: 'system',
     content: [
-      'You can read files on the user machine, and run bash commands on it, with the provided tools.',
+      'You can read and change files on the user machine, and run bash commands on it, with the',
+      'provided tools.',
       'These folders are shared with you, including everything beneath them:',
       ...roots.map(root => `  ${root}`),
       'Always pass absolute paths. Any path outside those folders is denied;',
@@ -418,6 +447,9 @@ function buildSystemMessage(roots: readonly string[]): CompletionMessage {
       'Running a command needs the user to approve it first, and they see the exact command, so',
       'prefer one clear command over several speculative ones. If they decline, accept it and ask',
       'what they would like instead rather than trying a variation of the same command.',
+      'Changing a file needs the same approval, and the user sees a line-by-line diff of the',
+      'change before they answer. Read a file before you edit it, and prefer file_edit over',
+      'file_write so the rest of the file is left alone; file_write replaces a file entirely.',
       'Never invent a file name, size or contents, or the output of a command: if a tool did not',
       'return it, you do not know it.',
     ].join('\n'),

@@ -1,3 +1,5 @@
+import type { ChatDiff } from '@shared/chat';
+
 /** Everything a tool may use. Deliberately narrow: no api client, no session, no token. */
 export interface ToolContext {
   /** Granted roots. Empty means the user has allowed nothing, and every path tool denies. */
@@ -16,6 +18,11 @@ export interface ApprovalPrompt {
   detail: string;
   /** Identity for "always allow": two calls share a key only if they would do the same thing. */
   key: string;
+  /**
+   * The change a write tool proposes, shown under `detail`. Computed from the file as it is
+   * on disk right now, before anything is written.
+   */
+  diff?: ChatDiff;
 }
 
 /** Wire shape the completions endpoint expects, matching CompletionToolSchema in common. */
@@ -35,8 +42,12 @@ export interface ToolDefinition {
   /**
    * Declared by tools that run code or change something. The gate is enforced by ChatService,
    * not here, so a tool cannot run itself past it by forgetting to ask.
+   *
+   * May be async and may touch the filesystem, because a write tool has to read the file to
+   * say what it would change. Throwing here refuses the call WITHOUT asking the user - which
+   * is what a write outside a granted folder must do, rather than being prompted around.
    */
-  approval?(input: Record<string, unknown>): ApprovalPrompt;
+  approval?(input: Record<string, unknown>, context: ToolContext): ApprovalPrompt | Promise<ApprovalPrompt>;
   /** Returns the text handed back to the model. Throwing is reported to it as a failure. */
   run(input: Record<string, unknown>, context: ToolContext): Promise<string>;
 }

@@ -7,17 +7,19 @@ import { isAbsolute, resolve, sep } from 'node:path';
  * probe for "does /Users/someone/secrets exist" must not be answerable from the wording.
  */
 export class PathAccessDenied extends Error {
-  constructor(requested: string) {
+  /** `reason` replaces the default wording for a refusal that is not about the granted set. */
+  constructor(requested: string, reason?: string) {
     super(
-      `Access denied: ${requested} is outside the folders you have granted. ` +
-        'Ask the user to grant that folder in Settings.'
+      reason ??
+        `Access denied: ${requested} is outside the folders you have granted. ` +
+          'Ask the user to grant that folder in Settings.'
     );
     this.name = 'PathAccessDenied';
   }
 }
 
 /** True when `candidate` is `root` itself or lies beneath it. */
-function isWithin(root: string, candidate: string): boolean {
+export function isWithin(root: string, candidate: string): boolean {
   if (candidate === root) return true;
   // The separator matters: without it "/Users/jude/Downloads-secret" passes a plain
   // startsWith test against "/Users/jude/Downloads".
@@ -56,7 +58,7 @@ export async function resolveWithinRoots(requested: string, roots: readonly stri
  * The real path of `target`, or of its nearest existing ancestor when it does not exist.
  * Walking up terminates at the filesystem root, which always exists.
  */
-async function realpathNearest(target: string): Promise<string> {
+export async function realpathNearest(target: string): Promise<string> {
   let current = target;
   for (;;) {
     try {

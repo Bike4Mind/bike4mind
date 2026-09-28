@@ -6,6 +6,7 @@ import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { ChatApprovalDecision, ChatToolCall, ChatToolStatus } from '@shared/chat';
+import { DiffView } from './DiffView';
 
 const STATUS_COLOR: Record<ChatToolStatus, 'neutral' | 'success' | 'danger' | 'warning' | 'primary'> = {
   'awaiting-approval': 'primary',
@@ -24,6 +25,13 @@ const STATUS_LABEL: Record<ChatToolStatus, string> = {
 };
 
 export type RespondToApproval = (approvalId: string, decision: ChatApprovalDecision) => void;
+
+/** Named for what it does to the file, so nothing reads as a generic "allow this". */
+const APPROVAL_QUESTION: Record<'create' | 'overwrite' | 'edit', string> = {
+  create: 'Create this file?',
+  overwrite: 'Replace this file?',
+  edit: 'Apply this edit?',
+};
 
 /** The argument worth showing next to the tool name - almost always what it acted on. */
 function summarizeInput(call: ChatToolCall): string {
@@ -47,6 +55,8 @@ function ApprovalPrompt({
   approvalId: string;
   onRespond: RespondToApproval;
 }) {
+  const diff = call.approvalDiff;
+
   return (
     <Sheet
       variant="soft"
@@ -55,32 +65,38 @@ function ApprovalPrompt({
       data-testid="chat-tool-approval"
     >
       <Typography level="body-xs" fontWeight="lg">
-        Run this command?
+        {diff ? APPROVAL_QUESTION[diff.operation] : 'Run this command?'}
       </Typography>
 
-      <Box
-        sx={{
-          mt: 0.75,
-          p: 1,
-          borderRadius: 'sm',
-          bgcolor: 'background.surface',
-          maxHeight: 200,
-          overflowY: 'auto',
-        }}
-      >
-        <Typography
-          level="body-xs"
-          fontFamily="monospace"
-          sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
-          data-testid="chat-tool-approval-detail"
+      {diff ? (
+        <Box sx={{ mt: 0.75 }}>
+          <DiffView diff={diff} />
+        </Box>
+      ) : (
+        <Box
+          sx={{
+            mt: 0.75,
+            p: 1,
+            borderRadius: 'sm',
+            bgcolor: 'background.surface',
+            maxHeight: 200,
+            overflowY: 'auto',
+          }}
         >
-          {call.approvalDetail ?? summarizeInput(call)}
-        </Typography>
-      </Box>
+          <Typography
+            level="body-xs"
+            fontFamily="monospace"
+            sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
+            data-testid="chat-tool-approval-detail"
+          >
+            {call.approvalDetail ?? summarizeInput(call)}
+          </Typography>
+        </Box>
+      )}
 
       <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
         <Button size="sm" onClick={() => onRespond(approvalId, 'once')} data-testid="chat-tool-approve-once">
-          Allow once
+          {diff ? 'Apply this change' : 'Allow once'}
         </Button>
         <Button
           size="sm"
@@ -97,7 +113,7 @@ function ApprovalPrompt({
           onClick={() => onRespond(approvalId, 'deny')}
           data-testid="chat-tool-deny"
         >
-          Don't run
+          {diff ? "Don't change it" : "Don't run"}
         </Button>
       </Stack>
     </Sheet>
