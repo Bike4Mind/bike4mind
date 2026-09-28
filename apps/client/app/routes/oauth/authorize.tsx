@@ -253,10 +253,6 @@ const OAuthAuthorizePage = () => {
               Allow
             </Button>
           </Box>
-
-          <Typography level="body-xs" color="neutral">
-            You can revoke this access from your Bike4Mind account settings.
-          </Typography>
         </Sheet>
       </Box>
     );
