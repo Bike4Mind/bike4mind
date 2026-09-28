@@ -133,6 +133,20 @@ export class SessionStore {
     return summarize(session);
   }
 
+  /**
+   * Remember the b4m notebook this conversation's generations are filed under. Written once,
+   * on the first generation; see `remoteSessionId` in @shared/chat for why it exists at all.
+   *
+   * Leaves `updatedAt` alone: this is bookkeeping about a turn, not a turn, and bumping it
+   * would reorder the sidebar behind the user's back.
+   */
+  async setRemoteSessionId(id: string, remoteSessionId: string): Promise<void> {
+    const session = await this.get(id);
+    if (!session || session.remoteSessionId === remoteSessionId) return;
+    session.remoteSessionId = remoteSessionId;
+    await this.write(session);
+  }
+
   async delete(id: string): Promise<void> {
     await rm(this.filePath(id), { force: true });
   }
@@ -185,6 +199,7 @@ export class SessionStore {
       createdAt: parsed.createdAt ?? now,
       updatedAt: parsed.updatedAt ?? parsed.createdAt ?? now,
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+      ...(typeof parsed.remoteSessionId === 'string' ? { remoteSessionId: parsed.remoteSessionId } : {}),
     };
   }
 

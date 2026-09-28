@@ -1,8 +1,50 @@
-import type { ChatDiff } from '@shared/chat';
+import type { ChatDiff, ChatMedia, ChatToolNotice } from '@shared/chat';
 
+import type { MediaApiClient } from '../media/MediaApiClient';
+import type { MediaStore } from '../media/MediaStore';
 import type { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
 
-/** Everything a tool may use. Deliberately narrow: no api client, no token. */
+/**
+ * What the server-backed generation tools need, and nothing else.
+ *
+ * This is the one place a tool is handed an API client. The local tools are deliberately given
+ * none - they touch the filesystem and have no business on the network - but image generation
+ * and speech synthesis ARE calls to b4m, so refusing them a client would only mean routing the
+ * same request through a wrapper that pretends otherwise. The client is the app's own
+ * authenticated session; the token itself is still never exposed.
+ */
+export interface MediaContext {
+  client: MediaApiClient;
+  store: MediaStore;
+  /** Base for generated-file URLs, from serverConfig. Relative on self-host, absolute on a CDN. */
+  cdnUrl: string;
+  /** Names the notebook the server creates for this conversation's first generation. */
+  notebookName: string;
+  /** Image models this deployment offers. Lazy: a turn with no image generation never asks. */
+  listImageModels(): Promise<string[]>;
+  getRemoteSessionId(): string | undefined;
+  setRemoteSessionId(remoteSessionId: string): Promise<void>;
+}
+
+/**
+ * Side channels a tool can push to besides its return value, wired per call by ChatService.
+ *
+ * Absent in tests and anywhere a tool is run outside the chat loop; every tool treats it as
+ * optional and keeps working without it, just more quietly.
+ */
+export interface ToolReporter {
+  /** Replaces the previous line. For work measured in tens of seconds. */
+  progress(text: string): void;
+  /** Attach a generated image or audio clip to this call, for the UI only - not sent to the model. */
+  media(item: ChatMedia): void;
+  /** Raise a cost or provider outcome to its own state; see ChatToolNotice. */
+  notice(notice: ChatToolNotice): void;
+}
+
+/**
+ * Everything a tool may use. Narrow by default: no api client and no token, except for the
+ * server-backed generation tools, which get exactly {@link MediaContext}.
+ */
 export interface ToolContext {
   /** Granted roots. Empty means the user has allowed nothing, and every path tool denies. */
   roots: readonly string[];
@@ -19,6 +61,10 @@ export interface ToolContext {
   sessionId?: string;
   /** Absent in tests and in builds without it; the background tools then refuse rather than run. */
   background?: BackgroundProcessRegistry;
+  /** Absent when signed out, and in tests; the generation tools then refuse rather than run. */
+  media?: MediaContext;
+  /** Absent outside the chat loop; every tool treats it as optional. */
+  report?: ToolReporter;
 }
 
 /** What the user is asked to allow before a tool runs, for tools that declare `approval`. */
