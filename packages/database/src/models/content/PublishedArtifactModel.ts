@@ -87,7 +87,8 @@ const AccessGateSubSchema = new Schema(
  *
  * `viewCount` is per LINK and is deliberately not the artifact's `viewCount`/`externalViewCount`:
  * those count every serve, and `externalViewCount` requires the viewer to be signed in, which a
- * share viewer essentially never is. Populated in a follow-up (#3255 step 2).
+ * share viewer essentially never is. Bumped by the serve route (#3255 step 2) for any
+ * non-owner, non-crawler view that resolved through that entry, signed in or not.
  */
 const ShareTokenSubSchema = new Schema({
   token: { type: String, required: true },
