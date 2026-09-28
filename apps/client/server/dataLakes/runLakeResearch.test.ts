@@ -138,6 +138,7 @@ describe('runLakeResearch', () => {
       { id: 'lake-1', createdByUserId: 'owner-1' },
       'coastal erosion',
       'completed',
+      'run-1',
       expect.anything()
     );
   });
@@ -267,6 +268,7 @@ describe('runLakeResearch', () => {
         { id: 'lake-1', createdByUserId: 'owner-1' },
         'coastal erosion',
         'failed',
+        'run-1',
         expect.anything()
       );
     });
@@ -327,6 +329,7 @@ describe('runLakeResearch', () => {
       { id: 'lake-1', createdByUserId: 'owner-1' },
       'coastal erosion',
       'failed',
+      'run-1',
       expect.anything()
     );
   });
