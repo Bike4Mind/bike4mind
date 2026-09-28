@@ -11,6 +11,7 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import { groupSessions, type ProjectGroup } from './grouping';
+import { ModeSwitcher } from './ModeSwitcher';
 
 function relativeDay(iso: string): string {
   const then = new Date(iso);
@@ -168,6 +169,7 @@ function ProjectHeader({
 export function SessionList({
   sessions,
   mode,
+  onModeChange,
   loading,
   activeId,
   runningIds,
@@ -181,6 +183,7 @@ export function SessionList({
 }: {
   sessions: ChatSessionSummary[];
   mode: ChatSessionMode;
+  onModeChange: (mode: ChatSessionMode) => void;
   loading: boolean;
   activeId: string | null;
   /** Sessions with a reply in flight, for the leading status dot. */
@@ -220,6 +223,7 @@ export function SessionList({
       }}
     >
       <Stack spacing={0.5} sx={{ p: 1.5, pb: 1 }}>
+        <ModeSwitcher mode={mode} onChange={onModeChange} />
         <Button fullWidth size="sm" onClick={onCreate} data-testid="chat-new-session-btn">
           {mode === 'code' ? '+ New Code session' : '+ New chat'}
         </Button>

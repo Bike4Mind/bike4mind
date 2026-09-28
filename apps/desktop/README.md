@@ -47,7 +47,7 @@ the IPC contract in `src/shared/ipc.ts` states the invariant that channels may r
 
 ## Chat and Code modes
 
-Every conversation has a mode, chosen with the segmented control at the top right.
+Every conversation has a mode, chosen with the segmented control at the top of the sidebar.
 
 - **Chat** is the default, and is what every conversation before modes existed reads back as.
   It is grounded in nothing in particular: its tools use the folders granted under **More**.

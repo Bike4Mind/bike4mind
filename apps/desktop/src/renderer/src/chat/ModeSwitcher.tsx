@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react';
 import Box from '@mui/joy/Box';
-import IconButton from '@mui/joy/IconButton';
+import Button from '@mui/joy/Button';
 import Tooltip from '@mui/joy/Tooltip';
 import type { ChatSessionMode } from '@shared/chat';
 
@@ -61,8 +61,8 @@ const MODES: { mode: ChatSessionMode; label: string; hint: string; icon: () => R
 ];
 
 /**
- * The segmented control at the top-right of the title bar. It chooses what a new session WILL
- * be, and filters the sidebar to that mode - it never converts an open session, because a Code
+ * The segmented control at the top of the sidebar. It chooses what a new session WILL be, and
+ * filters the list below it to that mode - it never converts an open session, because a Code
  * session's working directory is what its tools have already been running in.
  */
 export function ModeSwitcher({ mode, onChange }: { mode: ChatSessionMode; onChange: (mode: ChatSessionMode) => void }) {
@@ -81,17 +81,18 @@ export function ModeSwitcher({ mode, onChange }: { mode: ChatSessionMode; onChan
     >
       {MODES.map(({ mode: value, label, hint, icon: Icon }) => (
         <Tooltip key={value} title={hint} size="sm" variant="soft">
-          <IconButton
+          <Button
             size="sm"
-            aria-label={label}
             aria-pressed={mode === value}
             variant={mode === value ? 'solid' : 'plain'}
             color={mode === value ? 'primary' : 'neutral'}
+            startDecorator={<Icon />}
             onClick={() => onChange(value)}
+            sx={{ flex: 1, minWidth: 0 }}
             data-testid={`mode-switch-${value}-btn`}
           >
-            <Icon />
-          </IconButton>
+            {label}
+          </Button>
         </Tooltip>
       ))}
     </Box>
