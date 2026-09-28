@@ -557,9 +557,28 @@ function extractComponentName(code: string): string | null {
   return null;
 }
 
-function extractHTMLTitle(code: string): string | null {
-  const titleMatch = code.match(/<title>(.*?)<\/title>/i);
-  return titleMatch ? titleMatch[1] : null;
+// Same result as code.match(/<title>(.*?)<\/title>/i)?.[1] ?? null in one forward pass: that
+// regex rescans to the line end from every opener, so repeated `<title>` runs in quadratic time.
+export function extractHTMLTitle(code: string): string | null {
+  const opener = /<title>/gi;
+  const closer = /<\/title>/gi;
+  const lineEnd = /[\n\r\u2028\u2029]/g;
+  let closeAt = -1;
+  let lineEndAt = -1;
+  for (let open = opener.exec(code); open; open = opener.exec(code)) {
+    const bodyStart = opener.lastIndex;
+    if (closeAt < bodyStart) closeAt = nextMatchIndex(closer, code, bodyStart);
+    if (closeAt === Infinity) return null;
+    if (lineEndAt < bodyStart) lineEndAt = nextMatchIndex(lineEnd, code, bodyStart);
+    if (closeAt < lineEndAt) return code.slice(bodyStart, closeAt);
+  }
+  return null;
+}
+
+function nextMatchIndex(re: RegExp, text: string, from: number): number {
+  re.lastIndex = from;
+  const m = re.exec(text);
+  return m ? m.index : Infinity;
 }
 
 // Strip <, >, and " before interpolating a document-controlled title into title="...".

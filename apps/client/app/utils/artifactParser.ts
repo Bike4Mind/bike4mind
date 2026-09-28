@@ -7,7 +7,12 @@ import {
   scanArtifactOpenTag,
 } from '@bike4mind/common';
 import { detectElidedContent } from '@bike4mind/utils/artifactElision';
-import { stripHtmlComments, hasFullHtmlDocument, hasCompleteSvg } from '@bike4mind/utils/artifactParser';
+import {
+  stripHtmlComments,
+  hasFullHtmlDocument,
+  hasCompleteSvg,
+  extractHTMLTitle,
+} from '@bike4mind/utils/artifactParser';
 import { tryParseChartJSON } from './chartJsonParser';
 import { hasSingleLineImportFrom, scanImportStatements } from './importStatements';
 
@@ -951,11 +956,6 @@ function extractComponentName(code: string): string | null {
   if (classMatch) return classMatch[1];
 
   return null;
-}
-
-function extractHTMLTitle(code: string): string | null {
-  const titleMatch = code.match(/<title>(.*?)<\/title>/i);
-  return titleMatch ? titleMatch[1] : null;
 }
 
 // Strip <, >, and " before interpolating a document-controlled title into title="...".
