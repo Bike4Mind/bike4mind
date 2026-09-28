@@ -349,9 +349,13 @@ export async function runLakeResearch(
       // step-down/connection reset on the updateOne), not the run. We cannot tell whether that write
       // actually landed server-side before the ack was lost, so re-settling or re-recording here
       // would either silently overwrite a real outcome row or permanently misreport a run that
-      // worked - and `claimForExecution` only reclaims `queued` rows, so a wrong `failed` could
-      // never self-heal via redelivery. Rethrow as-is: no further settle/audit write, so the queue
-      // surfaces the fault instead of the run's history lying.
+      // worked. Rethrown as-is instead, deliberately at the cost of leaving the row stuck `running`:
+      // `claimForExecution` only reclaims `queued` rows, so nothing automatically repairs this any
+      // more than it would a wrong `failed` - there is no reaper (see `countActiveByLake`'s own
+      // "no cancel endpoint, no reaper cron" note; the age bound there only excludes a stale row
+      // from the active-run count, it does not flip its status). But a row stuck `running` is a
+      // detectable, honest "we don't know" - this `logger.error` and the run's own age are what an
+      // operator would query for - where a silently-wrong `failed` is neither detectable nor undoable.
       logger.error('[lakeResearch] run completed but recording its outcome failed; leaving the run unresolved', {
         runId,
         error,
