@@ -283,6 +283,40 @@ describe('ChatService queued messages', () => {
     expect(post).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * A spawned child's report and a queued message both append to THIS session, and
+   * SessionStore.appendMessage is a read-modify-write with no lock - so if the queue flush
+   * started its turn while the report was still being written, one of the two would be lost.
+   * The report is awaited first, which also keeps it above the turn that answers it.
+   */
+  it('lands a child report before the queued turn it arrives alongside', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'first');
+    await waitForEvent('start');
+    await service.send(id, 'typed ahead');
+
+    // Reached through a cast rather than by running a real spawn: the delivery path is what
+    // this pins, and widening ChatService's API for a test would be the worse trade. A report
+    // arriving mid-turn is held until the turn ends - the same moment the queue is released.
+    const internals = service as unknown as { deliverChildReport(sessionId: string, text: string): Promise<void> };
+    await internals.deliverChildReport(id, 'a spawned session finished');
+
+    await finishReply(0);
+    await waitForEvent('start', 1);
+    await vi.waitUntil(async () => ((await service.getSession(id))?.messages.length ?? 0) >= 4, {
+      timeout: 2000,
+      interval: 5,
+    });
+
+    const session = await service.getSession(id);
+    expect(session?.messages.map(message => [message.role, message.system === true, message.content])).toEqual([
+      ['user', false, 'first'],
+      ['assistant', false, 'reply'],
+      ['user', true, 'a spawned session finished'],
+      ['user', false, 'typed ahead'],
+    ]);
+  });
+
   it('refuses a message that could never be sent rather than queueing it', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'first');

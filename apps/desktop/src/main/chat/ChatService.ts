@@ -556,7 +556,7 @@ export class ChatService {
       // whose end cannot be classified is treated as failed, which HOLDS the queue rather than
       // firing it - the safe direction when the outcome is unknown.
       .catch(() => 'failed' as const)
-      .then(outcome => {
+      .then(async outcome => {
         // Only clear if still ours: a delete-then-recreate could have installed a newer one, and
         // telling activity this reply ended would then mark a live one idle.
         if (this.active.get(sessionId) !== controller) return;
@@ -565,10 +565,14 @@ export class ChatService {
         // All three need the session to be idle, and this is the moment it becomes so: a
         // spawned run gives its concurrency slot back and reports to its parent, and a parent
         // that was mid-turn takes delivery of anything that finished while it was busy.
+        // Reporting to the PARENT writes a different session's file, so it needs no ordering here.
         void this.settleSpawnedTurn(sessionId);
-        void this.flushChildReports(sessionId);
-        // Last, because a child report can itself start a turn on this session. flushQueue
-        // stands down when one is running, and that turn's own ending flushes the queue.
+
+        // Awaited, and before the queue: both append to THIS session, and appendMessage is a
+        // read-modify-write with no lock of its own - overlapping them would let the later
+        // write drop the earlier message. Ordering them here is cheaper than a store-wide lock
+        // and keeps the report above the turn that answers it.
+        await this.flushChildReports(sessionId).catch(() => undefined);
         this.settleQueue(sessionId, outcome);
       });
 
