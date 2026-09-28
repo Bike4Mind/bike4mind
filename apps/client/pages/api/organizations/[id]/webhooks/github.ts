@@ -204,7 +204,7 @@ const handler = baseApi()
         }
 
         const updatedConfig = await orgWebhookConfigRepository.update({
-          ...existingConfig,
+          id: existingConfig.id,
           ...updates,
         });
 

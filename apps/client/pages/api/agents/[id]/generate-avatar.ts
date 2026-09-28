@@ -464,7 +464,7 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
       generationPrompt: cleanPrompt.substring(0, 100) + '...',
     });
 
-    const updateResult = await agentRepository.update(updatedAgent);
+    const updateResult = await agentRepository.update({ id: agent.id, visual: updatedAgent.visual });
 
     if (updateResult) {
       imageLogger.info(`Agent update result:`, {

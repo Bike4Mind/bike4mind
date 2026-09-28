@@ -1,4 +1,5 @@
 import {
+  ITaskSchedule,
   ITaskSchedulePayloadMap,
   ITaskScheduleRepository,
   TaskScheduleHandler,
@@ -57,6 +58,7 @@ export const process = async ({ db, logger, handlers }: SchedulerProcessAdapters
       }
       claimedCount += 1;
 
+      let changes: Partial<ITaskSchedule>;
       try {
         const handler = handlers[taskSchedule.handler];
 
@@ -71,6 +73,7 @@ export const process = async ({ db, logger, handlers }: SchedulerProcessAdapters
         taskSchedule.status = TaskScheduleStatus.COMPLETED;
         taskSchedule.statusCompletedAt = new Date();
         taskSchedule.expireAt = new Date(Date.now() + TTL_DAYS * 24 * 60 * 60 * 1000);
+        changes = { statusCompletedAt: taskSchedule.statusCompletedAt };
       } catch (e) {
         logger?.error(`Error processing task schedule: ${taskSchedule.id}`, e as Error);
 
@@ -78,8 +81,14 @@ export const process = async ({ db, logger, handlers }: SchedulerProcessAdapters
         taskSchedule.statusFailedAt = new Date();
         taskSchedule.statusFailedReason = e instanceof Error ? e.message : 'Unknown error';
         taskSchedule.expireAt = new Date(Date.now() + TTL_DAYS * 24 * 60 * 60 * 1000);
+        changes = { statusFailedAt: taskSchedule.statusFailedAt, statusFailedReason: taskSchedule.statusFailedReason };
       }
-      await db.taskSchedules.update(taskSchedule);
+      await db.taskSchedules.update({
+        id: taskSchedule.id,
+        status: taskSchedule.status,
+        expireAt: taskSchedule.expireAt,
+        ...changes,
+      });
     }
   };
 

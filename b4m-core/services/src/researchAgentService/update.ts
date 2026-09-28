@@ -34,7 +34,12 @@ export const update = async (
   researchAgent.description = description;
   researchAgent.updatedAt = new Date();
 
-  await db.researchAgents.update(researchAgent);
+  await db.researchAgents.update({
+    id: researchAgent.id,
+    name: researchAgent.name,
+    description: researchAgent.description,
+    updatedAt: researchAgent.updatedAt,
+  });
 
   return researchAgent;
 };

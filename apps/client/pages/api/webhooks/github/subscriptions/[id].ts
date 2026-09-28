@@ -137,7 +137,7 @@ const handler = baseApi()
         }
 
         const updatedSubscription = await webhookSubscriptionRepository.update({
-          ...subscription,
+          id: subscription.id,
           ...updates,
         });
 

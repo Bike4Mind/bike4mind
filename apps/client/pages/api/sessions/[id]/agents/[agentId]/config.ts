@@ -81,7 +81,7 @@ const handler = baseApi()
       // happened to create the row first - otherwise a session write-sharee could rewrite the
       // prompt while leaving it to run under the original owner's identity, keys, and tools.
       config = await sessionAgentConfigRepository.update({
-        ...existingConfig,
+        id: existingConfig.id,
         userId: req.user!.id,
         proactiveMessaging: {
           ...validatedData.proactiveMessaging,

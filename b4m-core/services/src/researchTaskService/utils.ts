@@ -99,12 +99,22 @@ export async function findOrUpdateExistingResearchData(
           'get'
         );
         existingFile.fileUrlExpireAt = new Date(Date.now() + DEFAULT_EXPIRE_IN_SECONDS * 1000);
+        existingFile.updatedAt = new Date();
+        await adapters.db.fabFiles.update({
+          id: existingFile.id,
+          fileUrl: existingFile.fileUrl,
+          fileUrlExpireAt: existingFile.fileUrlExpireAt,
+          updatedAt: existingFile.updatedAt,
+        });
       } else {
         existingFile.fileUrl = undefined;
         existingFile.fileUrlExpireAt = undefined;
+        existingFile.updatedAt = new Date();
+        await adapters.db.fabFiles.update(
+          { id: existingFile.id, updatedAt: existingFile.updatedAt },
+          { unset: ['fileUrl', 'fileUrlExpireAt'] }
+        );
       }
-      existingFile.updatedAt = new Date();
-      await adapters.db.fabFiles.update(existingFile);
 
       return { file: existingFile, researchData: existingResearchData };
     } else {

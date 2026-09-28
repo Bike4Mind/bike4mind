@@ -166,7 +166,7 @@ const saveSelectionHandler = asyncHandler(async (req, res) => {
   }
   mcpServer.metadata.selectedRepositories = formattedRepos;
 
-  await mcpServerRepository.update(mcpServer);
+  await mcpServerRepository.update({ id: mcpServer.id, metadata: mcpServer.metadata });
 
   req.logger.info('Successfully updated repository selection', {
     userId,
