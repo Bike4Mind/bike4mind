@@ -128,6 +128,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
   const approvals = new ApprovalGate({
     requested: sessionId => activity.approvalRequested(sessionId),
     settled: sessionId => activity.approvalSettled(sessionId),
+    changed: () => send(IPC_CHANNELS.chatPendingApprovals, approvals.pendingApprovals()),
   });
 
   // Output and status go out on the same channel as reply tokens: a background process is
@@ -160,6 +161,10 @@ export function registerChat(auth: AuthService): RegisteredChat {
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
+  ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (_event, sessionId: string, archived: boolean) =>
+    service.setSessionArchived(sessionId, archived)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatGetPendingApprovals, () => service.pendingApprovals());
   ipcMain.handle(IPC_CHANNELS.chatSetSessionModel, (_event, sessionId: string, model: string) =>
     service.setSessionModel(sessionId, model)
   );

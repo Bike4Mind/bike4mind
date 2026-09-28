@@ -16,6 +16,13 @@ function isGeneration(name: string): boolean {
   return name.startsWith('generate_');
 }
 
+/** The question each app-control tool asks, named for what it does rather than "allow this". */
+const HOST_QUESTION: Record<string, string> = {
+  session_spawn: 'Start this session working? It runs on its own and costs credits.',
+  session_archive: 'Archive this conversation?',
+  session_delete: 'Delete this conversation for good?',
+};
+
 export type RespondToApproval = (approvalId: string, decision: ChatApprovalDecision) => void;
 
 /** Named for what it does to the file, so nothing reads as a generic "allow this". */
@@ -69,22 +76,27 @@ function ApprovalPrompt({
   onRespond: RespondToApproval;
 }) {
   const diff = call.approvalDiff;
+  // No undo behind it, so the card is red and offers no way to stop being asked. Answering
+  // "always" would be a single click standing in for consent to a later, different deletion.
+  const irreversible = call.approvalIrreversible === true;
 
   return (
     <Sheet
       variant="soft"
-      color="primary"
+      color={irreversible ? 'danger' : 'primary'}
       sx={{ borderRadius: 'sm', px: 1.5, py: 1.25, my: 0.5 }}
       data-testid="chat-tool-approval"
+      data-irreversible={irreversible ? 'true' : undefined}
     >
       <Typography level="body-xs" fontWeight="lg">
         {diff
           ? APPROVAL_QUESTION[diff.operation]
-          : isGeneration(call.name)
-            ? 'Generate this? It costs credits.'
-            : call.name === 'bash_background'
-              ? 'Start this in the background?'
-              : 'Run this command?'}
+          : (HOST_QUESTION[call.name] ??
+            (isGeneration(call.name)
+              ? 'Generate this? It costs credits.'
+              : call.name === 'bash_background'
+                ? 'Start this in the background?'
+                : 'Run this command?'))}
       </Typography>
 
       {diff ? (
@@ -114,17 +126,30 @@ function ApprovalPrompt({
       )}
 
       <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-        <Button size="sm" onClick={() => onRespond(approvalId, 'once')} data-testid="chat-tool-approve-once">
-          {diff ? 'Apply this change' : isGeneration(call.name) ? 'Generate it' : 'Allow once'}
-        </Button>
         <Button
           size="sm"
-          variant="soft"
-          onClick={() => onRespond(approvalId, 'always')}
-          data-testid="chat-tool-approve-always"
+          color={irreversible ? 'danger' : 'primary'}
+          onClick={() => onRespond(approvalId, 'once')}
+          data-testid="chat-tool-approve-once"
         >
-          Always in this chat
+          {irreversible
+            ? 'Delete it'
+            : diff
+              ? 'Apply this change'
+              : isGeneration(call.name)
+                ? 'Generate it'
+                : 'Allow once'}
         </Button>
+        {!irreversible && (
+          <Button
+            size="sm"
+            variant="soft"
+            onClick={() => onRespond(approvalId, 'always')}
+            data-testid="chat-tool-approve-always"
+          >
+            Always in this chat
+          </Button>
+        )}
         <Button
           size="sm"
           variant="plain"
@@ -132,7 +157,13 @@ function ApprovalPrompt({
           onClick={() => onRespond(approvalId, 'deny')}
           data-testid="chat-tool-deny"
         >
-          {diff ? "Don't change it" : isGeneration(call.name) ? "Don't generate" : "Don't run"}
+          {irreversible
+            ? 'Keep it'
+            : diff
+              ? "Don't change it"
+              : isGeneration(call.name)
+                ? "Don't generate"
+                : "Don't run"}
         </Button>
       </Stack>
     </Sheet>

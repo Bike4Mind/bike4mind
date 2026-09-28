@@ -7,6 +7,7 @@ import type {
   ChatArtifactLibrary,
   ChatAttachmentInput,
   ChatModelCatalog,
+  ChatPendingApproval,
   ChatSession,
   ChatSessionStatusEvent,
   ChatSessionSummary,
@@ -44,6 +45,7 @@ export const IPC_CHANNELS = {
   chatListModels: 'chat:list-models',
   chatSetSessionModel: 'chat:set-session-model',
   chatSetSessionPinned: 'chat:set-session-pinned',
+  chatSetSessionArchived: 'chat:set-session-archived',
   chatListSessions: 'chat:list-sessions',
   chatCreateSession: 'chat:create-session',
   chatCreateCodeSession: 'chat:create-code-session',
@@ -72,6 +74,9 @@ export const IPC_CHANNELS = {
   chatGetSessionStatuses: 'chat:get-session-statuses',
   /** main -> renderer push; one session started or stopped being busy. */
   chatSessionStatus: 'chat:session-status',
+  chatGetPendingApprovals: 'chat:get-pending-approvals',
+  /** main -> renderer push; the whole set of approvals waiting on the user, whenever it moves. */
+  chatPendingApprovals: 'chat:pending-approvals',
   toolsGetAccess: 'tools:get-access',
   toolsGrantAccess: 'tools:grant-access',
   toolsRevokeAccess: 'tools:revoke-access',
@@ -111,6 +116,8 @@ export interface DesktopApi {
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
+    /** Move a conversation into or out of the sidebar's Archived section. Reversible. */
+    setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null>;
     listSessions(): Promise<ChatSessionSummary[]>;
     /** Start a Chat session: no project, the mode everything before this was. */
     createSession(): Promise<ChatSessionSummary>;
@@ -186,6 +193,16 @@ export interface DesktopApi {
     getSessionStatuses(): Promise<ChatSessionStatusEvent[]>;
     /** Subscribe to per-session status changes; returns the unsubscribe. */
     onSessionStatus(listener: (event: ChatSessionStatusEvent) => void): () => void;
+    /**
+     * Every tool call waiting on the user, in any conversation.
+     *
+     * Read once on mount for the same reason as the statuses above, and pushed whole rather
+     * than as deltas: the set is small, and a renderer that missed one push would otherwise be
+     * left showing an approval that has already been answered.
+     */
+    getPendingApprovals(): Promise<ChatPendingApproval[]>;
+    /** Subscribe to the pending-approval set; returns the unsubscribe. */
+    onPendingApprovals(listener: (pending: ChatPendingApproval[]) => void): () => void;
   };
   files: {
     /**

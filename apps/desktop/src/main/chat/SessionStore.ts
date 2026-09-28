@@ -1,7 +1,14 @@
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
-import type { ChatMessage, ChatProject, ChatSession, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import type {
+  ChatMessage,
+  ChatProject,
+  ChatSession,
+  ChatSessionMode,
+  ChatSessionOrigin,
+  ChatSessionSummary,
+} from '@shared/chat';
 
 /** Session ids are generated here, but arrive back from the renderer over IPC - see `filePath`. */
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -24,6 +31,23 @@ export function deriveTitle(prompt: string): string {
   if (!oneLine) return UNTITLED;
   if (oneLine.length <= TITLE_MAX_LENGTH) return oneLine;
   return `${oneLine.slice(0, TITLE_MAX_LENGTH - 3).trimEnd()}...`;
+}
+
+/** Everything about a new session other than its model. */
+export interface CreateOptions {
+  /**
+   * Fixed at creation rather than settable later for a Chat session, because the working
+   * directory it names is what the tools have been running in. A Code session CAN arrive
+   * without one and be bound afterwards - that is the one direction `mode` and `project`
+   * disagree in, and the chip row is what resolves it.
+   */
+  project?: ChatProject;
+  mode?: ChatSessionMode;
+  /**
+   * Marks a session the agent spawned. Write-once: the spawn caps are counted off it, so a
+   * session that could be re-parented could be walked out of them.
+   */
+  origin?: ChatSessionOrigin;
 }
 
 function summarize(session: ChatSession): ChatSessionSummary {
@@ -56,6 +80,26 @@ function normalizeProject(value: unknown): ChatProject | null {
 }
 
 /**
+ * A stored spawn lineage, or null when the file does not carry a usable one.
+ *
+ * A partial record reads back as absent, which makes the session look user-created. That is the
+ * safe direction for the caps: it can only ever under-count depth for one session, where the
+ * alternative - trusting a half-written record - lets a malformed file claim depth 0 forever
+ * and turns the nesting cap off.
+ */
+function normalizeOrigin(value: unknown): ChatSessionOrigin | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Partial<ChatSessionOrigin>;
+  if (typeof raw.parentSessionId !== 'string' || !raw.parentSessionId) return null;
+  if (typeof raw.depth !== 'number' || !Number.isFinite(raw.depth) || raw.depth < 1) return null;
+  return {
+    parentSessionId: raw.parentSessionId,
+    depth: Math.floor(raw.depth),
+    seedPrompt: typeof raw.seedPrompt === 'string' ? raw.seedPrompt : '',
+  };
+}
+
+/**
  * Conversations as one JSON file per session, mirroring the CLI's `~/.bike4mind/sessions`.
  *
  * Local because the completion endpoint this client uses is stateless; see @shared/chat.
@@ -80,15 +124,12 @@ export class SessionStore {
    * `model` is what the caller resolved against the server's catalog; omitting it falls back to
    * the build's preferred model, which is the right answer only until that catalog is readable.
    *
-   * `mode` is passed separately from `project` because the two can disagree in exactly one
-   * direction: a Code session with nothing chosen yet. It cannot run a turn until it has a
-   * project, but it is a real session with a real sidebar row, and the chips are what bind it.
+   * The rest arrive as named options rather than as three more positionals, because two of
+   * them are independently optional and `create(model, undefined, undefined, origin)` is not a
+   * call anyone can read.
    */
-  async create(
-    model?: string,
-    project?: ChatProject,
-    mode: ChatSessionMode = project ? 'code' : 'chat'
-  ): Promise<ChatSessionSummary> {
+  async create(model?: string, options: CreateOptions = {}): Promise<ChatSessionSummary> {
+    const { project, origin, mode = project ? 'code' : 'chat' } = options;
     const now = new Date().toISOString();
     const session: ChatSession = {
       id: randomUUID(),
@@ -100,6 +141,7 @@ export class SessionStore {
       updatedAt: now,
       mode,
       ...(project && mode === 'code' ? { project } : {}),
+      ...(origin ? { origin } : {}),
       messages: [],
     };
     await this.write(session);
@@ -199,6 +241,21 @@ export class SessionStore {
   }
 
   /**
+   * Archive or restore a conversation.
+   *
+   * Leaves `updatedAt` alone, as pinning does: this moves a row between sidebar sections and
+   * says nothing about when the conversation was last talked to.
+   */
+  async setArchived(id: string, archived: boolean): Promise<ChatSessionSummary | null> {
+    const session = await this.get(id);
+    if (!session) return null;
+    if (archived) session.archived = true;
+    else delete session.archived;
+    await this.write(session);
+    return summarize(session);
+  }
+
+  /**
    * Ground a Code session. The caller has already resolved `workingDirectory` - this only
    * records the decision, so a worktree that could not be prepared never reaches disk.
    *
@@ -252,7 +309,10 @@ export class SessionStore {
     const session = await this.get(id);
     if (!session) return null;
 
-    const isFirstPrompt = message.role === 'user' && !session.messages.some(m => m.role === 'user');
+    // `system` excluded on both sides: a spawned session reporting back is not a prompt, so it
+    // neither names the conversation nor counts as the first thing asked in it.
+    const isFirstPrompt =
+      message.role === 'user' && !message.system && !session.messages.some(m => m.role === 'user' && !m.system);
     // A turn can be an attachment with no words ("look at this" is the screenshot), so the
     // filenames are the only thing left to name the conversation after.
     if (isFirstPrompt && session.title === UNTITLED) {
@@ -286,6 +346,7 @@ export class SessionStore {
     // Tolerant rather than schema-validated: these are this app's own files, and a field added
     // in a later version must not make an existing conversation unreadable.
     const project = normalizeProject(parsed.project);
+    const origin = normalizeOrigin(parsed.origin);
     return {
       id: parsed.id ?? id,
       title: parsed.title || UNTITLED,
@@ -300,6 +361,8 @@ export class SessionStore {
       mode: parsed.mode === 'code' ? 'code' : 'chat',
       ...(parsed.mode === 'code' && project ? { project } : {}),
       ...(parsed.pinned ? { pinned: true } : {}),
+      ...(parsed.archived ? { archived: true } : {}),
+      ...(origin ? { origin } : {}),
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
       ...(typeof parsed.remoteSessionId === 'string' ? { remoteSessionId: parsed.remoteSessionId } : {}),
     };
