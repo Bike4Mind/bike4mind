@@ -110,24 +110,28 @@ export async function updateResearchConfig(
   // absent query is a refusal), and re-normalizing the merge is also what re-clamps a stored value
   // that a tightened bound has since put out of range.
   const merged = normalizeResearchLevers({ ...existing, ...input });
-  // Compared with `recencyDays`/`model` coerced to `null`, matching how each is actually stored
-  // below - so a merely-absent field is never mistaken for a change from a previously-cleared one
-  // when diffed against `existing` (which went through the same coercion on its own last write).
+  // Field-by-field, not a JSON.stringify of two object literals: `merged` and a hand-written
+  // comparison object build their keys in different orders whenever `model`/`recencyDays` are
+  // unset (the default config) - `normalizeResearchLevers` omits them entirely rather than
+  // inserting them in their "natural" position, so JSON.stringify would compare differently
+  // ordered strings and report a byte-identical default-config resubmit as changed. `recencyDays`/
+  // `model` are coerced to `null` on both sides, matching how each is actually stored below, so a
+  // merely-absent field is never mistaken for a change from a previously-cleared one.
   const nextName = input.name !== undefined ? normalizeName(input.name) : existing.name;
-  const nextLevers = { ...merged, recencyDays: merged.recencyDays ?? null, model: merged.model ?? null };
-  const existingLevers = {
-    query: existing.query,
-    model: existing.model ?? null,
-    maxResults: existing.maxResults,
-    maxProposals: existing.maxProposals,
-    recencyDays: existing.recencyDays ?? null,
-    allowedDomains: existing.allowedDomains,
-    blockedDomains: existing.blockedDomains,
-    minRelevance: existing.minRelevance,
-    costCeilingMicroUsd: existing.costCeilingMicroUsd,
-    proposedTags: existing.proposedTags,
-  };
-  const nothingMoved = nextName === existing.name && JSON.stringify(nextLevers) === JSON.stringify(existingLevers);
+  const sameStringArray = (a: readonly string[], b: readonly string[]) =>
+    a.length === b.length && a.every((value, i) => value === b[i]);
+  const nothingMoved =
+    nextName === existing.name &&
+    merged.query === existing.query &&
+    (merged.model ?? null) === (existing.model ?? null) &&
+    merged.maxResults === existing.maxResults &&
+    merged.maxProposals === existing.maxProposals &&
+    (merged.recencyDays ?? null) === (existing.recencyDays ?? null) &&
+    sameStringArray(merged.allowedDomains, existing.allowedDomains) &&
+    sameStringArray(merged.blockedDomains, existing.blockedDomains) &&
+    merged.minRelevance === existing.minRelevance &&
+    merged.costCeilingMicroUsd === existing.costCeilingMicroUsd &&
+    sameStringArray(merged.proposedTags, existing.proposedTags);
 
   const updated = await db.dataLakeResearchConfigs.updateConfig(configId, lake.id, {
     ...merged,
