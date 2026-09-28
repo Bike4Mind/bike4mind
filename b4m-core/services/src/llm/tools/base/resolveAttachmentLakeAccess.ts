@@ -6,7 +6,7 @@ import type { ToolContext } from './types';
 /**
  * The caller's owner-wide data-lake access as an `AttachmentLakeAccess`, for a tool that must
  * re-authorize a workbench file by the SAME door that admitted it - `FabFileModel.findAccessibleInIds`
- * / `getAccessibleFiles`. Mirrors the chat door's `attachmentLakeAccess()` (getAccessibleDataLakeAccess):
+ * / `getAccessibleFiles`. Mirrors the chat door's `attachmentLakeAccess()` (getAttachmentDataLakeAccess):
  * owner-wide and NOT session-narrowed, so a file the caller reaches only through lake membership still
  * resolves. Deliberately differs from `resolveSessionLakeAccess`, which narrows to the session corpus.
  *

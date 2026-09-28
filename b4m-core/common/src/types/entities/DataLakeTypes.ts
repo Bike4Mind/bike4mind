@@ -198,13 +198,14 @@ export interface TransitionalDataLakeSummary {
 export const LAKE_INGESTABLE_STATUSES = ['draft', 'active'] as const satisfies readonly DataLakeStatus[];
 
 /**
- * The statuses whose files the product actually puts in front of a user: browse
- * (`buildAccessibleQuery`'s default, behind `listDataLakes` and so behind `GET /api/files/byIds`)
+ * The statuses whose files the product actually puts in front of a user: browse (`listDataLakes`
+ * and `listAllDataLakes`, and so `GET /api/files/byIds`, plus `buildAccessibleQuery`'s default)
  * admits both, which is what lets a draft lake's file be attached in the workbench.
  *
- * Shared with the ATTACHMENT door's opt-in
- * (`findActiveByUserTagsAndEntitlements`'s `includeDraftLakes`) so the two cannot drift: an
- * attachment lookup narrower than the door that admitted the file silently drops it.
+ * Every one of those reads this constant, as does the ATTACHMENT door's opt-in
+ * (`findActiveByUserTagsAndEntitlements`'s `includeDraftLakes`), so the two cannot drift: an
+ * attachment lookup narrower than the door that admitted the file silently drops it. Do not
+ * restate the list as a literal at a browse site.
  * Retrieval/semantic search is deliberately NOT in this set - it stays `active`-only, because an
  * unpublished lake must not become ground truth for a question the user never pointed at it.
  */

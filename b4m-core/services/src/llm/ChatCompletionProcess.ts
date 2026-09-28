@@ -1237,14 +1237,52 @@ export class ChatCompletionProcess {
    * (`resolveAttachmentLakeAccess`, `createAttachmentLakeAccess`, this one) must stay in step.
    */
   private async attachmentLakeAccess(): Promise<AttachmentLakeAccess> {
-    const access = await this.getAttachmentDataLakeAccess();
+    return this.toAttachmentLakeAccess(await this.getAttachmentDataLakeAccess(), 'attachment-resolution');
+  }
+
+  private toAttachmentLakeAccess(access: ResolvedLakeAccessSetWithAdmissions, site: string): AttachmentLakeAccess {
     const lakeMemberships = lakeMembershipsFrom(access.lakes);
-    warnIfManyLakeMemberships(lakeMemberships, this.logger, 'attachment-resolution');
+    warnIfManyLakeMemberships(lakeMemberships, this.logger, site);
     return {
       lakeMemberships,
       dataLakeTags: access.dataLakeTags,
       dataLakeTagPrefixes: access.dataLakeTagPrefixes,
     };
+  }
+
+  /**
+   * The subset of `attachedFiles` the knowledge tools can actually READ, for the tool-offer gate.
+   *
+   * `attachedFiles` came through the draft-inclusive attachment scope, but the tools search through
+   * the active-only retrieval scope, so a file reachable only through a DRAFT lake is inlined yet
+   * unreturnable by the tool. Counting it would offer a tool that can only reply empty - the
+   * "I cannot access this file" pattern `hasAttachedKnowledge` exists to prevent.
+   *
+   * Re-reads only when the attachment scope reaches a lake the retrieval scope does not; otherwise
+   * the two reads are identical and `attachedFiles` is returned as-is. `null` in or on a failed
+   * re-read means "cannot tell", which the gate treats as offer (fail open), as it already does.
+   */
+  private async getToolReadableAttachedFiles(
+    attachedFiles: IFabFileDocument[] | null
+  ): Promise<IFabFileDocument[] | null> {
+    if (attachedFiles === null || attachedFiles.length === 0) return attachedFiles;
+    const retrieval = await this.getAccessibleDataLakeAccess();
+    const attachment = await this.getAttachmentDataLakeAccess();
+    const retrievalLakeIds = new Set(retrieval.lakes.map(l => l.id));
+    if (attachment.lakes.every(l => retrievalLakeIds.has(l.id))) return attachedFiles;
+    try {
+      const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
+      return await this.db.fabfiles.getAccessibleFiles(
+        attachedFiles.map(f => f.id),
+        scope,
+        this.toAttachmentLakeAccess(retrieval, 'attachment-offer-gate')
+      );
+    } catch (err) {
+      this.logger.warn(
+        `[knowledge] tool-readable attachment check failed; treating attached knowledge as indexed (fail open): ${(err as Error)?.message}`
+      );
+      return null;
+    }
   }
 
   /**
@@ -1998,9 +2036,14 @@ export class ChatCompletionProcess {
       // discarding the content already in front of it. `attachedKnowledgeFiles` is `null` both
       // when the lookup was skipped above and when it failed - fail toward offering rather than
       // stranding a genuinely indexed corpus with no retrieval path (see getAttachedKnowledgeFiles).
+      // Narrowed to what the tool can READ, which excludes a draft-lake-only attachment (see
+      // getToolReadableAttachedFiles).
+      const toolReadableAttachedFiles = hasAnyAttachment
+        ? await this.getToolReadableAttachedFiles(attachedKnowledgeFiles)
+        : attachedKnowledgeFiles;
       const hasAttachedKnowledge =
         hasAnyAttachment &&
-        (attachedKnowledgeFiles === null || attachedKnowledgeFiles.some(attachmentHasIndexedContent));
+        (toolReadableAttachedFiles === null || toolReadableAttachedFiles.some(attachmentHasIndexedContent));
       // Only pay the accessible-lake lookup when it could change the offer: not skipped
       // (prompt-mode), and attached knowledge hasn't already triggered the offer anyway.
       const hasAccessibleDataLake =
