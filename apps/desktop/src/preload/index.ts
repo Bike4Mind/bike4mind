@@ -3,6 +3,7 @@ import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth'
 import type {
   ChatApprovalDecision,
   ChatAttachmentInput,
+  ChatPendingApproval,
   ChatSessionStatusEvent,
   ChatStreamEvent,
   CreateCodeSessionRequest,
@@ -38,6 +39,8 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionModel, sessionId, model),
     setSessionPinned: (sessionId: string, pinned: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPinned, sessionId, pinned),
+    setSessionArchived: (sessionId: string, archived: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionArchived, sessionId, archived),
     listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSessions),
     createSession: () => ipcRenderer.invoke(IPC_CHANNELS.chatCreateSession),
     createCodeSession: (request: CreateCodeSessionRequest) =>
@@ -78,6 +81,12 @@ const api: DesktopApi = {
       const handler = (_event: unknown, event: ChatSessionStatusEvent) => listener(event);
       ipcRenderer.on(IPC_CHANNELS.chatSessionStatus, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.chatSessionStatus, handler);
+    },
+    getPendingApprovals: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetPendingApprovals),
+    onPendingApprovals: listener => {
+      const handler = (_event: unknown, pending: ChatPendingApproval[]) => listener(pending);
+      ipcRenderer.on(IPC_CHANNELS.chatPendingApprovals, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatPendingApprovals, handler);
     },
   },
   files: {

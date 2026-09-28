@@ -1,5 +1,6 @@
 import { bashBackground, bashKill, bashList, bashOutput } from './backgroundTools';
 import { fileRead, globFiles, grepSearch } from './fileTools';
+import { sessionArchive, sessionDelete, sessionList, sessionRead, sessionSpawn } from './hostTools';
 import { generateImageTool, generateMusicTool, generateSoundEffectTool, generateSpeechTool } from './mediaTools';
 import { bashExecute } from './shellTools';
 import { fileEdit, fileWrite } from './writeTools';
@@ -45,7 +46,16 @@ const MEDIA_TOOLS: readonly ToolDefinition[] = [
   generateMusicTool,
 ];
 
-const BY_NAME = new Map([...LOCAL_TOOLS, ...MEDIA_TOOLS].map(tool => [tool.schema.name, tool]));
+/**
+ * The tools that drive this app: starting, listing, reading and removing conversations.
+ *
+ * Code sessions only, because every one of them is scoped to the calling session's project -
+ * see hostTools.ts. Reads are ungated; spawning is gated on cost and autonomy, and deleting is
+ * gated as irreversible, which no standing approval can cover.
+ */
+const HOST_TOOLS: readonly ToolDefinition[] = [sessionList, sessionRead, sessionSpawn, sessionArchive, sessionDelete];
+
+const BY_NAME = new Map([...LOCAL_TOOLS, ...MEDIA_TOOLS, ...HOST_TOOLS].map(tool => [tool.schema.name, tool]));
 
 export function findTool(name: string): ToolDefinition | undefined {
   return BY_NAME.get(name);
@@ -54,13 +64,23 @@ export function findTool(name: string): ToolDefinition | undefined {
 /**
  * Tool declarations for the request body, in the endpoint's `{ toolSchema }` envelope.
  *
- * The two families are declared independently, because they become available for unrelated
+ * The three families are declared independently, because they become available for unrelated
  * reasons. No granted folder means no local tools at all: declaring file tools the model can
  * only be denied teaches it to keep retrying, and an undeclared tool is a cleaner "not
  * available" than one that always fails. The generation tools need only a signed-in session,
- * so they are offered to a user who has shared nothing.
+ * so they are offered to a user who has shared nothing. The host tools need a project, which
+ * is what makes them Code-only.
  */
-export function toolsForRequest(options: { roots: readonly string[]; media: boolean }): { toolSchema: ToolSchema }[] {
-  const available = [...(options.roots.length > 0 ? LOCAL_TOOLS : []), ...(options.media ? MEDIA_TOOLS : [])];
+export function toolsForRequest(options: {
+  roots: readonly string[];
+  media: boolean;
+  /** A Code session's project binding. Without one the host tools have nothing to scope to. */
+  host: boolean;
+}): { toolSchema: ToolSchema }[] {
+  const available = [
+    ...(options.roots.length > 0 ? LOCAL_TOOLS : []),
+    ...(options.media ? MEDIA_TOOLS : []),
+    ...(options.host ? HOST_TOOLS : []),
+  ];
   return available.map(tool => ({ toolSchema: tool.schema }));
 }

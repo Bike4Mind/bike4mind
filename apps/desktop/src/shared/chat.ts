@@ -109,6 +109,12 @@ export interface ChatToolCall {
   /** What the user is being asked to allow, ready to display. Set with `approvalId`. */
   approvalDetail?: string;
   /**
+   * Set with `approvalId` on a tool whose effect cannot be undone. The card must not offer
+   * "always in this chat" for one of these, and main refuses to honour a standing approval
+   * against it however the user answered an earlier identical call.
+   */
+  approvalIrreversible?: boolean;
+  /**
    * The change a write tool proposes, set with `approvalId` on tools that edit files. The
    * user sees it before answering; nothing has been written while this is on screen.
    */
@@ -197,6 +203,15 @@ export interface ChatMessage {
   error?: string;
   /** Files the user attached to this turn. Only ever on a user message. */
   attachments?: ChatAttachment[];
+  /**
+   * Written by the app rather than typed by anyone: today only a spawned session reporting back
+   * to the conversation that started it.
+   *
+   * It carries `role: 'user'` because that is the only way out-of-band information reaches a
+   * stateless completions endpoint, but it is not the user talking, and the thread draws it as a
+   * notice rather than as their words.
+   */
+  system?: boolean;
 }
 
 export type BackgroundProcessStatus = 'running' | 'exited' | 'killed' | 'failed';
@@ -307,6 +322,24 @@ export interface ChatProject {
   contextDirectories: string[];
 }
 
+/**
+ * Where a session came from, when it was not the user who started it.
+ *
+ * Absent means a person created it, which is also what `depth: 0` would mean - the distinction
+ * matters because the spawn caps count agent-created sessions only, and a user is not rationed.
+ *
+ * `depth` is stored rather than walked back up the chain at spawn time: a parent can be deleted
+ * while its child is still running, and a cap that stops being enforceable because a row was
+ * removed from the sidebar is not a cap.
+ */
+export interface ChatSessionOrigin {
+  parentSessionId: string;
+  /** 1 for a session spawned by one the user made. Capped - see MAX_SPAWN_DEPTH in main. */
+  depth: number;
+  /** The prompt it was started with, so the row can say what it was sent off to do. */
+  seedPrompt: string;
+}
+
 interface ChatSessionMeta {
   id: string;
   title: string;
@@ -318,6 +351,14 @@ interface ChatSessionMeta {
   project?: ChatProject;
   /** Pinned to the top of the sidebar, above both the groups and the loose conversations. */
   pinned?: boolean;
+  /** Set when the agent spawned this session rather than the user starting it. */
+  origin?: ChatSessionOrigin;
+  /**
+   * Out of the way but not gone: archived sessions drop into their own collapsed section at the
+   * bottom of the sidebar instead of sitting among the live ones. Reversible from the same menu,
+   * which is what separates it from delete.
+   */
+  archived?: boolean;
 }
 
 /** A session without its messages - what the sidebar needs, so a long thread is not loaded to list it. */
@@ -348,9 +389,9 @@ export interface ChatSession extends ChatSessionMeta {
  * with `stopReason: 'aborted'` and whatever text had arrived, not an error - the partial reply
  * is kept, matching what the user saw on screen when they pressed stop.
  *
- * The two 'background-*' events are the exception to all of that: a background process outlives
- * the turn that started it, so they keep arriving with no reply in flight and carry no
- * `messageId`. A consumer that only cares about replies must ignore them explicitly rather
+ * The two 'background-*' events and 'message' are the exception to all of that: a background
+ * process outlives the turn that started it and a spawned session reports back long after, so
+ * they keep arriving with no reply in flight and carry no `messageId`. A consumer that only cares about replies must ignore them explicitly rather
  * than treating an unrecognised event as terminal.
  *
  * 'usage' is non-terminal too: several arrive during one reply, each carrying the running total.
@@ -384,7 +425,16 @@ export type ChatStreamEvent =
       stream: 'stdout' | 'stderr';
       text: string;
     }
-  | { type: 'background-status'; sessionId: string; process: BackgroundProcessInfo };
+  | { type: 'background-status'; sessionId: string; process: BackgroundProcessInfo }
+  /**
+   * A whole message appeared in a conversation without anyone typing it: today only a spawned
+   * session reporting back to the one that started it.
+   *
+   * Non-terminal, and it carries no `messageId` of a reply in flight - it is not part of one.
+   * It exists because the thread is otherwise built entirely from a reply being streamed, so a
+   * parent sitting open would not show the report until it was reloaded.
+   */
+  | { type: 'message'; sessionId: string; message: ChatMessage };
 
 /**
  * What a session is doing, as the sidebar draws it.
@@ -507,3 +557,33 @@ export interface UpdateProjectRequest {
  */
 export type UpdateProjectResult =
   { ok: true; session: ChatSessionSummary } | { ok: false; error: string; busy?: boolean };
+
+/**
+ * Why a spawn was refused, for the message handed back to the MODEL.
+ *
+ * Distinguished rather than collapsed into one string because the model can act on two of them
+ * differently: 'depth' is permanent for this session and it should stop asking, while
+ * 'concurrency' clears on its own and waiting is a real option.
+ */
+export type SpawnRefusal = 'depth' | 'concurrency' | 'no-project' | 'empty-prompt';
+
+/**
+ * A tool call parked at the approval gate, as the cross-session inbox lists it.
+ *
+ * The reason this exists as its own channel: a tool-call approval is drawn inside the
+ * conversation that raised it, and an autonomous session the renderer is not showing raises
+ * approvals nobody can see. The sidebar row says that session needs the user, but a badge is
+ * not an answer - this is what lets them give one without first working out which row to click.
+ */
+export interface ChatPendingApproval {
+  approvalId: string;
+  sessionId: string;
+  /** The conversation's title as it was when the tool asked, for naming the row. */
+  sessionTitle: string;
+  toolName: string;
+  detail: string;
+  diff?: ChatDiff;
+  /** True when "always in this chat" must not be offered; see ChatToolCall.approvalIrreversible. */
+  irreversible?: boolean;
+  requestedAt: string;
+}

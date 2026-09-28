@@ -110,3 +110,26 @@ describe('orderedSessions', () => {
     expect(orderedSessions(code).map(entry => entry.id)).toEqual(['pin', 'one-a', 'one-b', 'two-a']);
   });
 });
+
+describe('archived sessions', () => {
+  it('lifts them out of every other section, pinned included', () => {
+    const sections = groupSessions(
+      [
+        session({ id: 'live', mode: 'code', project: project('/r/one', 'one') }),
+        session({ id: 'gone', mode: 'code', archived: true, project: project('/r/one', 'one') }),
+        // Archiving outranks pinning, or archive would be the one action with no visible effect.
+        session({ id: 'pinned-gone', mode: 'code', pinned: true, archived: true, project: project('/r/one', 'one') }),
+      ],
+      'code'
+    );
+
+    expect(sections.archived.map(entry => entry.id)).toEqual(['gone', 'pinned-gone']);
+    expect(sections.pinned).toEqual([]);
+    expect(sections.projects.flatMap(group => group.sessions).map(entry => entry.id)).toEqual(['live']);
+  });
+
+  it('keeps archived rows out of the quick-switch order, which counts what is drawn', () => {
+    const sections = groupSessions([session({ id: 'live' }), session({ id: 'gone', archived: true })], 'chat');
+    expect(orderedSessions(sections).map(entry => entry.id)).toEqual(['live']);
+  });
+});
