@@ -12,8 +12,8 @@ import {
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { getFilesStorage } from '@server/utils/storage';
-import { createAttachmentLakeAccess } from '@server/queueHandlers/agentExecutor.attachmentLakeAccess';
 import { z } from 'zod';
+import type { AttachmentLakeAccess } from '@bike4mind/common';
 import { NotebookExportRequestSchema } from '../../../types/api';
 
 const { NotebookExportService, NotebookExportError } = notebookExportService;
@@ -66,13 +66,19 @@ const handler = baseApi().post(
       toDate: validatedBody.toDate,
     };
 
+    let lakeAccess: Promise<AttachmentLakeAccess> | undefined;
     const adapters = {
       sessionRepository,
       chatHistoryRepository: questRepository,
       knowledgeRepository: fabFileRepository,
       knowledgeAccess: {
         userGroups: req.user.groups ?? undefined,
-        resolveLakeAccess: createAttachmentLakeAccess(req.user, req.logger),
+        // Imported at call time and memoized: the resolver's graph reaches the Mongoose models (see
+        // the session create route), and one export resolves once however many notebooks it spans.
+        resolveLakeAccess: () =>
+          (lakeAccess ??= import('@server/queueHandlers/agentExecutor.attachmentLakeAccess').then(m =>
+            m.createAttachmentLakeAccess(req.user, req.logger)()
+          )),
       },
       artifactRepository,
       artifactContentRepository,
