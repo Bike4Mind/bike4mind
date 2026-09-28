@@ -51,7 +51,7 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.AI_GENERATE,
     label: 'AI Generate',
     description: 'Use AI generation features',
-    endpoints: ['POST /api/v1/image-generations', 'POST /api/v1/image-edits'],
+    endpoints: ['POST /api/v1/image-generations', 'POST /api/v1/image-edits', 'POST /api/v1/embeddings'],
   },
   {
     value: ApiKeyScope.AI_CHAT,
