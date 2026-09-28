@@ -70,4 +70,12 @@ describe('toolsUsedToFunctionCalls', () => {
     const result = toolsUsedToFunctionCalls([{ name: 'web_search', arguments: '{}', id: 'call_1' }]);
     expect(result[0].executionTime).toBeUndefined();
   });
+
+  it('never carries the in-memory fullReturnValue onto functionCalls', () => {
+    const result = toolsUsedToFunctionCalls([
+      { name: 'web_fetch', arguments: '{}', id: 'call_1', returnValue: 'short', fullReturnValue: 'short and long' },
+    ]);
+    expect(result[0]).not.toHaveProperty('fullReturnValue');
+    expect(result[0].returnValue).toBe('short');
+  });
 });

@@ -363,6 +363,13 @@ export function maskToolOutputRegions(content: string): ToolOutputMask {
   return { masked: masked + content.slice(copiedTo), protect, restore };
 }
 
+const TOOL_OUTPUT_OPENER_MARK = new RegExp(`^( {0,3}~{3,}[\\w-]*)[ \\t]+${TOOL_OUTPUT_MARKER}([ \\t]*\\r?)$`, 'gm');
+
+/** Drops the marker from every tool-output fence opener so replayed history never shows it to the model. */
+export function stripToolOutputMarker(value: string): string {
+  return value.includes(TOOL_OUTPUT_MARKER) ? value.replace(TOOL_OUTPUT_OPENER_MARK, '$1$2') : value;
+}
+
 function longestTildeRun(value: string): number {
   let longest = 0;
   let run = 0;

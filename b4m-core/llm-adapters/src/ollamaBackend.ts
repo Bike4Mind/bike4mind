@@ -22,7 +22,7 @@ import { ILogger, Logger } from '@bike4mind/observability';
 import { Agent } from 'undici';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { executeToolsBatch } from './executeToolsBatch';
-import { truncateToolResult } from './recordToolResult';
+import { fullToolResult, truncateToolResult } from './recordToolResult';
 import { normalizeOllamaDoneReason } from './stopReason';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -402,6 +402,7 @@ export class OllamaBackend implements ICompletionBackend {
           // observations[i] is already a string here (executeToolsBatch<string>), but keeping
           // the same guard means a future change to that generic can't silently drop it.
           returnValue: truncateToolResult(String(observations[i])),
+          fullReturnValue: fullToolResult(observations[i]),
           success: outcomes[i].ok,
         })),
       ];

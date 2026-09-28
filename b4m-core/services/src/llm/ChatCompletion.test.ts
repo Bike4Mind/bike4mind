@@ -1453,6 +1453,68 @@ describe('ChatCompletionProcess', () => {
 
         expect(mockQuest.replies).toEqual(['Hi!']);
       });
+      describe('echoed tool output', () => {
+        beforeEach(() => {
+          mockedGetSettingsValue.mockImplementation(((key: string) =>
+            key === 'EnableArtifacts' ? true : undefined) as typeof getSettingsValue);
+        });
+        afterEach(() => mockedGetSettingsValue.mockReset());
+
+        const page =
+          '<!DOCTYPE html>\n<html>\n<head><title>Fetched page</title></head>\n<body><h1>Hello from the fetched page</h1><p>Body text.</p></body>\n</html>';
+
+        function fetchThenAnswer(answer: string, toolName = 'web_fetch') {
+          setupTurn(async cb => {
+            const toolsUsed: Array<Record<string, unknown>> = [];
+            toolsUsed.push({ name: toolName, arguments: '{"url":"x"}', id: 't1' });
+            await cb(['Fetching.'], { toolsUsed });
+            // Stamped in place with no callback after it, as recordToolResult does.
+            Object.assign(toolsUsed[0], { returnValue: page, fullReturnValue: page, success: true });
+            await cb([answer]);
+            await cb([], { stopReason: 'end_turn' });
+          });
+        }
+
+        it('keeps a fenced html echo of web_fetch output as a marked code block', async () => {
+          fetchThenAnswer(`Here is the page:\n\n\`\`\`html\n${page}\n\`\`\`\n`);
+
+          await runTurn();
+
+          const reply = mockQuest.replies.join('');
+          expect(reply).toContain('~~~html b4m-tool-output');
+          expect(reply).not.toContain('<artifact');
+        });
+
+        it('keeps a bare echoed html document as a marked code block', async () => {
+          fetchThenAnswer(`Here is the page:\n\n${page}\n`);
+
+          await runTurn();
+
+          const reply = mockQuest.replies.join('');
+          expect(reply).toContain('b4m-tool-output');
+          expect(reply).not.toContain('<artifact');
+        });
+
+        it('still promotes model-authored html that no tool returned', async () => {
+          fetchThenAnswer(
+            '```html\n<!DOCTYPE html>\n<html><body><h1>A page I wrote myself for you today</h1></body></html>\n```\n'
+          );
+
+          await runTurn();
+
+          const reply = mockQuest.replies.join('');
+          expect(reply).toContain('<artifact');
+          expect(reply).not.toContain('b4m-tool-output');
+        });
+
+        it('still promotes html returned by an artifact-emitting tool', async () => {
+          fetchThenAnswer(`\`\`\`html\n${page}\n\`\`\`\n`, 'mermaid_chart');
+
+          await runTurn();
+
+          expect(mockQuest.replies.join('')).toContain('<artifact');
+        });
+      });
     });
 
     // Every other test in this file mocks messageTruncation: null, which never exercises the

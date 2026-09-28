@@ -18,12 +18,21 @@ export const MAX_RECORDED_TOOL_RESULT_CHARS = 8_000;
 
 export const TOOL_RESULT_TRUNCATION_NOTICE = '\n[tool result truncated]';
 
+/** Cap on the in-memory `fullReturnValue` (chars). */
+export const MAX_FULL_TOOL_RESULT_CHARS = 200_000;
+
 export type RecordableToolUse = {
   name: string;
   arguments?: string;
   /** Tool use ID for Anthropic API tool pairing */
   id?: string;
   returnValue?: string;
+  /**
+   * The untruncated result (up to MAX_FULL_TOOL_RESULT_CHARS), in memory only: the reply parser
+   * uses it to spot tool output the model quoted back. toolsUsedToFunctionCalls never copies it,
+   * so it is not persisted.
+   */
+  fullReturnValue?: string;
   success?: boolean;
   /** Wall-clock ms the tool took to run, success or failure. Undefined when the caller has none. */
   executionTime?: number;
@@ -32,6 +41,10 @@ export type RecordableToolUse = {
 export function truncateToolResult(observation: string): string {
   if (observation.length <= MAX_RECORDED_TOOL_RESULT_CHARS) return observation;
   return observation.slice(0, MAX_RECORDED_TOOL_RESULT_CHARS) + TOOL_RESULT_TRUNCATION_NOTICE;
+}
+
+export function fullToolResult(observation: unknown): string {
+  return String(observation).slice(0, MAX_FULL_TOOL_RESULT_CHARS);
 }
 
 /**
@@ -63,6 +76,7 @@ export function recordToolResult(
     return;
   }
   entry.returnValue = truncateToolResult(String(observation));
+  entry.fullReturnValue = fullToolResult(observation);
   entry.success = success;
   // Left undefined (rather than defaulted to e.g. 0) when the caller has no timing - see
   // RecordableToolUse's doc comment.

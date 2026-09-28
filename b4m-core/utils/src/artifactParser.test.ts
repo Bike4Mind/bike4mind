@@ -6,6 +6,7 @@ import {
   scanMermaidFences,
   maskToolOutputRegions,
   TOOL_OUTPUT_MARKER,
+  stripToolOutputMarker,
 } from './artifactParser';
 import { createToolEchoMatcher } from './toolEchoMatcher';
 
@@ -1176,5 +1177,16 @@ describe('maskToolOutputRegions', () => {
     expect(out.match(/<artifact [^>]*>/g)).toHaveLength(1);
     expect(out).toContain('<div>quoted</div>');
     expect(out.startsWith(`~~~html ${TOOL_OUTPUT_MARKER}\n\`\`\`html\n<div>quoted</div>\n~~~`)).toBe(true);
+  });
+});
+
+describe('stripToolOutputMarker', () => {
+  it('drops the marker from openers only, keeping body text and CRLF', () => {
+    const reply = `Intro\r\n~~~html ${TOOL_OUTPUT_MARKER}\r\n<p>${TOOL_OUTPUT_MARKER}</p>\r\n~~~\r\n`;
+    expect(stripToolOutputMarker(reply)).toBe(`Intro\r\n~~~html\r\n<p>${TOOL_OUTPUT_MARKER}</p>\r\n~~~\r\n`);
+  });
+
+  it('returns unmarked text unchanged', () => {
+    expect(stripToolOutputMarker('```html\n<p>x</p>\n```')).toBe('```html\n<p>x</p>\n```');
   });
 });

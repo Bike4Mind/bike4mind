@@ -3,6 +3,7 @@ import {
   recordToolResult,
   truncateToolResult,
   MAX_RECORDED_TOOL_RESULT_CHARS,
+  MAX_FULL_TOOL_RESULT_CHARS,
   TOOL_RESULT_TRUNCATION_NOTICE,
   type RecordableToolUse,
 } from './recordToolResult';
@@ -105,5 +106,18 @@ describe('recordToolResult', () => {
     const toolsUsed: RecordableToolUse[] = [{ name: 'web_search', id: 'call_1' }];
     recordToolResult(toolsUsed, { id: 'call_1', name: 'web_search' }, 'result', true);
     expect(toolsUsed[0].executionTime).toBeUndefined();
+  });
+
+  it('keeps the untruncated result in fullReturnValue, capped at MAX_FULL_TOOL_RESULT_CHARS', () => {
+    const long = 'x'.repeat(MAX_RECORDED_TOOL_RESULT_CHARS + 50);
+    const toolsUsed: RecordableToolUse[] = [{ name: 'web_fetch', id: 'call_1' }];
+    recordToolResult(toolsUsed, { id: 'call_1', name: 'web_fetch' }, long, true);
+    expect(toolsUsed[0].returnValue?.endsWith(TOOL_RESULT_TRUNCATION_NOTICE)).toBe(true);
+    expect(toolsUsed[0].fullReturnValue).toBe(long);
+
+    const huge = 'y'.repeat(MAX_FULL_TOOL_RESULT_CHARS + 10);
+    const second: RecordableToolUse[] = [{ name: 'web_fetch', id: 'call_2' }];
+    recordToolResult(second, { id: 'call_2', name: 'web_fetch' }, huge, true);
+    expect(second[0].fullReturnValue).toHaveLength(MAX_FULL_TOOL_RESULT_CHARS);
   });
 });

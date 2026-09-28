@@ -545,6 +545,7 @@ export {
 } from './_anthropicSemaphore';
 export * from './PipelineTimer';
 export * from './realtimeVoicePricing';
+export { TOOL_RESULT_TRUNCATION_NOTICE } from './recordToolResult';
 export * from './resolveDeprecatedModel';
 export * from './deprecationHorizon';
 export * from './staleReferences';
