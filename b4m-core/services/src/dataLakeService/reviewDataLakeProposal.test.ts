@@ -62,12 +62,14 @@ const adapters = (
   const recordAdmission = vi.fn(async () => undefined);
   const releaseClaim = vi.fn(async () => undefined);
   const admitSource = over.admitSource ?? vi.fn(async () => ({ id: 'file-9', fileName: 'Quarterly report' }));
+  const record = vi.fn(async () => undefined);
   return {
     deps: {
       db: {
         dataLakeProposals: { findById, claimForReview, recordAdmission, releaseClaim },
         dataLakes: { findById: vi.fn(async () => (over.lake === undefined ? lake() : over.lake)) },
         ...(over.grants ? { dataLakeAccessGrants: { listByLake: vi.fn(async () => over.grants as never) } } : {}),
+        lakeConfigChangeEvents: { record },
       },
       admitSource,
     },
@@ -76,6 +78,7 @@ const adapters = (
     recordAdmission,
     releaseClaim,
     admitSource,
+    record,
   };
 };
 
@@ -251,6 +254,34 @@ describe('approveDataLakeProposal', () => {
     await expect(approveDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(BadRequestError);
     expect(admitSource).not.toHaveBeenCalled();
   });
+
+  // #3298: approving a proposal left no trace in the lake's History tab - reviewDataLakeProposal
+  // never called recordLakeConfigChange at all.
+  it('records an approve-proposal history event naming the source and the reviewer', async () => {
+    const { deps, record } = adapters();
+
+    await approveDataLakeProposal('prop-1', ctx(), deps);
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalId: OWNER,
+        dataLakeId: 'lake-1',
+        action: 'approve-proposal',
+        changes: [{ field: 'proposalReview', kind: 'literal', after: 'approved: https://example.com/report' }],
+      })
+    );
+  });
+
+  it('still reports success when the history event fails to record', async () => {
+    const { deps, record } = adapters();
+    record.mockRejectedValue(new Error('replica set stepped down'));
+
+    // Best-effort like recordAdmission: an audit-write failure must never turn approved work into a
+    // reported failure the reviewer cannot act on.
+    const result = await approveDataLakeProposal('prop-1', ctx(), deps);
+
+    expect(result.fabFile.id).toBe('file-9');
+  });
 });
 
 describe('declineDataLakeProposal', () => {
@@ -292,6 +323,19 @@ describe('declineDataLakeProposal', () => {
 
     expect(claimForReview).toHaveBeenCalled();
   });
+
+  it('records a decline-proposal history event', async () => {
+    const { deps, record } = adapters();
+
+    await declineDataLakeProposal('prop-1', ctx(), { reason: 'paywalled' }, deps);
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'decline-proposal',
+        changes: [{ field: 'proposalReview', kind: 'literal', after: 'declined: https://example.com/report' }],
+      })
+    );
+  });
 });
 
 describe('restoreDataLakeProposal', () => {
@@ -309,6 +353,7 @@ describe('restoreDataLakeProposal', () => {
         ? ({ restored: false, reason: over.result } as const)
         : ({ restored: true, proposal: { ...(found as IDataLakeProposalDocument), status: 'pending' } } as const)
     );
+    const record = vi.fn(async () => undefined);
     return {
       deps: {
         db: {
@@ -318,9 +363,11 @@ describe('restoreDataLakeProposal', () => {
             restoreDeclined,
           },
           dataLakes: { findById: vi.fn(async () => lake()) },
+          lakeConfigChangeEvents: { record },
         },
       },
       restoreDeclined,
+      record,
     };
   };
 
@@ -358,6 +405,19 @@ describe('restoreDataLakeProposal', () => {
 
     await expect(restoreDataLakeProposal('prop-1', ctx({ userId: 'stranger' }), deps)).rejects.toThrow(ForbiddenError);
     expect(restoreDeclined).not.toHaveBeenCalled();
+  });
+
+  it('records a restore-proposal history event', async () => {
+    const { deps, record } = restoreAdapters();
+
+    await restoreDataLakeProposal('prop-1', ctx(), deps);
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'restore-proposal',
+        changes: [{ field: 'proposalReview', kind: 'literal', after: 'restored: https://example.com/report' }],
+      })
+    );
   });
 });
 
