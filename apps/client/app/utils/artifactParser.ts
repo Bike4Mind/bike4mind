@@ -15,6 +15,12 @@ import {
 } from '@bike4mind/utils/artifactParser';
 import { tryParseChartJSON } from './chartJsonParser';
 import { hasSingleLineImportFrom, scanImportStatements } from './importStatements';
+import {
+  ResultReplacer,
+  replaceEscapedResultObjects,
+  replaceLazyResultObjects,
+  replaceLogFormatResultObjects,
+} from './toolOutputResultScan';
 
 // Value is anchored to its own quote kind so a double-quoted value can contain
 // apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
@@ -526,23 +532,25 @@ function convertToolOutputsToArtifacts(content: string): string {
 
   // Try to find and extract JSON objects that contain our artifact types
   // We'll look for various patterns of escaping around the "result" field
-  const patterns = [
+  // Patterns 1, 3 and 5 are linear scanners (./toolOutputResultScan) with the same results as
+  // the regexes they replaced, which were quadratic on repeated unclosed "result" prefixes.
+  const steps: Array<(text: string, replacer: ResultReplacer) => string> = [
     // Pattern 1: Standard result field with escaped JSON (most common from logs)
-    /"result":\s*"(\{\\?"[^"]*\\?":\s*\\?"[^"]*\\?"[^}]*\})"/g,
+    replaceEscapedResultObjects,
     // Pattern 2: Result field with simpler escaping
-    /"result":\s*"(\{[^"]*(?:\\"[^"]*)*\})"/g,
+    (text, replacer) => text.replace(/"result":\s*"(\{[^"]*(?:\\"[^"]*)*\})"/g, replacer),
     // Pattern 3: More permissive result field matching
-    /"result":\s*"(\{.*?\})"/g,
+    replaceLazyResultObjects,
     // Pattern 4: Direct JSON object (less common but possible)
-    /(\{[^{}]*"type"\s*:\s*"(?:rechart|recharts|mermaid)"[^{}]*\})/g,
+    (text, replacer) => text.replace(/(\{[^{}]*"type"\s*:\s*"(?:rechart|recharts|mermaid)"[^{}]*\})/g, replacer),
     // Pattern 5: Very specific pattern for the exact log format
-    /"result":\s*"\{(\\\\"type\\\\":\\\\"(?:rechart|recharts|mermaid)\\\\"[^}]*)\}"/g,
+    replaceLogFormatResultObjects,
   ];
 
   let processedContent = content;
 
-  for (const pattern of patterns) {
-    processedContent = processedContent.replace(pattern, (match, captured) => {
+  for (const step of steps) {
+    processedContent = step(processedContent, (match, captured) => {
       try {
         let jsonString = captured || match;
 
