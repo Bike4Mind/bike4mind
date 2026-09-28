@@ -12,7 +12,7 @@ import {
   Typography,
 } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import type { IDataLakeSpendResponse } from '@bike4mind/common';
+import type { IDataLakeSpendResponse, UsageEventFeature } from '@bike4mind/common';
 import { formatUsd } from '@client/app/utils/formatUsd';
 import { BreakdownTable } from '@client/app/components/common/BreakdownTable';
 
@@ -20,6 +20,22 @@ const DAY_RANGES = [30, 60, 90] as const;
 type DayRange = (typeof DAY_RANGES)[number];
 
 const microToUsd = (microUsd: number) => microUsd / 1_000_000;
+
+/**
+ * #3298: research-run judge cost was invisible on this tab even after it started reaching the
+ * ledger, because nothing distinguished it from ingestion spend in the totals above. Today,
+ * `dataLakeId` is attached to a UsageEvent only by `fabFileVectorize.ts` (`'embedding'`) and
+ * `runLakeResearch.ts` (`'operations'`, see `recordOperationalUsage`'s own doc comment) - so
+ * within one lake's ledger, every `'operations'` row is currently a research judge call. Nothing
+ * enforces that pairing, though: a raw feature name is shown for anything else (there is none
+ * today), and a future THIRD lake-attributed producer of `'operations'` spend would silently
+ * inherit the "Research" label below and must revisit this map.
+ */
+const FEATURE_LABEL: Partial<Record<UsageEventFeature, string>> = {
+  embedding: 'File ingestion',
+  operations: 'Research',
+};
+const featureLabel = (feature: UsageEventFeature): string => FEATURE_LABEL[feature] ?? feature;
 
 const budgetProgressColor = (pct: number): 'primary' | 'warning' | 'danger' => {
   if (pct >= 100) return 'danger';
@@ -148,7 +164,8 @@ export function DataLakeSpendPanel({
             </Typography>
           )}
           <Typography level="body-sm" data-testid="datalake-spend-perrun-cap">
-            Per-run budget: {formatUsd(runBudgetUsd)} (applies per upload batch)
+            Ingestion per-run budget: {formatUsd(runBudgetUsd)} (applies per upload batch; a research run has its own
+            cost ceiling, set per saved configuration)
           </Typography>
           <Typography level="body-sm">
             Platform-wide budget: {formatUsd(periodBudgetUsd)} per {summary.periodHours}h (shared across every lake)
@@ -180,7 +197,19 @@ export function DataLakeSpendPanel({
             }))}
           />
           <BreakdownTable
-            title="By day"
+            title="By feature"
+            testid="datalake-spend-feature-table"
+            keyLabel="Feature"
+            rows={summary.ledger.byFeature.map(r => ({
+              key: r.feature,
+              label: featureLabel(r.feature),
+              requests: r.requests,
+              cogsUsd: r.cogsUsd,
+              creditsCharged: r.creditsCharged,
+            }))}
+          />
+          <BreakdownTable
+            title="By day (UTC)"
             testid="datalake-spend-overtime-table"
             keyLabel="Day"
             rows={summary.ledger.overTime.map(r => ({
