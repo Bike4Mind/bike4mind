@@ -1815,6 +1815,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => d.toJSON());
   }
 
+  async countByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<number> {
+    // Same predicate as findByDriveConnectionIdInDataLake, projected to a count so the
+    // disconnect-confirmation dialog never has to hydrate a full file body just for a number.
+    return this.fabFileModel.countDocuments({
+      driveConnectionId,
+      deletedAt: null,
+      archivedAt: null,
+      tags: { $elemMatch: { name: datalakeTag } },
+      status: { $ne: 'pending' },
+    });
+  }
+
   async findDriveFileIdsByBatchId(batchId: string): Promise<string[]> {
     // Excludes 'pending' - a row this slice's own createFabFile minted but whose storage.upload
     // never confirmed (see the interface docs and markUploaded). `distinct` keeps this a projection
