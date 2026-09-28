@@ -12,6 +12,8 @@ export type LakeDriveConnection = {
   lastError: string | null;
   lastUsedAt: string | null;
   connectedAt: string | null;
+  /** How many documents this connection has ingested into the lake - disconnecting deletes all of them. */
+  fileCount: number;
 };
 
 const lakeDriveConnectionKey = (dataLakeId?: string) => ['lake-drive-connection', dataLakeId];
