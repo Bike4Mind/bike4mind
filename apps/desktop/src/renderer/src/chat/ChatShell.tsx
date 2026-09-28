@@ -8,6 +8,7 @@ import Typography from '@mui/joy/Typography';
 import type { ChatProject, ChatSessionMode } from '@shared/chat';
 import { BackgroundProcessPanel } from './BackgroundProcessPanel';
 import { Composer } from './Composer';
+import { McpCard } from './McpCard';
 import { MessageThread } from './MessageThread';
 import { contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
@@ -239,7 +240,12 @@ export function ChatShell({ account }: { account?: ReactNode }) {
         onCreateInProject={directory => void onCreateInProject(directory)}
         onDelete={sessionId => void onDelete(sessionId)}
         onTogglePin={session => void togglePin(session)}
-        card={<SidebarCard />}
+        card={
+          <>
+            <SidebarCard />
+            <McpCard />
+          </>
+        }
         footer={account}
       />
 

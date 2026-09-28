@@ -9,6 +9,7 @@ import type {
   SendMessageRequest,
   UpdateProjectRequest,
 } from '@shared/chat';
+import type { McpServerInput, McpServersState } from '@shared/mcp';
 import { IPC_CHANNELS, type DesktopApi } from '@shared/ipc';
 
 // Written out one method per channel rather than a generic invoke(channel, ...args)
@@ -90,6 +91,20 @@ const api: DesktopApi = {
       } catch {
         return '';
       }
+    },
+  },
+  mcp: {
+    getServers: () => ipcRenderer.invoke(IPC_CHANNELS.mcpGetServers),
+    addServer: (input: McpServerInput) => ipcRenderer.invoke(IPC_CHANNELS.mcpAddServer, input),
+    updateServer: (id: string, input: McpServerInput) => ipcRenderer.invoke(IPC_CHANNELS.mcpUpdateServer, id, input),
+    removeServer: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.mcpRemoveServer, id),
+    setServerEnabled: (id: string, enabled: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.mcpSetServerEnabled, id, enabled),
+    reconnectServer: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.mcpReconnectServer, id),
+    onChanged: listener => {
+      const handler = (_event: unknown, state: McpServersState) => listener(state);
+      ipcRenderer.on(IPC_CHANNELS.mcpServersChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.mcpServersChanged, handler);
     },
   },
   tools: {

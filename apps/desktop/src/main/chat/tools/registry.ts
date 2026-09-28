@@ -58,9 +58,23 @@ export function findTool(name: string): ToolDefinition | undefined {
  * reasons. No granted folder means no local tools at all: declaring file tools the model can
  * only be denied teaches it to keep retrying, and an undeclared tool is a cleaner "not
  * available" than one that always fails. The generation tools need only a signed-in session,
- * so they are offered to a user who has shared nothing.
+ * so they are offered to a user who has shared nothing. MCP tools are a third family again,
+ * passed in rather than declared here because they only exist once a server is connected.
  */
-export function toolsForRequest(options: { roots: readonly string[]; media: boolean }): { toolSchema: ToolSchema }[] {
+export function toolsForRequest(options: {
+  roots: readonly string[];
+  media: boolean;
+  /**
+   * Schemas contributed by the user's connected MCP servers, already namespaced and framed
+   * (see chat/mcp/names.ts). They are appended rather than merged into either family because
+   * they become available for a third reason again - a server the user configured is up - and
+   * because a name collision with a built-in must be impossible, not resolved here.
+   */
+  mcp?: readonly ToolSchema[];
+}): { toolSchema: ToolSchema }[] {
   const available = [...(options.roots.length > 0 ? LOCAL_TOOLS : []), ...(options.media ? MEDIA_TOOLS : [])];
-  return available.map(tool => ({ toolSchema: tool.schema }));
+  return [
+    ...available.map(tool => ({ toolSchema: tool.schema })),
+    ...(options.mcp ?? []).map(toolSchema => ({ toolSchema })),
+  ];
 }
