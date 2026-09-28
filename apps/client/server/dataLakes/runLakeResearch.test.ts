@@ -220,6 +220,24 @@ describe('runLakeResearch', () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/outcome record failed/));
   });
 
+  // Round-2 finding: round-1's fix for this was never actually exercised either - same commit,
+  // same +3 -0 diff, no test that ever made `settleRun` itself reject. The run succeeded and spent
+  // money; what threw was the terminal settle write. Re-settling or re-recording `failed` here
+  // would either overwrite a real `completed` row or lie about an outcome that never happened.
+  it('leaves the run unresolved - no re-settle, no re-record - when the terminal settle write itself rejects', async () => {
+    h.settleRun.mockRejectedValueOnce(new Error('replica set stepped down'));
+
+    await expect(runLakeResearch('run-1', logger)).rejects.toThrow(/replica set stepped down/);
+
+    expect(h.settleRun).toHaveBeenCalledTimes(1);
+    expect(h.recordResearchRunOutcome).not.toHaveBeenCalled();
+    expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringMatching(/run completed but recording its outcome failed/),
+      expect.anything()
+    );
+  });
+
   describe('judge-cost usage recording (the runs API reported spend the Spend tab never showed)', () => {
     it('records one UsageEvent for the run, attributed to the lake and the resolved judge model', async () => {
       h.claimForExecution.mockResolvedValue(claimedRun({ levers: levers({ model: 'gpt-4.1-mini' }) }));
@@ -262,6 +280,35 @@ describe('runLakeResearch', () => {
       expect(h.findOrgById).toHaveBeenCalledWith('org-1');
       expect(h.recordOperationalUsage).toHaveBeenCalledWith(
         expect.objectContaining({ organization: { id: 'org-1' } }),
+        expect.anything()
+      );
+    });
+
+    // Round-2 finding: round-1's fix for this was never actually exercised - the commit claiming
+    // to cover it only added a `runId` argument to unrelated expectations. A lake whose creator
+    // account was deleted must not vanish research spend silently a second time.
+    it('logs and skips the ledger write when the lake creator cannot be resolved', async () => {
+      h.findUserById.mockResolvedValue(null);
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringMatching(/research spend not recorded: the lake creator could not be resolved/),
+        expect.anything()
+      );
+    });
+
+    // `.catch(() => null)` on the creator lookup means a rejection and a null resolution must
+    // behave identically from the caller's side - pinned so that equivalence cannot silently drift.
+    it('logs and skips the ledger write when the creator lookup itself rejects', async () => {
+      h.findUserById.mockRejectedValue(new Error('connection reset'));
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringMatching(/research spend not recorded: the lake creator could not be resolved/),
         expect.anything()
       );
     });
