@@ -28,7 +28,7 @@ export async function handler(event: never, context: Context) {
     logger,
     handlers: {
       [TaskScheduleHandler.RESEARCH_TASK_PROCESS]: async payload => {
-        await sendToQueue(Resource.researchEngineQueue.url, payload);
+        await sendToQueue(Resource.researchEngineQueue.url, { action: 'process', payload });
       },
       [TaskScheduleHandler.CUSTOM_TASK_PROCESS]: async payload => {
         console.log('CUSTOM_TASK_PROCESS', payload);
