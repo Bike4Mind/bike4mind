@@ -623,7 +623,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
               $group: {
                 // UTC, deliberately - not the viewer's zone. No caller threads a timezone/offset
                 // through this method today, so bucketing by a per-viewer zone would need a new
-                // param end to end; the client instead labels this explicitly as UTC (#3298) so an
+                // param end to end; the client instead labels this explicitly as UTC so an
                 // evening run's day is legible rather than silently wrong.
                 _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
                 ...spendSums,
