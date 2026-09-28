@@ -1,4 +1,4 @@
-import { withEventContext } from '@server/events/utils';
+import { withEventContext } from '@server/utils/eventContext';
 import { SessionEvents } from '@server/utils/eventBus';
 import {
   adminSettingsRepository,

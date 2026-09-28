@@ -8,7 +8,7 @@ import { StripeEvents } from '@server/utils/eventBus';
 import { stripe } from '@server/integrations/stripe/stripe';
 import { Config } from '@server/utils/config';
 import { emitMetric } from '@server/utils/cloudwatch';
-import { withEventContext } from '../utils';
+import { withEventContext } from '@server/utils/eventContext';
 import { postNewSubscriptionToSlack } from '@server/integrations/slack/slack';
 
 export const handler = withEventContext(async (event, logger) => {

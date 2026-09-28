@@ -12,7 +12,7 @@ import { stripe } from '@server/integrations/stripe/stripe';
 import { sendToClient } from '@server/websocket/utils';
 import dayjs from 'dayjs';
 import { Resource } from 'sst';
-import { withEventContext } from '../utils';
+import { withEventContext } from '@server/utils/eventContext';
 
 export const handler = withEventContext(async (event, logger) => {
   const { subscriptionId } = StripeEvents.CustomerSubscriptionUpdated.schema.parse(event.properties);

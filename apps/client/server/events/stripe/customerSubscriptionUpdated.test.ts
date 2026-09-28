@@ -71,7 +71,7 @@ vi.mock('sst', () => ({
   Resource: { websocket: { managementEndpoint: 'ws://test' } },
 }));
 
-vi.mock('../utils', () => ({
+vi.mock('@server/utils/eventContext', () => ({
   withEventContext: (h: any) => h,
 }));
 

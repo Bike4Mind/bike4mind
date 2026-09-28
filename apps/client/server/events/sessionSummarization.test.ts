@@ -33,7 +33,7 @@ const h = vi.hoisted(() => ({
 }));
 
 // Passthrough the wrapper so the raw handler runs without connectDB / Config.
-vi.mock('@server/events/utils', () => ({
+vi.mock('@server/utils/eventContext', () => ({
   withEventContext: (fn: unknown) => fn,
 }));
 

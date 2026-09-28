@@ -36,7 +36,7 @@ vi.mock('@server/utils/config', () => ({
   Config: { STAGE: 'test' },
 }));
 
-vi.mock('../utils', () => ({
+vi.mock('@server/utils/eventContext', () => ({
   withEventContext: (h: any) => h,
 }));
 

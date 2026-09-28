@@ -1,7 +1,7 @@
 import { questRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import { IMessage } from '@bike4mind/common';
 import { OperationsModelService } from '@client/services/operationsModelService';
-import { withEventContext } from '@server/events/utils';
+import { withEventContext } from '@server/utils/eventContext';
 import { SessionEvents } from '@server/utils/eventBus';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@server/events/recordSessionOperationalUsage';

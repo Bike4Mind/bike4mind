@@ -49,7 +49,7 @@ vi.mock('sst', () => ({
 }));
 
 // Passthrough so the raw handler runs without connectDB / Config; this test owns the connection.
-vi.mock('@server/events/utils', () => ({ withEventContext: (fn: unknown) => fn }));
+vi.mock('@server/utils/eventContext', () => ({ withEventContext: (fn: unknown) => fn }));
 
 vi.mock('@server/utils/eventBus', () => ({
   SessionEvents: {
@@ -86,7 +86,7 @@ vi.mock('@server/events/recordSessionOperationalUsage', () => ({
 import { TAG_RETRY_BACKOFF_MS } from '@bike4mind/common';
 import { Session, Quest, User, sessionRepository } from '@bike4mind/database';
 import { handler } from './sessionTagging';
-import { determineSessionOperations } from './spider';
+import { determineSessionOperations } from '@server/utils/sessionOperations';
 
 let mongoServer: MongoMemoryServer;
 
