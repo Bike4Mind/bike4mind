@@ -19,12 +19,17 @@ const MAX_IDS = 500;
 
 const isObjectIdHex = (id: string) => /^[a-f0-9]{24}$/i.test(id);
 
-const handler = baseApi().get(async (req: Request<{}, {}, {}, { ids: string[] }>, res) => {
-  const parsed = qs.parse(req.query as Record<string, any>) as { ids: string[] | Record<string, string> };
+// A lone `?ids=<id>` arrives as a scalar string; spreading it via Object.values yields one
+// "id" per character, every one of which misses, so the route answered 200 [] for a readable file.
+// qs may also yield an indexed object { '0': '...', '1': '...' } instead of an array for many items.
+const toIdList = (raw: unknown): string[] => {
+  if (typeof raw === 'string') return [raw];
+  const values = Array.isArray(raw) ? raw : raw && typeof raw === 'object' ? Object.values(raw) : [];
+  return values.filter((v): v is string => typeof v === 'string');
+};
 
-  // Next.js may parse ids[]=...&ids[]=... as an indexed object { '0': '...', '1': '...' }
-  // instead of an array when there are many items. Normalize to ensure it's always an array.
-  const ids = Array.isArray(parsed.ids) ? parsed.ids : Object.values(parsed.ids ?? {});
+const handler = baseApi().get(async (req: Request<{}, {}, {}, { ids: string[] }>, res) => {
+  const ids = toIdList(qs.parse(req.query as Record<string, any>).ids);
 
   if (ids.length > MAX_IDS) {
     return res.status(400).json({ message: `Too many ids (max ${MAX_IDS})` });
