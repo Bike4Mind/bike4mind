@@ -5,7 +5,7 @@ const h = vi.hoisted(() => ({
   startResearchRun: vi.fn(),
   recordResearchRunOutcome: vi.fn(),
   listByLake: vi.fn(),
-  settleRun: vi.fn(),
+  settleQueuedRun: vi.fn(),
   sendToQueue: vi.fn(),
   queueUrl: undefined as string | undefined,
 }));
@@ -30,7 +30,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeResearchConfigRepository: {},
-  dataLakeResearchRunRepository: { listByLake: h.listByLake, settleRun: h.settleRun },
+  dataLakeResearchRunRepository: { listByLake: h.listByLake, settleQueuedRun: h.settleQueuedRun },
   lakeConfigChangeEventRepository: {},
   adminSettingsRepository: {},
 }));
@@ -70,7 +70,7 @@ beforeEach(() => {
   h.listByLake.mockResolvedValue([queuedRun]);
   h.startResearchRun.mockResolvedValue(queuedRun);
   h.sendToQueue.mockResolvedValue(undefined);
-  h.settleRun.mockResolvedValue(true);
+  h.settleQueuedRun.mockResolvedValue(true);
   h.recordResearchRunOutcome.mockResolvedValue(undefined);
 });
 
@@ -127,7 +127,7 @@ describe('POST /api/data-lakes/[id]/research/runs', () => {
 
     await expect(call(req('POST', { id: 'l' }, { configId: 'config-1' }), res)).rejects.toThrow(/sqs is down/);
 
-    expect(h.settleRun).toHaveBeenCalledWith(
+    expect(h.settleQueuedRun).toHaveBeenCalledWith(
       'run-1',
       expect.objectContaining({
         status: 'failed',
@@ -156,12 +156,12 @@ describe('POST /api/data-lakes/[id]/research/runs', () => {
   });
 
   // sendToQueue can reject after the message actually landed (an ack lost to a timeout). If the
-  // executor claimed the run in that window, settleRun's own guard makes the settle here a no-op
-  // (it returns false) - the route must not then record a SECOND, contradictory outcome on top of
-  // the one the executor's own runLakeResearch.ts already recorded for real.
+  // executor claimed the run in that window, settleQueuedRun's queued-only filter makes the settle
+  // here a no-op (it returns false) - the route must not then record a SECOND, contradictory
+  // outcome on top of the one the executor's own runLakeResearch.ts already recorded for real.
   it('skips the outcome record when the run was already settled elsewhere', async () => {
     h.sendToQueue.mockRejectedValue(new Error('sqs is down'));
-    h.settleRun.mockResolvedValue(false);
+    h.settleQueuedRun.mockResolvedValue(false);
     const { res } = makeRes();
 
     await expect(call(req('POST', { id: 'l' }, { configId: 'config-1' }), res)).rejects.toThrow(/sqs is down/);
@@ -179,11 +179,11 @@ describe('POST /api/data-lakes/[id]/research/runs', () => {
     await expect(call(req('POST', { id: 'l' }, { configId: 'config-1' }), res)).rejects.toThrow(/sqs is down/);
   });
 
-  // A settleRun call that itself throws (not a guarded no-op) is a different, unknown case - the
-  // outcome record must still run, same as before this guard existed.
-  it('still records the outcome when settleRun itself fails, not just when it returns false', async () => {
+  // A settleQueuedRun call that itself throws (not a guarded no-op) is a different, unknown case -
+  // the outcome record must still run, same as before this guard existed.
+  it('still records the outcome when settleQueuedRun itself fails, not just when it returns false', async () => {
     h.sendToQueue.mockRejectedValue(new Error('sqs is down'));
-    h.settleRun.mockRejectedValue(new Error('replica set stepped down'));
+    h.settleQueuedRun.mockRejectedValue(new Error('replica set stepped down'));
     const { res } = makeRes();
 
     await expect(call(req('POST', { id: 'l' }, { configId: 'config-1' }), res)).rejects.toThrow(/sqs is down/);
