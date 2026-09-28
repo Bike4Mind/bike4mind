@@ -70,13 +70,17 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     } catch (error) {
       // Settle the row rather than leaving it `queued`: nothing will ever pick it up, and a
       // permanently-queued run holds the one-at-a-time guard closed against every later attempt.
-      await dataLakeResearchRunRepository.settleRun(run.id, {
-        status: 'failed',
-        completedAt: new Date(),
-        spentMicroUsd: 0,
-        totals: run.totals,
-        error: 'The run could not be queued for execution. Try again shortly.',
-      });
+      // Best-effort: a settle failure here must not mask the original enqueue error re-thrown
+      // below, and must not skip the outcome record that follows.
+      await dataLakeResearchRunRepository
+        .settleRun(run.id, {
+          status: 'failed',
+          completedAt: new Date(),
+          spentMicroUsd: 0,
+          totals: run.totals,
+          error: 'The run could not be queued for execution. Try again shortly.',
+        })
+        .catch(err => req.logger.warn(`[research/runs] settle failed: ${err}`));
       // Without this, History shows "started" with no matching outcome - the run row is
       // settled failed here directly, never through runLakeResearch.ts (the only other place an
       // outcome is recorded), since the executor never gets a message to pick up. Best-effort, same
