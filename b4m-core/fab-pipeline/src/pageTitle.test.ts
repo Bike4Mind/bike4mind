@@ -5,12 +5,24 @@ import { cleanPageTitle, readPageTitle } from './pageTitle';
 const EN_DASH = String.fromCharCode(0x2013);
 
 describe('cleanPageTitle', () => {
-  it('drops a pipe-delimited site suffix', () => {
-    expect(cleanPageTitle('How tides work | Ocean Weekly')).toBe('How tides work');
+  it('drops a pipe-delimited site suffix identified by site name', () => {
+    expect(cleanPageTitle('How tides work | Ocean Weekly', { siteName: 'Ocean Weekly' })).toBe('How tides work');
   });
 
   it('drops only the last segment of a multi-part title', () => {
-    expect(cleanPageTitle('How tides work | Science | Ocean Weekly')).toBe('How tides work | Science');
+    expect(cleanPageTitle('How tides work | Science | Ocean Weekly', { siteName: 'Ocean Weekly' })).toBe(
+      'How tides work | Science'
+    );
+  });
+
+  it('keeps a pipe suffix that is not identifiable as the site, even though it is short', () => {
+    expect(cleanPageTitle('How to deploy | Part 2')).toBe('How to deploy | Part 2');
+  });
+
+  it('keeps a dash suffix whose site match is only a substring of an unrelated host', () => {
+    expect(cleanPageTitle('Visiting Rome - Rome', { url: 'https://chromecity.example/guide' })).toBe(
+      'Visiting Rome - Rome'
+    );
   });
 
   it('drops a dash suffix that matches the declared site name', () => {

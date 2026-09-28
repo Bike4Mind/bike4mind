@@ -134,7 +134,6 @@ function asReviewerFacingAdmissionError(err: unknown): unknown {
 }
 
 function mapFetchFailure(err: unknown): HTTPError {
-
   const consequence = 'Nothing was added to the lake and the proposal is still waiting for review.';
   if (isSourceTimeout(err)) {
     return new GatewayTimeoutError(
@@ -142,15 +141,22 @@ function mapFetchFailure(err: unknown): HTTPError {
     );
   }
 
-  const { response, code, message } = (err ?? {}) as {
+  const { response, code, message, isAxiosError } = (err ?? {}) as {
     response?: { status?: number };
     code?: string;
     message?: string;
+    isAxiosError?: boolean;
   };
-  if (response?.status) {
-    return new BadGatewayError(`Could not add this source: the source returned HTTP ${response.status}. ${consequence}`);
+  // Gated on isAxiosError, same as isSourceTimeout above: createFabFileByUrl rethrows storage-upload
+  // errors from this same catch, and an upload-side ECONNRESET is an infrastructure failure, not
+  // evidence the source site is unreachable - it must keep its ordinary (error-level, non-"expected")
+  // handling rather than being misclassified as a retryable-by-the-reviewer 502.
+  if (isAxiosError && response?.status) {
+    return new BadGatewayError(
+      `Could not add this source: the source returned HTTP ${response.status}. ${consequence}`
+    );
   }
-  if (code && SOURCE_NETWORK_ERROR_CODES.has(code)) {
+  if (isAxiosError && code && SOURCE_NETWORK_ERROR_CODES.has(code)) {
     return new BadGatewayError(`Could not add this source: the source site could not be reached. ${consequence}`);
   }
   return new BadRequestError(`Could not add this source: ${message ?? 'the fetch failed'}. ${consequence}`);

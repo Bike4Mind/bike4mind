@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Box, Link, Typography } from '@mui/joy';
 import { FabFileSourceType, type IFabFileDocument } from '@bike4mind/common';
+import { useGetFabFile } from '@client/app/hooks/data/fabFiles';
 
 type ProcessingFields = Pick<
   IFabFileDocument,
@@ -10,19 +11,24 @@ type ProcessingFields = Pick<
   | 'isChunking'
   | 'chunkCount'
   | 'vectorizedChunkCount'
+  | 'embeddedChunkCount'
   | 'chunkEmbeddingModelStampedAt'
 >;
 
 /**
  * Where a file is in the chunk -> embed pipeline. `chunkEmbeddingModelStampedAt` is the terminal
- * marker; `vectorized` is not (see its doc on `IFabFileDocument`).
+ * marker; `vectorized` is not (see its doc on `IFabFileDocument`). The stamp alone does not mean
+ * anything is searchable: it is also set once every chunk reaches a terminal state, which includes
+ * an oversized chunk that was never embeddable - so a fully-stamped file can still have zero
+ * VECTOR-bearing chunks (`embeddedChunkCount`, not `chunkCount`).
  */
 export function describeProcessingState(file: ProcessingFields): string {
   if (file.error) return 'Processing failed';
   if (file.chunkStallReason || file.noExtractableTextAt) return 'Stopped - see the notice above';
   if (file.chunkEmbeddingModelStampedAt) {
-    const count = file.chunkCount ?? 0;
-    return `Searchable (${count.toLocaleString()} ${count === 1 ? 'passage' : 'passages'})`;
+    const embedded = file.embeddedChunkCount ?? 0;
+    if (embedded === 0 && (file.chunkCount ?? 0) > 0) return 'Processed - no passages could be embedded';
+    return `Searchable (${embedded.toLocaleString()} ${embedded === 1 ? 'passage' : 'passages'})`;
   }
   if (file.isChunking) return 'Splitting into passages';
   if (file.chunkCount) {
@@ -70,6 +76,13 @@ function Row({ label, children, testId }: { label: string; children: ReactNode; 
  * stamped server-side at admission (`approveDataLakeProposal`); renders nothing for other files.
  */
 export default function AdmittedSourceDetails({ file }: { file: IFabFileDocument }) {
+  // The caller's `file` is the selection the sidebar last clicked - a snapshot that does not
+  // update on its own while chunking/vectorization continues in the background, so "Queued" could
+  // sit on screen long after the file actually finished. Polled only while non-terminal (see
+  // isFabFileProcessingTerminal), so an already-settled file costs nothing here.
+  const { data: liveFile } = useGetFabFile(file.id, { pollWhileProcessing: true });
+  const processingFile = liveFile ?? file;
+
   if (file.sourceType !== FabFileSourceType.PROPOSAL_APPROVAL) return null;
 
   const meta = file.sourceMetadata ?? {};
@@ -110,7 +123,7 @@ export default function AdmittedSourceDetails({ file }: { file: IFabFileDocument
         </Row>
       )}
       <Row label="Processing" testId="datalake-admitted-source-processing">
-        {describeProcessingState(file)}
+        {describeProcessingState(processingFile)}
       </Row>
     </Box>
   );

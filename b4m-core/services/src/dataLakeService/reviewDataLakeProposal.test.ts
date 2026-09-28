@@ -191,7 +191,10 @@ describe('approveDataLakeProposal', () => {
   // source, not their click) nor the consequence (nothing admitted, proposal still queued).
   it('rewrites a raw fetch failure into something the reviewer can act on', async () => {
     const admitSource = vi.fn(async () => {
-      throw Object.assign(new Error('Request failed with status code 404'), { response: { status: 404 } });
+      throw Object.assign(new Error('Request failed with status code 404'), {
+        response: { status: 404 },
+        isAxiosError: true,
+      });
     });
     const { deps, releaseClaim } = adapters({ admitSource });
 
@@ -203,7 +206,10 @@ describe('approveDataLakeProposal', () => {
 
   it('reports a source HTTP failure as a bad gateway, not a bad request', async () => {
     const admitSource = vi.fn(async () => {
-      throw Object.assign(new Error('Request failed with status code 503'), { response: { status: 503 } });
+      throw Object.assign(new Error('Request failed with status code 503'), {
+        response: { status: 503 },
+        isAxiosError: true,
+      });
     });
     const { deps } = adapters({ admitSource });
 
@@ -253,11 +259,28 @@ describe('approveDataLakeProposal', () => {
 
   it('reports an unreachable source as a bad gateway without retrying', async () => {
     const admitSource = vi.fn(async () => {
-      throw Object.assign(new Error('getaddrinfo ENOTFOUND example.invalid'), { code: 'ENOTFOUND' });
+      throw Object.assign(new Error('getaddrinfo ENOTFOUND example.invalid'), {
+        code: 'ENOTFOUND',
+        isAxiosError: true,
+      });
     });
     const { deps } = adapters({ admitSource });
 
     await expect(approveDataLakeProposal('prop-1', ctx(), deps)).rejects.toMatchObject({ statusCode: 502 });
+    expect(admitSource).toHaveBeenCalledTimes(1);
+  });
+
+  // createFabFileByUrl rethrows storage-upload errors from the same catch the fetch does, and a
+  // reset on that side is an infrastructure failure, not evidence the source site is down - it must
+  // not be misclassified as a "the reviewer can just retry" 502.
+  it('does not classify a storage-upload reset as an unreachable source', async () => {
+    const admitSource = vi.fn(async () => {
+      throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+    });
+    const { deps } = adapters({ admitSource });
+
+    const rejection = approveDataLakeProposal('prop-1', ctx(), deps);
+    await expect(rejection).rejects.not.toMatchObject({ statusCode: 502 });
     expect(admitSource).toHaveBeenCalledTimes(1);
   });
 
