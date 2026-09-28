@@ -1,8 +1,8 @@
 /**
  * Non-admin `baseApi()` routes (paths relative to pages/api) that declare no API-key scope
- * posture, so any valid API key of a user who can reach them passes the API-key chain. Read by
- * apiKeyScopePostureCoverage.test.ts. This ledger only shrinks: posture a route and delete its
- * entry here. Do not add a route to silence the test without review. Kept sorted.
+ * posture, so any valid unconfined API key of a user who can reach them passes the API-key
+ * chain. Read by apiKeyScopePostureCoverage.test.ts. This ledger only shrinks: posture a route
+ * and delete its entry here. Do not add a route to silence the test without review. Kept sorted.
  */
 export const KNOWN_UNPOSTURED = new Set<string>([
   '[type]/[id]/index.ts',

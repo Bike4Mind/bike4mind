@@ -7,7 +7,8 @@ import { KNOWN_UNPOSTURED } from './apiKeyScopePostureLedger';
 /**
  * `requiredScopes` is opt-in and defaults open: baseApi installs `apiKeyAuth(undefined)` for
  * every authed route that is not `auth: 'jwtOnly'`, so a route that simply says `baseApi()`
- * accepts ANY valid API key of a user who can reach it. This scan makes that an explicit
+ * accepts any valid unconfined API key (decideScopeGate in apiKeyScopeGate.ts still denies a
+ * confined key) of a user who can reach it. This scan makes that an explicit
  * choice for every new route. A route is "postured" when its source declares any of:
  *  - `requiredScopes:` / `alsoRequiredScopes:` (API keys must carry those scopes),
  *  - `auth: 'jwtOnly'` (the API-key chain is skipped, keys are rejected),
@@ -26,7 +27,8 @@ const ROUTES_DIR = path.join(__dirname, '..', '..', 'pages', 'api');
 
 // ponytail: file-level match - a file with several baseApi() calls counts as postured if any
 // one of them (or any other object in the file) carries a marker. Per-call matching is the
-// upgrade path if that ceiling ever hides a real gap.
+// upgrade path if that ceiling ever hides a real gap. It also checks presence, not value, so a
+// `requiredScopes: undefined` (or a conditional that can yield undefined) passes as postured.
 const POSTURES = [/\b(requiredScopes|alsoRequiredScopes)\s*:/, /\bauth:\s*'jwtOnly'/, /\bauth:\s*false\b/];
 
 function routeFiles(dir: string): string[] {
