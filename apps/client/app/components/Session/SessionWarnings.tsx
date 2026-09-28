@@ -195,12 +195,16 @@ export function CreditsWarning({ show }: CreditsWarningProps) {
     // The 10px top padding matches the message row this replaces, which carries the
     // same padding to clear the grid's negative margin above it.
     <Box data-testid="session-credits-warning" sx={{ width: '100%', pt: '10px' }}>
+      {/* One row on desktop. On a phone the row is too narrow for the copy and two
+          buttons side by side, so the copy goes on top and the buttons share a full-width
+          row under it, split evenly. */}
       <Box
         sx={{
           display: 'flex',
-          alignItems: 'center',
+          flexDirection: { xs: 'column', sm: 'row' },
+          alignItems: { xs: 'stretch', sm: 'center' },
           justifyContent: 'space-between',
-          gap: 2,
+          gap: { xs: '12px', sm: 2 },
           py: '12px',
         }}
       >
@@ -217,7 +221,17 @@ export function CreditsWarning({ show }: CreditsWarningProps) {
           </Typography>
         </Box>
         {/* Subscribe is the one primary action; topping up is the fallback. */}
-        <Box data-testid="credits-warning-actions" sx={{ display: 'flex', gap: 1, flexShrink: 0 }}>
+        <Box
+          data-testid="credits-warning-actions"
+          sx={{
+            // Two equal grid columns on a phone rather than flex: flex never shrinks an
+            // item below its padding and border, so the outlined button came out 2px wider.
+            display: { xs: 'grid', sm: 'flex' },
+            gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+            gap: 1,
+            flexShrink: 0,
+          }}
+        >
           <SessionCreditsButton secondary />
           <SubscribeButton />
         </Box>
