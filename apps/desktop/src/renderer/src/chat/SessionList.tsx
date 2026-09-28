@@ -325,10 +325,10 @@ export function SessionList({
       }}
       data-testid="sidebar"
     >
-      <Stack direction="row" sx={{ alignItems: 'center', px: 1.5, pt: 1.5, pb: 0.5 }}>
-        <Typography level="body-xs" textColor="text.tertiary" sx={{ flex: 1, fontWeight: 'lg' }}>
-          Bike4Mind
-        </Typography>
+      <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, px: 1.5, pt: 1.5, pb: 1 }}>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <ModeSwitcher mode={mode} onChange={onModeChange} />
+        </Box>
         <IconButton
           size="sm"
           variant="plain"
@@ -340,10 +340,6 @@ export function SessionList({
           <PanelLeftIcon />
         </IconButton>
       </Stack>
-
-      <Box sx={{ px: 1.5, pb: 1 }}>
-        <ModeSwitcher mode={mode} onChange={onModeChange} />
-      </Box>
 
       <Stack spacing={0.25} sx={{ px: 1, pb: 1 }}>
         {/* One label and one behaviour in both modes: it makes a session and opens nothing.
