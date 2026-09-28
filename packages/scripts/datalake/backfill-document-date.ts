@@ -11,9 +11,9 @@
  *
  * Selection: live, fully chunked, not mid-chunk, has a stored path, and `documentDate` never
  * written. Every content pass since #3048 writes the pair (null when nothing was found), so an
- * ABSENT field means the file predates the feature. That same predicate guards
- * the write, so a Reprocess that lands between the read and the write wins, and a rerun after a
- * partial failure picks up where it left off.
+ * ABSENT field means the file predates the feature. That same predicate, plus the `serverTextHash`
+ * read, guards the write, so a Reprocess that lands between the read and the write wins, and a rerun
+ * after a partial failure picks up where it left off.
  *
  * The date must describe the chunks being SERVED. A content rewrite replaces the stored bytes but
  * keeps the old chunks until the next re-chunk, so dating the new bytes would date text retrieval is
@@ -25,7 +25,7 @@
  * as null (what a Reprocess would write) without downloading it, and counted separately. Recovering
  * those needs Drive's createdTime, which a Drive re-sync captures and this script does not fetch.
  *
- * A row whose S3 object is gone is left untouched and listed separately: nothing can date it, and
+ * A row whose S3 object is gone or empty is left untouched and listed separately: nothing can date it, and
  * counting it as a failure would fail every rerun. Rows with no filePath at all are never selected.
  *
  * Dry-run by default: it still downloads and extracts, so the summary shows what would be written.

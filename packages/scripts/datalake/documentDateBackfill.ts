@@ -41,11 +41,26 @@ export type BackfillResult = {
 
 type CandidateFile = Pick<
   IFabFile,
-  'filePath' | 'mimeType' | 'sourceType' | 'driveMd5Checksum' | 'documentDate' | 'documentDateSource' | 'serverTextHash'
+  | 'filePath'
+  | 'mimeType'
+  | 'sourceType'
+  | 'driveMd5Checksum'
+  | 'documentDate'
+  | 'documentDateSource'
+  | 'serverTextHash'
+  | 'chunkedCharCount'
 > & { _id: Types.ObjectId };
 
+/** The rows this backfill may write. Spread into both the selection and the guarded write. */
 const ELIGIBLE = {
   documentDate: { $exists: false },
+  deletedAt: null,
+  chunked: true,
+  // A file mid-chunk is about to get its date from that pass; leave it to it. Not `chunkClaimedAt`:
+  // the release clears only isChunking, so that stamp stays set on every file claimed since it shipped.
+  isChunking: { $ne: true },
+  // A pathless row (e.g. a system help-lake document) has no bytes to date and never will.
+  filePath: { $type: 'string', $ne: '' },
   // Cheap pre-filter for a content rewrite, which replaces the stored bytes but keeps the old chunks
   // until the next re-chunk. FAB_FILE_CONTENT_REWRITE_PATCH writes an explicit null here, which a
   // completed chunk pass never does. Not sufficient on its own: backfill-chunk-char-length.ts refills
@@ -76,12 +91,6 @@ export function candidateFilter(opts: Pick<BackfillOptions, 'fileIds'>, afterId:
   };
   return {
     ...ELIGIBLE,
-    deletedAt: null,
-    chunked: true,
-    // A file mid-chunk is about to get its date from that pass; leave it to it.
-    chunkClaimedAt: null,
-    // A pathless row (e.g. a system help-lake document) has no bytes to date and never will.
-    filePath: { $type: 'string', $ne: '' },
     ...(Object.keys(idClause).length > 0 ? { _id: idClause } : {}),
   };
 }
@@ -95,18 +104,23 @@ export function candidateFilter(opts: Pick<BackfillOptions, 'fileIds'>, afterId:
  */
 function servesStoredBytes(file: CandidateFile, extractedText: string | undefined): boolean {
   if (file.serverTextHash === undefined) return true;
+  // Null is also the rewrite tombstone. Only a text-less commit leaves chunkedCharCount at 0; a
+  // tombstone refilled by backfill-chunk-char-length carries the old chunks' sum instead.
+  if (file.serverTextHash === null && file.chunkedCharCount !== 0) return false;
   return file.serverTextHash === (dataLakeService.computeServerTextHash(extractedText) ?? null);
 }
 
 /**
- * The file's stored bytes, or `undefined` when the S3 key no longer exists: a permanent data problem
- * no content pass can date, so it is reported and left untouched rather than counted as a failure
- * that would fail every rerun.
+ * The file's stored bytes, or `undefined` when the S3 key no longer exists or holds zero bytes: a
+ * permanent data problem no content pass can date, so it is reported and left untouched rather than
+ * counted as a failure that would fail every rerun. A non-empty object that will not decode stays a
+ * failure: that can be a chunker bug, and hiding it would hide the fix.
  */
 async function readStoredBytes(file: CandidateFile, storage: BackfillDeps['storage']): Promise<Buffer | undefined> {
   if (!file.filePath) return undefined;
   try {
-    return await storage.getContentAsBuffer(file.filePath);
+    const content = await storage.getContentAsBuffer(file.filePath);
+    return content.length > 0 ? content : undefined;
   } catch (error) {
     if (error instanceof Error && error.name === 'NoSuchKey') return undefined;
     throw error;
@@ -133,7 +147,6 @@ async function processFile(file: CandidateFile, opts: BackfillOptions, deps: Bac
     const { matchedCount } = await FabFile.collection.updateOne(
       {
         _id: file._id,
-        deletedAt: null,
         ...ELIGIBLE,
         serverTextHash: file.serverTextHash === undefined ? { $exists: false } : file.serverTextHash,
       },
@@ -167,7 +180,9 @@ export async function runBackfill(opts: BackfillOptions, deps: BackfillDeps): Pr
 
   while (opts.limit === undefined || processed < opts.limit) {
     const page = await FabFile.find(candidateFilter(opts, afterId))
-      .select('_id filePath mimeType sourceType driveMd5Checksum documentDate documentDateSource serverTextHash')
+      .select(
+        '_id filePath mimeType sourceType driveMd5Checksum documentDate documentDateSource serverTextHash chunkedCharCount'
+      )
       .sort({ _id: 1 })
       .limit(nextPageSize(opts, processed))
       .lean<CandidateFile[]>();
@@ -202,7 +217,7 @@ export function formatSummary(result: BackfillResult, execute: boolean): string[
   const lines = [
     `${execute ? 'Wrote' : 'Would write'} a date on ${counts.dated} file(s) and null on ${counts.undated} with no recoverable date; ` +
       `${counts['editors-unrecoverable']} unpinned Drive Editors file(s) set null without a download; ` +
-      `${counts['bytes-missing']} skipped (stored bytes missing); ` +
+      `${counts['bytes-missing']} skipped (stored bytes missing or empty); ` +
       `${counts['stale-chunks']} skipped (served chunks predate the stored bytes); ` +
       `${counts.raced} skipped (changed by a concurrent pass); ${counts.failed} failed.`,
   ];

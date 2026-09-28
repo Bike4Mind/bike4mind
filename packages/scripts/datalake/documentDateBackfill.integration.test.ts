@@ -40,7 +40,7 @@ const PINNED_UPDATED_AT = new Date('2024-01-01T00:00:00Z');
 const FRONTMATTER_DATE = new Date('2019-03-14T00:00:00Z');
 
 /** What the fake extractor yields per stored path; the path doubles as the stored bytes. */
-type Stored = { text?: string; date?: Date; missing?: true; unreadable?: true };
+type Stored = { text?: string; date?: Date; missing?: true; empty?: true; unreadable?: true };
 
 const DATED_TEXT = 'dated body';
 const UNDATED_TEXT = 'undated body';
@@ -49,6 +49,7 @@ const storedBytes: Record<string, Stored> = {
   'undated.md': { text: UNDATED_TEXT },
   'textless.png': {},
   'gone.md': { missing: true },
+  'empty.md': { empty: true },
   'broken.md': { unreadable: true },
 };
 
@@ -67,8 +68,9 @@ async function seed(filePath: string | undefined, overrides: Record<string, unkn
     sourceType: FabFileSourceType.MANUAL_UPLOAD,
     deletedAt: null,
     chunked: true,
-    chunkClaimedAt: null,
-    chunkedCharCount: 10,
+    isChunking: false,
+    // A text-less chunk commit cuts no chunks, so it sums to 0.
+    chunkedCharCount: stored?.text ? 10 : 0,
     serverTextHash: stored?.text ? hashOf(stored.text) : null,
     updatedAt: PINNED_UPDATED_AT,
     ...(filePath ? { filePath } : {}),
@@ -102,6 +104,7 @@ function makeDeps(onChunk?: (path: string) => Promise<void>) {
       const stored = storedBytes[path];
       if (stored?.missing) throw Object.assign(new Error('gone'), { name: 'NoSuchKey' });
       if (stored?.unreadable) throw new Error('decode failed');
+      if (stored?.empty) return Buffer.alloc(0);
       return Buffer.from(path);
     },
   };
@@ -133,7 +136,7 @@ describe('runBackfill (real DB)', () => {
       await seed('dated.md', { chunkedCharCount: null }),
       await seed('dated.md', { deletedAt: new Date() }),
       await seed('dated.md', { chunked: false }),
-      await seed('dated.md', { chunkClaimedAt: new Date() }),
+      await seed('dated.md', { isChunking: true, chunkClaimedAt: new Date() }),
       await seed(undefined),
       await seed('', { filePath: '' }),
     ];
@@ -149,6 +152,18 @@ describe('runBackfill (real DB)', () => {
     }
   });
 
+  it('selects a file whose last chunk run finished, even though its claim stamp outlives the run', async () => {
+    const id = await seed('dated.md', { isChunking: false, chunkClaimedAt: new Date('2026-09-01T00:00:00Z') });
+    const legacy = await seed('dated.md');
+    await fabFiles().updateOne({ _id: legacy }, { $unset: { isChunking: '' } });
+
+    const result = await runBackfill(execute, makeDeps().deps);
+
+    expect(result.counts.dated).toBe(2);
+    expect(await load(id)).toMatchObject({ documentDate: FRONTMATTER_DATE });
+    expect(await load(legacy)).toMatchObject({ documentDate: FRONTMATTER_DATE });
+  });
+
   it('nulls an unpinned Drive Editors file without downloading it', async () => {
     const id = await seed('dated.md', { sourceType: FabFileSourceType.GOOGLE_DRIVE });
 
@@ -160,14 +175,16 @@ describe('runBackfill (real DB)', () => {
     expect(await load(id)).toMatchObject({ documentDate: null, documentDateSource: null });
   });
 
-  it('leaves a row whose S3 object is gone untouched and lists it without failing', async () => {
-    const id = await seed('gone.md');
+  it('leaves a row whose S3 object is gone or empty untouched and lists it without failing', async () => {
+    const gone = await seed('gone.md');
+    const empty = await seed('empty.md');
 
     const result = await runBackfill(execute, makeDeps().deps);
 
-    expect(result.counts['bytes-missing']).toBe(1);
-    expect(result.missingBytes).toEqual([id.toString()]);
-    expect(await load(id)).not.toHaveProperty('documentDate');
+    expect(result.counts['bytes-missing']).toBe(2);
+    expect(result.missingBytes).toEqual([gone.toString(), empty.toString()]);
+    expect(await load(gone)).not.toHaveProperty('documentDate');
+    expect(await load(empty)).not.toHaveProperty('documentDate');
     expect(exitCode(result)).toBe(0);
   });
 
@@ -176,11 +193,14 @@ describe('runBackfill (real DB)', () => {
     // old chunks: the chunkedCharCount pre-filter passes, only the hash can tell.
     const rewritten = await seed('dated.md', { serverTextHash: null, chunkedCharCount: 42 });
     const hashMismatch = await seed('dated.md', { serverTextHash: hashOf('the text before the edit') });
+    // The same tombstone, but the new bytes extract to no text: their null hash must not pass for it.
+    const rewrittenTextless = await seed('textless.png', { serverTextHash: null, chunkedCharCount: 42 });
 
     const result = await runBackfill(execute, makeDeps().deps);
 
-    expect(result.counts['stale-chunks']).toBe(2);
-    expect(result.staleChunks).toEqual([rewritten.toString(), hashMismatch.toString()]);
+    expect(result.counts['stale-chunks']).toBe(3);
+    expect(result.staleChunks).toEqual([rewritten.toString(), hashMismatch.toString(), rewrittenTextless.toString()]);
+    expect(await load(rewrittenTextless)).not.toHaveProperty('documentDate');
     expect(await load(rewritten)).not.toHaveProperty('documentDate');
     expect(await load(hashMismatch)).not.toHaveProperty('documentDate');
   });
@@ -189,12 +209,16 @@ describe('runBackfill (real DB)', () => {
     const textless = await seed('textless.png', { mimeType: 'image/png' });
     const preFingerprint = await seed('dated.md');
     await fabFiles().updateOne({ _id: preFingerprint }, { $unset: { serverTextHash: '' } });
+    // Chunked before the rollups existed: an absent chunkedCharCount is not the rewrite's null.
+    const preRollup = await seed('dated.md');
+    await fabFiles().updateOne({ _id: preRollup }, { $unset: { chunkedCharCount: '' } });
 
     const result = await runBackfill(execute, makeDeps().deps);
 
-    expect(result.counts).toMatchObject({ dated: 1, undated: 1, 'stale-chunks': 0 });
+    expect(result.counts).toMatchObject({ dated: 2, undated: 1, 'stale-chunks': 0 });
     expect(await load(textless)).toMatchObject({ documentDate: null });
     expect(await load(preFingerprint)).toMatchObject({ documentDate: FRONTMATTER_DATE });
+    expect(await load(preRollup)).toMatchObject({ documentDate: FRONTMATTER_DATE });
   });
 
   it('loses the race to a re-chunk that lands between the read and the write', async () => {
@@ -211,6 +235,21 @@ describe('runBackfill (real DB)', () => {
 
     expect(result.counts.raced).toBe(1);
     expect(await load(id)).toMatchObject({ documentDate: reChunkedDate });
+  });
+
+  it.each([
+    ['a chunk commit of different text', { serverTextHash: hashOf('the edited text') }],
+    ['a re-chunk claim', { isChunking: true }],
+  ])('loses the race to %s that lands between the read and the write', async (_label, patch) => {
+    const id = await seed('dated.md');
+    const { deps } = makeDeps(async () => {
+      await fabFiles().updateOne({ _id: id }, { $set: patch });
+    });
+
+    const result = await runBackfill(execute, deps);
+
+    expect(result.counts.raced).toBe(1);
+    expect(await load(id)).not.toHaveProperty('documentDate');
   });
 
   it('counts a thrown file as failed, keeps going, and exits non-zero', async () => {
@@ -236,6 +275,20 @@ describe('runBackfill (real DB)', () => {
     expect(formatSummary(result, false)[0]).toMatch(/^Would write a date on 1 file\(s\) and null on 1/);
   });
 
+  it('writes every page of a multi-page execute run and lists outcomes by id', async () => {
+    const ids = [];
+    for (let i = 0; i < 5; i++) ids.push(await seed('undated.md'));
+    const gone = await seed('gone.md');
+
+    const result = await runBackfill({ ...execute, batchSize: 2 }, makeDeps().deps);
+
+    expect(result.counts).toMatchObject({ undated: 5, 'bytes-missing': 1 });
+    for (const id of ids) expect(await load(id)).toMatchObject({ documentDate: null });
+    const summary = formatSummary(result, true);
+    expect(summary[0]).toMatch(/^Wrote a date on 0 file\(s\) and null on 5/);
+    expect(summary).toContain(`Missing-bytes file ids: ${gone.toString()}`);
+  });
+
   it('pages past batch boundaries, stops at --limit, and terminates a dry run', async () => {
     for (let i = 0; i < 5; i++) await seed('undated.md');
 
@@ -255,6 +308,19 @@ describe('runBackfill (real DB)', () => {
     expect(await load(picked)).toMatchObject({ documentDate: FRONTMATTER_DATE });
     expect(await load(other)).not.toHaveProperty('documentDate');
   });
+
+  it('pages through more --file-id ids than fit in one batch', async () => {
+    const picked = [await seed('dated.md'), await seed('dated.md'), await seed('dated.md')];
+    const other = await seed('dated.md');
+
+    const result = await runBackfill(
+      { ...execute, batchSize: 2, fileIds: picked.map(id => id.toString()) },
+      makeDeps().deps
+    );
+
+    expect(result.counts.dated).toBe(3);
+    expect(await load(other)).not.toHaveProperty('documentDate');
+  });
 });
 
 describe('checkOptions', () => {
@@ -267,6 +333,8 @@ describe('checkOptions', () => {
   it.each([
     ['a non-numeric --limit', { ...valid, limit: Number.NaN }, '--limit'],
     ['a fractional --limit', { ...valid, limit: 1.5 }, '--limit'],
+    ['a zero --limit', { ...valid, limit: 0 }, '--limit'],
+    ['a negative --limit', { ...valid, limit: -3 }, '--limit'],
     ['a zero --batch-size', { ...valid, batchSize: 0 }, '--batch-size'],
     ['a non-numeric --batch-size', { ...valid, batchSize: Number.NaN }, '--batch-size'],
     ['a non-ObjectId --file-id', { ...valid, fileIds: ['not-an-id'] }, 'not-an-id'],
