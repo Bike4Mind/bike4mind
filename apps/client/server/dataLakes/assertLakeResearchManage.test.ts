@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ForbiddenError } from '@bike4mind/utils';
 
 const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
@@ -67,6 +68,9 @@ describe('assertLakeResearchManage', () => {
     h.canManageLake.mockReturnValue(false);
 
     await expect(assertLakeResearchManage(req(), 'my-lake')).rejects.toThrow(/permission to manage research runs/i);
+    // Not just the message text: a same-worded BadRequestError (or any other type) must not pass
+    // this test - callers rely on the 403 status ForbiddenError specifically maps to.
+    await expect(assertLakeResearchManage(req(), 'my-lake')).rejects.toThrow(ForbiddenError);
   });
 
   // Existence must never be probeable through a 403: the read gate answers not-found first.
