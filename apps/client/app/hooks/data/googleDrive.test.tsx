@@ -1,19 +1,22 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import React from 'react';
-import { renderHook, waitFor } from '@testing-library/react';
+import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
+import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import {
   useLakeDriveConnection,
+  useDisconnectLakeDrive,
   driveConnectionPollInterval,
   DRIVE_CONNECTION_ACTIVE_POLL_MS,
   DRIVE_CONNECTION_IDLE_POLL_MS,
   type LakeDriveConnection,
 } from './googleDrive';
 
-vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn() } }));
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn(), delete: vi.fn() } }));
 
 const get = api.get as unknown as Mock;
+const del = api.delete as unknown as Mock;
 
 const renderLakeDriveConnection = (lakeId: string) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -61,6 +64,30 @@ describe('useLakeDriveConnection', () => {
     const { result } = renderLakeDriveConnection('other_org_lake');
 
     await waitFor(() => expect(result.current.isError).toBe(true));
+  });
+});
+
+// The DELETE route purges every FabFile the connection ingested (see drive-connection.ts) - a
+// disconnect used to delete nothing, so before this fix the mutation only invalidated the
+// connection-status query, leaving the lake's own file list/counts stale until a full reload.
+describe('useDisconnectLakeDrive', () => {
+  it('invalidates the lake file list and tag counts alongside the connection status', async () => {
+    del.mockResolvedValue({ data: undefined });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    const { result } = renderHook(() => useDisconnectLakeDrive(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('lake_1');
+    });
+
+    const invalidatedKeys = invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
+    expect(invalidatedKeys).toContainEqual(['lake-drive-connection', 'lake_1']);
+    expect(invalidatedKeys).toContainEqual(dataLakeKeys.filesOf('lake_1'));
+    expect(invalidatedKeys).toContainEqual(dataLakeKeys.tagCountsRoot);
   });
 });
 
