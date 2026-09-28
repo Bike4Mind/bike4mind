@@ -43,7 +43,7 @@ const makeReq = (body: Record<string, unknown>) => ({
   method: 'POST',
   query: { id: 'lake1', proposalId: 'prop-1' },
   body,
-  user: { id: 'creator-1' },
+  user: { id: 'creator-1', name: 'Casey Creator' },
   logger: { warn: vi.fn(), error: vi.fn() },
 });
 
@@ -72,7 +72,8 @@ describe('POST /api/data-lakes/:id/proposals/:proposalId', () => {
     expect(h.approveDataLakeProposal).toHaveBeenCalledWith(
       'prop-1',
       expect.objectContaining({ userId: 'creator-1' }),
-      expect.objectContaining({ admitSource: h.admitProposedSource })
+      expect.objectContaining({ admitSource: h.admitProposedSource }),
+      { approverName: 'Casey Creator' }
     );
     expect(json).toHaveBeenCalledWith({
       data: { id: 'prop-1', status: 'approved' },

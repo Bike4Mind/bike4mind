@@ -201,6 +201,74 @@ describe('approveDataLakeProposal', () => {
     expect(releaseClaim).toHaveBeenCalledWith('prop-1');
   });
 
+  it('reports a source HTTP failure as a bad gateway, not a bad request', async () => {
+    const admitSource = vi.fn(async () => {
+      throw Object.assign(new Error('Request failed with status code 503'), { response: { status: 503 } });
+    });
+    const { deps } = adapters({ admitSource });
+
+    await expect(approveDataLakeProposal('prop-1', ctx(), deps)).rejects.toMatchObject({ statusCode: 502 });
+    expect(admitSource).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a source timeout once and succeeds when the second fetch answers', async () => {
+    const timeout = Object.assign(new Error('timeout of 9725ms exceeded'), {
+      code: 'ECONNABORTED',
+      isAxiosError: true,
+    });
+    const { deps, admitSource, releaseClaim } = adapters();
+    admitSource.mockRejectedValueOnce(timeout);
+
+    const result = await approveDataLakeProposal('prop-1', ctx(), deps);
+
+    expect(result.fabFile.id).toBe('file-9');
+    expect(admitSource).toHaveBeenCalledTimes(2);
+    expect(admitSource.mock.calls[1][1]).toEqual(admitSource.mock.calls[0][1]);
+    expect(releaseClaim).not.toHaveBeenCalled();
+  });
+
+  it('reports a timeout that survives the retry as a gateway timeout and releases the claim', async () => {
+    const admitSource = vi.fn(async () => {
+      throw new Error('timeout of 9725ms exceeded');
+    });
+    const { deps, releaseClaim } = adapters({ admitSource });
+
+    const rejection = approveDataLakeProposal('prop-1', ctx(), deps);
+    await expect(rejection).rejects.toMatchObject({ statusCode: 504, expected: true });
+    await expect(rejection).rejects.toThrow(/did not respond in time\. Nothing was added to the lake/);
+    expect(admitSource).toHaveBeenCalledTimes(2);
+    expect(releaseClaim).toHaveBeenCalledWith('prop-1');
+  });
+
+  // A storage socket timeout happens AFTER the row is written, so retrying it could admit twice.
+  it('does not retry an ETIMEDOUT that did not come from the source fetch', async () => {
+    const admitSource = vi.fn(async () => {
+      throw Object.assign(new Error('socket hang up'), { code: 'ETIMEDOUT' });
+    });
+    const { deps } = adapters({ admitSource });
+
+    await expect(approveDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow();
+    expect(admitSource).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports an unreachable source as a bad gateway without retrying', async () => {
+    const admitSource = vi.fn(async () => {
+      throw Object.assign(new Error('getaddrinfo ENOTFOUND example.invalid'), { code: 'ENOTFOUND' });
+    });
+    const { deps } = adapters({ admitSource });
+
+    await expect(approveDataLakeProposal('prop-1', ctx(), deps)).rejects.toMatchObject({ statusCode: 502 });
+    expect(admitSource).toHaveBeenCalledTimes(1);
+  });
+
+  it('stamps the approver name on the admitted file when the route supplies one', async () => {
+    const { deps, admitSource } = adapters();
+
+    await approveDataLakeProposal('prop-1', ctx(), deps, { approverName: 'Pat Reviewer' });
+
+    expect(admitSource.mock.calls[0][1].provenance.sourceMetadata).toMatchObject({ approvedByName: 'Pat Reviewer' });
+  });
+
   it('keeps a fetch failure with no status readable', async () => {
     const admitSource = vi.fn(async () => {
       throw new Error('URL blocked for security reasons: private address');
