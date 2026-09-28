@@ -1,5 +1,4 @@
 import type {
-  AccessContext,
   IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IDataLakeProposalDocument,
@@ -9,7 +8,10 @@ import type {
 import { DATALAKE_TAG_STRENGTH, FabFileSourceType, isLakeIngestable } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, HTTPError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
-import { resolveCanManageLake } from './authorizeLakeManage';
+import { loadActiveLakeGrants } from './authorizeLakeManage';
+import { proposalReviewChange } from './diffLakeConfig';
+import { canManageLake, type LakeGrant, type ManageActor } from './manageRule';
+import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 
 /**
  * The human half of the acquisition queue (#1671): approve or decline one proposal.
@@ -34,8 +36,8 @@ export interface AdmitSourceParams {
 
 export type AdmittedFile = { id: string; fileName: string };
 
-export interface ReviewAdapters {
-  db: {
+export interface ReviewAdapters extends LakeConfigAuditAdapters {
+  db: LakeConfigAuditAdapters['db'] & {
     dataLakeProposals: Pick<
       IDataLakeProposalRepository,
       'findById' | 'claimForReview' | 'recordAdmission' | 'releaseClaim'
@@ -44,6 +46,9 @@ export interface ReviewAdapters {
     // Optional for the same reason as everywhere else in this family: absent, manage falls back to
     // createdByUserId + the org-admin rung (see loadActiveLakeGrants).
     dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+    // REQUIRED, not optional: every caller of this service is the one review route, so leaving it
+    // optional would let a review decision go unaudited silently - the exact gap #3298 reports.
+    lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
   };
   /**
    * Takes the whole ACTOR, not just its id. The admission door runs its own lake-tag write gate, and
@@ -52,7 +57,7 @@ export interface ReviewAdapters {
    * narrower than the review gate, so a curator or org admin cleared the 403, had the row claimed,
    * and was then refused the admission with nothing retryable.
    */
-  admitSource(actor: AccessContext, params: AdmitSourceParams): Promise<AdmittedFile>;
+  admitSource(actor: ManageActor, params: AdmitSourceParams): Promise<AdmittedFile>;
 }
 
 type ReviewableAdapters = Omit<ReviewAdapters, 'admitSource'>;
@@ -70,25 +75,31 @@ interface ResolveReviewableAdapters {
  * proposal or a vanished lake; manage-denied for a caller without write authority over the lake,
  * mirroring `removeFileFromLake`. Reviewing is a lake-management right, not a lake-read one: anyone
  * who can read a lake must not be able to decide what enters it.
+ *
+ * Returns the ACTIVE GRANTS alongside the gate's own verdict (rather than re-fetching them for the
+ * audit call below), for the same reason `updateDataLake` loads them once: the gate and the
+ * recorded manage rung must agree on the same grant set, and a second fetch could see a grant
+ * revoked microseconds later and report a rung that did not in fact authorize this write.
  */
 async function resolveReviewable(
   proposalId: string,
-  actor: AccessContext,
+  actor: ManageActor,
   { db }: ResolveReviewableAdapters
-): Promise<{ proposal: IDataLakeProposalDocument; lake: IDataLakeDocument }> {
+): Promise<{ proposal: IDataLakeProposalDocument; lake: IDataLakeDocument; grants: LakeGrant[] }> {
   const proposal = await db.dataLakeProposals.findById(proposalId);
   if (!proposal) throw new NotFoundError('Proposal not found');
 
   const lake = await db.dataLakes.findById(proposal.dataLakeId);
   if (!lake) throw new NotFoundError('Proposal not found');
 
+  const grants = await loadActiveLakeGrants(lake, { db });
   // 403, matching the sibling manage-gated read (`data-lakes/[id]/spend.ts`): the lake read gate
   // above has already cleared the caller, so refusing here is an authorization answer, not a
   // malformed request. Any change to this status belongs in the list route too.
-  if (!(await resolveCanManageLake(lake, actor, { db }))) {
+  if (!canManageLake(lake, actor, grants)) {
     throw new ForbiddenError('You do not have permission to review proposals for this data lake');
   }
-  return { proposal, lake };
+  return { proposal, lake, grants };
 }
 
 /**
@@ -130,11 +141,11 @@ export interface ApprovedProposal {
 
 export async function approveDataLakeProposal(
   proposalId: string,
-  actor: AccessContext,
+  actor: ManageActor,
   adapters: ReviewAdapters
 ): Promise<ApprovedProposal> {
-  const { db, admitSource } = adapters;
-  const { proposal, lake } = await resolveReviewable(proposalId, actor, { db });
+  const { db, admitSource, logger } = adapters;
+  const { proposal, lake, grants } = await resolveReviewable(proposalId, actor, { db });
   assertLakeTakesNewFiles(lake);
 
   const approvedAt = new Date();
@@ -193,19 +204,33 @@ export async function approveDataLakeProposal(
   // left without `admittedFabFileId` reads as not-held and the source is simply re-proposed visibly
   // (see the held-source check in `proposeDataLakeContent`).
   await db.dataLakeProposals.recordAdmission(proposalId, fabFile.id).catch(() => {});
+
+  // Best-effort, same as recordAdmission above: the approval has already landed, so an audit-write
+  // failure here must never turn into a reported failure for work that in fact succeeded.
+  await recordLakeConfigChange(
+    {
+      actor,
+      lake,
+      grants,
+      action: 'approve-proposal',
+      changes: [proposalReviewChange(proposal.sourceUrl, 'approved')],
+    },
+    { db, logger }
+  );
+
   return { proposal: { ...claimed, admittedFabFileId: fabFile.id }, fabFile };
 }
 
 export async function declineDataLakeProposal(
   proposalId: string,
-  actor: AccessContext,
+  actor: ManageActor,
   { reason }: { reason?: string },
   adapters: ReviewableAdapters
 ): Promise<IDataLakeProposalDocument> {
-  const { db } = adapters;
+  const { db, logger } = adapters;
   // Resolved for its authorization only. No writability check: declining an archived lake's backlog
   // is housekeeping, not a write into it.
-  await resolveReviewable(proposalId, actor, { db });
+  const { lake, grants } = await resolveReviewable(proposalId, actor, { db });
 
   // The claim also strips the excerpt - a tombstone keeps the source identity, the reason, the
   // reviewer and the text fingerprint, never the declined material itself.
@@ -216,13 +241,28 @@ export async function declineDataLakeProposal(
     declineReason: reason,
   });
   if (!declined) throw new BadRequestError('This proposal has already been reviewed');
+
+  await recordLakeConfigChange(
+    {
+      actor,
+      lake,
+      grants,
+      action: 'decline-proposal',
+      changes: [proposalReviewChange(declined.sourceUrl, 'declined')],
+    },
+    { db, logger }
+  );
+
   return declined;
 }
 
-export interface RestoreAdapters {
-  db: Omit<ResolveReviewableAdapters['db'], 'dataLakeProposals'> & {
-    dataLakeProposals: Pick<IDataLakeProposalRepository, 'findById' | 'findLatestBySourceKey' | 'restoreDeclined'>;
-  };
+export interface RestoreAdapters extends LakeConfigAuditAdapters {
+  db: LakeConfigAuditAdapters['db'] &
+    Omit<ResolveReviewableAdapters['db'], 'dataLakeProposals'> & {
+      dataLakeProposals: Pick<IDataLakeProposalRepository, 'findById' | 'findLatestBySourceKey' | 'restoreDeclined'>;
+      // REQUIRED - see the matching note on ReviewAdapters.
+      lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
+    };
 }
 
 /**
@@ -233,11 +273,11 @@ export interface RestoreAdapters {
  */
 export async function restoreDataLakeProposal(
   proposalId: string,
-  actor: AccessContext,
+  actor: ManageActor,
   adapters: RestoreAdapters
 ): Promise<IDataLakeProposalDocument> {
-  const { db } = adapters;
-  const { proposal } = await resolveReviewable(proposalId, actor, { db });
+  const { db, logger } = adapters;
+  const { proposal, lake, grants } = await resolveReviewable(proposalId, actor, { db });
   if (proposal.status !== 'declined') throw new BadRequestError('Only a declined proposal can be restored');
 
   const latest = await db.dataLakeProposals.findLatestBySourceKey(proposal.dataLakeId, proposal.canonicalSourceKey);
@@ -253,5 +293,17 @@ export async function restoreDataLakeProposal(
         : 'This proposal is no longer declined'
     );
   }
+
+  await recordLakeConfigChange(
+    {
+      actor,
+      lake,
+      grants,
+      action: 'restore-proposal',
+      changes: [proposalReviewChange(result.proposal.sourceUrl, 'restored')],
+    },
+    { db, logger }
+  );
+
   return result.proposal;
 }
