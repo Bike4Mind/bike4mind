@@ -10,6 +10,7 @@ import type {
   ChatModelOption,
   ChatPendingApproval,
   ChatProject,
+  ChatReplyRound,
   ChatSession,
   ChatSessionStatusEvent,
   ChatSessionSummary,
@@ -192,8 +193,15 @@ interface RequestedTool {
  */
 interface ResumedReply {
   content: string;
+  rounds: ChatReplyRound[];
   toolCalls: ChatToolCall[];
   artifacts: ChatArtifact[];
+}
+
+/** One round as it is produced, before its artifact markup is parsed out of the text. */
+interface RawRound {
+  text: string;
+  toolCallIds: string[];
 }
 
 /**
@@ -578,6 +586,10 @@ export class ChatService {
     const replyId = this.startReply(session, api, {
       id: last.id,
       content: last.content,
+      // A message stored before rounds were recorded resumes as one round holding everything it
+      // said and everything it ran, which is the most the flat shape supports: the turn carries
+      // on correctly, and only the ordering of what came BEFORE stays unrecoverable.
+      rounds: last.rounds ?? [{ text: last.content, toolCallIds: (last.toolCalls ?? []).map(call => call.id) }],
       toolCalls: last.toolCalls ?? [],
       artifacts: last.artifacts ?? [],
     });
@@ -714,6 +726,9 @@ export class ChatService {
     let thinking: unknown[] | undefined;
     let previousRound: string | null = null;
     let stalled = 0;
+    // Only this run's rounds: the resumed ones were parsed and cleaned when they were stored,
+    // and putting them back through the artifact parser would mint their ids a second time.
+    const produced: RawRound[] = [];
 
     try {
       const serverConfig = await this.resolveServerConfig(api);
@@ -727,13 +742,13 @@ export class ChatService {
       );
       wire.unshift(buildSystemMessage(roots, !!media, !!host, session.project));
 
-      for (let round = 0; round < limits.rounds; round++) {
+      for (let roundIndex = 0; roundIndex < limits.rounds; roundIndex++) {
         const requested: RequestedTool[] = [];
         let turnText = '';
         let turnThinking: unknown[] | undefined;
         let turnUsage: ChatUsage | undefined;
 
-        await streamCompletion(
+        const failure = await streamRound(
           api.getAxiosInstance(),
           serverConfig.endpoint,
           { model: session.model, messages: wire, tools },
@@ -759,6 +774,12 @@ export class ChatService {
           controller.signal
         );
 
+        // Recorded before the exits below, so the round that ENDS a turn - the one carrying the
+        // answer, which by definition runs no tools - is part of the structure rather than the
+        // one piece of prose the thread has to guess a home for.
+        const round: RawRound = { text: turnText, toolCallIds: [] };
+        produced.push(round);
+
         // Within one request the server's counts are cumulative, so the last report wins; across
         // the requests an agent turn makes they are separate bills, so the turn's cost is their
         // sum. Emitted here rather than only on 'done' so the status line can show a real number
@@ -766,6 +787,18 @@ export class ChatService {
         // minute, or one filled in with a guess.
         usage = addUsage(usage, turnUsage);
         if (usage) this.deps.emit({ type: 'usage', sessionId, messageId: replyId, usage });
+
+        // A turn whose context has run out is not a failed request to report: the rounds before
+        // it did real work, and the same request cannot be made to succeed by trying again. It
+        // ends the turn here, keeping what it has, with a reason of its own. See isTurnBudgetStop
+        // - deliberately not one of them, because Continue would re-send the same oversized
+        // conversation and fail identically.
+        if (failure) {
+          if (!isContextOverflow(failure)) throw failure;
+          this.deps.logger.warn(`CHAT: turn stopped, context exhausted: ${failure.message}`);
+          stopReason = 'context_limit';
+          break;
+        }
 
         if (controller.signal.aborted) break;
         if (requested.length === 0) break;
@@ -791,6 +824,7 @@ export class ChatService {
           controller.signal
         );
         toolCalls.push(...settled);
+        round.toolCallIds = settled.map(call => call.id);
 
         // Anthropic's shape: ONE assistant turn carrying the reasoning, any text and every
         // tool_use block, answered by ONE user turn of matching tool_result blocks. Splitting
@@ -819,7 +853,7 @@ export class ChatService {
           stopReason = 'turn_time_limit';
           break;
         }
-        if (round === limits.rounds - 1) stopReason = 'tool_turn_limit';
+        if (roundIndex === limits.rounds - 1) stopReason = 'tool_turn_limit';
       }
 
       if (controller.signal.aborted) stopReason = 'aborted';
@@ -828,23 +862,38 @@ export class ChatService {
       // shows raw <artifact> markup that is then replaced, and a reloaded conversation reads
       // back exactly what the live one showed. An aborted reply is included on purpose: a
       // complete artifact followed by a stop is still a complete artifact.
-      const parsed = extractArtifacts(content);
+      // Parsed per round rather than over the whole reply: an artifact is emitted inside one
+      // round's text and never spans two, and this is what keeps each round's prose and its own
+      // cards together once the markup is out.
+      const parsed = produced.map(round => ({ round, ...extractArtifacts(round.text) }));
+      const newArtifacts = parsed.flatMap(entry => entry.artifacts);
       const published =
-        parsed.artifacts.length > 0 && this.deps.artifacts
-          ? await this.deps.artifacts.publish(parsed.artifacts, sessionId)
-          : parsed.artifacts;
+        newArtifacts.length > 0 && this.deps.artifacts
+          ? await this.deps.artifacts.publish(newArtifacts, sessionId)
+          : newArtifacts;
       // A resumed run only ever sees markup the rounds AFTER the interruption emitted - the
-      // seeded text was stripped before it was stored - so the earlier artifacts are carried
-      // across rather than parsed again, and none of them is published twice.
+      // seeded rounds were stripped before they were stored - so the earlier artifacts are
+      // carried across rather than parsed again, and none of them is published twice.
       const artifacts = [...(resume?.artifacts ?? []), ...published];
+
+      const rounds = [
+        ...(resume?.rounds ?? []),
+        ...parsed
+          // Trimmed so the join below lands exactly one blank line between rounds, and so a
+          // round does not draw a gap under itself where the model happened to end on newlines.
+          .map(entry => ({ text: entry.content.trim(), toolCallIds: entry.round.toolCallIds }))
+          .filter(round => round.text.length > 0 || round.toolCallIds.length > 0),
+      ];
+      const finalContent = joinRounds(rounds.map(round => round.text));
 
       await this.settleReply(sessionId, !!resume, {
         id: replyId,
         role: 'assistant',
-        content: parsed.content,
+        content: finalContent,
         createdAt: new Date().toISOString(),
         stopReason,
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        ...(toolCalls.length > 0 ? { rounds } : {}),
         ...(thinking ? { thinking } : {}),
         ...(artifacts.length > 0 ? { artifacts } : {}),
       });
@@ -852,10 +901,11 @@ export class ChatService {
         type: 'done',
         sessionId,
         messageId: replyId,
-        content: parsed.content,
+        content: finalContent,
         stopReason,
         usage,
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        ...(toolCalls.length > 0 ? { rounds } : {}),
         ...(artifacts.length > 0 ? { artifacts } : {}),
       });
     } catch (err) {
@@ -897,6 +947,7 @@ export class ChatService {
       stopReason: message.stopReason,
       error: message.error,
       toolCalls: message.toolCalls,
+      rounds: message.rounds,
       thinking: message.thinking,
       artifacts: message.artifacts,
     });
@@ -1494,6 +1545,42 @@ const HOST_GUIDANCE: readonly string[] = [
 ];
 
 /**
+ * One round's request, returning what went wrong instead of throwing it.
+ *
+ * The loop has to decide whether a failure ends the TURN or ends the REPLY, and that decision
+ * needs the round's own bookkeeping - the text that did arrive, the running cost - to have been
+ * recorded first. A throw out of the middle of the loop skips all of it.
+ */
+async function streamRound(...args: Parameters<typeof streamCompletion>): Promise<Error | null> {
+  try {
+    await streamCompletion(...args);
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err : new Error(String(err));
+  }
+}
+
+/**
+ * Whether a failure is the conversation having outgrown the model's context window.
+ *
+ * Matched on the provider's own words, which is the only place it is said: the endpoint relays
+ * the failure with a status, and every provider phrases this differently while all of them name
+ * the window. Widened over time as new phrasings turn up - a miss here is an honest error
+ * message in the thread rather than a wrong one, which is why it errs towards not matching.
+ */
+function isContextOverflow(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    message.includes('context window') ||
+    message.includes('context length') ||
+    message.includes('context_length_exceeded') ||
+    message.includes('too many tokens') ||
+    (message.includes('maximum') && message.includes('tokens')) ||
+    (message.includes('prompt') && message.includes('too long'))
+  );
+}
+
+/**
  * Whatever newlines it takes to reach exactly one blank line at the end of `content`.
  *
  * Empty for empty content, which is what keeps a single-round reply - the common case - free of
@@ -1503,6 +1590,19 @@ function paragraphBreak(content: string): string {
   if (content.length === 0) return '';
   const trailing = /\n*$/.exec(content)?.[0].length ?? 0;
   return trailing >= 2 ? '' : '\n'.repeat(2 - trailing);
+}
+
+/**
+ * The rounds' prose as one reply. Uses the same rule the deltas are separated by, so what the
+ * thread streams and what it reloads are the same text rather than nearly the same.
+ */
+function joinRounds(texts: readonly string[]): string {
+  let joined = '';
+  for (const text of texts) {
+    if (text.length === 0) continue;
+    joined += paragraphBreak(joined) + text;
+  }
+  return joined;
 }
 
 /**
@@ -1560,11 +1660,13 @@ function describeChildOutcome(child: ChatSession): string {
 
   const note = isTurnBudgetStop(last.stopReason)
     ? ' It ran out of its turn budget rather than finishing, so its work may be incomplete.'
-    : last.stopReason === 'max_tokens'
-      ? ' Its reply was cut off at the length limit.'
-      : last.stopReason === 'aborted'
-        ? ' It was stopped before it finished.'
-        : '';
+    : last.stopReason === 'context_limit'
+      ? ' It filled the model context and stopped, so its work may be incomplete.'
+      : last.stopReason === 'max_tokens'
+        ? ' Its reply was cut off at the length limit.'
+        : last.stopReason === 'aborted'
+          ? ' It was stopped before it finished.'
+          : '';
 
   return `${header}${note}\n${read}`;
 }

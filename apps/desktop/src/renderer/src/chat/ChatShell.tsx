@@ -292,6 +292,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
           streaming={conversation.streaming}
           onRespond={conversation.respondToApproval}
           onContinue={() => void conversation.continueReply()}
+          status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
         />
 
         {conversation.sendError && (
@@ -361,7 +362,6 @@ export function ChatShell({ account }: { account?: ReactNode }) {
               onSelect={model => void conversation.setModel(model)}
             />
           }
-          status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
         />
       </Stack>
     </Box>

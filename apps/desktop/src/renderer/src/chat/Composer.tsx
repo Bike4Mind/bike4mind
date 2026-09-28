@@ -21,7 +21,6 @@ export function Composer({
   onSend,
   onStop,
   footer,
-  status,
 }: {
   sessionId: string | null;
   disabled: boolean;
@@ -46,12 +45,6 @@ export function Composer({
   onStop: () => void;
   /** Controls that belong to the next turn rather than to the app - the model picker. */
   footer?: ReactNode;
-  /**
-   * What the turn in flight is doing, when one is. It TAKES OVER this slot rather than sitting
-   * beside the idle indicator below: two status elements a foot apart are two things that can
-   * disagree about whether a reply is running, and the reader has no way to tell which is right.
-   */
-  status?: ReactNode;
 }) {
   const [text, setText] = useState('');
 
@@ -155,10 +148,6 @@ export function Composer({
         )}
       </Stack>
 
-      {/* The live turn line gets the full width, on its own row, left aligned. Sharing the
-          control row below it meant competing with the model picker for space, and losing. */}
-      {status && <Box sx={{ ...contentColumnSx, pt: 1 }}>{status}</Box>}
-
       {/* Attach on the left, what answers the turn on the right - the shape Claude Code uses. */}
       <Stack direction="row" alignItems="center" spacing={1} sx={{ ...contentColumnSx, py: 1 }}>
         <IconButton
@@ -177,29 +166,33 @@ export function Composer({
 
         {footer}
 
-        {/* Stands down entirely while the turn line above is showing: two elements that can
-            disagree about whether a reply is running is worse than one. */}
-        {!status && (
-          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }} data-testid="composer-status">
-            <Box
-              sx={{
-                width: 7,
-                height: 7,
-                borderRadius: '50%',
-                bgcolor: streaming
-                  ? 'primary.solidBg'
-                  : disabled
-                    ? 'neutral.softBg'
-                    : notReady
-                      ? 'warning.solidBg'
-                      : 'success.solidBg',
-              }}
-            />
-            <Typography level="body-xs" textColor="text.tertiary" noWrap>
-              {streaming ? 'Working' : disabled ? 'No session' : (notReady ?? 'Ready')}
-            </Typography>
-          </Stack>
-        )}
+        {/* Always here now, and it is the only thing that says WHETHER a reply is running. The
+            line at the foot of the reply says what that reply is DOING, and never claims a turn
+            this dot does not - so the two report different facts rather than the same fact
+            twice, which is what made a second indicator wrong before.
+
+            They are not redundant either: this dot knows about a turn the window never saw
+            start (a reload mid-reply), where the transcript line has no clock or token count to
+            show and correctly shows nothing. */}
+        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }} data-testid="composer-status">
+          <Box
+            sx={{
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              bgcolor: streaming
+                ? 'primary.solidBg'
+                : disabled
+                  ? 'neutral.softBg'
+                  : notReady
+                    ? 'warning.solidBg'
+                    : 'success.solidBg',
+            }}
+          />
+          <Typography level="body-xs" textColor="text.tertiary" noWrap>
+            {streaming ? 'Working' : disabled ? 'No session' : (notReady ?? 'Ready')}
+          </Typography>
+        </Stack>
       </Stack>
     </Box>
   );

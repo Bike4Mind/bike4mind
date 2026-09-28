@@ -229,6 +229,19 @@ export interface ChatMessage {
   /** Tools this assistant turn ran, in the order the model asked for them. */
   toolCalls?: ChatToolCall[];
   /**
+   * The same turn split the way it was PRODUCED: one entry per tool round, each carrying that
+   * round's prose and the calls it went on to make.
+   *
+   * `content` and `toolCalls` stay the flattened view, because that is what the request builder,
+   * the plain-text transcript and search all want. This is what the thread reads to draw a reply
+   * in the order it happened rather than every tool row piled up after every word.
+   *
+   * Absent on messages stored before rounds were recorded, and on a message that ran no tools at
+   * all. A reader that finds it missing has to fall back to `content` then `toolCalls`: the
+   * ordering was never captured for those and cannot be recovered.
+   */
+  rounds?: ChatReplyRound[];
+  /**
    * Provider-shaped reasoning blocks (Anthropic extended thinking). Opaque: they are replayed
    * verbatim into the next request, because dropping them breaks thinking-plus-tools turns.
    */
@@ -466,6 +479,8 @@ export type ChatStreamEvent =
       stopReason?: string;
       usage?: ChatUsage;
       toolCalls?: ChatToolCall[];
+      /** The reply's round structure; see ChatMessage.rounds. Absent when no tool ever ran. */
+      rounds?: ChatReplyRound[];
       /** `content` has had their markup removed, so these ride with it rather than following it. */
       artifacts?: ChatArtifact[];
     }
@@ -647,6 +662,18 @@ export interface ChatPendingApproval {
   /** True when "always in this chat" must not be offered; see ChatToolCall.approvalIrreversible. */
   irreversible?: boolean;
   requestedAt: string;
+}
+
+/**
+ * One tool round of a reply: what the model said, and then what it went on to run.
+ *
+ * Holds call IDS rather than the calls, so a call has exactly one home - the message's
+ * `toolCalls` - and a round naming one that is no longer there draws prose with no row instead
+ * of the same row twice.
+ */
+export interface ChatReplyRound {
+  text: string;
+  toolCallIds: string[];
 }
 
 /**

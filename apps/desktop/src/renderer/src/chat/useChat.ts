@@ -5,6 +5,7 @@ import type {
   ChatMessage,
   ChatModelOption,
   ChatPendingApproval,
+  ChatReplyRound,
   ChatSession,
   ChatSessionStatus,
   ChatSessionSummary,
@@ -253,6 +254,31 @@ function mergeToolCall(previous: ChatToolCall, next: ChatToolCall): ChatToolCall
   return { ...next, approvalDiff: previous.approvalDiff };
 }
 
+/**
+ * Rebuild the reply's round structure from the stream, which does not carry it.
+ *
+ * It does not need to: a round is prose and then the tools that prose announced, so the FIRST
+ * text after a round has run something opens the next round. That is the whole rule, and it
+ * reproduces exactly what main stores - the point being that the thread reads in order while it
+ * is streaming, instead of every row sitting at the bottom until 'done' rearranges them.
+ */
+function appendText(rounds: ChatReplyRound[] | undefined, text: string): ChatReplyRound[] {
+  const open = rounds?.[rounds.length - 1];
+  if (!rounds || !open || open.toolCallIds.length > 0) {
+    // The blank line main puts between rounds belongs to the flattened `content`, not to the
+    // round that follows it, which would otherwise open on an empty line of its own.
+    return [...(rounds ?? []), { text: text.replace(/^\n+/, ''), toolCallIds: [] }];
+  }
+  return [...rounds.slice(0, -1), { ...open, text: open.text + text }];
+}
+
+/** Put a call in the round that is open, starting one for a round that announced itself in silence. */
+function attachCall(rounds: ChatReplyRound[] | undefined, callId: string): ChatReplyRound[] {
+  const open = rounds?.[rounds.length - 1];
+  if (!rounds || !open) return [{ text: '', toolCallIds: [callId] }];
+  return [...rounds.slice(0, -1), { ...open, toolCallIds: [...open.toolCallIds, callId] }];
+}
+
 export interface ProjectBindingError {
   message: string;
   /** Refused on timing rather than validity: the same change works once the session is idle. */
@@ -377,7 +403,9 @@ export function useConversation(
       if (event.type === 'delta') {
         setMessages(current =>
           current.map(message =>
-            message.id === event.messageId ? { ...message, content: message.content + event.text } : message
+            message.id === event.messageId
+              ? { ...message, content: message.content + event.text, rounds: appendText(message.rounds, event.text) }
+              : message
           )
         );
         return;
@@ -402,6 +430,7 @@ export function useConversation(
               toolCalls: known
                 ? existing.map(call => (call.id === event.call.id ? mergeToolCall(call, event.call) : call))
                 : [...existing, event.call],
+              rounds: known ? message.rounds : attachCall(message.rounds, event.call.id),
             };
           })
         );

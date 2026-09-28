@@ -1,3 +1,4 @@
+import type { Readable } from 'node:stream';
 import { createParser } from 'eventsource-parser';
 import { isAxiosError, type AxiosInstance, type AxiosResponse } from 'axios';
 import type { ChatRole } from '@shared/chat';
@@ -57,7 +58,7 @@ export async function streamCompletion(
     );
   } catch (err) {
     if (signal?.aborted || (isAxiosError(err) && err.code === 'ERR_CANCELED')) return;
-    throw toRequestError(err);
+    throw toRequestError(err, await readErrorBody(err));
   }
 
   await readSseStream(response, onEvent, signal);
@@ -141,14 +142,14 @@ function readSseStream(
  * a proxy or WAF sitting in front of the completions service answers with an error page, and
  * the raw axios message for that is just a status code.
  */
-function toRequestError(error: unknown): Error {
+function toRequestError(error: unknown, body?: string): Error {
   if (isAxiosError(error)) {
     const status = error.response?.status;
     if (status === 401 || status === 403) {
       return new Error(`The server refused the request (${status}). Your session may have expired.`);
     }
     if (status) {
-      return new Error(`The completion request failed with status ${status}.`);
+      return new Error(body ? `${body} (status ${status})` : `The completion request failed with status ${status}.`);
     }
     if (error.code === 'ECONNREFUSED') {
       return new Error('Cannot reach the Bike4Mind server. Check the environment and your connection.');
@@ -156,3 +157,50 @@ function toRequestError(error: unknown): Error {
   }
   return error instanceof Error ? error : new Error(String(error));
 }
+
+/**
+ * The failure response's own words, when it has any.
+ *
+ * `responseType: 'stream'` means a REJECTED request hands back a stream too, so without reading
+ * it a 400 is only ever "status 400" - and the one thing a caller most needs to tell apart, a
+ * context window that has run out, is only distinguishable from what the provider wrote.
+ */
+async function readErrorBody(error: unknown): Promise<string | undefined> {
+  if (!isAxiosError(error)) return undefined;
+  const data = error.response?.data;
+  if (typeof data === 'string') return data.slice(0, ERROR_BODY_LIMIT) || undefined;
+  if (!data || typeof (data as Readable).on !== 'function') return undefined;
+
+  try {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of data as Readable) {
+      chunks.push(Buffer.from(chunk));
+      size += chunk.length;
+      if (size >= ERROR_BODY_LIMIT) break;
+    }
+    const text = Buffer.concat(chunks).toString('utf8').slice(0, ERROR_BODY_LIMIT).trim();
+    if (!text) return undefined;
+    // The server wraps a provider failure in its own envelope; either shape may show up, and a
+    // body that parses as neither is returned as written rather than dropped.
+    try {
+      const parsed = JSON.parse(text) as { message?: unknown; error?: { message?: unknown } | string };
+      const message =
+        typeof parsed.message === 'string'
+          ? parsed.message
+          : typeof parsed.error === 'string'
+            ? parsed.error
+            : typeof parsed.error?.message === 'string'
+              ? parsed.error.message
+              : undefined;
+      return message ?? text;
+    } catch {
+      return text;
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+/** Enough of a failure body to name the cause, and not enough to paste a page into a message. */
+const ERROR_BODY_LIMIT = 2000;

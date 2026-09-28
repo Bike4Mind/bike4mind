@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -6,7 +6,7 @@ import Chip from '@mui/joy/Chip';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { isTurnBudgetStop, type ChatMessage } from '@shared/chat';
+import { isTurnBudgetStop, type ChatMessage, type ChatReplyRound, type ChatToolCall } from '@shared/chat';
 import { ArtifactList } from './ArtifactCard';
 import { AttachmentRow } from './Attachments';
 import { contentColumnSx } from './layout';
@@ -46,6 +46,15 @@ function StopReasonRow({ reason, onContinue }: { reason?: string; onContinue?: (
           </Button>
         )}
       </Stack>
+    );
+  }
+  // No Continue: the next request would carry the same oversized conversation and fail the same
+  // way, and a button that cannot work is worse than no button. Says what to do instead.
+  if (reason === 'context_limit') {
+    return (
+      <Chip size="sm" color="warning" variant="soft" sx={{ mt: 1 }} data-testid="chat-context-limit-chip">
+        Stopped - this conversation filled the model's context. Start a new one to carry on.
+      </Chip>
     );
   }
   if (reason === 'aborted') {
@@ -91,6 +100,25 @@ function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: str
 }
 
 /**
+ * The turn as an ordered list of rounds, however it was stored.
+ *
+ * A message from before rounds were recorded - or one whose turn ran no tools - collapses to a
+ * single round holding everything, which is exactly how it used to draw: all the prose, then
+ * all the rows. The ordering was never captured for those, and inventing one would put tool
+ * rows next to text they have nothing to do with.
+ */
+function roundsOf(message: ChatMessage): ChatReplyRound[] {
+  if (message.rounds && message.rounds.length > 0) return message.rounds;
+  return [{ text: message.content, toolCallIds: (message.toolCalls ?? []).map(call => call.id) }];
+}
+
+/** A round's own calls, in the message's order. Ids it names that are gone simply drop out. */
+function callsIn(round: ChatReplyRound, toolCalls: readonly ChatToolCall[]): ChatToolCall[] {
+  const wanted = new Set(round.toolCallIds);
+  return toolCalls.filter(call => wanted.has(call.id));
+}
+
+/**
  * The assistant's turn: set flush in the column with no bubble around it.
  *
  * A reply can run for screens, and a container drawn around that much text reads as a wall
@@ -103,27 +131,37 @@ function AssistantTurn({
   message,
   onRespond,
   onContinue,
+  status,
 }: {
   message: ChatMessage;
   onRespond: RespondToApproval;
   /** Absent unless this is the turn a Continue would resume; see MessageThread. */
   onContinue?: () => void;
+  /** What this turn is doing, while it is the one in flight; see MessageThread. */
+  status?: ReactNode;
 }) {
   const toolCalls = message.toolCalls ?? [];
+  const rounds = roundsOf(message);
 
   return (
     <Box sx={{ minWidth: 0 }} data-testid="chat-message-assistant">
-      {/* pre-wrap, not a markdown renderer: the model emits newlines and indentation that
-          collapse to a single line without it. Rendering markdown is its own task. */}
-      {message.content.length > 0 && (
-        <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-          {message.content}
-        </Typography>
-      )}
-
-      {/* After the text, which is the order it arrives in: the model says what it is about to
-          do, then asks for the tool. Above it, an approval prompt appears before its reason. */}
-      <ToolCallList calls={toolCalls} onRespond={onRespond} />
+      {/* The turn in the order it happened: each round's prose, then the tools that round went
+          on to run, then the next round's prose. A reply that touched six files across ten
+          rounds is a narrative, and every row piled up after every word is not that narrative. */}
+      {rounds.map((round, index) => (
+        // The gap lives here rather than as a blank line inside the text, so a round that ran
+        // tools and said nothing does not leave an empty paragraph behind.
+        <Box key={index} sx={{ mt: index === 0 ? 0 : 1.5 }} data-testid="chat-message-round">
+          {/* pre-wrap, not a markdown renderer: the model emits newlines and indentation that
+              collapse to a single line without it. Rendering markdown is its own task. */}
+          {round.text.length > 0 && (
+            <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {round.text}
+            </Typography>
+          )}
+          <ToolCallList calls={callsIn(round, toolCalls)} onRespond={onRespond} />
+        </Box>
+      ))}
 
       {/* After both, because an artifact is what the turn produced rather than part of how it
           got there. `content` has already had the markup removed, so nothing is shown twice. */}
@@ -136,6 +174,11 @@ function AssistantTurn({
       )}
 
       <StopReasonRow reason={message.stopReason} onContinue={onContinue} />
+
+      {/* Last, under the reply it describes, which is where the eye already is while a turn
+          runs. It lived in the composer before and read as a property of the input box rather
+          than of the answer being written. */}
+      {status && <Box sx={{ mt: 1 }}>{status}</Box>}
     </Box>
   );
 }
@@ -172,6 +215,7 @@ export function MessageThread({
   streaming,
   onRespond,
   onContinue,
+  status,
 }: {
   messages: ChatMessage[];
   /** Needed to read attachment bytes back; they are stored per conversation. */
@@ -180,6 +224,11 @@ export function MessageThread({
   streaming: boolean;
   onRespond: RespondToApproval;
   onContinue: () => void;
+  /**
+   * The live turn line, drawn at the foot of the reply in flight. Null when no turn is running,
+   * which is the same condition `streaming` reports - so the two can never say different things.
+   */
+  status?: ReactNode;
 }) {
   const bottom = useRef<HTMLDivElement>(null);
   const last = messages[messages.length - 1];
@@ -218,6 +267,7 @@ export function MessageThread({
               // Only the last turn, and only while nothing is running: resuming writes back
               // into its own message, so a Continue on an older one would edit history.
               {...(index === messages.length - 1 && !streaming ? { onContinue } : {})}
+              {...(index === messages.length - 1 && streaming ? { status } : {})}
             />
           )
         )}

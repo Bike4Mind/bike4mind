@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { ChatStreamEvent } from '@shared/chat';
+import { isTurnBudgetStop, type ChatStreamEvent } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService, type ChatServiceDeps } from './ChatService';
 import { SessionStore } from './SessionStore';
@@ -268,6 +268,73 @@ describe('ChatService tool loop', () => {
 
     const session = await service.getSession(id);
     expect(session?.messages.filter(message => message.role === 'assistant')).toHaveLength(1);
+
+    // The resumed round is a round of its own rather than being folded into the one before it,
+    // so the thread still draws the tool call where it happened.
+    const reply = session?.messages.find(message => message.role === 'assistant');
+    expect(reply?.rounds).toEqual([
+      { text: 'Reading the config.', toolCallIds: [expect.any(String)] },
+      { text: 'Done.', toolCallIds: [] },
+    ]);
+  });
+
+  it('records each round with the calls it made, so a reply can be drawn in order', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'go');
+    await firstRequest();
+
+    streams[0].write(frame({ type: 'content', text: 'Looking for the config.' }));
+    await driveRounds(1, () => '{"pattern":"*.json"}');
+    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+    streams[1].write(frame({ type: 'content', text: 'Now reading it.' }));
+    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+    streams[1].write(
+      frame({ type: 'tool_use', tools: [{ id: 'c2', name: 'glob_files', arguments: '{"pattern":"*"}' }] })
+    );
+    streams[1].write(frame('[DONE]'));
+    await vi.waitUntil(() => streams.length === 3, { timeout: 3000, interval: 5 });
+    streams[2].write(frame({ type: 'content', text: 'Here is what I found.' }));
+    streams[2].write(frame('[DONE]'));
+
+    const done = await waitFor(events, 'done');
+    expect(done).toMatchObject({
+      content: 'Looking for the config.\n\nNow reading it.\n\nHere is what I found.',
+      rounds: [
+        { text: 'Looking for the config.', toolCallIds: [expect.any(String)] },
+        { text: 'Now reading it.', toolCallIds: ['c2'] },
+        // The round that ends the turn ran nothing, and is still a round: it carries the answer.
+        { text: 'Here is what I found.', toolCallIds: [] },
+      ],
+    });
+  });
+
+  it('ends a turn whose context ran out with its own reason, keeping the work before it', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'a long one');
+    await firstRequest();
+
+    streams[0].write(frame({ type: 'content', text: 'Working through it.' }));
+    await driveRounds(1, () => '{"pattern":"*"}');
+    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+
+    // What a provider says when the conversation has outgrown the window. It arrives as a
+    // failed request, and the turn must not be thrown away over it.
+    streams[1].destroy(new Error('prompt is too long: 213000 tokens > 200000 maximum'));
+
+    const done = await waitFor(events, 'done');
+    expect(done).toMatchObject({ stopReason: 'context_limit', content: 'Working through it.' });
+    // Not a budget stop, so no Continue is offered: the same oversized request cannot succeed.
+    expect(isTurnBudgetStop('context_limit')).toBe(false);
+  });
+
+  it('still fails the reply on an error that is not the context running out', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'go');
+    await firstRequest();
+
+    streams[0].destroy(new Error('the server fell over'));
+
+    await expect(waitFor(events, 'error')).resolves.toMatchObject({ message: 'the server fell over' });
   });
 
   it('refuses to continue a turn that was not stopped by a budget', async () => {
