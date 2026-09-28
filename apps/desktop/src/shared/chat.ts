@@ -85,6 +85,50 @@ export interface ChatToolCall {
  */
 export type ChatApprovalDecision = 'once' | 'always' | 'deny';
 
+/**
+ * What the user attached to a turn: an image the model looks at, or a text file inlined into
+ * the prompt.
+ *
+ * Deliberately NOT the same thing as the file tools. The tools are the model going and looking
+ * for something; an attachment is the user handing something over - "here is the screenshot of
+ * the bug" - and it is in the turn whether or not any folder is shared.
+ *
+ * The bytes are NOT here. They live beside the session on disk (see main/chat/AttachmentStore),
+ * because this descriptor is what gets persisted into the session JSON, and that file is read
+ * in full every time the sidebar lists conversations.
+ */
+export type ChatAttachmentKind = 'image' | 'text';
+
+export interface ChatAttachment {
+  id: string;
+  kind: ChatAttachmentKind;
+  /** Basename, or a generated name for a pasted image. Safe to render: control characters and quotes are stripped. */
+  name: string;
+  mediaType: string;
+  /** Size of what the model receives. For a truncated text file this is smaller than `sourceBytes`. */
+  byteSize: number;
+  /** Size of the file the user picked, before truncation or downscaling. */
+  sourceBytes: number;
+  /** Set when the file was too big to send whole; the model is told so in the attachment itself. */
+  truncated?: boolean;
+}
+
+/**
+ * One file on its way in, before it is classified and capped.
+ *
+ * Two shapes because the three entry paths genuinely differ: the picker and a drop both name a
+ * file on disk, so main reads it (and can read only the first slice of a huge log). A pasted
+ * screenshot exists only in the clipboard, so its bytes cross IPC.
+ */
+export type ChatAttachmentInput =
+  { source: 'path'; path: string } | { source: 'bytes'; name: string; mediaType?: string; data: Uint8Array };
+
+/** Attachments that made it in, plus the ones that did not and why - a silent drop is worse than a refusal. */
+export interface AddAttachmentsResult {
+  attachments: ChatAttachment[];
+  rejected: { name: string; reason: string }[];
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
@@ -104,6 +148,8 @@ export interface ChatMessage {
   stopReason?: string;
   /** Set instead of a reply when the turn failed; the message is kept so the thread shows why. */
   error?: string;
+  /** Files the user attached to this turn. Only ever on a user message. */
+  attachments?: ChatAttachment[];
 }
 
 export type BackgroundProcessStatus = 'running' | 'exited' | 'killed' | 'failed';
@@ -147,6 +193,12 @@ export interface ChatModelOption {
   /** Provider serving it ("anthropic", "ollama", ...). Shown as a secondary label. */
   backend?: string;
   contextWindow?: number;
+  /**
+   * Whether this model accepts images. Absent means the server said nothing, which is NOT the
+   * same as "no": the catalog only carries the flag for backends that report it, so an attached
+   * image is refused on an explicit `false` and allowed through on silence.
+   */
+  supportsVision?: boolean;
 }
 
 /**
@@ -225,6 +277,8 @@ export type ChatStreamEvent =
 export interface SendMessageRequest {
   sessionId: string;
   text: string;
+  /** Descriptors returned by `addAttachments`; their bytes are already on disk. */
+  attachments?: ChatAttachment[];
 }
 
 /**

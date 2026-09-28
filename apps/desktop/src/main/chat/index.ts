@@ -1,10 +1,12 @@
 import { join } from 'node:path';
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeImage } from 'electron';
 import { ChatModels } from '@bike4mind/common';
-import type { ChatApprovalDecision, ChatStreamEvent, SendMessageRequest } from '@shared/chat';
+import type { ChatApprovalDecision, ChatAttachmentInput, ChatStreamEvent, SendMessageRequest } from '@shared/chat';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
+import { AttachmentStore } from './AttachmentStore';
+import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
 import { ChatService } from './ChatService';
 import { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
@@ -27,6 +29,36 @@ const PREFERRED_MODEL: string = ChatModels.CLAUDE_4_5_SONNET;
 /** How much of a background process's output the panel asks for when it rejoins after a reload. */
 const PANEL_TAIL_CHARS = 20_000;
 
+/** Re-encode quality for a downscaled screenshot. Text in a UI stays legible well below this. */
+const SHRUNK_JPEG_QUALITY = 82;
+
+/**
+ * Downscale an oversized image with Electron's own decoder, so no image library is added.
+ *
+ * Returns null whenever it cannot help - a format nativeImage does not decode, or an image
+ * already inside the limit - and the caller then keeps the original bytes. PNG is kept as PNG
+ * when that is already small enough, because re-encoding a screenshot of text as JPEG blurs
+ * exactly the part the user attached it for; JPEG is only the fallback for what is still large.
+ */
+function shrinkImage(bytes: Buffer, mediaType: string, maxEdge: number): { bytes: Buffer; mediaType: string } | null {
+  const image = nativeImage.createFromBuffer(bytes);
+  if (image.isEmpty()) return null;
+
+  const { width, height } = image.getSize();
+  const longEdge = Math.max(width, height);
+  if (longEdge <= maxEdge && bytes.length <= IMAGE_BYTE_CAP) return null;
+
+  const resized = longEdge > maxEdge ? image.resize(width >= height ? { width: maxEdge } : { height: maxEdge }) : image;
+  if (resized.isEmpty()) return null;
+
+  const asPng = resized.toPNG();
+  if (asPng.length > 0 && asPng.length <= IMAGE_BYTE_CAP) return { bytes: asPng, mediaType: 'image/png' };
+
+  const asJpeg = resized.toJPEG(SHRUNK_JPEG_QUALITY);
+  if (asJpeg.length === 0) return null;
+  return { bytes: asJpeg, mediaType: 'image/jpeg' };
+}
+
 /**
  * Build the chat service and expose it over IPC.
  *
@@ -44,6 +76,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
   const userData = app.getPath('userData');
   const store = new SessionStore(join(userData, 'sessions'), PREFERRED_MODEL);
   const access = new AccessStore(join(userData, 'tool-access.json'));
+  const attachments = new AttachmentStore(join(userData, 'attachments'), logger, shrinkImage);
   const approvals = new ApprovalGate();
   const models = new ModelCatalog({
     logger,
@@ -69,6 +102,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
   const service = new ChatService({
     store,
     access,
+    attachments,
     models,
     logger,
     preferredModel: PREFERRED_MODEL,
@@ -94,11 +128,50 @@ export function registerChat(auth: AuthService): RegisteredChat {
   );
   ipcMain.handle(IPC_CHANNELS.chatDeleteSession, (_event, sessionId: string) => service.deleteSession(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatSendMessage, (_event, request: SendMessageRequest) =>
-    service.send(request.sessionId, request.text)
+    service.send(request.sessionId, request.text, request.attachments)
   );
   ipcMain.handle(IPC_CHANNELS.chatStopReply, (_event, sessionId: string) => service.stop(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatRespondToApproval, (_event, approvalId: string, decision: ChatApprovalDecision) =>
     approvals.resolve(approvalId, decision)
+  );
+
+  // The picker runs in main because that is where Electron's dialog lives, and it is the one
+  // entry path that can name a file the renderer never saw.
+  ipcMain.handle(IPC_CHANNELS.chatPickAttachments, async (event, sessionId: string) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const properties: ('openFile' | 'multiSelections')[] = ['openFile', 'multiSelections'];
+    const picked = await (window
+      ? dialog.showOpenDialog(window, { properties })
+      : dialog.showOpenDialog({ properties }));
+    if (picked.canceled || picked.filePaths.length === 0) return { attachments: [], rejected: [] };
+    return attachments.add(
+      sessionId,
+      picked.filePaths.map(path => ({ source: 'path' as const, path }))
+    );
+  });
+
+  ipcMain.handle(IPC_CHANNELS.chatAddAttachments, (_event, sessionId: string, inputs: ChatAttachmentInput[]) =>
+    attachments.add(sessionId, Array.isArray(inputs) ? inputs : [])
+  );
+
+  // One channel for both kinds, because the renderer wants one thing from each: something it
+  // can put in an <img src> or in a <pre>.
+  // `mediaType` comes from the descriptor the renderer already holds, and is validated against
+  // the image allowlist here rather than trusted: it ends up inside a `data:` URL, and the one
+  // thing that must not be reachable is an attacker-chosen scheme in an <img src>.
+  ipcMain.handle(
+    IPC_CHANNELS.chatReadAttachment,
+    async (_event, sessionId: string, attachmentId: string, mediaType: string) => {
+      const bytes = await attachments.read(sessionId, attachmentId);
+      if (!bytes) return null;
+      return isImageMediaType(mediaType)
+        ? `data:${mediaType};base64,${bytes.toString('base64')}`
+        : bytes.toString('utf8');
+    }
+  );
+
+  ipcMain.handle(IPC_CHANNELS.chatDiscardAttachment, (_event, sessionId: string, attachmentId: string) =>
+    attachments.discard(sessionId, attachmentId)
   );
 
   ipcMain.handle(IPC_CHANNELS.chatListBackground, (_event, sessionId: string) => background.list(sessionId));

@@ -7,6 +7,7 @@ import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { ChatMessage } from '@shared/chat';
+import { AttachmentRow } from './Attachments';
 import { contentColumnSx } from './layout';
 import { ToolCallList, type RespondToApproval } from './ToolCallList';
 
@@ -39,7 +40,9 @@ function StopReasonChip({ reason }: { reason?: string }) {
  * The user's own turn: a right-aligned bubble, narrower than the column so the alignment
  * reads as "mine" at a glance even when the text is long.
  */
-function UserTurn({ message }: { message: ChatMessage }) {
+function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: string | null }) {
+  const attachments = message.attachments ?? [];
+
   return (
     <Stack direction="row" justifyContent="flex-end">
       <Sheet
@@ -48,9 +51,18 @@ function UserTurn({ message }: { message: ChatMessage }) {
         sx={{ px: 2, py: 1.25, borderRadius: 'lg', maxWidth: '85%', minWidth: 0 }}
         data-testid="chat-message-user"
       >
-        <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-          {message.content}
-        </Typography>
+        {/* Above the text, matching the composer: what was handed over, then what was asked
+            about it. Not removable here - the turn has been sent. */}
+        {attachments.length > 0 && (
+          <Box sx={{ mb: message.content ? 1 : 0 }}>
+            <AttachmentRow sessionId={sessionId} attachments={attachments} />
+          </Box>
+        )}
+        {message.content && (
+          <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            {message.content}
+          </Typography>
+        )}
       </Sheet>
     </Stack>
   );
@@ -105,10 +117,13 @@ function AssistantTurn({
 
 export function MessageThread({
   messages,
+  sessionId,
   streaming,
   onRespond,
 }: {
   messages: ChatMessage[];
+  /** Needed to read attachment bytes back; they are stored per conversation. */
+  sessionId: string | null;
   streaming: boolean;
   onRespond: RespondToApproval;
 }) {
@@ -138,7 +153,7 @@ export function MessageThread({
       <Stack spacing={3} sx={{ ...contentColumnSx, py: 3 }}>
         {messages.map((message, index) =>
           message.role === 'user' ? (
-            <UserTurn key={message.id} message={message} />
+            <UserTurn key={message.id} message={message} sessionId={sessionId} />
           ) : (
             <AssistantTurn
               key={message.id}
