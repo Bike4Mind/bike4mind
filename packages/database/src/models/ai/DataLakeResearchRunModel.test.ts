@@ -153,6 +153,71 @@ describe('DataLakeResearchRunRepository', () => {
     });
   });
 
+  // The guard against a stale double-settle of the SAME caller (the executor) racing itself - e.g.
+  // an SQS redelivery reaching the terminal settle a second time: a second settle is a no-op, not
+  // an overwrite of the real outcome, and the caller can tell from the return value.
+  it('reports true when it actually settles the row, false when the row was already terminal', async () => {
+    const created = await repo.createRun(input());
+
+    const first = await repo.settleRun(created.id, {
+      status: 'completed',
+      completedAt: new Date(),
+      spentMicroUsd: 100,
+      totals: emptyResearchRunTotals(),
+    });
+    const second = await repo.settleRun(created.id, {
+      status: 'failed',
+      completedAt: new Date(),
+      spentMicroUsd: 0,
+      totals: emptyResearchRunTotals(),
+      error: 'a stale, racing settle',
+    });
+
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+    // The real outcome survives untouched - the racing settle never landed.
+    expect(await repo.findByIdInLake(created.id, LAKE)).toMatchObject({ status: 'completed', spentMicroUsd: 100 });
+  });
+
+  describe('settleQueuedRun (a caller with no execution claim, e.g. an enqueue-failure route)', () => {
+    // The round-2 regression: `settleRun`'s queued-OR-running guard let a caller that never
+    // claimed the run settle it out from under the executor the moment the executor set it
+    // `running`. Against a REAL `running` row (claimed via `claimForExecution`, not a mock),
+    // `settleQueuedRun` must be a no-op - it only ever owns a row nobody has picked up yet.
+    it('is a no-op against a row the executor has already claimed', async () => {
+      const created = await repo.createRun(input());
+      const startedAt = new Date('2026-03-01T12:00:00.000Z');
+      await repo.claimForExecution(created.id, startedAt);
+
+      const settled = await repo.settleQueuedRun(created.id, {
+        status: 'failed',
+        completedAt: new Date(),
+        spentMicroUsd: 0,
+        totals: emptyResearchRunTotals(),
+        error: 'the enqueue could not be confirmed',
+      });
+
+      expect(settled).toBe(false);
+      // The claimed run is untouched - still running, not overwritten to failed.
+      expect(await repo.findByIdInLake(created.id, LAKE)).toMatchObject({ status: 'running', startedAt });
+    });
+
+    it('settles a row nobody has claimed yet', async () => {
+      const created = await repo.createRun(input());
+
+      const settled = await repo.settleQueuedRun(created.id, {
+        status: 'failed',
+        completedAt: new Date(),
+        spentMicroUsd: 0,
+        totals: emptyResearchRunTotals(),
+        error: 'the enqueue could not be confirmed',
+      });
+
+      expect(settled).toBe(true);
+      expect(await repo.findByIdInLake(created.id, LAKE)).toMatchObject({ status: 'failed' });
+    });
+  });
+
   it('settles a failure with its message and no stop reason', async () => {
     const created = await repo.createRun(input());
 

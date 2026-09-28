@@ -28,9 +28,17 @@ export interface LakeConfigAuditAdapters {
   logger?: LakeConfigAuditLogger;
 }
 
+/**
+ * A lake reference, not the full document: only what this call needs to resolve the manage rung
+ * and stamp the event's `dataLakeId`. Exported so every research-service call site (which only
+ * ever has this much of the lake, never the full document) shares one type instead of each
+ * re-declaring the same `Pick` locally.
+ */
+export type LakeConfigAuditLakeRef = Pick<IDataLakeDocument, 'id' | 'createdByUserId' | 'organizationId'>;
+
 export interface RecordLakeConfigChangeParams {
   actor: ManageActor;
-  lake: Pick<IDataLakeDocument, 'id' | 'createdByUserId' | 'organizationId'>;
+  lake: LakeConfigAuditLakeRef;
   /** The lake's active grants, if the caller already loaded them for its own gate - passing them
    * is what lets the rung resolve to `grant-owner`/`grant-curator`/`org-grant` rather than
    * collapsing to the creator/org-admin arms. */

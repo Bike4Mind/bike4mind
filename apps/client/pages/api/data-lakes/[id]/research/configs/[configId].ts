@@ -7,10 +7,11 @@ import { Request } from 'express';
 import { z } from 'zod';
 import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchManage';
 import { ResearchLeversInput } from '@server/dataLakes/researchConfigInput';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 const UpdateInput = ResearchLeversInput.extend({ name: z.string().optional() });
 
-const db = { dataLakeResearchConfigs: dataLakeResearchConfigRepository };
+const db = { dataLakeResearchConfigs: dataLakeResearchConfigRepository, ...lakeConfigAuditDb };
 
 /**
  * PUT    /api/data-lakes/:id/research/configs/:configId - edit a saved configuration (#1682).
@@ -24,17 +25,20 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .put(async (req: Request, res) => {
     const { id, configId } = req.query as { id: string; configId: string };
-    const lake = await assertLakeResearchManage(req, id);
+    const { lake, actor, grants } = await assertLakeResearchManage(req, id);
     const input = UpdateInput.parse(req.body);
 
-    const updated = await dataLakeResearchService.updateResearchConfig(configId, lake.id, req.user!.id, input, { db });
+    const updated = await dataLakeResearchService.updateResearchConfig(configId, lake, actor, grants, input, {
+      db,
+      logger: req.logger,
+    });
     return res.json({ data: updated });
   })
   .delete(async (req: Request, res) => {
     const { id, configId } = req.query as { id: string; configId: string };
-    const lake = await assertLakeResearchManage(req, id);
+    const { lake, actor, grants } = await assertLakeResearchManage(req, id);
 
-    await dataLakeResearchService.deleteResearchConfig(configId, lake.id, { db });
+    await dataLakeResearchService.deleteResearchConfig(configId, lake, actor, grants, { db, logger: req.logger });
     return res.status(204).end();
   });
 
