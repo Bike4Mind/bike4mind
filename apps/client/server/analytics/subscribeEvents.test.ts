@@ -9,7 +9,7 @@ vi.mock('./emitActiveEvent', () => ({
 }));
 
 import { stableEventId } from './acquisition';
-import { emitSubscribeForSourceProducts } from './subscribeEvents';
+import { emitSignupForSourceProducts, emitSubscribeForSourceProducts } from './subscribeEvents';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -87,6 +87,55 @@ describe('emitSubscribeForSourceProducts', () => {
         subscriptionId: 's',
         touches: { lastTouch: { source: 'widgets' } },
       })
+    ).resolves.toEqual(['widgets']);
+  });
+});
+
+describe('emitSignupForSourceProducts', () => {
+  it('sends one signup per source product, keyed to the user so a retry sends the same id', async () => {
+    const sent = await emitSignupForSourceProducts({
+      userId: 'u1',
+      method: 'otc',
+      touches: { firstTouch: { source: 'widgets', medium: 'teaser' }, lastTouch: { source: 'widgets' } },
+    });
+    expect(sent).toEqual(['widgets']);
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    expect(mockEmit).toHaveBeenCalledWith({
+      productId: 'widgets',
+      event: 'signup',
+      eventId: stableEventId('signup', 'widgets', 'u1'),
+      userId: 'u1',
+      utm: { source: 'widgets', medium: 'teaser' },
+      metadata: { touch: 'both', attribution: 'self-reported', method: 'otc' },
+    });
+  });
+
+  it('marks every signup self-reported and never credits the host or a keyless source', async () => {
+    await emitSignupForSourceProducts({
+      userId: 'u1',
+      method: 'google',
+      touches: { firstTouch: { source: 'widgets' }, lastTouch: { source: 'gadgets' } },
+    });
+    expect(mockEmit).toHaveBeenCalledTimes(2);
+    for (const [call] of mockEmit.mock.calls) {
+      expect(call.metadata).toMatchObject({ attribution: 'self-reported', method: 'google' });
+    }
+
+    mockEmit.mockClear();
+    await expect(
+      emitSignupForSourceProducts({
+        userId: 'u1',
+        method: 'otc',
+        touches: { firstTouch: { source: 'bike4mind' }, lastTouch: { source: 'newsletter' } },
+      })
+    ).resolves.toEqual([]);
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it('never throws when the emitter fails', async () => {
+    mockEmit.mockRejectedValue(new Error('down'));
+    await expect(
+      emitSignupForSourceProducts({ userId: 'u1', method: 'otc', touches: { lastTouch: { source: 'widgets' } } })
     ).resolves.toEqual(['widgets']);
   });
 });

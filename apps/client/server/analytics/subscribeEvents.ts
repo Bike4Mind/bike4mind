@@ -5,7 +5,8 @@ import { emitProductEvent, HOST_PRODUCT_ID, ingestKeyFor } from './emitActiveEve
 
 // Kept apart from acquisition.ts, which is pure: this is the one piece that sends, so importing
 // the touch helpers (checkout, the subscription write path) does not pull in the emitter and its
-// config.
+// config. It sends the two conversions another product can be credited with: `signup` when an
+// account is created, and `subscribe` when its first invoice is paid.
 
 /**
  * How much these events are worth trusting, carried on every one of them. The product an event is
@@ -23,45 +24,95 @@ import { emitProductEvent, HOST_PRODUCT_ID, ingestKeyFor } from './emitActiveEve
  */
 const ATTRIBUTION = 'self-reported';
 
+type SourceTouch = { touch: 'first' | 'last' | 'both'; utm: OverwatchUtm };
+
 /**
- * Tell each product the customer came through that they subscribed: one `subscribe` event per
- * distinct touch source that names an Overwatch product this deployment holds a key for, marked
- * with which touch it was. A source that is only a campaign channel (an email, a social network)
- * has no key and sends nothing. The host product is not sent here: its funnel counts new
- * subscribers from its own daily totals, and a second path would double it.
- *
- * Every event carries `attribution: 'self-reported'` - see ATTRIBUTION above for why that matters
- * before these counts are trusted.
- *
- * Awaited by the caller but never throws; emitProductEvent fails open and times out on its own.
+ * The products a conversion is credited to: each distinct touch source that names an Overwatch
+ * product this deployment holds a key for, with which touch it was. A source that is only a
+ * campaign channel (an email, a social network) has no key and is no product. The host product is
+ * never one: its funnel counts its own signups and subscribers, and a second path would double it.
  */
-export async function emitSubscribeForSourceProducts(opts: {
-  userId: string;
-  /** The Stripe subscription id: the occurrence, so a retry maps to the same eventId. */
-  subscriptionId: string;
-  touches: AcquisitionTouches | undefined;
-  priceId?: string;
-}): Promise<string[]> {
-  const byProduct = new Map<string, { touch: 'first' | 'last' | 'both'; utm: OverwatchUtm }>();
+function sourceProducts(touches: AcquisitionTouches | undefined): Map<string, SourceTouch> {
+  const byProduct = new Map<string, SourceTouch>();
   const note = (touch: 'first' | 'last', utm: OverwatchUtm | undefined) => {
     const productId = utm?.source;
     if (!utm || !productId || productId === HOST_PRODUCT_ID || !ingestKeyFor(productId)) return;
     const seen = byProduct.get(productId);
     byProduct.set(productId, seen ? { ...seen, touch: 'both' } : { touch, utm });
   };
-  note('first', opts.touches?.firstTouch);
-  note('last', opts.touches?.lastTouch);
+  note('first', touches?.firstTouch);
+  note('last', touches?.lastTouch);
+  return byProduct;
+}
+
+/**
+ * Send `event` to each source product (see sourceProducts), marked with its touch and with
+ * `attribution: 'self-reported'` - see ATTRIBUTION above for why that matters before these counts
+ * are trusted. `occurrence` makes the eventId, so a retry of the same conversion sends the same id
+ * and the receiver keeps one event. Never throws; emitProductEvent fails open and times out on its
+ * own. Resolves to the products it sent to.
+ */
+async function emitForSourceProducts(opts: {
+  event: 'signup' | 'subscribe';
+  occurrence: string;
+  userId: string;
+  touches: AcquisitionTouches | undefined;
+  metadata?: Record<string, string>;
+}): Promise<string[]> {
+  const byProduct = sourceProducts(opts.touches);
   await Promise.all(
     [...byProduct.entries()].map(([productId, { touch, utm }]) =>
       emitProductEvent({
         productId,
-        event: 'subscribe',
-        eventId: stableEventId('subscribe', productId, opts.subscriptionId),
+        event: opts.event,
+        eventId: stableEventId(opts.event, productId, opts.occurrence),
         userId: opts.userId,
         utm,
-        metadata: { touch, attribution: ATTRIBUTION, ...(opts.priceId ? { priceId: opts.priceId } : {}) },
+        metadata: { touch, attribution: ATTRIBUTION, ...opts.metadata },
       }).catch(() => {})
     )
   );
   return [...byProduct.keys()];
+}
+
+/**
+ * Tell each product the customer came through that they subscribed. Awaited by the caller (the
+ * invoice webhook) but never throws.
+ */
+export function emitSubscribeForSourceProducts(opts: {
+  userId: string;
+  /** The Stripe subscription id: the occurrence, so a retry maps to the same eventId. */
+  subscriptionId: string;
+  touches: AcquisitionTouches | undefined;
+  priceId?: string;
+}): Promise<string[]> {
+  return emitForSourceProducts({
+    event: 'subscribe',
+    occurrence: opts.subscriptionId,
+    userId: opts.userId,
+    touches: opts.touches,
+    metadata: opts.priceId ? { priceId: opts.priceId } : undefined,
+  });
+}
+
+/**
+ * Tell each product a new user came through that they signed up: the middle stage of that
+ * product's funnel, between its visits and its subscribers. Called once, where an account is
+ * created with the new user's own request in hand (their cookies carry the touches). The user id
+ * is the occurrence, since an account signs up once. Awaited by the caller but never throws, and
+ * resolves at once when no touch names a product, which is most signups.
+ */
+export function emitSignupForSourceProducts(opts: {
+  userId: string;
+  touches: AcquisitionTouches | undefined;
+  /** How the account was created (`otc`, `google`, `github`, ...), for splitting the stage. */
+  method: string;
+}): Promise<string[]> {
+  return emitForSourceProducts({
+    event: 'signup',
+    occurrence: opts.userId,
+    userId: opts.userId,
+    touches: opts.touches,
+    metadata: { method: opts.method },
+  });
 }

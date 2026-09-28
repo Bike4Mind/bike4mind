@@ -17,6 +17,10 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next?.() }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
+const mockEmitSignup = vi.fn().mockResolvedValue([]);
+vi.mock('@server/analytics/subscribeEvents', () => ({
+  emitSignupForSourceProducts: (...a: any[]) => mockEmitSignup(...a),
+}));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn(() => Promise.resolve()) }));
 vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
 vi.mock('@server/auth/tokenGenerator', () => ({
@@ -110,6 +114,20 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 1000 });
     mockAddCredits.mockResolvedValue({ currentCredits: 1000 + EXPECTED_DOMAIN_CREDITS });
     mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0 });
+  });
+
+  it("credits the new account's signup to the product in its touch cookies, as an otc signup", async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `b4m-first-touch=${encodeURIComponent(JSON.stringify({ source: 'widgets' }))}`;
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockEmitSignup).toHaveBeenCalledWith({
+      userId: 'user-1',
+      touches: { firstTouch: { source: 'widgets' } },
+      method: 'otc',
+    });
   });
 
   it('is a sanity check that the fixture domain actually confers the product credit sum', () => {

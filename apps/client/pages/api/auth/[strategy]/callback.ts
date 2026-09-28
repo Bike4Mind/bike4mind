@@ -14,6 +14,8 @@ import passport from 'passport';
 import { z } from 'zod';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
+import { readAcquisitionTouches } from '@server/analytics/acquisition';
+import { emitSignupForSourceProducts } from '@server/analytics/subscribeEvents';
 import { AuthEvents } from '@bike4mind/common';
 import { resolveOAuthFailureReason, oauthFailureRedirectMessage } from '@server/utils/auth/oauthFailureReason';
 import { isLocalAppUrl } from '@server/utils/validators';
@@ -142,6 +144,9 @@ const handler = baseApi({ auth: false })
           } catch (logError) {
             console.error('Failed to log OAuth registration:', logError);
           }
+          // Credit the signup to the product the visitor came through, if any. The provider's
+          // redirect back here is a top-level GET, so the first-party touch cookies arrive.
+          await emitSignupForSourceProducts({ userId: user.id, touches: readAcquisitionTouches(req), method: strategy });
         }
 
         // Every OAuth callback is a successful authentication; only a genuine

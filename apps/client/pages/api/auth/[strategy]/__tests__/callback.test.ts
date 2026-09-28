@@ -33,6 +33,11 @@ vi.mock('@server/auth/authSuccessRedirect', () => ({ authSuccessRedirectQuery: (
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 
+const mockEmitSignup = vi.fn().mockResolvedValue([]);
+vi.mock('@server/analytics/subscribeEvents', () => ({
+  emitSignupForSourceProducts: (...a: any[]) => mockEmitSignup(...a),
+}));
+
 const mockIssueBrowserSession = vi.fn().mockResolvedValue({ accessToken: 'jwt-access', sid: 'sid' });
 vi.mock('@server/auth/issueSession', () => ({
   issueBrowserSession: (...a: any[]) => mockIssueBrowserSession(...a),
@@ -41,22 +46,22 @@ vi.mock('@server/auth/issueSession', () => ({
 // Import after mocks are registered.
 import handler from '@pages/api/auth/[strategy]/callback';
 
-function makeReqRes() {
+function makeReqRes(headers: Record<string, string> = {}) {
   const { req, res } = createMocks({
     method: 'GET',
     query: { strategy: 'github', state: 'state-token' },
-    headers: { host: 'localhost:3000', 'user-agent': 'vitest' },
+    headers: { host: 'localhost:3000', 'user-agent': 'vitest', ...headers },
     url: '/api/auth/github/callback',
   });
   return { req: req as any, res: res as any };
 }
 
 /** Drive the handler as if passport's verify callback resolved with (err, user, info). */
-async function runCallback(err: unknown, user: unknown, info: unknown) {
+async function runCallback(err: unknown, user: unknown, info: unknown, headers?: Record<string, string>) {
   mockAuthenticate.mockImplementation(
     (_strategy: string, _opts: any, cb: any) => (req: any, res: any, next: any) => cb(err, user, info)
   );
-  const { req, res } = makeReqRes();
+  const { req, res } = makeReqRes(headers);
   await handler(req, res, vi.fn());
   return res;
 }
@@ -167,5 +172,29 @@ describe('[strategy]/callback - invite gate', () => {
     expect(res._getRedirectUrl()).toBe(
       `/login?error=${encodeURIComponent('This instance is invite-only. Ask an administrator for an invite.')}`
     );
+  });
+});
+
+describe('[strategy]/callback - signup credited to the source product', () => {
+  const touchCookie = `b4m_last_touch=${encodeURIComponent(JSON.stringify({ source: 'widgets', medium: 'landing' }))}`;
+
+  it("sends a new account's touches, read from its own cookies, with the provider as the method", async () => {
+    const res = await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(mockEmitSignup).toHaveBeenCalledWith({
+      userId: 'u-new',
+      touches: { lastTouch: { source: 'widgets', medium: 'landing' } },
+      method: 'github',
+    });
+    expect(res._getRedirectUrl()).toMatch(/isNewUser=1/);
+  });
+
+  it('sends nothing for a returning user', async () => {
+    await runCallback(null, { id: 'u-old', isBanned: false }, undefined, { cookie: touchCookie });
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(mockIssueBrowserSession).toHaveBeenCalled();
+    expect(mockEmitSignup).not.toHaveBeenCalled();
   });
 });

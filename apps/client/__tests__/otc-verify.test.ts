@@ -108,6 +108,7 @@ vi.mock('@server/auth/tokenGenerator', () => ({
 }));
 vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@server/analytics/subscribeEvents', () => ({ emitSignupForSourceProducts: vi.fn().mockResolvedValue([]) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
 vi.mock('jsonwebtoken', () => ({
   default: { verify: (...a: unknown[]) => mockJwtVerify(...a), sign: (...a: unknown[]) => mockJwtSign(...a) },
