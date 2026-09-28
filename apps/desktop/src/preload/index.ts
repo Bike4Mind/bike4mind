@@ -1,6 +1,6 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
-import type { ChatApprovalDecision, ChatStreamEvent, SendMessageRequest } from '@shared/chat';
+import type { ChatApprovalDecision, ChatAttachmentInput, ChatStreamEvent, SendMessageRequest } from '@shared/chat';
 import { IPC_CHANNELS, type DesktopApi } from '@shared/ipc';
 
 // Written out one method per channel rather than a generic invoke(channel, ...args)
@@ -36,6 +36,13 @@ const api: DesktopApi = {
     deleteSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatDeleteSession, sessionId),
     sendMessage: (request: SendMessageRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatSendMessage, request),
     stopReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatStopReply, sessionId),
+    pickAttachments: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatPickAttachments, sessionId),
+    addAttachments: (sessionId: string, inputs: ChatAttachmentInput[]) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatAddAttachments, sessionId, inputs),
+    readAttachment: (sessionId: string, attachmentId: string, mediaType: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatReadAttachment, sessionId, attachmentId, mediaType),
+    discardAttachment: (sessionId: string, attachmentId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatDiscardAttachment, sessionId, attachmentId),
     respondToApproval: (approvalId: string, decision: ChatApprovalDecision) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatRespondToApproval, approvalId, decision),
     listBackgroundProcesses: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatListBackground, sessionId),
@@ -47,6 +54,18 @@ const api: DesktopApi = {
       const handler = (_event: unknown, streamEvent: ChatStreamEvent) => listener(streamEvent);
       ipcRenderer.on(IPC_CHANNELS.chatStreamEvent, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.chatStreamEvent, handler);
+    },
+  },
+  files: {
+    // Electron removed File.path in v32; webUtils is the replacement and it only works on this
+    // side of the bridge, so a dropped file's path is resolved here and the bytes never have to
+    // cross IPC. Returns '' for anything with no path of its own (a drag out of a web page).
+    pathFor: (file: File) => {
+      try {
+        return webUtils.getPathForFile(file);
+      } catch {
+        return '';
+      }
     },
   },
   tools: {

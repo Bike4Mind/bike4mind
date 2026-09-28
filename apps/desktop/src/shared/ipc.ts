@@ -1,7 +1,9 @@
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
+  AddAttachmentsResult,
   BackgroundProcessInfo,
   ChatApprovalDecision,
+  ChatAttachmentInput,
   ChatModelCatalog,
   ChatSession,
   ChatSessionSummary,
@@ -41,6 +43,10 @@ export const IPC_CHANNELS = {
   chatSendMessage: 'chat:send-message',
   chatStopReply: 'chat:stop-reply',
   chatRespondToApproval: 'chat:respond-to-approval',
+  chatPickAttachments: 'chat:pick-attachments',
+  chatAddAttachments: 'chat:add-attachments',
+  chatReadAttachment: 'chat:read-attachment',
+  chatDiscardAttachment: 'chat:discard-attachment',
   chatListBackground: 'chat:list-background',
   chatReadBackground: 'chat:read-background',
   chatStopBackground: 'chat:stop-background',
@@ -93,6 +99,17 @@ export interface DesktopApi {
     sendMessage(request: SendMessageRequest): Promise<SendMessageResult>;
     /** Stop an in-flight reply, keeping what has streamed so far. No-op if none is running. */
     stopReply(sessionId: string): Promise<void>;
+    /** Open the OS file picker and take in whatever is chosen. Resolves empty if the user cancels. */
+    pickAttachments(sessionId: string): Promise<AddAttachmentsResult>;
+    /** Take in dropped or pasted files. The bytes are written to disk before this resolves. */
+    addAttachments(sessionId: string, inputs: ChatAttachmentInput[]): Promise<AddAttachmentsResult>;
+    /**
+     * The stored bytes of one attachment, for showing it: a `data:` URL for an image, the text
+     * itself for a text file. Null when the file is gone from disk.
+     */
+    readAttachment(sessionId: string, attachmentId: string, mediaType: string): Promise<string | null>;
+    /** Throw away an attachment the user removed before sending. Unknown ids are ignored. */
+    discardAttachment(sessionId: string, attachmentId: string): Promise<void>;
     /**
      * Answer a tool call sitting at 'awaiting-approval'. Unknown or already-answered ids are
      * ignored, so a double click cannot approve a second, different command.
@@ -111,6 +128,14 @@ export interface DesktopApi {
     stopBackgroundProcess(sessionId: string, processId: string): Promise<void>;
     /** Subscribe to reply progress; returns the unsubscribe. */
     onStreamEvent(listener: (event: ChatStreamEvent) => void): () => void;
+  };
+  files: {
+    /**
+     * The absolute path of a dropped File, or '' when it has none (dragged out of a web page,
+     * or a clipboard item). Lives in preload because Electron's webUtils is only reachable
+     * there; it reads nothing, it only names what the user already dropped.
+     */
+    pathFor(file: File): string;
   };
   tools: {
     getAccess(): Promise<ToolAccessState>;

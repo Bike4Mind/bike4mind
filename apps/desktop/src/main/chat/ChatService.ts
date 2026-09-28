@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type {
+  ChatAttachment,
   ChatMessage,
   ChatModelCatalog,
   ChatModelOption,
@@ -11,6 +12,8 @@ import type {
   ChatUsage,
   SendMessageResult,
 } from '@shared/chat';
+import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
+import type { AttachmentStore } from './AttachmentStore';
 import { DEFAULT_COMPLETIONS_PATH, streamCompletion, type CompletionMessage } from './completions';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
 import type { SessionStore } from './SessionStore';
@@ -40,6 +43,8 @@ export interface ChatServiceLogger {
 export interface ChatServiceDeps {
   store: SessionStore;
   access: AccessStore;
+  /** Owns attachment bytes. Absent in tests that never attach anything. */
+  attachments?: AttachmentStore;
   logger: ChatServiceLogger;
   /**
    * The server's model list. Absent in tests that do not exercise model resolution, which then
@@ -128,6 +133,7 @@ export class ChatService {
     this.stop(sessionId);
     this.deps.approvals?.forgetSession(sessionId);
     await this.deps.background?.killSession(sessionId);
+    await this.deps.attachments?.deleteSession(sessionId);
     await this.deps.store.delete(sessionId);
   }
 
@@ -155,25 +161,43 @@ export class ChatService {
    * invoke left pending for the length of a generation looks like a hung renderer - the same
    * reasoning as the auth sign-in channel.
    */
-  async send(sessionId: string, text: string): Promise<SendMessageResult> {
+  async send(sessionId: string, text: string, attachments: readonly ChatAttachment[] = []): Promise<SendMessageResult> {
     const prompt = text.trim();
-    if (!prompt) return { ok: false, error: 'Type a message first.' };
+    // An attachment is a message on its own: "look at this" with a screenshot needs no prose.
+    if (!prompt && attachments.length === 0) return { ok: false, error: 'Type a message first.' };
+    if (attachments.length > MAX_ATTACHMENTS_PER_TURN) {
+      return { ok: false, error: `Only ${MAX_ATTACHMENTS_PER_TURN} attachments fit in one message.` };
+    }
     if (this.active.has(sessionId)) return { ok: false, error: 'This conversation is still replying.' };
 
     const api = this.deps.getApiClient();
     if (!api) return { ok: false, error: 'Sign in to send a message.' };
+
+    // Reconciled BEFORE the prompt is stored, because the vision check below has to run against
+    // the model that will actually answer - including a substitute picked here - and refusing a
+    // turn after appending it would leave the prompt in the thread with no reply coming.
+    const existing = await this.deps.store.get(sessionId);
+    if (!existing) return { ok: false, error: 'That conversation no longer exists.' };
+    const { session: reconciled, notice } = await this.reconcileModel(existing);
+
+    const attached = await this.resolveAttachments(sessionId, attachments);
+    const refusal = this.refuseUnreadableImages(reconciled.model, attached);
+    if (refusal) return { ok: false, error: refusal };
 
     const userMessage: ChatMessage = {
       id: randomUUID(),
       role: 'user',
       content: prompt,
       createdAt: new Date().toISOString(),
+      ...(attached.length > 0 ? { attachments: attached } : {}),
     };
 
-    const appended = await this.deps.store.appendMessage(sessionId, userMessage);
-    if (!appended) return { ok: false, error: 'That conversation no longer exists.' };
+    const session = await this.deps.store.appendMessage(sessionId, userMessage);
+    if (!session) return { ok: false, error: 'That conversation no longer exists.' };
 
-    const { session, notice } = await this.reconcileModel(appended);
+    // Now that the conversation's attachments are settled, anything on disk it does not
+    // reference was added to the composer and then removed. See AttachmentStore.prune.
+    void this.pruneAttachments(session);
 
     const replyId = randomUUID();
     const controller = new AbortController();
@@ -216,6 +240,55 @@ export class ChatService {
     };
   }
 
+  /**
+   * Keep only the attachments whose bytes are still on disk for THIS session.
+   *
+   * The renderer sends back descriptors it was given, so this is both a liveness check (the
+   * file could have been discarded) and the ownership check: an id belonging to another
+   * conversation resolves to nothing here rather than being read across the boundary.
+   */
+  private async resolveAttachments(
+    sessionId: string,
+    attachments: readonly ChatAttachment[]
+  ): Promise<ChatAttachment[]> {
+    const store = this.deps.attachments;
+    if (!store || attachments.length === 0) return [];
+
+    const present = await Promise.all(
+      attachments.map(async attachment => ((await store.read(sessionId, attachment.id)) ? attachment : null))
+    );
+    return present.filter((attachment): attachment is ChatAttachment => attachment !== null);
+  }
+
+  /**
+   * Refuse a turn whose images the chosen model cannot see.
+   *
+   * Only on an explicit `supportsVision: false`. The catalog carries the flag for the backends
+   * that report it and says nothing for the rest, so treating silence as "no" would refuse
+   * images on models that handle them fine - and a model that really cannot will reject the
+   * request itself, which is a worse message but an honest one. Sending an image to a model
+   * known not to read it is the only case with no upside.
+   */
+  private refuseUnreadableImages(model: string, attachments: readonly ChatAttachment[]): string | null {
+    if (!attachments.some(attachment => attachment.kind === 'image')) return null;
+
+    const option = this.deps.models?.cached()?.find(candidate => candidate.id === model);
+    if (!option || option.supportsVision !== false) return null;
+
+    return `${option.name} cannot read images. Pick a model that can, or remove the image before sending.`;
+  }
+
+  private async pruneAttachments(session: ChatSession): Promise<void> {
+    const store = this.deps.attachments;
+    if (!store) return;
+    const referenced = new Set(
+      session.messages.flatMap(message => (message.attachments ?? []).map(attachment => attachment.id))
+    );
+    await store.prune(session.id, referenced).catch(err => {
+      this.deps.logger.debug(`CHAT: pruning attachments failed: ${err instanceof Error ? err.message : 'unknown'}`);
+    });
+  }
+
   private async runReply(
     session: ChatSession,
     replyId: string,
@@ -235,7 +308,10 @@ export class ChatService {
       const endpoint = await this.resolveEndpoint(api);
       const roots = await this.deps.access.list();
       const tools = toolsForRequest(roots);
-      const wire = toCompletionMessages(session);
+      const wire = await toCompletionMessages(
+        session,
+        (attachment: ChatAttachment) => this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null)
+      );
       wire.unshift(buildSystemMessage(roots));
 
       for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
@@ -566,12 +642,21 @@ function parseArguments(raw: string | undefined): Record<string, unknown> {
  * A failed turn's placeholder is dropped rather than sent: replaying an empty assistant message
  * would teach the model that empty replies are acceptable, and some providers reject one outright.
  */
-function toCompletionMessages(session: ChatSession): CompletionMessage[] {
+async function toCompletionMessages(
+  session: ChatSession,
+  readAttachment: ReadAttachment
+): Promise<CompletionMessage[]> {
   const wire: CompletionMessage[] = [];
 
   for (const message of session.messages) {
     const calls = message.toolCalls ?? [];
     if (calls.length === 0) {
+      const attachments = message.attachments ?? [];
+      if (attachments.length > 0) {
+        const content = await toAttachedContent(message.content, attachments, readAttachment);
+        if (content.length > 0) wire.push({ role: message.role, content });
+        continue;
+      }
       if (message.content.length > 0) wire.push({ role: message.role, content: message.content });
       continue;
     }
@@ -596,4 +681,48 @@ function toCompletionMessages(session: ChatSession): CompletionMessage[] {
   }
 
   return wire;
+}
+
+/** Reads one attachment's stored bytes, or null when the file is gone. */
+type ReadAttachment = (attachment: ChatAttachment) => Promise<Buffer | null>;
+
+/**
+ * A user turn that carried attachments, as provider-shaped content blocks.
+ *
+ * Images go FIRST and as real image blocks: the point of this feature is that a screenshot
+ * arrives as pixels rather than as a filename the model then invents contents for. Text files
+ * are inlined into the single text block ahead of the user's own words, so the question they
+ * are asking is the last thing the model reads.
+ *
+ * An attachment whose bytes have vanished is skipped rather than faked - a placeholder saying
+ * "image.png" is exactly the filename-instead-of-image failure this exists to avoid.
+ */
+async function toAttachedContent(
+  prompt: string,
+  attachments: readonly ChatAttachment[],
+  readAttachment: ReadAttachment
+): Promise<unknown[]> {
+  const blocks: unknown[] = [];
+  const sections: string[] = [];
+
+  for (const attachment of attachments) {
+    const bytes = await readAttachment(attachment);
+    if (!bytes) continue;
+
+    if (attachment.kind === 'image') {
+      // Anthropic's block shape; the completions endpoint canonicalizes it for every other
+      // provider (see normalizeMultimodalMessages in @bike4mind/common).
+      blocks.push({
+        type: 'image',
+        source: { type: 'base64', media_type: attachment.mediaType, data: bytes.toString('base64') },
+      });
+      continue;
+    }
+
+    sections.push(textAttachmentBlock(attachment, bytes.toString('utf8')));
+  }
+
+  const text = [...sections, prompt].filter(part => part.length > 0).join('\n\n');
+  if (text.length > 0) blocks.push({ type: 'text', text });
+  return blocks;
 }

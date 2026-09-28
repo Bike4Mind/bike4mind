@@ -141,6 +141,10 @@ describe('ChatService', () => {
     const { id } = await service.createSession();
     await service.send(id, 'first');
     await waitFor(events, 'start');
+    // 'start' is emitted before the request goes out, so wait for the request itself: the
+    // assertion below is about a SECOND one never being made, which says nothing if the first
+    // has not been made either.
+    await vi.waitUntil(() => post.mock.calls.length === 1, { timeout: 2000, interval: 5 });
 
     expect(await service.send(id, 'second')).toMatchObject({ ok: false });
     expect(post).toHaveBeenCalledTimes(1);

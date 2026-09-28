@@ -146,7 +146,12 @@ export class SessionStore {
     if (!session) return null;
 
     const isFirstPrompt = message.role === 'user' && !session.messages.some(m => m.role === 'user');
-    if (isFirstPrompt && session.title === UNTITLED) session.title = deriveTitle(message.content);
+    // A turn can be an attachment with no words ("look at this" is the screenshot), so the
+    // filenames are the only thing left to name the conversation after.
+    if (isFirstPrompt && session.title === UNTITLED) {
+      const attachmentNames = (message.attachments ?? []).map(attachment => attachment.name).join(', ');
+      session.title = deriveTitle(message.content || attachmentNames);
+    }
 
     session.messages.push(message);
     session.updatedAt = new Date().toISOString();

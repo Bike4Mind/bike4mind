@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ChatApprovalDecision, ChatMessage, ChatModelOption, ChatSession, ChatSessionSummary } from '@shared/chat';
+import type {
+  ChatApprovalDecision,
+  ChatAttachment,
+  ChatMessage,
+  ChatModelOption,
+  ChatSession,
+  ChatSessionSummary,
+} from '@shared/chat';
 
 export interface SessionsController {
   sessions: ChatSessionSummary[];
@@ -100,7 +107,7 @@ export interface ConversationController {
   /** One-shot message about something main changed while accepting a turn. Not a failure. */
   notice: string | null;
   dismissNotice: () => void;
-  send: (text: string) => Promise<void>;
+  send: (text: string, attachments?: readonly ChatAttachment[]) => Promise<void>;
   stop: () => void;
   rename: (title: string) => Promise<void>;
   /** Pin this conversation to a model; it is used from the next turn on. */
@@ -217,10 +224,11 @@ export function useConversation(
   }, []);
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, attachments: readonly ChatAttachment[] = []) => {
       if (!sessionId) return;
       const prompt = text.trim();
-      if (!prompt) return;
+      // An attachment on its own is a turn; only a turn with neither is not.
+      if (!prompt && attachments.length === 0) return;
 
       setSendError(null);
       setNotice(null);
@@ -231,10 +239,15 @@ export function useConversation(
         role: 'user',
         content: prompt,
         createdAt: new Date().toISOString(),
+        ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
       };
       setMessages(current => [...current, optimistic]);
 
-      const result = await window.b4m.chat.sendMessage({ sessionId, text: prompt });
+      const result = await window.b4m.chat.sendMessage({
+        sessionId,
+        text: prompt,
+        ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
+      });
       if (!result.ok) {
         setMessages(current => current.filter(message => message.id !== optimistic.id));
         setSendError(result.error);
