@@ -275,7 +275,132 @@ function replaceMermaidFences(source: string, replace: (fullMatch: string, body:
  * Post-processes AI responses to detect code blocks that should be artifacts
  * and converts them to proper artifact syntax as a fallback
  */
-export function convertCodeBlocksToArtifacts(content: string): string {
+/**
+ * Info-string token marking a fence that holds a verbatim quote of tool output. Such a
+ * region is never promoted to an artifact, by this parser or by the client mirror in
+ * apps/client/app/utils/artifactParser.ts. History replay must strip it before the model
+ * sees the reply again.
+ */
+export const TOOL_OUTPUT_MARKER = 'b4m-tool-output';
+
+const TOOL_OUTPUT_OPENER = new RegExp(`^ {0,3}(~{3,})[\\w-]*[ \\t]+${TOOL_OUTPUT_MARKER}[ \\t]*$`);
+
+export interface ToolOutputMask {
+  /** The content with every marked region replaced by an opaque placeholder. */
+  masked: string;
+  /** Registers one more region and returns its placeholder. */
+  protect(region: string): string;
+  /** Puts every region back in place of its placeholder. */
+  restore(value: string): string;
+}
+
+function stripLineEnd(line: string): string {
+  return line.endsWith('\r') ? line.slice(0, -1) : line;
+}
+
+function isFenceCloser(line: string, runLength: number): boolean {
+  const trimmed = stripLineEnd(line).trim();
+  if (trimmed.length < runLength) return false;
+  for (let i = 0; i < trimmed.length; i++) if (trimmed[i] !== '~') return false;
+  return true;
+}
+
+/**
+ * Hides every closed `~~~<lang> b4m-tool-output` fence behind a placeholder so no
+ * detector can promote its body or count the backticks inside it. An opener with no
+ * closer is not a region. The placeholder uses a private-use character absent from the
+ * content, so it cannot collide with reply text.
+ */
+export function maskToolOutputRegions(content: string): ToolOutputMask {
+  let code = 0xe000;
+  while (content.includes(String.fromCharCode(code))) code++;
+  const sentinel = String.fromCharCode(code);
+  const regions: string[] = [];
+  const protect = (region: string): string => {
+    regions.push(region);
+    return `${sentinel}${regions.length - 1}${sentinel}`;
+  };
+  const restore = (value: string): string =>
+    regions.length === 0
+      ? value
+      : value.replace(new RegExp(`${sentinel}(\\d+)${sentinel}`, 'g'), (match, index: string) => {
+          const region = regions[Number(index)];
+          return region === undefined ? match : region;
+        });
+
+  if (!content.includes(TOOL_OUTPUT_MARKER)) return { masked: content, protect, restore };
+
+  let masked = '';
+  let copiedTo = 0;
+  let lineStart = 0;
+  while (lineStart < content.length) {
+    const newline = content.indexOf('\n', lineStart);
+    const lineEnd = newline === -1 ? content.length : newline;
+    const opener = TOOL_OUTPUT_OPENER.exec(stripLineEnd(content.slice(lineStart, lineEnd)));
+    if (!opener) {
+      lineStart = lineEnd + 1;
+      continue;
+    }
+    let closerEnd = -1;
+    let cursor = lineEnd + 1;
+    while (cursor < content.length) {
+      const next = content.indexOf('\n', cursor);
+      const end = next === -1 ? content.length : next;
+      if (isFenceCloser(content.slice(cursor, end), opener[1].length)) {
+        closerEnd = stripLineEnd(content.slice(cursor, end)) === content.slice(cursor, end) ? end : end - 1;
+        break;
+      }
+      cursor = end + 1;
+    }
+    if (closerEnd === -1) {
+      lineStart = lineEnd + 1;
+      continue;
+    }
+    masked += content.slice(copiedTo, lineStart) + protect(content.slice(lineStart, closerEnd));
+    copiedTo = closerEnd;
+    lineStart = closerEnd + 1;
+  }
+  return { masked: masked + content.slice(copiedTo), protect, restore };
+}
+
+function longestTildeRun(value: string): number {
+  let longest = 0;
+  let run = 0;
+  for (let i = 0; i < value.length; i++) {
+    run = value[i] === '~' ? run + 1 : 0;
+    if (run > longest) longest = run;
+  }
+  return longest;
+}
+
+/**
+ * The marked fence that replaces a promotable span found to be a tool echo. Body bytes are
+ * kept; a newline is added only where the fence would otherwise not start or end a line.
+ */
+function toolOutputFence(lang: string, body: string, before: string, after: string): string {
+  const tildes = '~'.repeat(Math.max(3, longestTildeRun(body) + 1));
+  const lead = before === '' || before.endsWith('\n') ? '' : '\n';
+  const open = body.startsWith('\n') || body.startsWith('\r\n') ? '' : '\n';
+  const close = body.endsWith('\n') ? '' : '\n';
+  const trail = after === '' || after.startsWith('\n') || after.startsWith('\r\n') ? '' : '\n';
+  return `${lead}${tildes}${lang} ${TOOL_OUTPUT_MARKER}${open}${body}${close}${tildes}${trail}`;
+}
+
+export interface ConvertCodeBlocksOptions {
+  /** True when a candidate body is a verbatim quote of this turn's tool output. */
+  isToolEcho?: (body: string) => boolean;
+}
+
+export function convertCodeBlocksToArtifacts(content: string, options: ConvertCodeBlocksOptions = {}): string {
+  const mask = maskToolOutputRegions(content);
+  content = mask.masked;
+  const { isToolEcho } = options;
+  // Echoed spans become marked fences, protected at once so later passes skip them too.
+  const echoFence = (lang: string, body: string, whole: string, start: number, end: number): string | null =>
+    isToolEcho?.(body)
+      ? mask.protect(toolOutputFence(lang, body, whole.slice(Math.max(0, start - 1), start), whole.slice(end, end + 2)))
+      : null;
+
   // The fence patterns below put no \s* in front of the body group: it is greedy over
   // characters the lazy body matches anyway, so a fence label followed by a long
   // whitespace run and no closer backtracks quadratically. Every callback trims. Mermaid
@@ -313,8 +438,10 @@ ${codeContent.trim()}
   // them into one.
   const htmlCodeBlockRegex = /```html([\s\S]*?)```/gi;
 
-  content = content.replace(htmlCodeBlockRegex, (match, codeContent) => {
+  content = content.replace(htmlCodeBlockRegex, (match, codeContent, offset: number, whole: string) => {
     if (!hasFullHtmlDocument(codeContent)) return match;
+    const echoed = echoFence('html', codeContent, whole, offset, offset + match.length);
+    if (echoed !== null) return echoed;
     const title = sanitizeHTMLTitle(extractHTMLTitle(codeContent), 'HTML Page');
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
@@ -328,9 +455,11 @@ ${codeContent.trim()}
   // so any remaining ```html fence is a fragment: still better presented as a
   // previewable artifact than left as a raw code block (parser gap C).
   const htmlFragmentFenceRegex = /```html([\s\S]*?)```/gi;
-  content = content.replace(htmlFragmentFenceRegex, (match, codeContent) => {
+  content = content.replace(htmlFragmentFenceRegex, (match, codeContent, offset: number, whole: string) => {
     // Require at least one HTML tag so a mislabeled fence of plain text is left alone.
     if (!/<[a-z][a-z0-9]*[\s/>]/i.test(codeContent)) return match;
+    const echoed = echoFence('html', codeContent, whole, offset, offset + match.length);
+    if (echoed !== null) return echoed;
     const title = sanitizeHTMLTitle(extractHTMLTitle(codeContent), 'HTML Snippet');
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
     return `<artifact identifier="${identifier}" type="text/html" title="${title}">
@@ -394,12 +523,15 @@ ${codeContent.trim()}
     }
   });
 
-  content = promoteToolCallJsonArtifact(content);
+  content = promoteToolCallJsonArtifact(content, echoFence);
 
-  content = promoteBareHtmlDocument(content);
+  content = promoteBareHtmlDocument(content, echoFence);
 
-  return content;
+  return mask.restore(content);
 }
+
+/** Returns the protected marked fence when the span is a tool echo, else null. */
+type EchoFence = (lang: string, body: string, whole: string, start: number, end: number) => string | null;
 
 /**
  * Promotes an artifact that a small local model emitted as a hallucinated tool
@@ -419,18 +551,29 @@ ${codeContent.trim()}
  * MUST STAY IN SYNC with the twin copy in apps/client/app/utils/artifactParser.ts
  * so client render and server persistence never diverge.
  */
-function promoteToolCallJsonArtifact(content: string): string {
+function promoteToolCallJsonArtifact(content: string, echoFence: EchoFence): string {
   // Fence labels a model uses for a tool call; a ```html fence is handled above.
   // The negative lookahead stops ```tool matching inside ```tool_calls etc.
-  const fenceRegex = /```(?:json|tool_code|tool)(?![a-z0-9_])([\s\S]*?)```/gi;
-  const afterFences = content.replace(fenceRegex, (match, body) => toolCallJsonToArtifact(body) ?? match);
+  const fenceRegex = /```(json|tool_code|tool)(?![a-z0-9_])([\s\S]*?)```/gi;
+  const afterFences = content.replace(
+    fenceRegex,
+    (match, label: string, body: string, offset: number, whole: string) => {
+      const artifact = toolCallJsonToArtifact(body);
+      if (!artifact) return match;
+      return echoFence(label, body, whole, offset, offset + match.length) ?? artifact;
+    }
+  );
   if (afterFences !== content) return afterFences;
 
   // A model may also return the bare object as its entire reply (no fence).
   const trimmed = content.trim();
   if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
     const artifact = toolCallJsonToArtifact(trimmed);
-    if (artifact) return content.replace(trimmed, () => artifact);
+    if (artifact) {
+      const start = content.indexOf(trimmed);
+      const echoed = echoFence('json', trimmed, content, start, start + trimmed.length);
+      return content.replace(trimmed, () => echoed ?? artifact);
+    }
   }
   return content;
 }
@@ -498,7 +641,7 @@ function looksLikeHtml(value: string): boolean {
  * otherwise render as raw HTML in the chat (parser gap B). Runs last so the
  * fence/artifact guards see all earlier conversions.
  */
-function promoteBareHtmlDocument(content: string): string {
+function promoteBareHtmlDocument(content: string, echoFence: EchoFence): string {
   // Two forward cursors instead of one <html>...</html> pattern, and guard counts that
   // accumulate over the gap since the previous document instead of re-reading the whole
   // prefix: both of the old shapes re-scanned from the start of the message on every
@@ -534,14 +677,19 @@ function promoteBareHtmlDocument(content: string): string {
     if (fences % 2 === 1 || artifactOpens > artifactCloses) continue;
 
     const doc = content.slice(start, end);
+    out += content.slice(copiedTo, start);
+    copiedTo = end;
+    promoted = true;
+    const echoed = echoFence('html', doc, content, start, end);
+    if (echoed !== null) {
+      out += echoed;
+      continue;
+    }
     const title = sanitizeHTMLTitle(extractHTMLTitle(doc), 'HTML Page');
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
-    out += content.slice(copiedTo, start);
     out += `<artifact identifier="${identifier}" type="text/html" title="${title}">
 ${doc.trim()}
 </artifact>`;
-    copiedTo = end;
-    promoted = true;
   }
   return promoted ? out + content.slice(copiedTo) : content;
 }

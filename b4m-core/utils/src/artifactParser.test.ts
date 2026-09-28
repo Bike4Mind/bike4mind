@@ -4,7 +4,10 @@ import {
   parseArtifacts,
   isSvgGraphicallyEmpty,
   scanMermaidFences,
+  maskToolOutputRegions,
+  TOOL_OUTPUT_MARKER,
 } from './artifactParser';
+import { createToolEchoMatcher } from './toolEchoMatcher';
 
 // The baseline-vs-SMALL_INPUT_MS_CEILING check below is the real regression guard: it
 // fails fast instead of letting a hang run out the clock. The ratio check is secondary
@@ -134,9 +137,7 @@ describe('convertCodeBlocksToArtifacts - HTML promotion', () => {
   });
 
   it('sanitizes < > and " from the title of a fenced HTML fragment', () => {
-    const { artifacts } = promote(
-      '```html\n<div><h1>Hello</h1></div>\n<title>Bad<>Title"</title>\n```'
-    );
+    const { artifacts } = promote('```html\n<div><h1>Hello</h1></div>\n<title>Bad<>Title"</title>\n```');
     expect(artifacts).toHaveLength(1);
     expect(artifacts[0].title).toBe('BadTitle');
   });
@@ -1046,5 +1047,134 @@ describe('mutation control: the body characters the original regex could not cro
     }
     expect(vsOriginal.extra).toBeGreaterThan(1000);
     expect(vsScanner.extra).toBeGreaterThan(1000);
+  });
+});
+
+describe('convertCodeBlocksToArtifacts - tool output echoes', () => {
+  const DOC =
+    '<!DOCTYPE html>\n<html><head><title>Fetched Page</title></head><body><p>Quoted verbatim from a tool result.</p></body></html>';
+  const FRAGMENT = '<div class="card"><h2>Fetched</h2><p>A fragment quoted verbatim from a tool result.</p></div>';
+  const TOOL_JSON = JSON.stringify({ name: 'build_html', arguments: { html: DOC } });
+  const isToolEcho = createToolEchoMatcher([{ text: `Fetched:\n${DOC}\n${FRAGMENT}\n${TOOL_JSON}`, truncated: false }]);
+  const artifacts = (out: string) => out.match(/<artifact [^>]*>/g) ?? [];
+  const marker = (lang: string) => new RegExp(`^~{3,}${lang} ${TOOL_OUTPUT_MARKER}$`, 'm');
+
+  it('marks an echoed full-document html fence instead of promoting it', () => {
+    const out = convertCodeBlocksToArtifacts(`Source:\n\`\`\`html\n${DOC}\n\`\`\`\n`, { isToolEcho });
+    expect(artifacts(out)).toHaveLength(0);
+    expect(out).toMatch(marker('html'));
+    expect(out).toContain(`\n${DOC}\n`);
+  });
+
+  it('marks an echoed html fragment fence', () => {
+    const out = convertCodeBlocksToArtifacts(`\`\`\`html\n${FRAGMENT}\n\`\`\``, { isToolEcho });
+    expect(artifacts(out)).toHaveLength(0);
+    expect(out).toMatch(marker('html'));
+  });
+
+  it('marks an echoed tool-call json fence and a whole-reply tool-call json', () => {
+    const fenced = convertCodeBlocksToArtifacts(`\`\`\`json\n${TOOL_JSON}\n\`\`\``, { isToolEcho });
+    expect(artifacts(fenced)).toHaveLength(0);
+    expect(fenced).toMatch(marker('json'));
+    const whole = convertCodeBlocksToArtifacts(TOOL_JSON, { isToolEcho });
+    expect(artifacts(whole)).toHaveLength(0);
+    expect(whole).toMatch(marker('json'));
+  });
+
+  it('marks an echoed bare document, starting the fence on its own line', () => {
+    const out = convertCodeBlocksToArtifacts(`Here it is: ${DOC} done`, { isToolEcho });
+    expect(artifacts(out)).toHaveLength(0);
+    expect(out).toMatch(marker('html'));
+    expect(out.startsWith('Here it is: \n~~~html')).toBe(true);
+  });
+
+  it('still promotes authored html next to an echo in the same reply', () => {
+    const authored = '<!DOCTYPE html>\n<html><head><title>Mine</title></head><body><p>new</p></body></html>';
+    const out = convertCodeBlocksToArtifacts(`\`\`\`html\n${DOC}\n\`\`\`\n\n\`\`\`html\n${authored}\n\`\`\``, {
+      isToolEcho,
+    });
+    expect(artifacts(out)).toEqual(['<artifact identifier="mine" type="text/html" title="Mine">']);
+  });
+
+  it('leaves mermaid, svg and react promotion alone even when echoed', () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>';
+    const echoAll = () => true;
+    const out = convertCodeBlocksToArtifacts(`\`\`\`svg\n${svg}\n\`\`\`\n\n\`\`\`mermaid\ngraph TD\n  A-->B\n\`\`\``, {
+      isToolEcho: echoAll,
+    });
+    expect(artifacts(out)).toHaveLength(2);
+  });
+
+  it('picks a tilde run longer than any in the body and keeps backticks inside', () => {
+    const body = `${FRAGMENT}\n~~~~\n\`\`\`\nstill quoted, long enough to pass the minimum length check\n`;
+    const out = convertCodeBlocksToArtifacts(`\`\`\`html\n${body}\`\`\``, { isToolEcho: () => true });
+    expect(out.split('\n')[0]).toBe(`~~~~~html ${TOOL_OUTPUT_MARKER}`);
+    expect(convertCodeBlocksToArtifacts(out)).toBe(out);
+  });
+
+  it('is stable when a marked reply is converted again without a matcher', () => {
+    const once = convertCodeBlocksToArtifacts(`\`\`\`html\n${DOC}\n\`\`\`\n\n${DOC}`, { isToolEcho });
+    expect(convertCodeBlocksToArtifacts(once)).toBe(once);
+  });
+
+  it('with no options and no marker, output matches a never-echo matcher', () => {
+    const corpus = [
+      `\`\`\`html\n${DOC}\n\`\`\``,
+      `\`\`\`html\n${FRAGMENT}\n\`\`\``,
+      TOOL_JSON,
+      `Text ${DOC} text`,
+      '```mermaid\ngraph TD\n  A-->B\n```',
+      'plain text with ~~~ tildes and b4m words',
+    ];
+    for (const sample of corpus) {
+      expect(convertCodeBlocksToArtifacts(sample)).toBe(
+        convertCodeBlocksToArtifacts(sample, { isToolEcho: () => false })
+      );
+      expect(maskToolOutputRegions(sample).masked).toBe(sample);
+    }
+  });
+});
+
+describe('maskToolOutputRegions', () => {
+  const region = (body: string, tildes = '~~~') => `${tildes}html ${TOOL_OUTPUT_MARKER}\n${body}\n${tildes}`;
+
+  it('hides a closed region from every detector and restores it byte for byte', () => {
+    const content = `before\n${region('<!DOCTYPE html><html><body>x</body></html>')}\nafter`;
+    const { masked, restore } = maskToolOutputRegions(content);
+    expect(masked).not.toContain('DOCTYPE');
+    expect(restore(masked)).toBe(content);
+    expect(convertCodeBlocksToArtifacts(content)).toBe(content);
+  });
+
+  it('does not treat an unclosed opener as a region', () => {
+    const content = `~~~html ${TOOL_OUTPUT_MARKER}\n<p>never closed</p>`;
+    expect(maskToolOutputRegions(content).masked).toBe(content);
+  });
+
+  it('handles CRLF line endings', () => {
+    const content = `a\r\n~~~html ${TOOL_OUTPUT_MARKER}\r\n<html><body>x</body></html>\r\n~~~\r\nb`;
+    const { masked, restore } = maskToolOutputRegions(content);
+    expect(masked).toMatch(/^a\r\n\S+\r\nb$/);
+    expect(restore(masked)).toBe(content);
+  });
+
+  it('masks adjacent regions and a region after a markdown block', () => {
+    const content = `\`\`\`markdown\n# notes\n\`\`\`\n${region('<html><body>1</body></html>')}\n${region('<html><body>2</body></html>', '~~~~')}`;
+    const { masked } = maskToolOutputRegions(content);
+    expect(masked).not.toContain('<html>');
+    expect(convertCodeBlocksToArtifacts(content)).toBe(content);
+  });
+
+  it('keeps a shorter tilde line inside the body', () => {
+    const content = region('~~~\n<html><body>x</body></html>', '~~~~');
+    expect(maskToolOutputRegions(content).masked).not.toContain('<html>');
+  });
+
+  it('does not pair backticks inside a region with an authored fence after it', () => {
+    const content = `${region('```html\n<div>quoted</div>')}\n\n\`\`\`html\n<div>authored</div>\n\`\`\``;
+    const out = convertCodeBlocksToArtifacts(content);
+    expect(out.match(/<artifact [^>]*>/g)).toHaveLength(1);
+    expect(out).toContain('<div>quoted</div>');
+    expect(out.startsWith(`~~~html ${TOOL_OUTPUT_MARKER}\n\`\`\`html\n<div>quoted</div>\n~~~`)).toBe(true);
   });
 });
