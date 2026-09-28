@@ -69,5 +69,43 @@ describe('resolveDocumentDateWithoutContent', () => {
     expect(
       resolveDocumentDateWithoutContent({ sourceType: FabFileSourceType.GOOGLE_DRIVE, driveMd5Checksum: 'abc123' })
     ).toBeUndefined();
+    expect(
+      resolveDocumentDateWithoutContent({
+        sourceType: FabFileSourceType.MANUAL_UPLOAD,
+        documentDate: null,
+        documentDateSource: null,
+      })
+    ).toBeUndefined();
+  });
+
+  it('returns a pinned DRIVE_CREATED vintage as-is', () => {
+    const file = {
+      sourceType: FabFileSourceType.GOOGLE_DRIVE,
+      documentDate: driveCreated,
+      documentDateSource: DocumentDateSource.DRIVE_CREATED,
+    };
+    expect(resolveDocumentDateWithoutContent(file)).toEqual({
+      documentDate: driveCreated,
+      documentDateSource: DocumentDateSource.DRIVE_CREATED,
+    });
+  });
+
+  it('keys the pin on the stored source, not on the row being a Drive file', () => {
+    const file = {
+      sourceType: FabFileSourceType.MANUAL_UPLOAD,
+      documentDate: driveCreated,
+      documentDateSource: DocumentDateSource.DRIVE_CREATED,
+    };
+    expect(resolveDocumentDateWithoutContent(file)).toEqual({
+      documentDate: driveCreated,
+      documentDateSource: DocumentDateSource.DRIVE_CREATED,
+    });
+  });
+
+  it('nulls an unpinned Drive Editors file', () => {
+    expect(resolveDocumentDateWithoutContent({ sourceType: FabFileSourceType.GOOGLE_DRIVE })).toEqual({
+      documentDate: null,
+      documentDateSource: null,
+    });
   });
 });

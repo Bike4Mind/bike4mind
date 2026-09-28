@@ -17,9 +17,8 @@ export type ResolvedDocumentDate = {
  * The vintage a content pass must write for this file when the file's bytes cannot change the
  * answer, or `undefined` when the date extracted from its bytes decides (see resolveDocumentDate).
  *
- * Split out so a caller that has not read the bytes yet - the metadata-only backfill
- * (packages/scripts/datalake/backfill-document-date.ts) - can skip a download that could not
- * change the result.
+ * Split out so a caller that has not read the bytes yet, such as a metadata-only backfill, can skip
+ * a download that could not change the result.
  */
 export function resolveDocumentDateWithoutContent(file: DocumentDatePrecedenceInput): ResolvedDocumentDate | undefined {
   // A stored DRIVE_CREATED wins outright. That source is only ever set for a Google Editors file,

@@ -1,0 +1,283 @@
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import mongoose from 'mongoose';
+import { DocumentDateSource, FabFileSourceType } from '@bike4mind/common';
+import { dataLakeService } from '@bike4mind/services';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../database/src/__test__/createMongoServer';
+import {
+  checkOptions,
+  exitCode,
+  formatSummary,
+  nextPageSize,
+  runBackfill,
+  type BackfillDeps,
+  type BackfillOptions,
+  type DateExtractor,
+} from './documentDateBackfill';
+
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+
+let server: Awaited<ReturnType<typeof createMongoServer>>;
+
+beforeAll(async () => {
+  server = await createMongoServer();
+  await mongoose.connect(server.getUri());
+});
+afterAll(async () => {
+  await mongoose.disconnect();
+  await server.stop();
+});
+beforeEach(async () => {
+  await fabFiles().deleteMany({});
+});
+
+function fabFiles() {
+  const db = mongoose.connection.db;
+  if (!db) throw new Error('no db connection');
+  return db.collection('fabfiles');
+}
+
+const PINNED_UPDATED_AT = new Date('2024-01-01T00:00:00Z');
+const FRONTMATTER_DATE = new Date('2019-03-14T00:00:00Z');
+
+/** What the fake extractor yields per stored path; the path doubles as the stored bytes. */
+type Stored = { text?: string; date?: Date; missing?: true; unreadable?: true };
+
+const DATED_TEXT = 'dated body';
+const UNDATED_TEXT = 'undated body';
+const storedBytes: Record<string, Stored> = {
+  'dated.md': { text: DATED_TEXT, date: FRONTMATTER_DATE },
+  'undated.md': { text: UNDATED_TEXT },
+  'textless.png': {},
+  'gone.md': { missing: true },
+  'broken.md': { unreadable: true },
+};
+
+const hashOf = (text: string) => dataLakeService.computeServerTextHash(text);
+
+// Raw driver so a field can be genuinely ABSENT: that is the state the selection keys on, and a
+// Mongoose create would fill defaults or bump timestamps.
+async function seed(filePath: string | undefined, overrides: Record<string, unknown> = {}) {
+  const _id = new mongoose.Types.ObjectId();
+  const stored = filePath ? storedBytes[filePath] : undefined;
+  await fabFiles().insertOne({
+    _id,
+    userId: 'user-1',
+    fileName: filePath ?? 'pathless',
+    mimeType: 'text/markdown',
+    sourceType: FabFileSourceType.MANUAL_UPLOAD,
+    deletedAt: null,
+    chunked: true,
+    chunkClaimedAt: null,
+    chunkedCharCount: 10,
+    serverTextHash: stored?.text ? hashOf(stored.text) : null,
+    updatedAt: PINNED_UPDATED_AT,
+    ...(filePath ? { filePath } : {}),
+    ...overrides,
+  });
+  return _id;
+}
+
+async function load(id: mongoose.Types.ObjectId) {
+  const doc = await fabFiles().findOne({ _id: id });
+  if (!doc) throw new Error(`fabfile ${id} vanished`);
+  return doc;
+}
+
+function makeDeps(onChunk?: (path: string) => Promise<void>) {
+  let current: Stored = {};
+  const chunker: DateExtractor = {
+    async chunkFile(content) {
+      const path = content.toString();
+      current = storedBytes[path];
+      await onChunk?.(path);
+      return [];
+    },
+    getDocumentDate: () => (current.date ? { date: current.date, source: DocumentDateSource.FRONTMATTER } : undefined),
+    getExtractedText: () => current.text,
+  };
+  const reads: string[] = [];
+  const storage: BackfillDeps['storage'] = {
+    async getContentAsBuffer(path: string) {
+      reads.push(path);
+      const stored = storedBytes[path];
+      if (stored?.missing) throw Object.assign(new Error('gone'), { name: 'NoSuchKey' });
+      if (stored?.unreadable) throw new Error('decode failed');
+      return Buffer.from(path);
+    },
+  };
+  return { deps: { chunker, storage, log: () => {} } satisfies BackfillDeps, reads };
+}
+
+const execute: BackfillOptions = { execute: true, batchSize: 100, fileIds: [] };
+
+describe('runBackfill (real DB)', () => {
+  it('dates an eligible file and nulls an undated one, without bumping updatedAt', async () => {
+    const dated = await seed('dated.md');
+    const undated = await seed('undated.md');
+
+    const result = await runBackfill(execute, makeDeps().deps);
+
+    expect(result.counts).toMatchObject({ dated: 1, undated: 1, failed: 0 });
+    expect(await load(dated)).toMatchObject({
+      documentDate: FRONTMATTER_DATE,
+      documentDateSource: DocumentDateSource.FRONTMATTER,
+      updatedAt: PINNED_UPDATED_AT,
+    });
+    expect(await load(undated)).toMatchObject({ documentDate: null, documentDateSource: null });
+    expect(exitCode(result)).toBe(0);
+  });
+
+  it('never selects an ineligible row, and never reads its bytes', async () => {
+    const ineligible = [
+      await seed('dated.md', { documentDate: null, documentDateSource: null }),
+      await seed('dated.md', { chunkedCharCount: null }),
+      await seed('dated.md', { deletedAt: new Date() }),
+      await seed('dated.md', { chunked: false }),
+      await seed('dated.md', { chunkClaimedAt: new Date() }),
+      await seed(undefined),
+      await seed('', { filePath: '' }),
+    ];
+
+    const { deps, reads } = makeDeps();
+    const result = await runBackfill(execute, deps);
+
+    expect(Object.values(result.counts).every(count => count === 0)).toBe(true);
+    expect(reads).toEqual([]);
+    for (const id of ineligible) {
+      const doc = await load(id);
+      expect(doc.documentDate === null || !('documentDate' in doc)).toBe(true);
+    }
+  });
+
+  it('nulls an unpinned Drive Editors file without downloading it', async () => {
+    const id = await seed('dated.md', { sourceType: FabFileSourceType.GOOGLE_DRIVE });
+
+    const { deps, reads } = makeDeps();
+    const result = await runBackfill(execute, deps);
+
+    expect(result.counts['editors-unrecoverable']).toBe(1);
+    expect(reads).toEqual([]);
+    expect(await load(id)).toMatchObject({ documentDate: null, documentDateSource: null });
+  });
+
+  it('leaves a row whose S3 object is gone untouched and lists it without failing', async () => {
+    const id = await seed('gone.md');
+
+    const result = await runBackfill(execute, makeDeps().deps);
+
+    expect(result.counts['bytes-missing']).toBe(1);
+    expect(result.missingBytes).toEqual([id.toString()]);
+    expect(await load(id)).not.toHaveProperty('documentDate');
+    expect(exitCode(result)).toBe(0);
+  });
+
+  it('refuses to date bytes the served chunks were not cut from', async () => {
+    // A rewrite nulled the hash, then backfill-chunk-char-length refilled chunkedCharCount from the
+    // old chunks: the chunkedCharCount pre-filter passes, only the hash can tell.
+    const rewritten = await seed('dated.md', { serverTextHash: null, chunkedCharCount: 42 });
+    const hashMismatch = await seed('dated.md', { serverTextHash: hashOf('the text before the edit') });
+
+    const result = await runBackfill(execute, makeDeps().deps);
+
+    expect(result.counts['stale-chunks']).toBe(2);
+    expect(result.staleChunks).toEqual([rewritten.toString(), hashMismatch.toString()]);
+    expect(await load(rewritten)).not.toHaveProperty('documentDate');
+    expect(await load(hashMismatch)).not.toHaveProperty('documentDate');
+  });
+
+  it('trusts a null hash on a text-less file and an absent hash on a pre-fingerprint chunk pass', async () => {
+    const textless = await seed('textless.png', { mimeType: 'image/png' });
+    const preFingerprint = await seed('dated.md');
+    await fabFiles().updateOne({ _id: preFingerprint }, { $unset: { serverTextHash: '' } });
+
+    const result = await runBackfill(execute, makeDeps().deps);
+
+    expect(result.counts).toMatchObject({ dated: 1, undated: 1, 'stale-chunks': 0 });
+    expect(await load(textless)).toMatchObject({ documentDate: null });
+    expect(await load(preFingerprint)).toMatchObject({ documentDate: FRONTMATTER_DATE });
+  });
+
+  it('loses the race to a re-chunk that lands between the read and the write', async () => {
+    const id = await seed('dated.md');
+    const reChunkedDate = new Date('2022-02-02T00:00:00Z');
+    const { deps } = makeDeps(async () => {
+      await fabFiles().updateOne(
+        { _id: id },
+        { $set: { documentDate: reChunkedDate, documentDateSource: DocumentDateSource.PDF_METADATA } }
+      );
+    });
+
+    const result = await runBackfill(execute, deps);
+
+    expect(result.counts.raced).toBe(1);
+    expect(await load(id)).toMatchObject({ documentDate: reChunkedDate });
+  });
+
+  it('counts a thrown file as failed, keeps going, and exits non-zero', async () => {
+    const broken = await seed('broken.md');
+    const dated = await seed('dated.md');
+
+    const result = await runBackfill(execute, makeDeps().deps);
+
+    expect(result.counts).toMatchObject({ failed: 1, dated: 1 });
+    expect(result.failures).toEqual([broken.toString()]);
+    expect(await load(dated)).toMatchObject({ documentDate: FRONTMATTER_DATE });
+    expect(exitCode(result)).toBe(1);
+  });
+
+  it('writes nothing on a dry run and reports the same counts', async () => {
+    const id = await seed('dated.md');
+    await seed('undated.md');
+
+    const result = await runBackfill({ ...execute, execute: false }, makeDeps().deps);
+
+    expect(result.counts).toMatchObject({ dated: 1, undated: 1 });
+    expect(await load(id)).not.toHaveProperty('documentDate');
+    expect(formatSummary(result, false)[0]).toMatch(/^Would write a date on 1 file\(s\) and null on 1/);
+  });
+
+  it('pages past batch boundaries, stops at --limit, and terminates a dry run', async () => {
+    for (let i = 0; i < 5; i++) await seed('undated.md');
+
+    const all = await runBackfill({ execute: false, batchSize: 2, fileIds: [] }, makeDeps().deps);
+    const limited = await runBackfill({ execute: false, batchSize: 2, limit: 3, fileIds: [] }, makeDeps().deps);
+
+    expect(all.counts.undated).toBe(5);
+    expect(limited.counts.undated).toBe(3);
+  });
+
+  it('restricts to --file-id', async () => {
+    const picked = await seed('dated.md');
+    const other = await seed('dated.md');
+
+    await runBackfill({ ...execute, fileIds: [picked.toString()] }, makeDeps().deps);
+
+    expect(await load(picked)).toMatchObject({ documentDate: FRONTMATTER_DATE });
+    expect(await load(other)).not.toHaveProperty('documentDate');
+  });
+});
+
+describe('checkOptions', () => {
+  const valid = { batchSize: 100, fileIds: [] };
+
+  it('accepts sane options', () => {
+    expect(checkOptions({ ...valid, limit: 5, fileIds: [new mongoose.Types.ObjectId().toString()] })).toBeUndefined();
+  });
+
+  it.each([
+    ['a non-numeric --limit', { ...valid, limit: Number.NaN }, '--limit'],
+    ['a fractional --limit', { ...valid, limit: 1.5 }, '--limit'],
+    ['a zero --batch-size', { ...valid, batchSize: 0 }, '--batch-size'],
+    ['a non-numeric --batch-size', { ...valid, batchSize: Number.NaN }, '--batch-size'],
+    ['a non-ObjectId --file-id', { ...valid, fileIds: ['not-an-id'] }, 'not-an-id'],
+  ])('rejects %s', (_label, opts, expected) => {
+    expect(checkOptions(opts)).toContain(expected);
+  });
+});
+
+describe('nextPageSize', () => {
+  it('uses the batch size when unbounded, and never overshoots --limit', () => {
+    expect(nextPageSize({ batchSize: 100 }, 250)).toBe(100);
+    expect(nextPageSize({ batchSize: 100, limit: 130 }, 100)).toBe(30);
+  });
+});
