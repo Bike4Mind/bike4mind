@@ -37,6 +37,7 @@ export const NONCE_SLOT = {
   driveConnect: 'google-drive',
   slackUserLink: 'slack-user-link',
   orgSlackConnect: 'org-slack-connect',
+  githubLakeConnect: 'github-lake-connect',
 } as const;
 
 // A slot suffixes the base cookie name; no slot keeps the base cookie unchanged.

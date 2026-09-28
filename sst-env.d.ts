@@ -81,6 +81,26 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "GITHUB_LAKE_APP_CLIENT_ID": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "GITHUB_LAKE_APP_CLIENT_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "GITHUB_LAKE_APP_ID": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "GITHUB_LAKE_APP_PRIVATE_KEY": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "GITHUB_LAKE_APP_SLUG": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "GITHUB_ZAP_REF": {
       "type": "sst.sst.Secret"
       "value": string
