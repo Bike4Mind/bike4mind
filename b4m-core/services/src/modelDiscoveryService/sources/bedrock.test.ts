@@ -79,9 +79,47 @@ describe('bedrock normalization', () => {
       autoDisabled: true,
       autoDisabledReason: 'not entitled in this AWS account',
     });
-    expect(models.get('anthropic.claude-opus-4-5-20251101-v1:0')?.patch).not.toHaveProperty('autoDisabled');
     // Never asked about: absence of data must not read as absence of entitlement.
     expect(models.get('amazon.nova-canvas-v1:0')?.patch).not.toHaveProperty('autoDisabled');
+  });
+
+  // The bare id of a profile-only model fails every dispatch (the Claude 4.x shape); offering it is
+  // how a picker hands a user a model that cannot answer. The profile-prefixed row is separate.
+  it('disables a model Bedrock serves only through an inference profile', () => {
+    const models = byId({ summaries, availability: new Map() });
+    expect(models.get('anthropic.claude-opus-4-5-20251101-v1:0')?.patch).toMatchObject({
+      autoDisabled: true,
+      autoDisabledReason: expect.stringMatching(/inference profile/),
+    });
+    expect(models.get('anthropic.claude-3-haiku-20240307-v1:0')?.patch).not.toHaveProperty('autoDisabled');
+  });
+
+  it('keeps the entitlement reason when a profile-only model is also unentitled', () => {
+    const models = byId({ summaries, availability });
+    expect(models.get('meta.llama4-scout-17b-instruct-v1:0')?.patch.autoDisabledReason).toBe(
+      'not entitled in this AWS account'
+    );
+  });
+
+  it('disables a provisioned-throughput-only model, whose bare id fails on demand too', () => {
+    const [record] = normalizeBedrockModels({
+      summaries: [{ ...summaries[0], inferenceTypesSupported: ['PROVISIONED'] }],
+    });
+    expect(record.patch).toMatchObject({ autoDisabled: true });
+  });
+
+  it('leaves a model alone when it is invocable on demand as well as by profile', () => {
+    const [record] = normalizeBedrockModels({
+      summaries: [{ ...summaries[0], inferenceTypesSupported: ['ON_DEMAND', 'INFERENCE_PROFILE'] }],
+    });
+    expect(record.patch).not.toHaveProperty('autoDisabled');
+  });
+
+  it('leaves a model alone when Bedrock did not say how it can be invoked', () => {
+    const [record] = normalizeBedrockModels({
+      summaries: [{ ...summaries[0], inferenceTypesSupported: undefined }],
+    });
+    expect(record.patch).not.toHaveProperty('autoDisabled');
   });
 
   it('skips malformed entries and drops an unparseable lifecycle date', () => {
@@ -168,7 +206,10 @@ describe('bedrock source fetch', () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.records).toHaveLength(summaries.length);
-      expect(result.records.every(record => record.patch.autoDisabled === undefined)).toBe(true);
+      // Profile-only models are still disabled - that verdict comes from the listing, not this check.
+      expect(
+        result.records.some(record => record.patch.autoDisabledReason === 'not entitled in this AWS account')
+      ).toBe(false);
     }
   });
 

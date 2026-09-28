@@ -40,6 +40,11 @@ export interface PromotionInput {
   credentials: DiscoveryCredentials;
   /** A price from a trusted tier: a provider API, or two aggregators that agree. */
   hasTrustedPrice: boolean;
+  /**
+   * The reason a source gave for disabling this model THIS run, if it did. Blocks promotion: the
+   * source has already answered "can this be called", and promoting would flip its verdict back on.
+   */
+  sourceDisabledReason?: string;
 }
 
 export interface PromotionDecision {
@@ -77,8 +82,16 @@ function dispatchProfileGaps(record: PromotionInput['record']): PromotionBlocker
  * the failed clauses recorded - "why is this model not selectable" is answerable
  * from the run report instead of from a code read.
  */
-export function evaluatePromotion({ record, policy, credentials, hasTrustedPrice }: PromotionInput): PromotionDecision {
+export function evaluatePromotion({
+  record,
+  policy,
+  credentials,
+  hasTrustedPrice,
+  sourceDisabledReason,
+}: PromotionInput): PromotionDecision {
   const blockedBy: PromotionBlocker[] = [];
+
+  if (sourceDisabledReason) blockedBy.push('disabled-by-source');
 
   if (!record.adapterFamily) blockedBy.push('no-adapter-family');
   else if (!DISPATCHABLE_ADAPTER_FAMILIES.includes(record.adapterFamily)) blockedBy.push('family-not-dispatchable');
@@ -95,7 +108,7 @@ export function evaluatePromotion({ record, policy, credentials, hasTrustedPrice
   if (!hasCredential) blockedBy.push('no-credential-for-backend');
 
   if (blockedBy.length === 0) return { promote: true, blockedBy };
-  return { promote: false, blockedBy, autoDisabledReason: reasonFor(blockedBy) };
+  return { promote: false, blockedBy, autoDisabledReason: sourceDisabledReason ?? reasonFor(blockedBy) };
 }
 
 /** The dispatch clauses; a denial by any of them is a work item, not a data gap. */

@@ -24,13 +24,25 @@ const JudgementSchema = z.object({
   rationale: z.string().optional(),
 });
 
-export interface RelevanceJudgement {
-  /** Clamped to 0..1 here, so a caller comparing against `minRelevance` never sees an out-of-range score. */
-  relevance: number;
-  rationale?: string;
-  /** What this one judgment cost, micro-USD. Zero when the model reported no usage. */
-  costMicroUsd: number;
-}
+/**
+ * One judgment's result. `costMicroUsd` is on BOTH arms: a failed call that already burned tokens
+ * still has to be charged, or a run whose model consistently returns malformed JSON would loop
+ * against a ceiling that never moves. Zero when the model reported no usage.
+ */
+export type RelevanceJudgement =
+  | {
+      outcome: 'judged';
+      /** Clamped to 0..1 here, so a caller comparing against `minRelevance` never sees an out-of-range score. */
+      relevance: number;
+      rationale?: string;
+      costMicroUsd: number;
+    }
+  | {
+      outcome: 'failed';
+      /** The underlying error's message, for the run card and logs. Never a stack. */
+      error: string;
+      costMicroUsd: number;
+    };
 
 /** The model used when a config names none, or names one this deployment no longer offers. */
 export const RELEVANCE_JUDGE_DEFAULT_MODEL: string = RESEARCH_RELEVANCE_MODEL_DEFAULT;
@@ -73,12 +85,12 @@ export class RelevanceJudgeService {
   }
 
   /**
-   * Judge one candidate. Returns null when the call or its response could not be used - fail-soft
-   * for the same reason lake-memory extraction is: one uncooperative judgment should cost the
-   * candidate, not the run. The caller drops a null candidate, which is the conservative direction
-   * (nothing reaches a human that a model did not vouch for), and counts it as `judgeFailed` rather
-   * than as a low score - the two are the same fate for the candidate and opposite answers for the
-   * operator.
+   * Judge one candidate. Never throws: a call or response that could not be used is a `failed`
+   * outcome - fail-soft for the same reason lake-memory extraction is, one uncooperative judgment
+   * should cost the candidate, not the run. The caller drops a failed candidate, which is the
+   * conservative direction (nothing reaches a human that a model did not vouch for), and counts it
+   * as `judgeFailed` rather than as a low score - the two are the same fate for the candidate and
+   * opposite answers for the operator.
    */
   async judge({
     apiKeyTable,
@@ -103,7 +115,7 @@ export class RelevanceJudgeService {
     snippet: string;
     /** Lake owner, for provider abuse attribution. Same use as the extraction service's. */
     endUserId?: string;
-  }): Promise<RelevanceJudgement | null> {
+  }): Promise<RelevanceJudgement> {
     let responseContent = '';
     let inputTokens = 0;
     let outputTokens = 0;
@@ -135,16 +147,19 @@ export class RelevanceJudgeService {
       const parsed = JudgementSchema.parse(JSON.parse(validJsonStringOnly || '{}'));
 
       return {
+        outcome: 'judged',
         relevance: Math.min(Math.max(parsed.relevance, 0), 1),
         rationale: parsed.rationale?.trim() || undefined,
         costMicroUsd: this.priceCall(modelInfo, inputTokens, outputTokens),
       };
     } catch (error) {
       this.logger.updateMetadata({ responseContent });
-      this.logger.warn('Relevance judgment failed for candidate; treating it as not relevant', { url, error });
-      // A failed judgment that already burned tokens still has to be charged, or a run whose model
-      // consistently returns malformed JSON would loop against a ceiling that never moves.
-      return modelInfo ? { relevance: 0, costMicroUsd: this.priceCall(modelInfo, inputTokens, outputTokens) } : null;
+      this.logger.warn('Relevance judgment failed for candidate; counting it as judgeFailed', { url, model, error });
+      return {
+        outcome: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+        costMicroUsd: modelInfo ? this.priceCall(modelInfo, inputTokens, outputTokens) : 0,
+      };
     }
   }
 

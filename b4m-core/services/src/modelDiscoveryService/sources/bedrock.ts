@@ -111,6 +111,21 @@ export interface BedrockFacts {
   availability?: ReadonlyMap<string, BedrockAvailability>;
 }
 
+/**
+ * Bedrock lists some models (every Claude 4.x among them) under a bare foundation-model id it will
+ * not serve on demand - only through a cross-region inference profile (`us.`/`global.`-prefixed) or
+ * provisioned throughput. The bare id is rejected by every InvokeModel/Converse call, so offering it
+ * guarantees a dispatch failure; the profile id is a separate catalog row this source never touches.
+ *
+ * Keyed on the ABSENCE of ON_DEMAND rather than on a profile value: the SDK's InferenceType enum
+ * names only ON_DEMAND and PROVISIONED, so the profile spelling is not a contract. An absent or
+ * empty list is "did not say".
+ */
+const isNotOnDemand = (summary: BedrockFoundationModelSummary): boolean => {
+  const types = summary.inferenceTypesSupported ?? [];
+  return types.length > 0 && !types.includes('ON_DEMAND');
+};
+
 export function normalizeBedrockModels({ summaries, availability }: BedrockFacts): DiscoveredModel[] {
   const records: DiscoveredModel[] = [];
 
@@ -129,6 +144,7 @@ export function normalizeBedrockModels({ summaries, availability }: BedrockFacts
       (entitlement.authorizationStatus === 'NOT_AUTHORIZED' ||
         entitlement.entitlementAvailability === 'NOT_AVAILABLE' ||
         entitlement.regionAvailability === 'NOT_AVAILABLE');
+    const notOnDemand = isNotOnDemand(summary);
     const lifecycle = lifecycleOf(summary);
 
     records.push(
@@ -149,12 +165,16 @@ export function normalizeBedrockModels({ summaries, availability }: BedrockFacts
             typeof summary?.responseStreamingSupported === 'boolean' ? summary.responseStreamingSupported : undefined,
           supportsVision: inputs.length > 0 ? inputs.includes('IMAGE') : undefined,
           lifecycle,
-          // Only ever set true. An unentitled model is disabled with a reason; a
-          // model we never asked about, or one whose check failed, is left alone,
-          // because clearing this flag on no evidence would re-enable a model the
-          // account cannot call.
-          autoDisabled: unauthorized ? true : undefined,
-          autoDisabledReason: unauthorized ? 'not entitled in this AWS account' : undefined,
+          // Only ever set true. An unentitled or not-on-demand model is disabled with
+          // a reason; a model we never asked about, or one whose check failed, is
+          // left alone, because clearing this flag on no evidence would re-enable a
+          // model the account cannot call.
+          autoDisabled: unauthorized || notOnDemand ? true : undefined,
+          autoDisabledReason: unauthorized
+            ? 'not entitled in this AWS account'
+            : notOnDemand
+              ? 'not invocable on demand; use its region-prefixed inference profile id'
+              : undefined,
         }),
       })
     );
