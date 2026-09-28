@@ -1,18 +1,16 @@
 import {
-  ARTIFACT_ATTRS_PATTERN,
   ArtifactPayload,
   ArtifactOperation,
   ArtifactType,
   mapMimeTypeToArtifactType,
+  matchArtifactBlocks,
+  scanArtifactOpenTag,
 } from '@bike4mind/common';
 import { detectElidedContent } from '@bike4mind/utils/artifactElision';
 import { stripHtmlComments, hasFullHtmlDocument, hasCompleteSvg } from '@bike4mind/utils/artifactParser';
 import { tryParseChartJSON } from './chartJsonParser';
 import { hasSingleLineImportFrom, scanImportStatements } from './importStatements';
 
-// Built from the shared ARTIFACT_ATTRS_PATTERN so the attribute sub-pattern
-// stays in sync with the core parser and PromptReplies truncation detector.
-const ARTIFACT_REGEX = new RegExp(`<artifact\\s+(${ARTIFACT_ATTRS_PATTERN})>([\\s\\S]*?)<\\/artifact>`, 'gi');
 // Value is anchored to its own quote kind so a double-quoted value can contain
 // apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
 // body, group 3 the single-quoted one; exactly one matches.
@@ -66,15 +64,10 @@ export function parseArtifacts(
 ): ArtifactParseResult {
   const artifacts: ParsedArtifact[] = [];
   let cleanedContent = content;
-  let match;
 
-  // Reset regex lastIndex to ensure we start from the beginning
-  ARTIFACT_REGEX.lastIndex = 0;
-
-  while ((match = ARTIFACT_REGEX.exec(content)) !== null) {
-    const [fullMatch, attributesString, artifactContent] = match;
-    const startIndex = match.index;
-    const endIndex = match.index + fullMatch.length;
+  for (const block of matchArtifactBlocks(content)) {
+    const { index: startIndex, fullMatch, attrs: attributesString, body: artifactContent } = block;
+    const endIndex = startIndex + fullMatch.length;
 
     // Parse attributes
     const attributes: Record<string, string> = {};
@@ -475,7 +468,7 @@ export function validateArtifactContent(
  * Sanitizes model-controlled text bound for a title="..." attribute in a tag this file
  * rebuilds. The artifact attribute parser (ATTRIBUTE_REGEX) has no escape mechanism, so a
  * " would truncate the attribute and leave the rest to be read as further attributes.
- * ARTIFACT_REGEX here is quote-aware, but the repo's other artifact matchers
+ * parseArtifacts here is quote-aware, but the repo's other artifact matchers
  * (sharedToolBuilder, notebookCurationService, openaiBackend) match attributes as [^>],
  * so a < or > reaching them closes the tag early; newlines break the single-line ones.
  * extractHTMLTitle applies the quote half of this rule to a <title> element.
@@ -495,7 +488,7 @@ function sanitizeToolOutputTitle(title: unknown): string {
 
 /**
  * Escapes the literal "</artifact>" sequence in a JSON artifact body so it cannot truncate
- * ARTIFACT_REGEX's non-greedy body match and leave a following "<artifact ...>" to be read
+ * parseArtifacts' non-greedy body match and leave a following "<artifact ...>" to be read
  * as a second, model-chosen artifact. JSON.parse reads "\/" as "/", so the consumer
  * restores the original losslessly. Twin of escapeArtifactBodyJson in b4m-core services
  * (llm/tools/utils/artifactEmission), which this package cannot import; keep in sync.
@@ -1035,7 +1028,7 @@ export function generateCompleteArtifactId(type: string, identifier: string, tim
  * whether to best-effort close the tag or drop the partial.
  */
 export function hasCompleteOpeningTag(tail: string): boolean {
-  return new RegExp(`^<artifact\\s+${ARTIFACT_ATTRS_PATTERN}>`).test(tail);
+  return tail.startsWith('<artifact') && scanArtifactOpenTag(tail, 0, 'run') !== null;
 }
 
 /**

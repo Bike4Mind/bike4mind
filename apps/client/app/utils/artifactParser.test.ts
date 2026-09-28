@@ -126,8 +126,7 @@ describe('parseArtifactsWithFallback', () => {
   });
 
   it('sanitizes < > and " from the title of a promoted bare HTML document', () => {
-    const dangerous =
-      '<!DOCTYPE html><html><head><title>Attack <script>"xss"</title></head><body></body></html>';
+    const dangerous = '<!DOCTYPE html><html><head><title>Attack <script>"xss"</title></head><body></body></html>';
     const result = parseArtifactsWithFallback(dangerous);
     expect(result.artifacts).toHaveLength(1);
     // All three problem characters must be gone from the title attribute.
@@ -135,8 +134,7 @@ describe('parseArtifactsWithFallback', () => {
   });
 
   it('sanitizes < > and " from the title of a fenced full HTML document', () => {
-    const fence =
-      '```html\n<!DOCTYPE html><html><head><title>A "test" <page></title></head><body></body></html>\n```';
+    const fence = '```html\n<!DOCTYPE html><html><head><title>A "test" <page></title></head><body></body></html>\n```';
     const result = parseArtifactsWithFallback(fence);
     expect(result.artifacts).toHaveLength(1);
     expect(result.artifacts[0].title).toBe('A test page');
@@ -820,7 +818,7 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
 
   it('drops tag brackets from a tool-output title', () => {
     // </> survive the deep-unescape loop, so a bracket reaches metadata.title
-    // intact. This file's ARTIFACT_REGEX reads a quoted value as a unit, but the repo's
+    // intact. This file's parseArtifacts reads a quoted value as a unit, but the repo's
     // other artifact matchers read attributes as [^>], where a bare > closes the tag and
     // hands everything after it to a re-typed artifact.
     const recharts =
@@ -837,7 +835,7 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
 
   it('does not let a tool-output mermaid body inject a second artifact', () => {
     // toolOutput.content is model-controlled and lands in the rebuilt tag's body, which
-    // ARTIFACT_REGEX ends at the first </artifact>. Unescaped, the tail below parses as a
+    // parseArtifacts ends at the first </artifact>. Unescaped, the tail below parses as a
     // second artifact of the model's chosen type.
     const payload =
       '{"type":"mermaid","metadata":{"title":"Diagram"},"content":' +

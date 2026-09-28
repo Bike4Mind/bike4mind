@@ -369,6 +369,9 @@ export type ArtifactPayload = z.infer<typeof ArtifactPayloadSchema>;
  * shared mutable `lastIndex` state.
  *
  * Usage: `new RegExp('<artifact\\s+(' + ARTIFACT_ATTRS_PATTERN + ')>...')`
+ *
+ * Backtracks quadratically on a repeated unclosed opener, so the parsers use the linear
+ * readers in utils/artifactOpenTag.ts instead. Must stay in sync with them.
  */
 export const ARTIFACT_ATTRS_PATTERN = String.raw`(?:[^>"']|"[^"]*"|'[^']*')*`;
 

@@ -1,4 +1,5 @@
-import { ARTIFACT_ATTRS_PATTERN, ClaudeArtifactMimeTypes } from '../types/entities/ArtifactTypes';
+import { ClaudeArtifactMimeTypes } from '../types/entities/ArtifactTypes';
+import { type ArtifactTagMemo, scanArtifactOpenTag } from './artifactOpenTag';
 
 // The tools whose results may carry artifacts, each pinned to the one type it emits. Any other
 // tool's output (web pages, files, MCP servers) is untrusted and can carry forged markup. Read by
@@ -36,7 +37,7 @@ export function parseToolArtifactAttributes(attrsStr: string): Record<string, st
  * Returns `text` with every artifact tag not of `toolName`'s pinned type removed, or null when
  * the tool is not an emitter, no tag is kept, or the text holds an artifact opener outside a
  * kept, closed, un-nested tag (a client streaming parser would still render an unclosed tag).
- * Tags are read with ARTIFACT_ATTRS_PATTERN, the grammar of the reply parser that consumes the
+ * Tags are read by scanArtifactOpenTag, the grammar of the reply parser that consumes the
  * streamed text, so a quoted ">" cannot end a tag here that the reply parser reads further.
  * A single forward scan: the input is tool output, so no per-opener rescan to the end.
  */
@@ -44,20 +45,19 @@ export function filterToolArtifactMarkup(toolName: string, text: string): string
   const allowedType = TOOL_ARTIFACT_EMITTERS.get(toolName);
   if (allowedType === undefined) return null;
   const opener = /<artifact\b/gi;
-  const openTag = new RegExp(`<artifact\\s(${ARTIFACT_ATTRS_PATTERN})>`, 'iy');
+  const memo: ArtifactTagMemo = {};
   const closer = /<\/artifact>/gi;
   let out = '';
   let cursor = 0;
   let kept = 0;
   for (let open = opener.exec(text); open; open = opener.exec(text)) {
-    openTag.lastIndex = open.index;
-    const tag = openTag.exec(text);
+    const tag = scanArtifactOpenTag(text, open.index, 'one', memo);
     if (!tag) return null;
-    const bodyStart = openTag.lastIndex;
+    const bodyStart = tag.end;
     closer.lastIndex = bodyStart;
     const close = closer.exec(text);
     if (!close) return null;
-    const keep = parseToolArtifactAttributes(tag[1]).type === allowedType;
+    const keep = parseToolArtifactAttributes(tag.attrs).type === allowedType;
     if (keep) {
       if (/<artifact\b/i.test(text.slice(bodyStart, close.index))) return null;
       kept++;
@@ -77,15 +77,15 @@ export function filterToolArtifactMarkup(toolName: string, text: string): string
  */
 export function stripToolArtifactMarkup(text: string, placeholder: string): string {
   const opener = /<artifact\b/gi;
-  const openTag = new RegExp(`<artifact\\s(?:${ARTIFACT_ATTRS_PATTERN})>`, 'iy');
+  const memo: ArtifactTagMemo = {};
   const closer = /<\/artifact>/gi;
   let out = '';
   let cursor = 0;
   for (let open = opener.exec(text); open; open = opener.exec(text)) {
     out += text.slice(cursor, open.index) + placeholder;
-    openTag.lastIndex = open.index;
-    if (!openTag.exec(text)) return out;
-    closer.lastIndex = openTag.lastIndex;
+    const tag = scanArtifactOpenTag(text, open.index, 'one', memo);
+    if (!tag) return out;
+    closer.lastIndex = tag.end;
     if (!closer.exec(text)) return out;
     cursor = closer.lastIndex;
     opener.lastIndex = cursor;
@@ -96,14 +96,21 @@ export function stripToolArtifactMarkup(text: string, placeholder: string): stri
 /**
  * Parses the `identifier` attribute out of every complete artifact tag opener in `markup`.
  * `markup` here is always content this codebase generated itself (artifact text already
- * streamed to the client), never adversarial input, so a plain global scan is safe.
+ * streamed to the client). Matches a `gi` scan of `<artifact\s(ATTRS)>`.
  */
 function extractArtifactIdentifiers(markup: string): Set<string> {
   const ids = new Set<string>();
-  const openTag = new RegExp(`<artifact\\s(${ARTIFACT_ATTRS_PATTERN})>`, 'gi');
-  for (const match of markup.matchAll(openTag)) {
-    const identifier = parseToolArtifactAttributes(match[1]).identifier;
+  const memo: ArtifactTagMemo = {};
+  const opener = /<artifact/gi;
+  for (let open = opener.exec(markup); open; open = opener.exec(markup)) {
+    const tag = scanArtifactOpenTag(markup, open.index, 'one', memo);
+    if (!tag) {
+      opener.lastIndex = open.index + 1;
+      continue;
+    }
+    const identifier = parseToolArtifactAttributes(tag.attrs).identifier;
     if (identifier !== undefined) ids.add(identifier);
+    opener.lastIndex = tag.end;
   }
   return ids;
 }
@@ -123,37 +130,32 @@ export function stripDeliveredArtifactBlocks(text: string, deliveredMarkup: stri
   const deliveredIdentifiers = extractArtifactIdentifiers(deliveredMarkup);
   if (deliveredIdentifiers.size === 0) return text;
   const opener = /<artifact\b/gi;
-  const openTag = new RegExp(`<artifact\\s(${ARTIFACT_ATTRS_PATTERN})>`, 'iy');
+  const memo: ArtifactTagMemo = {};
   const closer = /<\/artifact>/gi;
   let out = '';
   let cursor = 0;
   for (let open = opener.exec(text); open; open = opener.exec(text)) {
-    // Cheap O(1) rejection before the expensive scan below: no whitespace immediately after
+    // Cheap O(1) rejection before the scan below: no whitespace immediately after
     // "artifact" can never open a tag here, no matter how the rest of the text reads - skip to
     // the next opener match, same as a real reply parser would.
     if (!/\s/.test(text[open.index + 9] ?? '')) {
       opener.lastIndex = open.index + 1;
       continue;
     }
-    openTag.lastIndex = open.index;
-    const tag = openTag.exec(text);
+    const tag = scanArtifactOpenTag(text, open.index, 'one', memo);
     if (!tag) {
-      // The attrs-then-`>` scan ran all the way to the end of the string with no reachable,
-      // unquoted `>` to close it. That means no tag can open successfully from here on: any
-      // later position's remaining text is a subset of what this scan already exhausted, so a
-      // naive retry-by-one would re-run this same to-the-end scan at every later opener and
-      // blow up to O(n^2) on adversarial input (e.g. `'<artifact '.repeat(100_000)`). Stop
-      // scanning entirely instead - everything from here to the end is kept literally below.
+      // No unquoted `>` closes this tag before the end of the string. Stop scanning -
+      // everything from here to the end is kept literally below.
       break;
     }
-    closer.lastIndex = openTag.lastIndex;
+    closer.lastIndex = tag.end;
     const close = closer.exec(text);
     if (!close) {
       // Same reasoning: an unclosed tag here means nothing closes anywhere later either
       // (closer is a plain substring search, not scoped to this tag).
       break;
     }
-    const identifier = parseToolArtifactAttributes(tag[1]).identifier;
+    const identifier = parseToolArtifactAttributes(tag.attrs).identifier;
     const remove = identifier !== undefined && deliveredIdentifiers.has(identifier);
     out += text.slice(cursor, open.index) + (remove ? '' : text.slice(open.index, closer.lastIndex));
     cursor = closer.lastIndex;
