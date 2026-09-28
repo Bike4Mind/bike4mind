@@ -140,32 +140,46 @@ class DataLakeResearchRunRepository
     return (doc?.toJSON() as IDataLakeResearchRunDocument) ?? null;
   }
 
+  /** The `$set` body shared by every settle variant below - only the status filter differs. */
+  private settleFields(input: SettleResearchRunInput) {
+    const { status, completedAt, stopReason, spentMicroUsd, totals, judgeModel, error } = input;
+    return {
+      status,
+      completedAt,
+      stopReason: stopReason ?? null,
+      spentMicroUsd,
+      totals,
+      judgeModel: judgeModel ?? null,
+      error: error ?? null,
+    };
+  }
+
   /**
-   * Returns whether this call actually settled the row (false when it was already terminal). A
-   * caller that also records an outcome event alongside the settle - `research/runs/index.ts`'s
-   * enqueue-failure path - uses this to skip that record when the settle was a no-op, so a run the
-   * executor already resolved for real does not gain a second, contradictory outcome row.
+   * Returns whether this call actually settled the row (false when it was already terminal). The
+   * EXECUTOR's own settle: `runLakeResearch.ts` always calls this after `claimForExecution` has
+   * already flipped the row to `running`, so the guard covers `running` (its normal case) and
+   * `queued` (belt-and-suspenders, never actually reachable from that caller). A route settling a
+   * row it does NOT own the claim on must use `settleQueuedRun` instead - see that method's own
+   * comment for why admitting `running` here would be the wrong guard for that caller.
    */
   async settleRun(id: string, input: SettleResearchRunInput): Promise<boolean> {
-    const { status, completedAt, stopReason, spentMicroUsd, totals, judgeModel, error } = input;
-    // Guarded to the in-flight statuses so a settle racing an already-terminal run (e.g. an
-    // enqueue-failure settle that lands after the executor already claimed and finished the same
-    // row) is a no-op instead of overwriting a real outcome and leaving a second, contradictory
-    // History row behind it.
     const result = await this.runModel.updateOne(
       { _id: id, status: { $in: ['queued', 'running'] } },
-      {
-        $set: {
-          status,
-          completedAt,
-          stopReason: stopReason ?? null,
-          spentMicroUsd,
-          totals,
-          judgeModel: judgeModel ?? null,
-          error: error ?? null,
-        },
-      }
+      { $set: this.settleFields(input) }
     );
+    return result.matchedCount > 0;
+  }
+
+  /**
+   * Queued-only settle for a caller that does NOT hold the execution claim -
+   * `research/runs/index.ts`'s enqueue-failure path, which wrote the row but never got a message
+   * to the executor. Matches ONLY `status: 'queued'`: if the executor has already claimed the run
+   * (flipped it to `running`) this is a no-op and returns false, so the route knows the executor -
+   * not this route - now owns the run's outcome, rather than clobbering an in-flight claimed run
+   * with a `failed` settle the executor never asked for.
+   */
+  async settleQueuedRun(id: string, input: SettleResearchRunInput): Promise<boolean> {
+    const result = await this.runModel.updateOne({ _id: id, status: 'queued' }, { $set: this.settleFields(input) });
     return result.matchedCount > 0;
   }
 
