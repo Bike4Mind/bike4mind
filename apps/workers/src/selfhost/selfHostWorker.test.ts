@@ -44,6 +44,27 @@ describe('SelfHostWorker', () => {
     vi.useRealTimers();
   });
 
+  it('keeps the default receive batch and supports one-message queue registration', async () => {
+    const worker = new SelfHostWorker(mockLogger);
+    worker.registerQueueHandler('default', 'http://sqs/default', vi.fn());
+    worker.registerQueueHandler('single', 'http://sqs/single', vi.fn(), { batchSize: 1, visibilityTimeoutSec: 960 });
+    mockReceiveFromQueue.mockImplementation(async () => {
+      await Promise.resolve();
+      worker.stop();
+      return [];
+    });
+    worker.start();
+    await vi.waitFor(() => expect(mockReceiveFromQueue).toHaveBeenCalledTimes(2));
+    expect(mockReceiveFromQueue).toHaveBeenCalledWith('http://sqs/default', 10, 30, 20);
+    expect(mockReceiveFromQueue).toHaveBeenCalledWith('http://sqs/single', 1, 960, 20);
+    await worker.stop();
+  });
+
+  it.each([0, 11, 1.5, Number.NaN])('rejects invalid receive batch size %s', batchSize => {
+    const worker = new SelfHostWorker(mockLogger);
+    expect(() => worker.registerQueueHandler('q', 'http://sqs/q', vi.fn(), { batchSize })).toThrow('batchSize');
+  });
+
   it('deletes a message after the handler succeeds', async () => {
     const worker = new SelfHostWorker(mockLogger);
     const dispatch = vi.fn().mockResolvedValue(undefined);
