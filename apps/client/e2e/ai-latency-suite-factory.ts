@@ -65,15 +65,16 @@ export function createAiLatencySuite({
   // merging by id keeps each write monotonic.
   //
   // The unlocked read-modify-write is safe only because nothing writes this file concurrently, and
-  // that rests on two invariants, not on PW_WORKERS (the job runs 3 workers, with fullyParallel):
-  //  - each matrix cell runs exactly one spec file per `playwright test` invocation
-  //    (e2e-ai-latency.yml), and exactly one project matches each ai-latency spec;
+  // that rests on these invariants, not on PW_WORKERS (the job runs 3 workers, with fullyParallel):
+  //  - `resultsFilename` is unique per spec, so specs never share a file (running several specs in
+  //    one invocation is safe);
   //  - the describe below is `mode: 'default'`, which overrides fullyParallel: its prompts form one
   //    job, and after a failure the retry and the remaining prompts are re-queued as ONE job that
-  //    starts only once the failed worker has finished its afterAll.
-  // Switching that mode to 'parallel', or running several specs per invocation, makes two workers
-  // race here, and a lost update that drops an `incomplete` row reads as a healthy cell.
-  // checkAiLatencyBudget.test.ts pins both invariants.
+  //    starts only after the failed worker has run its afterAll;
+  //  - exactly one project matches each ai-latency spec (playwright.config.ts);
+  //  - repeatEach is 1: each repeat is a separate job, so repeats would write one file at once.
+  // Breaking any of them makes two workers race here, and a lost update that drops an `incomplete`
+  // row reads as a healthy cell. checkAiLatencyBudget.test.ts pins all but the project one.
   function persistResults(model: string, newResults: PromptResult[]) {
     fs.mkdirSync(resultsDir, { recursive: true });
 
