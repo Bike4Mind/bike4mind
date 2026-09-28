@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
-import type { ChatStreamEvent, SendMessageRequest } from '@shared/chat';
+import type { ChatApprovalDecision, ChatStreamEvent, SendMessageRequest } from '@shared/chat';
 import { IPC_CHANNELS, type DesktopApi } from '@shared/ipc';
 
 // Written out one method per channel rather than a generic invoke(channel, ...args)
@@ -33,6 +33,8 @@ const api: DesktopApi = {
     deleteSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatDeleteSession, sessionId),
     sendMessage: (request: SendMessageRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatSendMessage, request),
     stopReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatStopReply, sessionId),
+    respondToApproval: (approvalId: string, decision: ChatApprovalDecision) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatRespondToApproval, approvalId, decision),
     onStreamEvent: listener => {
       const handler = (_event: unknown, streamEvent: ChatStreamEvent) => listener(streamEvent);
       ipcRenderer.on(IPC_CHANNELS.chatStreamEvent, handler);

@@ -61,7 +61,7 @@ describe('ChatService tool loop', () => {
     });
   });
 
-  it('declares the file tools once a folder is granted', async () => {
+  it('declares every tool once a folder is granted', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'hi');
     await firstRequest();
@@ -69,7 +69,7 @@ describe('ChatService tool loop', () => {
     const declared = post.mock.calls[0][1].options.tools.map(
       (entry: { toolSchema: { name: string } }) => entry.toolSchema.name
     );
-    expect(declared).toEqual(['file_read', 'glob_files', 'grep_search']);
+    expect(declared).toEqual(['file_read', 'glob_files', 'grep_search', 'bash_execute']);
   });
 
   it('names the granted roots so the model looks them up instead of guessing a path', async () => {

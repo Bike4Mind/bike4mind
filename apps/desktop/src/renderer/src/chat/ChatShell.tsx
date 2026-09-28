@@ -105,7 +105,11 @@ export function ChatShell({ account }: { account?: ReactNode }) {
           </Box>
         </Box>
 
-        <MessageThread messages={conversation.messages} streaming={conversation.streaming} />
+        <MessageThread
+          messages={conversation.messages}
+          streaming={conversation.streaming}
+          onRespond={conversation.respondToApproval}
+        />
 
         {conversation.sendError && (
           <Alert size="sm" color="danger" variant="soft" sx={contentColumnSx} data-testid="chat-send-error">

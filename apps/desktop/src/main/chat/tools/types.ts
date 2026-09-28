@@ -3,6 +3,19 @@ export interface ToolContext {
   /** Granted roots. Empty means the user has allowed nothing, and every path tool denies. */
   roots: readonly string[];
   signal: AbortSignal;
+  /**
+   * Paths the app protects whatever the user granted - its own userData above all, which holds
+   * the access token. A granted home folder would otherwise expose the vault to a shell command.
+   */
+  protectedPaths?: readonly string[];
+}
+
+/** What the user is asked to allow before a tool runs, for tools that declare `approval`. */
+export interface ApprovalPrompt {
+  /** Shown to the user verbatim. */
+  detail: string;
+  /** Identity for "always allow": two calls share a key only if they would do the same thing. */
+  key: string;
 }
 
 /** Wire shape the completions endpoint expects, matching CompletionToolSchema in common. */
@@ -19,6 +32,11 @@ export interface ToolSchema {
 
 export interface ToolDefinition {
   schema: ToolSchema;
+  /**
+   * Declared by tools that run code or change something. The gate is enforced by ChatService,
+   * not here, so a tool cannot run itself past it by forgetting to ask.
+   */
+  approval?(input: Record<string, unknown>): ApprovalPrompt;
   /** Returns the text handed back to the model. Throwing is reported to it as a failure. */
   run(input: Record<string, unknown>, context: ToolContext): Promise<string>;
 }

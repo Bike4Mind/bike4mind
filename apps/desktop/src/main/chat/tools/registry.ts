@@ -1,14 +1,16 @@
 import { fileRead, globFiles, grepSearch } from './fileTools';
+import { bashExecute } from './shellTools';
 import type { ToolDefinition, ToolSchema } from './types';
 
 /**
  * The tools this client offers the model.
  *
- * Read-only for now. Writes, shell execution and the server-side tools (web_search and
- * friends) are the later stages of this work; each needs its own gate, so they are added
- * here only once that gate exists rather than being declared early and refused at run time.
+ * Reads run unattended; `bash_execute` runs code, so it declares `approval` and ChatService
+ * holds it at the gate until the user answers. The write tools and the server-side ones
+ * (web_search and friends) are later stages, and are added here only once each has its gate
+ * rather than being declared early and refused at run time.
  */
-const TOOLS: readonly ToolDefinition[] = [fileRead, globFiles, grepSearch];
+const TOOLS: readonly ToolDefinition[] = [fileRead, globFiles, grepSearch, bashExecute];
 
 const BY_NAME = new Map(TOOLS.map(tool => [tool.schema.name, tool]));
 

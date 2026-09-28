@@ -1,13 +1,14 @@
 import { join } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import { ChatModels } from '@bike4mind/common';
-import type { SendMessageRequest } from '@shared/chat';
+import type { ChatApprovalDecision, SendMessageRequest } from '@shared/chat';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
 import { AccessStore } from './tools/AccessStore';
+import { ApprovalGate } from './tools/ApprovalGate';
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 
@@ -22,13 +23,19 @@ const DEFAULT_MODEL: string = ChatModels.CLAUDE_4_5_SONNET;
  */
 export function registerChat(auth: AuthService): ChatService {
   const logger = createMainLogger(VERBOSE);
-  const store = new SessionStore(join(app.getPath('userData'), 'sessions'), DEFAULT_MODEL);
-  const access = new AccessStore(join(app.getPath('userData'), 'tool-access.json'));
+  const userData = app.getPath('userData');
+  const store = new SessionStore(join(userData, 'sessions'), DEFAULT_MODEL);
+  const access = new AccessStore(join(userData, 'tool-access.json'));
+  const approvals = new ApprovalGate();
 
   const service = new ChatService({
     store,
     access,
     logger,
+    approvals,
+    // userData holds the auth vault. Without this a user who shares their home folder would be
+    // one `cat` away from the access token, which is T4's invariant broken through a side door.
+    protectedPaths: [userData],
     getApiClient: () => auth.getApiClient(),
     getEnvironmentUrl: () => auth.getState().environment.url,
     emit: event => {
@@ -49,6 +56,9 @@ export function registerChat(auth: AuthService): ChatService {
     service.send(request.sessionId, request.text)
   );
   ipcMain.handle(IPC_CHANNELS.chatStopReply, (_event, sessionId: string) => service.stop(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatRespondToApproval, (_event, approvalId: string, decision: ChatApprovalDecision) =>
+    approvals.resolve(approvalId, decision)
+  );
 
   ipcMain.handle(IPC_CHANNELS.toolsGetAccess, async () => ({ roots: await access.list() }));
   // The picker is the ONLY way a root is added. Keeping the grant behind an OS dialog the user

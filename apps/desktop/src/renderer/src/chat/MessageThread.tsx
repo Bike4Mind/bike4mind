@@ -8,7 +8,7 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { ChatMessage } from '@shared/chat';
 import { contentColumnSx } from './layout';
-import { ToolCallList } from './ToolCallList';
+import { ToolCallList, type RespondToApproval } from './ToolCallList';
 
 function StopReasonChip({ reason }: { reason?: string }) {
   if (reason === 'max_tokens') {
@@ -62,13 +62,21 @@ function UserTurn({ message }: { message: ChatMessage }) {
  * A reply can run for screens, and a container drawn around that much text reads as a wall
  * rather than as prose; the right-aligned user bubble is what separates the two speakers.
  */
-function AssistantTurn({ message, streaming }: { message: ChatMessage; streaming: boolean }) {
+function AssistantTurn({
+  message,
+  streaming,
+  onRespond,
+}: {
+  message: ChatMessage;
+  streaming: boolean;
+  onRespond: RespondToApproval;
+}) {
   const toolCalls = message.toolCalls ?? [];
   const awaitingFirstToken = streaming && message.content.length === 0 && toolCalls.length === 0 && !message.error;
 
   return (
     <Box sx={{ minWidth: 0 }} data-testid="chat-message-assistant">
-      <ToolCallList calls={toolCalls} />
+      <ToolCallList calls={toolCalls} onRespond={onRespond} />
 
       {awaitingFirstToken ? (
         <CircularProgress size="sm" data-testid="chat-awaiting-reply" />
@@ -93,7 +101,15 @@ function AssistantTurn({ message, streaming }: { message: ChatMessage; streaming
   );
 }
 
-export function MessageThread({ messages, streaming }: { messages: ChatMessage[]; streaming: boolean }) {
+export function MessageThread({
+  messages,
+  streaming,
+  onRespond,
+}: {
+  messages: ChatMessage[];
+  streaming: boolean;
+  onRespond: RespondToApproval;
+}) {
   const bottom = useRef<HTMLDivElement>(null);
   const last = messages[messages.length - 1];
   const lastContent = (last?.content.length ?? 0) + (last?.toolCalls?.length ?? 0);
@@ -122,7 +138,12 @@ export function MessageThread({ messages, streaming }: { messages: ChatMessage[]
           message.role === 'user' ? (
             <UserTurn key={message.id} message={message} />
           ) : (
-            <AssistantTurn key={message.id} message={message} streaming={streaming && index === messages.length - 1} />
+            <AssistantTurn
+              key={message.id}
+              message={message}
+              streaming={streaming && index === messages.length - 1}
+              onRespond={onRespond}
+            />
           )
         )}
         <div ref={bottom} />

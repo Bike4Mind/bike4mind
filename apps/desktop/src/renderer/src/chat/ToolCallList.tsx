@@ -1,16 +1,29 @@
 import Box from '@mui/joy/Box';
+import Button from '@mui/joy/Button';
 import Chip from '@mui/joy/Chip';
 import CircularProgress from '@mui/joy/CircularProgress';
+import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import type { ChatToolCall, ChatToolStatus } from '@shared/chat';
+import type { ChatApprovalDecision, ChatToolCall, ChatToolStatus } from '@shared/chat';
 
-const STATUS_COLOR: Record<ChatToolStatus, 'neutral' | 'success' | 'danger' | 'warning'> = {
+const STATUS_COLOR: Record<ChatToolStatus, 'neutral' | 'success' | 'danger' | 'warning' | 'primary'> = {
+  'awaiting-approval': 'primary',
   running: 'neutral',
   done: 'success',
   error: 'danger',
   denied: 'warning',
 };
+
+const STATUS_LABEL: Record<ChatToolStatus, string> = {
+  'awaiting-approval': 'needs approval',
+  running: 'running',
+  done: 'done',
+  error: 'error',
+  denied: 'denied',
+};
+
+export type RespondToApproval = (approvalId: string, decision: ChatApprovalDecision) => void;
 
 /** The argument worth showing next to the tool name - almost always what it acted on. */
 function summarizeInput(call: ChatToolCall): string {
@@ -19,8 +32,84 @@ function summarizeInput(call: ChatToolCall): string {
   return typeof interesting === 'string' ? interesting : '';
 }
 
-function ToolCall({ call }: { call: ChatToolCall }) {
+/**
+ * The consent prompt for a tool that has not run yet.
+ *
+ * Deliberately not a `details` the user can leave collapsed: the command is the whole thing
+ * they are being asked about, so it is always on screen next to the buttons that allow it.
+ */
+function ApprovalPrompt({
+  call,
+  approvalId,
+  onRespond,
+}: {
+  call: ChatToolCall;
+  approvalId: string;
+  onRespond: RespondToApproval;
+}) {
+  return (
+    <Sheet
+      variant="soft"
+      color="primary"
+      sx={{ borderRadius: 'sm', px: 1.5, py: 1.25 }}
+      data-testid="chat-tool-approval"
+    >
+      <Typography level="body-xs" fontWeight="lg">
+        Run this command?
+      </Typography>
+
+      <Box
+        sx={{
+          mt: 0.75,
+          p: 1,
+          borderRadius: 'sm',
+          bgcolor: 'background.surface',
+          maxHeight: 200,
+          overflowY: 'auto',
+        }}
+      >
+        <Typography
+          level="body-xs"
+          fontFamily="monospace"
+          sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
+          data-testid="chat-tool-approval-detail"
+        >
+          {call.approvalDetail ?? summarizeInput(call)}
+        </Typography>
+      </Box>
+
+      <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+        <Button size="sm" onClick={() => onRespond(approvalId, 'once')} data-testid="chat-tool-approve-once">
+          Allow once
+        </Button>
+        <Button
+          size="sm"
+          variant="soft"
+          onClick={() => onRespond(approvalId, 'always')}
+          data-testid="chat-tool-approve-always"
+        >
+          Always in this chat
+        </Button>
+        <Button
+          size="sm"
+          variant="plain"
+          color="neutral"
+          onClick={() => onRespond(approvalId, 'deny')}
+          data-testid="chat-tool-deny"
+        >
+          Don't run
+        </Button>
+      </Stack>
+    </Sheet>
+  );
+}
+
+function ToolCall({ call, onRespond }: { call: ChatToolCall; onRespond: RespondToApproval }) {
   const summary = summarizeInput(call);
+
+  if (call.status === 'awaiting-approval' && call.approvalId) {
+    return <ApprovalPrompt call={call} approvalId={call.approvalId} onRespond={onRespond} />;
+  }
 
   return (
     <Box
@@ -33,7 +122,7 @@ function ToolCall({ call }: { call: ChatToolCall }) {
           <CircularProgress size="sm" sx={{ '--CircularProgress-size': '14px' }} />
         ) : (
           <Chip size="sm" variant="soft" color={STATUS_COLOR[call.status]} data-testid="chat-tool-status">
-            {call.status}
+            {STATUS_LABEL[call.status]}
           </Chip>
         )}
         <Typography level="body-xs" fontFamily="monospace">
@@ -60,12 +149,12 @@ function ToolCall({ call }: { call: ChatToolCall }) {
   );
 }
 
-export function ToolCallList({ calls }: { calls: ChatToolCall[] }) {
+export function ToolCallList({ calls, onRespond }: { calls: ChatToolCall[]; onRespond: RespondToApproval }) {
   if (calls.length === 0) return null;
   return (
     <Stack spacing={0.5} sx={{ mb: 1 }}>
       {calls.map(call => (
-        <ToolCall key={call.id} call={call} />
+        <ToolCall key={call.id} call={call} onRespond={onRespond} />
       ))}
     </Stack>
   );

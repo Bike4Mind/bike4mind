@@ -1,5 +1,6 @@
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
+  ChatApprovalDecision,
   ChatSession,
   ChatSessionSummary,
   ChatStreamEvent,
@@ -35,6 +36,7 @@ export const IPC_CHANNELS = {
   chatDeleteSession: 'chat:delete-session',
   chatSendMessage: 'chat:send-message',
   chatStopReply: 'chat:stop-reply',
+  chatRespondToApproval: 'chat:respond-to-approval',
   /** main -> renderer push; reply tokens as they arrive. */
   chatStreamEvent: 'chat:stream-event',
   toolsGetAccess: 'tools:get-access',
@@ -77,6 +79,11 @@ export interface DesktopApi {
     sendMessage(request: SendMessageRequest): Promise<SendMessageResult>;
     /** Stop an in-flight reply, keeping what has streamed so far. No-op if none is running. */
     stopReply(sessionId: string): Promise<void>;
+    /**
+     * Answer a tool call sitting at 'awaiting-approval'. Unknown or already-answered ids are
+     * ignored, so a double click cannot approve a second, different command.
+     */
+    respondToApproval(approvalId: string, decision: ChatApprovalDecision): Promise<void>;
     /** Subscribe to reply progress; returns the unsubscribe. */
     onStreamEvent(listener: (event: ChatStreamEvent) => void): () => void;
   };

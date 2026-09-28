@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ChatMessage, ChatSession, ChatSessionSummary } from '@shared/chat';
+import type { ChatApprovalDecision, ChatMessage, ChatSession, ChatSessionSummary } from '@shared/chat';
 
 export interface SessionsController {
   sessions: ChatSessionSummary[];
@@ -52,6 +52,8 @@ export interface ConversationController {
   send: (text: string) => Promise<void>;
   stop: () => void;
   rename: (title: string) => Promise<void>;
+  /** Answer a tool call waiting at the approval gate. Nothing has run until this is called. */
+  respondToApproval: (approvalId: string, decision: ChatApprovalDecision) => void;
 }
 
 /**
@@ -203,5 +205,9 @@ export function useConversation(
     [sessionId, onSummaryChanged]
   );
 
-  return { session, messages, streaming, sendError, send, stop, rename };
+  const respondToApproval = useCallback((approvalId: string, decision: ChatApprovalDecision) => {
+    void window.b4m.chat.respondToApproval(approvalId, decision);
+  }, []);
+
+  return { session, messages, streaming, sendError, send, stop, rename, respondToApproval };
 }

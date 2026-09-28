@@ -11,7 +11,7 @@
 
 export type ChatRole = 'user' | 'assistant';
 
-export type ChatToolStatus = 'running' | 'done' | 'error' | 'denied';
+export type ChatToolStatus = 'awaiting-approval' | 'running' | 'done' | 'error' | 'denied';
 
 /**
  * One tool the model asked for, and what running it produced.
@@ -27,7 +27,22 @@ export interface ChatToolCall {
   /** Truncated for display; the model receives the full (size-capped) result. */
   preview?: string;
   error?: string;
+  /**
+   * Set only while `status` is 'awaiting-approval': the token to pass back to
+   * `respondToApproval`. The tool is not running and has had no effect until that answer
+   * arrives, so a renderer that never answers leaves the machine untouched.
+   */
+  approvalId?: string;
+  /** What the user is being asked to allow, ready to display. Set with `approvalId`. */
+  approvalDetail?: string;
 }
+
+/**
+ * 'always' repeats the approval for identical later calls in the SAME conversation, and is
+ * forgotten when the app exits. It is matched on the exact request - an approved `git status`
+ * does not carry over to `git status; rm -rf ~`.
+ */
+export type ChatApprovalDecision = 'once' | 'always' | 'deny';
 
 export interface ChatMessage {
   id: string;

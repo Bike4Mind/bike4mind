@@ -12,8 +12,9 @@ import type {
 import { DEFAULT_COMPLETIONS_PATH, streamCompletion, type CompletionMessage } from './completions';
 import type { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
+import type { ApprovalGate } from './tools/ApprovalGate';
 import { findTool, toolsForRequest } from './tools/registry';
-import { capOutput } from './tools/types';
+import { capOutput, type ToolDefinition } from './tools/types';
 
 /** Only the field this client reads from `GET /api/settings/serverConfig`. */
 interface ServerTransportConfig {
@@ -36,6 +37,10 @@ export interface ChatServiceDeps {
   store: SessionStore;
   access: AccessStore;
   logger: ChatServiceLogger;
+  /** Absent in tests that exercise tools needing no consent; a gated tool then never runs. */
+  approvals?: ApprovalGate;
+  /** Paths kept out of reach of shell commands whatever the user granted. See tools/sandbox.ts. */
+  protectedPaths?: readonly string[];
   /** Null whenever no session is usable, which is how a signed-out send is refused. */
   getApiClient(): AuthenticatedApiClient | null;
   /** Identifies the cached completions endpoint; changing environments invalidates it. */
@@ -84,6 +89,7 @@ export class ChatService {
 
   async deleteSession(sessionId: string): Promise<void> {
     this.stop(sessionId);
+    this.deps.approvals?.forgetSession(sessionId);
     await this.deps.store.delete(sessionId);
   }
 
@@ -95,6 +101,7 @@ export class ChatService {
   dispose(): void {
     for (const controller of this.active.values()) controller.abort();
     this.active.clear();
+    this.deps.approvals?.dispose();
   }
 
   /**
@@ -272,32 +279,79 @@ export class ChatService {
           input: parseArguments(request.arguments),
           status: 'running',
         };
-        this.deps.emit({ type: 'tool-start', sessionId, messageId, call });
 
         const tool = findTool(request.name);
-        let settled: ChatToolCall;
         if (!tool) {
-          settled = { ...call, status: 'error', error: `Unknown tool: ${request.name}` };
-        } else {
-          try {
-            const result = await tool.run(call.input, { roots, signal });
-            settled = { ...call, status: 'done', preview: capOutput(result) };
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            this.deps.logger.debug(`CHAT: tool ${request.name} failed: ${message}`);
-            settled = {
-              ...call,
-              // A refusal is its own state: the UI says "denied", not "something broke".
-              status: err instanceof Error && err.name === 'PathAccessDenied' ? 'denied' : 'error',
-              error: message,
-            };
-          }
+          const unknown: ChatToolCall = { ...call, status: 'error', error: `Unknown tool: ${request.name}` };
+          this.deps.emit({ type: 'tool-start', sessionId, messageId, call });
+          this.deps.emit({ type: 'tool-end', sessionId, messageId, call: unknown });
+          return unknown;
+        }
+
+        // Asked BEFORE 'running' is announced, so the UI never shows a command as under way
+        // while it is still waiting on the user, and nothing has run if they say no.
+        const denial = await this.awaitApproval(tool, call, sessionId, messageId, signal);
+        if (denial) return denial;
+
+        this.deps.emit({ type: 'tool-start', sessionId, messageId, call });
+
+        let settled: ChatToolCall;
+        try {
+          const result = await tool.run(call.input, { roots, signal, protectedPaths: this.deps.protectedPaths });
+          settled = { ...call, status: 'done', preview: capOutput(result) };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.deps.logger.debug(`CHAT: tool ${request.name} failed: ${message}`);
+          settled = {
+            ...call,
+            // A refusal is its own state: the UI says "denied", not "something broke".
+            status: err instanceof Error && err.name === 'PathAccessDenied' ? 'denied' : 'error',
+            error: message,
+          };
         }
 
         this.deps.emit({ type: 'tool-end', sessionId, messageId, call: settled });
         return settled;
       })
     );
+  }
+
+  /**
+   * Hold a tool at the approval gate, if it declares one.
+   *
+   * Returns the settled DENIED call when the user says no, and null when the tool may run. A
+   * refusal is reported to the model as a failed tool_result rather than as an aborted turn, so
+   * it can say what it wanted to do instead of the conversation stopping dead.
+   */
+  private async awaitApproval(
+    tool: ToolDefinition,
+    call: ChatToolCall,
+    sessionId: string,
+    messageId: string,
+    signal: AbortSignal
+  ): Promise<ChatToolCall | null> {
+    const gate = this.deps.approvals;
+    const prompt = tool.approval?.(call.input);
+    if (!gate || !prompt || gate.isStanding(sessionId, prompt.key)) return null;
+
+    const decision = await gate.request(sessionId, prompt.key, signal, approvalId => {
+      this.deps.emit({
+        type: 'tool-start',
+        sessionId,
+        messageId,
+        call: { ...call, status: 'awaiting-approval', approvalId, approvalDetail: prompt.detail },
+      });
+    });
+
+    if (decision !== 'deny') return null;
+
+    const denied: ChatToolCall = {
+      ...call,
+      status: 'denied',
+      error: 'The user declined to run this. Do not try to run it again; ask them what to do instead.',
+    };
+    this.deps.emit({ type: 'tool-end', sessionId, messageId, call: denied });
+    return denied;
   }
 
   /**
@@ -356,12 +410,16 @@ function buildSystemMessage(roots: readonly string[]): CompletionMessage {
   return {
     role: 'system',
     content: [
-      'You can read files on the user machine with the provided tools.',
+      'You can read files on the user machine, and run bash commands on it, with the provided tools.',
       'These folders are shared with you, including everything beneath them:',
       ...roots.map(root => `  ${root}`),
       'Always pass absolute paths. Any path outside those folders is denied;',
       'if you need one, ask the user to share it with the "Share a folder" button.',
-      'Never invent a file name, size or contents: if a tool did not return it, you do not know it.',
+      'Running a command needs the user to approve it first, and they see the exact command, so',
+      'prefer one clear command over several speculative ones. If they decline, accept it and ask',
+      'what they would like instead rather than trying a variation of the same command.',
+      'Never invent a file name, size or contents, or the output of a command: if a tool did not',
+      'return it, you do not know it.',
     ].join('\n'),
   };
 }
