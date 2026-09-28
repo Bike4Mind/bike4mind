@@ -4,7 +4,7 @@ import {
   stripSearchResultCardFences,
   type CitableSource,
 } from '@bike4mind/common';
-import { stripArtifactTagBlocks } from '../utils/artifactTagBlocks';
+import { stripArtifactTags } from '../utils/scanArtifactTags';
 
 /**
  * Template-based "Raw Transcript" markdown generator (Option 1) for curated notebooks.
@@ -393,7 +393,7 @@ function formatArtifactTypeLabel(type: ArtifactType): string {
  */
 function cleanMessageContent(content: string, citables?: CitableSource[]): string {
   // Remove <artifact> tags (already extracted)
-  let cleaned = stripArtifactTagBlocks(content);
+  let cleaned = stripArtifactTags(content);
 
   // Remove <think> tags (internal reasoning)
   cleaned = cleaned.replace(/<think>([\s\S]*?)<\/think>/gi, '');

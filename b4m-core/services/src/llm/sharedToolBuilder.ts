@@ -32,7 +32,7 @@ import { isToolOfferable, type ToolAvailability } from './toolAvailability';
 import { extractAndSaveEntitiesFromToolResult, shouldExtractEntitiesFromTool } from '../conversationContextService';
 import type { MinimalSessionRepository } from '../conversationContextService/types';
 import { notifyToolFinish } from './toolFinishObserver';
-import { matchToolArtifactTagBlocks } from '../utils/artifactTagBlocks';
+import { scanArtifactTags } from '../utils/scanArtifactTags';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -671,7 +671,7 @@ function wrapToolsForSentinels(
           result.includes('<artifact')
         ) {
           try {
-            for (const { attrs: attrsStr, body: content } of matchToolArtifactTagBlocks(result)) {
+            for (const { attrs: attrsStr, body: content } of scanArtifactTags(result, true)) {
               const attrs = parseToolArtifactAttributes(attrsStr);
 
               // Checked on the final value, so a repeated type= attribute cannot smuggle one past.

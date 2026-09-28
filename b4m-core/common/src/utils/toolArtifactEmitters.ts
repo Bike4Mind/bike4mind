@@ -5,6 +5,20 @@ import { type ArtifactTagMemo, scanArtifactOpenTag } from './artifactOpenTag';
 // tool's output (web pages, files, MCP servers) is untrusted and can carry forged markup. Read by
 // sharedToolBuilder (tool_result extraction) and llm-adapters toolStreamingHelper (reply streaming);
 // a new artifact-emitting tool must be added here or its artifact is dropped on both paths.
+//
+// Gating status (#3253/#3329's fix + #3354's follow-ups only cover the 4 backends that
+// live-stream a tool's own result as a distinct chunk via handleToolResultStreaming: Anthropic,
+// Gemini, Bedrock, OpenAI). kimiBackend.ts, xaiBackend.ts, deepseekBackend.ts, and
+// ollamaBackend.ts reference neither TOOL_ARTIFACT_EMITTERS nor handleToolResultStreaming - but
+// this is NOT a "nothing to dedupe" case: sharedToolBuilder.ts's onArtifactExtracted callback
+// pulls an artifact out of ANY backend's tool result into quest.promptMeta.artifacts regardless of
+// this map's 4-backend gating, and all 4 of these backends push the tool result RAW (unstripped)
+// into pushToolMessages/history with no stripToolArtifactMarkup call - so the model can see and
+// echo its own artifact tag back in reply text, reproducing #3253's exact duplicate-card bug on
+// these 4 backends too. Left unfixed here deliberately - fixing it means wiring
+// stripToolArtifactMarkup + createRecursiveArtifactGuard/markDelivered into 4 more backends,
+// out of scope for #3354's test-coverage/hardening follow-ups. Not excluded from this map either:
+// that would just silently drop these tools' availability without closing the real gap.
 export const TOOL_ARTIFACT_EMITTERS: ReadonlyMap<string, string> = new Map([
   ['recharts', ClaudeArtifactMimeTypes.RECHARTS],
   ['mermaid_chart', ClaudeArtifactMimeTypes.MERMAID],
@@ -144,15 +158,23 @@ export function stripDeliveredArtifactBlocks(text: string, deliveredMarkup: stri
     }
     const tag = scanArtifactOpenTag(text, open.index, 'one', memo);
     if (!tag) {
-      // No unquoted `>` closes this tag before the end of the string. Stop scanning -
-      // everything from here to the end is kept literally below.
+      // No unquoted `>` closes this tag before the end of the string. Stop scanning - everything
+      // from here to the end is kept literally below.
+      //
+      // Known trade-off, not a guarantee: a later genuine duplicate usually still gets swallowed and
+      // removed, because the open-tag scan reaches for the later block's own `>`. But an UNBALANCED
+      // quote in the stray text between here and that later block (e.g. "it won't help") stops the
+      // scan before that `>`, so the later duplicate is left unstripped. See toolArtifactEmitters.test.ts's
+      // "unbalanced quote after a stray opener" pin for the exact reproducing input.
       break;
     }
     closer.lastIndex = tag.end;
     const close = closer.exec(text);
     if (!close) {
-      // Same reasoning: an unclosed tag here means nothing closes anywhere later either
-      // (closer is a plain substring search, not scoped to this tag).
+      // An unclosed tag here means nothing closes anywhere later either (closer is a plain
+      // substring search, not scoped to this tag) - so, unlike the `!tag` break above, THIS one
+      // really can never strand a later duplicate: any complete duplicate block supplies its own
+      // `</artifact>`, and this unscoped search would have found it already if it existed.
       break;
     }
     const identifier = parseToolArtifactAttributes(tag.attrs).identifier;

@@ -1,7 +1,14 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import type { ContextTelemetry, AnomaliesTelemetry } from '@bike4mind/common';
-import { buildAnalysisPrompt, formatIssueBody, type LLMAnalysis } from './telemetryAnalysis';
+import { buildAnalysisPrompt, extractAnalysisJson, formatIssueBody, type LLMAnalysis } from './telemetryAnalysis';
+import {
+  GROWTH_RATIO_CEILING,
+  SMALL_INPUT_MS_CEILING,
+  measureGrowth,
+  seededCorpus,
+  FENCE_PIECES,
+} from '@client/__tests__/utils/regexLinearity';
 
 function createTestTelemetry(overrides: { anomalies?: Partial<AnomaliesTelemetry> } = {}): ContextTelemetry {
   const defaultAnomalies: AnomaliesTelemetry = {
@@ -147,5 +154,44 @@ describe('buildAnalysisPrompt token distribution', () => {
     const prompt = buildAnalysisPrompt(telemetry);
 
     expect(prompt).toContain('- Lake Retrieval: 0 (0.0%)');
+  });
+});
+
+describe('extractAnalysisJson', () => {
+  function oldExtract(responseText: string): string {
+    let jsonStr = responseText.trim();
+    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) return jsonMatch[1].trim();
+    const braceMatch = jsonStr.match(/\{[\s\S]*\}/);
+    if (braceMatch) jsonStr = braceMatch[0];
+    return jsonStr;
+  }
+
+  it('unwraps a fence, else slices the outermost braces', () => {
+    expect(extractAnalysisJson('```json\n {"a":1}\n```')).toBe('{"a":1}');
+    expect(extractAnalysisJson('Sure: {"a":{"b":2}} done')).toBe('{"a":{"b":2}}');
+    expect(extractAnalysisJson('  } no object {  ')).toBe('} no object {');
+  });
+
+  // The old fence regex took about 1-2s at 16000; the old brace fallback about 3s on 16000 '{'.
+  it.each([
+    ['newlines after an unclosed fence', (n: number) => '```json' + '\n'.repeat(n) + 'x', 16000],
+    ['space-newline pairs after an unclosed fence', (n: number) => '```json' + ' \n'.repeat(n) + 'x', 16000],
+    ['many unclosed braces', (n: number) => '{'.repeat(n), 16000],
+  ])('stays linear on %s', (_label, build, small) => {
+    const { baselineMs, ratio } = measureGrowth(extractAnalysisJson, build, small);
+    expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
+    expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
+  });
+
+  it('returns what the old extraction returned on every seeded input', () => {
+    const corpus = seededCorpus(2998, 3000, [...FENCE_PIECES, '{', '}']);
+    expect(corpus.filter(s => s.includes('```') && s.indexOf('```') !== s.lastIndexOf('```')).length).toBeGreaterThan(
+      300
+    );
+    expect(corpus.filter(s => extractAnalysisJson(s) !== oldExtract(s))).toEqual([]);
+    // Control: a lazy brace slice diverges, so this differential can fail.
+    const lazy = (s: string) => s.trim().match(/\{[\s\S]*?\}/)?.[0] ?? s.trim();
+    expect(corpus.filter(s => !s.includes('```') && lazy(s) !== oldExtract(s)).length).toBeGreaterThan(0);
   });
 });

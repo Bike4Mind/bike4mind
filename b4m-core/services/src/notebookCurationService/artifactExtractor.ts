@@ -7,7 +7,7 @@ import {
   SEARCH_RESULT_CARDS_LANGUAGE,
   LOCATION_MAP_LANGUAGE,
 } from '@bike4mind/common';
-import { matchArtifactTagBlocks } from '../utils/artifactTagBlocks';
+import { scanArtifactTags } from '../utils/scanArtifactTags';
 
 /**
  * The loaded `IChatHistoryItem` plus the mongo `_id` that document/lean-form items
@@ -25,7 +25,9 @@ export type CurationMessage = IChatHistoryItem & { _id?: { toString(): string } 
 // apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
 // body, group 3 the single-quoted one; exactly one matches.
 const ATTRIBUTE_REGEX = /(\w+)=(?:"([^"]*)"|'([^']*)')/g;
-const CODE_BLOCK_REGEX = /```(\w+)?\s*([\s\S]*?)```/g;
+// The lookahead makes the language run atomic; `(\w+)?\s*` ahead of the lazy body backtracked
+// quadratically on an unclosed fence. Callers trim the body, so the dropped `\s*` is unobservable.
+export const CODE_BLOCK_REGEX = /```(?=(\w*))\1([\s\S]*?)```/g;
 
 /**
  * Extract artifacts from a single message
@@ -117,7 +119,7 @@ export function extractArtifactsFromMessage(message: CurationMessage, options: C
 function extractArtifactTags(content: string, messageId: string, timestamp: Date): ExtractedArtifact[] {
   const artifacts: ExtractedArtifact[] = [];
 
-  for (const { attrs: attributesString, body: artifactContent } of matchArtifactTagBlocks(content)) {
+  for (const { attrs: attributesString, body: artifactContent } of scanArtifactTags(content, false)) {
     // Parse attributes
     const attributes: Record<string, string> = {};
     let attrMatch;
