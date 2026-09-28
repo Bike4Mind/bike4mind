@@ -15,11 +15,11 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
  * is not enough, and the read gate runs FIRST so a stranger still gets the not-found-style denial
  * that leaks no existence.
  *
- * Also hands back the `actor` these routes need to record a History event (#3298): building it here,
+ * Also hands back the `actor` these routes need to record a History event: building it here,
  * once, is what keeps every research route attributing a key-driven write to the key the same way
  * `grants.ts`/`lifecycle.ts` do, rather than re-deriving it three times.
  *
- * Returns the ACTIVE GRANTS alongside the gate's own verdict too (#3298), rather than making each
+ * Returns the ACTIVE GRANTS alongside the gate's own verdict too, rather than making each
  * research-config/run write re-fetch them for its own audit call: `loadActiveLakeGrants` +
  * `canManageLake` here (not `resolveCanManageLake`, which fetches the same grants and discards
  * them) is the same reuse `reviewDataLakeProposal.ts`'s `resolveReviewable` applies - the gate and
