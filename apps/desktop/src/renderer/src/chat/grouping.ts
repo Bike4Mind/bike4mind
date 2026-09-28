@@ -1,0 +1,69 @@
+import type { ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+
+export interface ProjectGroup {
+  /** The project directory, which is the grouping identity - two projects can share a name. */
+  directory: string;
+  name: string;
+  sessions: ChatSessionSummary[];
+}
+
+export interface SidebarSections {
+  pinned: ChatSessionSummary[];
+  /** Code sessions, one group per project directory. */
+  projects: ProjectGroup[];
+  /** Chat sessions, which have no project and sit outside the groups. */
+  loose: ChatSessionSummary[];
+}
+
+/**
+ * Split the session list into what the sidebar draws.
+ *
+ * A pinned session appears ONLY in the pinned section, not a second time inside its project
+ * group: two rows for one conversation, one of which silently mirrors the other, reads as a
+ * duplicate rather than as emphasis.
+ *
+ * Group order follows the most recently updated session in each group, so the project being
+ * worked on now rises to the top - the same rule the flat list already used for rows.
+ */
+export function groupSessions(sessions: readonly ChatSessionSummary[], mode: ChatSessionMode): SidebarSections {
+  const visible = sessions.filter(session => session.mode === mode);
+  const pinned = visible.filter(session => session.pinned);
+  const rest = visible.filter(session => !session.pinned);
+
+  const byDirectory = new Map<string, ProjectGroup>();
+  const loose: ChatSessionSummary[] = [];
+
+  for (const session of rest) {
+    const project = session.project;
+    if (!project) {
+      loose.push(session);
+      continue;
+    }
+    const group = byDirectory.get(project.directory);
+    if (group) group.sessions.push(session);
+    else byDirectory.set(project.directory, { directory: project.directory, name: project.name, sessions: [session] });
+  }
+
+  return { pinned, projects: [...byDirectory.values()], loose };
+}
+
+/** How many rows carry a quick-switch number. Past this the reference shows a plain dot. */
+export const QUICK_SWITCH_LIMIT = 9;
+
+/**
+ * Every row the sidebar draws, in the order it draws them.
+ *
+ * The quick-switch numbers are positions in THIS list, so they have to come from the same
+ * order the eye reads: numbering each section on its own would put a "1" at the top of the
+ * pinned block and another at the top of every project.
+ */
+export function orderedSessions(sections: SidebarSections): ChatSessionSummary[] {
+  return [...sections.pinned, ...sections.projects.flatMap(group => group.sessions), ...sections.loose];
+}
+
+/** sessionId -> its 1-based quick-switch number, for the first QUICK_SWITCH_LIMIT rows only. */
+export function quickSwitchIndices(ordered: readonly ChatSessionSummary[]): ReadonlyMap<string, number> {
+  const indices = new Map<string, number>();
+  ordered.slice(0, QUICK_SWITCH_LIMIT).forEach((session, position) => indices.set(session.id, position + 1));
+  return indices;
+}

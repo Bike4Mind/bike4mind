@@ -5,15 +5,25 @@ import type {
   ChatMessage,
   ChatModelOption,
   ChatSession,
+  ChatSessionStatus,
   ChatSessionSummary,
+  CreateCodeSessionRequest,
 } from '@shared/chat';
+import { applyStatusEvents } from './sessionStatus';
 
 export interface SessionsController {
   sessions: ChatSessionSummary[];
   loading: boolean;
   reload: () => Promise<void>;
   create: () => Promise<string>;
+  /** Start a Code session. Resolves null when main refused; `codeError` then says why. */
+  createCode: (request: CreateCodeSessionRequest) => Promise<string | null>;
+  /** Set while a Code session is being created - resolving a worktree can take a moment. */
+  creatingCode: boolean;
+  codeError: string | null;
+  clearCodeError: () => void;
   remove: (sessionId: string) => Promise<void>;
+  togglePin: (session: ChatSessionSummary) => Promise<void>;
   /** Apply a summary main just returned, so the sidebar reorders without a full reload. */
   apply: (summary: ChatSessionSummary) => void;
 }
@@ -21,6 +31,8 @@ export interface SessionsController {
 export function useSessions(): SessionsController {
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [creatingCode, setCreatingCode] = useState(false);
+  const [codeError, setCodeError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     const next = await window.b4m.chat.listSessions();
@@ -38,6 +50,22 @@ export function useSessions(): SessionsController {
     return created.id;
   }, []);
 
+  const createCode = useCallback(async (request: CreateCodeSessionRequest) => {
+    setCreatingCode(true);
+    setCodeError(null);
+    try {
+      const result = await window.b4m.chat.createCodeSession(request);
+      if (!result.ok) {
+        setCodeError(result.error);
+        return null;
+      }
+      setSessions(current => [result.session, ...current]);
+      return result.session.id;
+    } finally {
+      setCreatingCode(false);
+    }
+  }, []);
+
   const remove = useCallback(async (sessionId: string) => {
     await window.b4m.chat.deleteSession(sessionId);
     setSessions(current => current.filter(session => session.id !== sessionId));
@@ -47,7 +75,72 @@ export function useSessions(): SessionsController {
     setSessions(current => [summary, ...current.filter(session => session.id !== summary.id)]);
   }, []);
 
-  return { sessions, loading, reload, create, remove, apply };
+  // Patched in place rather than moved to the front: pinning does not touch `updatedAt`, so
+  // reordering the row here would disagree with what the next reload shows.
+  const togglePin = useCallback(async (session: ChatSessionSummary) => {
+    const updated = await window.b4m.chat.setSessionPinned(session.id, !session.pinned);
+    if (!updated) return;
+    setSessions(current => current.map(entry => (entry.id === updated.id ? updated : entry)));
+  }, []);
+
+  const clearCodeError = useCallback(() => setCodeError(null), []);
+
+  return {
+    sessions,
+    loading,
+    reload,
+    create,
+    createCode,
+    creatingCode,
+    codeError,
+    clearCodeError,
+    remove,
+    togglePin,
+    apply,
+  };
+}
+
+/**
+ * What every session is doing, for the sidebar's status badges.
+ *
+ * The renderer does not work this out. Main owns it (see main/chat/SessionActivity) and pushes
+ * it, and this hook only folds those pushes into a map. That division is the whole point: the
+ * state that matters most - a background session parked at the approval gate - produces no
+ * stream events a newly opened window would see, so anything derived here from what this
+ * window happened to witness would draw it as idle.
+ */
+export function useSessionStatuses(): ReadonlyMap<string, ChatSessionStatus> {
+  const [statuses, setStatuses] = useState<ReadonlyMap<string, ChatSessionStatus>>(() => new Map());
+
+  useEffect(() => {
+    let live = true;
+    // Sessions a push has already spoken for. Subscribing BEFORE reading the snapshot is what
+    // stops a change landing in the gap being lost, but it also means the snapshot can resolve
+    // already stale for a session - so it is applied only to sessions no push has covered.
+    const pushed = new Set<string>();
+
+    const unsubscribe = window.b4m.chat.onSessionStatus(event => {
+      pushed.add(event.sessionId);
+      setStatuses(current => applyStatusEvents(current, [event]));
+    });
+
+    void window.b4m.chat.getSessionStatuses().then(snapshot => {
+      if (!live) return;
+      setStatuses(current =>
+        applyStatusEvents(
+          current,
+          snapshot.filter(entry => !pushed.has(entry.sessionId))
+        )
+      );
+    });
+
+    return () => {
+      live = false;
+      unsubscribe();
+    };
+  }, []);
+
+  return statuses;
 }
 
 export interface ModelCatalogController {

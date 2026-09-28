@@ -1,7 +1,8 @@
 # @bike4mind/desktop
 
-Electron desktop client for Bike4Mind. It signs in against a Bike4Mind backend and stops
-there: no chat, no session list, no model picker, no packaging/installer yet.
+Electron desktop client for Bike4Mind. It signs in against a Bike4Mind backend, holds local
+conversations in two modes, and runs local tools behind an approval gate. No
+packaging/installer yet.
 
 The web SPA (`apps/client`) cannot be wrapped: it is a Next.js server-rendered shell that
 hydrates Tanstack Router, not a static bundle. So this app has its own lean renderer
@@ -43,6 +44,88 @@ passthrough, because a passthrough would let renderer code reach every handler m
 registers. The OAuth device flow runs in **main** so tokens never enter the renderer, and
 the IPC contract in `src/shared/ipc.ts` states the invariant that channels may return auth
 *state* but never a token.
+
+## Chat and Code modes
+
+Every conversation has a mode, chosen with the segmented control at the top right.
+
+- **Chat** is the default, and is what every conversation before modes existed reads back as.
+  It is grounded in nothing in particular: its tools use the folders granted under **More**.
+- **Code** adds project grounding. A new Code session asks for a project directory, a branch, a
+  workspace toggle and any extra context directories, and its conversations group under that
+  project in the sidebar.
+
+**Tools are not the difference.** Both modes carry the same file, shell and background-process
+tools. Code mode's distinction is *where* they run.
+
+### The workspace toggle is a git worktree
+
+Off, the session runs in the project directory. On, it runs in a git worktree for the chosen
+branch, following the layout in `~/.config/b4m/worktree.zsh`: worktrees live inside the
+project's own container directory (the parent of the shared git dir), one folder per branch,
+with `/` in the branch name written as `+`.
+
+```
+<container>/.bare              the bare repo
+<container>/main               the main worktree
+<container>/fix+some-branch    one folder per branch
+```
+
+That layout is reimplemented in `src/main/chat/project/workspace.ts` rather than shelled out
+to, because a packaged app cannot assume a personal shell function exists. Nothing ever writes
+to a `../` path, which would scatter folders that read as separate projects.
+
+Three cases it handles rather than failing:
+
+- **The worktree already exists** - adopted, not recreated. A worktree registered for that
+  branch at some *other* path is adopted too, because git allows a branch in exactly one
+  worktree and `worktree add` would otherwise fail against it.
+- **The branch does not exist** - created from `origin/main` (then `origin/master`, then
+  `HEAD`), `--no-track`, matching the shell helper's default.
+- **The branch is the one the main checkout is on** - resolves *to* the main checkout, since
+  git permits nothing else. The resolved path is shown in the header, so the app never claims
+  an isolation it did not get.
+
+**Deleting a session never deletes its worktree.** A worktree can hold uncommitted work, and
+deleting a conversation must not be a way to lose code. Removing one stays a git operation the
+user performs themselves (`rmworktree <branch>`).
+
+### Tools run in the session's working directory
+
+`ChatService.resolveToolScope` puts the session's working directory and its context
+directories at the *front* of the granted roots and passes the working directory on
+`ToolContext`. Everything downstream reads it: `bash_execute` and `bash_background` default
+their cwd to it, `resolveWithinRoots` resolves relative paths against it, and `glob_files` /
+`grep_search` anchor there.
+
+This is load-bearing. Before it, an ungrounded default fell back to `roots[0]` - the first
+folder the user ever granted. For a session bound to a worktree that is the main checkout, so
+commands would have run on the wrong branch while the UI said otherwise. `src/main/chat/tools/
+workingDirectory.test.ts` pins it by making the working directory the *second* root, so any
+regression to `roots[0]` fails.
+
+### Session storage and migration
+
+Sessions gained `mode`, an optional `project` and an optional `pinned`. `SessionStore.parse`
+stays tolerant, as it already was: a file with no `mode` reads back as Chat, which is what
+every pre-existing conversation is. A file claiming `code` with an unusable project is
+downgraded to Chat rather than trusted, because a Code session with no working directory would
+send its tools to whatever the first global grant happens to be.
+
+`SessionStore.modes.test.ts` runs against a session file captured from the pre-change code,
+not a hand-written approximation.
+
+### Sidebar
+
+Adapted from Claude Code desktop's layout: primary nav, a **Pinned** section, then project
+groups with per-group actions (new session, search, settings) and a leading status dot per row
+- filled while a reply streams, hollow when idle. The dot is driven by a global subscription to
+main's stream events, not the open conversation, so a session replying in the background shows
+as running.
+
+Two of its entries have no counterpart here. **Artifacts** is dropped: desktop conversations are
+local and produce none. **Customize** maps onto the folder grants this app already had, which
+moved out of the account panel into the collapsible **More**.
 
 ## Authentication
 

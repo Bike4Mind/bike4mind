@@ -267,12 +267,51 @@ export interface ChatUsage {
   outputTokens?: number;
 }
 
+/**
+ * Chat is the default and is every conversation this client had before modes existed; Code
+ * adds project grounding on top of it.
+ *
+ * Deliberately NOT a tool switch. Both modes carry the same tools - the difference is that a
+ * Code session knows which directory it is about, so its tools run there and its conversations
+ * group under that project in the sidebar.
+ */
+export type ChatSessionMode = 'chat' | 'code';
+
+/**
+ * What a Code session is grounded in, fixed when the session is created.
+ *
+ * `workingDirectory` is the one field the tools read, and it is stored rather than recomputed
+ * because resolving it can CREATE a worktree: recomputing on every turn would either repeat
+ * that work or silently move a conversation to a different checkout halfway through.
+ */
+export interface ChatProject {
+  /** Absolute path the user picked. Also the grouping identity in the sidebar. */
+  directory: string;
+  /** Basename of `directory`, for the group header. */
+  name: string;
+  branch: string;
+  /** True when the session runs in its own git worktree for `branch` rather than in `directory`. */
+  workspace: boolean;
+  /**
+   * Where this session's tools actually run: the worktree when `workspace` is on, and
+   * `directory` when it is off. Always granted to the tools for this session.
+   */
+  workingDirectory: string;
+  /** Extra folders granted to this session alone, on top of `workingDirectory`. */
+  contextDirectories: string[];
+}
+
 interface ChatSessionMeta {
   id: string;
   title: string;
   model: string;
   createdAt: string;
   updatedAt: string;
+  mode: ChatSessionMode;
+  /** Set on Code sessions only. A Chat session has no project and sits outside the groups. */
+  project?: ChatProject;
+  /** Pinned to the top of the sidebar, above both the groups and the loose conversations. */
+  pinned?: boolean;
 }
 
 /** A session without its messages - what the sidebar needs, so a long thread is not loaded to list it. */
@@ -333,6 +372,29 @@ export type ChatStreamEvent =
     }
   | { type: 'background-status'; sessionId: string; process: BackgroundProcessInfo };
 
+/**
+ * What a session is doing, as the sidebar draws it.
+ *
+ * 'needs-action' outranks 'processing' whenever both are true, which they are for the whole
+ * time a tool sits at the approval gate: the turn is still open, but the model is not what is
+ * holding it up - the user is, and they may well be looking at a different conversation.
+ */
+export type ChatSessionStatus = 'processing' | 'needs-action' | 'done';
+
+/**
+ * One session's status changing, pushed main -> renderer.
+ *
+ * Deliberately NOT a member of ChatStreamEvent. That union is per-reply progress aimed at the
+ * open conversation; this is per-session lifecycle for every conversation at once, including
+ * ones with no reply in flight and no window showing them. Keeping them apart means neither
+ * consumer has to filter the other's traffic, and it lets the snapshot channel that seeds this
+ * one carry the same payload shape.
+ */
+export interface ChatSessionStatusEvent {
+  sessionId: string;
+  status: ChatSessionStatus;
+}
+
 export interface SendMessageRequest {
   sessionId: string;
   text: string;
@@ -369,3 +431,40 @@ export interface ToolAccessState {
   /** Absolute paths, each granting its whole subtree. */
   roots: string[];
 }
+
+/**
+ * What the New Code session dialog learned about a directory the user picked.
+ *
+ * `isRepository: false` is not an error: the directory is still usable as a project, it just
+ * has no branches and no worktree to offer, so the dialog hides both controls rather than
+ * refusing the folder.
+ */
+export interface ProjectInspection {
+  directory: string;
+  name: string;
+  isRepository: boolean;
+  branches: string[];
+  currentBranch: string | null;
+  /** Set when git could be asked but answered with a failure; the dialog shows it verbatim. */
+  error?: string;
+}
+
+export interface CreateCodeSessionRequest {
+  directory: string;
+  branch: string;
+  workspace: boolean;
+  contextDirectories?: string[];
+}
+
+/**
+ * `ok: false` carries the reason the session could not be created - almost always a worktree
+ * that could not be made. Nothing is stored when it fails, so there is no half-created session
+ * to clean up.
+ */
+export type CreateCodeSessionResult =
+  | {
+      ok: true;
+      session: ChatSessionSummary;
+      /** Set when an existing worktree was adopted. */ reusedWorkspace?: boolean;
+    }
+  | { ok: false; error: string };

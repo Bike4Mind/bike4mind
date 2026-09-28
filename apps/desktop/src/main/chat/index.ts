@@ -1,7 +1,15 @@
-import { join } from 'node:path';
-import { app, BrowserWindow, dialog, ipcMain, nativeImage } from 'electron';
+import { basename, join, resolve } from 'node:path';
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, type WebContents } from 'electron';
 import { ChatModels } from '@bike4mind/common';
-import type { ChatApprovalDecision, ChatAttachmentInput, ChatStreamEvent, SendMessageRequest } from '@shared/chat';
+import type {
+  ChatApprovalDecision,
+  ChatAttachmentInput,
+  ChatSessionStatusEvent,
+  ChatStreamEvent,
+  CreateCodeSessionRequest,
+  ProjectInspection,
+  SendMessageRequest,
+} from '@shared/chat';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
@@ -11,7 +19,9 @@ import { ChatService } from './ChatService';
 import { MediaStore } from './media/MediaStore';
 import { registerMediaProtocol } from './media/protocol';
 import { ModelCatalog } from './ModelCatalog';
+import { SessionActivity } from './SessionActivity';
 import { SessionStore } from './SessionStore';
+import { currentBranch, isGitRepository, listBranches, projectDisplayName } from './project/git';
 import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
@@ -73,13 +83,20 @@ export interface RegisteredChat {
   background: BackgroundProcessRegistry;
 }
 
+/** The OS folder picker, parented to the window that asked when there is one. */
+async function pickDirectory(sender: WebContents): Promise<string | null> {
+  const window = BrowserWindow.fromWebContents(sender);
+  const properties: ('openDirectory' | 'createDirectory')[] = ['openDirectory', 'createDirectory'];
+  const picked = await (window ? dialog.showOpenDialog(window, { properties }) : dialog.showOpenDialog({ properties }));
+  return picked.canceled || picked.filePaths.length === 0 ? null : picked.filePaths[0];
+}
+
 export function registerChat(auth: AuthService): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
   const userData = app.getPath('userData');
   const store = new SessionStore(join(userData, 'sessions'), PREFERRED_MODEL);
   const access = new AccessStore(join(userData, 'tool-access.json'));
   const attachments = new AttachmentStore(join(userData, 'attachments'), logger, shrinkImage);
-  const approvals = new ApprovalGate();
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
   const models = new ModelCatalog({
@@ -88,11 +105,23 @@ export function registerChat(auth: AuthService): RegisteredChat {
     getEnvironmentUrl: () => auth.getState().environment.url,
   });
 
-  const broadcast = (event: ChatStreamEvent) => {
+  const send = (channel: string, payload: unknown) => {
     for (const window of BrowserWindow.getAllWindows()) {
-      window.webContents.send(IPC_CHANNELS.chatStreamEvent, event);
+      window.webContents.send(channel, payload);
     }
   };
+
+  const broadcast = (event: ChatStreamEvent) => send(IPC_CHANNELS.chatStreamEvent, event);
+
+  // Declared before the two things that feed it, because both take it as a constructor
+  // argument: the gate reports who is waiting on the user, the service reports who is
+  // replying, and this turns the pair into the one status a sidebar row draws.
+  const activity = new SessionActivity((event: ChatSessionStatusEvent) => send(IPC_CHANNELS.chatSessionStatus, event));
+
+  const approvals = new ApprovalGate({
+    requested: sessionId => activity.approvalRequested(sessionId),
+    settled: sessionId => activity.approvalSettled(sessionId),
+  });
 
   // Output and status go out on the same channel as reply tokens: a background process is
   // still something that conversation is doing, and a renderer that reloads re-subscribes to
@@ -113,6 +142,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     approvals,
     background,
     media,
+    activity,
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which is T4's invariant broken through a side door.
     protectedPaths: [userData],
@@ -125,8 +155,50 @@ export function registerChat(auth: AuthService): RegisteredChat {
   ipcMain.handle(IPC_CHANNELS.chatSetSessionModel, (_event, sessionId: string, model: string) =>
     service.setSessionModel(sessionId, model)
   );
+  ipcMain.handle(IPC_CHANNELS.chatSetSessionPinned, (_event, sessionId: string, pinned: boolean) =>
+    service.setSessionPinned(sessionId, pinned)
+  );
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
+  ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => service.sessionStatuses());
   ipcMain.handle(IPC_CHANNELS.chatCreateSession, () => service.createSession());
+  ipcMain.handle(IPC_CHANNELS.chatCreateCodeSession, (_event, request: CreateCodeSessionRequest) =>
+    service.createCodeSession(request)
+  );
+
+  ipcMain.handle(IPC_CHANNELS.chatPickProjectDirectory, (event): Promise<string | null> => pickDirectory(event.sender));
+
+  // Reading branches is a git call on a path the user just chose in a native dialog, so it is
+  // not gated: nothing here writes, and the alternative is a branch field the user must type
+  // from memory.
+  ipcMain.handle(IPC_CHANNELS.chatInspectProject, async (_event, directory: string): Promise<ProjectInspection> => {
+    const resolved = resolve(directory);
+    if (!(await isGitRepository(resolved))) {
+      return { directory: resolved, name: basename(resolved), isRepository: false, branches: [], currentBranch: null };
+    }
+    const base = { directory: resolved, name: await projectDisplayName(resolved) };
+    try {
+      const [branches, head] = await Promise.all([listBranches(resolved), currentBranch(resolved)]);
+      return { ...base, isRepository: true, branches, currentBranch: head };
+    } catch (err) {
+      return {
+        ...base,
+        isRepository: true,
+        branches: [],
+        currentBranch: null,
+        error: err instanceof Error ? err.message : 'Could not read this repository.',
+      };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.chatAddContextDirectory, async (event, sessionId: string) => {
+    const directory = await pickDirectory(event.sender);
+    if (!directory) return null;
+    return service.addContextDirectory(sessionId, directory);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.chatRemoveContextDirectory, (_event, sessionId: string, directory: string) =>
+    service.removeContextDirectory(sessionId, directory)
+  );
   ipcMain.handle(IPC_CHANNELS.chatGetSession, (_event, sessionId: string) => service.getSession(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatRenameSession, (_event, sessionId: string, title: string) =>
     service.renameSession(sessionId, title)

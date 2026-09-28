@@ -1,20 +1,36 @@
+import { useState } from 'react';
 import Alert from '@mui/joy/Alert';
-import Box from '@mui/joy/Box';
+import Avatar from '@mui/joy/Avatar';
 import Button from '@mui/joy/Button';
+import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
-import { FolderAccess } from '../chat/FolderAccess';
+import { ChevronIcon, GearIcon } from '../chat/icons';
 import { RuntimeInfo } from '../components/RuntimeInfo';
 
+/** Two letters for the avatar. Falls back to one, then to nothing, rather than to a stray '?'. */
+function initials(name: string): string {
+  const parts = name.split(/[\s._@-]+/).filter(Boolean);
+  if (parts.length === 0) return '';
+  const letters = parts.length > 1 ? parts[0][0] + parts[1][0] : parts[0].slice(0, 2);
+  return letters.toUpperCase();
+}
+
 /**
- * The account strip under the session list: who is signed in, where, and the way out.
+ * The account strip at the foot of the sidebar: who is signed in, where, and the way out.
  *
- * Compact on purpose - now that chat owns the window, identity is context rather than the
- * subject. The blocked states (storage, identity errors) still surface here, because nothing
- * else in the chat UI would explain why replies suddenly stop working.
+ * Laid out like Claude Code desktop's - avatar, name over organization, a chevron for the
+ * account menu and a settings control on the right. "Organization" is the b4m ENVIRONMENT
+ * here, which is the nearest true thing: the desktop identity has no org field, and where the
+ * account lives (hosted, or a self-hosted stack) is what a user actually needs to see to know
+ * which deployment a reply came from.
+ *
+ * The blocked states still surface here, because nothing else in the chat UI would explain why
+ * replies suddenly stop working.
  */
 export function SignedInPanel({ state }: { state: AuthState }) {
+  const [open, setOpen] = useState(false);
   const user = state.user;
   const displayName = user?.nickname || user?.username || user?.email || user?.id || 'Signed in';
 
@@ -49,8 +65,11 @@ export function SignedInPanel({ state }: { state: AuthState }) {
         </Alert>
       )}
 
-      <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-        <Stack sx={{ minWidth: 0 }}>
+      <Stack direction="row" spacing={1} alignItems="center">
+        <Avatar size="sm" variant="soft" color="primary">
+          {initials(displayName)}
+        </Avatar>
+        <Stack sx={{ flex: 1, minWidth: 0 }}>
           <Typography level="body-sm" noWrap data-testid="auth-status-chip">
             {displayName}
           </Typography>
@@ -58,28 +77,43 @@ export function SignedInPanel({ state }: { state: AuthState }) {
             {state.environment.label}
           </Typography>
         </Stack>
-        <Button
+        <IconButton
           size="sm"
           variant="plain"
           color="neutral"
-          loading={state.busy === 'signing-out'}
-          onClick={() => void window.b4m.auth.signOut()}
-          data-testid="auth-signout-btn"
+          aria-label={open ? 'Hide account options' : 'Show account options'}
+          onClick={() => setOpen(current => !current)}
+          data-testid="account-menu-btn"
         >
-          Sign out
-        </Button>
+          <ChevronIcon open={open} />
+        </IconButton>
+        <IconButton
+          size="sm"
+          variant="plain"
+          color="neutral"
+          aria-label="Account settings"
+          onClick={() => void window.b4m.auth.openAccountPage('verification')}
+          data-testid="account-settings-btn"
+        >
+          <GearIcon />
+        </IconButton>
       </Stack>
 
-      <FolderAccess />
-
-      <Box component="details">
-        <Typography component="summary" level="body-xs" textColor="text.tertiary" sx={{ cursor: 'pointer' }}>
-          Runtime
-        </Typography>
-        <Box sx={{ pt: 1 }}>
+      {open && (
+        <Stack spacing={1} data-testid="account-menu">
+          <Button
+            size="sm"
+            variant="soft"
+            color="neutral"
+            loading={state.busy === 'signing-out'}
+            onClick={() => void window.b4m.auth.signOut()}
+            data-testid="auth-signout-btn"
+          >
+            Sign out
+          </Button>
           <RuntimeInfo />
-        </Box>
-      </Box>
+        </Stack>
+      )}
     </Stack>
   );
 }

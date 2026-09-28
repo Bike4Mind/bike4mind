@@ -178,10 +178,20 @@ function formatOutcome(command: string, cwd: string, timeoutMs: number, outcome:
  * Where the command runs. The model may name a directory, but only one inside a granted root:
  * the sandbox lets it WRITE nowhere else, and starting it somewhere unrelated would just be a
  * confusing way to fail.
+ *
+ * The default is the session's working directory when it has one. Falling back to `roots[0]`
+ * for a Code session would run the command in whichever folder was granted first - for a
+ * session bound to a worktree, that is the main checkout, which is exactly the confusion this
+ * mode exists to remove.
  */
-export async function resolveCwd(input: Record<string, unknown>, roots: readonly string[]): Promise<string> {
+export async function resolveCwd(
+  input: Record<string, unknown>,
+  roots: readonly string[],
+  workingDirectory?: string
+): Promise<string> {
   const requested = typeof input.cwd === 'string' && input.cwd.length > 0 ? input.cwd : null;
-  if (requested) return resolveWithinRoots(requested, roots);
+  if (requested) return resolveWithinRoots(requested, roots, workingDirectory);
+  if (workingDirectory) return workingDirectory;
   if (roots.length === 0) throw new Error('No folder has been shared, so there is nowhere to run a command.');
   return roots[0];
 }
@@ -249,7 +259,7 @@ export const bashExecute: ToolDefinition = {
       throw new Error('Commands cannot be run on this machine: the macOS sandbox is unavailable.');
     }
 
-    const cwd = await resolveCwd(input, context.roots);
+    const cwd = await resolveCwd(input, context.roots, context.workingDirectory);
     const requestedTimeout = optionalNumber(input, 'timeout');
     const timeoutMs = Math.min(Math.max(requestedTimeout ?? DEFAULT_TIMEOUT_MS, 1_000), MAX_TIMEOUT_MS);
 

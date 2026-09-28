@@ -48,6 +48,16 @@ export interface ToolReporter {
 export interface ToolContext {
   /** Granted roots. Empty means the user has allowed nothing, and every path tool denies. */
   roots: readonly string[];
+  /**
+   * Where this session's work happens: a Code session's resolved working directory, which is
+   * its worktree when the workspace toggle is on. Commands default to running here and
+   * relative paths resolve against it.
+   *
+   * Absent for a Chat session, which is grounded in nothing in particular and falls back to the
+   * first granted root. This field is the whole reason a Code session bound to a worktree does
+   * not quietly run its commands in the main checkout.
+   */
+  workingDirectory?: string;
   signal: AbortSignal;
   /**
    * Paths the app protects whatever the user granted - its own userData above all, which holds

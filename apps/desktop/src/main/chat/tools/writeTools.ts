@@ -27,7 +27,7 @@ const MAX_WRITE_BYTES = 1_000_000;
  * a root can be revoked, or a path replaced with a symlink, while the prompt is on screen.
  */
 async function resolveWritablePath(requested: string, context: ToolContext): Promise<string> {
-  const target = await resolveWithinRoots(requested, context.roots);
+  const target = await resolveWithinRoots(requested, context.roots, context.workingDirectory);
   const real = await realpathNearest(target);
 
   for (const guarded of [...(context.protectedPaths ?? []), ...credentialPaths()]) {

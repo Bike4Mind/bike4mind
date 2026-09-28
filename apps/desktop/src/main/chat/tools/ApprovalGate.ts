@@ -14,6 +14,19 @@ interface PendingApproval {
 }
 
 /**
+ * Told when a session starts and stops waiting on the user, so the sidebar can say so.
+ *
+ * Reported from here rather than inferred from the tool-call events, because those are aimed
+ * at one open conversation: the gate is what actually knows a background session is blocked.
+ * Paired exactly - `settled` fires once for each `requested`, on every exit including timeout,
+ * abort and dispose.
+ */
+export interface ApprovalGateListener {
+  requested(sessionId: string): void;
+  settled(sessionId: string): void;
+}
+
+/**
  * The user's consent for tool calls that change something or run code.
  *
  * This is the whole boundary for shell execution. The sandbox confines WRITES to the granted
@@ -27,6 +40,8 @@ export class ApprovalGate {
 
   /** sessionId -> request keys the user chose 'always' for. In memory only, by design. */
   private readonly standing = new Map<string, Set<string>>();
+
+  constructor(private readonly listener?: ApprovalGateListener) {}
 
   isStanding(sessionId: string, key: string): boolean {
     return this.standing.get(sessionId)?.has(key) ?? false;
@@ -46,6 +61,10 @@ export class ApprovalGate {
 
     return new Promise<ChatApprovalDecision>(resolve => {
       let done = false;
+      // Whether the user was ever actually asked. The aborted-before-announce path settles
+      // without asking, and reporting that as a settled request would leave the sidebar
+      // counting an ask that never happened.
+      let announced = false;
       const settle = (decision: ChatApprovalDecision) => {
         if (done) return;
         done = true;
@@ -53,6 +72,7 @@ export class ApprovalGate {
         signal.removeEventListener('abort', onAbort);
         this.pending.delete(approvalId);
         if (decision === 'always') this.remember(sessionId, key);
+        if (announced) this.listener?.settled(sessionId);
         resolve(decision);
       };
 
@@ -68,6 +88,8 @@ export class ApprovalGate {
         return;
       }
 
+      announced = true;
+      this.listener?.requested(sessionId);
       announce(approvalId);
     });
   }

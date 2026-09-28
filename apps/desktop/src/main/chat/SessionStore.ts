@@ -1,7 +1,7 @@
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
-import type { ChatMessage, ChatSession, ChatSessionSummary } from '@shared/chat';
+import { basename, join } from 'node:path';
+import type { ChatMessage, ChatProject, ChatSession, ChatSessionSummary } from '@shared/chat';
 
 /** Session ids are generated here, but arrive back from the renderer over IPC - see `filePath`. */
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -32,6 +32,30 @@ function summarize(session: ChatSession): ChatSessionSummary {
 }
 
 /**
+ * A stored project binding, or null when it is not one the tools could be pointed at.
+ *
+ * `workingDirectory` and `directory` are both required because they are what the tools root
+ * themselves at; a partial binding is dropped and the session reads back as Chat, which is the
+ * safe direction - it loses the grouping, not the conversation.
+ */
+function normalizeProject(value: unknown): ChatProject | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Partial<ChatProject>;
+  if (typeof raw.directory !== 'string' || !raw.directory) return null;
+  if (typeof raw.workingDirectory !== 'string' || !raw.workingDirectory) return null;
+  return {
+    directory: raw.directory,
+    name: typeof raw.name === 'string' && raw.name ? raw.name : basename(raw.directory),
+    branch: typeof raw.branch === 'string' ? raw.branch : '',
+    workspace: raw.workspace === true,
+    workingDirectory: raw.workingDirectory,
+    contextDirectories: Array.isArray(raw.contextDirectories)
+      ? raw.contextDirectories.filter((entry): entry is string => typeof entry === 'string')
+      : [],
+  };
+}
+
+/**
  * Conversations as one JSON file per session, mirroring the CLI's `~/.bike4mind/sessions`.
  *
  * Local because the completion endpoint this client uses is stateless; see @shared/chat.
@@ -55,15 +79,22 @@ export class SessionStore {
   /**
    * `model` is what the caller resolved against the server's catalog; omitting it falls back to
    * the build's preferred model, which is the right answer only until that catalog is readable.
+   *
+   * `project` makes it a Code session. It is fixed here rather than settable later, because the
+   * working directory it names is what the tools have been running in.
    */
-  async create(model?: string): Promise<ChatSessionSummary> {
+  async create(model?: string, project?: ChatProject): Promise<ChatSessionSummary> {
     const now = new Date().toISOString();
     const session: ChatSession = {
       id: randomUUID(),
+      // Left untitled even for a Code session: the project name is already the group header it
+      // sits under, so the row itself is still best named after the first thing asked.
       title: UNTITLED,
       model: model || this.defaultModel,
       createdAt: now,
       updatedAt: now,
+      mode: project ? 'code' : 'chat',
+      ...(project ? { project } : {}),
       messages: [],
     };
     await this.write(session);
@@ -147,6 +178,45 @@ export class SessionStore {
     await this.write(session);
   }
 
+  /**
+   * Pin or unpin a conversation.
+   *
+   * Leaves `updatedAt` alone: pinning is about where a row sits, and bumping the timestamp
+   * would also reorder it within its section, which is not what the user asked for.
+   */
+  async setPinned(id: string, pinned: boolean): Promise<ChatSessionSummary | null> {
+    const session = await this.get(id);
+    if (!session) return null;
+    if (pinned) session.pinned = true;
+    else delete session.pinned;
+    await this.write(session);
+    return summarize(session);
+  }
+
+  /** Grant one more folder to a Code session alone. No-op for a Chat session, which has no project. */
+  async addContextDirectory(id: string, directory: string): Promise<ChatSessionSummary | null> {
+    const session = await this.get(id);
+    if (!session?.project) return null;
+    if (!session.project.contextDirectories.includes(directory)) {
+      session.project.contextDirectories.push(directory);
+      await this.write(session);
+    }
+    return summarize(session);
+  }
+
+  async removeContextDirectory(id: string, directory: string): Promise<ChatSessionSummary | null> {
+    const session = await this.get(id);
+    if (!session?.project) return null;
+    session.project.contextDirectories = session.project.contextDirectories.filter(entry => entry !== directory);
+    await this.write(session);
+    return summarize(session);
+  }
+
+  /**
+   * Forget the conversation. Deliberately does NOT touch the project directory or its worktree:
+   * a worktree can hold uncommitted work, and deleting a chat must never be a way to lose code.
+   * Removing one stays a git operation the user performs themselves (`rmworktree <branch>`).
+   */
   async delete(id: string): Promise<void> {
     await rm(this.filePath(id), { force: true });
   }
@@ -192,12 +262,20 @@ export class SessionStore {
     const now = new Date().toISOString();
     // Tolerant rather than schema-validated: these are this app's own files, and a field added
     // in a later version must not make an existing conversation unreadable.
+    const project = normalizeProject(parsed.project);
     return {
       id: parsed.id ?? id,
       title: parsed.title || UNTITLED,
       model: parsed.model || this.defaultModel,
       createdAt: parsed.createdAt ?? now,
       updatedAt: parsed.updatedAt ?? parsed.createdAt ?? now,
+      // Every session written before modes existed is a Chat session, which is why 'chat' is
+      // the fallback and not merely the default for new ones. A file claiming 'code' without a
+      // usable project is downgraded rather than trusted: a Code session with no working
+      // directory would send its tools to whatever the first global grant happens to be.
+      mode: parsed.mode === 'code' && project ? 'code' : 'chat',
+      ...(parsed.mode === 'code' && project ? { project } : {}),
+      ...(parsed.pinned ? { pinned: true } : {}),
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
       ...(typeof parsed.remoteSessionId === 'string' ? { remoteSessionId: parsed.remoteSessionId } : {}),
     };
