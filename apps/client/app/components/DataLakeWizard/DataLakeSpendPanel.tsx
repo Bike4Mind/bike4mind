@@ -22,7 +22,7 @@ type DayRange = (typeof DAY_RANGES)[number];
 const microToUsd = (microUsd: number) => microUsd / 1_000_000;
 
 /**
- * #3298: research-run judge cost was invisible on this tab even after it started reaching the
+ * Research-run judge cost was invisible on this tab even after it started reaching the
  * ledger, because nothing distinguished it from ingestion spend in the totals above. Today,
  * `dataLakeId` is attached to a UsageEvent only by `fabFileVectorize.ts` (`'embedding'`) and
  * `runLakeResearch.ts` (`'operations'`, see `recordOperationalUsage`'s own doc comment) - so
