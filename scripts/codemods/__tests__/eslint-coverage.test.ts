@@ -94,6 +94,48 @@ describe('B4Mv3 ESLint import guards', () => {
   });
 });
 
+describe('apps/workers <-> apps/client import boundary', () => {
+  let eslint: ESLint;
+
+  beforeAll(() => {
+    eslint = new ESLint({ cwd: ROOT });
+  });
+
+  async function lint(code: string, relativeFilePath: string) {
+    const results = await eslint.lintText(code, {
+      filePath: path.join(ROOT, relativeFilePath),
+    });
+    return results[0].messages;
+  }
+
+  function hasRestrictedImportError(messages: Awaited<ReturnType<typeof lint>>) {
+    return messages.some(m => m.ruleId === 'no-restricted-imports' && m.severity === 2);
+  }
+
+  it('flags apps/client importing from apps/workers via the @workers/* alias', async () => {
+    const messages = await lint(`import x from '@workers/events/spider';`, 'apps/client/server/foo.ts');
+    expect(hasRestrictedImportError(messages)).toBe(true);
+  });
+
+  it('flags apps/workers importing UI code (react)', async () => {
+    const messages = await lint(`import { useState } from 'react';`, 'apps/workers/src/events/foo.ts');
+    expect(hasRestrictedImportError(messages)).toBe(true);
+  });
+
+  it('does not flag apps/workers importing apps/client/server code via the @server/* bridge', async () => {
+    const messages = await lint(`import { Config } from '@server/utils/config';`, 'apps/workers/src/events/foo.ts');
+    expect(hasRestrictedImportError(messages)).toBe(false);
+  });
+
+  // Proves the apps/workers block's no-restricted-imports options (paths + patterns) were merged
+  // onto the pre-existing Overwatch/B4Mv3 restrictions rather than replacing them - flat-config
+  // no-restricted-imports is last-rule-wins per file, so a careless merge would silently drop this.
+  it('still flags apps/workers reaching into Overwatch internals (pre-existing Overwatch barrier)', async () => {
+    const messages = await lint(`import x from '@server/overwatch/services/foo';`, 'apps/workers/src/events/foo.ts');
+    expect(hasRestrictedImportError(messages)).toBe(true);
+  });
+});
+
 describe('CI gate backstop — error-severity rules that must stay at error', () => {
   let eslint: ESLint;
 
