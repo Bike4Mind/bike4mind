@@ -6,6 +6,7 @@ import {
   supportedChatModels,
 } from '@bike4mind/common';
 import { handleLLMCommand } from '@client/app/components/commands/LLMCommand';
+import { selectTurnPreferences } from '@client/app/components/commands/turnPreferences';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
@@ -422,6 +423,7 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
   const [model, max_tokens, tools, organizationId, enabledMcpServers] = useLLM(
     useShallow(s => [s.model, s.max_tokens, s.tools, s.organizationId, s.enabledMcpServers])
   );
+  const turnPreferences = useLLM(useShallow(selectTurnPreferences));
   const updateQuestProgress = useUpdateQuestProgress();
 
   // Track which task is currently being started to prevent race conditions
@@ -552,6 +554,8 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
           tools,
           max_tokens,
           organizationId,
+          mcpServers: enabledMcpServers ?? undefined,
+          ...turnPreferences,
           questMaster: {
             questMasterPlanId,
             questId: mainTaskId,
@@ -593,6 +597,8 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
       tools,
       max_tokens,
       organizationId,
+      turnPreferences,
+      enabledMcpServers,
     ]
   );
 
@@ -670,6 +676,7 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
           tools,
           max_tokens,
           organizationId,
+          ...turnPreferences,
           mcpServers: enabledMcpServers ?? undefined,
           questMaster: {
             questMasterPlanId,
@@ -697,6 +704,7 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
       tools,
       max_tokens,
       organizationId,
+      turnPreferences,
       enabledMcpServers,
       questMasterPlanId,
       updateQuestProgress,
@@ -752,6 +760,7 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
         tools: ['deep_research'],
         max_tokens,
         organizationId,
+        ...turnPreferences,
         mcpServers: enabledMcpServers ?? undefined,
         deepResearchConfig: {
           maxDepth: 5,
@@ -780,6 +789,7 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
       queryClient,
       max_tokens,
       organizationId,
+      turnPreferences,
       enabledMcpServers,
       questMasterPlanId,
       updateQuestProgress,
@@ -824,6 +834,7 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
           tools,
           max_tokens,
           organizationId,
+          ...turnPreferences,
           mcpServers: enabledMcpServers ?? undefined,
         });
       } catch (error) {
@@ -841,6 +852,7 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
       tools,
       max_tokens,
       organizationId,
+      turnPreferences,
       enabledMcpServers,
     ]
   );
