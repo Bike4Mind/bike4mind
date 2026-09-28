@@ -34,6 +34,7 @@ on:
           - Search
           - Data Lake
           - Skills
+          - Credits
           - WebSocket Auth
         default: All tests
       pr_number:
@@ -88,6 +89,7 @@ jobs:
             "Search")           ARGS="--project=search" ;;
             "Data Lake")        ARGS="--project=data-lake" ;;
             "Skills")           ARGS="--project=skills" ;;
+            "Credits")          ARGS="--project=credits" ;;
             "WebSocket Auth")   ARGS="--project=websocket-auth" ;;
             *)                  ARGS="" ; echo "Unknown selection '$TEST_PROJECT' — running full suite" ;;
           esac
