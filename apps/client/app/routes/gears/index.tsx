@@ -1,4 +1,5 @@
 import { Box, Button, Card, Chip, chipClasses, Stack, TabList, TabPanel, Tabs, Tooltip, Typography } from '@mui/joy';
+import type { Theme } from '@mui/joy/styles';
 import { useNavigate } from '@tanstack/react-router';
 import { cloneElement, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -99,6 +100,34 @@ const GEAR_ICONS: Partial<Record<GearKey, React.ReactElement>> = {
 /** The reward as prose, for the tooltips: the chip shows the bare number. */
 const creditText = (gear: GearStatus) => `${gear.credits.toLocaleString()} credit${gear.credits === 1 ? '' : 's'}`;
 
+type RewardState = 'locked' | 'claimable' | 'pending' | 'claimed';
+
+const rewardState = (gear: GearStatus): RewardState => {
+  if (!gear.unlocked) return 'locked';
+  return gear.rewardPending ? 'pending' : 'claimed';
+};
+
+/** The green a claimable reward is painted in, for the chip and the claim line. */
+const rewardGreen = (theme: Theme) => {
+  // green[800] carries the dark surface at about 6:1, but the light one is near
+  // white and drops it to 2.4:1 - the darker step of the same green clears AA
+  // there. On the white card a solid stroke draws a hard box round the chip, so
+  // light mode gets a tint instead - the same trick the theme's border.soft uses.
+  const dark = theme.palette.mode === 'dark';
+  // The fill steps down in dark mode, where the same 10% glows against the surface.
+  return {
+    ink: dark ? green[800] : green[950],
+    stroke: dark ? green[800] : greenAlpha[800][30],
+    fill: dark ? greenAlpha[800][6] : greenAlpha[800][10],
+  };
+};
+
+/** The frame shared by the locked and claimed markers. */
+const neutralFrame = (theme: Theme) => ({
+  backgroundColor: grayAlpha[150][10],
+  border: `1px solid ${theme.palette.border.muted}`,
+});
+
 /**
  * Each glyph's own bounds inside MUI's 24x24 box, measured with getBBox and
  * squared off, used as the icon's viewBox.
@@ -183,6 +212,10 @@ const GearsPage = () => {
   // Guard against double-toasting in strict mode / refetches.
   const toastedRef = useRef(false);
 
+  // No gear reaches 'claimable' yet: the status endpoint still pays out the moment
+  // it sees an unlock. The claim endpoint makes the state real and wires this up.
+  const claim = (_gear: GearStatus) => undefined;
+
   // Same gating as the sidenav: a gear whose feature is off for this deployment
   // isn't offered at all (it would dead-end on gated endpoints).
   const gearVisible = (key: GearKey) => {
@@ -258,89 +291,90 @@ const GearsPage = () => {
           gap: 2,
         }}
       >
-        {cards.map(gear => (
-          // Every card looks the same whether or not its gear is earned: the page is
-          // a place to read about features, and a checkmark grid turns it into a
-          // score. The unlock still happens and still pays - it just is not what
-          // this surface is for.
-          // The whole card is the control, as in Tutorials: a solid Button per card
-          // painted a grid of twenty-odd primary rectangles, which reads as twenty
-          // equally urgent calls to action rather than a list to browse.
-          <Card
-            key={gear.key}
-            variant="outlined"
-            data-testid={`gear-card-${gear.key}`}
-            role="button"
-            tabIndex={0}
-            onClick={() => act(gear)}
-            onKeyDown={event => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                act(gear);
-              }
-            }}
-            sx={theme => ({
-              display: 'flex',
-              flexDirection: 'column',
-              // Joy paints both a Card and PageFrame's Sheet with background.surface,
-              // so without this the card would sit on its own colour in light mode and
-              // read as a 1px outline on a flat sheet. White is a step past the theme's
-              // body grey, to lift the card off the frame rather than just clear it.
-              backgroundColor: theme.palette.mode === 'dark' ? theme.palette.background.body : gray[0],
-              // The softest step of the border scale, as on TutorialCard: `divider`
-              // is the app's full-strength rule and reads as drawn lines across a
-              // grid of thirty cards.
-              borderColor: theme.palette.border.soft,
-              // Spacing is per-child rather than a single column gap: the steps down
-              // the card differ, so each margin is the gap above that element.
-              gap: 0,
-              cursor: 'pointer',
-              transition:
-                'background-color 0.18s ease-out, border-color 0.18s ease-out, transform 0.22s cubic-bezier(0.2, 0.8, 0.3, 1)',
-              '&:hover': {
-                backgroundColor: theme.palette.loginRegister.termsAndPrivacy.hoverBg,
-                borderColor: theme.palette.border.light,
-                transform: 'translateY(-2px)',
-              },
-              '@media (prefers-reduced-motion: reduce)': {
-                transition: 'background-color 0.18s ease-out, border-color 0.18s ease-out',
-                '&:hover': { transform: 'none' },
-              },
-              '&:focus-visible': {
-                outline: `2px solid ${theme.palette.primary[500]}`,
-                outlineOffset: '2px',
-              },
-            })}
-          >
-            <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}>
-              {/* GEAR_ICONS holds bare elements, so size and colour are set once
+        {cards.map(gear => {
+          const reward = rewardState(gear);
+          return (
+            // Every card looks the same whether or not its gear is earned: the page is
+            // a place to read about features, and a checkmark grid turns it into a
+            // score. The unlock still happens and still pays - it just is not what
+            // this surface is for.
+            // The whole card is the control, as in Tutorials: a solid Button per card
+            // painted a grid of twenty-odd primary rectangles, which reads as twenty
+            // equally urgent calls to action rather than a list to browse.
+            <Card
+              key={gear.key}
+              variant="outlined"
+              data-testid={`gear-card-${gear.key}`}
+              role="button"
+              tabIndex={0}
+              onClick={() => act(gear)}
+              onKeyDown={event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  act(gear);
+                }
+              }}
+              sx={theme => ({
+                display: 'flex',
+                flexDirection: 'column',
+                // Joy paints both a Card and PageFrame's Sheet with background.surface,
+                // so without this the card would sit on its own colour in light mode and
+                // read as a 1px outline on a flat sheet. White is a step past the theme's
+                // body grey, to lift the card off the frame rather than just clear it.
+                backgroundColor: theme.palette.mode === 'dark' ? theme.palette.background.body : gray[0],
+                // The softest step of the border scale, as on TutorialCard: `divider`
+                // is the app's full-strength rule and reads as drawn lines across a
+                // grid of thirty cards.
+                borderColor: theme.palette.border.soft,
+                // Spacing is per-child rather than a single column gap: the steps down
+                // the card differ, so each margin is the gap above that element.
+                gap: 0,
+                cursor: 'pointer',
+                transition:
+                  'background-color 0.18s ease-out, border-color 0.18s ease-out, transform 0.22s cubic-bezier(0.2, 0.8, 0.3, 1)',
+                '&:hover': {
+                  backgroundColor: theme.palette.loginRegister.termsAndPrivacy.hoverBg,
+                  borderColor: theme.palette.border.light,
+                  transform: 'translateY(-2px)',
+                },
+                '@media (prefers-reduced-motion: reduce)': {
+                  transition: 'background-color 0.18s ease-out, border-color 0.18s ease-out',
+                  '&:hover': { transform: 'none' },
+                },
+                '&:focus-visible': {
+                  outline: `2px solid ${theme.palette.primary[500]}`,
+                  outlineOffset: '2px',
+                },
+              })}
+            >
+              <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}>
+                {/* GEAR_ICONS holds bare elements, so size and colour are set once
                 here rather than repeated on every entry in the map. */}
-              <Stack direction="row" alignItems="center" gap={1}>
-                <Box
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    width: `${ICON_SLOT}px`,
-                    height: `${ICON_SLOT}px`,
-                    flexShrink: 0,
-                    // Tertiary because an icon at title strength competes with the
-                    // title beside it, thirty times over.
-                    color: 'text.tertiary',
-                    '& > svg': { fontSize: `${ICON_BOX}px` },
-                  }}
-                >
-                  {cloneElement(GEAR_ICONS[gear.key] ?? <SettingsOutlinedIcon />, {
-                    viewBox: GLYPH_VIEWBOX[gear.key] ?? '2 2 20 20',
-                  })}
-                </Box>
-                <Typography level="title-md">{gear.title}</Typography>
-              </Stack>
-              {/* The ONLY thing on the card that knows whether the gear is earned.
+                <Stack direction="row" alignItems="center" gap={1}>
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: `${ICON_SLOT}px`,
+                      height: `${ICON_SLOT}px`,
+                      flexShrink: 0,
+                      // Tertiary because an icon at title strength competes with the
+                      // title beside it, thirty times over.
+                      color: 'text.tertiary',
+                      '& > svg': { fontSize: `${ICON_BOX}px` },
+                    }}
+                  >
+                    {cloneElement(GEAR_ICONS[gear.key] ?? <SettingsOutlinedIcon />, {
+                      viewBox: GLYPH_VIEWBOX[gear.key] ?? '2 2 20 20',
+                    })}
+                  </Box>
+                  <Typography level="title-md">{gear.title}</Typography>
+                </Stack>
+                {/* The ONLY thing on the card that knows whether the gear is earned.
                 The card itself stays identical either way - greying the whole
                 card out said "this is spent", when what is spent is the reward. */}
-              {gear.unlocked ? (
-                gear.rewardPending ? (
+                {reward === 'pending' && (
                   <Tooltip title="Reward not claimed yet">
                     <Chip
                       size="sm"
@@ -350,25 +384,21 @@ const GearsPage = () => {
                       data-testid={`gear-pending-${gear.key}`}
                       // Joy sets gap as a plain declaration per size (3px on sm), not
                       // as a variable, so it is overridden directly.
-                      sx={{ gap: '6px', '--Chip-minHeight': '24px' }}
+                      sx={{ gap: '6px', '--Chip-minHeight': '24px', fontSize: '13px' }}
                     >
                       {gear.credits.toLocaleString()}
                     </Chip>
                   </Tooltip>
-                ) : (
-                  // The checkmark stands for a claimed reward, so it waits for the
-                  // payout rather than the unlock - and it is the only trace of the
-                  // amount, the chip that carried the number being gone by then.
+                )}
+                {reward === 'claimed' && (
                   <Tooltip title={`Reward claimed - ${creditText(gear)}`}>
                     <Chip
                       size="sm"
                       variant="soft"
                       color="neutral"
                       data-testid={`gear-unlocked-${gear.key}`}
-                      // The credit chip's frame on the neutral scale: a claimed gear
-                      // holds the same shape as an unclaimed one, and only the colour
-                      // and the glyph say which it is.
                       sx={theme => ({
+                        ...neutralFrame(theme),
                         '--Chip-minHeight': '24px',
                         // Joy sizes a Chip from its content plus padding-inline and
                         // caps it at `max-content`, so a circle needs the padding
@@ -380,8 +410,6 @@ const GearsPage = () => {
                         maxWidth: '24px',
                         borderRadius: '50%',
                         justifyContent: 'center',
-                        backgroundColor: grayAlpha[150][10],
-                        border: `1px solid ${theme.palette.border.muted}`,
                         color: theme.palette.text.tertiary,
                         // Joy's label slot is an inline-block that grows to fill the
                         // chip, so the glyph inside it sits on the text baseline
@@ -397,34 +425,48 @@ const GearsPage = () => {
                       <CheckIcon sx={{ fontSize: '16px', display: 'block' }} />
                     </Chip>
                   </Tooltip>
-                )
-              ) : (
-                gear.credits > 0 && (
-                  <Tooltip title={`Earn ${creditText(gear)} the first time you use this.`}>
+                )}
+                {/* Locked and claimable share one shape: the neutral frame says "there
+                is a reward here", and green is kept for the one state that asks for
+                something. */}
+                {(reward === 'locked' || reward === 'claimable') && gear.credits > 0 && (
+                  <Tooltip
+                    title={
+                      reward === 'claimable'
+                        ? `Claim ${creditText(gear)}`
+                        : `Earn ${creditText(gear)} the first time you use this.`
+                    }
+                  >
                     <Chip
                       size="sm"
                       variant="soft"
-                      color="success"
+                      color={reward === 'claimable' ? 'success' : 'neutral'}
                       startDecorator={<Bike4MindIcon size="12" />}
+                      data-testid={`gear-reward-${gear.key}`}
+                      {...(reward === 'claimable' && {
+                        onClick: (event: React.MouseEvent) => {
+                          event.stopPropagation();
+                          claim(gear);
+                        },
+                      })}
                       sx={theme => {
-                        // green[800] carries the dark surface at about 6:1, but the
-                        // light one is near white and drops it to 2.4:1 - the darker
-                        // step of the same green clears AA there. The 10% fill is an
-                        // alpha, so it needs no such split.
-                        const dark = theme.palette.mode === 'dark';
-                        const ink = dark ? green[800] : green[950];
-                        // On the white card a solid stroke of the darker green draws a
-                        // hard box round the chip, so light mode gets a tint instead -
-                        // the same trick the theme's own border.soft uses.
-                        const stroke = dark ? green[800] : greenAlpha[800][30];
+                        const { ink, stroke, fill } =
+                          reward === 'claimable'
+                            ? rewardGreen(theme)
+                            : {
+                                ink: theme.palette.text.primary,
+                                stroke: theme.palette.border.muted,
+                                fill: grayAlpha[150][10],
+                              };
                         return {
                           gap: '6px',
                           '--Chip-minHeight': '24px',
-                          backgroundColor: greenAlpha[800][10],
+                          fontSize: '13px',
+                          backgroundColor: fill,
                           border: `1px solid ${stroke}`,
                           color: ink,
                           // Bike4MindIcon fills with var(--Icon-color), which Joy's
-                          // variant would otherwise set from the success palette.
+                          // variant would otherwise set from its own palette.
                           '--Icon-color': ink,
                         };
                       }}
@@ -432,41 +474,76 @@ const GearsPage = () => {
                       {gear.credits.toLocaleString()}
                     </Chip>
                   </Tooltip>
-                )
-              )}
-            </Stack>
-            <Typography level="body-sm" sx={{ opacity: 0.85, mt: '16px' }}>
-              {gear.intro}
-            </Typography>
-            {/* The deferred payout gets a full line rather than chip text: it is the
+                )}
+              </Stack>
+              <Typography level="body-sm" sx={{ opacity: 0.85, mt: '16px' }}>
+                {gear.intro}
+              </Typography>
+              {/* The deferred payout gets a full line rather than chip text: it is the
                 one state a glance at a colour cannot explain, and there is room here.
                 Worded for Published, the only gear that declares a rewardCheck - a
                 second one would need this copy to come from the gear instead. */}
-            {gear.rewardPending && (
+              {reward === 'pending' && (
+                <Typography
+                  level="body-xs"
+                  data-testid={`gear-pending-note-${gear.key}`}
+                  // The same token the soft chip paints its own text with.
+                  sx={{ mt: '16px', fontSize: '13px', color: 'warning.softColor' }}
+                >
+                  {creditText(gear)} will be claimed once someone else opens your artifact link.
+                </Typography>
+              )}
+              {/* The claim is a line of its own rather than a wider chip: the top row
+                has no room to spare beside a long title, and this is where the eye
+                lands after reading the card. */}
+              {reward === 'claimable' && (
+                <Typography
+                  level="body-xs"
+                  component="button"
+                  data-testid={`gear-claim-${gear.key}`}
+                  onClick={event => {
+                    event.stopPropagation();
+                    claim(gear);
+                  }}
+                  onKeyDown={event => event.stopPropagation()}
+                  sx={theme => ({
+                    alignSelf: 'flex-start',
+                    mt: '16px',
+                    p: 0,
+                    border: 0,
+                    background: 'none',
+                    font: 'inherit',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    color: rewardGreen(theme).ink,
+                    cursor: 'pointer',
+                    '&:hover': { textDecoration: 'underline' },
+                    '&:focus-visible': {
+                      outline: `2px solid ${theme.palette.primary[500]}`,
+                      outlineOffset: '2px',
+                      borderRadius: '4px',
+                    },
+                  })}
+                >
+                  Claim {creditText(gear)}
+                </Typography>
+              )}
+              {/* Pinned to the bottom so the CTAs line up across a row of uneven cards. */}
               <Typography
-                level="body-xs"
-                data-testid={`gear-pending-note-${gear.key}`}
-                // The same token the soft chip paints its own text with.
-                sx={{ mt: '16px', color: 'warning.softColor' }}
+                level="body-sm"
+                data-testid={`gear-cta-${gear.key}`}
+                sx={{ mt: 'auto', pt: '20px', color: 'text.primary' }}
               >
-                {creditText(gear)} will be claimed once someone else opens your artifact link.
-              </Typography>
-            )}
-            {/* Pinned to the bottom so the CTAs line up across a row of uneven cards. */}
-            <Typography
-              level="body-sm"
-              data-testid={`gear-cta-${gear.key}`}
-              sx={{ mt: 'auto', pt: '20px', color: 'text.primary' }}
-            >
-              {opensDetail ? 'Learn more' : gear.cta}
-              {/* An HTML entity rather than the arrow character, so this file stays
+                {opensDetail ? 'Learn more' : gear.cta}
+                {/* An HTML entity rather than the arrow character, so this file stays
                 ASCII: Prettier rewrites a unicode escape back into the character. */}
-              <Box component="span" sx={{ ml: '6px' }}>
-                &rarr;
-              </Box>
-            </Typography>
-          </Card>
-        ))}
+                <Box component="span" sx={{ ml: '6px' }}>
+                  &rarr;
+                </Box>
+              </Typography>
+            </Card>
+          );
+        })}
       </Box>
     );
   };
