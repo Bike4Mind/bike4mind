@@ -51,8 +51,9 @@ export interface DataLakeResearchPanelProps {
   savingConfigId?: string | null;
   deletingConfigId?: string | null;
   startingConfigId?: string | null;
-  onCreate: (input: ResearchConfigInput) => void;
-  onUpdate: (configId: string, input: ResearchConfigInput) => void;
+  /** Settles when the save does: the form closes on resolve and keeps the draft on reject. */
+  onCreate: (input: ResearchConfigInput) => Promise<unknown>;
+  onUpdate: (configId: string, input: ResearchConfigInput) => Promise<unknown>;
   onDelete: (configId: string) => void;
   onStartRun: (configId: string) => void;
   /** Whether the open create/edit form holds edits not yet saved, so the host can confirm before closing. */
@@ -379,13 +380,19 @@ export function DataLakeResearchPanel({
   };
   const closeForm = () => setEditingId(null);
 
-  const submit = () => {
+  const submit = async () => {
+    const submittedId = editingId;
+    if (submittedId === null) return;
     const input = draftToInput(draft);
-    if (editingId) onUpdate(editingId, input);
-    else onCreate(input);
-    // Closed optimistically: the mutation toasts its own refusal, and leaving the form open on
-    // success would look like the save had not registered.
-    closeForm();
+    try {
+      if (submittedId) await onUpdate(submittedId, input);
+      else await onCreate(input);
+    } catch {
+      // The mutation toasts its own refusal; staying open keeps the draft for a retry.
+      return;
+    }
+    // Only close the form this save came from: it may have been cancelled, or another opened, meanwhile.
+    setEditingId(current => (current === submittedId ? null : current));
   };
 
   if (isLoading) {

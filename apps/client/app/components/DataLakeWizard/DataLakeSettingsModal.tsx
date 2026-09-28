@@ -829,8 +829,8 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     savingConfigId={updateResearchConfig.isPending ? updateResearchConfig.variables?.configId : null}
                     deletingConfigId={deleteResearchConfig.isPending ? deleteResearchConfig.variables : null}
                     startingConfigId={startResearchRun.isPending ? startResearchRun.variables : null}
-                    onCreate={input => createResearchConfig.mutate(input)}
-                    onUpdate={(configId, input) => updateResearchConfig.mutate({ configId, ...input })}
+                    onCreate={input => createResearchConfig.mutateAsync(input)}
+                    onUpdate={(configId, input) => updateResearchConfig.mutateAsync({ configId, ...input })}
                     onDelete={confirmDeleteResearchConfig}
                     onStartRun={configId => startResearchRun.mutate(configId)}
                     onDirtyChange={setResearchDirty}

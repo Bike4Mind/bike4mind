@@ -84,8 +84,18 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   // assertion runs, whether or not the test touches that tab.
   useDataLakeResearchConfigs: (...args: unknown[]) => useDataLakeResearchConfigsMock(...args),
   useDataLakeResearchRuns: (...args: unknown[]) => useDataLakeResearchRunsMock(...args),
-  useCreateDataLakeResearchConfig: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
-  useUpdateDataLakeResearchConfig: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
+  useCreateDataLakeResearchConfig: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn().mockResolvedValue(undefined),
+    isPending: false,
+    variables: undefined,
+  }),
+  useUpdateDataLakeResearchConfig: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn().mockResolvedValue(undefined),
+    isPending: false,
+    variables: undefined,
+  }),
   useDeleteDataLakeResearchConfig: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
   useStartDataLakeResearchRun: () => ({ mutate: startResearchRunMutate, isPending: false, variables: undefined }),
 }));
