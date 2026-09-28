@@ -32,9 +32,14 @@ describe('emitSubscribeForSourceProducts', () => {
       eventId: stableEventId('subscribe', 'widgets', 'sub_1'),
       userId: 'u1',
       utm: { source: 'widgets', medium: 'teaser' },
-      metadata: { touch: 'first', priceId: 'price_pro' },
+      metadata: { touch: 'first', attribution: 'self-reported', priceId: 'price_pro' },
     });
-    expect(mockEmit).toHaveBeenCalledWith(expect.objectContaining({ productId: 'gadgets', metadata: { touch: 'last', priceId: 'price_pro' } }));
+    expect(mockEmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        productId: 'gadgets',
+        metadata: { touch: 'last', attribution: 'self-reported', priceId: 'price_pro' },
+      })
+    );
   });
 
   it('sends once, as both, when first and last touch are the same product', async () => {
@@ -44,7 +49,22 @@ describe('emitSubscribeForSourceProducts', () => {
       touches: { firstTouch: { source: 'widgets' }, lastTouch: { source: 'widgets', medium: 'landing' } },
     });
     expect(mockEmit).toHaveBeenCalledTimes(1);
-    expect(mockEmit.mock.calls[0][0].metadata).toEqual({ touch: 'both' });
+    expect(mockEmit.mock.calls[0][0].metadata).toEqual({ touch: 'both', attribution: 'self-reported' });
+  });
+
+  it('marks every event self-reported, whichever product it credits', async () => {
+    // The productId is read from a cookie the browser set, so a consumer has to be able to see
+    // that the credit is a visitor's claim rather than anything this server observed. Assert it
+    // on every call rather than one, so a later branch cannot quietly send an unmarked event.
+    await emitSubscribeForSourceProducts({
+      userId: 'u1',
+      subscriptionId: 'sub_1',
+      touches: { firstTouch: { source: 'widgets' }, lastTouch: { source: 'gadgets' } },
+    });
+    expect(mockEmit).toHaveBeenCalledTimes(2);
+    for (const [call] of mockEmit.mock.calls) {
+      expect(call.metadata).toMatchObject({ attribution: 'self-reported' });
+    }
   });
 
   it('sends nothing for the host product, a keyless source, or no touches, and never throws', async () => {
@@ -56,11 +76,17 @@ describe('emitSubscribeForSourceProducts', () => {
         touches: { firstTouch: { source: 'bike4mind' }, lastTouch: { source: 'newsletter' } },
       })
     ).resolves.toEqual([]);
-    await expect(emitSubscribeForSourceProducts({ userId: 'u1', subscriptionId: 's', touches: undefined })).resolves.toEqual([]);
+    await expect(
+      emitSubscribeForSourceProducts({ userId: 'u1', subscriptionId: 's', touches: undefined })
+    ).resolves.toEqual([]);
     expect(mockEmit).not.toHaveBeenCalled();
 
     await expect(
-      emitSubscribeForSourceProducts({ userId: 'u1', subscriptionId: 's', touches: { lastTouch: { source: 'widgets' } } })
+      emitSubscribeForSourceProducts({
+        userId: 'u1',
+        subscriptionId: 's',
+        touches: { lastTouch: { source: 'widgets' } },
+      })
     ).resolves.toEqual(['widgets']);
   });
 });
