@@ -15,9 +15,11 @@ import { contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
 import { NewCodeSessionDialog } from './NewCodeSessionDialog';
 import { SessionList } from './SessionList';
+import { SidebarCard } from './SidebarCard';
+import { SidebarShortcuts } from './SidebarShortcuts';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
-import { useConversation, useModelCatalog, useRunningSessions, useSessions } from './useChat';
+import { useConversation, useModelCatalog, useSessionStatuses, useSessions } from './useChat';
 import { useFileDrop } from './useFileDrop';
 
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
@@ -102,7 +104,8 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   const conversation = useConversation(activeId, apply);
   const background = useBackgroundProcesses(activeId);
   const catalog = useModelCatalog();
-  const running = useRunningSessions();
+  const statuses = useSessionStatuses();
+  const [collapsed, setCollapsed] = useState(false);
   const draft = useAttachmentDraft(activeId);
 
   const onFilesDropped = useCallback(
@@ -227,13 +230,17 @@ export function ChatShell({ account }: { account?: ReactNode }) {
         onModeChange={setMode}
         loading={loading}
         activeId={activeId}
-        runningIds={running}
+        statuses={statuses}
+        collapsed={collapsed}
+        onToggleCollapsed={() => setCollapsed(current => !current)}
         onSelect={setActiveId}
         onCreate={() => void onCreate()}
         onCreateInProject={directory => void onCreateInProject(directory)}
         onDelete={sessionId => void onDelete(sessionId)}
         onTogglePin={session => void togglePin(session)}
-        more={<FolderAccess />}
+        customize={<FolderAccess />}
+        more={<SidebarShortcuts />}
+        card={<SidebarCard />}
         footer={account}
       />
 

@@ -5,9 +5,11 @@ import type {
   ChatMessage,
   ChatModelOption,
   ChatSession,
+  ChatSessionStatus,
   ChatSessionSummary,
   CreateCodeSessionRequest,
 } from '@shared/chat';
+import { applyStatusEvents } from './sessionStatus';
 
 export interface SessionsController {
   sessions: ChatSessionSummary[];
@@ -99,33 +101,46 @@ export function useSessions(): SessionsController {
 }
 
 /**
- * Which sessions have a reply in flight, for the sidebar's status dots.
+ * What every session is doing, for the sidebar's status badges.
  *
- * Subscribed globally rather than derived from the open conversation: main streams replies for
- * every session at once, so a dot driven by the active conversation alone would show every
- * background session as idle - which is the one thing the dot exists to contradict.
+ * The renderer does not work this out. Main owns it (see main/chat/SessionActivity) and pushes
+ * it, and this hook only folds those pushes into a map. That division is the whole point: the
+ * state that matters most - a background session parked at the approval gate - produces no
+ * stream events a newly opened window would see, so anything derived here from what this
+ * window happened to witness would draw it as idle.
  */
-export function useRunningSessions(): ReadonlySet<string> {
-  const [running, setRunning] = useState<ReadonlySet<string>>(() => new Set());
+export function useSessionStatuses(): ReadonlyMap<string, ChatSessionStatus> {
+  const [statuses, setStatuses] = useState<ReadonlyMap<string, ChatSessionStatus>>(() => new Map());
 
   useEffect(() => {
-    return window.b4m.chat.onStreamEvent(event => {
-      // The background-* events outlive the turn that started one, so they say nothing about
-      // whether a REPLY is streaming and must not clear the dot.
-      if (event.type === 'background-output' || event.type === 'background-status') return;
-      setRunning(current => {
-        const isStart = event.type === 'start';
-        if (isStart === current.has(event.sessionId)) return current;
-        const next = new Set(current);
-        if (isStart) next.add(event.sessionId);
-        else if (event.type === 'done' || event.type === 'error') next.delete(event.sessionId);
-        else return current;
-        return next;
-      });
+    let live = true;
+    // Sessions a push has already spoken for. Subscribing BEFORE reading the snapshot is what
+    // stops a change landing in the gap being lost, but it also means the snapshot can resolve
+    // already stale for a session - so it is applied only to sessions no push has covered.
+    const pushed = new Set<string>();
+
+    const unsubscribe = window.b4m.chat.onSessionStatus(event => {
+      pushed.add(event.sessionId);
+      setStatuses(current => applyStatusEvents(current, [event]));
     });
+
+    void window.b4m.chat.getSessionStatuses().then(snapshot => {
+      if (!live) return;
+      setStatuses(current =>
+        applyStatusEvents(
+          current,
+          snapshot.filter(entry => !pushed.has(entry.sessionId))
+        )
+      );
+    });
+
+    return () => {
+      live = false;
+      unsubscribe();
+    };
   }, []);
 
-  return running;
+  return statuses;
 }
 
 export interface ModelCatalogController {
@@ -273,6 +288,21 @@ export function useConversation(
               toolCalls: known
                 ? existing.map(call => (call.id === event.call.id ? event.call : call))
                 : [...existing, event.call],
+            };
+          })
+        );
+        return;
+      }
+
+      if (event.type === 'tool-progress') {
+        setMessages(current =>
+          current.map(message => {
+            if (message.id !== event.messageId) return message;
+            return {
+              ...message,
+              toolCalls: (message.toolCalls ?? []).map(call =>
+                call.id === event.callId ? { ...call, progress: event.text } : call
+              ),
             };
           })
         );
