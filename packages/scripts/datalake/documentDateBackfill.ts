@@ -14,6 +14,8 @@ export type BackfillOptions = {
   batchSize: number;
   limit?: number;
   fileIds: string[];
+  /** Date files last chunked before serverTextHash existed, whose served chunks cannot be verified. */
+  trustUnhashed: boolean;
 };
 
 /** The slice of SmartChunker the backfill uses: one extraction pass, read back for its date and text. */
@@ -30,7 +32,7 @@ export type BackfillDeps = {
 };
 
 export type Outcome =
-  'dated' | 'undated' | 'editors-unrecoverable' | 'bytes-missing' | 'stale-chunks' | 'raced' | 'failed';
+  'dated' | 'undated' | 'editors-unrecoverable' | 'bytes-missing' | 'stale-chunks' | 'unhashed' | 'raced' | 'failed';
 
 export type BackfillResult = {
   counts: Record<Outcome, number>;
@@ -63,8 +65,8 @@ const ELIGIBLE = {
   filePath: { $type: 'string', $ne: '' },
   // Cheap pre-filter for a content rewrite, which replaces the stored bytes but keeps the old chunks
   // until the next re-chunk. FAB_FILE_CONTENT_REWRITE_PATCH writes an explicit null here, which a
-  // completed chunk pass never does. Not sufficient on its own: backfill-chunk-char-length.ts refills
-  // it from the OLD chunks, so servesStoredBytes is the check that actually decides.
+  // completed chunk pass never does. Not a guard: backfill-chunk-char-length.ts refills it from the
+  // OLD chunks, so servesStoredBytes is the check that actually decides.
   chunkedCharCount: { $not: { $type: 'null' } },
 };
 
@@ -100,7 +102,7 @@ export function candidateFilter(opts: Pick<BackfillOptions, 'fileIds'>, afterId:
  * by a chunk commit (the hash of the text it chunked, or null for a text-less pass) and is nulled by
  * a content rewrite, so a mismatch with the re-extracted text means the bytes moved on since the
  * chunks were cut. Absent means the last chunk pass predates the hash (#1679): there is nothing to
- * compare, and the chunkedCharCount pre-filter is the only guard.
+ * compare, so such a file reaches here only under `trustUnhashed`, which accepts that risk.
  */
 function servesStoredBytes(file: CandidateFile, extractedText: string | undefined): boolean {
   if (file.serverTextHash === undefined) return true;
@@ -122,9 +124,17 @@ async function readStoredBytes(file: CandidateFile, storage: BackfillDeps['stora
     const content = await storage.getContentAsBuffer(file.filePath);
     return content.length > 0 ? content : undefined;
   } catch (error) {
-    if (error instanceof Error && error.name === 'NoSuchKey') return undefined;
+    // Both names mean a missing object, as the sibling S3 call sites treat them.
+    if (error instanceof Error && (error.name === 'NoSuchKey' || error.name === 'NotFound')) return undefined;
     throw error;
   }
+}
+
+/** A bare `null` would also match an absent field, so each state gets an exact match. */
+function pinServerTextHash(hash: CandidateFile['serverTextHash']) {
+  if (hash === undefined) return { $exists: false };
+  if (hash === null) return { $type: 'null' };
+  return hash;
 }
 
 async function processFile(file: CandidateFile, opts: BackfillOptions, deps: BackfillDeps): Promise<Outcome> {
@@ -133,6 +143,7 @@ async function processFile(file: CandidateFile, opts: BackfillOptions, deps: Bac
 
   let resolved = pinned;
   if (!resolved) {
+    if (file.serverTextHash === undefined && !opts.trustUnhashed) return 'unhashed';
     const content = await readStoredBytes(file, deps.storage);
     if (!content) return 'bytes-missing';
     await deps.chunker.chunkFile(content, file.mimeType);
@@ -148,7 +159,7 @@ async function processFile(file: CandidateFile, opts: BackfillOptions, deps: Bac
       {
         _id: file._id,
         ...ELIGIBLE,
-        serverTextHash: file.serverTextHash === undefined ? { $exists: false } : file.serverTextHash,
+        serverTextHash: pinServerTextHash(file.serverTextHash),
       },
       { $set: resolved }
     );
@@ -168,6 +179,7 @@ export async function runBackfill(opts: BackfillOptions, deps: BackfillDeps): Pr
       'editors-unrecoverable': 0,
       'bytes-missing': 0,
       'stale-chunks': 0,
+      unhashed: 0,
       raced: 0,
       failed: 0,
     },
@@ -219,6 +231,8 @@ export function formatSummary(result: BackfillResult, execute: boolean): string[
       `${counts['editors-unrecoverable']} unpinned Drive Editors file(s) set null without a download; ` +
       `${counts['bytes-missing']} skipped (stored bytes missing or empty); ` +
       `${counts['stale-chunks']} skipped (served chunks predate the stored bytes); ` +
+      `${counts.unhashed} skipped (chunked before serverTextHash, so the served chunks cannot be verified; ` +
+      `--trust-unhashed dates them); ` +
       `${counts.raced} skipped (changed by a concurrent pass); ${counts.failed} failed.`,
   ];
   if (result.missingBytes.length > 0) lines.push(`Missing-bytes file ids: ${result.missingBytes.join(', ')}`);

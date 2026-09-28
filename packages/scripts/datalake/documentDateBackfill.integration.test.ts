@@ -40,7 +40,7 @@ const PINNED_UPDATED_AT = new Date('2024-01-01T00:00:00Z');
 const FRONTMATTER_DATE = new Date('2019-03-14T00:00:00Z');
 
 /** What the fake extractor yields per stored path; the path doubles as the stored bytes. */
-type Stored = { text?: string; date?: Date; missing?: true; empty?: true; unreadable?: true };
+type Stored = { text?: string; date?: Date; missing?: 'NoSuchKey' | 'NotFound'; empty?: true; unreadable?: true };
 
 const DATED_TEXT = 'dated body';
 const UNDATED_TEXT = 'undated body';
@@ -48,7 +48,8 @@ const storedBytes: Record<string, Stored> = {
   'dated.md': { text: DATED_TEXT, date: FRONTMATTER_DATE },
   'undated.md': { text: UNDATED_TEXT },
   'textless.png': {},
-  'gone.md': { missing: true },
+  'gone.md': { missing: 'NoSuchKey' },
+  'notfound.md': { missing: 'NotFound' },
   'empty.md': { empty: true },
   'broken.md': { unreadable: true },
 };
@@ -102,7 +103,7 @@ function makeDeps(onChunk?: (path: string) => Promise<void>) {
     async getContentAsBuffer(path: string) {
       reads.push(path);
       const stored = storedBytes[path];
-      if (stored?.missing) throw Object.assign(new Error('gone'), { name: 'NoSuchKey' });
+      if (stored?.missing) throw Object.assign(new Error('gone'), { name: stored.missing });
       if (stored?.unreadable) throw new Error('decode failed');
       if (stored?.empty) return Buffer.alloc(0);
       return Buffer.from(path);
@@ -111,7 +112,7 @@ function makeDeps(onChunk?: (path: string) => Promise<void>) {
   return { deps: { chunker, storage, log: () => {} } satisfies BackfillDeps, reads };
 }
 
-const execute: BackfillOptions = { execute: true, batchSize: 100, fileIds: [] };
+const execute: BackfillOptions = { execute: true, batchSize: 100, fileIds: [], trustUnhashed: false };
 
 describe('runBackfill (real DB)', () => {
   it('dates an eligible file and nulls an undated one, without bumping updatedAt', async () => {
@@ -177,14 +178,14 @@ describe('runBackfill (real DB)', () => {
 
   it('leaves a row whose S3 object is gone or empty untouched and lists it without failing', async () => {
     const gone = await seed('gone.md');
+    const notFound = await seed('notfound.md');
     const empty = await seed('empty.md');
 
     const result = await runBackfill(execute, makeDeps().deps);
 
-    expect(result.counts['bytes-missing']).toBe(2);
-    expect(result.missingBytes).toEqual([gone.toString(), empty.toString()]);
-    expect(await load(gone)).not.toHaveProperty('documentDate');
-    expect(await load(empty)).not.toHaveProperty('documentDate');
+    expect(result.counts['bytes-missing']).toBe(3);
+    expect(result.missingBytes).toEqual([gone.toString(), notFound.toString(), empty.toString()]);
+    for (const id of [gone, notFound, empty]) expect(await load(id)).not.toHaveProperty('documentDate');
     expect(exitCode(result)).toBe(0);
   });
 
@@ -203,22 +204,53 @@ describe('runBackfill (real DB)', () => {
     expect(await load(rewrittenTextless)).not.toHaveProperty('documentDate');
     expect(await load(rewritten)).not.toHaveProperty('documentDate');
     expect(await load(hashMismatch)).not.toHaveProperty('documentDate');
+    expect(formatSummary(result, true)).toContain(
+      `Stale-chunk file ids: ${[rewritten, hashMismatch, rewrittenTextless].join(', ')}`
+    );
   });
 
-  it('trusts a null hash on a text-less file and an absent hash on a pre-fingerprint chunk pass', async () => {
+  it('trusts a null hash on a text-less file and an absent chunkedCharCount on a pre-rollup chunk pass', async () => {
     const textless = await seed('textless.png', { mimeType: 'image/png' });
-    const preFingerprint = await seed('dated.md');
-    await fabFiles().updateOne({ _id: preFingerprint }, { $unset: { serverTextHash: '' } });
     // Chunked before the rollups existed: an absent chunkedCharCount is not the rewrite's null.
     const preRollup = await seed('dated.md');
     await fabFiles().updateOne({ _id: preRollup }, { $unset: { chunkedCharCount: '' } });
 
     const result = await runBackfill(execute, makeDeps().deps);
 
-    expect(result.counts).toMatchObject({ dated: 2, undated: 1, 'stale-chunks': 0 });
+    expect(result.counts).toMatchObject({ dated: 1, undated: 1, 'stale-chunks': 0 });
     expect(await load(textless)).toMatchObject({ documentDate: null });
-    expect(await load(preFingerprint)).toMatchObject({ documentDate: FRONTMATTER_DATE });
     expect(await load(preRollup)).toMatchObject({ documentDate: FRONTMATTER_DATE });
+  });
+
+  describe('a file chunked before serverTextHash existed', () => {
+    // Its chunkedCharCount may be a rollup refilled from chunks older than the stored bytes, and no
+    // hash is there to catch it, so nothing on the row says whether the served chunks match.
+    async function seedUnhashed() {
+      const id = await seed('dated.md');
+      await fabFiles().updateOne({ _id: id }, { $unset: { serverTextHash: '' } });
+      return id;
+    }
+
+    it('is skipped and counted as unhashed by default, without reading its bytes', async () => {
+      const id = await seedUnhashed();
+
+      const { deps, reads } = makeDeps();
+      const result = await runBackfill(execute, deps);
+
+      expect(result.counts).toMatchObject({ unhashed: 1, dated: 0 });
+      expect(reads).toEqual([]);
+      expect(await load(id)).not.toHaveProperty('documentDate');
+      expect(formatSummary(result, true)[0]).toContain('1 skipped (chunked before serverTextHash');
+    });
+
+    it('is dated under --trust-unhashed', async () => {
+      const id = await seedUnhashed();
+
+      const result = await runBackfill({ ...execute, trustUnhashed: true }, makeDeps().deps);
+
+      expect(result.counts).toMatchObject({ unhashed: 0, dated: 1 });
+      expect(await load(id)).toMatchObject({ documentDate: FRONTMATTER_DATE });
+    });
   });
 
   it('loses the race to a re-chunk that lands between the read and the write', async () => {
@@ -239,11 +271,24 @@ describe('runBackfill (real DB)', () => {
 
   it.each([
     ['a chunk commit of different text', { serverTextHash: hashOf('the edited text') }],
+    ['a content rewrite nulling the hash', { serverTextHash: null }],
     ['a re-chunk claim', { isChunking: true }],
   ])('loses the race to %s that lands between the read and the write', async (_label, patch) => {
     const id = await seed('dated.md');
     const { deps } = makeDeps(async () => {
       await fabFiles().updateOne({ _id: id }, { $set: patch });
+    });
+
+    const result = await runBackfill(execute, deps);
+
+    expect(result.counts.raced).toBe(1);
+    expect(await load(id)).not.toHaveProperty('documentDate');
+  });
+
+  it('does not mistake a hash removed between the read and the write for the null it read', async () => {
+    const id = await seed('textless.png', { mimeType: 'image/png' });
+    const { deps } = makeDeps(async () => {
+      await fabFiles().updateOne({ _id: id }, { $unset: { serverTextHash: '' } });
     });
 
     const result = await runBackfill(execute, deps);
@@ -260,6 +305,7 @@ describe('runBackfill (real DB)', () => {
 
     expect(result.counts).toMatchObject({ failed: 1, dated: 1 });
     expect(result.failures).toEqual([broken.toString()]);
+    expect(formatSummary(result, true)).toContain(`Failed file ids: ${broken.toString()}`);
     expect(await load(dated)).toMatchObject({ documentDate: FRONTMATTER_DATE });
     expect(exitCode(result)).toBe(1);
   });
@@ -292,8 +338,9 @@ describe('runBackfill (real DB)', () => {
   it('pages past batch boundaries, stops at --limit, and terminates a dry run', async () => {
     for (let i = 0; i < 5; i++) await seed('undated.md');
 
-    const all = await runBackfill({ execute: false, batchSize: 2, fileIds: [] }, makeDeps().deps);
-    const limited = await runBackfill({ execute: false, batchSize: 2, limit: 3, fileIds: [] }, makeDeps().deps);
+    const dryRun = { ...execute, execute: false, batchSize: 2 };
+    const all = await runBackfill(dryRun, makeDeps().deps);
+    const limited = await runBackfill({ ...dryRun, limit: 3 }, makeDeps().deps);
 
     expect(all.counts.undated).toBe(5);
     expect(limited.counts.undated).toBe(3);

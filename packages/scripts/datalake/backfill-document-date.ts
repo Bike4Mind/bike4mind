@@ -9,9 +9,10 @@
  * the run costs no embedding spend. The winner is decided by resolveDocumentDate - the same rule
  * prepareFabFileChunks applies - so a backfilled file carries exactly what a Reprocess would give it.
  *
- * Selection: live, fully chunked, not mid-chunk, has a stored path, and `documentDate` never
- * written. Every content pass since #3048 writes the pair (null when nothing was found), so an
- * ABSENT field means the file predates the feature. That same predicate, plus the `serverTextHash`
+ * Selection (`ELIGIBLE` in documentDateBackfill.ts): live, fully chunked, not mid-chunk, has a stored
+ * path, `chunkedCharCount` not nulled by a content rewrite, and `documentDate` never written. Every
+ * content pass since #3048 writes the pair (null when nothing was found), so an ABSENT field means
+ * the file predates the feature. That same predicate, plus the `serverTextHash`
  * read, guards the write, so a Reprocess that lands between the read and the write wins, and a rerun
  * after a partial failure picks up where it left off.
  *
@@ -19,6 +20,8 @@
  * keeps the old chunks until the next re-chunk, so dating the new bytes would date text retrieval is
  * not returning. Each file's re-extracted text is therefore checked against the `serverTextHash` its
  * last chunk commit recorded; a mismatch is left untouched and listed as stale for its next re-chunk.
+ * A file last chunked before that hash existed (#1679) cannot be checked, so it is skipped and counted
+ * as unhashed. --trust-unhashed dates those anyway, accepting that a legacy rewrite may be misdated.
  *
  * Unrecoverable by design: a Google Editors file ingested before #3048 has no pinned Drive
  * `createdTime`, and its stored bytes are an export rendition that cannot date it. It is written
@@ -29,7 +32,7 @@
  * counting it as a failure would fail every rerun. Rows with no filePath at all are never selected.
  *
  * Dry-run by default: it still downloads and extracts, so the summary shows what would be written.
- * Pass --execute to write.
+ * Pass --execute to write, and --trust-unhashed to include the files the hash cannot verify.
  *
  * Usage (needs DB + the fabFile bucket, provided by `sst shell`):
  *   npx sst shell --stage dev        -- tsx packages/scripts/datalake/backfill-document-date.ts --limit 50
@@ -66,6 +69,11 @@ const argv = yargs(hideBin(process.argv))
   .option('execute', { type: 'boolean', default: false, describe: 'Actually write (default: dry-run)' })
   .option('batch-size', { type: 'number', default: 100, describe: 'Files read per page' })
   .option('limit', { type: 'number', describe: 'Stop after this many files (default: all)' })
+  .option('trust-unhashed', {
+    type: 'boolean',
+    default: false,
+    describe: 'Also date files chunked before serverTextHash existed, whose served chunks cannot be verified',
+  })
   .option('file-id', { type: 'string', array: true, default: [], describe: 'Restrict to these FabFile ids' })
   .check(checkedArgv => {
     const error = checkOptions({
@@ -78,7 +86,13 @@ const argv = yargs(hideBin(process.argv))
   })
   .parseSync();
 
-main({ execute: argv.execute, batchSize: argv['batch-size'], limit: argv.limit, fileIds: argv['file-id'] })
+main({
+  execute: argv.execute,
+  batchSize: argv['batch-size'],
+  limit: argv.limit,
+  fileIds: argv['file-id'],
+  trustUnhashed: argv['trust-unhashed'],
+})
   .then(code => process.exit(code))
   .catch(err => {
     console.error(err);
