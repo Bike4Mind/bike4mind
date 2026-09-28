@@ -3,6 +3,7 @@ import type {
   AddAttachmentsResult,
   BackgroundProcessInfo,
   ChatApprovalDecision,
+  ChatApprovalMode,
   ChatAttachmentInput,
   ChatModelCatalog,
   ChatPendingApproval,
@@ -43,6 +44,11 @@ export const IPC_CHANNELS = {
   chatListModels: 'chat:list-models',
   chatSetSessionModel: 'chat:set-session-model',
   chatSetSessionPinned: 'chat:set-session-pinned',
+  /**
+   * The one way an approval mode changes. Renderer -> main only, driven by the composer pill:
+   * there is deliberately no tool, no MCP surface and no model-facing path to this channel.
+   */
+  chatSetApprovalMode: 'chat:set-approval-mode',
   chatSetSessionArchived: 'chat:set-session-archived',
   chatListSessions: 'chat:list-sessions',
   chatCreateSession: 'chat:create-session',
@@ -112,6 +118,11 @@ export interface DesktopApi {
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
+    /**
+     * Set how much this conversation may do without asking. Called from the composer pill, in
+     * response to the user clicking it, and from nowhere else - see IPC_CHANNELS above.
+     */
+    setApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<ChatSessionSummary | null>;
     /** Move a conversation into or out of the sidebar's Archived section. Reversible. */
     setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null>;
     listSessions(): Promise<ChatSessionSummary[]>;

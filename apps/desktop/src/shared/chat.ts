@@ -344,6 +344,29 @@ export interface ChatUsage {
 export type ChatSessionMode = 'chat' | 'code';
 
 /**
+ * How much the user has agreed to be asked before a tool that runs code or changes a file
+ * goes ahead.
+ *
+ * Deliberately NOT ChatSessionMode, which says what a conversation is FOR. This says what it
+ * may do without stopping, and it governs one axis only: filesystem and execution. The
+ * generation tools are gated on COST, not safety, and ask in every mode - approving
+ * `bash_execute` says nothing about whether the user wants to spend credits on an image.
+ *
+ *  - 'ask'  every gated tool asks. The behaviour this client had before modes existed.
+ *  - 'auto' a gated call runs unasked only when it is provably confined: see
+ *           main/chat/tools/riskAssessment.ts, which is the whole definition of "safe" here.
+ *           Anything it cannot prove - including any tool it does not know, such as one from
+ *           an MCP server - falls back to asking.
+ *  - 'full' no gate at all for the filesystem and the shell. A command can then read any file
+ *           this user can read and reach the internet with nobody looking. Chosen per
+ *           conversation, never inherited by a spawned one, and reset to 'ask' on relaunch.
+ *
+ * Changed by the user in the renderer and nowhere else. No tool, no MCP server and no model
+ * output can raise it; see ChatService.setApprovalMode and HostContext.
+ */
+export type ChatApprovalMode = 'ask' | 'auto' | 'full';
+
+/**
  * What a Code session is grounded in, once the user has chosen it.
  *
  * `workingDirectory` is the one field the tools read, and it is stored rather than recomputed
@@ -392,6 +415,12 @@ interface ChatSessionMeta {
   createdAt: string;
   updatedAt: string;
   mode: ChatSessionMode;
+  /**
+   * Per conversation, not app-wide: the risk of running unattended is a property of what this
+   * thread is pointed at, and one runaway conversation must not loosen the next. Always on
+   * screen in the composer pill, so it is never a setting the user has forgotten they set.
+   */
+  approvalMode: ChatApprovalMode;
   /**
    * Set on Code sessions that have been pointed at a directory. Absent on a Chat session, and
    * on a Code session nobody has chosen a folder for yet - which is a usable state, not a

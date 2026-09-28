@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type {
+  ChatApprovalMode,
   ChatAttachment,
   ChatMedia,
   ChatMessage,
@@ -39,6 +40,7 @@ import type { AccessStore } from './tools/AccessStore';
 import type { ApprovalGate } from './tools/ApprovalGate';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { findTool, toolsForRequest } from './tools/registry';
+import { assessApprovalRisk, spendsCredits } from './tools/riskAssessment';
 import {
   capOutput,
   type ApprovalPrompt,
@@ -373,6 +375,18 @@ export class ChatService {
 
   setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null> {
     return this.deps.store.setPinned(sessionId, pinned);
+  }
+
+  /**
+   * Set how much this conversation may do without asking.
+   *
+   * Reached from one IPC channel the composer pill calls, and from nothing else. It is not on
+   * HostContext, it is not in ToolContext, and no tool schema mentions it - a tool able to
+   * raise its own approval mode would turn a single prompt injection into unrestricted read
+   * access to the machine, which is the one escalation this whole feature has to not have.
+   */
+  setApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<ChatSessionSummary | null> {
+    return this.deps.store.setApprovalMode(sessionId, mode);
   }
 
   addContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null> {
@@ -957,6 +971,13 @@ export class ChatService {
           contextDirectories: [...project.contextDirectories],
         },
         origin: { parentSessionId: parent.id, depth, seedPrompt: seed },
+        // Inherit, never widen - the rule the folder grants above already follow - with one
+        // ceiling on top of it: 'full' does not cross into a session nobody is watching. It
+        // is the mode where a command may read any file on the machine, and it is already
+        // scoped to the run of the app the user chose it in; handing it to an autonomous
+        // child would make it outlive both the choice and the person who made it. There is
+        // deliberately no argument on session_spawn through which a mode could be named.
+        approvalMode: parent.approvalMode === 'full' ? 'auto' : parent.approvalMode,
       });
 
       const named = title?.trim() ? await this.deps.store.rename(child.id, title.trim()) : null;
@@ -1117,6 +1138,10 @@ export class ChatService {
     // enough reason to skip asking. The gate refuses to record one for these either.
     if (!prompt.irreversible && gate.isStanding(sessionId, prompt.key)) return null;
 
+    // Consulted AFTER tool.approval() ran, so a call that is refused outright - a path outside
+    // every granted root - is still refused rather than waved through by a loose mode.
+    if (await this.autoApproves(sessionId, call, prompt, context)) return null;
+
     const decision = await gate.request(
       sessionId,
       prompt.key,
@@ -1155,6 +1180,31 @@ export class ChatService {
     };
     this.deps.emit({ type: 'tool-end', sessionId, messageId, call: denied });
     return denied;
+  }
+
+  /**
+   * Whether this conversation's approval mode lets this particular call go ahead unasked.
+   *
+   * Read from the store rather than from the session captured when the turn started, so a user
+   * who lowers the mode mid-reply is obeyed by the very next tool call rather than after it.
+   *
+   * The two exclusions hold in every mode, 'full' included. An irreversible call is asked
+   * because there is nothing to undo it with, and a credit-spending call is asked because cost
+   * is a different axis from filesystem risk: deciding the agent may edit files and run the
+   * shell says nothing about whether the user wants to pay for an image.
+   */
+  private async autoApproves(
+    sessionId: string,
+    call: ChatToolCall,
+    prompt: ApprovalPrompt,
+    context: ToolContext
+  ): Promise<boolean> {
+    if (prompt.irreversible || spendsCredits(call.name)) return false;
+
+    const mode = await this.deps.store.approvalMode(sessionId);
+    if (mode === 'ask') return false;
+    if (mode === 'full') return true;
+    return (await assessApprovalRisk(call.name, call.input, prompt, context)) === 'contained';
   }
 
   private pickModel(models: readonly ChatModelOption[]): string | null {

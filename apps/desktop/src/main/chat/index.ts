@@ -3,6 +3,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, type WebContents } fr
 import { ChatModels } from '@bike4mind/common';
 import type {
   ChatApprovalDecision,
+  ChatApprovalMode,
   ChatAttachmentInput,
   ChatSessionStatusEvent,
   ChatStreamEvent,
@@ -168,6 +169,12 @@ export function registerChat(auth: AuthService): RegisteredChat {
   );
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPinned, (_event, sessionId: string, pinned: boolean) =>
     service.setSessionPinned(sessionId, pinned)
+  );
+  // Validated here rather than trusted, for the same reason the folder grant goes through a
+  // native picker: this is the only door to the approval mode, so an unrecognised value must
+  // not reach the store and land as something looser than the user asked for.
+  ipcMain.handle(IPC_CHANNELS.chatSetApprovalMode, (_event, sessionId: string, mode: ChatApprovalMode) =>
+    mode === 'ask' || mode === 'auto' || mode === 'full' ? service.setApprovalMode(sessionId, mode) : null
   );
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
   ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => service.sessionStatuses());

@@ -21,6 +21,7 @@ export function Composer({
   onSend,
   onStop,
   footer,
+  leading,
   status,
 }: {
   sessionId: string | null;
@@ -46,6 +47,12 @@ export function Composer({
   onStop: () => void;
   /** Controls that belong to the next turn rather than to the app - the model picker. */
   footer?: ReactNode;
+  /**
+   * Sits beside the attach button, on the left of the same row - the approval-mode pill. Its
+   * place is load-bearing: a permission the user cannot see without opening something is a
+   * permission they will forget they granted.
+   */
+  leading?: ReactNode;
   /**
    * What the turn in flight is doing, when one is. It TAKES OVER this slot rather than sitting
    * beside the idle indicator below: two status elements a foot apart are two things that can
@@ -172,6 +179,8 @@ export function Composer({
         >
           <Typography level="body-lg">+</Typography>
         </IconButton>
+
+        {leading}
 
         <Box sx={{ flex: 1 }} />
 

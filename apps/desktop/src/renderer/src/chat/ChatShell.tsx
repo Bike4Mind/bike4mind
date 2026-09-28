@@ -7,6 +7,7 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatProject, ChatSessionMode } from '@shared/chat';
 import { BackgroundProcessPanel } from './BackgroundProcessPanel';
+import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
 import { MessageThread } from './MessageThread';
 import { PendingApprovalBar } from './PendingApprovalBar';
@@ -351,6 +352,13 @@ export function ChatShell({ account }: { account?: ReactNode }) {
           }
           onSend={text => void onSend(text)}
           onStop={conversation.stop}
+          leading={
+            <ApprovalModePill
+              mode={conversation.session?.approvalMode ?? 'ask'}
+              disabled={!activeId}
+              onSelect={mode => void conversation.setApprovalMode(mode)}
+            />
+          }
           footer={
             <ModelPicker
               catalog={catalog}

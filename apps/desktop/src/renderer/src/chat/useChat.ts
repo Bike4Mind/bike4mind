@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ChatApprovalDecision,
+  ChatApprovalMode,
   ChatAttachment,
   ChatMessage,
   ChatModelOption,
@@ -295,6 +296,11 @@ export interface ConversationController {
   rename: (title: string) => Promise<void>;
   /** Pin this conversation to a model; it is used from the next turn on. */
   setModel: (model: string) => Promise<void>;
+  /**
+   * Set how much this conversation may do without asking. Driven by the composer pill, from a
+   * click, and from nothing else: this is the only path to the mode in the renderer.
+   */
+  setApprovalMode: (mode: ChatApprovalMode) => Promise<void>;
   /** Where this Code session is grounded, for the chip row. Inert on a Chat session. */
   project: ProjectBindingController;
   /** Answer a tool call waiting at the approval gate. Nothing has run until this is called. */
@@ -522,6 +528,17 @@ export function useConversation(
     [sessionId, onSummaryChanged]
   );
 
+  const setApprovalMode = useCallback(
+    async (mode: ChatApprovalMode) => {
+      if (!sessionId) return;
+      const updated = await window.b4m.chat.setApprovalMode(sessionId, mode);
+      if (!updated) return;
+      setSession(current => (current ? { ...current, approvalMode: updated.approvalMode } : current));
+      onSummaryChanged(updated);
+    },
+    [sessionId, onSummaryChanged]
+  );
+
   const respondToApproval = useCallback((approvalId: string, decision: ChatApprovalDecision) => {
     void window.b4m.chat.respondToApproval(approvalId, decision);
   }, []);
@@ -646,6 +663,7 @@ export function useConversation(
     stop,
     rename,
     setModel,
+    setApprovalMode,
     project,
     respondToApproval,
   };

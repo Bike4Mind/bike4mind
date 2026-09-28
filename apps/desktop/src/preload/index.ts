@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
 import type {
   ChatApprovalDecision,
+  ChatApprovalMode,
   ChatAttachmentInput,
   ChatPendingApproval,
   ChatSessionStatusEvent,
@@ -39,6 +40,8 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionModel, sessionId, model),
     setSessionPinned: (sessionId: string, pinned: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPinned, sessionId, pinned),
+    setApprovalMode: (sessionId: string, mode: ChatApprovalMode) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetApprovalMode, sessionId, mode),
     setSessionArchived: (sessionId: string, archived: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionArchived, sessionId, archived),
     listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSessions),
