@@ -15,6 +15,8 @@ import type {
   SendMessageRequest,
   SendMessageResult,
   ToolAccessState,
+  UpdateProjectRequest,
+  UpdateProjectResult,
 } from './chat';
 
 /**
@@ -43,6 +45,7 @@ export const IPC_CHANNELS = {
   chatListSessions: 'chat:list-sessions',
   chatCreateSession: 'chat:create-session',
   chatCreateCodeSession: 'chat:create-code-session',
+  chatUpdateProject: 'chat:update-project',
   chatPickProjectDirectory: 'chat:pick-project-directory',
   chatInspectProject: 'chat:inspect-project',
   chatAddContextDirectory: 'chat:add-context-directory',
@@ -109,6 +112,11 @@ export interface DesktopApi {
     createSession(): Promise<ChatSessionSummary>;
     /** Start a Code session, creating or adopting its worktree first when one is asked for. */
     createCodeSession(request: CreateCodeSessionRequest): Promise<CreateCodeSessionResult>;
+    /**
+     * Re-ground a Code session that already exists: a different directory, branch or workspace
+     * choice. Refused while the session is busy - see UpdateProjectResult.
+     */
+    updateProject(request: UpdateProjectRequest): Promise<UpdateProjectResult>;
     /** Open the OS folder picker for a project root. Null when the user cancels. */
     pickProjectDirectory(): Promise<string | null>;
     /** Read a directory's branches for the New Code session dialog. */

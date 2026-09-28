@@ -1,19 +1,18 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
-import Chip from '@mui/joy/Chip';
 import Input from '@mui/joy/Input';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
-import type { ChatProject, ChatSessionMode, CreateCodeSessionRequest } from '@shared/chat';
+import type { ChatProject, ChatSessionMode } from '@shared/chat';
 import { BackgroundProcessPanel } from './BackgroundProcessPanel';
 import { Composer } from './Composer';
 import { FolderAccess } from './FolderAccess';
 import { MessageThread } from './MessageThread';
 import { contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
-import { NewCodeSessionDialog } from './NewCodeSessionDialog';
+import { SessionChips } from './SessionChips';
 import { SessionList } from './SessionList';
 import { SidebarCard } from './SidebarCard';
 import { SidebarShortcuts } from './SidebarShortcuts';
@@ -72,28 +71,20 @@ function SessionHeader({ title, onRename }: { title: string; onRename: (title: s
 }
 
 /**
- * Where a Code session is grounded, under its title. The working directory is shown whenever it
- * differs from the project, because that difference IS the workspace toggle: a user who cannot
- * see it has no way to tell which checkout their commands just ran in.
+ * The working directory a Code session's commands actually run in, under its title.
+ *
+ * Only shown when it differs from the project directory, because that difference IS the
+ * worktree toggle: the chip row above the composer says which branch and that a worktree is on,
+ * and this is the one thing it cannot fit - where that resolved to.
  */
-function ProjectBar({ project }: { project: ChatProject }) {
-  const relocated = project.workingDirectory !== project.directory;
+function WorkingDirectoryLine({ project }: { project: ChatProject }) {
+  if (project.workingDirectory === project.directory) return null;
   return (
-    <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mt: 0.25 }} data-testid="chat-project-bar">
-      <Chip size="sm" variant="soft" color="primary">
-        {project.name}
-      </Chip>
-      {project.branch && (
-        <Chip size="sm" variant="soft" color="neutral" data-testid="chat-project-branch">
-          {project.branch}
-        </Chip>
-      )}
-      <Tooltip title={project.workingDirectory} size="sm" variant="soft" placement="bottom-start">
-        <Typography level="body-xs" textColor="text.tertiary" noWrap data-testid="chat-project-cwd">
-          {relocated ? `worktree: ${project.workingDirectory}` : project.directory}
-        </Typography>
-      </Tooltip>
-    </Stack>
+    <Tooltip title={project.workingDirectory} size="sm" variant="soft" placement="bottom-start">
+      <Typography level="body-xs" textColor="text.tertiary" noWrap data-testid="chat-project-cwd">
+        worktree: {project.workingDirectory}
+      </Typography>
+    </Tooltip>
   );
 }
 
@@ -102,7 +93,6 @@ export function ChatShell({ account }: { account?: ReactNode }) {
     useSessions();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [mode, setMode] = useState<ChatSessionMode>('chat');
-  const [codeDialogOpen, setCodeDialogOpen] = useState(false);
   const conversation = useConversation(activeId, apply);
   const background = useBackgroundProcesses(activeId);
   const catalog = useModelCatalog();
@@ -159,24 +149,31 @@ export function ChatShell({ account }: { account?: ReactNode }) {
     setActiveId(sessions.find(session => session.mode === mode)?.id ?? null);
   }, [loading, activeId, sessions, mode]);
 
+  /**
+   * Start a session. In Code mode that is the folder picker and nothing else.
+   *
+   * There is no setup form any more: a project directory is the only thing a Code session
+   * cannot be created without - its tools have to run somewhere - and the branch, worktree and
+   * context folders it used to ask for are all chips above the composer now, answerable at any
+   * point instead of once. So the session opens on the repository's current branch, in the
+   * checkout itself, and the row says so.
+   */
   const onCreate = useCallback(async () => {
-    if (mode === 'code') {
-      clearCodeError();
-      setCodeDialogOpen(true);
+    if (mode !== 'code') {
+      setActiveId(await create());
       return;
     }
-    setActiveId(await create());
-  }, [mode, create, clearCodeError]);
-
-  const onCreateCode = useCallback(
-    async (request: CreateCodeSessionRequest) => {
-      const created = await createCode(request);
-      if (!created) return;
-      setCodeDialogOpen(false);
-      setActiveId(created);
-    },
-    [createCode]
-  );
+    clearCodeError();
+    const directory = await window.b4m.chat.pickProjectDirectory();
+    if (!directory) return;
+    const inspected = await window.b4m.chat.inspectProject(directory);
+    const created = await createCode({
+      directory,
+      branch: inspected.currentBranch ?? '',
+      workspace: false,
+    });
+    if (created) setActiveId(created);
+  }, [mode, create, createCode, clearCodeError]);
 
   /**
    * Another session in the same project, from the group header's "+".
@@ -257,7 +254,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
             {conversation.session ? (
               <>
                 <SessionHeader title={conversation.session.title} onRename={title => void conversation.rename(title)} />
-                {conversation.session.project && <ProjectBar project={conversation.session.project} />}
+                {conversation.session.project && <WorkingDirectoryLine project={conversation.session.project} />}
               </>
             ) : (
               <Typography level="title-sm" textColor="text.tertiary">
@@ -272,8 +269,6 @@ export function ChatShell({ account }: { account?: ReactNode }) {
           sessionId={activeId}
           onRespond={conversation.respondToApproval}
         />
-
-        <TurnStatus turn={conversation.turn} activity={activity} />
 
         {conversation.sendError && (
           <Alert size="sm" color="danger" variant="soft" sx={contentColumnSx} data-testid="chat-send-error">
@@ -296,12 +291,32 @@ export function ChatShell({ account }: { account?: ReactNode }) {
 
         <BackgroundProcessPanel processes={background.processes} onStop={background.stop} />
 
+        {codeError && (
+          <Alert
+            size="sm"
+            color="danger"
+            variant="soft"
+            sx={{ ...contentColumnSx, cursor: 'pointer' }}
+            onClick={clearCodeError}
+            data-testid="chat-code-create-error"
+          >
+            {codeError}
+          </Alert>
+        )}
+
+        {conversation.session?.project && (
+          <SessionChips project={conversation.session.project} binding={conversation.project} />
+        )}
+
         <Composer
           sessionId={activeId}
-          disabled={!activeId}
+          disabled={!activeId || creatingCode}
           streaming={conversation.streaming}
           attachments={draft}
           blockedReason={blockedReason}
+          placeholder={
+            conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'
+          }
           onSend={text => void onSend(text)}
           onStop={conversation.stop}
           footer={
@@ -312,16 +327,9 @@ export function ChatShell({ account }: { account?: ReactNode }) {
               onSelect={model => void conversation.setModel(model)}
             />
           }
+          status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
         />
       </Stack>
-
-      <NewCodeSessionDialog
-        open={codeDialogOpen}
-        onClose={() => setCodeDialogOpen(false)}
-        onCreate={request => void onCreateCode(request)}
-        error={codeError}
-        busy={creatingCode}
-      />
     </Box>
   );
 }

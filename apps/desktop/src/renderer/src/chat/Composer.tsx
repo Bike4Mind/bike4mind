@@ -16,14 +16,18 @@ export function Composer({
   streaming,
   attachments,
   blockedReason,
+  placeholder = 'Send a message...',
   onSend,
   onStop,
   footer,
+  status,
 }: {
   sessionId: string | null;
   disabled: boolean;
   streaming: boolean;
   attachments: AttachmentDraft;
+  /** Prompt for an empty composer. A Code session asks for a task, a Chat session for a message. */
+  placeholder?: string;
   /**
    * Why this turn cannot be sent as composed - today only an image on a model known not to
    * read them. Shown in full and blocks Send: the alternative is a request the server rejects
@@ -34,6 +38,12 @@ export function Composer({
   onStop: () => void;
   /** Controls that belong to the next turn rather than to the app - the model picker. */
   footer?: ReactNode;
+  /**
+   * What the turn in flight is doing, when one is. It TAKES OVER this slot rather than sitting
+   * beside the idle indicator below: two status elements a foot apart are two things that can
+   * disagree about whether a reply is running, and the reader has no way to tell which is right.
+   */
+  status?: ReactNode;
 }) {
   const [text, setText] = useState('');
 
@@ -107,23 +117,12 @@ export function Composer({
         </Box>
       )}
 
-      <Stack direction="row" spacing={1} alignItems="flex-end" sx={{ ...contentColumnSx, py: 1.5 }}>
-        <IconButton
-          variant="plain"
-          color="neutral"
-          disabled={disabled || attachments.busy}
-          onClick={() => void attachments.pick()}
-          aria-label="Attach a file"
-          data-testid="composer-attach-btn"
-        >
-          <Typography level="body-lg">+</Typography>
-        </IconButton>
-
+      <Stack direction="row" spacing={1} alignItems="flex-end" sx={{ ...contentColumnSx, pt: 1.5 }}>
         <Textarea
           value={text}
           onChange={event => setText(event.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={disabled ? 'Pick a conversation to start typing' : 'Send a message...'}
+          placeholder={disabled ? 'Pick a conversation to start typing' : placeholder}
           disabled={disabled}
           minRows={1}
           maxRows={8}
@@ -148,11 +147,42 @@ export function Composer({
         )}
       </Stack>
 
-      {footer && (
-        <Stack direction="row" alignItems="center" sx={{ ...contentColumnSx, pb: 1, mt: -0.5 }}>
-          {footer}
+      {/* Attach on the left, what answers the turn on the right - the shape Claude Code uses. */}
+      <Stack direction="row" alignItems="center" spacing={1} sx={{ ...contentColumnSx, py: 1 }}>
+        <IconButton
+          size="sm"
+          variant="plain"
+          color="neutral"
+          disabled={disabled || attachments.busy}
+          onClick={() => void attachments.pick()}
+          aria-label="Attach a file"
+          data-testid="composer-attach-btn"
+        >
+          <Typography level="body-lg">+</Typography>
+        </IconButton>
+
+        <Box sx={{ flex: 1 }} />
+
+        {footer}
+
+        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }} data-testid="composer-status">
+          {status ?? (
+            <>
+              <Box
+                sx={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: '50%',
+                  bgcolor: streaming ? 'primary.solidBg' : disabled ? 'neutral.softBg' : 'success.solidBg',
+                }}
+              />
+              <Typography level="body-xs" textColor="text.tertiary">
+                {streaming ? 'Working' : disabled ? 'No session' : 'Ready'}
+              </Typography>
+            </>
+          )}
         </Stack>
-      )}
+      </Stack>
     </Box>
   );
 }

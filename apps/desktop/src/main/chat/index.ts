@@ -9,6 +9,7 @@ import type {
   CreateCodeSessionRequest,
   ProjectInspection,
   SendMessageRequest,
+  UpdateProjectRequest,
 } from '@shared/chat';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { AuthService } from '../auth';
@@ -163,6 +164,10 @@ export function registerChat(auth: AuthService): RegisteredChat {
   ipcMain.handle(IPC_CHANNELS.chatCreateSession, () => service.createSession());
   ipcMain.handle(IPC_CHANNELS.chatCreateCodeSession, (_event, request: CreateCodeSessionRequest) =>
     service.createCodeSession(request)
+  );
+
+  ipcMain.handle(IPC_CHANNELS.chatUpdateProject, (_event, request: UpdateProjectRequest) =>
+    service.updateProject(request)
   );
 
   ipcMain.handle(IPC_CHANNELS.chatPickProjectDirectory, (event): Promise<string | null> => pickDirectory(event.sender));

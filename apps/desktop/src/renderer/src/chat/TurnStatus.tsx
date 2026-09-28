@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
-import { contentColumnSx } from './layout';
 import { statusFields, type TurnProgress } from './statusLine';
 
 const pulse = keyframes({
@@ -11,9 +10,12 @@ const pulse = keyframes({
 });
 
 /**
- * The one quiet line under the transcript while a turn is in flight: elapsed, tokens, activity.
+ * The one quiet line while a turn is in flight: elapsed, tokens, activity.
  *
- * Drawn from `turn` alone, which main nulls on every way a turn can end - finished, failed,
+ * It fills the composer's status slot, taking over from the idle Ready/Working indicator, so
+ * exactly one element on screen speaks for whether a reply is running.
+ *
+ * Drawn from `turn` alone, which is nulled on every way a turn can end - finished, failed,
  * stopped - so the line cannot outlive the thing it describes. A stale "3m 7s . Running
  * tools..." sitting under a finished answer is the failure this shape invites.
  */
@@ -31,13 +33,7 @@ export function TurnStatus({ turn, activity }: { turn: TurnProgress | null; acti
   if (!turn) return null;
 
   return (
-    <Stack
-      direction="row"
-      spacing={0.75}
-      alignItems="center"
-      sx={{ ...contentColumnSx, pb: 1 }}
-      data-testid="chat-turn-status"
-    >
+    <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }} data-testid="chat-turn-status">
       <Typography
         level="body-xs"
         textColor="text.tertiary"
