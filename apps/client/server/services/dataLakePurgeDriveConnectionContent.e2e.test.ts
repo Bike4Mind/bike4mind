@@ -167,6 +167,41 @@ describe('data lake purge Drive teardown - ingested content (real repos + Mongo)
     expect(result).toEqual({ filesPurged: 0, storageObjectsDeleted: 0 });
   });
 
+  it("calls shredDocumentMemory once per deleted file, with that file's own tags and owner", async () => {
+    const lake = await seedLake();
+    const connectionId = new mongoose.Types.ObjectId().toHexString();
+    const fileA = await seedFile({ datalakeTag: lake.datalakeTag, driveConnectionId: connectionId, userId: OWNER });
+    const fileB = await seedFile({
+      datalakeTag: lake.datalakeTag,
+      driveConnectionId: connectionId,
+      userId: CONTRIBUTOR,
+    });
+
+    const files = await fabFileRepository.findByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag);
+    const shredDocumentMemory = vi.fn(async () => {});
+    const result = await dataLakeService.purgeDataLakeConnectionFiles(
+      dataLakeService.lakeMembershipScope(lake),
+      files,
+      {
+        db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository, users: userRepository },
+        shredDocumentMemory,
+      }
+    );
+
+    expect(result.filesPurged).toBe(2);
+    expect(shredDocumentMemory).toHaveBeenCalledTimes(2);
+    expect(shredDocumentMemory).toHaveBeenCalledWith({
+      tagNames: [lake.datalakeTag],
+      fabFileId: fileA.id,
+      ownerUserId: OWNER,
+    });
+    expect(shredDocumentMemory).toHaveBeenCalledWith({
+      tagNames: [lake.datalakeTag],
+      fabFileId: fileB.id,
+      ownerUserId: CONTRIBUTOR,
+    });
+  });
+
   it('refunds each owner their storage quota for the bytes it actually deleted', async () => {
     const lake = await seedLake();
     const connectionId = new mongoose.Types.ObjectId().toHexString();
