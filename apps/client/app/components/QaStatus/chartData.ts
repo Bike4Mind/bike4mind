@@ -33,7 +33,7 @@ function build(entries: Entry[], unit: string): ChartData {
   let resolvedUnit = unit;
   for (const e of entries) {
     if (!kept.has(e.key)) continue;
-    const row = rows.get(e.t) ?? { t: e.t };
+    const row: ChartRow = rows.get(e.t) ?? { t: e.t };
     row[e.key] = e.value;
     rows.set(e.t, row);
     if (e.threshold !== undefined && !thresholds.includes(e.threshold)) thresholds.push(e.threshold);
