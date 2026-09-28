@@ -1,4 +1,11 @@
-import { filterToolArtifactMarkup, stripDeliveredArtifactBlocks, type StreamChannel } from '@bike4mind/common';
+import {
+  ARTIFACT_DELIVERED_PLACEHOLDER,
+  ARTIFACT_REMOVED_PLACEHOLDER,
+  filterToolArtifactMarkup,
+  stripDeliveredArtifactBlocks,
+  stripToolArtifactMarkup,
+  type StreamChannel,
+} from '@bike4mind/common';
 import type { CompletionInfo } from './backend';
 
 /**
@@ -22,6 +29,19 @@ export async function handleToolResultStreaming(
   if (filtered !== null) {
     await streamCallback([filtered], { channel: 'tool-artifact' });
   }
+}
+
+/**
+ * Strips artifact markup from a tool result before it re-enters history, for a backend that never
+ * streams tool artifacts live. An emitter's artifact still reaches the user through the services
+ * sharedToolBuilder tool_result extraction, so the model is told it was delivered rather than
+ * shown markup it could echo into a second card.
+ */
+export function stripUnstreamedToolResult(toolName: string, result: string): string {
+  return stripToolArtifactMarkup(
+    result,
+    filterToolArtifactMarkup(toolName, result) !== null ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
+  );
 }
 
 // The four backends' own completion-callback types differ only in whether `info` is required

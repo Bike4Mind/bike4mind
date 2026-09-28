@@ -1,10 +1,12 @@
 import {
+  ARTIFACT_REMOVED_PLACEHOLDER,
   ChatModels,
   createThinkMarkerEscaper,
   escapeThinkMarkers,
   IMessage,
   ModelBackend,
   PermissionDeniedError,
+  stripToolArtifactMarkup,
   type CacheUsageStats,
   type ModelInfo,
 } from '@bike4mind/common';
@@ -16,6 +18,7 @@ import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
+import { stripUnstreamedToolResult } from './toolStreamingHelper';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -348,7 +351,7 @@ export class DeepSeekBackend implements ICompletionBackend {
             let turnReasoning = reasoningContent;
             for (const outcome of outcomes) {
               if (outcome.ok) {
-                const resultStr = outcome.result.toString();
+                const resultStr = stripUnstreamedToolResult(outcome.name, outcome.result.toString());
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
                 this.pushToolMessages(
                   messages,
@@ -359,7 +362,10 @@ export class DeepSeekBackend implements ICompletionBackend {
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
                 const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
-                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                const observation = stripToolArtifactMarkup(
+                  `Error processing ${outcome.name} tool: ${errorMessage}`,
+                  ARTIFACT_REMOVED_PLACEHOLDER
+                );
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 this.pushToolMessages(
                   messages,
@@ -651,7 +657,7 @@ export class DeepSeekBackend implements ICompletionBackend {
         let turnReasoning: string | undefined = streamedReasoning || undefined;
         for (const outcome of outcomes) {
           if (outcome.ok) {
-            const resultStr = outcome.result.toString();
+            const resultStr = stripUnstreamedToolResult(outcome.name, outcome.result.toString());
             recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
             this.pushToolMessages(
               messages,
@@ -662,7 +668,10 @@ export class DeepSeekBackend implements ICompletionBackend {
           } else {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
             const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
-            const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+            const observation = stripToolArtifactMarkup(
+              `Error processing ${outcome.name} tool: ${errorMessage}`,
+              ARTIFACT_REMOVED_PLACEHOLDER
+            );
             recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
             this.pushToolMessages(
               messages,

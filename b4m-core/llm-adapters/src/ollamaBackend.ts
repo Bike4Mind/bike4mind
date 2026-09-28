@@ -1,4 +1,5 @@
 import {
+  ARTIFACT_REMOVED_PLACEHOLDER,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
   createThinkMarkerEscaper,
   escapeThinkMarkers,
@@ -6,6 +7,7 @@ import {
   isUserInitiatedAbort,
   ModelBackend,
   PermissionDeniedError,
+  stripToolArtifactMarkup,
   type MessageContentObject,
   type ModelInfo,
 } from '@bike4mind/common';
@@ -23,6 +25,7 @@ import { Agent } from 'undici';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { executeToolsBatch } from './executeToolsBatch';
 import { attachFullToolResult, truncateToolResult } from './recordToolResult';
+import { stripUnstreamedToolResult } from './toolStreamingHelper';
 import { normalizeOllamaDoneReason } from './stopReason';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -375,14 +378,15 @@ export class OllamaBackend implements ICompletionBackend {
         const { tc } = resolved[i];
         const params = tc.arguments || '{}';
         if (outcome.ok) {
-          observations[i] = outcome.result;
-          this.pushToolMessages(messages, { id: tc.id, name: tc.name, parameters: params }, outcome.result);
+          observations[i] = stripUnstreamedToolResult(tc.name, outcome.result);
+          this.pushToolMessages(messages, { id: tc.id, name: tc.name, parameters: params }, observations[i]);
         } else {
           // A denied permission must abort, not be fed back as a result.
           if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
-          const errorMsg = `Error running ${tc.name}: ${
-            outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
-          }`;
+          const errorMsg = stripToolArtifactMarkup(
+            `Error running ${tc.name}: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`,
+            ARTIFACT_REMOVED_PLACEHOLDER
+          );
           observations[i] = errorMsg;
           this.pushToolMessages(messages, { id: tc.id, name: tc.name, parameters: params }, errorMsg);
         }

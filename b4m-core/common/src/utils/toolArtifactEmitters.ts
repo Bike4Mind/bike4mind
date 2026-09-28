@@ -3,22 +3,17 @@ import { type ArtifactTagMemo, scanArtifactOpenTag } from './artifactOpenTag';
 
 // The tools whose results may carry artifacts, each pinned to the one type it emits. Any other
 // tool's output (web pages, files, MCP servers) is untrusted and can carry forged markup. Read by
-// sharedToolBuilder (tool_result extraction) and llm-adapters toolStreamingHelper (reply streaming);
-// a new artifact-emitting tool must be added here or its artifact is dropped on both paths.
+// sharedToolBuilder (tool_result extraction) and llm-adapters toolStreamingHelper (reply streaming
+// and the delivered-vs-removed placeholder every backend puts in history); a new artifact-emitting
+// tool must be added here or its artifact is dropped on both paths.
 //
-// Gating status (#3253/#3329's fix + #3354's follow-ups only cover the 4 backends that
-// live-stream a tool's own result as a distinct chunk via handleToolResultStreaming: Anthropic,
-// Gemini, Bedrock, OpenAI). kimiBackend.ts, xaiBackend.ts, deepseekBackend.ts, and
-// ollamaBackend.ts reference neither TOOL_ARTIFACT_EMITTERS nor handleToolResultStreaming - but
-// this is NOT a "nothing to dedupe" case: sharedToolBuilder.ts's onArtifactExtracted callback
-// pulls an artifact out of ANY backend's tool result into quest.promptMeta.artifacts regardless of
-// this map's 4-backend gating, and all 4 of these backends push the tool result RAW (unstripped)
-// into pushToolMessages/history with no stripToolArtifactMarkup call - so the model can see and
-// echo its own artifact tag back in reply text, reproducing #3253's exact duplicate-card bug on
-// these 4 backends too. Left unfixed here deliberately - fixing it means wiring
-// stripToolArtifactMarkup + createRecursiveArtifactGuard/markDelivered into 4 more backends,
-// out of scope for #3354's test-coverage/hardening follow-ups. Not excluded from this map either:
-// that would just silently drop these tools' availability without closing the real gap.
+// Gating status: every backend (Anthropic, Gemini, Bedrock, OpenAI via #3253/#3329/#3354, and
+// kimi/xai/deepseek/ollama here) now strips the raw <artifact> tag out of a tool result before it
+// enters history, so the model can no longer echo it back verbatim - closing #3253's duplicate-card
+// bug everywhere. What remains backend-specific: only Anthropic/Gemini/Bedrock/OpenAI also wire
+// createRecursiveArtifactGuard/markDelivered, which catches a model that reconstructs the tag from
+// memory instead of echoing it. kimi/xai/deepseek/ollama don't wire that guard yet, so a
+// memory-reconstructed echo can still slip through on those four; that is the remaining follow-up.
 export const TOOL_ARTIFACT_EMITTERS: ReadonlyMap<string, string> = new Map([
   ['recharts', ClaudeArtifactMimeTypes.RECHARTS],
   ['mermaid_chart', ClaudeArtifactMimeTypes.MERMAID],
