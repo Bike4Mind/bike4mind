@@ -210,6 +210,12 @@ const GearsPage = () => {
       !GENERATOR_KEYS.includes(g.key) &&
       !INTEGRATION_KEYS.includes(g.key)
   );
+  const tabCards: Record<GearsTabKey, GearStatus[]> = {
+    'getting-started': gettingStarted,
+    features: skills,
+    generators,
+    integrations,
+  };
 
   /** Interpret a gear's ctaAction - see lib/gears/presentation.ts for the grammar. */
   const onCta = (gear: GearStatus) => {
@@ -593,29 +599,63 @@ const GearsPage = () => {
           aria-label="Gear categories"
         >
           <TabList data-testid="gears-tablist" sx={pageTabListSx}>
-            {TABS.map(({ key, label }) => (
-              <PageTab key={key} value={key} data-testid={`gears-tab-${key}`}>
-                {/* Colour set here, as on /profile: the opacity step in PageTab is what
-                    separates active from inactive, so the label itself stays primary ink. */}
-                <Typography sx={{ color: 'text.primary' }}>{label}</Typography>
-              </PageTab>
-            ))}
+            {TABS.map(({ key, label }) => {
+              const claimable = tabCards[key].filter(g => rewardState(g) === 'claimable').length;
+              return (
+                <PageTab key={key} value={key} data-testid={`gears-tab-${key}`}>
+                  {/* Colour set here, as on /profile: the opacity step in PageTab is what
+                      separates active from inactive, so the label itself stays primary ink. */}
+                  <Typography sx={{ color: 'text.primary' }}>{label}</Typography>
+                  {claimable > 0 && (
+                    // A Box, not Typography: PageTab fades every Typography on an
+                    // inactive tab, and this count is most useful on exactly those.
+                    // The claimed marker's circle in the claimable green, so the tab
+                    // points at the cards the sidenav's Claim N counted.
+                    <Box
+                      component="span"
+                      role="img"
+                      aria-label={`${claimable} to claim`}
+                      data-testid={`gears-tab-claimable-${key}`}
+                      sx={theme => ({
+                        ml: '8px',
+                        minWidth: '20px',
+                        height: '20px',
+                        px: '5px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderRadius: '999px',
+                        // The credit chips' own size and weight.
+                        fontSize: '13px',
+                        fontWeight: 500,
+                        lineHeight: 1,
+                        color: rewardGreen(theme).ink,
+                        backgroundColor: rewardGreen(theme).fill,
+                        border: `1px solid ${rewardGreen(theme).stroke}`,
+                      })}
+                    >
+                      {claimable}
+                    </Box>
+                  )}
+                </PageTab>
+              );
+            })}
           </TabList>
 
           <TabPanel value="getting-started" sx={{ px: 0, pt: '24px', pb: 0 }}>
-            {renderPanel(gettingStarted, 'getting-started')}
+            {renderPanel(tabCards['getting-started'], 'getting-started')}
           </TabPanel>
 
           <TabPanel value="features" sx={{ px: 0, pt: '24px', pb: 0 }}>
-            {renderPanel(skills, 'features')}
+            {renderPanel(tabCards.features, 'features')}
           </TabPanel>
 
           <TabPanel value="generators" sx={{ px: 0, pt: '24px', pb: 0 }}>
-            {renderPanel(generators, 'generators')}
+            {renderPanel(tabCards.generators, 'generators')}
           </TabPanel>
 
           <TabPanel value="integrations" sx={{ px: 0, pt: '24px', pb: 0 }}>
-            {renderPanel(integrations, 'integrations')}
+            {renderPanel(tabCards.integrations, 'integrations')}
           </TabPanel>
         </Tabs>
       </Box>
