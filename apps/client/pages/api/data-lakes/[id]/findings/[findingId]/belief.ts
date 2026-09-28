@@ -48,10 +48,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // forgets. Cheap to keep: the assert is synchronous and idempotent.
     assertDataLakeWriteScope(req);
 
-    // Before the first await: the crypto-shred fence refuses a write only when the purge lands at or
-    // after this instant, so stamping it later would let a purge that landed mid-request lift its own
-    // tombstone. See `recordFindingResolutionBelief`'s `startedAt`.
-    const startedAt = new Date();
+    // The request's arrival, stamped by baseApi ahead of connectDB and auth: the crypto-shred fence
+    // refuses a write only when the purge lands at or after this instant, so any later stamp would
+    // let a purge that landed mid-request lift its own tombstone. See `recordFindingResolutionBelief`.
+    const startedAt = req.receivedAt;
     const { id, findingId } = req.query as { id: string; findingId: string };
 
     const { lake, finding } = await loadFindingForLake(req, { lakeId: id, findingId });
