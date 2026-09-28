@@ -11,7 +11,7 @@
  *  - admin: browse returns `listAllDataLakes` - every lake of every tenant - while retrieval
  *    gives an admin the static registry plus only the lakes they reach unprivileged.
  *  - draft lakes: browse includes `draft`, retrieval is `active`-only. The ATTACHMENT doors are
- *    the one exception and track browse here (#3279) - they re-authorize a file the user named
+ *    the one exception and track browse here - they re-authorize a file the user named
  *    and the product already showed them, so being narrower than browse silently drops it.
  * So a caller can browse a lake that semantic search will not reach; never the reverse.
  * (An owner's own gated lake used to be a third difference - the retrieval resolver now

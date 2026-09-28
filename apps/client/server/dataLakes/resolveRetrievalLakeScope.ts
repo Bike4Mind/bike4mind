@@ -11,7 +11,7 @@
  * draft lakes). Retrieval is a subset in every case, never the reverse. Do not paper those
  * over here. The one caller that legitimately needs browse's draft reach asks for it explicitly
  * (`includeDraftLakes` on the request-free resolver below), because it is an ATTACHMENT door and
- * not a retrieval one - see #3279. An owner's own gated lake is no longer among them: the core resolver restores it, and
+ * not a retrieval one. An owner's own gated lake is no longer among them: the core resolver restores it, and
  * so is a lake held by an owner/curator grant - the grant arm below is what keeps browse and
  * retrieval agreeing on a transferred lake.
  */
@@ -176,7 +176,7 @@ export async function resolveRetrievalLakeScopeForUser(
     /**
      * Default `false`. Pass `true` to resolve the ATTACHMENT scope instead of the retrieval one:
      * draft lakes join active ones, matching the browse door that admitted the file to the
-     * workbench (#3279). Only `createAttachmentLakeAccess` passes it - the derivation call sites
+     * workbench. Only `createAttachmentLakeAccess` passes it - the derivation call sites
      * below (sessionCrud, the voice and quest-plan routes) are retrieval and must not, or an
      * unpublished lake would become ground truth for a question the user never pointed at it.
      */

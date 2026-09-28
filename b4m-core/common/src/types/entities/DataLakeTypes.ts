@@ -204,7 +204,7 @@ export const LAKE_INGESTABLE_STATUSES = ['draft', 'active'] as const satisfies r
  *
  * Shared with the ATTACHMENT door's opt-in
  * (`findActiveByUserTagsAndEntitlements`'s `includeDraftLakes`) so the two cannot drift: an
- * attachment lookup narrower than the door that admitted the file silently drops it (#3279).
+ * attachment lookup narrower than the door that admitted the file silently drops it.
  * Retrieval/semantic search is deliberately NOT in this set - it stays `active`-only, because an
  * unpublished lake must not become ground truth for a question the user never pointed at it.
  */
@@ -672,8 +672,8 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
        * Widens the status filter from `active` alone to `LAKE_ATTACHABLE_STATUSES` (draft +
        * active) - the set browse already admits. Opt-in and OFF by default, because it is an
        * access widening that only ONE caller class is entitled to: the ATTACHMENT doors, where
-       * the user has explicitly named a file the product already showed them and let them attach
-       * (#3279). Retrieval and semantic search must leave it unset - an unpublished lake is not
+       * the user has explicitly named a file the product already showed them and let them attach.
+       * Retrieval and semantic search must leave it unset - an unpublished lake is not
        * ground truth for a question the user never pointed at it.
        *
        * Widens ONLY the status filter. Every other arm - org prerequisite, requirement gate,

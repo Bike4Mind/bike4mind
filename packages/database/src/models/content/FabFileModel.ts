@@ -939,12 +939,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // the door that admitted the file and silently drop lake-only images. Same builder, same
     // `archivedAt: null` post-processing on each arm - so the two doors can never disagree.
     //
-    // DRAFT lakes used to be the one place the two doors disagreed, and not because of anything
-    // here: the arms are only as wide as the `lakeAccess` a caller passes, and every attachment
-    // door resolved that active-only while browse (`GET /api/files/byIds`, which is what admits the
-    // file to the workbench) selects draft AND active - so an unpublished lake's file was
-    // attachable there and absent here (#3279). The three attachment doors now opt into
-    // `includeDraftLakes`; retrieval and semantic search still do not. Pinned by
+    // DRAFT lakes follow the same rule, but not from anything here: the arms are only as wide as
+    // the `lakeAccess` a caller passes. Browse (`GET /api/files/byIds`, which admits the file to the
+    // workbench) selects draft AND active, so every attachment door resolves its `lakeAccess` with
+    // `includeDraftLakes` to match - an active-only scope would drop an unpublished lake's file
+    // here that browse just showed. Retrieval and semantic search stay active-only. Pinned by
     // `queries/dataLakeDraftAttachmentScope.integration.test.ts`.
     const lakeArms = buildLakeArms({
       lakeMemberships: lakeAccess?.lakeMemberships,

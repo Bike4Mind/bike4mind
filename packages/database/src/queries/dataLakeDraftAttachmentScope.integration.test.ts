@@ -14,11 +14,11 @@ import { DataLakeModel, dataLakeRepository } from '../models/ai/DataLakeModel';
  * deliberately, per `resolveRetrievalLakeScope`: an unpublished lake must not become ground truth
  * for a question the user never pointed at it.
  *
- * The ATTACHMENT doors used to inherit retrieval's narrowing, so a file the workbench admitted and
- * the user explicitly attached was silently dropped by `findAccessibleInIds` - the image edit mask,
- * the reference anchors, the generation input (#3279). They now pass `includeDraftLakes` and track
- * browse. This file asserts BOTH halves, because the fix is the split, not the widening: move
- * either door and one of these assertions must change deliberately.
+ * The ATTACHMENT doors pass `includeDraftLakes` and track browse instead: were they to inherit
+ * retrieval's narrowing, a file the workbench admitted and the user explicitly attached would be
+ * silently dropped by `findAccessibleInIds` - the image edit mask, the reference anchors, the
+ * generation input. This file asserts BOTH halves, because the contract is the split, not the
+ * widening: move either door and one of these assertions must change deliberately.
  *
  * Against a real server rather than asserted structurally: the whole claim is about what Mongo
  * returns for a status filter combined with the tag/prefix arms, which a shape assertion cannot show.

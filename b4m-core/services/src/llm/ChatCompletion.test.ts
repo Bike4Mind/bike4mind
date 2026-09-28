@@ -1132,8 +1132,8 @@ describe('ChatCompletionProcess', () => {
     };
 
     it('derives lakeMemberships via lakeMembershipsFrom (owned only) and forwards tags/prefixes verbatim', async () => {
-      // Seeds the ATTACHMENT memo, not the retrieval one: since #3279 the two are separate
-      // resolutions - the attachment scope admits draft lakes, as browse does.
+      // Seeds the ATTACHMENT memo, not the retrieval one: the two are separate resolutions -
+      // the attachment scope admits draft lakes, as browse does.
       (service as any).attachmentDataLakeAccessMemo = {
         dataLakeTags: ['datalake:acme', 'datalake:reg'],
         dataLakeTagPrefixes: ['reg:'],
@@ -1199,7 +1199,7 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
-    // #3279: the attachment door re-authorizes a file the user NAMED and that browse
+    // The attachment door re-authorizes a file the user NAMED and that browse
     // (`GET /api/files/byIds`) already admitted to the workbench, so it must track browse's
     // draft+active status set. Retrieval must not follow it there - an unpublished lake is not
     // ground truth for a question the user never pointed at. These three pin both halves.
@@ -3959,8 +3959,8 @@ describe('ChatCompletionProcess', () => {
      * `getAttachedKnowledgeFiles` (getAccessibleFiles) and `fabFilesToMessages`
      * (fetchAndConvertFabFiles) must resolve `attachmentLakeAccess()` off the SAME
      * memoized per-turn access, or an id reachable through one door could silently
-     * disagree with the other. That memo is the ATTACHMENT one since #3279, which is
-     * what this seeds.
+     * disagree with the other. That memo is the ATTACHMENT one, which is what this
+     * seeds.
      */
     it('forwards the same attachmentLakeAccess to fetchAndConvertFabFiles as getAttachedKnowledgeFiles gets from getAccessibleFiles', async () => {
       const membership = {

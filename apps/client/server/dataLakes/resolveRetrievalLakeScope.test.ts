@@ -245,7 +245,7 @@ describe('resolveRetrievalLakeScope', () => {
         entitlementKeysResolved: true,
       },
       // Second argument: the per-call options. Empty is the retrieval scope - the attachment door
-      // is the only caller that opts into draft lakes (#3279).
+      // is the only caller that opts into draft lakes.
       {}
     );
   });
@@ -397,7 +397,7 @@ describe('resolveRetrievalLakeScopeForUser', () => {
     expect(mockGetDynamicDataLakeAccess.mock.calls[0][0]).toMatchObject({ entitlementKeys: ['k'] });
   });
 
-  // #3279: this resolver serves the retrieval surfaces AND, through createAttachmentLakeAccess, the
+  // This resolver serves the retrieval surfaces AND, through createAttachmentLakeAccess, the
   // agent/image attachment door - which must track browse's draft+active set because browse is what
   // admitted the file to the workbench. The flag is the only thing separating them, so both
   // polarities are pinned.

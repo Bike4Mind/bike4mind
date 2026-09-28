@@ -356,11 +356,11 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
   });
 });
 
-// #3279: the ATTACHMENT scope. `includeDraftLakes` is a per-CALL option rather than a context
+// The ATTACHMENT scope. `includeDraftLakes` is a per-CALL option rather than a context
 // field precisely so a caller can resolve it off the SAME context object the retrieval pass used -
 // the per-turn membership/grant/supersession memos key on that object's IDENTITY - so these tests
 // assert the flag reaches the repo and nothing else about the resolution moves with it.
-describe('getDynamicDataLakeAccess - the #3279 attachment scope', () => {
+describe('getDynamicDataLakeAccess - the attachment scope', () => {
   it('leaves includeDraftLakes unset by default, so every retrieval surface stays active-only', async () => {
     const findActive = vi.fn().mockResolvedValue([]);
     const context = ctx([], { user: { id: 'u1', tags: [] } });

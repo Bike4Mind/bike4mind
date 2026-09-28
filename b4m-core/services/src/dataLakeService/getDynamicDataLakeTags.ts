@@ -259,7 +259,7 @@ export async function getDynamicDataLakeTags(context: DataLakeAccessContext): Pr
 export interface GetDynamicDataLakeAccessOptions {
   /**
    * Resolve the ATTACHMENT scope rather than the retrieval one: draft lakes join active ones, as
-   * they already do on the browse door that admitted the file to the workbench (#3279). Only the
+   * they already do on the browse door that admitted the file to the workbench. Only the
    * three attachment doors may pass this - `ChatCompletionProcess.attachmentLakeAccess`,
    * `resolveAttachmentLakeAccess`, and the app layer's `createAttachmentLakeAccess`. Every
    * retrieval surface leaves it unset.
@@ -283,7 +283,7 @@ export interface GetDynamicDataLakeAccessOptions {
  * persisted `createdByUserId` rather than assumed from the query, and stays bounded by the
  * pre-filter's status set - `active` alone by default, so a DRAFT lake stays out of retrieval;
  * `opts.includeDraftLakes` widens that to browse's own draft+active for the attachment doors, and
- * for them only (#3279). The bypass is org-independent, matching browse: a creator who has since
+ * for them only. The bypass is org-independent, matching browse: a creator who has since
  * moved orgs still reaches a gated lake they made in the old one, and only they or an admin could
  * have put files in it.
  *
@@ -596,7 +596,7 @@ export async function getDynamicDataLakeAccess(
     // running the count on a degraded input would produce a confidently wrong number in either
     // direction rather than the honest "unknown" this field's contract requires.
     //
-    // Skipped entirely on the attachment pass (#3279). That pass is a SECOND resolution in the same
+    // Skipped entirely on the attachment pass. That pass is a SECOND resolution in the same
     // turn, and every one of its consumers builds an `AttachmentLakeAccess` from the tag/prefix/lake
     // buckets alone - none reads this count. The count is also status-scoped to ACTIVE lakes and
     // `includeDraftLakes` does not touch it, so re-running it here would spend a second whole-account

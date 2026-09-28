@@ -45,9 +45,9 @@ describe('createAttachmentLakeAccess', () => {
   });
 
   it('opts IN to includeDraftLakes, so the attachment scope tracks the door that admitted the file', async () => {
-    // #3279: `GET /api/files/byIds` admits a draft lake's file to the workbench. Resolving this
-    // door active-only made it narrower than that, and the image mask / reference anchors /
-    // generation input were dropped for a file the user had explicitly attached.
+    // `GET /api/files/byIds` admits a draft lake's file to the workbench. Resolving this door
+    // active-only would be narrower than that, and would drop the image mask / reference anchors /
+    // generation input for a file the user explicitly attached.
     resolveRetrievalLakeScopeForUser.mockResolvedValue({ lakes: [], dataLakeTags: [], dataLakeTagPrefixes: [] });
     const logger = makeLogger();
 

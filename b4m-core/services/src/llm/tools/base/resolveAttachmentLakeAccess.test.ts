@@ -36,10 +36,10 @@ describe('resolveAttachmentLakeAccess', () => {
     lakeMembershipsFromMock.mockReturnValue([MEMBERSHIP]);
   });
 
-  // #3279: browse (`GET /api/files/byIds`) admits a DRAFT lake's file to the workbench. A tool
-  // re-authorizing that same named file against an active-only lake set is narrower than the door
-  // that admitted it, so `edit_image` reported "not found or is not accessible" for a file the
-  // user was looking at.
+  // Browse (`GET /api/files/byIds`) admits a DRAFT lake's file to the workbench. A tool
+  // re-authorizing that same named file against an active-only lake set would be narrower than the
+  // door that admitted it, so `edit_image` would report "not found or is not accessible" for a file
+  // the user is looking at.
   it('asks for the attachment scope, not the retrieval one', async () => {
     await resolveAttachmentLakeAccess(context);
 

@@ -184,8 +184,8 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
   });
 
   it('includeDraftLakes lifts that status bound - the ATTACHMENT scope, which tracks browse', async () => {
-    // #3279: browse admits a draft lake's file to the workbench, so an attachment lookup resolved
-    // active-only is narrower than the door that admitted the file and silently drops it.
+    // Browse admits a draft lake's file to the workbench, so an attachment lookup resolved
+    // active-only would be narrower than the door that admitted the file and silently drop it.
     await dataLakeRepository.create(baseLake({ slug: 'draft', createdByUserId: 'alice', status: 'draft' }));
 
     const attachment = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], undefined, 'alice', {

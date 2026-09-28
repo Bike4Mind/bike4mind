@@ -13,10 +13,10 @@ import type { Logger } from '@bike4mind/observability';
  * attachment doors disagreeing for exactly the caller class most likely to notice.
  *
  * Opted IN to `includeDraftLakes`, which is what makes this an ATTACHMENT scope rather than the
- * retrieval one the resolver's name describes (#3279): browse (`GET /api/files/byIds`) admits a
+ * retrieval one the resolver's name describes: browse (`GET /api/files/byIds`) admits a
  * DRAFT lake's file to the workbench, so re-authorizing that same named file against an
- * active-only lake set is narrower than the door that admitted it - the mask, the reference
- * anchors and the generation input were all silently dropped. The other three
+ * active-only lake set would be narrower than the door that admitted it and silently drop the
+ * mask, the reference anchors and the generation input. The other three
  * `resolveRetrievalLakeScopeForUser` call sites are retrieval-tag derivation and must not pass it.
  *
  * Returns a THUNK, and the caller must keep it one: a handoff is a FRESH invocation (published to

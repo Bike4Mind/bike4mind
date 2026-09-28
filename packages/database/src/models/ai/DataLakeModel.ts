@@ -428,7 +428,7 @@ export const buildAccessibleQuery = (
     supersededOwnLakeIds?: string[];
   }
 ): { filter: Record<string, unknown>; arms: FindAccessibleArm[] } => {
-  // Same list the attachment door opts into (#3279), read from one constant so browse cannot widen
+  // Same list the attachment door opts into, read from one constant so browse cannot widen
   // or narrow without the attachment lookup following it.
   const statuses = opts?.statuses ?? [...LAKE_ATTACHABLE_STATUSES];
 
@@ -746,7 +746,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     }
 
     // `active` alone for retrieval; draft + active for the ATTACHMENT doors, which must track the
-    // browse door that admitted the file to the workbench in the first place (#3279 - see the
+    // browse door that admitted the file to the workbench in the first place (see the
     // interface's `includeDraftLakes` doc). Only the status filter moves: every arm above still
     // applies, so a draft lake surfaces here only for a caller who could have reached it published.
     const status = opts?.includeDraftLakes ? { $in: [...LAKE_ATTACHABLE_STATUSES] } : 'active';

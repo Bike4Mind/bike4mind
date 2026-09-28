@@ -900,7 +900,7 @@ export class ChatCompletionProcess {
    */
   private accessibleDataLakeAccessMemo: ResolvedLakeAccessSetWithAdmissions | undefined;
   /**
-   * Per-turn memo for the ATTACHMENT scope (#3279) - the same resolution as
+   * Per-turn memo for the ATTACHMENT scope - the same resolution as
    * `accessibleDataLakeAccessMemo` above but with DRAFT lakes included, as browse includes them.
    * Kept separate rather than widening that one: it feeds the tool-offer gate, the inline-defer
    * plan and the retrieval seed's `lakeScope`, and an unpublished lake must not become ground truth
@@ -1105,7 +1105,7 @@ export class ChatCompletionProcess {
   }
 
   /**
-   * The same resolution with DRAFT lakes included - the ATTACHMENT scope (#3279). Separate memo,
+   * The same resolution with DRAFT lakes included - the ATTACHMENT scope. Separate memo,
    * separate query, deliberately: see `attachmentDataLakeAccessMemo`. Lazy, so a turn with no
    * attachments never pays for it.
    */
@@ -1224,7 +1224,7 @@ export class ChatCompletionProcess {
    * and returns an empty access set - so a lake-resolution outage degrades to today's
    * ownership-only behaviour. Never widen on error.
    *
-   * Resolved through `getAttachmentDataLakeAccess`, NOT the retrieval memo (#3279): browse admits a
+   * Resolved through `getAttachmentDataLakeAccess`, NOT the retrieval memo: browse admits a
    * DRAFT lake's file to the workbench, so re-authorizing that same named file against an
    * active-only lake set would be narrower than the door that admitted it. The retrieval memo stays
    * active-only - the two are separate on purpose, and the three attachment doors
