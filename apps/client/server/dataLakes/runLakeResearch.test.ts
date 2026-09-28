@@ -92,6 +92,7 @@ beforeEach(() => {
     totals: { ...emptyResearchRunTotals(), searchHits: 3, proposed: 1 },
     spentMicroUsd: 800,
     stopReason: 'exhausted',
+    judgeStepFailed: false,
   });
 });
 
@@ -111,8 +112,71 @@ describe('runLakeResearch', () => {
 
     expect(h.settleRun).toHaveBeenCalledWith(
       'run-1',
-      expect.objectContaining({ status: 'completed', stopReason: 'exhausted', spentMicroUsd: 800 })
+      expect.objectContaining({ status: 'completed', stopReason: 'exhausted', spentMicroUsd: 800, error: undefined })
     );
+  });
+
+  // "Default" leaves `levers.model` unset, so without this a run cannot be traced to the model that
+  // judged it, and changing the default would silently rewrite its history.
+  it('records the resolved default judge model on the run', async () => {
+    await runLakeResearch('run-1', logger);
+
+    expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ judgeModel: 'default-judge-model' }));
+  });
+
+  it('records the judge model on a run that dies mid-flight too', async () => {
+    h.executeResearchRun.mockRejectedValue(new Error('boom'));
+
+    await expect(runLakeResearch('run-1', logger)).rejects.toThrow(/boom/);
+
+    expect(h.settleRun).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({ status: 'failed', judgeModel: 'default-judge-model' })
+    );
+  });
+
+  describe('a failing judge', () => {
+    it('settles as failed, naming the model and its error, when every judgment failed', async () => {
+      h.executeResearchRun.mockResolvedValue({
+        totals: { ...emptyResearchRunTotals(), searchHits: 10, judgeFailed: 10 },
+        spentMicroUsd: 0,
+        stopReason: 'exhausted',
+        judgeStepFailed: true,
+        judgeError: 'model access denied',
+      });
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.settleRun).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({
+          status: 'failed',
+          totals: expect.objectContaining({ judgeFailed: 10, belowRelevance: 0 }),
+          error:
+            'The relevance judge (default-judge-model) failed on every candidate it tried (10), so nothing was proposed: model access denied',
+        })
+      );
+    });
+
+    it('completes a partly-failed run but carries the judge error, so the card shows it as degraded', async () => {
+      h.executeResearchRun.mockResolvedValue({
+        totals: { ...emptyResearchRunTotals(), searchHits: 3, judgeFailed: 1, proposed: 2 },
+        spentMicroUsd: 500,
+        stopReason: 'exhausted',
+        judgeStepFailed: false,
+        judgeError: 'rate limited',
+      });
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.settleRun).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({
+          status: 'completed',
+          error: 'The relevance judge (default-judge-model) failed on 1 candidate: rate limited',
+        })
+      );
+    });
   });
 
   it('executes the levers snapshotted on the run row', async () => {

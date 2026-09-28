@@ -12,7 +12,7 @@ import { getAvailableModels, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { fetchAndParseURL } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
-import type { ResearchRunTotals } from '@bike4mind/common';
+import type { ResearchRunTotals, SettleResearchRunInput } from '@bike4mind/common';
 
 /**
  * Binds one queued research run (#1682) to the real world and executes it: the admin-configured
@@ -57,6 +57,26 @@ async function fetchSourceForProposal(url: string, logger: Logger) {
   }
 }
 
+/** Provider errors can carry a whole request echo; the run card needs the gist, not the payload. */
+const JUDGE_ERROR_MAX_CHARS = 300;
+
+/**
+ * The run card's account of a judge that failed on `failedCount` candidates. Names the model and
+ * the first error, because "the model failed" is only actionable when it says which model and how.
+ */
+export function describeJudgeFailure(
+  model: string,
+  failedCount: number,
+  judgeError: string | undefined,
+  allFailed: boolean
+): string {
+  const scope = allFailed
+    ? `every candidate it tried (${failedCount}), so nothing was proposed`
+    : `${failedCount} candidate${failedCount === 1 ? '' : 's'}`;
+  const cause = judgeError ? `: ${judgeError.slice(0, JUDGE_ERROR_MAX_CHARS)}` : '';
+  return `The relevance judge (${model}) failed on ${scope}${cause}`;
+}
+
 /**
  * Execute one queued run end to end. Idempotent at the claim: a redelivery of a run that already
  * ran finds it non-`queued` and returns `claimed: false` without spending anything.
@@ -69,8 +89,11 @@ export async function runLakeResearch(
   const claimed = await dataLakeResearchRunRepository.claimForExecution(runId, new Date());
   if (!claimed) return { claimed: false };
 
-  const settle = (input: Parameters<typeof dataLakeResearchRunRepository.settleRun>[1]) =>
-    dataLakeResearchRunRepository.settleRun(runId, input);
+  // Set once the judge model resolves, and stamped on every settle from then on - including a fault's.
+  let judgeModel: string | undefined;
+
+  const settle = (input: Omit<SettleResearchRunInput, 'judgeModel'>) =>
+    dataLakeResearchRunRepository.settleRun(runId, { ...input, judgeModel });
 
   /**
    * The claim is a one-way door, so EVERY path from here on has to settle: a run left `running`
@@ -150,6 +173,7 @@ export async function runLakeResearch(
       configuredModel && models.some(m => m.id === configuredModel)
         ? configuredModel
         : dataLakeResearchService.RELEVANCE_JUDGE_DEFAULT_MODEL;
+    judgeModel = model;
     if (configuredModel && model !== configuredModel) {
       logger.warn('[lakeResearch] configured judge model is unavailable; falling back', {
         runId,
@@ -195,14 +219,28 @@ export async function runLakeResearch(
 
     const result = await dataLakeResearchService.executeResearchRun(claimed.levers, runId, ports);
 
+    const judgeFailure =
+      result.totals.judgeFailed > 0
+        ? describeJudgeFailure(model, result.totals.judgeFailed, result.judgeError, result.judgeStepFailed)
+        : undefined;
+
+    // A judge that failed on everything is a failed run, not an empty web - see `judgeStepFailed`.
+    // Settled rather than thrown: a model that cannot judge fails the same way on every redelivery.
     await settle({
-      status: 'completed',
+      status: result.judgeStepFailed ? 'failed' : 'completed',
       completedAt: new Date(),
       stopReason: result.stopReason,
       spentMicroUsd: result.spentMicroUsd,
       totals: result.totals,
+      error: judgeFailure,
     });
-    logger.log('[lakeResearch] run finished', { runId, stopReason: result.stopReason, ...result.totals });
+    logger.log('[lakeResearch] run finished', {
+      runId,
+      judgeModel: model,
+      stopReason: result.stopReason,
+      judgeStepFailed: result.judgeStepFailed,
+      ...result.totals,
+    });
     return { claimed: true };
   } catch (error) {
     // The spend and totals the loop last reported, not zero - see `spentMicroUsd` above.
