@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import { htmlErrorTitle } from './htmlErrorTitle.js';
 import { isValidSessionId, SESSION_ID_PATTERN } from './validateSessionId.js';
 
 export class Logger {
@@ -265,12 +266,12 @@ export class Logger {
    */
   private parseHtmlError(html: string): string | null {
     // Try to extract error from common patterns
-    const titleMatch = html.match(/<title>(.*?)<\/title>/i);
+    const title = htmlErrorTitle(html);
     const h1Match = html.match(/<h1>(.*?)<\/h1>/i);
     const bodyMatch = html.match(/<body[^>]*>(.*?)<\/body>/is);
 
-    if (titleMatch && titleMatch[1] !== 'Error') {
-      return titleMatch[1].trim();
+    if (title !== null) {
+      return title;
     }
 
     if (h1Match) {

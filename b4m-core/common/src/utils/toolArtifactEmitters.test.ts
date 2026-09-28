@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { expectLinearGrowth } from '../__tests__/expectLinearGrowth';
 import { ARTIFACT_ATTRS_PATTERN, ClaudeArtifactMimeTypes } from '../types/entities/ArtifactTypes';
 import {
   ARTIFACT_DELIVERED_PLACEHOLDER,
@@ -137,26 +138,8 @@ function randomText(rand: () => number): string {
   return s;
 }
 
-const MIN_BASELINE_MS = 25;
-
-function bestMs(fn: () => void): number {
-  let best = Infinity;
-  for (let i = 0; i < 3; i++) {
-    const t = performance.now();
-    fn();
-    best = Math.min(best, performance.now() - t);
-  }
-  return best;
-}
-
-function expectLinear(build: (n: number) => string, run: (s: string) => unknown) {
-  const [ta, tb, tc] = [20_000, 40_000, 80_000].map(n => {
-    const input = build(n);
-    return bestMs(() => run(input));
-  });
-  expect(tb / Math.max(ta, MIN_BASELINE_MS)).toBeLessThan(3);
-  expect(tc / Math.max(tb, MIN_BASELINE_MS)).toBeLessThan(3);
-}
+// At 10k the old regexes' baseline is already hundreds of ms, the linear scans a few ms.
+const GROWTH_SMALL_N = 10_000;
 
 describe('toolArtifactEmitters linear scan', () => {
   it('matches the regex implementations on seeded fuzz input', () => {
@@ -179,10 +162,14 @@ describe('toolArtifactEmitters linear scan', () => {
     ['repeated closed opener', (n: number) => '<artifact a>'.repeat(n)],
     ['repeated unclosed quote', (n: number) => '<artifact a="'.repeat(n)],
   ])('runs in linear time on a %s', (_label, build) => {
-    expectLinear(build, text => {
-      filterToolArtifactMarkup('recharts', text);
-      stripToolArtifactMarkup(text, ARTIFACT_DELIVERED_PLACEHOLDER);
-      stripDeliveredArtifactBlocks(text, text);
-    });
+    expectLinearGrowth(
+      build,
+      text => {
+        filterToolArtifactMarkup('recharts', text);
+        stripToolArtifactMarkup(text, ARTIFACT_DELIVERED_PLACEHOLDER);
+        stripDeliveredArtifactBlocks(text, text);
+      },
+      GROWTH_SMALL_N
+    );
   });
 });

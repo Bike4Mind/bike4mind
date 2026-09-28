@@ -17,6 +17,7 @@ import { tryParseChartJSON } from './chartJsonParser';
 import { hasSingleLineImportFrom, scanImportStatements } from './importStatements';
 import {
   ResultReplacer,
+  replaceDirectTypeObjects,
   replaceEscapedResultObjects,
   replaceLazyResultObjects,
   replaceLogFormatResultObjects,
@@ -532,8 +533,8 @@ function convertToolOutputsToArtifacts(content: string): string {
 
   // Try to find and extract JSON objects that contain our artifact types
   // We'll look for various patterns of escaping around the "result" field
-  // Patterns 1, 3 and 5 are linear scanners (./toolOutputResultScan) with the same results as
-  // the regexes they replaced, which were quadratic on repeated unclosed "result" prefixes.
+  // Patterns 1, 3, 4 and 5 are linear scanners (./toolOutputResultScan) with the same results
+  // as the regexes they replaced, which were quadratic on repeated unclosed prefixes or braces.
   const steps: Array<(text: string, replacer: ResultReplacer) => string> = [
     // Pattern 1: Standard result field with escaped JSON (most common from logs)
     replaceEscapedResultObjects,
@@ -542,7 +543,7 @@ function convertToolOutputsToArtifacts(content: string): string {
     // Pattern 3: More permissive result field matching
     replaceLazyResultObjects,
     // Pattern 4: Direct JSON object (less common but possible)
-    (text, replacer) => text.replace(/(\{[^{}]*"type"\s*:\s*"(?:rechart|recharts|mermaid)"[^{}]*\})/g, replacer),
+    replaceDirectTypeObjects,
     // Pattern 5: Very specific pattern for the exact log format
     replaceLogFormatResultObjects,
   ];

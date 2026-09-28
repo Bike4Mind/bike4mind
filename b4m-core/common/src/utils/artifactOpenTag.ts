@@ -49,7 +49,17 @@ function step(text: string, p: number): number {
 // Index of the `>` ending a tag whose attributes start at `from`, or -1. The memo holds the
 // answer for every outside-quote position a walk passes, so a restart at each later opener
 // stops where an earlier walk already went, which keeps a scan of every opener linear.
-function findTagClose(text: string, from: number, memo: ArtifactTagMemo): number {
+// Without a memo it walks only to the close, so a lone call costs the tag, not the text.
+function findTagClose(text: string, from: number, memo?: ArtifactTagMemo): number {
+  if (!memo) {
+    for (let p = from; p < text.length;) {
+      const next = step(text, p);
+      if (next === -2) return p;
+      if (next === -1) return -1;
+      p = next;
+    }
+    return -1;
+  }
   const ends = (memo.ends ??= new Int32Array(text.length));
   let result = -1;
   for (let p = from; p < text.length;) {
@@ -76,13 +86,13 @@ function findTagClose(text: string, from: number, memo: ArtifactTagMemo): number
 
 /**
  * Reads an artifact open tag starting exactly at `at` (`<artifact` matched case-insensitively),
- * or returns null. Pass one `memo` to every call over the same `text`.
+ * or returns null. When scanning several openers of one `text`, pass one `memo` to every call.
  */
 export function scanArtifactOpenTag(
   text: string,
   at: number,
   leading: ArtifactTagLeading,
-  memo: ArtifactTagMemo = {}
+  memo?: ArtifactTagMemo
 ): ArtifactOpenTag | null {
   OPENER_STICKY.lastIndex = at;
   if (!OPENER_STICKY.test(text)) return null;

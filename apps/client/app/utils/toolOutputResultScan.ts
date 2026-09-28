@@ -1,7 +1,7 @@
-// Linear-time stand-ins for three of convertToolOutputsToArtifacts' "result" patterns
-// (./artifactParser.ts). Each returns what text.replace(pattern, replacer) returned, and passes
-// the replacer the same (match, captured) pair. The regex forms rescan to the end of the
-// input from every "result" prefix, which is quadratic on repeated unclosed prefixes.
+// Linear-time stand-ins for four of convertToolOutputsToArtifacts' patterns (./artifactParser.ts).
+// Each returns what text.replace(pattern, replacer) returned, and passes the replacer the same
+// (match, captured) pair. The regex forms rescan to the end of the input from every prefix or
+// brace, which is quadratic on repeated unclosed ones.
 
 export type ResultReplacer = (match: string, captured: string) => string;
 
@@ -77,4 +77,29 @@ export function replaceLogFormatResultObjects(text: string, replacer: ResultRepl
     false,
     replacer
   );
+}
+
+const DIRECT_TYPE = /"type"\s*:\s*"(?:rechart|recharts|mermaid)"/;
+const BRACE = /[{}]/g;
+
+// text.replace(/(\{[^{}]*"type"\s*:\s*"(?:rechart|recharts|mermaid)"[^{}]*\})/g, replacer).
+// Neither [^{}]* crosses a brace, so a match runs from a '{' to the next brace, which must be '}'.
+export function replaceDirectTypeObjects(text: string, replacer: ResultReplacer): string {
+  let out = '';
+  let copied = 0;
+  let open = text.indexOf('{');
+  while (open !== -1) {
+    BRACE.lastIndex = open + 1;
+    const next = BRACE.exec(text);
+    if (!next) break;
+    if (next[0] === '}' && DIRECT_TYPE.test(text.slice(open + 1, next.index))) {
+      const match = text.slice(open, next.index + 1);
+      out += text.slice(copied, open) + replacer(match, match);
+      copied = next.index + 1;
+      open = text.indexOf('{', copied);
+    } else {
+      open = next[0] === '{' ? next.index : text.indexOf('{', next.index + 1);
+    }
+  }
+  return out + text.slice(copied);
 }

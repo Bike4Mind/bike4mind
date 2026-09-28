@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { expectLinearGrowth } from '../__tests__/expectLinearGrowth';
 import { ARTIFACT_ATTRS_PATTERN } from '../types/entities/ArtifactTypes';
 import {
   matchArtifactBlocks,
@@ -64,28 +65,8 @@ function randomText(rand: () => number): string {
   return s;
 }
 
-// Best of three with a floored denominator, as in the utils parser's growth tests: a near-
-// instant run is timer noise, while a quadratic scan is slow on every attempt.
-const MIN_BASELINE_MS = 25;
-
-function bestMs(fn: () => void): number {
-  let best = Infinity;
-  for (let i = 0; i < 3; i++) {
-    const t = performance.now();
-    fn();
-    best = Math.min(best, performance.now() - t);
-  }
-  return best;
-}
-
-function expectLinear(build: (n: number) => string, run: (s: string) => unknown) {
-  const [ta, tb, tc] = [20_000, 40_000, 80_000].map(n => {
-    const input = build(n);
-    return bestMs(() => run(input));
-  });
-  expect(tb / Math.max(ta, MIN_BASELINE_MS)).toBeLessThan(3);
-  expect(tc / Math.max(tb, MIN_BASELINE_MS)).toBeLessThan(3);
-}
+// At 10k the old regexes' baseline is already hundreds of ms, the linear scans a few ms.
+const GROWTH_SMALL_N = 10_000;
 
 describe('scanArtifactOpenTag', () => {
   it.each(['one', 'run'] as const)('matches the old %s regex at every position of seeded fuzz input', leading => {
@@ -94,7 +75,9 @@ describe('scanArtifactOpenTag', () => {
       const text = randomText(rand);
       const memo: ArtifactTagMemo = {};
       for (let at = 0; at < text.length; at++) {
-        expect(scanArtifactOpenTag(text, at, leading, memo)).toEqual(oldTag(text, at, leading));
+        const expected = oldTag(text, at, leading);
+        expect(scanArtifactOpenTag(text, at, leading, memo)).toEqual(expected);
+        expect(scanArtifactOpenTag(text, at, leading)).toEqual(expected);
       }
     }
   });
@@ -125,12 +108,16 @@ describe('scanArtifactOpenTag', () => {
     ['repeated unclosed quote', (n: number) => '<artifact a="'.repeat(n)],
   ])('scans every opener of a %s in linear time', (_label, build) => {
     for (const leading of ['one', 'run'] as const) {
-      expectLinear(build, text => {
-        const memo: ArtifactTagMemo = {};
-        for (let at = text.indexOf('<'); at >= 0; at = text.indexOf('<', at + 1)) {
-          scanArtifactOpenTag(text, at, leading, memo);
-        }
-      });
+      expectLinearGrowth(
+        build,
+        text => {
+          const memo: ArtifactTagMemo = {};
+          for (let at = text.indexOf('<'); at >= 0; at = text.indexOf('<', at + 1)) {
+            scanArtifactOpenTag(text, at, leading, memo);
+          }
+        },
+        GROWTH_SMALL_N
+      );
     }
   });
 });
@@ -156,6 +143,6 @@ describe('matchArtifactBlocks', () => {
     ['one opener then a whitespace run', (n: number) => '<artifact' + ' '.repeat(n)],
     ['repeated unclosed quote', (n: number) => '<artifact a="'.repeat(n)],
   ])('runs in linear time on a %s', (_label, build) => {
-    expectLinear(build, matchArtifactBlocks);
+    expectLinearGrowth(build, matchArtifactBlocks, GROWTH_SMALL_N);
   });
 });
