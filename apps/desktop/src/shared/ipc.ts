@@ -1,6 +1,7 @@
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
   ChatApprovalDecision,
+  ChatModelCatalog,
   ChatSession,
   ChatSessionSummary,
   ChatStreamEvent,
@@ -29,6 +30,8 @@ export const IPC_CHANNELS = {
   authOpenAccountPage: 'auth:open-account-page',
   /** main -> renderer push; the renderer never polls for auth state. */
   authStateChanged: 'auth:state-changed',
+  chatListModels: 'chat:list-models',
+  chatSetSessionModel: 'chat:set-session-model',
   chatListSessions: 'chat:list-sessions',
   chatCreateSession: 'chat:create-session',
   chatGetSession: 'chat:get-session',
@@ -69,6 +72,13 @@ export interface DesktopApi {
     onStateChanged(listener: (state: AuthState) => void): () => void;
   };
   chat: {
+    /**
+     * Models this deployment offers the agent, from the server's own catalog. `force` skips
+     * the main-process cache, which is what a "try again" affordance needs.
+     */
+    listModels(force?: boolean): Promise<ChatModelCatalog>;
+    /** Pin a conversation to a model. Null when the session is gone. */
+    setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
     listSessions(): Promise<ChatSessionSummary[]>;
     createSession(): Promise<ChatSessionSummary>;
     /** Null when the session is gone (deleted in another window, or a stale id). */

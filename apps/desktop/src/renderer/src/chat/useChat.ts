@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ChatApprovalDecision, ChatMessage, ChatSession, ChatSessionSummary } from '@shared/chat';
+import type { ChatApprovalDecision, ChatMessage, ChatModelOption, ChatSession, ChatSessionSummary } from '@shared/chat';
 
 export interface SessionsController {
   sessions: ChatSessionSummary[];
@@ -43,15 +43,68 @@ export function useSessions(): SessionsController {
   return { sessions, loading, reload, create, remove, apply };
 }
 
+export interface ModelCatalogController {
+  models: ChatModelOption[];
+  loading: boolean;
+  /** Set when the list could not be READ. An empty list with no error means the server has none. */
+  error: string | null;
+  /** Refetch, bypassing main's cache. */
+  reload: () => Promise<void>;
+}
+
+/**
+ * The models this server offers, refetched when the environment changes.
+ *
+ * Auth state is the trigger rather than a timer: switching hosted -> self-host changes which
+ * providers have keys, so the previous server's list is not just stale but wrong, and leaving
+ * it on screen would offer models this deployment will reject.
+ */
+export function useModelCatalog(): ModelCatalogController {
+  const [models, setModels] = useState<ChatModelOption[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async (force: boolean) => {
+    setLoading(true);
+    const catalog = await window.b4m.chat.listModels(force);
+    setModels(catalog.models);
+    setError(catalog.error ?? null);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    void load(false);
+  }, [load]);
+
+  useEffect(() => {
+    let lastKey: string | null = null;
+    return window.b4m.auth.onStateChanged(state => {
+      const key = `${state.status}:${state.environment.url}`;
+      if (key === lastKey) return;
+      lastKey = key;
+      void load(true);
+    });
+  }, [load]);
+
+  const reload = useCallback(() => load(true), [load]);
+
+  return { models, loading, error, reload };
+}
+
 export interface ConversationController {
   session: ChatSession | null;
   messages: ChatMessage[];
   /** Set while a reply for THIS session is streaming. */
   streaming: boolean;
   sendError: string | null;
+  /** One-shot message about something main changed while accepting a turn. Not a failure. */
+  notice: string | null;
+  dismissNotice: () => void;
   send: (text: string) => Promise<void>;
   stop: () => void;
   rename: (title: string) => Promise<void>;
+  /** Pin this conversation to a model; it is used from the next turn on. */
+  setModel: (model: string) => Promise<void>;
   /** Answer a tool call waiting at the approval gate. Nothing has run until this is called. */
   respondToApproval: (approvalId: string, decision: ChatApprovalDecision) => void;
 }
@@ -71,6 +124,7 @@ export function useConversation(
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   // Read inside the IPC subscription, which must not be torn down and rebuilt per session
   // change: a rebuild between 'start' and the first 'delta' would drop tokens.
@@ -79,6 +133,7 @@ export function useConversation(
 
   useEffect(() => {
     setSendError(null);
+    setNotice(null);
     if (!sessionId) {
       setSession(null);
       setMessages([]);
@@ -163,6 +218,7 @@ export function useConversation(
       if (!prompt) return;
 
       setSendError(null);
+      setNotice(null);
       const optimistic: ChatMessage = {
         // Temporary: main assigns the persisted id. They meet again on the next load, which is
         // the only place the difference could show, and by then this one is gone.
@@ -179,6 +235,7 @@ export function useConversation(
         setSendError(result.error);
         return;
       }
+      if (result.notice) setNotice(result.notice);
 
       const summary = await window.b4m.chat.getSession(sessionId);
       if (summary) {
@@ -205,9 +262,35 @@ export function useConversation(
     [sessionId, onSummaryChanged]
   );
 
+  const setModel = useCallback(
+    async (model: string) => {
+      if (!sessionId) return;
+      const updated = await window.b4m.chat.setSessionModel(sessionId, model);
+      if (!updated) return;
+      setNotice(null);
+      setSession(current => (current ? { ...current, model: updated.model } : current));
+      onSummaryChanged(updated);
+    },
+    [sessionId, onSummaryChanged]
+  );
+
   const respondToApproval = useCallback((approvalId: string, decision: ChatApprovalDecision) => {
     void window.b4m.chat.respondToApproval(approvalId, decision);
   }, []);
 
-  return { session, messages, streaming, sendError, send, stop, rename, respondToApproval };
+  const dismissNotice = useCallback(() => setNotice(null), []);
+
+  return {
+    session,
+    messages,
+    streaming,
+    sendError,
+    notice,
+    dismissNotice,
+    send,
+    stop,
+    rename,
+    setModel,
+    respondToApproval,
+  };
 }

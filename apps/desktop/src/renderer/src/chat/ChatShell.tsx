@@ -7,8 +7,9 @@ import Typography from '@mui/joy/Typography';
 import { Composer } from './Composer';
 import { MessageThread } from './MessageThread';
 import { contentColumnSx } from './layout';
+import { ModelPicker } from './ModelPicker';
 import { SessionList } from './SessionList';
-import { useConversation, useSessions } from './useChat';
+import { useConversation, useModelCatalog, useSessions } from './useChat';
 
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -61,6 +62,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   const { sessions, loading, create, remove, apply } = useSessions();
   const [activeId, setActiveId] = useState<string | null>(null);
   const conversation = useConversation(activeId, apply);
+  const catalog = useModelCatalog();
 
   // Open the most recent conversation on first load so the app lands somewhere useful rather
   // than on an empty pane. Only until the user picks one - after that, their choice stands.
@@ -117,11 +119,32 @@ export function ChatShell({ account }: { account?: ReactNode }) {
           </Alert>
         )}
 
+        {conversation.notice && (
+          <Alert
+            size="sm"
+            color="warning"
+            variant="soft"
+            sx={{ ...contentColumnSx, cursor: 'pointer' }}
+            onClick={conversation.dismissNotice}
+            data-testid="chat-notice"
+          >
+            {conversation.notice}
+          </Alert>
+        )}
+
         <Composer
           disabled={!activeId}
           streaming={conversation.streaming}
           onSend={text => void conversation.send(text)}
           onStop={conversation.stop}
+          footer={
+            <ModelPicker
+              catalog={catalog}
+              modelId={conversation.session?.model ?? null}
+              disabled={!activeId}
+              onSelect={model => void conversation.setModel(model)}
+            />
+          }
         />
       </Stack>
     </Box>

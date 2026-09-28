@@ -52,12 +52,16 @@ export class SessionStore {
     return join(this.baseDirectory, `${id}.json`);
   }
 
-  async create(): Promise<ChatSessionSummary> {
+  /**
+   * `model` is what the caller resolved against the server's catalog; omitting it falls back to
+   * the build's preferred model, which is the right answer only until that catalog is readable.
+   */
+  async create(model?: string): Promise<ChatSessionSummary> {
     const now = new Date().toISOString();
     const session: ChatSession = {
       id: randomUUID(),
       title: UNTITLED,
-      model: this.defaultModel,
+      model: model || this.defaultModel,
       createdAt: now,
       updatedAt: now,
       messages: [],
@@ -109,6 +113,21 @@ export class SessionStore {
     const session = await this.get(id);
     if (!session) return null;
     session.title = deriveTitle(title);
+    session.updatedAt = new Date().toISOString();
+    await this.write(session);
+    return summarize(session);
+  }
+
+  /**
+   * Pin a conversation to a model. Stored per session rather than as one app-wide setting so
+   * reopening a thread resumes the model it was held on - switching model for a new question
+   * must not silently rewrite what an old conversation was answered with.
+   */
+  async setModel(id: string, model: string): Promise<ChatSessionSummary | null> {
+    const session = await this.get(id);
+    if (!session) return null;
+    if (session.model === model) return summarize(session);
+    session.model = model;
     session.updatedAt = new Date().toISOString();
     await this.write(session);
     return summarize(session);

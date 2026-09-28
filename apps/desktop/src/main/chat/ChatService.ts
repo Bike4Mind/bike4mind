@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type {
   ChatMessage,
+  ChatModelCatalog,
+  ChatModelOption,
   ChatSession,
   ChatSessionSummary,
   ChatStreamEvent,
@@ -10,6 +12,7 @@ import type {
   SendMessageResult,
 } from '@shared/chat';
 import { DEFAULT_COMPLETIONS_PATH, streamCompletion, type CompletionMessage } from './completions';
+import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
 import type { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import type { ApprovalGate } from './tools/ApprovalGate';
@@ -37,6 +40,13 @@ export interface ChatServiceDeps {
   store: SessionStore;
   access: AccessStore;
   logger: ChatServiceLogger;
+  /**
+   * The server's model list. Absent in tests that do not exercise model resolution, which then
+   * leaves every session on whatever model it was created with.
+   */
+  models?: ModelCatalog;
+  /** This build's preferred model, used until the server's catalog says what it really offers. */
+  preferredModel?: string;
   /** Absent in tests that exercise tools needing no consent; a gated tool then never runs. */
   approvals?: ApprovalGate;
   /** Paths kept out of reach of shell commands whatever the user granted. See tools/sandbox.ts. */
@@ -75,8 +85,25 @@ export class ChatService {
     return this.deps.store.list();
   }
 
-  createSession(): Promise<ChatSessionSummary> {
-    return this.deps.store.create();
+  listModels(force = false): Promise<ChatModelCatalog> {
+    return this.deps.models?.list(force) ?? Promise.resolve({ models: [] });
+  }
+
+  /**
+   * Start a conversation on a model this deployment actually offers.
+   *
+   * The catalog lookup is awaited rather than skipped: it is one cached round trip on a
+   * deliberate click, and starting a thread on a model the server does not have means the
+   * user's first message is the thing that discovers it.
+   */
+  async createSession(): Promise<ChatSessionSummary> {
+    const catalog = await this.listModels();
+    return this.deps.store.create(this.pickModel(catalog.models) ?? undefined);
+  }
+
+  /** Pin this conversation to a model. Not validated against the catalog: see `reconcileModel`. */
+  setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null> {
+    return this.deps.store.setModel(sessionId, model);
   }
 
   getSession(sessionId: string): Promise<ChatSession | null> {
@@ -126,8 +153,10 @@ export class ChatService {
       createdAt: new Date().toISOString(),
     };
 
-    const session = await this.deps.store.appendMessage(sessionId, userMessage);
-    if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+    const appended = await this.deps.store.appendMessage(sessionId, userMessage);
+    if (!appended) return { ok: false, error: 'That conversation no longer exists.' };
+
+    const { session, notice } = await this.reconcileModel(appended);
 
     const replyId = randomUUID();
     const controller = new AbortController();
@@ -138,7 +167,36 @@ export class ChatService {
       if (this.active.get(sessionId) === controller) this.active.delete(sessionId);
     });
 
-    return { ok: true, messageId: replyId };
+    return { ok: true, messageId: replyId, ...(notice ? { notice } : {}) };
+  }
+
+  /**
+   * Move a conversation off a model this deployment no longer offers.
+   *
+   * The two ways in are an environment switch (hosted -> self-host, where the model set is
+   * whatever that stack holds keys for) and a conversation older than a provider key being
+   * removed. Substituting is better than letting the request 4xx: the user gets an answer plus
+   * a line saying what happened, rather than a status code from a server they did not change.
+   *
+   * Only ever acts on an ALREADY-CACHED list. A turn must not wait on a network round trip to
+   * discover that nothing is wrong, and an unreadable catalog is not evidence that a model is
+   * gone - in that case the request goes out as saved and the server decides.
+   */
+  private async reconcileModel(session: ChatSession): Promise<{ session: ChatSession; notice?: string }> {
+    const available = this.deps.models?.cached();
+    if (!available || available.length === 0) return { session };
+    if (available.some(model => model.id === session.model)) return { session };
+
+    const replacement = this.pickModel(available);
+    if (!replacement) return { session };
+
+    await this.deps.store.setModel(session.id, replacement);
+    const name = available.find(model => model.id === replacement)?.name ?? replacement;
+    this.deps.logger.warn(`CHAT: ${session.model} is not available here; using ${replacement}`);
+    return {
+      session: { ...session, model: replacement },
+      notice: `${session.model} is not available on this server. Switched this conversation to ${name}.`,
+    };
   }
 
   private async runReply(
@@ -352,6 +410,10 @@ export class ChatService {
     };
     this.deps.emit({ type: 'tool-end', sessionId, messageId, call: denied });
     return denied;
+  }
+
+  private pickModel(models: readonly ChatModelOption[]): string | null {
+    return resolveDefaultModel(models, this.deps.preferredModel ?? '');
   }
 
   /**

@@ -25,6 +25,9 @@ const api: DesktopApi = {
     },
   },
   chat: {
+    listModels: (force?: boolean) => ipcRenderer.invoke(IPC_CHANNELS.chatListModels, force ?? false),
+    setSessionModel: (sessionId: string, model: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionModel, sessionId, model),
     listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSessions),
     createSession: () => ipcRenderer.invoke(IPC_CHANNELS.chatCreateSession),
     getSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetSession, sessionId),

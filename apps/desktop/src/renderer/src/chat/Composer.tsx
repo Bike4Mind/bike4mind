@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from 'react';
+import { useState, type KeyboardEvent, type ReactNode } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Stack from '@mui/joy/Stack';
@@ -10,11 +10,14 @@ export function Composer({
   streaming,
   onSend,
   onStop,
+  footer,
 }: {
   disabled: boolean;
   streaming: boolean;
   onSend: (text: string) => void;
   onStop: () => void;
+  /** Controls that belong to the next turn rather than to the app - the model picker. */
+  footer?: ReactNode;
 }) {
   const [text, setText] = useState('');
 
@@ -56,6 +59,12 @@ export function Composer({
           </Button>
         )}
       </Stack>
+
+      {footer && (
+        <Stack direction="row" alignItems="center" sx={{ ...contentColumnSx, pb: 1, mt: -0.5 }}>
+          {footer}
+        </Stack>
+      )}
     </Box>
   );
 }
