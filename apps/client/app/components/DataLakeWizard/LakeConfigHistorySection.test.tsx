@@ -254,6 +254,42 @@ describe('LakeConfigHistorySection', () => {
     expect(screen.getByText('not set -> approved: https://example.com/report')).toBeInTheDocument();
   });
 
+  // A saved research config's create/update/delete left no trace in this tab at all.
+  it('renders a research-config change with its action label and encoded name', () => {
+    renderSection({
+      view: view({
+        entries: [
+          entry({
+            action: 'update-research-config',
+            changes: [{ field: 'researchConfig', kind: 'literal', after: 'updated: Coastal erosion' }],
+          }),
+        ],
+      }),
+    });
+    expect(screen.getByText('Research configuration updated')).toBeInTheDocument();
+    expect(screen.getByText('Research configuration')).toBeInTheDocument();
+    expect(screen.getByText('not set -> updated: Coastal erosion')).toBeInTheDocument();
+  });
+
+  // A run reaching an outcome left no trace in this tab either - the executor's own half of the
+  // start/outcome pair `startResearchRun.ts`/`runLakeResearch.ts` record.
+  it('renders a research-run outcome with its action label and encoded query and run id', () => {
+    renderSection({
+      view: view({
+        entries: [
+          entry({
+            action: 'complete-research-run',
+            manageRung: 'system',
+            changes: [{ field: 'researchRun', kind: 'literal', after: 'completed: coastal erosion (run run-7)' }],
+          }),
+        ],
+      }),
+    });
+    expect(screen.getByText('Research run finished')).toBeInTheDocument();
+    expect(screen.getByText('Research run')).toBeInTheDocument();
+    expect(screen.getByText('not set -> completed: coastal erosion (run run-7)')).toBeInTheDocument();
+  });
+
   // These rows are retained for 1095-3650 days, so one can outlive the enum that named it. An
   // unguarded RUNG_LABEL lookup would throw on `.label` and take the whole table down.
   describe('a row whose vocabulary the current code no longer knows', () => {
