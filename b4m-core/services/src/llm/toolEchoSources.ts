@@ -3,10 +3,11 @@ import type { ToolEchoSource } from '@bike4mind/utils';
 import type { ToolsUsedEntry } from './toolsUsedToFunctionCalls';
 
 /**
- * Tools whose output is third-party web content. Only these count as echo sources: output from
- * the user's own content (knowledge base, files) or an artifact emitter is meant to promote.
+ * Tools whose output is third-party web content (deep_research returns scraped page text in
+ * `data.findings`). Only these count as echo sources: output from the user's own content
+ * (knowledge base, files) or an artifact emitter is meant to promote.
  */
-export const TOOL_ECHO_SOURCE_TOOLS: ReadonlySet<string> = new Set(['web_fetch', 'web_search']);
+export const TOOL_ECHO_SOURCE_TOOLS: ReadonlySet<string> = new Set(['web_fetch', 'web_search', 'deep_research']);
 
 /** Total chars of tool output the echo matcher searches per reply. */
 export const MAX_TOOL_ECHO_HAYSTACK_CHARS = 400_000;

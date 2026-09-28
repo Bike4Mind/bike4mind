@@ -15,10 +15,12 @@ describe('buildToolEchoSources', () => {
         { name: 'mermaid_chart', returnValue: 'graph TD; A-->B' },
         { name: 'web_search', returnValue: 'search hit' },
         { name: 'web_fetch', returnValue: 'page' },
+        { name: 'deep_research', returnValue: 'scraped findings' },
       ])
     ).toEqual([
       { text: 'search hit', truncated: false },
       { text: 'page', truncated: false },
+      { text: 'scraped findings', truncated: false },
     ]);
   });
 
