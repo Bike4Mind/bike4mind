@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   createResearchConfig: vi.fn(),
   updateResearchConfig: vi.fn(),
   deleteResearchConfig: vi.fn(),
+  countPendingByLakes: vi.fn(),
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as sibling endpoint tests).
@@ -31,7 +32,10 @@ vi.mock('@bike4mind/services', () => ({
     deleteResearchConfig: h.deleteResearchConfig,
   },
 }));
-vi.mock('@bike4mind/database', () => ({ dataLakeResearchConfigRepository: {} }));
+vi.mock('@bike4mind/database', () => ({
+  dataLakeResearchConfigRepository: {},
+  dataLakeProposalRepository: { countPendingByLakes: h.countPendingByLakes },
+}));
 vi.mock('@server/dataLakes/assertLakeResearchManage', () => ({
   assertLakeResearchManage: h.assertLakeResearchManage,
 }));
@@ -60,13 +64,42 @@ beforeEach(() => {
   h.createResearchConfig.mockResolvedValue(savedConfig);
   h.updateResearchConfig.mockResolvedValue(savedConfig);
   h.deleteResearchConfig.mockResolvedValue(undefined);
+  h.countPendingByLakes.mockResolvedValue({ 'lake-oid-1': 7 });
 });
 
 describe('/api/data-lakes/[id]/research/configs', () => {
   it('lists a lake configurations for a manager', async () => {
     const { res, json } = makeRes();
     await call(indexHandler, req('GET', { id: 'my-lake' }), res);
-    expect(json).toHaveBeenCalledWith({ data: [savedConfig] });
+    expect(json).toHaveBeenCalledWith({ data: [savedConfig], pendingProposals: 7 });
+    expect(h.countPendingByLakes).toHaveBeenCalledWith(['lake-oid-1']);
+  });
+
+  // countPendingByLakes omits a lake with nothing pending rather than zero-filling it.
+  it('reports zero pending proposals for a lake the count omits', async () => {
+    h.countPendingByLakes.mockResolvedValue({});
+    const { res, json } = makeRes();
+    await call(indexHandler, req('GET', { id: 'my-lake' }), res);
+    expect(json).toHaveBeenCalledWith({ data: [savedConfig], pendingProposals: 0 });
+  });
+
+  it('carries the schedule through on create and update', async () => {
+    const { res } = makeRes();
+    const schedule = { cadence: 'weekly', reviewBacklogLimit: 40 };
+
+    await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', ...schedule }), res);
+    await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, schedule), res);
+
+    expect(h.createResearchConfig.mock.calls[0][2]).toMatchObject(schedule);
+    expect(h.updateResearchConfig.mock.calls[0][3]).toMatchObject(schedule);
+  });
+
+  it('refuses a cadence the scheduler does not know', async () => {
+    const { res } = makeRes();
+    await expect(
+      call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', cadence: 'hourly' }), res)
+    ).rejects.toThrow();
+    expect(h.createResearchConfig).not.toHaveBeenCalled();
   });
 
   it('creates against the RESOLVED lake, not the raw id-or-slug from the URL', async () => {

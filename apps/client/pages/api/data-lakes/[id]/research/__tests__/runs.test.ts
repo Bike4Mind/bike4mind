@@ -52,7 +52,8 @@ const req = (method: string, query: Record<string, string>, body?: unknown) =>
 
 const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(r, res);
 
-const queuedRun = { id: 'run-1', status: 'queued', totals: { searchHits: 0 } };
+// dataLakeId is the RESOLVED lake id startResearchRun wrote, which is what the queue message carries.
+const queuedRun = { id: 'run-1', dataLakeId: 'lake-oid-1', status: 'queued', totals: { searchHits: 0 } };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -92,7 +93,12 @@ describe('POST /api/data-lakes/[id]/research/runs', () => {
 
     await call(req('POST', { id: 'my-lake' }, { configId: 'config-1' }), res);
 
-    expect(h.startResearchRun).toHaveBeenCalledWith('config-1', 'lake-oid-1', 'user-1', expect.anything());
+    expect(h.startResearchRun).toHaveBeenCalledWith(
+      'config-1',
+      'lake-oid-1',
+      { trigger: 'on_demand', actorUserId: 'user-1' },
+      expect.anything()
+    );
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example/research', {
       runId: 'run-1',
       dataLakeId: 'lake-oid-1',

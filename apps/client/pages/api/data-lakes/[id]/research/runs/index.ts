@@ -8,7 +8,7 @@ import { Request } from 'express';
 import { Resource } from 'sst';
 import { z } from 'zod';
 import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchManage';
-import { sendToQueue } from '@server/utils/sqs';
+import { queueResearchRun } from '@server/dataLakes/queueResearchRun';
 
 const StartInput = z.object({ configId: z.string() });
 
@@ -55,27 +55,19 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       throw new InternalServerError('Research runs are not available on this deployment');
     }
 
-    const run = await dataLakeResearchService.startResearchRun(configId, lake.id, req.user!.id, {
-      db: {
-        dataLakeResearchConfigs: dataLakeResearchConfigRepository,
-        dataLakeResearchRuns: dataLakeResearchRunRepository,
-      },
-    });
+    const run = await dataLakeResearchService.startResearchRun(
+      configId,
+      lake.id,
+      { trigger: 'on_demand', actorUserId: req.user!.id },
+      {
+        db: {
+          dataLakeResearchConfigs: dataLakeResearchConfigRepository,
+          dataLakeResearchRuns: dataLakeResearchRunRepository,
+        },
+      }
+    );
 
-    try {
-      await sendToQueue(queueUrl, { runId: run.id, dataLakeId: lake.id });
-    } catch (error) {
-      // Settle the row rather than leaving it `queued`: nothing will ever pick it up, and a
-      // permanently-queued run holds the one-at-a-time guard closed against every later attempt.
-      await dataLakeResearchRunRepository.settleRun(run.id, {
-        status: 'failed',
-        completedAt: new Date(),
-        spentMicroUsd: 0,
-        totals: run.totals,
-        error: 'The run could not be queued for execution. Try again shortly.',
-      });
-      throw error;
-    }
+    await queueResearchRun(run, queueUrl);
 
     return res.status(202).json({ data: run });
   });

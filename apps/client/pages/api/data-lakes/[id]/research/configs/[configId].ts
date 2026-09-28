@@ -6,9 +6,9 @@ import { dataLakeResearchConfigRepository } from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
 import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchManage';
-import { ResearchLeversInput } from '@server/dataLakes/researchConfigInput';
+import { ResearchLeversInput, ResearchScheduleInput } from '@server/dataLakes/researchConfigInput';
 
-const UpdateInput = ResearchLeversInput.extend({ name: z.string().optional() });
+const UpdateInput = ResearchLeversInput.merge(ResearchScheduleInput).extend({ name: z.string().optional() });
 
 const db = { dataLakeResearchConfigs: dataLakeResearchConfigRepository };
 

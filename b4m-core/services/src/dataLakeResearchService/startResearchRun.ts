@@ -2,6 +2,7 @@ import type {
   IDataLakeResearchConfigRepository,
   IDataLakeResearchRunDocument,
   IDataLakeResearchRunRepository,
+  ResearchScheduleSkipReason,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { normalizeResearchLevers } from './researchLevers';
@@ -11,9 +12,25 @@ import { normalizeResearchLevers } from './researchLevers';
  * the row exists first so a user who clicked Run sees a run immediately rather than after a worker
  * picks the message up.
  *
- * v2 calls exactly this, from a scheduler instead of a route. That is the whole reason the
- * configuration is a saved object.
+ * The research scheduler (`runDueResearchSchedules`) calls exactly this too, with a `periodic`
+ * starter. That is the whole reason the configuration is a saved object.
  */
+
+/** Who started the run: a person pressing Run, or the scheduler with nobody behind it. */
+export type ResearchRunStarter = { trigger: 'on_demand'; actorUserId: string } | { trigger: 'periodic' };
+
+/**
+ * A spend rail refused the start. Typed so the scheduler can record WHICH rail as a skip reason
+ * and retry soon, instead of treating a busy lake as a failed schedule. Still a 400 to the route.
+ */
+export class ResearchRunRefusedError extends BadRequestError {
+  constructor(
+    message: string,
+    readonly reason: Exclude<ResearchScheduleSkipReason, 'review_backlog'>
+  ) {
+    super(message);
+  }
+}
 
 export interface StartResearchRunAdapters {
   db: {
@@ -35,7 +52,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export async function startResearchRun(
   configId: string,
   dataLakeId: string,
-  actorUserId: string,
+  starter: ResearchRunStarter,
   { db, now = () => new Date() }: StartResearchRunAdapters
 ): Promise<IDataLakeResearchRunDocument> {
   const config = await db.dataLakeResearchConfigs.findByIdInLake(configId, dataLakeId);
@@ -52,7 +69,7 @@ export async function startResearchRun(
   // primitive, and `claimForExecution` is where correctness actually lives.
   const active = await db.dataLakeResearchRuns.countActiveByLake(dataLakeId);
   if (active > 0) {
-    throw new BadRequestError('A research run is already in progress for this data lake');
+    throw new ResearchRunRefusedError('A research run is already in progress for this data lake', 'run_in_progress');
   }
 
   const startedAt = now();
@@ -60,8 +77,9 @@ export async function startResearchRun(
   if (started >= RESEARCH_RUNS_PER_LAKE_PER_DAY) {
     // "in the last 24 hours", not "today": the window is rolling (see DAY_MS), so a manager
     // refused at 10am because of a 3pm burst yesterday can act on the former and not the latter.
-    throw new BadRequestError(
-      `This data lake has already started ${RESEARCH_RUNS_PER_LAKE_PER_DAY} research runs in the last 24 hours`
+    throw new ResearchRunRefusedError(
+      `This data lake has already started ${RESEARCH_RUNS_PER_LAKE_PER_DAY} research runs in the last 24 hours`,
+      'daily_cap'
     );
   }
 
@@ -72,8 +90,9 @@ export async function startResearchRun(
     // run reports it ran with, so it has to be the post-clamp values or the two would disagree for
     // any config stored before a bound tightened.
     levers: normalizeResearchLevers(config),
-    trigger: config.trigger,
-    startedByUserId: actorUserId,
+    // How THIS run started, not the config's trigger: Run now on a scheduled config is still on-demand.
+    trigger: starter.trigger,
+    startedByUserId: starter.trigger === 'on_demand' ? starter.actorUserId : null,
     startedAt: null,
     completedAt: null,
   });

@@ -8,6 +8,7 @@ import {
   emptyResearchRunTotals,
   RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
   RESEARCH_MIN_RELEVANCE_DEFAULT,
+  RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
   RESEARCH_RUN_STALE_AFTER_MS,
 } from '@bike4mind/common';
 import { DataLakeResearchPanel } from './DataLakeResearchPanel';
@@ -75,7 +76,7 @@ const handlers = () => ({
 
 const renderPanel = (props: Partial<React.ComponentProps<typeof DataLakeResearchPanel>> = {}) => {
   const spies = handlers();
-  render(
+  const { unmount } = render(
     <Wrapper>
       <DataLakeResearchPanel
         configs={[]}
@@ -88,7 +89,7 @@ const renderPanel = (props: Partial<React.ComponentProps<typeof DataLakeResearch
       />
     </Wrapper>
   );
-  return spies;
+  return { ...spies, unmount };
 };
 
 beforeEach(() => vi.clearAllMocks());
@@ -503,6 +504,120 @@ describe('DataLakeResearchPanel', () => {
       expect(runButton.textContent).toBe('Save changes to run');
       fireEvent.click(runButton);
       expect(spies.onStartRun).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('scheduling (#3292)', () => {
+    it('sends the chosen cadence and review backlog limit on create', () => {
+      const spies = renderPanel();
+
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
+      fireEvent.click(screen.getByTestId('datalake-research-cadence-select'));
+      fireEvent.click(screen.getByRole('option', { name: 'Daily' }));
+      fireEvent.change(screen.getByTestId('datalake-research-review-backlog-input'), { target: { value: '10' } });
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+      expect(spies.onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ cadence: 'daily', reviewBacklogLimit: 10 })
+      );
+    });
+
+    // The field only means something once a schedule is chosen - showing it against "Off" would
+    // suggest it governs Run now, which it never does.
+    it('hides the review backlog field while the schedule is off', () => {
+      renderPanel();
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      expect(screen.queryByTestId('datalake-research-review-backlog-input')).toBeNull();
+    });
+
+    it('shows no schedule line on the config card when the cadence is off', () => {
+      renderPanel({ configs: [config()] });
+      expect(screen.queryByTestId('research-config-schedule')).toBeNull();
+    });
+
+    it('names the cadence and the next run time on the config card', () => {
+      renderPanel({
+        configs: [config({ cadence: 'weekly', nextRunAt: new Date('2026-04-01T00:00:00.000Z') })],
+      });
+      const line = screen.getByTestId('research-config-schedule').textContent ?? '';
+      expect(line).toMatch(/Runs weekly/);
+      expect(line).toMatch(/next/);
+    });
+
+    it('shows the paused line once pending proposals reach the limit, and not one below it', () => {
+      const scheduled = config({ cadence: 'daily', reviewBacklogLimit: 10 });
+      const { unmount } = renderPanel({ configs: [scheduled], pendingProposals: 9 });
+      expect(screen.queryByTestId('research-config-schedule-paused')).toBeNull();
+      unmount();
+
+      renderPanel({ configs: [scheduled], pendingProposals: 10 });
+      expect(screen.getByTestId('research-config-schedule-paused').textContent).toMatch(/10 of 10 pending proposals/);
+    });
+
+    it('says why the last scheduled tick did not start a run', () => {
+      const at = new Date('2026-03-02T00:00:00Z');
+      const { unmount } = renderPanel({
+        configs: [config({ cadence: 'daily', lastScheduledOutcome: { outcome: 'skipped', at, reason: 'daily_cap' } })],
+      });
+      expect(screen.getByTestId('research-config-schedule-outcome').textContent).toMatch(/daily run limit/);
+      unmount();
+
+      renderPanel({
+        configs: [
+          config({ cadence: 'daily', lastScheduledOutcome: { outcome: 'failed', at, error: 'Could not start.' } }),
+        ],
+      });
+      expect(screen.getByTestId('research-config-schedule-outcome').textContent).toBe('Could not start.');
+    });
+
+    // The paused line already carries a backlog skip; a second line would say it twice.
+    it('adds no outcome line for a backlog skip or a started run', () => {
+      const at = new Date('2026-03-02T00:00:00Z');
+      renderPanel({
+        configs: [
+          config({
+            id: 'a',
+            cadence: 'daily',
+            lastScheduledOutcome: { outcome: 'skipped', at, reason: 'review_backlog' },
+          }),
+          config({ id: 'b', cadence: 'daily', lastScheduledOutcome: { outcome: 'started', at, runId: 'run-1' } }),
+        ],
+      });
+      expect(screen.queryByTestId('research-config-schedule-outcome')).toBeNull();
+    });
+
+    it('counts the leading run of scheduled failures, newest first', () => {
+      renderPanel({
+        configs: [config({ cadence: 'daily' })],
+        runs: [
+          run({ id: 'run-old', trigger: 'periodic', status: 'failed', startedAt: new Date('2026-03-01T00:00:00Z') }),
+          run({ id: 'run-new', trigger: 'periodic', status: 'failed', startedAt: new Date('2026-03-02T00:00:00Z') }),
+        ],
+      });
+      expect(screen.getByTestId('research-config-schedule-failures').textContent).toBe('Last 2 scheduled runs failed');
+    });
+
+    // Run now is never blocked by the backlog limit - a person pressing it has decided to spend -
+    // so the warning must appear without touching the button's disabled state.
+    it('warns near Run now when the backlog is already at the limit, without disabling it', () => {
+      renderPanel({ configs: [config()], pendingProposals: RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT });
+
+      expect(screen.getByTestId('research-config-run-backlog-warning').textContent).toMatch(
+        /already waiting for review/
+      );
+      expect(screen.getByTestId('datalake-research-run-btn')).not.toBeDisabled();
+    });
+
+    it('marks a periodic run as Scheduled in the run history', () => {
+      renderPanel({ runs: [run({ trigger: 'periodic' })] });
+      expect(screen.getByTestId('research-run-trigger-scheduled')).toBeTruthy();
+    });
+
+    it('does not mark an on-demand run as Scheduled', () => {
+      renderPanel({ runs: [run({ trigger: 'on_demand' })] });
+      expect(screen.queryByTestId('research-run-trigger-scheduled')).toBeNull();
     });
   });
 });

@@ -7,5 +7,6 @@ export * from './executeResearchRun';
 export * from './RelevanceJudgeService';
 export * from './researchConfigs';
 export * from './researchLevers';
+export * from './researchSchedule';
 export * from './sourceFilter';
 export * from './startResearchRun';

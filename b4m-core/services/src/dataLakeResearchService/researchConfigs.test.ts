@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { IDataLakeResearchConfigDocument } from '@bike4mind/common';
 import {
+  RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
+  RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
   RESEARCH_CONFIG_NAME_MAX_CHARS,
   RESEARCH_MAX_RESULTS_DEFAULT,
   RESEARCH_MIN_RELEVANCE_DEFAULT,
@@ -16,6 +18,7 @@ import {
 
 const LAKE = 'lake-1';
 const ACTOR = 'user-1';
+const NOW = new Date('2026-03-01T12:00:00.000Z');
 
 const storedConfig = (overrides: Partial<IDataLakeResearchConfigDocument> = {}) =>
   ({
@@ -49,7 +52,10 @@ const makeAdapters = (overrides: Partial<ResearchConfigAdapters['db']['dataLakeR
     deleteConfig: vi.fn(async () => true),
     ...overrides,
   };
-  return { adapters: { db: { dataLakeResearchConfigs: repo } } as unknown as ResearchConfigAdapters, repo };
+  return {
+    adapters: { db: { dataLakeResearchConfigs: repo }, now: () => NOW } as unknown as ResearchConfigAdapters,
+    repo,
+  };
 };
 
 describe('createResearchConfig', () => {
@@ -83,26 +89,51 @@ describe('createResearchConfig', () => {
     );
   });
 
-  // v1 is user-triggered. Storing a trigger nothing will ever fire is a setting that silently does
-  // nothing, which is worse than a refusal.
-  it('accepts on_demand and refuses the triggers v1 cannot fire', async () => {
-    const { adapters, repo } = makeAdapters();
-
-    await createResearchConfig(LAKE, ACTOR, { name: 'n', query: 'q', trigger: 'on_demand' }, adapters);
-    expect(repo.createConfig.mock.calls[0][0].trigger).toBe('on_demand');
-
-    await expect(
-      createResearchConfig(LAKE, ACTOR, { name: 'n', query: 'q', trigger: 'scheduled' }, adapters)
-    ).rejects.toThrow(/not available yet/);
-    await expect(
-      createResearchConfig(LAKE, ACTOR, { name: 'n', query: 'q', trigger: 'periodic' }, adapters)
-    ).rejects.toThrow(/not available yet/);
-  });
-
-  it('defaults an absent trigger to on_demand', async () => {
+  it('defaults to an unscheduled on-demand config with the default review limit', async () => {
     const { adapters, repo } = makeAdapters();
     await createResearchConfig(LAKE, ACTOR, { name: 'n', query: 'q' }, adapters);
-    expect(repo.createConfig.mock.calls[0][0].trigger).toBe('on_demand');
+    expect(repo.createConfig.mock.calls[0][0]).toMatchObject({
+      trigger: 'on_demand',
+      cadence: 'off',
+      nextRunAt: null,
+      reviewBacklogLimit: RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
+    });
+  });
+
+  it('schedules the first run one period out and derives the periodic trigger', async () => {
+    const { adapters, repo } = makeAdapters();
+    await createResearchConfig(LAKE, ACTOR, { name: 'n', query: 'q', cadence: 'weekly' }, adapters);
+    expect(repo.createConfig.mock.calls[0][0]).toMatchObject({
+      trigger: 'periodic',
+      cadence: 'weekly',
+      nextRunAt: new Date('2026-03-08T12:00:00.000Z'),
+    });
+  });
+
+  it('clamps the review limit', async () => {
+    const { adapters, repo } = makeAdapters();
+    await createResearchConfig(LAKE, ACTOR, { name: 'n', query: 'q', reviewBacklogLimit: 0 }, adapters);
+    await createResearchConfig(LAKE, ACTOR, { name: 'n', query: 'q', reviewBacklogLimit: 1e9 }, adapters);
+    expect(repo.createConfig.mock.calls[0][0].reviewBacklogLimit).toBe(1);
+    expect(repo.createConfig.mock.calls[1][0].reviewBacklogLimit).toBe(RESEARCH_REVIEW_BACKLOG_LIMIT_MAX);
+  });
+
+  // A trigger that disagrees with the cadence would save a setting that silently does nothing.
+  it('accepts a trigger only when it agrees with the cadence', async () => {
+    const { adapters, repo } = makeAdapters();
+
+    await createResearchConfig(LAKE, ACTOR, { name: 'n', query: 'q', trigger: 'periodic', cadence: 'daily' }, adapters);
+    expect(repo.createConfig.mock.calls[0][0].trigger).toBe('periodic');
+
+    await expect(
+      createResearchConfig(LAKE, ACTOR, { name: 'n', query: 'q', trigger: 'periodic' }, adapters)
+    ).rejects.toThrow(/needs a cadence/);
+    await expect(
+      createResearchConfig(LAKE, ACTOR, { name: 'n', query: 'q', trigger: 'on_demand', cadence: 'daily' }, adapters)
+    ).rejects.toThrow(/cannot have a cadence/);
+    await expect(
+      createResearchConfig(LAKE, ACTOR, { name: 'n', query: 'q', trigger: 'scheduled', cadence: 'daily' }, adapters)
+    ).rejects.toThrow(/One-off scheduled/);
   });
 
   it('caps how many configurations one lake may hold', async () => {
@@ -168,6 +199,40 @@ describe('updateResearchConfig', () => {
     const { adapters, repo } = makeAdapters();
     await updateResearchConfig('config-1', LAKE, ACTOR, { maxResults: RESEARCH_MAX_RESULTS_DEFAULT }, adapters);
     expect(repo.updateConfig.mock.calls[0][2]).not.toHaveProperty('name');
+  });
+
+  it('resets the next run when the cadence changes', async () => {
+    const { adapters, repo } = makeAdapters();
+    await updateResearchConfig('config-1', LAKE, ACTOR, { cadence: 'daily' }, adapters);
+    expect(repo.updateConfig.mock.calls[0][2]).toMatchObject({
+      cadence: 'daily',
+      trigger: 'periodic',
+      nextRunAt: new Date('2026-03-02T12:00:00.000Z'),
+      lastScheduledOutcome: null,
+    });
+  });
+
+  it('clears the next run when scheduling is switched off', async () => {
+    const { adapters, repo } = makeAdapters({
+      findByIdInLake: vi.fn(async () =>
+        storedConfig({ cadence: 'daily', trigger: 'periodic', nextRunAt: new Date('2026-03-01T20:00:00.000Z') })
+      ),
+    });
+    await updateResearchConfig('config-1', LAKE, ACTOR, { cadence: 'off' }, adapters);
+    expect(repo.updateConfig.mock.calls[0][2]).toMatchObject({ cadence: 'off', trigger: 'on_demand', nextRunAt: null });
+  });
+
+  // Editing the query of a daily config must not push today's run a whole day out.
+  it('keeps the next run when the cadence is unchanged', async () => {
+    const { adapters, repo } = makeAdapters({
+      findByIdInLake: vi.fn(async () =>
+        storedConfig({ cadence: 'daily', trigger: 'periodic', nextRunAt: new Date('2026-03-01T20:00:00.000Z') })
+      ),
+    });
+    await updateResearchConfig('config-1', LAKE, ACTOR, { cadence: 'daily', query: 'new question' }, adapters);
+    const patch = repo.updateConfig.mock.calls[0][2];
+    expect(patch).not.toHaveProperty('nextRunAt');
+    expect(patch).not.toHaveProperty('cadence');
   });
 
   it('404s on a config that is not in this lake', async () => {
