@@ -9,10 +9,15 @@
          b4m-media: is this app's own scheme for generated images and audio, served by the main
          process out of userData - see main/chat/media/MediaStore.ts. It is named on img-src and
          media-src only, and nothing remote is admitted: the bytes are fetched in main and
-         written to disk there precisely so the renderer never reaches a provider or a CDN. -->
+         written to disk there precisely so the renderer never reaches a provider or a CDN.
+         b4m-artifact: is the same idea for the frame an HTML artifact renders in - main serves
+         one inert document on it, under a CSP of its own (main/chat/artifacts/sandboxProtocol.ts),
+         and it is named on frame-src alone. Framing the backend's /api/artifact-sandbox instead
+         would mean admitting a configurable remote origin here, which this policy has never done.
+         data: on img-src is also what carries an SVG artifact, which loads as a picture. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: b4m-media:; media-src 'self' b4m-media:; font-src 'self' data:; connect-src 'self' ws://localhost:* http://localhost:*"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: b4m-media:; media-src 'self' b4m-media:; font-src 'self' data:; frame-src b4m-artifact:; connect-src 'self' ws://localhost:* http://localhost:*"
     />
     <link rel="icon" type="image/png" href="./favicon.png" />
     <title>Bike4Mind</title>

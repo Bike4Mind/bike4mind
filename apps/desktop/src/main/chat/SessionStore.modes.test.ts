@@ -129,7 +129,7 @@ describe('SessionStore code sessions', () => {
   });
 
   it('records the project and round-trips it', async () => {
-    const created = await store.create(MODEL, PROJECT);
+    const created = await store.create(MODEL, { project: PROJECT });
     expect(created.mode).toBe('code');
 
     const loaded = await store.get(created.id);
@@ -137,7 +137,7 @@ describe('SessionStore code sessions', () => {
   });
 
   it('leaves a Code session untitled so the first prompt still names it', async () => {
-    const created = await store.create(MODEL, PROJECT);
+    const created = await store.create(MODEL, { project: PROJECT });
     await store.appendMessage(created.id, {
       id: 'm1',
       role: 'user',
@@ -158,7 +158,7 @@ describe('SessionStore code sessions', () => {
   });
 
   it('adds a context directory once, and removes it', async () => {
-    const created = await store.create(MODEL, PROJECT);
+    const created = await store.create(MODEL, { project: PROJECT });
     await store.addContextDirectory(created.id, '/repos/another');
     await store.addContextDirectory(created.id, '/repos/another');
 
@@ -175,7 +175,7 @@ describe('SessionStore code sessions', () => {
 
   // Deleting a conversation must never be a way to lose a worktree that holds uncommitted work.
   it('deletes the session without touching the project directory', async () => {
-    const created = await store.create(MODEL, PROJECT);
+    const created = await store.create(MODEL, { project: PROJECT });
     await store.delete(created.id);
 
     expect(await store.get(created.id)).toBeNull();

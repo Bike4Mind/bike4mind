@@ -119,6 +119,36 @@ const PHRASES: Record<string, ToolPhrases> = {
     many: n => `Generated ${n} sound effects`,
     active: 'Generating a sound effect...',
   },
+  session_list: {
+    didAlone: 'Listed the sessions in this project',
+    toAlone: 'list the sessions in this project',
+    many: n => `Listed the sessions ${n} times`,
+    active: 'Listing sessions...',
+  },
+  session_read: {
+    didAlone: 'Read another session',
+    toAlone: 'read another session',
+    many: n => `Read ${n} sessions`,
+    active: 'Reading a session...',
+  },
+  session_spawn: {
+    didAlone: 'Started a session',
+    toAlone: 'start a session',
+    many: n => `Started ${n} sessions`,
+    active: 'Starting a session...',
+  },
+  session_archive: {
+    didAlone: 'Archived a session',
+    toAlone: 'archive a session',
+    many: n => `Archived ${n} sessions`,
+    active: 'Archiving a session...',
+  },
+  session_delete: {
+    didAlone: 'Deleted a session',
+    toAlone: 'delete a session',
+    many: n => `Deleted ${n} sessions`,
+    active: 'Deleting a session...',
+  },
   generate_music: {
     didAlone: 'Generated music',
     toAlone: 'generate music',
@@ -155,6 +185,9 @@ function phrasesFor(name: string): ToolPhrases {
 const ARGUMENT_PRIORITY: Record<string, readonly string[]> = {
   grep_search: ['pattern', 'path'],
   glob_files: ['pattern', 'path'],
+  // The title if it was given one, never the seed prompt: that is a paragraph, and a row
+  // showing its first 56 characters names the task less well than "Started a session" does.
+  session_spawn: ['title'],
 };
 
 const DEFAULT_ARGUMENT_PRIORITY: readonly string[] = ['path', 'pattern', 'command', 'prompt', 'text', 'id'];

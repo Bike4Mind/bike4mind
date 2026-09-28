@@ -1,4 +1,4 @@
-import type { ChatDiff, ChatMedia, ChatToolNotice } from '@shared/chat';
+import type { ChatDiff, ChatMedia, ChatSessionSummary, ChatToolNotice, SpawnRefusal } from '@shared/chat';
 
 import type { MediaApiClient } from '../media/MediaApiClient';
 import type { MediaStore } from '../media/MediaStore';
@@ -73,8 +73,65 @@ export interface ToolContext {
   background?: BackgroundProcessRegistry;
   /** Absent when signed out, and in tests; the generation tools then refuse rather than run. */
   media?: MediaContext;
+  /** Absent outside a Code session; the host-control tools are then not declared at all. */
+  host?: HostContext;
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
+}
+
+/** What one session looks like to the host-control tools. */
+export interface HostSessionView {
+  id: string;
+  title: string;
+  /** Message count, and the timestamps the sidebar orders by. */
+  messageCount: number;
+  updatedAt: string;
+  archived: boolean;
+  /** Set when the agent spawned it; `self` marks the calling conversation's own children. */
+  spawnedBy?: string;
+  /** Present-tense state, the same one the sidebar row draws. */
+  status: 'processing' | 'needs-action' | 'done';
+}
+
+/** A spawn that did not happen, and which of the caps or preconditions stopped it. */
+export interface SpawnRejected {
+  ok: false;
+  reason: SpawnRefusal;
+  message: string;
+}
+
+export type SpawnOutcome = { ok: true; session: ChatSessionSummary } | SpawnRejected;
+
+/**
+ * The app itself, as a tool may drive it. Offered to Code sessions only.
+ *
+ * This is the third tool family, beside the local tools (filesystem risk) and the generation
+ * tools (credit risk); its risk is that the agent changes what the USER sees - it can start
+ * work that spends credits without them typing anything, and it can remove a conversation.
+ *
+ * Deliberately narrow, and narrow in a specific direction: everything here is scoped to the
+ * calling session's own project, and `spawn` copies the caller's folder grants verbatim rather
+ * than taking any of its own. There is no way through this interface to widen what the agent
+ * may touch, which is the invariant the whole family rests on.
+ */
+export interface HostContext {
+  /**
+   * Start a session under this one's project and set it running on `prompt`.
+   *
+   * Refused rather than queued when a cap is hit; see SpawnRefusal for which caps and why the
+   * model is told them apart.
+   */
+  spawn(prompt: string, title?: string): Promise<SpawnOutcome>;
+  /** Sessions in this one's project, newest first. Includes archived ones, flagged as such. */
+  listSessions(options: { includeArchived: boolean }): Promise<HostSessionView[]>;
+  /** One session's transcript as plain text, or null when it is gone or not in this project. */
+  readSession(sessionId: string): Promise<string | null>;
+  /** Reversible; the row moves to the sidebar's Archived section. Null when not addressable. */
+  setArchived(sessionId: string, archived: boolean): Promise<HostSessionView | null>;
+  /** Irreversible. False when the id names nothing this session may address. */
+  deleteSession(sessionId: string): Promise<boolean>;
+  /** How a session is described in an approval prompt, so the user reads a title not a uuid. */
+  describeSession(sessionId: string): Promise<string | null>;
 }
 
 /** What the user is asked to allow before a tool runs, for tools that declare `approval`. */
@@ -88,6 +145,12 @@ export interface ApprovalPrompt {
    * on disk right now, before anything is written.
    */
   diff?: ChatDiff;
+  /**
+   * This call cannot be undone, so it is asked EVERY time: a standing approval is neither
+   * honoured nor recordable against it, and the card does not offer one. Deleting a
+   * conversation is the case this exists for.
+   */
+  irreversible?: true;
 }
 
 /** Wire shape the completions endpoint expects, matching CompletionToolSchema in common. */

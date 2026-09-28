@@ -10,6 +10,7 @@ import { BackgroundProcessPanel } from './BackgroundProcessPanel';
 import { Composer } from './Composer';
 import { McpCard } from './McpCard';
 import { MessageThread } from './MessageThread';
+import { PendingApprovalBar } from './PendingApprovalBar';
 import { contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
 import { SessionChips } from './SessionChips';
@@ -19,7 +20,7 @@ import { TurnStatus } from './TurnStatus';
 import { describeActivity } from './statusLine';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
-import { useConversation, useModelCatalog, useSessionStatuses, useSessions } from './useChat';
+import { useConversation, useModelCatalog, usePendingApprovals, useSessionStatuses, useSessions } from './useChat';
 import { useFileDrop } from './useFileDrop';
 
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
@@ -88,14 +89,27 @@ function WorkingDirectoryLine({ project }: { project: ChatProject }) {
 }
 
 export function ChatShell({ account }: { account?: ReactNode }) {
-  const { sessions, loading, create, createCode, creatingCode, codeError, clearCodeError, remove, togglePin, apply } =
-    useSessions();
+  const {
+    sessions,
+    loading,
+    reload,
+    create,
+    createCode,
+    creatingCode,
+    codeError,
+    clearCodeError,
+    remove,
+    togglePin,
+    toggleArchived,
+    apply,
+  } = useSessions();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [mode, setMode] = useState<ChatSessionMode>('chat');
   const conversation = useConversation(activeId, apply);
   const background = useBackgroundProcesses(activeId);
   const catalog = useModelCatalog();
   const statuses = useSessionStatuses();
+  const pendingApprovals = usePendingApprovals();
   const [collapsed, setCollapsed] = useState(false);
   const draft = useAttachmentDraft(activeId);
 
@@ -143,6 +157,18 @@ export function ChatShell({ account }: { account?: ReactNode }) {
     },
     [conversation, draft]
   );
+
+  /**
+   * Re-read the session list whenever the set of busy sessions changes.
+   *
+   * The agent can now CREATE conversations, and it does so in main with no IPC call from here
+   * to hang a refresh off. A spawned session starts replying the moment it exists, so its
+   * status push is the first thing this window hears about it - and without this the row would
+   * not appear until something else happened to reload the list.
+   */
+  useEffect(() => {
+    void reload();
+  }, [reload, statuses]);
 
   // Open the most recent conversation of the current mode, so the app lands somewhere useful
   // rather than on an empty pane and switching mode does not leave a session open that the
@@ -240,6 +266,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
         onCreateInProject={directory => void onCreateInProject(directory)}
         onDelete={sessionId => void onDelete(sessionId)}
         onTogglePin={session => void togglePin(session)}
+        onToggleArchived={session => void toggleArchived(session)}
         card={
           <>
             <SidebarCard />
@@ -289,6 +316,13 @@ export function ChatShell({ account }: { account?: ReactNode }) {
             {conversation.notice}
           </Alert>
         )}
+
+        <PendingApprovalBar
+          pending={pendingApprovals}
+          openSessionId={activeId}
+          onRespond={conversation.respondToApproval}
+          onOpenSession={setActiveId}
+        />
 
         <BackgroundProcessPanel processes={background.processes} onStop={background.stop} />
 

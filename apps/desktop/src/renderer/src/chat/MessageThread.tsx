@@ -6,6 +6,7 @@ import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { ChatMessage } from '@shared/chat';
+import { ArtifactList } from './ArtifactCard';
 import { AttachmentRow } from './Attachments';
 import { contentColumnSx } from './layout';
 import { ToolCallList, type RespondToApproval } from './ToolCallList';
@@ -93,6 +94,10 @@ function AssistantTurn({ message, onRespond }: { message: ChatMessage; onRespond
           do, then asks for the tool. Above it, an approval prompt appears before its reason. */}
       <ToolCallList calls={toolCalls} onRespond={onRespond} />
 
+      {/* After both, because an artifact is what the turn produced rather than part of how it
+          got there. `content` has already had the markup removed, so nothing is shown twice. */}
+      <ArtifactList artifacts={message.artifacts ?? []} />
+
       {message.error && (
         <Alert size="sm" color="danger" variant="soft" sx={{ mt: 1 }} data-testid="chat-message-error">
           {message.error}
@@ -101,6 +106,32 @@ function AssistantTurn({ message, onRespond }: { message: ChatMessage; onRespond
 
       <StopReasonChip reason={message.stopReason} />
     </Box>
+  );
+}
+
+/**
+ * A message the app put in the thread rather than either speaker: a spawned session reporting
+ * back to the conversation that started it.
+ *
+ * Centred and quiet, on neither side of the conversation, because it is neither: drawn as a
+ * user bubble it would read as something the user typed, and as an assistant turn as something
+ * the model said. Both would be a lie about where the text came from.
+ */
+function SystemTurn({ message }: { message: ChatMessage }) {
+  return (
+    <Sheet
+      variant="soft"
+      color="neutral"
+      sx={{ px: 2, py: 1.25, borderRadius: 'md' }}
+      data-testid="chat-message-system"
+    >
+      <Typography level="body-xs" textColor="text.tertiary" sx={{ fontWeight: 'lg', mb: 0.5 }}>
+        From a session you started
+      </Typography>
+      <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        {message.content}
+      </Typography>
+    </Sheet>
   );
 }
 
@@ -139,7 +170,9 @@ export function MessageThread({
     <Box sx={{ flex: 1, overflowY: 'auto' }} data-testid="chat-thread">
       <Stack spacing={3} sx={{ ...contentColumnSx, py: 3 }}>
         {messages.map(message =>
-          message.role === 'user' ? (
+          message.system ? (
+            <SystemTurn key={message.id} message={message} />
+          ) : message.role === 'user' ? (
             <UserTurn key={message.id} message={message} sessionId={sessionId} />
           ) : (
             <AssistantTurn key={message.id} message={message} onRespond={onRespond} />
