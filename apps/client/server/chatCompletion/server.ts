@@ -111,7 +111,7 @@ async function main() {
   // Deliberately does NOT drive model discovery: this service and the self-host
   // worker share one env file, so a startup leg here would arm a second driver
   // on the same flag and run a provider fan-out inside the inference process.
-  // The worker is the single discovery driver (server/worker/main.ts).
+  // The worker is the single discovery driver (apps/workers/src/selfhost/main.ts).
   connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), bootLogger)
     .then(() => {
       bootLogger.info('MongoDB connected at boot');

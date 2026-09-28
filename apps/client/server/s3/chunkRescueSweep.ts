@@ -15,8 +15,9 @@
  * warned about had already happened - a #2126 review found the self-host copy had no test of its own,
  * so dropping an argument there regressed nothing visible while the cron's test stayed green.
  *
- * Lives in its own module rather than inline in main.ts so the enqueue accounting is reachable from a
- * test at all: as a scheduled-task closure it was unexported and unnameable.
+ * Lives in its own module rather than inline in the self-host worker's main.ts
+ * (apps/workers/src/selfhost/main.ts) so the enqueue accounting is reachable from a test at all: as
+ * a scheduled-task closure it was unexported and unnameable.
  */
 
 import { adminSettingsRepository, DataLakeModel, FabFile, scopedSettingsRepository } from '@bike4mind/database';

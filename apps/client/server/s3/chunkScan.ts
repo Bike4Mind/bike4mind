@@ -3,9 +3,9 @@
  *
  * If the ingest event (MinIO webhook on self-host, S3 ObjectCreated on hosted) is ever missed -
  * or auto-chunk was disabled when the file landed - this sweep re-enqueues files that completed
- * upload but were never chunked. Consumed by the self-host worker (main.ts) and the hosted
- * dataLakeBatchReconcile cron. Kept here so the selection filter is unit-testable without
- * importing either boot graph.
+ * upload but were never chunked. Consumed by the self-host worker (apps/workers/src/selfhost/main.ts)
+ * and the hosted dataLakeBatchReconcile cron. Kept here so the selection filter is unit-testable
+ * without importing either boot graph.
  */
 import { CHUNK_STALL_REASONS, LEGACY_CHUNK_STALL_NOTES } from '@bike4mind/common';
 

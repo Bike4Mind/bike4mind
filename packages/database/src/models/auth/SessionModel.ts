@@ -91,7 +91,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     tags: { type: [TagSchema], required: false },
     // Pairs with `tags` the way `summaryAt` pairs with `summary`. The schema is strict, so WITHOUT
     // this declaration the field is dropped from every write and the `!session.taggedAt` gate in
-    // apps/client/server/events/spider.ts re-tags notebooks it already paid a completion to tag.
+    // apps/workers/src/events/spider.ts re-tags notebooks it already paid a completion to tag.
     taggedAt: { type: Date, required: false },
     // Same strict-schema hazard as `taggedAt` above: undeclared means silently dropped, and the
     // retry gate would read permanently unattempted. Records that a completion was spent and

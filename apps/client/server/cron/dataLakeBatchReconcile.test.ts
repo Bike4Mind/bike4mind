@@ -226,7 +226,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
   });
 
   describe('un-chunked rescue sweep (#1420)', () => {
-    // The sweep itself lives in server/worker/chunkRescueSweep.ts and is covered there, by the same
+    // The sweep itself lives in server/s3/chunkRescueSweep.ts and is covered there, by the same
     // suite that covers the self-host driver - that shared function is why the two can no longer
     // drift. What is the CRON's own business, and all this block asserts, is that it calls the sweep
     // with the hosted budget, folds both counts into its response, and isolates a failure.
