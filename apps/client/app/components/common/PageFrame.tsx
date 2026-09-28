@@ -20,11 +20,9 @@ const PageFrame = ({ children, testId }: { children: ReactNode; testId?: string 
       // centred frame would collapse that space as soon as content overflowed.
       overflowY: 'auto',
       overflowX: 'hidden',
-      // Side gutters keep the frame off the viewport edges once it is narrower
-      // than its cap; the vertical padding stays tighter so the frame is not
-      // squeezed on short screens.
-      px: { xs: '16px', sm: '24px', md: '40px' },
-      py: { xs: '16px', md: '24px' },
+      // One tight gap on every side: the frame is itself a bordered card, so it
+      // only needs to clear the shell, not float in it.
+      p: '8px',
     }}
   >
     <Sheet
@@ -34,10 +32,10 @@ const PageFrame = ({ children, testId }: { children: ReactNode; testId?: string 
         width: '100%',
         maxWidth: '1400px',
         mx: 'auto',
-        // Fills the viewport when the content is short, grows past it when long.
-        // Subtracts the container's own vertical padding so the frame ends
-        // exactly where the bottom gap begins.
-        minHeight: { xs: 'calc(100vh - 32px)', md: 'calc(100vh - 48px)' },
+        // Fills the container when the content is short, grows past it when long.
+        // Measured against the container rather than the viewport: the app shell
+        // insets the page area, so a `100vh` frame always overflowed by that inset.
+        minHeight: '100%',
         display: 'flex',
         flexDirection: 'column',
         borderRadius: '12px',
