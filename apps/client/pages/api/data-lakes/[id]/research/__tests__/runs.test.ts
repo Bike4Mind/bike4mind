@@ -137,7 +137,7 @@ describe('POST /api/data-lakes/[id]/research/runs', () => {
     );
   });
 
-  // #3298: without this, History showed "started" with no matching outcome - this settle path
+  // Without this, History showed "started" with no matching outcome - this settle path
   // bypasses runLakeResearch.ts entirely (the executor never gets a message), so the route itself
   // has to record the outcome.
   it('records a failed outcome when the enqueue fails, so History does not show "started" forever', async () => {
