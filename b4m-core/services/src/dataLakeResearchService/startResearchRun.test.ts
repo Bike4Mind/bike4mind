@@ -132,7 +132,7 @@ describe('startResearchRun', () => {
     expect(runs.countStartedSince).toHaveBeenCalledWith(LAKE, new Date('2026-02-28T12:00:00.000Z'));
   });
 
-  // #3298: starting a research run left no trace in the lake's History tab.
+  // Starting a research run left no trace in the lake's History tab.
   it('records a start-research-run history event naming the configuration', async () => {
     const { adapters, record } = makeAdapters();
 
@@ -148,7 +148,7 @@ describe('startResearchRun', () => {
     );
   });
 
-  // #3298 follow-up: pinned so a regression back to an internal re-fetch (which silently returns
+  // Follow-up: pinned so a regression back to an internal re-fetch (which silently returns
   // [] without a wired grant repo) fails loudly instead of quietly mis-stamping every curator.
   it('records the manage rung the passed-in grants actually authorize, not `system`', async () => {
     const { adapters, record } = makeAdapters();
