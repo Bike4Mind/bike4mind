@@ -27,7 +27,7 @@ const ROUTES_DIR = path.join(__dirname, '..', '..', 'pages', 'api');
 // ponytail: file-level match - a file with several baseApi() calls counts as postured if any
 // one of them (or any other object in the file) carries a marker. Per-call matching is the
 // upgrade path if that ceiling ever hides a real gap.
-const POSTURES = [/\b(requiredScopes|alsoRequiredScopes)\s*:/, /auth:\s*'jwtOnly'/, /auth:\s*false\b/];
+const POSTURES = [/\b(requiredScopes|alsoRequiredScopes)\s*:/, /\bauth:\s*'jwtOnly'/, /\bauth:\s*false\b/];
 
 function routeFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
