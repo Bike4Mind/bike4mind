@@ -118,7 +118,7 @@ export function Composer({
   };
 
   return (
-    <Box sx={{ borderTop: '1px solid', borderColor: 'divider' }}>
+    <Box>
       {attachments.rejected.length > 0 && (
         <Alert
           size="sm"
