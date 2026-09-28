@@ -378,9 +378,13 @@ export function useConversation(
           return event.type === 'done'
             ? {
                 ...message,
+                // `content` REPLACES the streamed text rather than extending it: main strips
+                // the artifact markup out of the reply, so the deltas that carried it are
+                // exactly what has to be dropped here.
                 content: event.content,
                 stopReason: event.stopReason,
                 toolCalls: event.toolCalls ?? message.toolCalls,
+                artifacts: event.artifacts ?? message.artifacts,
               }
             : { ...message, error: event.message };
         })

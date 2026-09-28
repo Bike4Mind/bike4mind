@@ -176,6 +176,45 @@ export interface AddAttachmentsResult {
   rejected: { name: string; reason: string }[];
 }
 
+/**
+ * What an <artifact> block in a reply became.
+ *
+ * Only a subset is RENDERED (see the renderer's ArtifactCard): an artifact body is code the
+ * model wrote, and this app has a filesystem and a shell behind its preload bridge, so a type
+ * renders only where its content can run with no reach into this process. The rest is shown as
+ * source. `type` is the server's ArtifactType vocabulary, held as a plain string so this file
+ * stays free of core imports (see the header).
+ */
+export interface ChatArtifact {
+  /** Stable id, and the id of the server row when one was written. */
+  id: string;
+  /** The model's own `identifier` attribute, when it gave one. Its handle for an update. */
+  identifier?: string;
+  /** Server artifact type: 'html', 'react', 'svg', 'mermaid', 'code', 'python', ... */
+  type: string;
+  /** The `type` attribute verbatim, so the markup can be rebuilt for the next turn. */
+  mimeType: string;
+  title: string;
+  /** The body, verbatim. Never rendered as markup except through an isolated frame. */
+  content: string;
+  language?: string;
+  /** How the copy on the server went. Absent until a save has been attempted. */
+  save?: ChatArtifactSave;
+}
+
+/**
+ * Whether the server kept a copy, shown on the card.
+ *
+ * Reported rather than left silent because the outcomes differ for the user: a desktop
+ * conversation is otherwise local-only, so saving is the one thing that makes an artifact
+ * reachable from the web app, and a failure means it exists here and nowhere else.
+ */
+export interface ChatArtifactSave {
+  status: 'saved' | 'failed' | 'disabled';
+  /** Why it did not save. Set on 'failed' and 'disabled'. */
+  reason?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
@@ -197,6 +236,12 @@ export interface ChatMessage {
   error?: string;
   /** Files the user attached to this turn. Only ever on a user message. */
   attachments?: ChatAttachment[];
+  /**
+   * Artifacts parsed out of this reply. Their markup is NOT in `content`, which holds the prose
+   * around them; the wire rebuilds it from here (restoreArtifactMarkup) so the model still sees
+   * its own artifact on a follow-up while the body is stored exactly once.
+   */
+  artifacts?: ChatArtifact[];
 }
 
 export type BackgroundProcessStatus = 'running' | 'exited' | 'killed' | 'failed';
@@ -375,6 +420,8 @@ export type ChatStreamEvent =
       stopReason?: string;
       usage?: ChatUsage;
       toolCalls?: ChatToolCall[];
+      /** `content` has had their markup removed, so these ride with it rather than following it. */
+      artifacts?: ChatArtifact[];
     }
   | { type: 'error'; sessionId: string; messageId: string; message: string }
   | {

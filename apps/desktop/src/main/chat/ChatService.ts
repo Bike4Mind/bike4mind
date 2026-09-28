@@ -21,6 +21,9 @@ import type {
   UpdateProjectRequest,
   UpdateProjectResult,
 } from '@shared/chat';
+import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
+import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
+import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
 import { projectDisplayName } from './project/git';
 import { resolveWorkspace } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
@@ -95,6 +98,11 @@ export interface ChatServiceDeps {
    * is known; the approval gate feeds it the other half.
    */
   activity?: SessionActivity;
+  /**
+   * Copies emitted artifacts to the server. Absent in tests, and in that case a reply's
+   * artifacts are still parsed and shown - they simply exist only on this machine.
+   */
+  artifacts?: ArtifactPublisher;
   /** Null whenever no session is usable, which is how a signed-out send is refused. */
   getApiClient(): AuthenticatedApiClient | null;
   /** Identifies the cached completions endpoint; changing environments invalidates it. */
@@ -577,23 +585,35 @@ export class ChatService {
 
       if (controller.signal.aborted) stopReason = 'aborted';
 
+      // Artifacts are resolved BEFORE the message is stored or announced, so the thread never
+      // shows raw <artifact> markup that is then replaced, and a reloaded conversation reads
+      // back exactly what the live one showed. An aborted reply is included on purpose: a
+      // complete artifact followed by a stop is still a complete artifact.
+      const parsed = extractArtifacts(content);
+      const artifacts =
+        parsed.artifacts.length > 0 && this.deps.artifacts
+          ? await this.deps.artifacts.publish(parsed.artifacts, sessionId)
+          : parsed.artifacts;
+
       await this.deps.store.appendMessage(sessionId, {
         id: replyId,
         role: 'assistant',
-        content,
+        content: parsed.content,
         createdAt: new Date().toISOString(),
         stopReason,
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(thinking ? { thinking } : {}),
+        ...(artifacts.length > 0 ? { artifacts } : {}),
       });
       this.deps.emit({
         type: 'done',
         sessionId,
         messageId: replyId,
-        content,
+        content: parsed.content,
         stopReason,
         usage,
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        ...(artifacts.length > 0 ? { artifacts } : {}),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -879,6 +899,8 @@ function buildSystemMessage(roots: readonly string[], media: boolean, project?: 
         'path or contents. If asked about local files, say plainly that you have no access and ask',
         'the user to grant a folder with the "Share a folder" button.',
         ...(media ? MEDIA_GUIDANCE : []),
+        '',
+        DESKTOP_ARTIFACT_PROMPT,
       ].join('\n'),
     };
   }
@@ -906,6 +928,8 @@ function buildSystemMessage(roots: readonly string[], media: boolean, project?: 
       'Never invent a file name, size or contents, or the output of a command: if a tool did not',
       'return it, you do not know it.',
       ...(media ? MEDIA_GUIDANCE : []),
+      '',
+      DESKTOP_ARTIFACT_PROMPT,
     ].join('\n'),
   };
 }
@@ -974,14 +998,18 @@ async function toCompletionMessages(
 
   for (const message of session.messages) {
     const calls = message.toolCalls ?? [];
+    // Artifact markup is stripped out of the stored text, so it has to go back in here: a model
+    // that cannot see the artifact it just wrote cannot revise it.
+    const text = restoreArtifactMarkup(message);
+
     if (calls.length === 0) {
       const attachments = message.attachments ?? [];
       if (attachments.length > 0) {
-        const content = await toAttachedContent(message.content, attachments, readAttachment);
+        const content = await toAttachedContent(text, attachments, readAttachment);
         if (content.length > 0) wire.push({ role: message.role, content });
         continue;
       }
-      if (message.content.length > 0) wire.push({ role: message.role, content: message.content });
+      if (text.length > 0) wire.push({ role: message.role, content: text });
       continue;
     }
 
@@ -989,7 +1017,7 @@ async function toCompletionMessages(
       role: 'assistant',
       content: [
         ...(message.thinking ?? []),
-        ...(message.content ? [{ type: 'text', text: message.content }] : []),
+        ...(text ? [{ type: 'text', text }] : []),
         ...calls.map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input })),
       ],
     });
