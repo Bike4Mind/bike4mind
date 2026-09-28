@@ -3,11 +3,15 @@ import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope, QA_INGEST_USER_TAG } from '@bike4mind/common';
 import { makeIngestRequest } from '@server/qa/testFixtures';
 
-const { mockIngest } = vi.hoisted(() => ({ mockIngest: vi.fn() }));
+const { mockIngest, mockEvaluate } = vi.hoisted(() => ({ mockIngest: vi.fn(), mockEvaluate: vi.fn() }));
 
 // baseApi is stubbed (no auth chain); the real nextRouteForContract prelude and errorHandler run.
 vi.mock('@server/middlewares/baseApi', () => import('@server/qa/testing/baseApiStub'));
 vi.mock('@server/qa/ingestRun', () => ({ ingestRun: (...a: unknown[]) => mockIngest(...a) }));
+vi.mock('@server/qa/evaluateAlarm', () => ({
+  evaluateAlarm: (...a: unknown[]) => mockEvaluate(...a),
+  defaultAlarmDeps: () => ({ deps: 'default' }),
+}));
 
 import handler, { config } from '../runs';
 
@@ -25,6 +29,7 @@ const call = async (body: unknown, auth: Record<string, unknown> = { apiKeyInfo:
 beforeEach(() => {
   vi.clearAllMocks();
   mockIngest.mockResolvedValue({ runId: 'r1', status: 'passed', created: true });
+  mockEvaluate.mockResolvedValue(null);
 });
 
 describe('POST /api/v1/qa/runs', () => {
@@ -62,5 +67,30 @@ describe('POST /api/v1/qa/runs', () => {
   });
   it('raises the body limit for large runs', () => {
     expect(config.api.bodyParser.sizeLimit).toBe('4mb');
+  });
+});
+
+describe('POST /api/v1/qa/runs alarm wiring', () => {
+  it('evaluates the alarm after a first ingest', async () => {
+    await call(makeIngestRequest());
+    expect(mockEvaluate).toHaveBeenCalledWith('r1', { deps: 'default' });
+    expect(mockIngest.mock.invocationCallOrder[0]).toBeLessThan(mockEvaluate.mock.invocationCallOrder[0]);
+  });
+  it('never re-evaluates a re-ingested run', async () => {
+    mockIngest.mockResolvedValueOnce({ runId: 'r1', status: 'failed', created: false });
+    expect((await call(makeIngestRequest())).status).toBe(200);
+    expect(mockEvaluate).not.toHaveBeenCalled();
+  });
+  it('still returns 200 and logs when the alarm throws', async () => {
+    mockEvaluate.mockRejectedValueOnce(new Error('slack down'));
+    const { status, json } = await call(makeIngestRequest());
+    expect(status).toBe(200);
+    expect(json).toEqual({ run_id: 'r1', status: 'passed', created: true });
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('alarm failed for run=r1: slack down'));
+  });
+  it('never evaluates a rejected payload', async () => {
+    const { product: _omit, ...rest } = makeIngestRequest();
+    expect((await call(rest)).status).toBe(422);
+    expect(mockEvaluate).not.toHaveBeenCalled();
   });
 });

@@ -44,6 +44,7 @@ export const DEFAULT_MANIFEST = {
   OPTIHASHI_API_URL: { kind: 'secret', optional: true },
   OPTIHASHI_WEBHOOK_SECRET: { kind: 'secret', optional: true },
   OPTIHASHI_WEBHOOK_SECRET_PREVIOUS: { kind: 'secret', optional: true },
+  QA_ALARM_SLACK_WEBHOOKS: { kind: 'secret', optional: true },
   RATE_LIMIT_INGEST_TOKEN: { kind: 'secret', optional: true },
   SECOPS_ATTACK_SIMULATION_INGEST_TOKEN: { kind: 'secret', optional: true },
   SECOPS_CODE_INGEST_TOKEN: { kind: 'secret', optional: true },
