@@ -139,10 +139,20 @@ class DataLakeResearchRunRepository
     return (doc?.toJSON() as IDataLakeResearchRunDocument) ?? null;
   }
 
-  async settleRun(id: string, input: SettleResearchRunInput): Promise<void> {
+  /**
+   * Returns whether this call actually settled the row (false when it was already terminal). A
+   * caller that also records an outcome event alongside the settle - `research/runs/index.ts`'s
+   * enqueue-failure path - uses this to skip that record when the settle was a no-op, so a run the
+   * executor already resolved for real does not gain a second, contradictory outcome row.
+   */
+  async settleRun(id: string, input: SettleResearchRunInput): Promise<boolean> {
     const { status, completedAt, stopReason, spentMicroUsd, totals, error } = input;
-    await this.runModel.updateOne(
-      { _id: id },
+    // Guarded to the in-flight statuses so a settle racing an already-terminal run (e.g. an
+    // enqueue-failure settle that lands after the executor already claimed and finished the same
+    // row) is a no-op instead of overwriting a real outcome and leaving a second, contradictory
+    // History row behind it.
+    const result = await this.runModel.updateOne(
+      { _id: id, status: { $in: ['queued', 'running'] } },
       {
         $set: {
           status,
@@ -154,6 +164,7 @@ class DataLakeResearchRunRepository
         },
       }
     );
+    return result.matchedCount > 0;
   }
 
   async recordProgress(id: string, spentMicroUsd: number, totals: ResearchRunTotals): Promise<void> {
