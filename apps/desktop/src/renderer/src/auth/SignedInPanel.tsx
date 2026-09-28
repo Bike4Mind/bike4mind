@@ -1,40 +1,24 @@
 import Alert from '@mui/joy/Alert';
+import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
-import Chip from '@mui/joy/Chip';
-import Divider from '@mui/joy/Divider';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
 import { RuntimeInfo } from '../components/RuntimeInfo';
 
 /**
- * The signed-in shell. Deliberately thin: it exists to prove the identity round-trip, and
- * chat, sessions and model selection arrive in later tasks.
+ * The account strip under the session list: who is signed in, where, and the way out.
+ *
+ * Compact on purpose - now that chat owns the window, identity is context rather than the
+ * subject. The blocked states (storage, identity errors) still surface here, because nothing
+ * else in the chat UI would explain why replies suddenly stop working.
  */
 export function SignedInPanel({ state }: { state: AuthState }) {
   const user = state.user;
   const displayName = user?.nickname || user?.username || user?.email || user?.id || 'Signed in';
 
   return (
-    <Stack spacing={2}>
-      <Stack spacing={0.5}>
-        <Typography level="h2">{displayName}</Typography>
-        {user?.email && user.email !== displayName && (
-          <Typography level="body-sm" textColor="text.secondary">
-            {user.email}
-          </Typography>
-        )}
-      </Stack>
-
-      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-        <Chip size="sm" variant="soft" color="success" data-testid="auth-status-chip">
-          Signed in
-        </Chip>
-        <Typography level="body-xs" fontFamily="monospace" textColor="text.tertiary">
-          {state.environment.label} - {state.environment.url}
-        </Typography>
-      </Stack>
-
+    <Stack spacing={1} sx={{ p: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
       {state.storage === 'unavailable' && (
         <Alert color="warning" variant="soft" size="sm" data-testid="auth-storage-alert">
           No OS keychain is available here, so this sign-in lasts only until you quit.
@@ -64,13 +48,18 @@ export function SignedInPanel({ state }: { state: AuthState }) {
         </Alert>
       )}
 
-      <Divider />
-      <RuntimeInfo />
-      <Divider />
-
-      <Stack direction="row">
+      <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+        <Stack sx={{ minWidth: 0 }}>
+          <Typography level="body-sm" noWrap data-testid="auth-status-chip">
+            {displayName}
+          </Typography>
+          <Typography level="body-xs" textColor="text.tertiary" noWrap>
+            {state.environment.label}
+          </Typography>
+        </Stack>
         <Button
-          variant="soft"
+          size="sm"
+          variant="plain"
           color="neutral"
           loading={state.busy === 'signing-out'}
           onClick={() => void window.b4m.auth.signOut()}
@@ -79,6 +68,15 @@ export function SignedInPanel({ state }: { state: AuthState }) {
           Sign out
         </Button>
       </Stack>
+
+      <Box component="details">
+        <Typography component="summary" level="body-xs" textColor="text.tertiary" sx={{ cursor: 'pointer' }}>
+          Runtime
+        </Typography>
+        <Box sx={{ pt: 1 }}>
+          <RuntimeInfo />
+        </Box>
+      </Box>
     </Stack>
   );
 }

@@ -1,4 +1,5 @@
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
+import type { ChatSession, ChatSessionSummary, ChatStreamEvent, SendMessageRequest, SendMessageResult } from './chat';
 
 /**
  * IPC contract shared by the main process and the preload bridge.
@@ -20,6 +21,15 @@ export const IPC_CHANNELS = {
   authOpenAccountPage: 'auth:open-account-page',
   /** main -> renderer push; the renderer never polls for auth state. */
   authStateChanged: 'auth:state-changed',
+  chatListSessions: 'chat:list-sessions',
+  chatCreateSession: 'chat:create-session',
+  chatGetSession: 'chat:get-session',
+  chatRenameSession: 'chat:rename-session',
+  chatDeleteSession: 'chat:delete-session',
+  chatSendMessage: 'chat:send-message',
+  chatStopReply: 'chat:stop-reply',
+  /** main -> renderer push; reply tokens as they arrive. */
+  chatStreamEvent: 'chat:stream-event',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -45,5 +55,19 @@ export interface DesktopApi {
     openAccountPage(page: AccountPage): Promise<void>;
     /** Subscribe to main's auth state pushes; returns the unsubscribe. */
     onStateChanged(listener: (state: AuthState) => void): () => void;
+  };
+  chat: {
+    listSessions(): Promise<ChatSessionSummary[]>;
+    createSession(): Promise<ChatSessionSummary>;
+    /** Null when the session is gone (deleted in another window, or a stale id). */
+    getSession(sessionId: string): Promise<ChatSession | null>;
+    renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
+    deleteSession(sessionId: string): Promise<void>;
+    /** Resolves when the turn is accepted; the reply arrives via onStreamEvent. */
+    sendMessage(request: SendMessageRequest): Promise<SendMessageResult>;
+    /** Stop an in-flight reply, keeping what has streamed so far. No-op if none is running. */
+    stopReply(sessionId: string): Promise<void>;
+    /** Subscribe to reply progress; returns the unsubscribe. */
+    onStreamEvent(listener: (event: ChatStreamEvent) => void): () => void;
   };
 }

@@ -6,9 +6,15 @@ import Typography from '@mui/joy/Typography';
 import { SignInCard } from '../auth/SignInCard';
 import { SignedInPanel } from '../auth/SignedInPanel';
 import { useAuthState } from '../auth/useAuthState';
+import { ChatShell } from '../chat/ChatShell';
 
 export function Home() {
   const state = useAuthState();
+
+  // Signed in, the window belongs to the conversation; identity moves to the sidebar footer.
+  if (state?.status === 'signed-in') {
+    return <ChatShell account={<SignedInPanel state={state} />} />;
+  }
 
   return (
     <Box sx={{ minHeight: '100vh', display: 'grid', placeItems: 'center', bgcolor: 'background.body', p: 3 }}>
@@ -20,8 +26,6 @@ export function Home() {
               Checking your saved sign-in...
             </Typography>
           </Stack>
-        ) : state.status === 'signed-in' ? (
-          <SignedInPanel state={state} />
         ) : (
           <SignInCard state={state} />
         )}

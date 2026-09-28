@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
+import type { ChatStreamEvent, SendMessageRequest } from '@shared/chat';
 import { IPC_CHANNELS, type DesktopApi } from '@shared/ipc';
 
 // Written out one method per channel rather than a generic invoke(channel, ...args)
@@ -21,6 +22,21 @@ const api: DesktopApi = {
       const handler = (_event: unknown, state: AuthState) => listener(state);
       ipcRenderer.on(IPC_CHANNELS.authStateChanged, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.authStateChanged, handler);
+    },
+  },
+  chat: {
+    listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSessions),
+    createSession: () => ipcRenderer.invoke(IPC_CHANNELS.chatCreateSession),
+    getSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetSession, sessionId),
+    renameSession: (sessionId: string, title: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatRenameSession, sessionId, title),
+    deleteSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatDeleteSession, sessionId),
+    sendMessage: (request: SendMessageRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatSendMessage, request),
+    stopReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatStopReply, sessionId),
+    onStreamEvent: listener => {
+      const handler = (_event: unknown, streamEvent: ChatStreamEvent) => listener(streamEvent);
+      ipcRenderer.on(IPC_CHANNELS.chatStreamEvent, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatStreamEvent, handler);
     },
   },
 };

@@ -91,6 +91,16 @@ export class AuthService {
     return this.state;
   }
 
+  /**
+   * The authenticated HTTP client for the current environment, or null when there is no usable
+   * session. Main-process only, and deliberately not reachable over IPC: the instance injects
+   * the access token into every request, so handing it across the contextBridge would hand the
+   * renderer the credential this whole arrangement keeps out of it (see src/shared/ipc.ts).
+   */
+  getApiClient(): AuthenticatedApiClient | null {
+    return this.state.status === 'signed-in' ? this.api : null;
+  }
+
   /** Read the stored environment and session. Call after the app `ready` event. */
   async initialize(): Promise<void> {
     const selection = await this.deps.vault.getEnvironment();

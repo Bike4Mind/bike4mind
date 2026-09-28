@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { IPC_CHANNELS, type AppInfo } from '@shared/ipc';
 import { registerAuth } from './auth';
+import { registerChat } from './chat';
 
 // electron-vite sets this in dev only; a packaged build loads the renderer off disk.
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL;
@@ -52,7 +53,11 @@ void app.whenReady().then(async () => {
   // After ready, not before: safeStorage is only usable once the app is ready, and the vault
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
-  app.once('will-quit', () => auth.dispose());
+  const chat = registerChat(auth);
+  app.once('will-quit', () => {
+    auth.dispose();
+    chat.dispose();
+  });
 
   createWindow();
 
