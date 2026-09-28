@@ -93,6 +93,30 @@ class LakeMembershipChangeEventRepository
     const docs = await query;
     return docs.map(d => d.toJSON() as unknown as ILakeMembershipChangeEventDocument);
   }
+
+  async listByLakeSince(
+    lakeId: string,
+    since: Date,
+    opts?: { limit?: number }
+  ): Promise<ILakeMembershipChangeEventDocument[]> {
+    // `$gt`, not `$gte`: the bound is exclusive so two adjacent windows partition the log instead
+    // of both claiming a change written exactly on the boundary.
+    const query = this.eventModel
+      .find({ dataLakeId: lakeId, createdAt: { $gt: since } })
+      .sort({ createdAt: -1, _id: -1 });
+    if (opts?.limit) query.limit(opts.limit);
+    const docs = await query;
+    return docs.map(d => d.toJSON() as unknown as ILakeMembershipChangeEventDocument);
+  }
+
+  async oldestEventAt(lakeId: string): Promise<Date | undefined> {
+    const doc = await this.eventModel
+      .findOne({ dataLakeId: lakeId })
+      .sort({ createdAt: 1, _id: 1 })
+      .select({ createdAt: 1 })
+      .lean();
+    return doc?.createdAt ?? undefined;
+  }
 }
 
 export const lakeMembershipChangeEventRepository: ILakeMembershipChangeEventRepository =

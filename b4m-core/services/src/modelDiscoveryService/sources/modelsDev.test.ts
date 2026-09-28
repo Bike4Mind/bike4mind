@@ -148,6 +148,23 @@ describe('models.dev normalization', () => {
     expect(active?.lifecycleEvidence).toBeUndefined();
   });
 
+  it('maps release_date to releaseDate', () => {
+    expect(byId(result.records).get('claude-opus-5')?.patch.releaseDate).toBe('2026-07-24');
+  });
+
+  it('drops a release_date that is not a full calendar day', () => {
+    const doc = (release_date: unknown) => ({
+      anthropic: { models: { 'claude-opus-6': { id: 'claude-opus-6', release_date, limit: { context: 1000 } } } },
+    });
+    const target: JoinTarget[] = [{ modelId: 'claude-opus-6', backend: 'anthropic' }];
+
+    for (const value of ['2026-07', '2026-02-30', '26-07-24', 20260724, null]) {
+      const records = normalizeModelsDev(doc(value), target).records;
+      expect(records[0]?.patch).not.toHaveProperty('releaseDate');
+      expect(records[0]?.patch).toMatchObject({ contextWindow: 1000 });
+    }
+  });
+
   it('never claims a reasoning style, only that the model reasons', () => {
     expect(byId(result.records).get('claude-opus-5')?.patch.reasoning).toEqual({ supported: true });
   });

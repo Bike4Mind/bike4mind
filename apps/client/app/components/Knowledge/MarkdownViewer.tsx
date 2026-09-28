@@ -1,3 +1,4 @@
+import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { remarkGfmNoSingleTilde, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
@@ -5,10 +6,9 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { Box, Typography, IconButton, Tooltip } from '@mui/joy';
 import { ContentCopy, Check } from '@mui/icons-material';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import MermaidChart from '../Charts/MermaidChart';
 import { locateCitedPassage, blockIntersectsPassage, type PassageRange } from './citedPassage';
+import { extractMermaidFence } from '@client/app/utils/mermaidFence';
 
 interface Props {
   content: string;
@@ -145,7 +145,7 @@ const MarkdownViewer: React.FC<Props> = ({ content, citedPassage }) => {
     content.trim().startsWith('mindmap');
 
   // Check if the content is a Mermaid diagram wrapped in code blocks
-  const mermaidMatch = content.match(/```mermaid\s*([\s\S]*?)```/);
+  const mermaidBody = extractMermaidFence(content);
 
   // A diagram has no prose blocks to mark, but the prop's contract is that the reader always gets
   // to SEE the cited passage - so these two early returns still render the callout rather than
@@ -164,8 +164,8 @@ const MarkdownViewer: React.FC<Props> = ({ content, citedPassage }) => {
     );
   }
 
-  if (mermaidMatch) {
-    const chartContent = mermaidMatch[1].trim();
+  if (mermaidBody !== null) {
+    const chartContent = mermaidBody;
     return (
       <>
         {mermaidCitedFallback}
@@ -244,20 +244,11 @@ const MarkdownViewer: React.FC<Props> = ({ content, citedPassage }) => {
                 {...citedBlockProps(node, citedRange)}
               >
                 <CopyButton text={String(children).replace(/\n$/, '')} />
-                <SyntaxHighlighter
-                  {...props}
-                  style={oneDark}
+                <HighlightedCode
+                  code={String(children).replace(/\n$/, '')}
                   language={language}
-                  PreTag="div"
-                  customStyle={{
-                    maxWidth: '100%',
-                    overflowX: 'auto',
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-word',
-                  }}
-                >
-                  {String(children).replace(/\n$/, '')}
-                </SyntaxHighlighter>
+                  customStyle={{ maxWidth: '100%', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                />
               </Box>
             ) : (
               <code

@@ -173,22 +173,25 @@ test.describe('Data Lake - management panel', () => {
       fileTagPrefix: `e2eorigin${RUN}:`,
     });
 
-    await dataLakePage.openLakeInManager(lake.id);
+    // The nav chip lives on the root lake row, which ManagerNav unmounts once a lake is selected,
+    // so check it BEFORE selectLake - after it, a count of 0 would hold for any origin.
+    const navChip = dataLakePage.lakeRow(lake.id).getByTestId(`datalake-manager-origin-${lake.id}`);
+    const infoChip = dataLakePage.lakeInfo.getByTestId(`datalake-origin-chip-${lake.id}`);
+
     // Curated (the default origin) gets no badge on either surface - only connector-fed does.
-    await expect(dataLakePage.page.getByTestId(`datalake-manager-origin-${lake.id}`)).toHaveCount(0);
-    await expect(dataLakePage.page.getByTestId(`datalake-origin-chip-${lake.id}`)).toHaveCount(0);
+    await dataLakePage.openManagerFromChat();
+    await expect(dataLakePage.lakeRow(lake.id)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(navChip).toHaveCount(0);
+    await dataLakePage.selectLake(lake.id);
+    await expect(infoChip).toHaveCount(0);
 
     expect(await apiUpdateDataLake(request, ownerToken(), lake.id, { origin: 'connector-fed' })).toBe(200);
     // The manager modal is client-side state, not URL-driven, so a plain page.reload() would
     // drop it - re-enter through the same chat-surface flow the rest of this file uses.
-    await dataLakePage.openLakeInManager(lake.id);
-
-    await expect(dataLakePage.page.getByTestId(`datalake-manager-origin-${lake.id}`)).toBeVisible({
-      timeout: TIMEOUTS.VISIBLE,
-    });
-    await expect(dataLakePage.page.getByTestId(`datalake-origin-chip-${lake.id}`)).toBeVisible({
-      timeout: TIMEOUTS.VISIBLE,
-    });
+    await dataLakePage.openManagerFromChat();
+    await expect(navChip).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await dataLakePage.selectLake(lake.id);
+    await expect(infoChip).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   });
 });
 

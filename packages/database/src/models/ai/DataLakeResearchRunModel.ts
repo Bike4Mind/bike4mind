@@ -64,6 +64,7 @@ const DataLakeResearchRunSchema = new Schema<IDataLakeResearchRunDocument>(
     stopReason: { type: String, enum: RESEARCH_RUN_STOP_REASONS, default: null },
     spentMicroUsd: { type: Number, default: 0 },
     totals: { type: ResearchRunTotalsSchema, default: () => emptyResearchRunTotals() },
+    judgeModel: { type: String, default: null },
     error: { type: String, default: null },
   },
   {
@@ -140,7 +141,7 @@ class DataLakeResearchRunRepository
   }
 
   async settleRun(id: string, input: SettleResearchRunInput): Promise<void> {
-    const { status, completedAt, stopReason, spentMicroUsd, totals, error } = input;
+    const { status, completedAt, stopReason, spentMicroUsd, totals, judgeModel, error } = input;
     await this.runModel.updateOne(
       { _id: id },
       {
@@ -150,6 +151,7 @@ class DataLakeResearchRunRepository
           stopReason: stopReason ?? null,
           spentMicroUsd,
           totals,
+          judgeModel: judgeModel ?? null,
           error: error ?? null,
         },
       }

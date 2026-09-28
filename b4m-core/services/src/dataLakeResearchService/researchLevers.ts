@@ -53,7 +53,16 @@ const boundedStringList = (values: readonly unknown[] | undefined, max: number):
  * credentials, port, path and query, lowercases the host, punycodes an IDN so a Cyrillic entry can
  * match the `xn--` hostname a URL actually carries, and leaves a trailing root dot for us to strip
  * (`sourceHostname` strips it on the other side, so the two meet).
+ *
+ * A leading `www.` is dropped too: `hostMatchesDomain` already covers subdomains, so the bare domain
+ * is what a manager means by `www.example.com`, and keeping the prefix would leave `example.com`
+ * itself unmatched. Only when a registrable name remains, so `www.com` never widens to all of `com`.
  */
+const stripWww = (hostname: string): string => {
+  const rest = hostname.replace(/^www\./, '');
+  return rest.includes('.') ? rest : hostname;
+};
+
 const normalizeDomainEntry = (value: string): string => {
   const bare = value
     .trim()
@@ -61,7 +70,7 @@ const normalizeDomainEntry = (value: string): string => {
     .replace(/^[*.]+/, '');
   if (!bare) return '';
   try {
-    return new URL(`https://${bare}`).hostname.replace(/\.$/, '');
+    return stripWww(new URL(`https://${bare}`).hostname.replace(/\.$/, ''));
   } catch {
     return '';
   }

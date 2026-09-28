@@ -32,8 +32,8 @@ const useLakeConfigHistoryMock = vi.fn(() => ({
   error: null,
   refetch: vi.fn(),
 }));
-// Steady state for the tests that don't care about the acquisition queue: an empty queue, which
-// keeps the Proposals tab hidden. The proposals suite below overrides it per test.
+// Steady state for the tests that don't care about the acquisition queue: an empty queue. The
+// proposals suite below overrides it per test.
 const useDataLakeProposalsMock = vi.fn(() => ({
   data: [] as unknown[],
   isLoading: false,
@@ -1129,14 +1129,21 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
     withQueue([]);
   });
 
-  it('hides the tab while the queue is empty - a permanently empty tab reads as broken', () => {
+  // The Research tab says its results land "in the Proposals queue", so the queue must be findable
+  // before the first proposal exists.
+  it('shows the tab to a manager while the queue is empty, with a pointer to how proposals arrive', async () => {
+    const user = userEvent.setup();
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
       </Wrapper>
     );
 
-    expect(screen.queryByTestId('datalake-settings-tab-proposals')).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
+
+    expect(screen.getByTestId('datalake-settings-tab-proposals')).toHaveTextContent('Proposals (0)');
+    expect(screen.getByTestId('datalake-proposals-empty')).toHaveTextContent(/research run/);
+    expect(screen.getByTestId('datalake-proposals-empty')).toHaveTextContent(/Research tab/);
   });
 
   it('shows the tab with a count once something is waiting', () => {
@@ -1150,10 +1157,8 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
     expect(screen.getByTestId('datalake-settings-tab-proposals')).toHaveTextContent('Proposals (2)');
   });
 
-  // Ruling on the last proposal used to make the tab vanish under the reviewer mid-action, silently
-  // relocating them to the Settings form - it read as the app losing their place, and hid the
-  // confirmation that they had finished the queue.
-  it('keeps the tab for the rest of the session once the queue empties', () => {
+  // Ruling on the last proposal must not make the tab vanish under the reviewer mid-action.
+  it('keeps the tab once the queue empties', () => {
     withQueue([queued()]);
     const { rerender } = render(
       <Wrapper>
@@ -1164,6 +1169,22 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
 
     withQueue([]);
     rerender(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-tab-proposals')).toHaveTextContent('Proposals (0)');
+  });
+
+  it('shows the tab when only declined proposals exist, so they can be restored', () => {
+    useDataLakeProposalsMock.mockImplementation(((_id: unknown, status: unknown) => ({
+      data: status === 'declined' ? [queued({ status: 'declined' })] : [],
+      isLoading: false,
+      isForbidden: false,
+      error: null,
+    })) as never);
+    render(
       <Wrapper>
         <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
       </Wrapper>
@@ -1240,8 +1261,8 @@ describe('DataLakeSettingsModal - Research tab', () => {
     useDataLakeResearchRunsMock.mockReturnValue({ data: [], isLoading: false, isForbidden: false, error: null });
   });
 
-  // Unlike Proposals, this tab shows even with nothing in it: it is where a configuration is
-  // CREATED, so hiding it while empty would hide the only way to make the first one.
+  // Shown even with nothing in it: it is where a configuration is CREATED, so hiding it while empty
+  // would hide the only way to make the first one.
   it('offers the tab to a manager who has no configuration yet', () => {
     render(
       <Wrapper>
@@ -1472,5 +1493,130 @@ describe('DataLakeSettingsModal - lake memory toggle', () => {
 
     expect(screen.getByTestId('datalake-memory-toggle')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-memory-toggle-help')).toHaveTextContent(/disabled platform-wide/i);
+  });
+});
+
+describe('DataLakeSettingsModal - closing with unsaved edits', () => {
+  const manageableLake = { ...openLake, id: 'lake-close-1' };
+
+  beforeEach(() => {
+    useDataLakeResearchConfigsMock.mockReturnValue({ data: [], isLoading: false, isForbidden: false, error: null });
+    useDataLakeResearchRunsMock.mockReturnValue({ data: [], isLoading: false, isForbidden: false, error: null });
+  });
+
+  const renderModal = (onClose = vi.fn()) => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={onClose} />
+      </Wrapper>
+    );
+    return onClose;
+  };
+
+  it('closes straight away on Escape when nothing was edited', async () => {
+    const user = userEvent.setup();
+    const onClose = renderModal();
+
+    await user.keyboard('{Escape}');
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('datalake-discard-confirm')).not.toBeInTheDocument();
+  });
+
+  it('asks before Escape discards an edit, and keeps the edit when the user backs out', async () => {
+    const user = userEvent.setup();
+    const onClose = renderModal();
+
+    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
+    await user.keyboard('{Escape}');
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('datalake-discard-confirm')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('datalake-discard-keep-btn'));
+
+    await waitFor(() => expect(screen.queryByTestId('datalake-discard-confirm')).not.toBeInTheDocument());
+    expect(within(screen.getByTestId('datalake-settings-name')).getByRole('textbox')).toHaveValue('Open Lake renamed');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('closes once the user confirms the discard', async () => {
+    const user = userEvent.setup();
+    const onClose = renderModal();
+
+    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
+    await user.click(screen.getByTestId('datalake-settings-close-btn'));
+    await user.click(screen.getByTestId('datalake-discard-confirm-btn'));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats an edit that is typed back to the original as clean', async () => {
+    const user = userEvent.setup();
+    const onClose = renderModal();
+
+    await user.type(screen.getByTestId('datalake-settings-name'), 'x');
+    await user.type(screen.getByTestId('datalake-settings-name'), '{Backspace}');
+    await user.keyboard('{Escape}');
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not count a background refetch of the lake as an unsaved edit', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={onClose} />
+      </Wrapper>
+    );
+    rerender(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...manageableLake, name: 'Renamed elsewhere' }} onClose={onClose} />
+      </Wrapper>
+    );
+
+    await user.keyboard('{Escape}');
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets Escape close an open listbox without closing the dialog', async () => {
+    const user = userEvent.setup();
+    const onClose = renderModal();
+
+    await user.click(screen.getByTestId('datalake-grounding-mode-button'));
+    expect(screen.getByTestId('datalake-grounding-mode-button')).toHaveAttribute('aria-expanded', 'true');
+
+    await user.keyboard('{Escape}');
+
+    expect(screen.getByTestId('datalake-grounding-mode-button')).toHaveAttribute('aria-expanded', 'false');
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('datalake-settings-modal')).toBeInTheDocument();
+  });
+
+  it('offers a close button on a tab without Save/Cancel', async () => {
+    const user = userEvent.setup();
+    const onClose = renderModal();
+
+    await user.click(screen.getByTestId('datalake-settings-tab-research'));
+    expect(screen.queryByTestId('datalake-settings-save-btn')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('datalake-settings-close-btn'));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks before discarding an unsaved research configuration', async () => {
+    const user = userEvent.setup();
+    const onClose = renderModal();
+
+    await user.click(screen.getByTestId('datalake-settings-tab-research'));
+    await user.click(screen.getByTestId('datalake-research-new-btn'));
+    await user.type(screen.getByTestId('datalake-research-name-input'), 'Weekly sweep');
+    await user.click(screen.getByTestId('datalake-settings-close-btn'));
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('datalake-discard-confirm')).toBeInTheDocument();
   });
 });

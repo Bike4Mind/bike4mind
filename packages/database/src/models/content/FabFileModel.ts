@@ -6,6 +6,7 @@ import {
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
   type DataLakeMembershipFileCounts,
+  type DataLakeLiveMember,
   type DataLakeSweptFile,
   effectiveTagPrefixArm,
   FabFileChunkPolicyConflict,
@@ -3104,6 +3105,31 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       .find(buildDataLakeMembershipFilter(scope), { _id: 1 })
       .setOptions({ includeDeleted: true });
     return docs.map(d => d._id.toString());
+  }
+
+  async findLiveMembersByDataLakeTag(scope: DataLakeMembershipScope): Promise<DataLakeLiveMember[]> {
+    // `deletedAt: null` asserted explicitly rather than left to the soft-delete plugin's find hook,
+    // matching softDeleteByDataLakeTag: a soft delete leaves the lake tags in place, so a tombstone
+    // keeps matching the membership filter and would otherwise read as a current member.
+    const docs = await this.fabFileModel.find(
+      { ...buildDataLakeMembershipFilter(scope), deletedAt: null },
+      { _id: 1, createdAt: 1 }
+    );
+    return docs.map(d => ({ id: d._id.toString(), createdAt: d.createdAt }));
+  }
+
+  async findStorageKeysByIds(fabFileIds: string[]) {
+    if (fabFileIds.length === 0) return [];
+    // includeDeleted is the whole point: every caller's ids are soft-deleted rows (see the interface).
+    const docs = await this.fabFileModel
+      .find({ _id: { $in: convertIds(fabFileIds) } }, { filePath: 1, 'versions.filePath': 1 })
+      .setOptions({ includeDeleted: true })
+      .lean();
+    return docs.map(d => ({
+      id: d._id.toString(),
+      filePath: d.filePath ?? undefined,
+      versions: (d.versions ?? []).map(v => ({ filePath: v.filePath })),
+    }));
   }
 
   async updateTagsByUserId(userId: string, tag: string, newTag: string): Promise<number> {

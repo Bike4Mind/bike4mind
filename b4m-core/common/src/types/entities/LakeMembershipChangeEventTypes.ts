@@ -23,10 +23,10 @@ import { LAKE_ACCESS_PRINCIPAL_KINDS, type LakeAccessPrincipalKind } from './Lak
 // LakeAccessEventTypes, is the same choice LakeConfigChangeEvent itself made against
 // LakeAccessEventModel - see that file's own header.
 //
-// SCOPE: the event, its vocabulary, and the write path that records it (#3052). Reading it back
-// is #3053 - the repository below exposes `record`/`listByLake` and nothing else, matching
-// LakeConfigChangeEventModel's own read/append split, and nothing here surfaces these rows to a
-// user yet.
+// SCOPE: the event, its vocabulary, the write path that records it, and the read side that diffs
+// a lake's membership between two instants. Still append-only: the repository below exposes
+// `record` plus reads and nothing else, matching LakeConfigChangeEventModel's own read/append
+// split.
 
 /** Mirrors the read model's vocabulary deliberately (aliased, not re-declared), the same choice
  * LakeConfigChangeEventTypes makes and for the same reason: one principal shape across every
@@ -95,6 +95,25 @@ export interface ILakeMembershipChangeEventRepository extends Pick<
 > {
   record(input: RecordLakeMembershipChangeInput): Promise<ILakeMembershipChangeEventDocument>;
   listByLake(lakeId: string, opts?: { limit?: number }): Promise<ILakeMembershipChangeEventDocument[]>;
+  /**
+   * Every event for the lake strictly AFTER `since`, newest first, capped by `limit`.
+   *
+   * No upper bound on purpose: a diff ending in the past still has to rewind today's membership
+   * back to the window's end, which needs the events recorded since then. Truncation therefore
+   * drops the OLDEST rows, which is the end a caller can honestly report as uncovered.
+   */
+  listByLakeSince(
+    lakeId: string,
+    since: Date,
+    opts?: { limit?: number }
+  ): Promise<ILakeMembershipChangeEventDocument[]>;
+  /**
+   * When this lake's oldest RETAINED event was written, or undefined when it has none. The only
+   * evidence available for how far back the log can be believed: rows expire on the TTL, and
+   * nothing records when collection began, so a window reaching past this instant cannot be
+   * answered with a membership set - only with the events that happen to survive.
+   */
+  oldestEventAt(lakeId: string): Promise<Date | undefined>;
 }
 
 type AssertTrue<T extends true> = T;
@@ -108,7 +127,7 @@ type AssertTrue<T extends true> = T;
 export type LakeMembershipChangeEventRepositoryIsAppendOnly = AssertTrue<
   Exclude<
     keyof ILakeMembershipChangeEventRepository,
-    'record' | 'listByLake' | 'find' | 'findOne' | 'findById' | 'count'
+    'record' | 'listByLake' | 'listByLakeSince' | 'oldestEventAt' | 'find' | 'findOne' | 'findById' | 'count'
   > extends never
     ? true
     : false

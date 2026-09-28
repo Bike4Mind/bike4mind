@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { stripToolArtifactMarkup } from '@bike4mind/common';
-import { handleToolResultStreaming } from './toolStreamingHelper';
+import { handleToolResultStreaming, createRecursiveArtifactGuard } from './toolStreamingHelper';
 
 const CHESS_ARTIFACT =
   '<artifact identifier="game-1" type="application/vnd.ant.chess" title="Chess Game">{"fen":"8/8/8/8/8/8/8/8 w - - 0 1"}</artifact>';
@@ -79,37 +78,144 @@ describe('handleToolResultStreaming: only emitting tools stream, and only their 
   });
 });
 
-describe('stripToolArtifactMarkup: the model never sees tool artifact markup it could echo', () => {
-  const P = '[removed]';
+// stripToolArtifactMarkup and stripDeliveredArtifactBlocks are tested with their own
+// module, co-located at @bike4mind/common's toolArtifactEmitters.test.ts.
 
-  it('replaces every block, keeps surrounding text, and leaves markup-free text untouched', () => {
-    expect(stripToolArtifactMarkup(`a ${CHESS_ARTIFACT} b ${MERMAID_ARTIFACT} c`, P)).toBe(`a ${P} b ${P} c`);
-    expect(stripToolArtifactMarkup('plain <artifacts> text', P)).toBe('plain <artifacts> text');
-    expect(stripToolArtifactMarkup('', P)).toBe('');
+describe('createRecursiveArtifactGuard: one shared buffer/flush pipe for a whole recursive chain', () => {
+  it('buffers text across multiple calls and strips an echo of an already-delivered artifact on flush', async () => {
+    const received: Array<{ text: (string | null | undefined)[]; info: unknown }> = [];
+    const cb = async (text: (string | null | undefined)[], info: unknown) => {
+      received.push({ text, info });
+    };
+    const guard = createRecursiveArtifactGuard(cb);
+
+    // Simulate the original tool call delivering the diagram before the model echoes it back.
+    await guard.emitArtifact([MERMAID_ARTIFACT], { inputTokens: 1, outputTokens: 1 });
+    received.length = 0;
+
+    await guard.callback(['Here is your diagram:\n\n'], { inputTokens: 10, outputTokens: 5 });
+    await guard.callback([MERMAID_ARTIFACT], { inputTokens: 10, outputTokens: 5 });
+    await guard.callback([null], { inputTokens: 20, outputTokens: 12 });
+    await guard.flush();
+
+    expect(received).toHaveLength(1);
+    expect(received[0].text).toEqual(['Here is your diagram:']);
+    // Last-write-wins: the terminal call's accumulated totals are what gets flushed, not the
+    // first partial one.
+    expect(received[0].info).toEqual({ inputTokens: 20, outputTokens: 12 });
   });
 
-  it('removes a block whose quoted attribute holds ">" and a case-varied tag', () => {
-    const tricky = '<ARTIFACT title="a>b" type="text/html"><script>x</script></Artifact>';
-    expect(stripToolArtifactMarkup(`x${tricky}y`, P)).toBe(`x${P}y`);
+  it('pin: keeps a genuinely NEW artifact the model composes in its own reply text, even complete and well-formed', async () => {
+    const received: Array<{ text: (string | null | undefined)[]; info: unknown }> = [];
+    const cb = async (text: (string | null | undefined)[], info: unknown) => {
+      received.push({ text, info });
+    };
+    const guard = createRecursiveArtifactGuard(cb);
+
+    await guard.emitArtifact([CHESS_ARTIFACT], { inputTokens: 1, outputTokens: 1 });
+    received.length = 0;
+
+    // A DIFFERENT artifact (a different identifier) the model composes itself must survive -
+    // it is not an echo of the one already delivered.
+    await guard.callback([`Here's a second one:\n\n${MERMAID_ARTIFACT}`], { inputTokens: 5, outputTokens: 5 });
+    await guard.flush();
+
+    expect(received).toHaveLength(1);
+    expect(received[0].text).toEqual([`Here's a second one:\n\n${MERMAID_ARTIFACT}`]);
   });
 
-  it('breaks an unclosed opener and a nested opener so no tag survives', () => {
-    const out = stripToolArtifactMarkup('<artifact type="text/html">open <artifact type="x">in</artifact> tail', P);
-    expect(out).not.toMatch(/<artifact/i);
-    expect(stripToolArtifactMarkup('ok <artifact type="text/html"><!DOCTYPE html><html></html>', P)).toBe(`ok ${P}`);
-    expect(stripToolArtifactMarkup('<artifact>bare</artifact> tail', P)).toBe(P);
+  it('still flushes the terminal metadata even when the buffered text ends up empty', async () => {
+    const received: Array<{ text: (string | null | undefined)[]; info: unknown }> = [];
+    const cb = async (text: (string | null | undefined)[], info: unknown) => {
+      received.push({ text, info });
+    };
+    const guard = createRecursiveArtifactGuard(cb);
+
+    await guard.emitArtifact([MERMAID_ARTIFACT], { inputTokens: 1, outputTokens: 1 });
+    received.length = 0;
+
+    // The model's entire follow-up reply was just the echoed tag - buffer strips down to nothing.
+    await guard.callback([MERMAID_ARTIFACT], { inputTokens: 37, outputTokens: 11, toolsUsed: [] });
+    await guard.flush();
+
+    expect(received).toHaveLength(1);
+    expect(received[0].text).toEqual([]);
+    expect(received[0].info).toMatchObject({ inputTokens: 37, outputTokens: 11 });
   });
 
-  it('does not let a quoted closer inside the open tag end the block early', () => {
-    const quoted = '<artifact title="</artifact>" type="text/html"><html><script>x</script></html></artifact>';
-    expect(stripToolArtifactMarkup(`a ${quoted} b`, P)).toBe(`a ${P} b`);
+  it('never calls the real callback for buffered text before flush or emitArtifact', async () => {
+    const cb = vi.fn(async () => {});
+    const guard = createRecursiveArtifactGuard(cb);
+
+    await guard.callback(['partial'], { inputTokens: 1, outputTokens: 1 });
+    expect(cb).not.toHaveBeenCalled();
+
+    await guard.flush();
+    expect(cb).toHaveBeenCalledTimes(1);
   });
 
-  it('strips pathological output in linear time', () => {
-    const started = Date.now();
-    stripToolArtifactMarkup('<artifact '.repeat(100_000), P);
-    stripToolArtifactMarkup(`${'<artifact>'.repeat(50_000)}</artifact>`, P);
-    stripToolArtifactMarkup(CHESS_ARTIFACT.repeat(20_000), P);
-    expect(Date.now() - started).toBeLessThan(2_000);
+  it('emitArtifact sends the artifact straight through, unbuffered and unscrubbed', async () => {
+    const cb = vi.fn(async () => {});
+    const guard = createRecursiveArtifactGuard(cb);
+
+    await guard.emitArtifact([MERMAID_ARTIFACT], { inputTokens: 1, outputTokens: 1 });
+
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb).toHaveBeenCalledWith([MERMAID_ARTIFACT], { inputTokens: 1, outputTokens: 1 });
+  });
+
+  it('pin: emitArtifact flushes buffered text BEFORE the artifact, so a chained tool call keeps generation order', async () => {
+    const received: Array<{ text: (string | null | undefined)[]; info: unknown }> = [];
+    const cb = async (text: (string | null | undefined)[], info: unknown) => {
+      received.push({ text, info });
+    };
+    const guard = createRecursiveArtifactGuard(cb);
+
+    await guard.emitArtifact([MERMAID_ARTIFACT], { inputTokens: 1, outputTokens: 1 });
+    received.length = 0;
+
+    // The model narrates a second chart, THEN calls the tool that produces it - without the
+    // guard flushing first, the chart would reach the client before its own introduction.
+    await guard.callback(["Here's the second chart."], { inputTokens: 2, outputTokens: 2 });
+    await guard.emitArtifact([CHESS_ARTIFACT], { inputTokens: 3, outputTokens: 3 });
+
+    expect(received).toHaveLength(2);
+    expect(received[0].text).toEqual(["Here's the second chart."]);
+    expect(received[1].text).toEqual([CHESS_ARTIFACT]);
+  });
+
+  it('pin: a second flush() call is a no-op, so a future double-call cannot resend the buffered reply and its terminal metadata a second time', async () => {
+    const received: Array<{ text: (string | null | undefined)[]; info: unknown }> = [];
+    const cb = async (text: (string | null | undefined)[], info: unknown) => {
+      received.push({ text, info });
+    };
+    const guard = createRecursiveArtifactGuard(cb);
+
+    await guard.callback(['Hello.'], { inputTokens: 1, outputTokens: 1 });
+    await guard.flush();
+    await guard.flush();
+
+    expect(received).toHaveLength(1);
+    expect(received[0].text).toEqual(['Hello.']);
+  });
+
+  it('a later echo of a chained artifact is also stripped on the final flush', async () => {
+    const received: Array<{ text: (string | null | undefined)[]; info: unknown }> = [];
+    const cb = async (text: (string | null | undefined)[], info: unknown) => {
+      received.push({ text, info });
+    };
+    const guard = createRecursiveArtifactGuard(cb);
+
+    await guard.emitArtifact([MERMAID_ARTIFACT], { inputTokens: 1, outputTokens: 1 });
+    await guard.callback(["Here's the second chart."], { inputTokens: 2, outputTokens: 2 });
+    await guard.emitArtifact([CHESS_ARTIFACT], { inputTokens: 3, outputTokens: 3 });
+    received.length = 0;
+
+    // The model echoes the chess artifact it just saw delivered.
+    await guard.callback([`Thanks for watching. ${CHESS_ARTIFACT}`], { inputTokens: 4, outputTokens: 4 });
+    await guard.flush();
+
+    expect(received).toHaveLength(1);
+    expect(received[0].text).toEqual(['Thanks for watching.']);
   });
 });

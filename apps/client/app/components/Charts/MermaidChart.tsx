@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import mermaid from 'mermaid';
-import { Box, IconButton, Stack, Tab, TabList, TabPanel, Tabs, Typography, useTheme, Textarea } from '@mui/joy';
+import { Box, IconButton, Stack, TabPanel, Tabs, Typography, useTheme, Textarea } from '@mui/joy';
+import ArtifactModeTabs from '@client/app/components/common/ArtifactModeTabs';
 import { Code, Download, ContentCopy } from '@mui/icons-material';
 import ErrorIcon from '@mui/icons-material/Error';
 import { useSnackbar } from '@client/app/contexts/SnackbarContext';
+import { artifactFileName } from '@client/app/utils/artifactFileName';
 
 interface MermaidChartProps {
   chartDefinition: string;
@@ -12,6 +14,131 @@ interface MermaidChartProps {
   onChartChange?: (newDefinition: string) => void;
   readOnly?: boolean;
   className?: string;
+  /**
+   * Drop the tab strip and toolbar and render the diagram alone. For the inline artifact
+   * card, whose job is to say what the artifact is: switching to source and exporting are
+   * the viewer's affordances, and a card carrying its own set duplicated the card's row.
+   */
+  chromeless?: boolean;
+}
+
+/**
+ * How many frames to keep re-checking a zero-width container before leaving it to the
+ * ResizeObserver. A few frames covers the common case (a container that has not been laid
+ * out yet on first paint) without spinning for a chart that is display:none indefinitely.
+ */
+const ZERO_WIDTH_RETRY_FRAMES = 30;
+
+/** Fallback raster size (before scale) when neither the viewBox nor the live element yield one. */
+const FALLBACK_SVG_WIDTH = 300;
+const FALLBACK_SVG_HEIGHT = 150;
+
+// Canvas limits a raster export must fit under. Chrome caps a canvas at 32767px per side and
+// ~268,435,456px^2 total; iOS Safari caps total area much lower, around 16,777,216px^2. 16384
+// and 16_000_000 stay comfortably under both without a per-browser branch - a 2x export of a
+// large diagram used to exceed these silently, so canvas.toBlob returned null and the export
+// failed with "Failed to create blob" instead of a smaller-but-working PNG.
+const MAX_EXPORT_SIDE = 16384;
+const MAX_EXPORT_AREA = 16_000_000;
+
+/**
+ * Scales `scale` down (never up) so a `baseWidth` x `baseHeight` image rasterizes at or under
+ * both the per-side and total-area canvas limits, while keeping aspect ratio. Never clamps
+ * below the scale that keeps the smaller side at >= 1px, so a degenerate (near-zero) base size
+ * still produces a valid image rather than a 0x0 one.
+ */
+export function clampExportScale(baseWidth: number, baseHeight: number, scale: number): number {
+  if (baseWidth <= 0 || baseHeight <= 0) return scale;
+  const sideLimit = MAX_EXPORT_SIDE / Math.max(baseWidth, baseHeight);
+  const areaLimit = Math.sqrt(MAX_EXPORT_AREA / (baseWidth * baseHeight));
+  const minScale = 1 / Math.min(baseWidth, baseHeight);
+  return Math.max(Math.min(scale, sideLimit, areaLimit), minScale);
+}
+
+/** The svg's intrinsic size before any export scale is applied: viewBox, else the live rect, else a fixed fallback. */
+function getBaseSvgSize(svgElement: SVGSVGElement): { width: number; height: number } {
+  const viewBox = svgElement.getAttribute('viewBox');
+  if (viewBox) {
+    const parts = viewBox.trim().split(/\s+/).map(Number);
+    const [, , vbWidth, vbHeight] = parts;
+    if (parts.length === 4 && parts.every(Number.isFinite) && vbWidth > 0 && vbHeight > 0) {
+      return { width: vbWidth, height: vbHeight };
+    }
+  }
+  const rect = svgElement.getBoundingClientRect();
+  if (rect.width > 0 && rect.height > 0) {
+    return { width: rect.width, height: rect.height };
+  }
+  return { width: FALLBACK_SVG_WIDTH, height: FALLBACK_SVG_HEIGHT };
+}
+
+/**
+ * Derives the PNG export size from the svg's viewBox, falling back to the live element's
+ * bounding rect, then clamps the requested scale to the canvas limits above. Pure so it can be
+ * unit-tested without mocking canvas/Image, which jsdom does not implement - see
+ * MermaidChart.test.tsx.
+ *
+ * renderChart sets width="100%" height="100%" on the rendered <svg> so it fills its container,
+ * which leaves the serialized element with no intrinsic size of its own: rasterizing it as-is
+ * left Chrome falling back to its 300x150 default, so exports came out tiny and blurry
+ * regardless of the diagram's actual size.
+ */
+export function computeSvgExportSize(svgElement: SVGSVGElement, scale = 2): { width: number; height: number } {
+  const { width: baseWidth, height: baseHeight } = getBaseSvgSize(svgElement);
+  const effectiveScale = clampExportScale(baseWidth, baseHeight, scale);
+  return { width: Math.round(baseWidth * effectiveScale), height: Math.round(baseHeight * effectiveScale) };
+}
+
+/**
+ * Clones the live svg and stamps it with explicit width/height for rasterization, leaving the
+ * original's responsive (100%/100%) sizing untouched. Split out from svgToPngBlob so a test can
+ * assert the clone actually carries numeric dimensions - the sizing math alone can't catch a
+ * regression that drops this step and reintroduces Chrome's 300x150 default.
+ */
+export function prepareExportSvg(svgElement: SVGSVGElement, scale = 2): SVGSVGElement {
+  const { width, height } = computeSvgExportSize(svgElement, scale);
+  const clone = svgElement.cloneNode(true) as SVGSVGElement;
+  clone.setAttribute('width', String(width));
+  clone.setAttribute('height', String(height));
+  return clone;
+}
+
+/**
+ * Shared svg -> canvas -> PNG pipeline for both the Copy-as-PNG and Download actions. Clones
+ * the svg so the explicit width/height set for rasterization never touch the live, responsive
+ * (100%/100%) element mermaid rendered into the DOM.
+ *
+ * No background fill: Joy's theme background tokens are CSS custom properties, and resolving
+ * one to a concrete color for ctx.fillStyle needs getComputedStyle on a mounted element - not
+ * worth the added surface for a transparent-PNG nicety, so dark-theme exports stay transparent.
+ */
+export async function svgToPngBlob(svgElement: SVGSVGElement, scale = 2): Promise<Blob> {
+  const clone = prepareExportSvg(svgElement, scale);
+  const width = Number(clone.getAttribute('width'));
+  const height = Number(clone.getAttribute('height'));
+
+  const svgData = new XMLSerializer().serializeToString(clone);
+  const img = new window.Image();
+
+  return new Promise<Blob>((resolve, reject) => {
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Failed to get canvas context'));
+        return;
+      }
+      ctx.drawImage(img, 0, 0, width, height);
+      canvas.toBlob(blob => {
+        if (blob) resolve(blob);
+        else reject(new Error('Failed to create blob'));
+      }, 'image/png');
+    };
+    img.onerror = () => reject(new Error('Failed to load image'));
+    img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
+  });
 }
 
 const MermaidChart: React.FC<MermaidChartProps> = ({
@@ -21,6 +148,7 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
   onChartChange,
   readOnly = true,
   className,
+  chromeless = false,
 }) => {
   const theme = useTheme();
   const { showSnackbar } = useSnackbar();
@@ -37,6 +165,10 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
       // PNG export serializes the inline <svg> that render() returns (see handleExportPNG),
       // which 'strict' leaves in place - only 'sandbox' (iframe-wrapped output) would break it.
       securityLevel: 'strict',
+      // Without this, a parse failure draws mermaid's error diagram into the temporary
+      // container it appends to <body> and throws before its own cleanup runs. The
+      // component renders its own error state below, so the built-in one is pure litter.
+      suppressErrorRendering: true,
     });
   }, [theme.palette.mode]);
 
@@ -45,23 +177,57 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
     if (activeTab !== 'chart' || !elementRef.current) return;
 
     let cancelled = false;
+    let retryFrame: number | null = null;
+    let retriesLeft = ZERO_WIDTH_RETRY_FRAMES;
+    let rendering = false;
     const container = elementRef.current;
 
     const renderChart = async () => {
       if (cancelled || !elementRef.current) return;
-      // Don't render into a zero-size container - wait for ResizeObserver to retry
-      if (elementRef.current.offsetWidth === 0 && typeof process !== 'undefined' && process.env.NODE_ENV !== 'test')
+      // Two entry points reach this - the initial call and the ResizeObserver below - and
+      // mermaid.render is async, so without this guard a container that gains width mid
+      // render starts a second one over the top of the first.
+      if (rendering) return;
+      // Don't render into a zero-size container, and retry on the next frame rather than
+      // waiting for a resize that may never come. The observer below only fires on a LATER
+      // size change, so a card whose container measures 0 on first paint and is never
+      // resized again stayed blank until something else moved the layout - opening the
+      // artifact viewer, say, which is how this surfaced.
+      //
+      // Bounded, because a chart under a display:none ancestor never gains width: an
+      // unbounded retry would read layout every frame for the life of the component. Once
+      // the budget is spent the observer is the only thing left waiting, which is the right
+      // tool for a container that becomes visible much later.
+      if (elementRef.current.offsetWidth === 0 && typeof process !== 'undefined' && process.env.NODE_ENV !== 'test') {
+        if (retriesLeft <= 0) return;
+        retriesLeft--;
+        retryFrame = requestAnimationFrame(() => {
+          retryFrame = null;
+          renderChart();
+        });
         return;
+      }
+      rendering = true;
+      // Unique per render: mermaid injects a temporary element under this id, so two
+      // charts sharing one collide - and the same diagram routinely mounts twice at once
+      // (the inline card and the artifact viewer). The loser rendered nothing until some
+      // later re-render happened to find the id free, which is why closing the viewer
+      // appeared to "fix" a blank card. Matches TavernArtifactRenderer, which already
+      // generates a unique id.
+      const renderId = 'mermaid-chart-' + Math.random().toString(36).slice(2);
       try {
         setError(null);
-        const { svg } = await mermaid.render('mermaid-chart', localDefinition);
+        const { svg } = await mermaid.render(renderId, localDefinition);
         if (cancelled || !elementRef.current) return;
 
         elementRef.current.innerHTML = '';
 
-        const parser = new DOMParser();
-        const svgDoc = parser.parseFromString(svg, 'image/svg+xml');
-        const svgElement = svgDoc.documentElement;
+        // Mermaid's htmlLabels put unclosed HTML <br> inside foreignObject content whenever a
+        // node label wraps a line. Strict image/svg+xml parsing rejects that as invalid XML
+        // and silently hands back an html/parsererror document instead of throwing, so parse
+        // as HTML and pull the <svg> out of it.
+        const svgElement = new DOMParser().parseFromString(svg, 'text/html').body.querySelector('svg');
+        if (!svgElement) throw new Error('SVG element not found');
 
         const originalWidth = svgElement.getAttribute('width');
         const originalHeight = svgElement.getAttribute('height');
@@ -81,6 +247,17 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
       } catch (err) {
         console.error('Mermaid chart rendering error:', err);
         if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to render chart');
+        // mermaid removes its temp container itself on success, but throws before doing so
+        // on a parse error. A fixed id used to mean the next render swept the orphan; with
+        // a unique id per render nothing would, and invalid model-written mermaid is common.
+        //
+        // Error path only, and never by renderId alone: the svg mermaid RETURNS also carries
+        // that id, so once it is in the container, removing by id deletes the chart itself.
+        document.getElementById('d' + renderId)?.remove();
+        const stray = document.getElementById(renderId);
+        if (stray?.parentElement === document.body) stray.remove();
+      } finally {
+        rendering = false;
       }
     };
 
@@ -90,6 +267,8 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
     const observer = new ResizeObserver(entries => {
       const entry = entries[0];
       if (entry && entry.contentRect.width > 0 && !container.querySelector('svg')) {
+        // The frame budget above may already be spent; a real size change earns a fresh one.
+        retriesLeft = ZERO_WIDTH_RETRY_FRAMES;
         renderChart();
       }
     });
@@ -97,6 +276,7 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
 
     return () => {
       cancelled = true;
+      if (retryFrame !== null) cancelAnimationFrame(retryFrame);
       observer.disconnect();
     };
   }, [theme.palette.mode, localDefinition, activeTab]);
@@ -127,27 +307,7 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
       const svgElement = elementRef.current.querySelector('svg');
       if (!svgElement) throw new Error('SVG element not found');
 
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error('Failed to get canvas context');
-
-      const svgData = new XMLSerializer().serializeToString(svgElement);
-      const img = new window.Image();
-
-      const blob = await new Promise<Blob>((resolve, reject) => {
-        img.onload = () => {
-          canvas.width = img.width;
-          canvas.height = img.height;
-          ctx.drawImage(img, 0, 0);
-          canvas.toBlob(blob => {
-            if (blob) resolve(blob);
-            else reject(new Error('Failed to create blob'));
-          }, 'image/png');
-        };
-        img.onerror = () => reject(new Error('Failed to load image'));
-        img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
-      });
-
+      const blob = await svgToPngBlob(svgElement);
       const item = new ClipboardItem({ 'image/png': blob });
       await navigator.clipboard.write([item]);
       showSnackbar('Chart copied as PNG', { variant: 'plain' });
@@ -163,31 +323,12 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
       const svgElement = elementRef.current.querySelector('svg');
       if (!svgElement) throw new Error('SVG element not found');
 
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error('Failed to get canvas context');
-
-      const svgData = new XMLSerializer().serializeToString(svgElement);
-      const img = new window.Image();
-
-      const blob = await new Promise<Blob>((resolve, reject) => {
-        img.onload = () => {
-          canvas.width = img.width;
-          canvas.height = img.height;
-          ctx.drawImage(img, 0, 0);
-          canvas.toBlob(blob => {
-            if (blob) resolve(blob);
-            else reject(new Error('Failed to create blob'));
-          }, 'image/png');
-        };
-        img.onerror = () => reject(new Error('Failed to load image'));
-        img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
-      });
+      const blob = await svgToPngBlob(svgElement);
 
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${title || 'mermaid-chart'}.png`;
+      a.download = artifactFileName(title, 'png', 'mermaid-chart');
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -220,47 +361,47 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
         onChange={(_, v) => setActiveTab(v as 'chart' | 'source')}
         sx={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}
       >
-        <Box sx={{ display: 'flex', alignItems: 'center', borderBottom: 1, borderColor: 'divider' }}>
-          <TabList>
-            <Tab value="chart" data-testid="mermaid-chart-tab">
-              Chart
-            </Tab>
-            <Tab value="source" data-testid="mermaid-source-tab">
-              Source
-            </Tab>
-          </TabList>
+        {!chromeless && (
+          <Box sx={{ display: 'flex', alignItems: 'center', borderBottom: 1, borderColor: 'divider' }}>
+            <ArtifactModeTabs
+              previewValue="chart"
+              codeValue="source"
+              previewTestId="mermaid-chart-tab"
+              codeTestId="mermaid-source-tab"
+            />
 
-          {/* Actions */}
-          <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
-            <IconButton
-              size="sm"
-              variant="soft"
-              onClick={handleCopyDefinition}
-              title="Copy chart definition"
-              data-testid="mermaid-copy-definition-btn"
-            >
-              <Code />
-            </IconButton>
-            <IconButton
-              size="sm"
-              variant="soft"
-              onClick={handleCopy}
-              title={activeTab === 'source' ? 'Copy source code' : 'Copy as PNG'}
-              data-testid="mermaid-copy-btn"
-            >
-              <ContentCopy />
-            </IconButton>
-            <IconButton
-              size="sm"
-              variant="soft"
-              onClick={handleExportPNG}
-              title="Download as PNG"
-              data-testid="mermaid-download-btn"
-            >
-              <Download />
-            </IconButton>
+            {/* Actions */}
+            <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
+              <IconButton
+                size="sm"
+                variant="soft"
+                onClick={handleCopyDefinition}
+                title="Copy chart definition"
+                data-testid="mermaid-copy-definition-btn"
+              >
+                <Code />
+              </IconButton>
+              <IconButton
+                size="sm"
+                variant="soft"
+                onClick={handleCopy}
+                title={activeTab === 'source' ? 'Copy source code' : 'Copy as PNG'}
+                data-testid="mermaid-copy-btn"
+              >
+                <ContentCopy />
+              </IconButton>
+              <IconButton
+                size="sm"
+                variant="soft"
+                onClick={handleExportPNG}
+                title="Download as PNG"
+                data-testid="mermaid-download-btn"
+              >
+                <Download />
+              </IconButton>
+            </Box>
           </Box>
-        </Box>
+        )}
 
         <TabPanel value="chart" sx={{ flex: 1, overflow: 'hidden', p: 1, height: 0 }}>
           {error ? (

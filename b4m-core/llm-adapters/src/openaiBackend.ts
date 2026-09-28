@@ -40,7 +40,7 @@ import {
   replaceLastToolResultObservationOpenAI,
   getLatestToolCallIdOpenAI,
 } from './backend';
-import { handleToolResultStreaming } from './toolStreamingHelper';
+import { handleToolResultStreaming, createRecursiveArtifactGuard } from './toolStreamingHelper';
 import { DispatchModel } from './dispatchModel';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
@@ -50,11 +50,10 @@ import {
   isRetryableError,
   stripToolArtifactMarkup,
   TOOL_ARTIFACT_EMITTERS,
+  ARTIFACT_DELIVERED_PLACEHOLDER,
+  ARTIFACT_REMOVED_PLACEHOLDER,
 } from '@bike4mind/common';
 import { normalizeOpenAIFinishReason, normalizeOpenAIResponsesStopReason } from './stopReason';
-
-const ARTIFACT_DELIVERED_PLACEHOLDER = '[Artifact rendered and delivered to user]';
-const ARTIFACT_REMOVED_PLACEHOLDER = '[Artifact markup removed]';
 
 // Type for the reasoning_effort parameter that can be added to ChatCompletionCreateParams
 // OpenAI API expects reasoning_effort as a top-level string, not a nested object
@@ -1310,8 +1309,14 @@ export class OpenAIBackend implements ICompletionBackend {
                   }
             );
 
-            // Inject results in original order; track artifact streaming for deduplication.
-            let anyArtifactWasStreamed = false;
+            // The single shared guard for this whole recursive chain - reused unchanged if an
+            // earlier level already created one, so a CHAINED MCP tool call's artifact and any
+            // text buffered ahead of it stay in one true generation order. See anthropicBackend
+            // and createRecursiveArtifactGuard for the same pattern.
+            const inheritedArtifactGuard = options._internal?.artifactGuard;
+            let artifactGuard = inheritedArtifactGuard;
+
+            // Inject results in original order.
             // Keep tools if any resolved tool was an MCP tool - regardless of execution outcome.
             // Using resolvedTools (not outcomes) because a failing MCP tool should still enable
             // chaining: the model needs tools available to retry or continue the chain.
@@ -1343,15 +1348,16 @@ export class OpenAIBackend implements ICompletionBackend {
                 resultStr.substring(0, 200) + '...'
               );
 
-              // Track per-outcome whether this specific tool produced artifacts,
-              // so we only sanitize the tool result that actually had artifacts streamed.
+              // Track per-outcome whether this specific tool streamed an artifact, which picks
+              // the placeholder the model sees (delivered vs removed) - every result is still
+              // sanitized below, not only the ones that streamed.
               let thisToolHadArtifact = false;
 
               // Stream artifact-generating tool results immediately to the client.
               await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
                 thisToolHadArtifact = true;
-                anyArtifactWasStreamed = true;
-                await callback(results, {
+                if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+                await artifactGuard.emitArtifact(results, {
                   inputTokens: 0,
                   outputTokens: 0,
                   toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
@@ -1376,21 +1382,6 @@ export class OpenAIBackend implements ICompletionBackend {
               );
             }
 
-            // Make one recursive call after all tools have been processed.
-            // If any artifact was already streamed, buffer and strip duplicates from recursive response.
-            let recursiveBuffer = '';
-            let recursiveMeta: CompletionInfo = { inputTokens: 0, outputTokens: 0 };
-            const recursiveCallback: typeof callback = anyArtifactWasStreamed
-              ? async (results, meta) => {
-                  for (const r of results) {
-                    if (r != null) recursiveBuffer += r;
-                  }
-                  if (meta.inputTokens || meta.outputTokens) {
-                    recursiveMeta = { ...meta };
-                  }
-                }
-              : callback;
-
             // Keep tools available for MCP tools (enables chaining); remove for built-in tools
             // Carry this turn's tokens forward so the terminal recursive call's
             // emits carry the full multi-turn billable total (each OpenAI API
@@ -1412,18 +1403,15 @@ export class OpenAIBackend implements ICompletionBackend {
                   accumInputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
                   accumOutputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
                   accumCacheReadTokens: totalCacheReadTokens,
+                  artifactGuard,
                 },
               },
-              recursiveCallback,
+              artifactGuard?.callback ?? callback,
               toolsUsed
             );
 
-            if (anyArtifactWasStreamed && recursiveBuffer) {
-              const cleaned = recursiveBuffer.replace(/<artifact(?:\s[^>]*)?>[\s\S]*?<\/artifact>/gi, '').trim();
-              if (cleaned) {
-                await callback([cleaned], recursiveMeta);
-              }
-            }
+            // See anthropicBackend for why only a guard this level created is flushed.
+            if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
 
             return;
           } else {
@@ -1695,9 +1683,10 @@ export class OpenAIBackend implements ICompletionBackend {
               }
         );
 
-        // Inject results in original order; track whether any artifact was streamed
-        // so we can strip duplicate artifacts from GPT's recursive follow-up.
-        let anyArtifactWasStreamed = false;
+        // See the streaming branch above for why the shared artifactGuard exists.
+        const inheritedArtifactGuard = options._internal?.artifactGuard;
+        let artifactGuard = inheritedArtifactGuard;
+
         // Keep tools if any resolved tool was an MCP tool - regardless of execution outcome.
         // Using resolvedTools (not outcomes) because a failing MCP tool should still enable
         // chaining: the model needs tools available to retry or continue the chain.
@@ -1723,8 +1712,9 @@ export class OpenAIBackend implements ICompletionBackend {
           const resultStr = outcome.result.toString();
           this.logger.debug(`[Tool Result] Tool executed for ${outcome.name}:`, resultStr.substring(0, 200) + '...');
 
-          // Track per-outcome whether this specific tool produced artifacts,
-          // so we only sanitize the tool result that actually had artifacts streamed.
+          // Track per-outcome whether this specific tool streamed an artifact, which picks the
+          // placeholder the model sees (delivered vs removed) - every result is still sanitized
+          // below, not only the ones that streamed.
           let thisToolHadArtifact = false;
 
           // Stream artifact-generating tool results immediately to the client.
@@ -1733,8 +1723,8 @@ export class OpenAIBackend implements ICompletionBackend {
           // a smaller this-turn-only value.
           await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
             thisToolHadArtifact = true;
-            anyArtifactWasStreamed = true;
-            await callback(results, {
+            if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+            await artifactGuard.emitArtifact(results, {
               ...splitCacheInclusiveInput(
                 accumInputTokens + inputTokens,
                 accumCacheReadTokens + cachedTokensFromStream
@@ -1761,74 +1751,33 @@ export class OpenAIBackend implements ICompletionBackend {
           );
         }
 
-        // If an artifact was already streamed to the client, buffer GPT's recursive
-        // response and strip any <artifact> tags it may reconstruct from tool call
-        // parameters. GPT models can rebuild artifacts even when the tool result is
-        // sanitized, because they retain the original tool call arguments in context.
-        if (anyArtifactWasStreamed) {
-          let recursiveBuffer = '';
-          let recursiveMeta: CompletionInfo = { inputTokens: 0, outputTokens: 0 };
+        // Keep tools available for MCP tools (enables chaining); remove for built-in tools.
+        // Carry this turn's tokens forward so the recursive call's emits carry the full
+        // multi-turn billable total (each OpenAI API call is billed independently -
+        // accumulating is required for correct credit attribution).
+        await this.complete(
+          model,
+          messages,
+          {
+            ...options,
+            tools: anyMcpTool ? options.tools : undefined,
+            // First-turn-only tool_choice: after tools run, let the model synthesize.
+            tool_choice: 'auto',
+            _internal: {
+              ...options._internal,
+              toolCallCount: toolCallCount + 1,
+              accumInputTokens: accumInputTokens + inputTokens,
+              accumOutputTokens: accumOutputTokens + outputTokens,
+              accumCacheReadTokens: accumCacheReadTokens + cachedTokensFromStream,
+              artifactGuard,
+            },
+          },
+          artifactGuard?.callback ?? callback,
+          toolsUsed
+        );
 
-          // Carry this turn's tokens forward so the recursive call's emits
-          // carry the full multi-turn billable total (each OpenAI API call is
-          // billed independently - accumulating is required for correct
-          // credit attribution).
-          await this.complete(
-            model,
-            messages,
-            {
-              ...options,
-              tools: anyMcpTool ? options.tools : undefined,
-              // First-turn-only tool_choice: after tools run, let the model synthesize.
-              tool_choice: 'auto',
-              _internal: {
-                ...options._internal,
-                toolCallCount: toolCallCount + 1,
-                accumInputTokens: accumInputTokens + inputTokens,
-                accumOutputTokens: accumOutputTokens + outputTokens,
-                accumCacheReadTokens: accumCacheReadTokens + cachedTokensFromStream,
-              },
-            },
-            async (results, meta) => {
-              for (const r of results) {
-                if (r != null) recursiveBuffer += r;
-              }
-              if (meta.inputTokens || meta.outputTokens) {
-                recursiveMeta = { ...meta };
-              }
-            },
-            toolsUsed
-          );
-
-          // Strip artifact tags and forward cleaned text to the client
-          const cleaned = recursiveBuffer.replace(/<artifact(?:\s[^>]*)?>[\s\S]*?<\/artifact>/gi, '').trim();
-          if (cleaned) {
-            await callback([cleaned], recursiveMeta);
-          }
-        } else {
-          // No artifact was streamed - use normal callback
-          // Keep tools available for MCP tools (enables chaining); remove for built-in tools
-          // Carry accumulators forward as above.
-          await this.complete(
-            model,
-            messages,
-            {
-              ...options,
-              tools: anyMcpTool ? options.tools : undefined,
-              // First-turn-only tool_choice: after tools run, let the model synthesize.
-              tool_choice: 'auto',
-              _internal: {
-                ...options._internal,
-                toolCallCount: toolCallCount + 1,
-                accumInputTokens: accumInputTokens + inputTokens,
-                accumOutputTokens: accumOutputTokens + outputTokens,
-                accumCacheReadTokens: accumCacheReadTokens + cachedTokensFromStream,
-              },
-            },
-            callback,
-            toolsUsed
-          );
-        }
+        // See the streaming branch above for why only a guard this level created is flushed.
+        if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
       } else {
         // Pass tool calls through callback without executing.
         // Terminal leaf - emit accumulated total plus this turn's tokens.
@@ -2223,14 +2172,29 @@ export class OpenAIBackend implements ICompletionBackend {
       { parallel: parallelEnabled, maxConcurrency: options.maxParallelTools }
     );
 
+    // This path never streams a tool's artifact live (unlike the chat-completions paths above,
+    // which push it through handleToolResultStreaming) - the client renders it via a separate
+    // services-layer extraction from the recorded tool result instead. The guard still needs to
+    // know an artifact was delivered THAT way, or it can't recognize the model reconstructing the
+    // same tag from the tool call's own arguments (it retains them in context) as an echo when it
+    // shows up in the synthesis reply below - so markDelivered records the markup without
+    // re-sending it. See the streaming branch above for why the shared artifactGuard exists.
+    const inheritedArtifactGuard = options._internal?.artifactGuard;
+    let artifactGuard = inheritedArtifactGuard;
+
     for (let i = 0; i < batchOutcomes.length; i++) {
       const outcome = batchOutcomes[i];
       const r = resolved[i];
       if (outcome.ok) {
+        const rawResult = outcome.result.result.toString();
+        if (TOOL_ARTIFACT_EMITTERS.has(r.name)) {
+          if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+          artifactGuard.markDelivered(rawResult);
+        }
         // This path never streams, but an emitter's artifact still reaches the user via tool_result
         // extraction in services sharedToolBuilder; strip it so GPT cannot echo a second copy.
         const resultStr = stripToolArtifactMarkup(
-          outcome.result.result.toString(),
+          rawResult,
           TOOL_ARTIFACT_EMITTERS.has(r.name) ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
         );
         recordToolResult(toolsUsed, { id: r.callId, name: r.name }, resultStr, true);
@@ -2266,11 +2230,15 @@ export class OpenAIBackend implements ICompletionBackend {
           accumInputTokens: accumInputTokens + inputTokens,
           accumOutputTokens: accumOutputTokens + outputTokens,
           accumCacheReadTokens: accumCacheReadTokens + cachedTokensFromStream,
+          artifactGuard,
         },
       },
-      callback,
+      artifactGuard?.callback ?? callback,
       toolsUsed
     );
+
+    // See the streaming branch above for why only a guard this level created is flushed.
+    if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
   }
 }
 

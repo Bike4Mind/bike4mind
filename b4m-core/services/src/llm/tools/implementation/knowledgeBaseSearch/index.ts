@@ -1,5 +1,6 @@
 import { ToolContext, ToolDefinition } from '../../base/types';
 import {
+  citationTagDescription,
   CitableSource,
   describePipelineStall,
   getEmbeddingModelCost,
@@ -445,11 +446,7 @@ async function emitSemanticCitables(
       type: 'document',
       title: r.fileName,
       url: `/opti?mode=datalake&article=${r.fileId}`,
-      description:
-        r.fileTags
-          .filter(t => !t.startsWith('datalake:'))
-          .slice(0, 4)
-          .join(', ') || undefined,
+      description: citationTagDescription(r.fileTags),
       timestamp: new Date().toISOString(),
       status: 'complete',
       metadata: {
@@ -1494,16 +1491,12 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           // could only be a guess, and the reader lands on the whole document, which is honest.
           if (rankedResults.length > 0) {
             const citables: CitableSource[] = rankedResults.map((file: IFabFileDocument, index: number) => {
-              const fileTags = (file.tags?.map(t => t.name) || [])
-                .filter(t => !t.startsWith('datalake:'))
-                .slice(0, 4)
-                .join(', ');
               return {
                 id: file.id,
                 type: 'document' as const,
                 title: file.fileName,
                 url: `/opti?mode=datalake&article=${file.id}`,
-                description: fileTags || undefined,
+                description: citationTagDescription(file.tags?.map(t => t.name) || []),
                 timestamp: new Date().toISOString(),
                 status: 'complete' as const,
                 metadata: {

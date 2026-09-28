@@ -13,6 +13,7 @@ import type {
   IDataLakeBatchSummary,
   IDataLakeFindingDocument,
   InconsistencyKind,
+  LakeInconsistencyScanSummary,
   LakeFindingStatus,
   IDataLakeSpendResponse,
   IFabFileDocument,
@@ -31,7 +32,14 @@ import type {
 } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
 import { useTranslation } from 'react-i18next';
-import { DATA_LAKES, isResearchRunInFlight, normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
+import {
+  BATCH_NON_TERMINAL_STATUSES,
+  DATA_LAKES,
+  isResearchRunInFlight,
+  normalizeTagPrefix,
+  tagPrefixesOverlap,
+  TAXONOMY_NON_TERMINAL_STATUSES,
+} from '@bike4mind/common';
 import type {
   CreateDataLakeRequestInputType,
   DuplicateBucket,
@@ -760,6 +768,10 @@ function invalidateAfterLifecycle(queryClient: ReturnType<typeof useQueryClient>
   // `cleanup` never reaches this helper - the purge door builds its own onSuccess around the
   // pending-purge suppression, and invalidates this same key itself.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
+  // The health report's serving verdict is derived from `lake.status` (computeLakeHealth), so
+  // every lifecycle move changes it - publish flips "Not serving: draft" to serving. The query
+  // neither polls nor refetches on focus, so without this the chip holds the pre-move verdict.
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(id) });
 }
 
 function useLifecycleMutation(action: LifecycleAction, successMessage: string, errorMessage: string) {
@@ -980,9 +992,23 @@ export function useGetDeletedDataLakes(enabled = true) {
 
 // ── Batch progress / background AI tagging ──────────────────────────────────
 
-/** Polling cadence for the list's ingest/AI-tagging badges - no per-batch WebSocket wiring
- * needed for a list view; a short poll is simple and good enough for background progress. */
-const ACTIVE_BATCHES_POLL_MS = 10_000;
+/** Fast cadence while a batch in the list is still moving; see activeBatchesPollInterval. */
+export const ACTIVE_BATCHES_POLL_MS = 10_000;
+
+/** Never false: a batch can start outside this tab (Slack, Drive, research, another tab), and the
+ * GET drives server-side stuck-batch reconciliation. */
+export const IDLE_BATCHES_POLL_MS = 60_000;
+
+/**
+ * Fast only while ingest or AI-tagging is non-terminal; a batch waiting on review or failed can
+ * sit for days, so it must not hold the fast cadence.
+ */
+export function activeBatchesPollInterval(batches: IDataLakeBatchSummary[] | undefined): number {
+  const isMoving = (b: IDataLakeBatchSummary) =>
+    BATCH_NON_TERMINAL_STATUSES.includes(b.status) ||
+    (!!b.taxonomyStatus && TAXONOMY_NON_TERMINAL_STATUSES.includes(b.taxonomyStatus));
+  return batches?.some(isMoving) ? ACTIVE_BATCHES_POLL_MS : IDLE_BATCHES_POLL_MS;
+}
 
 /**
  * Batches the Data Lakes list needs to show a badge for: still uploading/chunking/
@@ -998,7 +1024,7 @@ export function useActiveDataLakeBatches(enabled = true) {
       const response = await api.get<{ data: IDataLakeBatchSummary[] }>('/api/data-lakes/batches');
       return response.data.data;
     },
-    refetchInterval: enabled ? ACTIVE_BATCHES_POLL_MS : false,
+    refetchInterval: query => (enabled ? activeBatchesPollInterval(query.state.data) : false),
     refetchOnWindowFocus: false,
   });
 }
@@ -1941,10 +1967,15 @@ export function useConvergeDataLake(dataLakeId: string | null) {
  * content-prefix tags with it, unrecoverably). The caller (Files browser) filters the selection
  * down first; `skippedCount` is purely for the success toast's wording.
  */
+// Exported so a caller can gate on `useIsMutating({ mutationKey: addFilesToLakeMutationKey })`
+// while this mutation is in flight, e.g. to keep a submit button disabled across an unmount.
+export const addFilesToLakeMutationKey = ['addFilesToLake'] as const;
+
 export function useAddFilesToLake() {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
   return useMutation({
+    mutationKey: addFilesToLakeMutationKey,
     mutationFn: async ({
       fileIds,
       lake,
@@ -2239,9 +2270,10 @@ export function reviewProposalFailureMessage(error: unknown): string {
 }
 
 /**
- * Approve or decline one proposal. An approval admits the source into the lake through the ordinary
- * ingestion door, so it invalidates the lake's file list and health alongside the queue - the file
- * appears immediately, and its health badge stops reflecting a corpus that just changed.
+ * Approve, decline, or restore (declined back to pending) one proposal. An approval admits the source
+ * into the lake through the ordinary ingestion door, so it invalidates the lake's file list and health
+ * alongside the queue - the file appears immediately, and its health badge stops reflecting a corpus
+ * that just changed.
  */
 export function useReviewDataLakeProposal(dataLakeId: string) {
   const queryClient = useQueryClient();
@@ -2252,7 +2284,7 @@ export function useReviewDataLakeProposal(dataLakeId: string) {
       reason,
     }: {
       proposalId: string;
-      decision: 'approve' | 'decline';
+      decision: 'approve' | 'decline' | 'restore';
       reason?: string;
     }) => {
       const { data } = await api.post<{ data: IDataLakeProposalDocument }>(
@@ -2267,7 +2299,13 @@ export function useReviewDataLakeProposal(dataLakeId: string) {
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
       }
-      toast.success(decision === 'approve' ? `Added "${proposal.title}" to the lake` : 'Proposal declined');
+      toast.success(
+        decision === 'approve'
+          ? `Added "${proposal.title}" to the lake`
+          : decision === 'restore'
+            ? 'Proposal restored to the queue'
+            : 'Proposal declined'
+      );
     },
     onError: (error: unknown) => {
       toast.error(reviewProposalFailureMessage(error));
@@ -2356,6 +2394,42 @@ export function useDataLakeFindings(
     loadMore: query.fetchNextPage,
     isLoadingMore: query.isFetchingNextPage,
   };
+}
+
+/** The run summary POST /api/data-lakes/:id/inconsistencies answers with - the fields read here. */
+type LakeScanResult = Pick<LakeInconsistencyScanSummary, 'countsByKind' | 'memberCount'>;
+
+function describeScanResult({ countsByKind, memberCount }: LakeScanResult): string {
+  // Zero members read is "nothing to scan", never "clean" - the detector draws the same line.
+  if (memberCount === 0) return 'Scan complete. No document in this lake has text to compare yet.';
+  const total = Object.values(countsByKind).reduce((sum, count) => sum + count, 0);
+  return `Scan complete: ${total} finding(s) across ${memberCount} document(s).`;
+}
+
+/**
+ * Runs detection over one lake now, rather than waiting for the nightly `lakeInconsistencySweep`.
+ * The route records findings as rows and stores the run summary on the lake, so both the findings
+ * queue and the health badge (which renders that summary's counts) are re-read afterwards.
+ *
+ * Rate-limited per caller server-side; the 429's own text ("try again in N seconds") is what the
+ * error toast shows.
+ */
+export function useScanDataLakeFindings(dataLakeId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.post<LakeScanResult | null>(`/api/data-lakes/${dataLakeId}/inconsistencies`);
+      return data;
+    },
+    onSuccess: result => {
+      if (result) toast.success(describeScanResult(result));
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.findingsOf(dataLakeId) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
+    },
+    onError: (error: Error) => {
+      toast.error(serverRefusalMessage(error) || 'Could not scan this lake. Try again shortly.');
+    },
+  });
 }
 
 /** How often the run list re-reads while a run is queued or running. */

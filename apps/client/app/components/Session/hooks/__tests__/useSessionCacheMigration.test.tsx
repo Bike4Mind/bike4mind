@@ -30,7 +30,7 @@ describe('useSessionCacheMigration', () => {
 
   beforeEach(() => {
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    useChatInput.setState({ drafts: {} });
+    useChatInput.setState({ drafts: {}, programmaticLaunch: null });
   });
 
   describe('migrateQuests', () => {
@@ -104,6 +104,27 @@ describe('useSessionCacheMigration', () => {
       result.current.migrateSession(TMP_ID, REAL_ID, makeSession(REAL_ID));
 
       expect(useChatInput.getState().getDraft(REAL_ID)).toBe('work in progress');
+    });
+
+    it('re-pins a pending briefcase launch from tmpId to realId', () => {
+      useChatInput.setState({
+        programmaticLaunch: { promptId: 'p', dispatchNonce: 'n', promptContent: 'go', sessionId: TMP_ID },
+      });
+
+      const result = renderMigration();
+      result.current.migrateSession(TMP_ID, REAL_ID, makeSession(REAL_ID));
+
+      expect(useChatInput.getState().programmaticLaunch).toMatchObject({ dispatchNonce: 'n', sessionId: REAL_ID });
+    });
+
+    it('leaves a launch pinned to another session untouched', () => {
+      const launch = { promptId: 'p', dispatchNonce: 'n', promptContent: 'go', sessionId: 'other' };
+      useChatInput.setState({ programmaticLaunch: launch });
+
+      const result = renderMigration();
+      result.current.migrateSession(TMP_ID, REAL_ID, makeSession(REAL_ID));
+
+      expect(useChatInput.getState().programmaticLaunch).toBe(launch);
     });
   });
 

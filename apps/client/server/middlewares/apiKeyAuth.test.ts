@@ -8,7 +8,10 @@ const { validateUserApiKeyMock, findByIdMock } = vi.hoisted(() => ({
   findByIdMock: vi.fn(),
 }));
 
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services', async importOriginal => ({
+  // Real `userService.accountBlockReasons` drives the account-state gate; the rest of the barrel
+  // loads alongside it (its db deps are mocked here).
+  ...(await importOriginal<typeof import('@bike4mind/services')>()),
   userApiKeyService: { validateUserApiKey: validateUserApiKeyMock },
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));

@@ -40,6 +40,13 @@ export const DISCOVERY_CONTRIBUTOR = 'discovery';
 const FEED_FORBIDDEN_GROUPS: readonly FieldGroup[] = ['dispatch', 'presentation'];
 
 /**
+ * The exceptions: a published fact, not copy. Claimed only for a model no seed row,
+ * operator row or adapter literal presents (planOne), and seed outranks discovery
+ * for that group at merge time (PRESENTATION_PRECEDENCE in llm-adapters mergeCatalog.ts).
+ */
+const FEED_CLAIMABLE_FIELDS: ReadonlySet<string> = new Set(['releaseDate']);
+
+/**
  * Statuses a model is on its way out in, and therefore not promotable. MUST STAY
  * IN SYNC WITH SUNSET_STATUSES in lifecyclePlan.ts, which decides what counts as
  * a transition; importing it would make the two modules circular.
@@ -106,6 +113,8 @@ export interface CatalogWriteInput {
   /** Contributors on that same superseded row, so a re-claim keeps its provenance. */
   priorContributors?: ReadonlyMap<string, readonly ICatalogContributor[]>;
   operatorOwnedModelIds: ReadonlySet<string>;
+  /** Models a seed row, operator row or adapter literal presents; discovery leaves those alone. */
+  presentationOwnedElsewhere?: ReadonlySet<string>;
   credentials: DiscoveryCredentials;
   policy: DiscoveryAutoEnablePolicy;
   knownPricedModelIds?: ReadonlySet<string>;
@@ -265,7 +274,7 @@ function usableFields(
       dropped.push({ source: sourceName, modelId, reason: `unknown field "${key}"` });
       continue;
     }
-    if (FEED_FORBIDDEN_GROUPS.includes(group)) {
+    if (FEED_FORBIDDEN_GROUPS.includes(group) && !FEED_CLAIMABLE_FIELDS.has(key)) {
       dropped.push({ source: sourceName, modelId, reason: `field "${key}" is seed- or operator-owned` });
       continue;
     }
@@ -346,6 +355,17 @@ function starvedByOutputClaim(
 
 type PlanOneResult = { entry: CatalogDiffEntry; row: IModelCatalogRowInput } | { unchanged: true } | { reason: string };
 
+/**
+ * What a source said this run about disabling the model: only the fields it CONTRIBUTED, never the
+ * row in force, whose autoDisabled may be a previous run's "awaiting price" that promotion exists to
+ * clear.
+ */
+function sourceDisabledReasonOf(contributed: ReadonlyMap<string, unknown>): string | undefined {
+  if (contributed.get('autoDisabled') !== true) return undefined;
+  const reason = contributed.get('autoDisabledReason');
+  return typeof reason === 'string' && reason.length > 0 ? reason : 'disabled by its source';
+}
+
 function planOne(
   candidate: Candidate,
   existing: ResolvedCatalogRecord | undefined,
@@ -353,7 +373,13 @@ function planOne(
   dropped: DroppedSourceRecord[]
 ): PlanOneResult {
   const base = existing?.record ?? {};
-  const contributed = contributedFields(candidate, base, existing !== undefined, input.coveredBackends, dropped);
+  const contributed = new Map(
+    contributedFields(candidate, base, existing !== undefined, input.coveredBackends, dropped)
+  );
+  const presentationElsewhere = input.presentationOwnedElsewhere?.has(candidate.modelId) === true;
+  if (presentationElsewhere) {
+    for (const key of FEED_CLAIMABLE_FIELDS) contributed.delete(key);
+  }
   const draft: Record<string, unknown> = { ...base };
   for (const [key, value] of contributed) draft[key] = value;
 
@@ -435,8 +461,8 @@ function planOne(
   }
 
   const probedAnswer = input.probedProfiles?.get(candidate.modelId);
-  // A probe that reached /v1/responses through a 400 verified the transport and
-  // NOT maxTokensParam, which is still predictMaxTokensParam's guess. The
+  // A probe whose tool-free chat check could not confirm maxTokensParam verified
+  // the transport only; the parameter is still predictMaxTokensParam's guess. The
   // terminal no-tools turn of a responses model sends that parameter on the chat
   // path (openaiBackend), so the guess is never written: the verified family
   // stands, the profile waits, and the model stays a probe candidate for the
@@ -526,6 +552,7 @@ function planOne(
       policy: input.policy,
       credentials: input.credentials,
       hasTrustedPrice: hasTrustedPrice(candidate, input.knownPricedModelIds),
+      sourceDisabledReason: sourceDisabledReasonOf(contributed),
     });
     // autoDisabledReason is omitted rather than set to undefined so a promotion
     // reads as a removed key in the diff instead of a key that is still there.
@@ -544,7 +571,9 @@ function planOne(
 
   if (ownedGroups.size === 0) return { unchanged: true };
 
-  const owned = claimedGroups(record, ownedGroups, input.priorDiscoveryGroups?.get(candidate.modelId));
+  const owned = claimedGroups(record, ownedGroups, input.priorDiscoveryGroups?.get(candidate.modelId)).filter(
+    group => !(presentationElsewhere && group === 'presentation')
+  );
   const changedKeys = changedWithinGroups(base, record, owned);
   if (existing && changedKeys.length === 0) return { unchanged: true };
 

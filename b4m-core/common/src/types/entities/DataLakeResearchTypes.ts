@@ -1,5 +1,6 @@
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
+import { ChatModels } from '../../models';
 
 // -- Data Lake Research Runs -------------------------------------------------------------------
 //
@@ -42,8 +43,9 @@ export const RESEARCH_RUN_PRODUCER = 'research_run';
  * started is visible immediately rather than appearing only once a worker picks it up.
  *
  * `completed` means the run finished its own loop, INCLUDING when it stopped early on a lever
- * (`stopReason`). A stopped-early run did the work it was allowed to do; only an unhandled failure
- * is `failed`.
+ * (`stopReason`). A stopped-early run did the work it was allowed to do. `failed` is an unhandled
+ * fault, an operator fact that makes the run impossible, or a judge that failed on every candidate
+ * it tried - the last because "nothing proposed" would otherwise read as "the web had nothing".
  */
 export const RESEARCH_RUN_STATUSES = ['queued', 'running', 'completed', 'failed'] as const;
 export type ResearchRunStatus = (typeof RESEARCH_RUN_STATUSES)[number];
@@ -73,6 +75,12 @@ export type ResearchRunStopReason = (typeof RESEARCH_RUN_STOP_REASONS)[number];
 
 export const RESEARCH_CONFIG_NAME_MAX_CHARS = 120;
 export const RESEARCH_CONFIG_QUERY_MAX_CHARS = 500;
+
+/**
+ * The relevance judge used when a config names no model, or names one this deployment no longer
+ * offers. Lives here rather than in the service so the config form can name it.
+ */
+export const RESEARCH_RELEVANCE_MODEL_DEFAULT: string = ChatModels.GPT4_1_MINI;
 
 /** How many search hits a run may ask its provider for. */
 export const RESEARCH_MAX_RESULTS_DEFAULT = 10;
@@ -218,7 +226,7 @@ export interface ResearchRunTotals {
   /** Candidates the judge scored below `minRelevance`. */
   belowRelevance: number;
   /**
-   * Candidates the judge could not score at all, because the model was unreachable. Counted apart
+   * Candidates the judge could not score at all: the model call failed or its response was unusable. Counted apart
    * from `belowRelevance` even though the candidate meets the same fate: a run whose judge is down
    * reports "20 hits, 20 below relevance, 0 proposed", which reads as "the web had nothing" and
    * sends a manager off to retune a query that was never the problem.
@@ -274,7 +282,17 @@ export interface IDataLakeResearchRun {
   /** What the run actually spent on relevance judgments, micro-USD. Reported next to the ceiling. */
   spentMicroUsd: number;
   totals: ResearchRunTotals;
-  /** Why a `failed` run failed, in terms a lake manager can act on. Never a raw stack. */
+  /**
+   * The judge model the run actually resolved, which is not always `levers.model`: that lever is
+   * absent on "Default" and falls back when the configured model is gone. Recorded so spend and
+   * quality trace to a model, and so changing the default does not rewrite history. Absent on a run
+   * that failed before resolving one.
+   */
+  judgeModel?: string | null;
+  /**
+   * Why a `failed` run failed, in terms a lake manager can act on. Never a raw stack. Also set on a
+   * `completed` run whose judge failed on some candidates, so a degraded run carries its cause.
+   */
   error?: string | null;
 }
 
@@ -304,6 +322,7 @@ export interface SettleResearchRunInput {
   stopReason?: ResearchRunStopReason;
   spentMicroUsd: number;
   totals: ResearchRunTotals;
+  judgeModel?: string;
   error?: string;
 }
 

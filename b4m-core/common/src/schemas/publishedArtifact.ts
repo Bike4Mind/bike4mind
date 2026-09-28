@@ -98,6 +98,20 @@ export const ArtifactVersionMetaSchema = z.object({
 });
 export type ArtifactVersionMeta = z.infer<typeof ArtifactVersionMetaSchema>;
 
+/** One no-sign-in share link. `token` is the capability itself and is stripped from every
+ *  serialized response, so it is optional here: an owner-facing read carries the metadata
+ *  (id to revoke by, timestamps, per-link view count) with no token at all. `id` is the
+ *  subdocument `_id`, rendered as a string. */
+export const ShareTokenEntrySchema = z.object({
+  id: z.string().optional(),
+  token: z.string().optional(),
+  createdAt: z.date().optional(),
+  revokedAt: z.date().nullish(),
+  viewCount: z.int().nonnegative().prefault(0),
+  lastViewedAt: z.date().nullish(),
+});
+export type ShareTokenEntry = z.infer<typeof ShareTokenEntrySchema>;
+
 // ─── Slug rules ────────────────────────────────────────────────────────────────
 
 /** Reserved slugs - must include every tier URL token so a slug can't shadow routing. */
@@ -392,6 +406,10 @@ export const PublishedArtifactSchema = z.object({
   shareToken: z.string().optional(),
   /** When `shareToken` was last minted/rotated; drives the owner-facing "link created" surface. */
   shareTokenUpdatedAt: z.date().nullish(),
+  /** Every share link ever minted, revoked ones included. Mirrors the two fields above during
+   *  the rollout and becomes the source of truth once the backfill has run everywhere; `token`
+   *  is stripped from serialized responses, so an owner-facing read sees only the metadata. */
+  shareTokens: z.array(ShareTokenEntrySchema).prefault([]),
 
   /** Collaboration gate: who (among viewers) may annotate. Orthogonal to
    *  `visibility`. Defaults to `none` (read-only) until the owner opts in. */

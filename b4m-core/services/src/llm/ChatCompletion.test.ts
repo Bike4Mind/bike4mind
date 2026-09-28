@@ -316,8 +316,8 @@ describe('ChatCompletionProcess', () => {
       (service as any).getEntitlements = getEnt;
       (service as any).entitlementsResolved = false;
       (service as any).entitlementKeys = [];
-      expect(await service.resolveEntitlementKeys()).toEqual(['product:pro']);
-      expect(await service.resolveEntitlementKeys()).toEqual(['product:pro']);
+      expect(await service.resolveEntitlementKeys()).toEqual({ keys: ['product:pro'], resolved: true });
+      expect(await service.resolveEntitlementKeys()).toEqual({ keys: ['product:pro'], resolved: true });
       expect(getEnt).toHaveBeenCalledTimes(1);
     });
 
@@ -326,7 +326,9 @@ describe('ChatCompletionProcess', () => {
       (service as any).entitlementsResolved = false;
       (service as any).entitlementKeys = [];
       (service as any).logger = { warn: vi.fn() };
-      await expect(service.resolveEntitlementKeys()).resolves.toEqual([]);
+      // The degraded `[]` and the flag that says so come back as ONE value: a consumer building a
+      // lake-access context cannot take the keys and leave the completeness signal behind.
+      await expect(service.resolveEntitlementKeys()).resolves.toEqual({ keys: [], resolved: false });
       expect((service as any).logger.warn).toHaveBeenCalled();
     });
 
@@ -334,7 +336,7 @@ describe('ChatCompletionProcess', () => {
       (service as any).getEntitlements = undefined;
       (service as any).entitlementsResolved = false;
       (service as any).entitlementKeys = [];
-      expect(await service.resolveEntitlementKeys()).toEqual([]);
+      expect(await service.resolveEntitlementKeys()).toEqual({ keys: [], resolved: true });
     });
 
     // #3155 (review): `entitlementsResolved` only flips AFTER the await, so two callers racing
@@ -351,8 +353,8 @@ describe('ChatCompletionProcess', () => {
 
       const [first, second] = await Promise.all([service.resolveEntitlementKeys(), service.resolveEntitlementKeys()]);
 
-      expect(first).toEqual(['product:pro']);
-      expect(second).toEqual(['product:pro']);
+      expect(first).toEqual({ keys: ['product:pro'], resolved: true });
+      expect(second).toEqual({ keys: ['product:pro'], resolved: true });
       expect(getEnt).toHaveBeenCalledTimes(1);
     });
   });

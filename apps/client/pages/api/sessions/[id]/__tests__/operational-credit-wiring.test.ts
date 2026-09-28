@@ -51,11 +51,11 @@ const REQUESTER_ID = 'requester-2';
 // throws "Cannot update session" without ever reaching the pre-flight these tests assert on.
 const SESSION_ID = '65a1f2c3d4e5f60718293a4b';
 
-const run = async (handler: unknown) => {
+const run = async (handler: unknown, user: { id: string; isAdmin?: boolean } = { id: REQUESTER_ID }) => {
   const res = { json: vi.fn(), status: vi.fn().mockReturnThis() };
   await (handler as (req: unknown, res: unknown) => Promise<void>)(
     {
-      user: { id: REQUESTER_ID },
+      user,
       query: { id: SESSION_ID },
       ability: {},
       logger: undefined,
@@ -95,6 +95,18 @@ describe('session operational credit pre-flight wiring', () => {
 
       await expect(run(tagHandler)).rejects.toThrow('insufficient credits');
       expect(mockPublishTag).not.toHaveBeenCalled();
+    });
+
+    it('names the requester on the queued job so the write re-checks their access', async () => {
+      await run(tagHandler);
+
+      expect(mockPublishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: REQUESTER_ID });
+    });
+
+    it('names no requester for an admin, so the job re-checks as the owner', async () => {
+      await run(tagHandler, { id: REQUESTER_ID, isAdmin: true });
+
+      expect(mockPublishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: undefined });
     });
 
     it('checks credits before publishing, not after', async () => {
