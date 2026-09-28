@@ -47,7 +47,7 @@ export interface ReviewAdapters extends LakeConfigAuditAdapters {
     // createdByUserId + the org-admin rung (see loadActiveLakeGrants).
     dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     // REQUIRED, not optional: every caller of this service is the one review route, so leaving it
-    // optional would let a review decision go unaudited silently - the exact gap #3298 reports.
+    // optional would let a review decision go unaudited silently.
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
   };
   /**
