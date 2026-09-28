@@ -361,8 +361,18 @@ export interface IDataLakeResearchRunRepository extends IBaseRepository<IDataLak
    * spend a second ceiling's worth of money.
    */
   claimForExecution(id: string, startedAt: Date): Promise<IDataLakeResearchRunDocument | null>;
-  /** Returns false when the row was already terminal (settle was a no-op), true when it settled. */
+  /**
+   * The executor's own settle - matches `queued` or `running`. Returns false when the row was
+   * already terminal (settle was a no-op), true when it settled. A caller that does not hold the
+   * execution claim must use `settleQueuedRun` instead.
+   */
   settleRun(id: string, input: SettleResearchRunInput): Promise<boolean>;
+  /**
+   * Settle for a caller that has NOT claimed the run - matches `queued` ONLY, so it can never
+   * overwrite a run the executor has already claimed (`running`) or resolved. Returns false when
+   * the row was not queued (the executor now owns it), true when it settled.
+   */
+  settleQueuedRun(id: string, input: SettleResearchRunInput): Promise<boolean>;
   /** Live progress while the loop runs, so the panel is not blank for a minute. */
   recordProgress(id: string, spentMicroUsd: number, totals: ResearchRunTotals): Promise<void>;
   /** How many runs a lake started since `since`. Backs the per-lake daily spend cap. */
