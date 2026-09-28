@@ -1,5 +1,5 @@
-import { Box, Divider, Stack, Typography } from '@mui/joy';
-import { useTheme } from '@mui/joy/styles';
+import { Box, Chip, Divider, Stack, Typography } from '@mui/joy';
+import { useTheme, type Theme } from '@mui/joy/styles';
 import { useNavigate, useLocation } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Fragment, ReactNode } from 'react';
@@ -26,7 +26,39 @@ import { useOptiAccess } from '@client/app/hooks/data/opti';
 import { useMeetingsAccess } from '@client/app/hooks/data/meetings';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
+import { useGearsNavSignal } from '@client/app/hooks/useVisibleGears';
+import { neutralFrame, rewardGreen } from '@client/app/components/common/gearRewardStyles';
+import { gray } from '@client/app/utils/themes/colors';
 import { useNotebookLayout } from '..';
+
+const NAV_ROW_HEIGHT = 32;
+const NAV_TAG_HEIGHT = 24;
+/** A row's right padding when it carries a tag: the gap left above and below
+ *  the tag, so it sits evenly inset on three sides. */
+const NAV_TAG_INSET = (NAV_ROW_HEIGHT - NAV_TAG_HEIGHT) / 2;
+
+/** Shared by the tags on the right of a row: labels, not controls - the row
+ *  under them is what gets clicked. */
+const navTagSx = {
+  '--Chip-minHeight': `${NAV_TAG_HEIGHT}px`,
+  // 13px, as on the Gears page's credit chips.
+  fontSize: '13px',
+  pointerEvents: 'none',
+} as const;
+
+/**
+ * Start here: the Gears page's neutral marker in dark mode. In light mode that
+ * tint vanishes on the active row's blue wash, so it gets a white fill and the
+ * theme's solid light border instead - the same white the Gears cards use.
+ */
+const startHereTagSx = (theme: Theme) =>
+  theme.palette.mode === 'dark'
+    ? { ...neutralFrame(theme), color: theme.palette.text.primary }
+    : {
+        backgroundColor: gray[0],
+        border: `1px solid ${theme.palette.border.light}`,
+        color: theme.palette.text.primary,
+      };
 
 type NavItem = {
   key: string;
@@ -37,6 +69,8 @@ type NavItem = {
   // Renders a thin separator above this row, to set a utility item apart from the
   // workspace destinations above it.
   dividerAbove?: boolean;
+  // Pinned to the row's right edge.
+  trailing?: ReactNode;
 };
 
 /**
@@ -83,6 +117,8 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // still pays its one-time credit reward on first use, but discovery must not
   // depend on having already discovered it - Hearth was only reachable from the
   // Gears page, so its row could never appear on its own.
+
+  const gearsSignal = useGearsNavSignal();
 
   const closeOnMobile = () => {
     if (isMobile) setOpenSideNav(false);
@@ -292,6 +328,41 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       label: t('sidenav.gears', 'Gears'),
       icon: iconSlot(<SettingsOutlinedIcon sx={{ fontSize: '18px' }} />),
       isActive: location.pathname === '/gears',
+      // One tag at a time: a waiting reward outranks the nudge to explore, and the
+      // row is too narrow to carry both.
+      trailing:
+        gearsSignal.claimableCount > 0 ? (
+          <Chip
+            size="sm"
+            variant="soft"
+            color="success"
+            data-testid="sidenav-gears-rewards"
+            sx={{
+              ...navTagSx,
+              // The Gears page's claimable chip, so the two read as one signal.
+              color: rewardGreen(theme).ink,
+              backgroundColor: rewardGreen(theme).fill,
+              border: `1px solid ${rewardGreen(theme).stroke}`,
+            }}
+          >
+            {t('sidenav.gearsClaim', 'Claim {{count}}', { count: gearsSignal.claimableCount })}
+          </Chip>
+        ) : gearsSignal.startHere ? (
+          <Chip
+            size="sm"
+            variant="soft"
+            color="neutral"
+            data-testid="sidenav-gears-start-here"
+            sx={{
+              ...navTagSx,
+              // An invitation, kept quiet so the green Claim tag stays the only
+              // one asking for something.
+              ...startHereTagSx(theme),
+            }}
+          >
+            {t('sidenav.gearsStartHere', 'Start here')}
+          </Chip>
+        ) : undefined,
       onClick: () => {
         closeOnMobile();
         navigate({ to: '/gears' });
@@ -327,9 +398,10 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
               display: 'flex',
               alignItems: 'center',
               gap: '12px',
-              px: '12px',
-              height: '32px',
-              minHeight: '32px',
+              pl: '12px',
+              pr: item.trailing ? `${NAV_TAG_INSET}px` : '12px',
+              height: `${NAV_ROW_HEIGHT}px`,
+              minHeight: `${NAV_ROW_HEIGHT}px`,
               borderRadius: '8px',
               cursor: 'pointer',
               color: theme.palette.sidenav?.navItemText ?? theme.palette.text.primary,
@@ -347,6 +419,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             <Typography level="body-sm" sx={{ fontSize: '14px', fontWeight: 400, color: 'inherit' }} noWrap>
               {item.label}
             </Typography>
+            {item.trailing && <Box sx={{ ml: 'auto', display: 'flex', flexShrink: 0 }}>{item.trailing}</Box>}
           </Box>
         </Fragment>
       ))}

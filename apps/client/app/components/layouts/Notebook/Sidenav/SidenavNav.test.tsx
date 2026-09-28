@@ -12,15 +12,17 @@ import { getThemeConfig } from '@client/app/utils/themes';
  * page, so its row could never appear on its own. Feature FLAGS still gate, and
  * still fail closed.
  */
-const { useFeatureEnabledMock, useGearUnlocksMock } = vi.hoisted(() => ({
+const { useFeatureEnabledMock, useGearUnlocksMock, useGearsNavSignalMock } = vi.hoisted(() => ({
   useFeatureEnabledMock: vi.fn(),
   useGearUnlocksMock: vi.fn(),
+  useGearsNavSignalMock: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isFeatureEnabled: useFeatureEnabledMock }),
 }));
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ useGearUnlocks: useGearUnlocksMock }));
+vi.mock('@client/app/hooks/useVisibleGears', () => ({ useGearsNavSignal: useGearsNavSignalMock }));
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
   useAdminSettingsCache: () => ({ isFeatureEnabled: () => false }),
 }));
@@ -47,7 +49,12 @@ vi.mock('@tanstack/react-router', () => ({
   useLocation: () => ({ pathname: '/new', search: {} }),
 }));
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (_key: string, fallback?: string) => fallback ?? _key }),
+  useTranslation: () => ({
+    t: (key: string, fallback?: string, options?: { count?: number }) => {
+      const value = fallback ?? key;
+      return options?.count === undefined ? value : value.replace('{{count}}', String(options.count));
+    },
+  }),
 }));
 vi.mock('..', () => ({ useNotebookLayout: () => vi.fn() }));
 
@@ -80,6 +87,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   useFeatureEnabledMock.mockImplementation((key: string) => key === 'enableHearth');
   useGearUnlocksMock.mockReturnValue({ hearth: true });
+  useGearsNavSignalMock.mockReturnValue({ startHere: false, claimableCount: 0 });
 });
 
 describe('SidenavNav feature rows', () => {
@@ -114,5 +122,35 @@ describe('SidenavNav Hearth row', () => {
     useGearUnlocksMock.mockReturnValue({ hearth: false });
     renderNav();
     expect(hearthRow()).toBeInTheDocument();
+  });
+});
+
+describe('SidenavNav Gears row tag', () => {
+  const startHere = () => screen.queryByTestId('sidenav-gears-start-here');
+  const rewards = () => screen.queryByTestId('sidenav-gears-rewards');
+
+  it('shows no tag while there is nothing to flag', () => {
+    renderNav();
+    expect(startHere()).not.toBeInTheDocument();
+    expect(rewards()).not.toBeInTheDocument();
+  });
+
+  it('says Start here while Getting Started is unfinished', () => {
+    useGearsNavSignalMock.mockReturnValue({ startHere: true, claimableCount: 0 });
+    renderNav();
+    expect(startHere()).toHaveTextContent('Start here');
+  });
+
+  it('counts the rewards waiting', () => {
+    useGearsNavSignalMock.mockReturnValue({ startHere: false, claimableCount: 3 });
+    renderNav();
+    expect(rewards()).toHaveTextContent('Claim 3');
+  });
+
+  it('a waiting reward replaces Start here rather than sitting beside it', () => {
+    useGearsNavSignalMock.mockReturnValue({ startHere: true, claimableCount: 2 });
+    renderNav();
+    expect(rewards()).toBeInTheDocument();
+    expect(startHere()).not.toBeInTheDocument();
   });
 });

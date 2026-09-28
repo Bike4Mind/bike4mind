@@ -1,5 +1,4 @@
 import { Box, Button, Card, Chip, chipClasses, Stack, TabList, TabPanel, Tabs, Tooltip, Typography } from '@mui/joy';
-import type { Theme } from '@mui/joy/styles';
 import { useNavigate } from '@tanstack/react-router';
 import { cloneElement, useState } from 'react';
 import { toast } from 'sonner';
@@ -38,16 +37,16 @@ import CalculateOutlinedIcon from '@mui/icons-material/CalculateOutlined';
 import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
 import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
 import { api } from '@client/app/contexts/ApiContext';
-import { useClaimGear, useGearsStatus, type GearKey, type GearStatus } from '@client/app/hooks/useGearsStatus';
-import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
-import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
+import { useClaimGear, type GearKey, type GearStatus } from '@client/app/hooks/useGearsStatus';
+import { GETTING_STARTED_LEAD, isGettingStarted, useVisibleGears } from '@client/app/hooks/useVisibleGears';
+import { neutralFrame, rewardGreen } from '@client/app/components/common/gearRewardStyles';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
 import { openInNewTab } from '@client/app/utils/externalLinks';
 import PageFrame from '@client/app/components/common/PageFrame';
 import FeatureDetailView from '@client/app/components/common/FeatureDetailView';
 import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
-import { gray, grayAlpha, green, greenAlpha } from '@client/app/utils/themes/colors';
+import { gray, grayAlpha } from '@client/app/utils/themes/colors';
 import HelpCenterButton from '@client/app/components/common/HelpCenterButton';
 import { PageTab, pageTabListSx } from '@client/app/components/common/pageTabs';
 
@@ -112,27 +111,6 @@ const rewardState = (gear: GearStatus): RewardState => {
   return gear.rewardPending ? 'pending' : 'claimed';
 };
 
-/** The green a claimable reward is painted in, for the chip and the claim line. */
-const rewardGreen = (theme: Theme) => {
-  // green[800] carries the dark surface at about 6:1, but the light one is near
-  // white and drops it to 2.4:1 - the darker step of the same green clears AA
-  // there. On the white card a solid stroke draws a hard box round the chip, so
-  // light mode gets a tint instead - the same trick the theme's border.soft uses.
-  const dark = theme.palette.mode === 'dark';
-  // The fill steps down in dark mode, where the same 10% glows against the surface.
-  return {
-    ink: dark ? green[800] : green[950],
-    stroke: dark ? green[800] : greenAlpha[800][30],
-    fill: dark ? greenAlpha[800][6] : greenAlpha[800][10],
-  };
-};
-
-/** The frame shared by the locked and claimed markers. */
-const neutralFrame = (theme: Theme) => ({
-  backgroundColor: grayAlpha[150][10],
-  border: `1px solid ${theme.palette.border.muted}`,
-});
-
 /**
  * Each glyph's own bounds inside MUI's 24x24 box, measured with getBBox and
  * squared off, used as the icon's viewBox.
@@ -194,12 +172,6 @@ const TABS: { key: GearsTabKey; label: string }[] = [
  *  a sidenav row from everything else. */
 const GENERATOR_KEYS: GearKey[] = ['image', 'video', 'music', 'sound'];
 
-/** Leads the first tab despite being a skill: running one question past many
- *  models is the story the product turns on, so it should not be buried among
- *  thirty siblings. Placement only - the endpoint still calls it a skill,
- *  because it earns no sidenav row. */
-const LEAD_KEY: GearKey = 'models';
-
 /** Skills that connect Bike4Mind to something outside it. Slack is the only
  *  one broken out so far; MCP and the chat imports are the obvious next. */
 const INTEGRATION_KEYS: GearKey[] = ['slack'];
@@ -210,9 +182,7 @@ const GearsPage = () => {
   // back lands on the list rather than reopening whatever was last read.
   const [openKey, setOpenKey] = useState<GearKey | null>(null);
   const navigate = useNavigate();
-  const { data, isPending, refetch } = useGearsStatus();
-  const { isFeatureEnabled } = useFeatureEnabled();
-  const { isFeatureEnabled: isAdminFeatureEnabled } = useAdminSettingsCache();
+  const { gears, isPending, refetch } = useVisibleGears();
   const { setOpen: setFileBrowserOpen } = useFileBrowser();
 
   const { mutate: claimGear, isPending: claiming } = useClaimGear();
@@ -226,21 +196,19 @@ const GearsPage = () => {
     });
   };
 
-  // Same gating as the sidenav: a gear whose feature is off for this deployment
-  // isn't offered at all (it would dead-end on gated endpoints).
-  const gearVisible = (key: GearKey) => {
-    if (key === 'agents') return isFeatureEnabled('enableAgents');
-    if (key === 'datalakes') return isAdminFeatureEnabled('EnableDataLakes');
-    if (key === 'hearth') return isFeatureEnabled('enableHearth');
-    return true;
-  };
-  const gears = (data?.gears ?? []).filter(g => gearVisible(g.key));
-  const gettingStarted = [...gears.filter(g => g.key === LEAD_KEY), ...gears.filter(g => g.kind === 'destination')];
+  // The lead first, then the destinations in endpoint order.
+  const gettingStarted = [
+    ...gears.filter(g => g.key === GETTING_STARTED_LEAD),
+    ...gears.filter(g => isGettingStarted(g) && g.key !== GETTING_STARTED_LEAD),
+  ];
   const generators = gears.filter(g => GENERATOR_KEYS.includes(g.key));
   const integrations = gears.filter(g => INTEGRATION_KEYS.includes(g.key));
   const skills = gears.filter(
     g =>
-      g.kind === 'skill' && g.key !== LEAD_KEY && !GENERATOR_KEYS.includes(g.key) && !INTEGRATION_KEYS.includes(g.key)
+      g.kind === 'skill' &&
+      g.key !== GETTING_STARTED_LEAD &&
+      !GENERATOR_KEYS.includes(g.key) &&
+      !INTEGRATION_KEYS.includes(g.key)
   );
 
   /** Interpret a gear's ctaAction - see lib/gears/presentation.ts for the grammar. */
