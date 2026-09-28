@@ -255,6 +255,35 @@ describe('updateResearchConfig', () => {
       })
     );
   });
+
+  // A resubmit that changes nothing is not an event a History reader needs to see - and without
+  // this guard it wrote one anyway, indistinguishable from a real edit.
+  it('does not record a history event when the submitted body matches what is already stored', async () => {
+    const { adapters, record } = makeAdapters();
+
+    await updateResearchConfig(
+      'config-1',
+      lake(),
+      actor(),
+      NO_GRANTS,
+      {
+        name: 'Weekly sweep',
+        query: 'coastal erosion',
+        model: 'gpt-4.1-mini',
+        maxResults: 10,
+        maxProposals: 5,
+        recencyDays: 30,
+        allowedDomains: ['example.com'],
+        blockedDomains: [],
+        minRelevance: 0.6,
+        costCeilingMicroUsd: 50_000,
+        proposedTags: ['research'],
+      },
+      adapters
+    );
+
+    expect(record).not.toHaveBeenCalled();
+  });
 });
 
 describe('deleteResearchConfig', () => {
