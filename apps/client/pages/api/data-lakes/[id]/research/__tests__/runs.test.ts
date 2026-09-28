@@ -70,7 +70,7 @@ beforeEach(() => {
   h.listByLake.mockResolvedValue([queuedRun]);
   h.startResearchRun.mockResolvedValue(queuedRun);
   h.sendToQueue.mockResolvedValue(undefined);
-  h.settleRun.mockResolvedValue(undefined);
+  h.settleRun.mockResolvedValue(true);
   h.recordResearchRunOutcome.mockResolvedValue(undefined);
 });
 
@@ -146,7 +146,27 @@ describe('POST /api/data-lakes/[id]/research/runs', () => {
 
     await expect(call(req('POST', { id: 'l' }, { configId: 'config-1' }), res)).rejects.toThrow(/sqs is down/);
 
-    expect(h.recordResearchRunOutcome).toHaveBeenCalledWith(LAKE, 'coastal erosion', 'failed', expect.anything());
+    expect(h.recordResearchRunOutcome).toHaveBeenCalledWith(
+      LAKE,
+      'coastal erosion',
+      'failed',
+      'run-1',
+      expect.anything()
+    );
+  });
+
+  // sendToQueue can reject after the message actually landed (an ack lost to a timeout). If the
+  // executor claimed the run in that window, settleRun's own guard makes the settle here a no-op
+  // (it returns false) - the route must not then record a SECOND, contradictory outcome on top of
+  // the one the executor's own runLakeResearch.ts already recorded for real.
+  it('skips the outcome record when the run was already settled elsewhere', async () => {
+    h.sendToQueue.mockRejectedValue(new Error('sqs is down'));
+    h.settleRun.mockResolvedValue(false);
+    const { res } = makeRes();
+
+    await expect(call(req('POST', { id: 'l' }, { configId: 'config-1' }), res)).rejects.toThrow(/sqs is down/);
+
+    expect(h.recordResearchRunOutcome).not.toHaveBeenCalled();
   });
 
   // Best-effort like every other outcome record - a failed write here must not mask the real
@@ -157,6 +177,24 @@ describe('POST /api/data-lakes/[id]/research/runs', () => {
     const { res } = makeRes();
 
     await expect(call(req('POST', { id: 'l' }, { configId: 'config-1' }), res)).rejects.toThrow(/sqs is down/);
+  });
+
+  // A settleRun call that itself throws (not a guarded no-op) is a different, unknown case - the
+  // outcome record must still run, same as before this guard existed.
+  it('still records the outcome when settleRun itself fails, not just when it returns false', async () => {
+    h.sendToQueue.mockRejectedValue(new Error('sqs is down'));
+    h.settleRun.mockRejectedValue(new Error('replica set stepped down'));
+    const { res } = makeRes();
+
+    await expect(call(req('POST', { id: 'l' }, { configId: 'config-1' }), res)).rejects.toThrow(/sqs is down/);
+
+    expect(h.recordResearchRunOutcome).toHaveBeenCalledWith(
+      LAKE,
+      'coastal erosion',
+      'failed',
+      'run-1',
+      expect.anything()
+    );
   });
 
   it('requires a configId', async () => {
