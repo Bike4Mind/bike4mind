@@ -11,7 +11,8 @@ import { type ArtifactTagMemo, scanArtifactOpenTag } from './artifactOpenTag';
 // kimi/xai/deepseek/ollama here) now strips the raw <artifact> tag out of a tool result before it
 // enters history, so the model can no longer echo it back verbatim - closing #3253's duplicate-card
 // bug everywhere. What remains backend-specific: only Anthropic/Gemini/Bedrock/OpenAI also wire
-// createRecursiveArtifactGuard/markDelivered, which catches a model that reconstructs the tag from
+// createRecursiveArtifactGuard (OpenAI additionally calls its markDelivered, since its Responses
+// path never streams a tool artifact live), which catches a model that reconstructs the tag from
 // memory instead of echoing it. kimi/xai/deepseek/ollama don't wire that guard yet, so a
 // memory-reconstructed echo can still slip through on those four; that is the remaining follow-up.
 export const TOOL_ARTIFACT_EMITTERS: ReadonlyMap<string, string> = new Map([
@@ -76,6 +77,34 @@ export function filterToolArtifactMarkup(toolName: string, text: string): string
     opener.lastIndex = cursor;
   }
   return kept > 0 ? out + text.slice(cursor) : null;
+}
+
+/**
+ * True when `text` holds at least one complete `<artifact>` block of `toolName`'s pinned type -
+ * the outcome sharedToolBuilder's scanArtifactTags-based extraction actually delivers to the
+ * client. Unlike filterToolArtifactMarkup (built to construct display text, so it bails to null
+ * on ANY malformed/unclosed opener anywhere in the string), this keeps scanning past a broken
+ * opener for a later valid block, matching extraction's own recovery behavior - so a tool result
+ * with a valid pinned block followed by a stray, malformed "<artifact" cannot be reported as
+ * REMOVED when the client already rendered it.
+ */
+export function hasDeliverablePinnedArtifact(toolName: string, text: string): boolean {
+  const allowedType = TOOL_ARTIFACT_EMITTERS.get(toolName);
+  if (allowedType === undefined) return false;
+  const opener = /<artifact\b/gi;
+  const openTag = new RegExp(`<artifact\\s(${ARTIFACT_ATTRS_PATTERN})>`, 'iy');
+  const closer = /<\/artifact>/gi;
+  for (let open = opener.exec(text); open; open = opener.exec(text)) {
+    openTag.lastIndex = open.index;
+    const tag = openTag.exec(text);
+    if (!tag) continue; // malformed opener - a later opener may still be valid
+    closer.lastIndex = openTag.lastIndex;
+    const close = closer.exec(text);
+    if (!close) break; // unclosed - closer is an unscoped search, so nothing later closes either
+    if (parseToolArtifactAttributes(tag[1]).type === allowedType) return true;
+    opener.lastIndex = closer.lastIndex;
+  }
+  return false;
 }
 
 /**

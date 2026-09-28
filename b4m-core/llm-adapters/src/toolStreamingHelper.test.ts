@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { handleToolResultStreaming, createRecursiveArtifactGuard } from './toolStreamingHelper';
+import { ARTIFACT_DELIVERED_PLACEHOLDER, ARTIFACT_REMOVED_PLACEHOLDER } from '@bike4mind/common';
+import {
+  handleToolResultStreaming,
+  createRecursiveArtifactGuard,
+  stripUnstreamedToolResult,
+} from './toolStreamingHelper';
 
 const CHESS_ARTIFACT =
   '<artifact identifier="game-1" type="application/vnd.ant.chess" title="Chess Game">{"fen":"8/8/8/8/8/8/8/8 w - - 0 1"}</artifact>';
@@ -80,6 +85,34 @@ describe('handleToolResultStreaming: only emitting tools stream, and only their 
 
 // stripToolArtifactMarkup and stripDeliveredArtifactBlocks are tested with their own
 // module, co-located at @bike4mind/common's toolArtifactEmitters.test.ts.
+
+describe('stripUnstreamedToolResult: delivered vs removed must agree with what extraction actually delivers', () => {
+  it('reports DELIVERED for a result holding only its own pinned type', () => {
+    const result = stripUnstreamedToolResult('mermaid_chart', MERMAID_ARTIFACT);
+
+    expect(result).not.toContain('<artifact');
+    expect(result).toBe(ARTIFACT_DELIVERED_PLACEHOLDER);
+  });
+
+  it('still reports DELIVERED when a valid pinned block is followed by a later malformed opener', () => {
+    // filterToolArtifactMarkup would bail to null on the trailing malformed opener and read this
+    // as REMOVED, even though sharedToolBuilder's scanArtifactTags already delivered the first block.
+    const result = `${MERMAID_ARTIFACT}\n<artifact identifier="x" type="text/html" title="Open"><p>x</p>`;
+
+    expect(stripUnstreamedToolResult('mermaid_chart', result)).toContain(ARTIFACT_DELIVERED_PLACEHOLDER);
+  });
+
+  it('reports REMOVED for a result holding only a different type than the tool is pinned to', () => {
+    const result = stripUnstreamedToolResult('mermaid_chart', CHESS_ARTIFACT);
+
+    expect(result).not.toContain('<artifact');
+    expect(result).toBe(ARTIFACT_REMOVED_PLACEHOLDER);
+  });
+
+  it('leaves a result with no artifact markup unchanged', () => {
+    expect(stripUnstreamedToolResult('mermaid_chart', 'No diagram needed.')).toBe('No diagram needed.');
+  });
+});
 
 describe('createRecursiveArtifactGuard: one shared buffer/flush pipe for a whole recursive chain', () => {
   it('buffers text across multiple calls and strips an echo of an already-delivered artifact on flush', async () => {

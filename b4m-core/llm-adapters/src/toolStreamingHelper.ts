@@ -2,6 +2,7 @@ import {
   ARTIFACT_DELIVERED_PLACEHOLDER,
   ARTIFACT_REMOVED_PLACEHOLDER,
   filterToolArtifactMarkup,
+  hasDeliverablePinnedArtifact,
   stripDeliveredArtifactBlocks,
   stripToolArtifactMarkup,
   type StreamChannel,
@@ -40,7 +41,7 @@ export async function handleToolResultStreaming(
 export function stripUnstreamedToolResult(toolName: string, result: string): string {
   return stripToolArtifactMarkup(
     result,
-    filterToolArtifactMarkup(toolName, result) !== null ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
+    hasDeliverablePinnedArtifact(toolName, result) ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
   );
 }
 

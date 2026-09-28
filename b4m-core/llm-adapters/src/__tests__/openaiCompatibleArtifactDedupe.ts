@@ -91,18 +91,16 @@ async function runToolTurn(
   // The client is private; swapping it keeps this a unit test.
   (backend as unknown as { _api: unknown })._api = { chat: { completions: { create } } };
 
-  const texts: string[] = [];
   let lastInfo: CompletionInfo | undefined;
   await backend.complete(
     model,
     [{ role: 'user', content: 'a simple process flow diagram' } as IMessage],
     { stream, tools: [toolDef] },
-    async (results, info) => {
-      texts.push(...results.filter((r): r is string => typeof r === 'string'));
+    async (_results, info) => {
       if (info) lastInfo = info;
     }
   );
-  return { requests, clientText: texts.join(''), toolsUsed: lastInfo?.toolsUsed };
+  return { requests, toolsUsed: lastInfo?.toolsUsed };
 }
 
 export function describeOpenAICompatibleArtifactDedupe(
