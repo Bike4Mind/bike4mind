@@ -16,6 +16,10 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({
   useAccessToken: () => ({ accessToken: 'tok', resetTokens: vi.fn() }),
 }));
 
+// The branded header reaches react-query through useLogoSettings/useConfig, which this suite
+// does not stand up a QueryClientProvider for. The logo is not what any case here asserts.
+vi.mock('@client/app/hooks/useGetLogo', () => ({ default: () => '/logo.png' }));
+
 import OAuthAuthorizePage from './authorize';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -82,6 +86,40 @@ describe('OAuthAuthorizePage consent screen', () => {
     expect(list).toHaveTextContent('ai:generate');
     expect(screen.getByTestId('oauth-consent-allow-btn')).toBeInTheDocument();
     expect(screen.getByTestId('oauth-consent-deny-btn')).toBeInTheDocument();
+  });
+
+  it('shows a plain-language label with the raw scope id kept beside it', async () => {
+    global.fetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ consent_required: true, client_name: 'VibesWire', scopes: ['openid'] }),
+    });
+
+    renderPage();
+
+    const list = await screen.findByTestId('oauth-consent-scopes');
+    expect(list).toHaveTextContent('Confirm who you are');
+    // The id stays on screen: the wording is an aid, not a replacement for what is granted.
+    // Deliberately a scope whose id is NOT a substring of its label - asserting on 'email'
+    // against 'See your email address' would pass even with the id removed.
+    expect(list).toHaveTextContent('openid');
+  });
+
+  it('still renders a scope it has no label for, rather than dropping it', async () => {
+    // The server validates scopes against the client registration, not against the label map, so
+    // a newly registered scope arrives unmapped. Hiding it would show the user fewer permissions
+    // than the client actually receives.
+    global.fetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ consent_required: true, client_name: 'VibesWire', scopes: ['openid', 'billing:write'] }),
+    });
+
+    renderPage();
+
+    await screen.findByTestId('oauth-consent-scopes');
+    expect(screen.getAllByTestId('oauth-consent-scope')).toHaveLength(2);
+    expect(screen.getByTestId('oauth-consent-scopes')).toHaveTextContent('billing:write');
   });
 
   it('on Allow, re-requests with consent and redirects to the client with the code and preserved state', async () => {

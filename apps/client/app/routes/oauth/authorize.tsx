@@ -21,7 +21,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
-import { CircularProgress, Box, Typography, Button, List, ListItem } from '@mui/joy';
+import { CircularProgress, Box, Typography, Button, List, ListItem, Sheet } from '@mui/joy';
+import useGetLogo from '@client/app/hooks/useGetLogo';
+import { toConsentScopes } from './consentScopes';
 
 interface ConsentInfo {
   clientName: string;
@@ -32,6 +34,7 @@ const OAuthAuthorizePage = () => {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, string | undefined>;
   const { accessToken, resetTokens } = useAccessToken();
+  const logoUrl = useGetLogo();
 
   const [status, setStatus] = useState<'idle' | 'authorizing' | 'consent' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -185,34 +188,76 @@ const OAuthAuthorizePage = () => {
   if (status === 'consent' && consentInfo) {
     return (
       <Box
-        sx={{
+        sx={theme => ({
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
           minHeight: '100vh',
-          gap: 2,
           px: 2,
-          textAlign: 'center',
-        }}
+          py: 4,
+          backgroundColor: theme.palette.background.panel,
+        })}
       >
-        <Typography level="h4">Authorize {consentInfo.clientName}</Typography>
-        <Typography level="body-sm" color="neutral">
-          {consentInfo.clientName} is requesting access to your Bike4Mind account:
-        </Typography>
-        <List sx={{ maxWidth: 360 }} data-testid="oauth-consent-scopes">
-          {consentInfo.scopes.map(s => (
-            <ListItem key={s}>{s}</ListItem>
-          ))}
-        </List>
-        <Box sx={{ display: 'flex', gap: 2 }}>
-          <Button variant="plain" color="neutral" data-testid="oauth-consent-deny-btn" onClick={denyConsent}>
-            Deny
-          </Button>
-          <Button variant="solid" data-testid="oauth-consent-allow-btn" onClick={() => requestCode(true)}>
-            Allow
-          </Button>
-        </Box>
+        {/* Same logo treatment and 56px box as the login screen, so a user arriving here from a
+            satellite app sees the brand they are about to authorize against, not a bare page. */}
+        {/* Plain img, not next/image: this is a Tanstack SPA route and the optimizer endpoint
+            buys nothing for a 56px logo. alt="" because the heading below already names the app. */}
+        <Box component="img" src={logoUrl} alt="" sx={{ width: 56, height: 56, objectFit: 'contain', mb: 2 }} />
+
+        <Sheet
+          variant="outlined"
+          sx={{
+            width: '100%',
+            maxWidth: 420,
+            borderRadius: 'md',
+            p: 3,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+          }}
+        >
+          <Box>
+            <Typography level="h4" component="h1">
+              Authorize {consentInfo.clientName}
+            </Typography>
+            <Typography level="body-sm" color="neutral" sx={{ mt: 0.5 }}>
+              {consentInfo.clientName} is requesting access to your Bike4Mind account:
+            </Typography>
+          </Box>
+
+          <List sx={{ '--ListItem-paddingX': '0px' }} data-testid="oauth-consent-scopes">
+            {toConsentScopes(consentInfo.scopes).map(({ id, label }) => (
+              <ListItem key={id} data-testid="oauth-consent-scope">
+                <Box>
+                  {/* An unmapped scope shows its raw id as the heading rather than being skipped:
+                      never show fewer permissions than the client is actually granted. */}
+                  <Typography level="body-sm">{label ?? id}</Typography>
+                  {label && (
+                    <Typography level="body-xs" color="neutral">
+                      {id}
+                    </Typography>
+                  )}
+                </Box>
+              </ListItem>
+            ))}
+          </List>
+
+          {/* Directly under the list rather than floating at the viewport bottom, so the action
+              reads as applying to the permissions above it. */}
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
+            <Button variant="plain" color="neutral" data-testid="oauth-consent-deny-btn" onClick={denyConsent}>
+              Deny
+            </Button>
+            <Button variant="solid" data-testid="oauth-consent-allow-btn" onClick={() => requestCode(true)}>
+              Allow
+            </Button>
+          </Box>
+
+          <Typography level="body-xs" color="neutral">
+            You can revoke this access from your Bike4Mind account settings.
+          </Typography>
+        </Sheet>
       </Box>
     );
   }
