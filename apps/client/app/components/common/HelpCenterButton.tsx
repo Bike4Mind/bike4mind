@@ -3,8 +3,7 @@ import HelpCenterOutlinedIcon from '@mui/icons-material/HelpCenterOutlined';
 import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
 
 /**
- * The Help Center link that sits in the top-right of the feature-discovery
- * pages (Tutorials, Gears).
+ * The Help Center link that sits in the top-right of the Gears page.
  *
  * Interim: the Help Center is its own sidenav surface today and moves under
  * these pages later, so this is a link out rather than a tab.

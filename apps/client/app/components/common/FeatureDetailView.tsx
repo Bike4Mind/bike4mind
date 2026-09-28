@@ -4,14 +4,11 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { gearDetailFor } from '@client/lib/gears/detail';
 
 /**
- * The long-form view behind a feature card: the four explanation sections and a
- * single call to action, shared by Tutorials and Gears.
+ * The long-form view behind a Gears card: the four explanation sections from
+ * lib/gears/detail.ts and a single call to action.
  *
- * The CTA is passed in rather than built here, because the two surfaces mean
- * different things by it: on Tutorials nothing is wired, so it is a label, and
- * something that looks clickable and does nothing is worse than something that
- * plainly is not. On Gears the gear's `ctaAction` is interpreted, so it is a
- * real control.
+ * The CTA is passed in rather than built here, because acting on it means
+ * interpreting the gear's `ctaAction`, which the Gears page owns.
  */
 
 const SECTION_MEASURE = 'min(100%, 72ch)';
@@ -44,7 +41,7 @@ const FeatureDetailView = ({
   item: { key: string; title: string; intro: string };
   cta: ReactNode;
   onBack: () => void;
-  /** Namespaces this view's test ids, e.g. `tutorial-detail` / `gear-detail`. */
+  /** Namespaces this view's test ids, e.g. `gear-detail`. */
   testIdPrefix: string;
 }) => {
   const detail = gearDetailFor(item);

@@ -11,8 +11,8 @@ import Tab from '@mui/joy/Tab';
  * tab toward whatever it sits on, so the same rule lands on a different colour per surface;
  * the text tokens are the recession the rest of the app is built from.
  *
- * Shared because this block was being hand-copied per surface - `/profile`, the tutorials
- * explorer and the profile sub-tabs each carry their own near-identical version, and the
+ * Shared because this block was being hand-copied per surface - `/profile` and the
+ * profile sub-tabs each carry their own near-identical version, and the
  * sub-tabs copy had already drifted (it lost the flat bottom corners). Pair it with
  * `profileTabListSx` on the TabList.
  *

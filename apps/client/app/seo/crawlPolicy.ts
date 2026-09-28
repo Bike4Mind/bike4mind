@@ -78,7 +78,6 @@ export const CORE_DISALLOWED_PATHS: readonly string[] = [
   '/skills',
   '/subscribe',
   '/subscriptions',
-  '/tutorials',
 ];
 
 /**

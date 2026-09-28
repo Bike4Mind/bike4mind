@@ -2,10 +2,8 @@ import { Box, Sheet } from '@mui/joy';
 import type { ReactNode } from 'react';
 
 /**
- * The bordered card a full-page surface sits in, shared by Tutorials and Gears
- * so the two read as one family. Extracted rather than copied: they are the same
- * surface at different stages of the same feature, and a divergence between them
- * is a bug rather than a choice.
+ * The bordered card a full-page surface sits in (the Gears page), kept apart
+ * from it so the next such surface starts from the same frame.
  *
  * Owns the scrolling too. The app layout is a fixed-height shell, so a page
  * taller than the viewport must scroll itself or the overflow is simply clipped.

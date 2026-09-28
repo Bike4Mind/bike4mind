@@ -48,7 +48,6 @@ const EXPECTED_CORE_DISALLOWED = [
   '/skills',
   '/subscribe',
   '/subscriptions',
-  '/tutorials',
 ];
 
 describe('CORE_DISALLOWED_PATHS', () => {

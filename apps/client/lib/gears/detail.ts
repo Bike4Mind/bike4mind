@@ -1,9 +1,9 @@
 /**
- * Gears - long-form copy, shared by the Tutorials detail view and the Gears one.
+ * Gears - long-form copy, shown in the detail view a Gears card opens.
  *
  * Sits beside presentation.ts on purpose: that file holds the sentence a card
  * shows, this one holds the paragraphs behind it, and both are keyed by gear so
- * neither surface keeps a second copy that can drift.
+ * neither keeps a second copy that can drift.
  *
  * Every section is optional. A missing one is not rendered, so a feature can be
  * filled in a section at a time rather than needing all four to be worth showing.

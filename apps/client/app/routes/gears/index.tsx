@@ -264,7 +264,7 @@ const GearsPage = () => {
             // a place to read about features, and a checkmark grid turns it into a
             // score. The unlock still happens and still pays - it just is not what
             // this surface is for.
-            // The whole card is the control, as in Tutorials: a solid Button per card
+            // The whole card is the control: a solid Button per card
             // painted a grid of twenty-odd primary rectangles, which reads as twenty
             // equally urgent calls to action rather than a list to browse.
             <Card
@@ -288,7 +288,7 @@ const GearsPage = () => {
                 // read as a 1px outline on a flat sheet. White is a step past the theme's
                 // body grey, to lift the card off the frame rather than just clear it.
                 backgroundColor: theme.palette.mode === 'dark' ? theme.palette.background.body : gray[0],
-                // The softest step of the border scale, as on TutorialCard: `divider`
+                // The softest step of the border scale: `divider`
                 // is the app's full-strength rule and reads as drawn lines across a
                 // grid of thirty cards.
                 borderColor: theme.palette.border.soft,
@@ -532,8 +532,6 @@ const GearsPage = () => {
         item={open}
         onBack={() => setOpenKey(null)}
         testIdPrefix="gear-detail"
-        // A real control, unlike the Tutorials copy: the gear's ctaAction is
-        // interpreted here, so the button goes where it says it does.
         cta={
           <Button
             size="sm"

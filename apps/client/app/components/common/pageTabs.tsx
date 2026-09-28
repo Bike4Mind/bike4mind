@@ -3,8 +3,8 @@ import { styled } from '@mui/system';
 import { profileTabListSx } from '@client/app/routes/profile/profileTabListSx';
 
 /**
- * The /profile tab strip, shared by the full-page surfaces that sit in a
- * PageFrame (Tutorials, Gears), plus one fix those pages need.
+ * The /profile tab strip, for the full-page surfaces that sit in a PageFrame
+ * (Gears), plus one fix those pages need.
  *
  * Joy derives a child radius from `--List-radius` and applies it to the items
  * marked data-first-child / data-last-child, which rounds the OUTER corners of
