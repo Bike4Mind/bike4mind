@@ -19,17 +19,25 @@ import { normalizeResearchLevers } from './researchLevers';
 /** Who started the run: a person pressing Run, or the scheduler with nobody behind it. */
 export type ResearchRunStarter = { trigger: 'on_demand'; actorUserId: string } | { trigger: 'periodic' };
 
+type ResearchRunRefusalReason = Exclude<ResearchScheduleSkipReason, 'review_backlog'>;
+
 /**
- * A spend rail refused the start. Typed so the scheduler can record WHICH rail as a skip reason
+ * A spend rail refused the start. Tagged so the scheduler can record WHICH rail as a skip reason
  * and retry soon, instead of treating a busy lake as a failed schedule. Still a 400 to the route.
+ *
+ * A tagged BadRequestError rather than a subclass on purpose: `class ... extends BadRequestError`
+ * evaluates the utils export when this module loads, which breaks every suite that imports the
+ * services barrel under a partial `@bike4mind/utils` mock.
  */
-export class ResearchRunRefusedError extends BadRequestError {
-  constructor(
-    message: string,
-    readonly reason: Exclude<ResearchScheduleSkipReason, 'review_backlog'>
-  ) {
-    super(message);
-  }
+export type ResearchRunRefusedError = BadRequestError & { reason: ResearchRunRefusalReason };
+
+const REFUSAL_REASONS: ReadonlySet<unknown> = new Set<ResearchRunRefusalReason>(['run_in_progress', 'daily_cap']);
+
+const researchRunRefused = (message: string, reason: ResearchRunRefusalReason): ResearchRunRefusedError =>
+  Object.assign(new BadRequestError(message), { reason });
+
+export function isResearchRunRefusal(error: unknown): error is ResearchRunRefusedError {
+  return error instanceof BadRequestError && 'reason' in error && REFUSAL_REASONS.has(error.reason);
 }
 
 export interface StartResearchRunAdapters {
@@ -69,7 +77,7 @@ export async function startResearchRun(
   // primitive, and `claimForExecution` is where correctness actually lives.
   const active = await db.dataLakeResearchRuns.countActiveByLake(dataLakeId);
   if (active > 0) {
-    throw new ResearchRunRefusedError('A research run is already in progress for this data lake', 'run_in_progress');
+    throw researchRunRefused('A research run is already in progress for this data lake', 'run_in_progress');
   }
 
   const startedAt = now();
@@ -77,7 +85,7 @@ export async function startResearchRun(
   if (started >= RESEARCH_RUNS_PER_LAKE_PER_DAY) {
     // "in the last 24 hours", not "today": the window is rolling (see DAY_MS), so a manager
     // refused at 10am because of a 3pm burst yesterday can act on the former and not the latter.
-    throw new ResearchRunRefusedError(
+    throw researchRunRefused(
       `This data lake has already started ${RESEARCH_RUNS_PER_LAKE_PER_DAY} research runs in the last 24 hours`,
       'daily_cap'
     );

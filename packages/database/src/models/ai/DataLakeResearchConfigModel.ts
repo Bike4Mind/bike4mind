@@ -64,6 +64,7 @@ const DataLakeResearchConfigSchema = new Schema<IDataLakeResearchConfigDocument>
     cadence: { type: String, enum: RESEARCH_SCHEDULE_CADENCES, default: 'off' },
     reviewBacklogLimit: { type: Number, default: RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT },
     nextRunAt: { type: Date, default: null },
+    scheduleAnchorAt: { type: Date, default: null },
     lastScheduledOutcome: { type: ResearchScheduleOutcomeSchema, default: null },
     createdByUserId: { type: String, required: true },
     lastUpdatedByUserId: { type: String, default: null },

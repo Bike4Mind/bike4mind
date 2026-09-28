@@ -81,13 +81,15 @@ export async function createResearchConfig(
   }
 
   const cadence = resolveCadence(input, 'off');
+  const firstRunAt = firstResearchRunAt(cadence, now());
   return db.dataLakeResearchConfigs.createConfig({
     dataLakeId,
     name: normalizeName(input.name),
     trigger: triggerFor(cadence),
     cadence,
     reviewBacklogLimit: normalizeReviewBacklogLimit(input.reviewBacklogLimit),
-    nextRunAt: firstResearchRunAt(cadence, now()),
+    nextRunAt: firstRunAt,
+    scheduleAnchorAt: firstRunAt,
     createdByUserId: actorUserId,
     ...normalizeResearchLevers(input),
   });
@@ -115,12 +117,14 @@ export async function updateResearchConfig(
   const cadence = resolveCadence(input, currentCadence);
   // The next slot is only reset when the cadence CHANGES, so editing a query does not push a
   // config's upcoming run a whole period out. The last outcome belonged to the old schedule.
+  const firstRunAt = firstResearchRunAt(cadence, now());
   const schedule =
     cadence !== currentCadence
       ? {
           cadence,
           trigger: triggerFor(cadence),
-          nextRunAt: firstResearchRunAt(cadence, now()),
+          nextRunAt: firstRunAt,
+          scheduleAnchorAt: firstRunAt,
           lastScheduledOutcome: null,
         }
       : {};

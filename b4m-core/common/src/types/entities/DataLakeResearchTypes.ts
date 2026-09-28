@@ -254,6 +254,12 @@ export interface IDataLakeResearchConfig extends ResearchRunLevers {
   reviewBacklogLimit: number;
   /** When the scheduler next fires this config. Null exactly when `cadence` is `off`. */
   nextRunAt?: Date | null;
+  /**
+   * The first slot of the current cadence, set with it. Every regular slot is this plus a whole
+   * number of periods, so a retried tick cannot shift the cadence and a monthly config keeps its
+   * day of the month past a short month. Null exactly when `cadence` is `off`.
+   */
+  scheduleAnchorAt?: Date | null;
   lastScheduledOutcome?: ResearchScheduleOutcome | null;
   createdByUserId: string;
   lastUpdatedByUserId?: string | null;
@@ -365,6 +371,7 @@ export type UpdateDataLakeResearchConfigInput = Partial<Omit<ResearchRunLevers, 
   cadence?: ResearchScheduleCadence;
   reviewBacklogLimit?: number;
   nextRunAt?: Date | null;
+  scheduleAnchorAt?: Date | null;
   lastScheduledOutcome?: null;
   lastUpdatedByUserId: string;
 };

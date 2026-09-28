@@ -84,6 +84,16 @@ describe('nextResearchRunAfter', () => {
     const weekLate = new Date('2026-03-17T10:00:00.000Z');
     expect(nextResearchRunAfter('daily', DUE_AT, weekLate)).toEqual(new Date('2026-03-18T09:00:00.000Z'));
   });
+
+  it('returns to the anchor day of the month after clamping to a shorter month', () => {
+    const jan31 = new Date('2026-01-31T08:00:00.000Z');
+    expect(nextResearchRunAfter('monthly', jan31, new Date('2026-02-01T00:00:00.000Z'))).toEqual(
+      new Date('2026-02-28T08:00:00.000Z')
+    );
+    expect(nextResearchRunAfter('monthly', jan31, new Date('2026-02-28T09:00:00.000Z'))).toEqual(
+      new Date('2026-03-31T08:00:00.000Z')
+    );
+  });
 });
 
 describe('runDueResearchSchedules', () => {
@@ -148,6 +158,19 @@ describe('runDueResearchSchedules', () => {
       { outcome: 'skipped', at: NOW, reason: 'run_in_progress' },
       new Date(NOW.getTime() + RESEARCH_SCHEDULE_RETRY_MS)
     );
+  });
+
+  // A retried tick fires off-slot; the run that finally starts must not make that the new cadence.
+  it('steps from the anchor, not from a retry time, once a retried run starts', async () => {
+    const retriedAt = new Date(DUE_AT.getTime() + RESEARCH_SCHEDULE_RETRY_MS);
+    const due = [scheduledConfig({ scheduleAnchorAt: new Date('2026-03-09T08:00:00.000Z'), nextRunAt: retriedAt })];
+    const { adapters, configs } = makeAdapters({ due });
+
+    await runDueResearchSchedules(adapters);
+
+    const [, , outcome, nextRunAt] = configs.recordScheduleOutcome.mock.calls[0];
+    expect(outcome).toMatchObject({ outcome: 'started' });
+    expect(nextRunAt).toEqual(new Date('2026-03-11T08:00:00.000Z'));
   });
 
   it('records a failed start visibly and retries, without leaking the raw error to the card', async () => {

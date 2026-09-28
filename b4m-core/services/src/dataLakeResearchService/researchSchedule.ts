@@ -7,7 +7,7 @@ import type {
   ResearchScheduleOutcome,
 } from '@bike4mind/common';
 import { RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT, RESEARCH_REVIEW_BACKLOG_LIMIT_MAX } from '@bike4mind/common';
-import { ResearchRunRefusedError, startResearchRun, type StartResearchRunAdapters } from './startResearchRun';
+import { isResearchRunRefusal, startResearchRun, type StartResearchRunAdapters } from './startResearchRun';
 
 /**
  * Scheduled research runs: which configs are due, whether each one may start, and when it is next
@@ -35,26 +35,21 @@ export const RESEARCH_SCHEDULE_RETRY_MS = 60 * 60 * 1000;
 
 const SCHEDULED_START_FAILED_MESSAGE = 'The scheduled run could not be started. It will be retried in about an hour.';
 
-const addUtcMonth = (from: Date): Date => {
+const addUtcMonths = (from: Date, months: number): Date => {
   const next = new Date(from);
   const day = next.getUTCDate();
   next.setUTCDate(1);
-  next.setUTCMonth(next.getUTCMonth() + 1);
+  next.setUTCMonth(next.getUTCMonth() + months);
   // Clamp to the target month's last day: Jan 31 + 1 month is Feb 28/29, not Mar 3.
   const lastDay = new Date(Date.UTC(next.getUTCFullYear(), next.getUTCMonth() + 1, 0)).getUTCDate();
   next.setUTCDate(Math.min(day, lastDay));
   return next;
 };
 
+const CADENCE_PERIOD_MS = { daily: DAY_MS, weekly: 7 * DAY_MS } as const;
+
 export function addCadence(cadence: Exclude<ResearchScheduleCadence, 'off'>, from: Date): Date {
-  switch (cadence) {
-    case 'daily':
-      return new Date(from.getTime() + DAY_MS);
-    case 'weekly':
-      return new Date(from.getTime() + 7 * DAY_MS);
-    case 'monthly':
-      return addUtcMonth(from);
-  }
+  return cadence === 'monthly' ? addUtcMonths(from, 1) : new Date(from.getTime() + CADENCE_PERIOD_MS[cadence]);
 }
 
 /** First due time for a config whose cadence was just set, or null when scheduling is off. */
@@ -63,14 +58,24 @@ export function firstResearchRunAt(cadence: ResearchScheduleCadence, now: Date):
 }
 
 /**
- * The next slot after `now`, stepping from the slot that came due. Anchored on the due slot rather
- * than on `now` so a daily run does not creep later by one tick's lag every day, and stepped past
- * `now` so a scheduler outage does not come back to a burst of catch-up runs.
+ * The first regular slot after `now`: `anchorAt` plus a whole number (at least one) of periods.
+ * Counted from the anchor rather than chained from the previous slot, so a daily run does not creep
+ * by one tick's lag (or a retry's delay) and a monthly run clamped to Feb 28 is back on the 31st in
+ * March. Stepped past `now` so a scheduler outage does not come back to a burst of catch-up runs.
  */
-export function nextResearchRunAfter(cadence: Exclude<ResearchScheduleCadence, 'off'>, dueAt: Date, now: Date): Date {
-  let next = addCadence(cadence, dueAt);
-  while (next.getTime() <= now.getTime()) next = addCadence(cadence, next);
-  return next;
+export function nextResearchRunAfter(
+  cadence: Exclude<ResearchScheduleCadence, 'off'>,
+  anchorAt: Date,
+  now: Date
+): Date {
+  if (cadence === 'monthly') {
+    let months = 1;
+    while (addUtcMonths(anchorAt, months).getTime() <= now.getTime()) months += 1;
+    return addUtcMonths(anchorAt, months);
+  }
+  const periodMs = CADENCE_PERIOD_MS[cadence];
+  const periods = Math.max(1, Math.floor((now.getTime() - anchorAt.getTime()) / periodMs) + 1);
+  return new Date(anchorAt.getTime() + periods * periodMs);
 }
 
 export function normalizeReviewBacklogLimit(value: unknown): number {
@@ -124,7 +129,7 @@ async function fireScheduledConfig(
   try {
     run = await startResearchRun(config.id, config.dataLakeId, { trigger: 'periodic' }, { db, now: () => at });
   } catch (error) {
-    if (error instanceof ResearchRunRefusedError) return { outcome: 'skipped', at, reason: error.reason };
+    if (isResearchRunRefusal(error)) return { outcome: 'skipped', at, reason: error.reason };
     throw error;
   }
 
@@ -137,7 +142,9 @@ function nextRunAtFor(config: ScheduledConfig, outcome: ResearchScheduleOutcome,
   const waitsFullPeriod =
     outcome.outcome === 'started' || (outcome.outcome === 'skipped' && outcome.reason === 'review_backlog');
   if (!waitsFullPeriod) return new Date(at.getTime() + RESEARCH_SCHEDULE_RETRY_MS);
-  return nextResearchRunAfter(config.cadence, config.nextRunAt ?? at, at);
+  // `nextRunAt` is only a fallback for a row written before the anchor existed: after a retry it
+  // holds the retry time, which is exactly the drift the anchor prevents.
+  return nextResearchRunAfter(config.cadence, config.scheduleAnchorAt ?? config.nextRunAt ?? at, at);
 }
 
 export async function runDueResearchSchedules(

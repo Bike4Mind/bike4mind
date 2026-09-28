@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { IDataLakeResearchConfigDocument } from '@bike4mind/common';
+import { BadRequestError } from '@bike4mind/utils';
 import {
+  isResearchRunRefusal,
   RESEARCH_RUNS_PER_LAKE_PER_DAY,
-  ResearchRunRefusedError,
   startResearchRun,
   type StartResearchRunAdapters,
 } from './startResearchRun';
@@ -140,7 +141,8 @@ describe('startResearchRun', () => {
 
     const capped = makeAdapters({ startedToday: RESEARCH_RUNS_PER_LAKE_PER_DAY });
     const refusal = await startResearchRun('config-1', LAKE, ON_DEMAND, capped.adapters).catch(e => e);
-    expect(refusal).toBeInstanceOf(ResearchRunRefusedError);
+    expect(refusal).toBeInstanceOf(BadRequestError);
+    expect(isResearchRunRefusal(refusal)).toBe(true);
     expect(refusal.reason).toBe('daily_cap');
   });
 

@@ -96,6 +96,7 @@ describe('createResearchConfig', () => {
       trigger: 'on_demand',
       cadence: 'off',
       nextRunAt: null,
+      scheduleAnchorAt: null,
       reviewBacklogLimit: RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
     });
   });
@@ -107,6 +108,7 @@ describe('createResearchConfig', () => {
       trigger: 'periodic',
       cadence: 'weekly',
       nextRunAt: new Date('2026-03-08T12:00:00.000Z'),
+      scheduleAnchorAt: new Date('2026-03-08T12:00:00.000Z'),
     });
   });
 
@@ -208,6 +210,7 @@ describe('updateResearchConfig', () => {
       cadence: 'daily',
       trigger: 'periodic',
       nextRunAt: new Date('2026-03-02T12:00:00.000Z'),
+      scheduleAnchorAt: new Date('2026-03-02T12:00:00.000Z'),
       lastScheduledOutcome: null,
     });
   });
@@ -219,7 +222,12 @@ describe('updateResearchConfig', () => {
       ),
     });
     await updateResearchConfig('config-1', LAKE, ACTOR, { cadence: 'off' }, adapters);
-    expect(repo.updateConfig.mock.calls[0][2]).toMatchObject({ cadence: 'off', trigger: 'on_demand', nextRunAt: null });
+    expect(repo.updateConfig.mock.calls[0][2]).toMatchObject({
+      cadence: 'off',
+      trigger: 'on_demand',
+      nextRunAt: null,
+      scheduleAnchorAt: null,
+    });
   });
 
   // Editing the query of a daily config must not push today's run a whole day out.
@@ -232,6 +240,7 @@ describe('updateResearchConfig', () => {
     await updateResearchConfig('config-1', LAKE, ACTOR, { cadence: 'daily', query: 'new question' }, adapters);
     const patch = repo.updateConfig.mock.calls[0][2];
     expect(patch).not.toHaveProperty('nextRunAt');
+    expect(patch).not.toHaveProperty('scheduleAnchorAt');
     expect(patch).not.toHaveProperty('cadence');
   });
 
