@@ -36,7 +36,7 @@ const APPROVAL_QUESTION: Record<'create' | 'overwrite' | 'edit', string> = {
 /** The argument worth showing next to the tool name - almost always what it acted on. */
 function summarizeInput(call: ChatToolCall): string {
   const input = call.input ?? {};
-  const interesting = input.path ?? input.pattern ?? input.command;
+  const interesting = input.path ?? input.pattern ?? input.command ?? input.id;
   return typeof interesting === 'string' ? interesting : '';
 }
 
@@ -65,7 +65,11 @@ function ApprovalPrompt({
       data-testid="chat-tool-approval"
     >
       <Typography level="body-xs" fontWeight="lg">
-        {diff ? APPROVAL_QUESTION[diff.operation] : 'Run this command?'}
+        {diff
+          ? APPROVAL_QUESTION[diff.operation]
+          : call.name === 'bash_background'
+            ? 'Start this in the background?'
+            : 'Run this command?'}
       </Typography>
 
       {diff ? (

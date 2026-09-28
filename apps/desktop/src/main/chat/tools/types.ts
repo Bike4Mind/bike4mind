@@ -1,6 +1,8 @@
 import type { ChatDiff } from '@shared/chat';
 
-/** Everything a tool may use. Deliberately narrow: no api client, no session, no token. */
+import type { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
+
+/** Everything a tool may use. Deliberately narrow: no api client, no token. */
 export interface ToolContext {
   /** Granted roots. Empty means the user has allowed nothing, and every path tool denies. */
   roots: readonly string[];
@@ -10,6 +12,13 @@ export interface ToolContext {
    * the access token. A granted home folder would otherwise expose the vault to a shell command.
    */
   protectedPaths?: readonly string[];
+  /**
+   * The conversation this call belongs to. Background processes are scoped by it, so one
+   * conversation cannot read or stop another's just by naming a handle.
+   */
+  sessionId?: string;
+  /** Absent in tests and in builds without it; the background tools then refuse rather than run. */
+  background?: BackgroundProcessRegistry;
 }
 
 /** What the user is asked to allow before a tool runs, for tools that declare `approval`. */

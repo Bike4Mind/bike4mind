@@ -53,11 +53,49 @@ void app.whenReady().then(async () => {
   // After ready, not before: safeStorage is only usable once the app is ready, and the vault
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
-  const chat = registerChat(auth);
+  const { service: chat, background } = registerChat(auth);
+
+  /**
+   * Kill every background process before the app goes, in two passes.
+   *
+   * `before-quit` is the only hook that can wait, so the graceful pass lives here: the quit is
+   * vetoed once, the process groups are SIGTERMed and given a moment to shut down cleanly (a
+   * dev server releasing its port), and only then does the quit resume. `quitting` stops that
+   * veto from looping forever, and Electron's own force-quit paths still land on `will-quit`
+   * below, which SIGKILLs whatever survived.
+   *
+   * Neither of these runs if main is SIGKILLed or crashes. That case is covered inside the
+   * child instead - see tools/backgroundScript.ts - because it is the case that actually
+   * happened: a dev server from an earlier task held port 3000 for three days.
+   */
+  let quitting = false;
+  app.on('before-quit', event => {
+    if (quitting) return;
+    quitting = true;
+    event.preventDefault();
+    void background
+      .shutdown()
+      .catch(() => undefined)
+      .finally(() => app.quit());
+  });
+
   app.once('will-quit', () => {
     auth.dispose();
     chat.dispose();
+    // Synchronous and unconditional: this handler cannot await, and a quit that raced the
+    // grace period above must not leave a process group behind.
+    background.shutdownSync();
   });
+
+  // Ctrl-C in a dev terminal, or a `kill` of the app. Our children are detached into their own
+  // process groups precisely so one signal can reach a whole command tree - which also means a
+  // terminal interrupt never reaches them on its own.
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+    process.on(signal, () => {
+      background.shutdownSync();
+      app.quit();
+    });
+  }
 
   createWindow();
 
@@ -71,6 +109,12 @@ void app.whenReady().then(async () => {
   });
 });
 
+/**
+ * Closing the last window is not quitting on macOS, and background processes are deliberately
+ * left running through it: the app is still alive, the user reopens from the dock, and the
+ * panel shows the same dev server still up. Everywhere else this quits, which runs the
+ * teardown above.
+ */
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });

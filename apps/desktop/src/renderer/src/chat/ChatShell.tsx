@@ -4,10 +4,12 @@ import Box from '@mui/joy/Box';
 import Input from '@mui/joy/Input';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
+import { BackgroundProcessPanel } from './BackgroundProcessPanel';
 import { Composer } from './Composer';
 import { MessageThread } from './MessageThread';
 import { contentColumnSx } from './layout';
 import { SessionList } from './SessionList';
+import { useBackgroundProcesses } from './useBackgroundProcesses';
 import { useConversation, useSessions } from './useChat';
 
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
@@ -61,6 +63,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   const { sessions, loading, create, remove, apply } = useSessions();
   const [activeId, setActiveId] = useState<string | null>(null);
   const conversation = useConversation(activeId, apply);
+  const background = useBackgroundProcesses(activeId);
 
   // Open the most recent conversation on first load so the app lands somewhere useful rather
   // than on an empty pane. Only until the user picks one - after that, their choice stands.
@@ -116,6 +119,8 @@ export function ChatShell({ account }: { account?: ReactNode }) {
             {conversation.sendError}
           </Alert>
         )}
+
+        <BackgroundProcessPanel processes={background.processes} onStop={background.stop} />
 
         <Composer
           disabled={!activeId}

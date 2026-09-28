@@ -37,7 +37,8 @@ const REFUSED: readonly { pattern: RegExp; reason: string }[] = [
   { pattern: /\b(shutdown|reboot|halt)\b/i, reason: 'shuts the machine down' },
 ];
 
-function refusalReason(command: string): string | null {
+/** Exported so backgrounding a command cannot be a way around the same refusals. */
+export function refusalReason(command: string): string | null {
   return REFUSED.find(entry => entry.pattern.test(command))?.reason ?? null;
 }
 
@@ -178,7 +179,7 @@ function formatOutcome(command: string, cwd: string, timeoutMs: number, outcome:
  * the sandbox lets it WRITE nowhere else, and starting it somewhere unrelated would just be a
  * confusing way to fail.
  */
-async function resolveCwd(input: Record<string, unknown>, roots: readonly string[]): Promise<string> {
+export async function resolveCwd(input: Record<string, unknown>, roots: readonly string[]): Promise<string> {
   const requested = typeof input.cwd === 'string' && input.cwd.length > 0 ? input.cwd : null;
   if (requested) return resolveWithinRoots(requested, roots);
   if (roots.length === 0) throw new Error('No folder has been shared, so there is nowhere to run a command.');
@@ -200,7 +201,8 @@ export const bashExecute: ToolDefinition = {
       '',
       'Use it for git, builds, tests, package managers and system inspection. It blocks until the',
       `command exits or the timeout elapses (default ${DEFAULT_TIMEOUT_MS / 1000}s, max`,
-      `${MAX_TIMEOUT_MS / 1000}s), so do not start dev servers, watchers or anything long-lived.`,
+      `${MAX_TIMEOUT_MS / 1000}s), so it is the wrong tool for a dev server, a watcher or anything`,
+      'else meant to keep running: start those with bash_background instead.',
     ].join('\n'),
     parameters: {
       type: 'object',

@@ -13,6 +13,7 @@ import { DEFAULT_COMPLETIONS_PATH, streamCompletion, type CompletionMessage } fr
 import type { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import type { ApprovalGate } from './tools/ApprovalGate';
+import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { findTool, toolsForRequest } from './tools/registry';
 import { capOutput, type ApprovalPrompt, type ToolContext, type ToolDefinition } from './tools/types';
 
@@ -39,6 +40,8 @@ export interface ChatServiceDeps {
   logger: ChatServiceLogger;
   /** Absent in tests that exercise tools needing no consent; a gated tool then never runs. */
   approvals?: ApprovalGate;
+  /** Owns long-running commands. Absent in tests, which then have no background tools. */
+  background?: BackgroundProcessRegistry;
   /** Paths kept out of reach of shell commands whatever the user granted. See tools/sandbox.ts. */
   protectedPaths?: readonly string[];
   /** Null whenever no session is usable, which is how a signed-out send is refused. */
@@ -87,13 +90,27 @@ export class ChatService {
     return this.deps.store.rename(sessionId, title);
   }
 
+  /**
+   * Deleting a conversation also kills its background processes.
+   *
+   * The alternative - leaving them running - orphans them: the panel that could stop them is
+   * gone with the conversation, and the model can no longer name their handles. Nothing would
+   * be left that could turn a forgotten dev server off.
+   */
   async deleteSession(sessionId: string): Promise<void> {
     this.stop(sessionId);
     this.deps.approvals?.forgetSession(sessionId);
+    await this.deps.background?.killSession(sessionId);
     await this.deps.store.delete(sessionId);
   }
 
-  /** Stop an in-flight reply. The partial text is kept - see the 'done' case in @shared/chat. */
+  /**
+   * Stop an in-flight reply. The partial text is kept - see the 'done' case in @shared/chat.
+   *
+   * Background processes are deliberately NOT stopped: outliving the turn is the whole point
+   * of starting one, and a user pressing stop on a reply is stopping the model, not the dev
+   * server it started. `bash_kill` and the panel's Stop button are how those end.
+   */
   stop(sessionId: string): void {
     this.active.get(sessionId)?.abort();
   }
@@ -288,7 +305,13 @@ export class ChatService {
           return unknown;
         }
 
-        const context: ToolContext = { roots, signal, protectedPaths: this.deps.protectedPaths };
+        const context: ToolContext = {
+          roots,
+          signal,
+          protectedPaths: this.deps.protectedPaths,
+          sessionId,
+          background: this.deps.background,
+        };
 
         // Asked BEFORE 'running' is announced, so the UI never shows a command as under way
         // while it is still waiting on the user, and nothing has run if they say no.
@@ -450,6 +473,10 @@ function buildSystemMessage(roots: readonly string[]): CompletionMessage {
       'Changing a file needs the same approval, and the user sees a line-by-line diff of the',
       'change before they answer. Read a file before you edit it, and prefer file_edit over',
       'file_write so the rest of the file is left alone; file_write replaces a file entirely.',
+      'Dev servers, watchers and anything else meant to keep running go to bash_background, not',
+      'bash_execute. Background processes belong to this conversation, are all killed when the app',
+      'quits, and none survive a restart - so check bash_list rather than assuming one from an',
+      'earlier session is still up, and stop what you no longer need with bash_kill.',
       'Never invent a file name, size or contents, or the output of a command: if a tool did not',
       'return it, you do not know it.',
     ].join('\n'),

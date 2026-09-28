@@ -1,3 +1,4 @@
+import { bashBackground, bashKill, bashList, bashOutput } from './backgroundTools';
 import { fileRead, globFiles, grepSearch } from './fileTools';
 import { bashExecute } from './shellTools';
 import { fileEdit, fileWrite } from './writeTools';
@@ -11,8 +12,24 @@ import type { ToolDefinition, ToolSchema } from './types';
  * additionally shows the user the diff it would apply before they answer. The server-side
  * tools (web_search and friends) are a later stage, and are added here only once each has its
  * gate rather than being declared early and refused at run time.
+ *
+ * `bash_background` runs code too and is gated the same way. The three tools around it -
+ * `bash_output`, `bash_list`, `bash_kill` - only inspect or stop processes the user has
+ * already approved, so they are not gated: a second dialog to stop a dev server would just
+ * make the safe action the slow one.
  */
-const TOOLS: readonly ToolDefinition[] = [fileRead, globFiles, grepSearch, bashExecute, fileWrite, fileEdit];
+const TOOLS: readonly ToolDefinition[] = [
+  fileRead,
+  globFiles,
+  grepSearch,
+  bashExecute,
+  fileWrite,
+  fileEdit,
+  bashBackground,
+  bashOutput,
+  bashList,
+  bashKill,
+];
 
 const BY_NAME = new Map(TOOLS.map(tool => [tool.schema.name, tool]));
 
