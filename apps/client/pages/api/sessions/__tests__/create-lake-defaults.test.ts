@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   toAccessContext: vi.fn(),
   findByIdAndUpdate: vi.fn(),
   logEvent: vi.fn(),
+  createAttachmentLakeAccess: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -46,6 +47,9 @@ vi.mock('@bike4mind/database', () => ({
   User: { findByIdAndUpdate: h.findByIdAndUpdate },
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
+vi.mock('@server/queueHandlers/agentExecutor.attachmentLakeAccess', () => ({
+  createAttachmentLakeAccess: h.createAttachmentLakeAccess,
+}));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@client/config/activities', () => ({ ActivityType: { NOTEBOOK_ADDED_TO_PROJECT: 'added' } }));
 vi.mock('@bike4mind/services', async () => {
@@ -130,5 +134,24 @@ describe('POST /api/sessions/create - lake-derived session defaults', () => {
     const params = paramsOf();
     expect('systemPromptId' in params).toBe(false);
     expect('forceKnowledgeRetrieval' in params).toBe(false);
+  });
+});
+
+describe('POST /api/sessions/create - knowledge access wiring', () => {
+  it('hands createSession the attachment-door lake resolver for the caller', async () => {
+    h.createSession.mockResolvedValue({ id: 's1', name: 'N', knowledgeIds: [], agentIds: [] });
+    const lakeAccess = { lakeMemberships: [], dataLakeTags: ['lake:x'], dataLakeTagPrefixes: [] };
+    h.createAttachmentLakeAccess.mockReturnValue(async () => lakeAccess);
+    const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn() };
+    const req = { method: 'POST', user: { id: 'u1' }, ability: {}, logger, body: { name: 'N', knowledgeIds: [] } };
+    const { res } = makeRes();
+
+    await run(req, res);
+
+    const adapters = h.createSession.mock.calls.at(-1)![2] as {
+      resolveAttachmentLakeAccess: () => Promise<unknown>;
+    };
+    await expect(adapters.resolveAttachmentLakeAccess()).resolves.toBe(lakeAccess);
+    expect(h.createAttachmentLakeAccess).toHaveBeenCalledWith(req.user, logger);
   });
 });

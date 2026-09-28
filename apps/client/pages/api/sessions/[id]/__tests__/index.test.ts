@@ -29,6 +29,7 @@ const {
   mockDeleteSession,
   mockLogEvent,
   mockWithTransaction,
+  mockCreateLakeAccess,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
@@ -38,6 +39,7 @@ const {
   mockDeleteSession: vi.fn(),
   mockLogEvent: vi.fn(),
   mockWithTransaction: vi.fn(),
+  mockCreateLakeAccess: vi.fn(),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -91,6 +93,10 @@ vi.mock('@bike4mind/database', async orig => {
     User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => mockFindById(...a) }),
   };
 });
+
+vi.mock('@server/queueHandlers/agentExecutor.attachmentLakeAccess', () => ({
+  createAttachmentLakeAccess: (...a: unknown[]) => mockCreateLakeAccess(...a),
+}));
 
 import handler from '../index';
 import { ApiKeyScope, SessionEvents } from '@bike4mind/common';
@@ -233,6 +239,22 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
         }),
         expect.anything()
       );
+    });
+
+    it('hands updateSession the attachment-door lake resolver for the caller', async () => {
+      keyWithScopes([ApiKeyScope.WRITE_NOTEBOOKS]);
+      mockUpdateSession.mockResolvedValue({ id: 'sess-1', name: 'Untitled', userId: 'user-1', knowledgeIds: [] });
+      const lakeAccess = { lakeMemberships: [], dataLakeTags: ['lake:x'], dataLakeTagPrefixes: [] };
+      mockCreateLakeAccess.mockReturnValue(async () => lakeAccess);
+      const { req, res } = fire({ method: 'PUT', body: { knowledgeIds: [FAB_ID] } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+
+      const adapters = mockUpdateSession.mock.calls.at(-1)![2] as {
+        resolveAttachmentLakeAccess: () => Promise<unknown>;
+      };
+      await expect(adapters.resolveAttachmentLakeAccess()).resolves.toBe(lakeAccess);
+      expect(mockCreateLakeAccess).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }), req.logger);
     });
 
     it('403s a key without notebooks:write before the handler runs', async () => {
