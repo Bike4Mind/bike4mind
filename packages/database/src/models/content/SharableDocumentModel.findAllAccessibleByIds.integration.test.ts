@@ -150,3 +150,35 @@ describe.each(cases)('findAllAccessibleByIds - $name', ({ create, find }) => {
     expect(rows).toEqual([]);
   });
 });
+
+// /api/files/byIds resolves through this lookup. The file-list query (buildFabFileSearchQuery)
+// hides session-scoped files, but a by-id read must not: the owner's attachments and session
+// summaries stay readable by id, and nothing here may start filtering on sessionId silently.
+describe('findAllAccessibleByIds - session-scoped FabFile', () => {
+  it("returns the owner's file even when it carries a sessionId", async () => {
+    const d = await FabFile.create({
+      userId: OWNER,
+      sessionId: new mongoose.Types.ObjectId().toHexString(),
+      fileName: `session-${++seq}.txt`,
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      fileSize: 4,
+    });
+
+    const rows = await fabFileRepository.shareable.findAllAccessibleByIds(user, [String(d._id)]);
+    expect(rows.map(r => String(r.id))).toEqual([String(d._id)]);
+  });
+
+  it("does not return another user's session-scoped file", async () => {
+    const d = await FabFile.create({
+      userId: new mongoose.Types.ObjectId().toHexString(),
+      sessionId: new mongoose.Types.ObjectId().toHexString(),
+      fileName: `foreign-session-${++seq}.txt`,
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      fileSize: 4,
+    });
+
+    expect(await fabFileRepository.shareable.findAllAccessibleByIds(user, [String(d._id)])).toEqual([]);
+  });
+});
