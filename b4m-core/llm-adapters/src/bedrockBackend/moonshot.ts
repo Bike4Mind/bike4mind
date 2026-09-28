@@ -401,12 +401,10 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
       // present; otherwise convert the inline <reasoning> envelope to <think>.
       if (hasNativeToolMarker(content)) {
         const inner = escapeThinkMarkers(content.replace(/<\/?reasoning>/g, ''));
-        // Slice to the calls before parsing: parseNativeToolSection caps its input, and
-        // `inner` is the whole message - on a thinking model the monologue precedes the
-        // calls, so an uncapped `inner` can push them past the cap and silently drop every
-        // call (or execute a subset of a parallel call set). Scoping on the section
-        // wrapper alone was not enough: the wrapper is optional, and a bare call fell
-        // straight back to the whole message.
+        // Slice to the calls before parsing: parseNativeToolSection expects section-scoped
+        // text, and `inner` is the whole message with the monologue ahead of the calls.
+        // Scoping on the section wrapper alone was not enough: the wrapper is optional, and
+        // a bare call fell straight back to the whole message.
         const begin = nativeToolCallsBegin(inner);
         const before = (begin >= 0 ? inner.slice(0, begin) : inner).trim();
         const nativeCalls = begin >= 0 ? parseNativeToolSection(inner.slice(begin)) : [];
