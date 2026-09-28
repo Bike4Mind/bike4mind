@@ -35,6 +35,11 @@ const api: DesktopApi = {
     stopReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatStopReply, sessionId),
     respondToApproval: (approvalId: string, decision: ChatApprovalDecision) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatRespondToApproval, approvalId, decision),
+    listBackgroundProcesses: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatListBackground, sessionId),
+    readBackgroundOutput: (sessionId: string, processId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatReadBackground, sessionId, processId),
+    stopBackgroundProcess: (sessionId: string, processId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatStopBackground, sessionId, processId),
     onStreamEvent: listener => {
       const handler = (_event: unknown, streamEvent: ChatStreamEvent) => listener(streamEvent);
       ipcRenderer.on(IPC_CHANNELS.chatStreamEvent, handler);

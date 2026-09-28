@@ -139,6 +139,11 @@ export function useConversation(
         return;
       }
 
+      // Only 'done' and 'error' end a reply. Stated rather than left to the fall-through,
+      // because the background-process events arrive with no reply in flight at all, and
+      // treating an unrecognised event as terminal would blank the streaming indicator.
+      if (event.type !== 'done' && event.type !== 'error') return;
+
       setStreaming(false);
       setMessages(current =>
         current.map(message => {

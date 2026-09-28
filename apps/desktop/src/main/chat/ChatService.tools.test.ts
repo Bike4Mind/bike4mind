@@ -69,7 +69,16 @@ describe('ChatService tool loop', () => {
     const declared = post.mock.calls[0][1].options.tools.map(
       (entry: { toolSchema: { name: string } }) => entry.toolSchema.name
     );
-    expect(declared).toEqual(['file_read', 'glob_files', 'grep_search', 'bash_execute']);
+    expect(declared).toEqual([
+      'file_read',
+      'glob_files',
+      'grep_search',
+      'bash_execute',
+      'bash_background',
+      'bash_output',
+      'bash_list',
+      'bash_kill',
+    ]);
   });
 
   it('names the granted roots so the model looks them up instead of guessing a path', async () => {

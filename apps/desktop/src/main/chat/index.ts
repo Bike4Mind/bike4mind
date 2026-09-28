@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import { ChatModels } from '@bike4mind/common';
-import type { ChatApprovalDecision, SendMessageRequest } from '@shared/chat';
+import type { ChatApprovalDecision, ChatStreamEvent, SendMessageRequest } from '@shared/chat';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
@@ -9,11 +9,15 @@ import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
 import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
+import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 
 /** Matches the CLI's default. Choosing a model per session is T7's job. */
 const DEFAULT_MODEL: string = ChatModels.CLAUDE_4_5_SONNET;
+
+/** How much of a background process's output the panel asks for when it rejoins after a reload. */
+const PANEL_TAIL_CHARS = 20_000;
 
 /**
  * Build the chat service and expose it over IPC.
@@ -21,28 +25,46 @@ const DEFAULT_MODEL: string = ChatModels.CLAUDE_4_5_SONNET;
  * Every channel here is main-side work on purpose: sending a message needs the access token,
  * which never leaves this process, so the renderer asks for a turn and receives text.
  */
-export function registerChat(auth: AuthService): ChatService {
+export interface RegisteredChat {
+  service: ChatService;
+  /** Background processes, exposed so main/index.ts can tear them down on every quit path. */
+  background: BackgroundProcessRegistry;
+}
+
+export function registerChat(auth: AuthService): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
   const userData = app.getPath('userData');
   const store = new SessionStore(join(userData, 'sessions'), DEFAULT_MODEL);
   const access = new AccessStore(join(userData, 'tool-access.json'));
   const approvals = new ApprovalGate();
 
+  const broadcast = (event: ChatStreamEvent) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send(IPC_CHANNELS.chatStreamEvent, event);
+    }
+  };
+
+  // Output and status go out on the same channel as reply tokens: a background process is
+  // still something that conversation is doing, and a renderer that reloads re-subscribes to
+  // one stream rather than two.
+  const background = new BackgroundProcessRegistry({
+    output: (sessionId, processId, stream, text) =>
+      broadcast({ type: 'background-output', sessionId, processId, stream, text }),
+    status: (sessionId, process) => broadcast({ type: 'background-status', sessionId, process }),
+  });
+
   const service = new ChatService({
     store,
     access,
     logger,
     approvals,
+    background,
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which is T4's invariant broken through a side door.
     protectedPaths: [userData],
     getApiClient: () => auth.getApiClient(),
     getEnvironmentUrl: () => auth.getState().environment.url,
-    emit: event => {
-      for (const window of BrowserWindow.getAllWindows()) {
-        window.webContents.send(IPC_CHANNELS.chatStreamEvent, event);
-      }
-    },
+    emit: broadcast,
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
@@ -60,6 +82,14 @@ export function registerChat(auth: AuthService): ChatService {
     approvals.resolve(approvalId, decision)
   );
 
+  ipcMain.handle(IPC_CHANNELS.chatListBackground, (_event, sessionId: string) => background.list(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatReadBackground, (_event, sessionId: string, processId: string) =>
+    background.tail(processId, sessionId, PANEL_TAIL_CHARS)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatStopBackground, (_event, sessionId: string, processId: string) =>
+    background.kill(processId, sessionId).then(() => undefined)
+  );
+
   ipcMain.handle(IPC_CHANNELS.toolsGetAccess, async () => ({ roots: await access.list() }));
   // The picker is the ONLY way a root is added. Keeping the grant behind an OS dialog the user
   // drives is what stops a crafted prompt from widening the tools' reach on its own.
@@ -75,7 +105,8 @@ export function registerChat(auth: AuthService): ChatService {
     roots: await access.revoke(root),
   }));
 
-  return service;
+  return { service, background };
 }
 
 export { ChatService } from './ChatService';
+export { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';

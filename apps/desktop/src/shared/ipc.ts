@@ -1,5 +1,6 @@
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
+  BackgroundProcessInfo,
   ChatApprovalDecision,
   ChatSession,
   ChatSessionSummary,
@@ -37,6 +38,9 @@ export const IPC_CHANNELS = {
   chatSendMessage: 'chat:send-message',
   chatStopReply: 'chat:stop-reply',
   chatRespondToApproval: 'chat:respond-to-approval',
+  chatListBackground: 'chat:list-background',
+  chatReadBackground: 'chat:read-background',
+  chatStopBackground: 'chat:stop-background',
   /** main -> renderer push; reply tokens as they arrive. */
   chatStreamEvent: 'chat:stream-event',
   toolsGetAccess: 'tools:get-access',
@@ -84,6 +88,17 @@ export interface DesktopApi {
      * ignored, so a double click cannot approve a second, different command.
      */
     respondToApproval(approvalId: string, decision: ChatApprovalDecision): Promise<void>;
+    /**
+     * Background commands belonging to this conversation, running and recently finished.
+     *
+     * The renderer holds no state main does not: a window reload loses the live tail but not
+     * the processes, so this is called on mount to rejoin whatever is still running.
+     */
+    listBackgroundProcesses(sessionId: string): Promise<BackgroundProcessInfo[]>;
+    /** The newest output of one background process, for the panel after a reload. */
+    readBackgroundOutput(sessionId: string, processId: string): Promise<string>;
+    /** Stop a background process and everything it spawned. Unknown ids are ignored. */
+    stopBackgroundProcess(sessionId: string, processId: string): Promise<void>;
     /** Subscribe to reply progress; returns the unsubscribe. */
     onStreamEvent(listener: (event: ChatStreamEvent) => void): () => void;
   };

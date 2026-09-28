@@ -65,6 +65,34 @@ export interface ChatMessage {
   error?: string;
 }
 
+export type BackgroundProcessStatus = 'running' | 'exited' | 'killed' | 'failed';
+
+/**
+ * A command started with `bash_background` and left running past the turn that started it.
+ *
+ * These live in the main process and ONLY in memory: nothing is persisted, and nothing
+ * survives a restart. Every exit path kills the process group, so a handle here always refers
+ * to something that either is running now or ended during this run of the app.
+ */
+export interface BackgroundProcessInfo {
+  /** Short handle the model passes to `bash_output` and `bash_kill`. */
+  id: string;
+  sessionId: string;
+  command: string;
+  cwd: string;
+  status: BackgroundProcessStatus;
+  startedAt: string;
+  endedAt?: string;
+  exitCode?: number | null;
+  signal?: string | null;
+  /** Characters of output currently retained; the buffer keeps a bounded tail. */
+  bufferedChars: number;
+  /** Characters produced but discarded by that cap. */
+  droppedChars: number;
+  /** Set when the process could not be spawned at all. */
+  error?: string;
+}
+
 /** Token counts for a finished turn. Absent when the server sent none. */
 export interface ChatUsage {
   inputTokens?: number;
@@ -95,6 +123,11 @@ export interface ChatSession extends ChatSessionMeta {
  * Exactly one terminal event ('done' | 'error') follows a 'start'. A stopped reply is a 'done'
  * with `stopReason: 'aborted'` and whatever text had arrived, not an error - the partial reply
  * is kept, matching what the user saw on screen when they pressed stop.
+ *
+ * The two 'background-*' events are the exception to all of that: a background process outlives
+ * the turn that started it, so they keep arriving with no reply in flight and carry no
+ * `messageId`. A consumer that only cares about replies must ignore them explicitly rather
+ * than treating an unrecognised event as terminal.
  */
 export type ChatStreamEvent =
   | { type: 'start'; sessionId: string; messageId: string }
@@ -110,7 +143,15 @@ export type ChatStreamEvent =
       usage?: ChatUsage;
       toolCalls?: ChatToolCall[];
     }
-  | { type: 'error'; sessionId: string; messageId: string; message: string };
+  | { type: 'error'; sessionId: string; messageId: string; message: string }
+  | {
+      type: 'background-output';
+      sessionId: string;
+      processId: string;
+      stream: 'stdout' | 'stderr';
+      text: string;
+    }
+  | { type: 'background-status'; sessionId: string; process: BackgroundProcessInfo };
 
 export interface SendMessageRequest {
   sessionId: string;
