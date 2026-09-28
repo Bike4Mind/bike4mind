@@ -16,6 +16,7 @@ import { B4M_HORIZONTAL_LOGO_SVG, B4M_FAVICON_SVG } from '@client/app/utils/b4mL
 // Marketing-site URL sourced from config (empty when unconfigured).
 import { WEBSITE_URL, getBrandName } from '@client/config/general';
 import { escapeAttr } from './htmlEscape';
+import type { PublishVisibility } from '@bike4mind/common';
 
 const SITE_URL = WEBSITE_URL;
 
@@ -172,6 +173,36 @@ export function buildSignupGateHtml(): { styles: string; html: string } {
   ].join('');
 
   return { styles, html };
+}
+
+const SIGNUP_GATE_MARKER = '<input type="checkbox" id="b4m-gate-dismiss"';
+
+/**
+ * Whether a served page should carry the sign-up gate. Only an anonymous viewer of an
+ * artifact whose EFFECTIVE visibility is `public` (open-public: no access gate) is a
+ * sign-up prospect; a gated page is by definition reached by an account holder or a
+ * token/passphrase holder the owner chose. `viewer` is the request's resolved identity
+ * (req.user), which a plain top-level navigation never carries - see bumpViewCount in
+ * the serve handler.
+ */
+export function shouldShowSignupGate(
+  effectiveVisibility: PublishVisibility,
+  viewer: { id?: unknown } | null | undefined
+): boolean {
+  return effectiveVisibility === 'public' && !viewer?.id;
+}
+
+/**
+ * Remove a sign-up gate baked into stored artifact bytes (renderArtifactIndexHtml emits it
+ * as the last element before `</body>`). The gate's CSS is left in place: every rule keys
+ * off the removed elements, so it goes inert - including the `body:has(...)` scroll lock.
+ */
+export function stripSignupGateHtml(html: string): string {
+  const start = html.lastIndexOf(SIGNUP_GATE_MARKER);
+  if (start === -1) return html;
+  const end = html.indexOf('</body>', start);
+  if (end === -1) return html;
+  return html.slice(0, start) + html.slice(end);
 }
 
 /** Returns the footer as an HTML string ready to inject before `</body>`. */

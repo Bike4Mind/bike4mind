@@ -35,7 +35,12 @@ import {
   isAppWrapperHost,
   VIEWER_SANDBOX,
 } from '@server/services/publish/viewerSecurity';
-import { buildShareFooterHtml, buildSignupGateHtml } from '@client/app/utils/shareFooter';
+import {
+  buildShareFooterHtml,
+  buildSignupGateHtml,
+  shouldShowSignupGate,
+  stripSignupGateHtml,
+} from '@client/app/utils/shareFooter';
 // Use require for all Prism imports so ESM/CJS interop can't split the singleton:
 // language component files call require('../prism-core') and must get the exact same
 // object reference that our highlight calls use.
@@ -499,6 +504,19 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // user-initiated download is not a hot path, so there is nothing to trade away.
   const exportCacheControl = 'private, no-store, must-revalidate';
 
+  const viewerIsProspect = shouldShowSignupGate(effectiveVisibility, req.user as { id?: string });
+  // Exports and the plain-text alternate are never rendered pages, so they never carry it.
+  // Stored bundle bytes may have the gate baked in at publish time; it is stripped below
+  // whenever this is false, which also covers a visibility change after publish.
+  const showSignupGate = viewerIsProspect && !exportFormat && !isFormatRaw;
+  // An authenticated view of an open-public page drops the gate, so it must not land in the
+  // shared cache and be handed to anonymous viewers.
+  const viewCacheControl = isShare
+    ? SHARE_CACHE_CONTROL
+    : isOpenPublic && !viewerIsProspect
+      ? 'private, no-store'
+      : cacheControlFor(effectiveVisibility);
+
   // Whether a plain, credential-free navigation to this artifact re-authorizes - the
   // condition for OFFERING an export link on a viewer surface. A `?export=` click is a
   // fresh top-level request with no Authorization header, so anything that needs a Bearer
@@ -602,6 +620,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       canFrameArtifacts,
       exportFormats,
       sharedBy: ownerName ?? undefined,
+      signupGate: showSignupGate,
     });
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     // The page itself stays script-free (`script-src 'none'` neutralizes any markup that
@@ -622,7 +641,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
         "frame-ancestors 'self'",
       ].join('; ')
     );
-    res.setHeader('Cache-Control', isShare ? SHARE_CACHE_CONTROL : cacheControlFor(effectiveVisibility));
+    res.setHeader('Cache-Control', viewCacheControl);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
     return res.status(200).send(page);
@@ -689,6 +708,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       error: isKnownOlderVersion ? 'Version not found' : 'Artifact index.html missing from storage',
     });
   }
+  if (!showSignupGate) indexHtml = stripSignupGateHtml(indexHtml);
 
   if (isFormatRaw) {
     if (!isOpenPublic) {
@@ -814,11 +834,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
 
   // `?v={sha}` historical views are a cold path served `no-store` (removes the
   // dependency on whether the CDN keys on the `v` query string).
-  const bundleCacheControl = isShare
-    ? SHARE_CACHE_CONTROL
-    : isKnownOlderVersion
-      ? 'private, no-store'
-      : cacheControlFor(effectiveVisibility);
+  const bundleCacheControl = !isShare && isKnownOlderVersion ? 'private, no-store' : viewCacheControl;
 
   // The per-artifact isolated origin (Approach B), e.g. `abc123.usercontent.app.<domain>`.
   // Empty when SERVER_DOMAIN is unset (Approach B disabled) OR the artifact is non-public:
@@ -1609,6 +1625,8 @@ function renderViewerPage(
     standalone?: boolean;
     /** Display name of the artifact owner, shown in the page header. Omitted when unknown. */
     sharedBy?: string;
+    /** See shouldShowSignupGate. Ignored for a standalone export, which never carries it. */
+    signupGate?: boolean;
   }
 ): string {
   const {
@@ -1619,6 +1637,7 @@ function renderViewerPage(
     exportFormats = [],
     standalone = false,
     sharedBy,
+    signupGate = false,
   } = opts;
   const body = artifact.renderedBody ?? '';
   let contentHtml: string;
@@ -1693,8 +1712,7 @@ function renderViewerPage(
         reportPublicId: artifact.publicId,
       }) + buildExportActionsHtml(selfPath, exportFormats);
 
-  // Soft sign-up gate: shown on served pages only (not standalone exports).
-  const gate = standalone ? null : buildSignupGateHtml();
+  const gate = signupGate && !standalone ? buildSignupGateHtml() : null;
   const gateStyles = gate?.styles ?? '';
   const gateHtml = gate?.html ?? '';
 

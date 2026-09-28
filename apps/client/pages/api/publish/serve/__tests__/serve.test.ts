@@ -2556,3 +2556,114 @@ describe('GET /api/publish/serve - Save as PDF', () => {
     expect(wrapper.res._getData() as string).not.toContain('window.print');
   });
 });
+
+describe('GET /api/publish/serve - sign-up gate is for anonymous viewers of open-public pages', () => {
+  const GATE = 'id="b4m-gate-dismiss"';
+  const reply = (over: Record<string, unknown> = {}) => ({
+    publicId: 'r-gate',
+    title: 'A reply',
+    visibility: 'public',
+    ownerId: 'owner1',
+    source: { kind: 'reply' },
+    renderedBody: '# Hello',
+    storageKeyPrefix: '',
+    manifest: [],
+    tier: 'user',
+    scopeId: 's',
+    slug: 'x',
+    ...over,
+  });
+  // Stored bytes as renderArtifactIndexHtml bakes them at publish time.
+  const bakedBundleBytes = async () => {
+    const { renderArtifactIndexHtml } = await import('@server/services/publish/renderArtifactHtml');
+    return Buffer.from(renderArtifactIndexHtml('html', '<p>baked body</p>', 'Baked'));
+  };
+
+  it('renders the gate for an anonymous viewer of a public reply', async () => {
+    mockArtifactFindOne.mockReturnValue(reply());
+    const { res, promise } = run(['r', 'r-gate']);
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain(GATE);
+  });
+
+  it('omits the gate for the owner of a private reply', async () => {
+    mockArtifactFindOne.mockReturnValue(reply({ visibility: 'private' }));
+    const { res, promise } = run(['r', 'r-gate'], { user: { id: 'owner1' }, raw: true });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).not.toContain(GATE);
+  });
+
+  it('omits the gate for a same-org colleague on an organization reply', async () => {
+    mockArtifactFindOne.mockReturnValue(reply({ visibility: 'organization', tier: 'organization', scopeId: 'org_42' }));
+    const { res, promise } = run(['r', 'r-gate'], { user: { id: 'colleague', organizationId: 'org_42' }, raw: true });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('Hello');
+    expect(res._getData() as string).not.toContain(GATE);
+  });
+
+  it('omits the gate for a signed-in viewer of a public reply and keeps that page out of the shared cache', async () => {
+    mockArtifactFindOne.mockReturnValue(reply());
+    const { res, promise } = run(['r', 'r-gate'], { user: { id: 'owner1' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).not.toContain(GATE);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+  });
+
+  it('keeps the gate baked into a public bundle for an anonymous viewer', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(await bakedBundleBytes());
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain(GATE);
+  });
+
+  it('strips the baked gate from the ?format=raw text of a public bundle', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(await bakedBundleBytes());
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { format: 'raw' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('baked body');
+    expect(data).not.toContain('Read the rest with a free account');
+  });
+
+  it('strips the baked gate from a private bundle for its owner', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private' }));
+    mockDownload.mockResolvedValue(await bakedBundleBytes());
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' }, raw: true });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('baked body');
+    expect(data).not.toContain(GATE);
+  });
+
+  it('strips the baked gate from an organization bundle for a same-org colleague', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      bundle({ visibility: 'organization', tier: 'organization', scopeId: 'org_42', ownerId: 'owner1' })
+    );
+    mockDownload.mockResolvedValue(await bakedBundleBytes());
+    const { res, promise } = run(['u', 'org_42', 'my-slug'], {
+      user: { id: 'colleague', organizationId: 'org_42' },
+      raw: true,
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).not.toContain(GATE);
+  });
+
+  it('strips the baked gate from a public bundle behind an access gate', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ accessGate: { kind: 'domain', allowedDomains: ['acme.com'] } }));
+    mockDownload.mockResolvedValue(await bakedBundleBytes());
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' }, raw: true });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).not.toContain(GATE);
+  });
+});
