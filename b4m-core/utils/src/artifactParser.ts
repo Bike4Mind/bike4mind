@@ -272,10 +272,6 @@ function replaceMermaidFences(source: string, replace: (fullMatch: string, body:
 }
 
 /**
- * Post-processes AI responses to detect code blocks that should be artifacts
- * and converts them to proper artifact syntax as a fallback
- */
-/**
  * Info-string token marking a fence that holds a verbatim quote of tool output. Such a
  * region is never promoted to an artifact, by this parser or by the client mirror in
  * apps/client/app/utils/artifactParser.ts. History replay must strip it before the model
@@ -292,17 +288,19 @@ export interface ToolOutputMask {
   protect(region: string): string;
   /** Puts every region back in place of its placeholder. */
   restore(value: string): string;
+  /** True when the value contains a placeholder, i.e. a span that must not be promoted. */
+  holds(value: string): boolean;
 }
 
 function stripLineEnd(line: string): string {
   return line.endsWith('\r') ? line.slice(0, -1) : line;
 }
 
-function isFenceCloser(line: string, runLength: number): boolean {
-  const trimmed = stripLineEnd(line).trim();
-  if (trimmed.length < runLength) return false;
-  for (let i = 0; i < trimmed.length; i++) if (trimmed[i] !== '~') return false;
-  return true;
+/** Length of a line made only of tildes (surrounding whitespace allowed), else 0. */
+function tildeLineRun(line: string): number {
+  const trimmed = line.trim();
+  for (let i = 0; i < trimmed.length; i++) if (trimmed[i] !== '~') return 0;
+  return trimmed.length;
 }
 
 /**
@@ -312,8 +310,13 @@ function isFenceCloser(line: string, runLength: number): boolean {
  * content, so it cannot collide with reply text.
  */
 export function maskToolOutputRegions(content: string): ToolOutputMask {
+  const used = new Set<number>();
+  for (let i = 0; i < content.length; i++) {
+    const c = content.charCodeAt(i);
+    if (c >= 0xe000) used.add(c);
+  }
   let code = 0xe000;
-  while (content.includes(String.fromCharCode(code))) code++;
+  while (used.has(code)) code++;
   const sentinel = String.fromCharCode(code);
   const regions: string[] = [];
   const protect = (region: string): string => {
@@ -327,40 +330,44 @@ export function maskToolOutputRegions(content: string): ToolOutputMask {
           const region = regions[Number(index)];
           return region === undefined ? match : region;
         });
+  const holds = (value: string): boolean => regions.length > 0 && value.includes(sentinel);
 
-  if (!content.includes(TOOL_OUTPUT_MARKER)) return { masked: content, protect, restore };
+  if (!content.includes(TOOL_OUTPUT_MARKER)) return { masked: content, protect, restore, holds };
+
+  // One pass collects openers and closers; a suffix max of closer lengths answers "is there
+  // any closer long enough ahead" in O(1), so an unclosed opener never rescans to the end.
+  const openers: { start: number; run: number }[] = [];
+  const closers: { start: number; end: number; run: number }[] = [];
+  for (let lineStart = 0; lineStart < content.length;) {
+    const newline = content.indexOf('\n', lineStart);
+    const lineEnd = newline === -1 ? content.length : newline;
+    const line = stripLineEnd(content.slice(lineStart, lineEnd));
+    const opener = TOOL_OUTPUT_OPENER.exec(line);
+    if (opener) {
+      openers.push({ start: lineStart, run: opener[1].length });
+    } else {
+      const run = tildeLineRun(line);
+      if (run >= 3) closers.push({ start: lineStart, end: lineStart + line.length, run });
+    }
+    lineStart = lineEnd + 1;
+  }
+  const longestAhead: number[] = new Array(closers.length + 1).fill(0);
+  for (let i = closers.length - 1; i >= 0; i--) longestAhead[i] = Math.max(closers[i].run, longestAhead[i + 1]);
 
   let masked = '';
   let copiedTo = 0;
-  let lineStart = 0;
-  while (lineStart < content.length) {
-    const newline = content.indexOf('\n', lineStart);
-    const lineEnd = newline === -1 ? content.length : newline;
-    const opener = TOOL_OUTPUT_OPENER.exec(stripLineEnd(content.slice(lineStart, lineEnd)));
-    if (!opener) {
-      lineStart = lineEnd + 1;
-      continue;
-    }
-    let closerEnd = -1;
-    let cursor = lineEnd + 1;
-    while (cursor < content.length) {
-      const next = content.indexOf('\n', cursor);
-      const end = next === -1 ? content.length : next;
-      if (isFenceCloser(content.slice(cursor, end), opener[1].length)) {
-        closerEnd = stripLineEnd(content.slice(cursor, end)) === content.slice(cursor, end) ? end : end - 1;
-        break;
-      }
-      cursor = end + 1;
-    }
-    if (closerEnd === -1) {
-      lineStart = lineEnd + 1;
-      continue;
-    }
-    masked += content.slice(copiedTo, lineStart) + protect(content.slice(lineStart, closerEnd));
-    copiedTo = closerEnd;
-    lineStart = closerEnd + 1;
+  let next = 0;
+  for (const opener of openers) {
+    if (opener.start < copiedTo) continue;
+    while (next < closers.length && closers[next].start < opener.start) next++;
+    if (longestAhead[next] < opener.run) continue;
+    let closer = next;
+    while (closers[closer].run < opener.run) closer++;
+    masked += content.slice(copiedTo, opener.start) + protect(content.slice(opener.start, closers[closer].end));
+    copiedTo = closers[closer].end;
+    next = closer + 1;
   }
-  return { masked: masked + content.slice(copiedTo), protect, restore };
+  return { masked: masked + content.slice(copiedTo), protect, restore, holds };
 }
 
 const TOOL_OUTPUT_OPENER_MARK = new RegExp(`^( {0,3}~{3,}[\\w-]*)[ \\t]+${TOOL_OUTPUT_MARKER}([ \\t]*\\r?)$`, 'gm');
@@ -398,6 +405,10 @@ export interface ConvertCodeBlocksOptions {
   isToolEcho?: (body: string) => boolean;
 }
 
+/**
+ * Post-processes AI responses to detect code blocks that should be artifacts
+ * and converts them to proper artifact syntax as a fallback
+ */
 export function convertCodeBlocksToArtifacts(content: string, options: ConvertCodeBlocksOptions = {}): string {
   return transformCodeBlocks(content, options, false);
 }
@@ -416,6 +427,9 @@ function transformCodeBlocks(content: string, options: ConvertCodeBlocksOptions,
   content = mask.masked;
   const { isToolEcho } = options;
   // Echoed spans become marked fences, protected at once so later passes skip them too.
+  // A span that holds a placeholder wraps protected tool output; promoting it would put that
+  // output back inside an artifact when restore runs.
+  const { holds } = mask;
   const echoFence = (lang: string, body: string, whole: string, start: number, end: number): string | null =>
     isToolEcho?.(body)
       ? mask.protect(toolOutputFence(lang, body, whole.slice(Math.max(0, start - 1), start), whole.slice(end, end + 2)))
@@ -430,7 +444,7 @@ function transformCodeBlocks(content: string, options: ConvertCodeBlocksOptions,
   const reactCodeBlockRegex = /```(?:tsx?|javascript|jsx)([\s\S]*?)```/gi;
 
   content = content.replace(reactCodeBlockRegex, (match, codeContent) => {
-    if (echoOnly) return match;
+    if (echoOnly || holds(codeContent)) return match;
     // Anchor requirement the old regex encoded inline: a declaration + component token
     // on one line. Without it, this fence is not a React component - leave it alone.
     if (!hasReactComponentLine(codeContent)) return match;
@@ -460,7 +474,7 @@ ${codeContent.trim()}
   const htmlCodeBlockRegex = /```html([\s\S]*?)```/gi;
 
   content = content.replace(htmlCodeBlockRegex, (match, codeContent, offset: number, whole: string) => {
-    if (!hasFullHtmlDocument(codeContent)) return match;
+    if (!hasFullHtmlDocument(codeContent) || holds(codeContent)) return match;
     const echoed = echoFence('html', codeContent, whole, offset, offset + match.length);
     if (echoed !== null) return echoed;
     if (echoOnly) return match;
@@ -479,7 +493,7 @@ ${codeContent.trim()}
   const htmlFragmentFenceRegex = /```html([\s\S]*?)```/gi;
   content = content.replace(htmlFragmentFenceRegex, (match, codeContent, offset: number, whole: string) => {
     // Require at least one HTML tag so a mislabeled fence of plain text is left alone.
-    if (!/<[a-z][a-z0-9]*[\s/>]/i.test(codeContent)) return match;
+    if (!/<[a-z][a-z0-9]*[\s/>]/i.test(codeContent) || holds(codeContent)) return match;
     const echoed = echoFence('html', codeContent, whole, offset, offset + match.length);
     if (echoed !== null) return echoed;
     if (echoOnly) return match;
@@ -494,7 +508,7 @@ ${codeContent.trim()}
   const svgCodeBlockRegex = /```svg([\s\S]*?)```/gi;
 
   content = content.replace(svgCodeBlockRegex, (match, codeContent) => {
-    if (echoOnly) return match;
+    if (echoOnly || holds(codeContent)) return match;
     // Not a complete <svg>...</svg> - leave the fence unchanged.
     if (!hasCompleteSvg(codeContent)) return match;
     const identifier = 'svg-graphic';
@@ -506,7 +520,7 @@ ${codeContent.trim()}
 
   // Detect Mermaid code blocks and mixed content.
   content = replaceMermaidFences(content, (fullMatch, codeContent) => {
-    if (echoOnly) return fullMatch;
+    if (echoOnly || holds(codeContent)) return fullMatch;
     // Clean and validate the Mermaid syntax
     const { isValid, cleanedContent, errors } = validateMermaidSyntax(codeContent);
 
@@ -530,7 +544,7 @@ ${codeContent.trim()}
 
   content = content.replace(rawMermaidRegex, (fullMatch, mermaidContent) => {
     // Skip if this is already inside a code block or artifact
-    if (echoOnly || fullMatch.includes('```') || fullMatch.includes('<artifact')) {
+    if (echoOnly || holds(fullMatch) || fullMatch.includes('```') || fullMatch.includes('<artifact')) {
       return fullMatch;
     }
 
@@ -548,9 +562,9 @@ ${codeContent.trim()}
     }
   });
 
-  content = promoteToolCallJsonArtifact(content, echoFence, echoOnly);
+  content = promoteToolCallJsonArtifact(content, echoFence, echoOnly, holds);
 
-  content = promoteBareHtmlDocument(content, echoFence, echoOnly);
+  content = promoteBareHtmlDocument(content, echoFence, echoOnly, holds);
 
   return mask.restore(content);
 }
@@ -573,16 +587,23 @@ type EchoFence = (lang: string, body: string, whole: string, start: number, end:
  * model that merely SHOWS such tool-call JSON as an example from having it
  * swallowed and re-rendered as an artifact.
  *
- * MUST STAY IN SYNC with the twin copy in apps/client/app/utils/artifactParser.ts
- * so client render and server persistence never diverge.
+ * Recognition must stay identical to the twin in apps/client/app/utils/artifactParser.ts.
+ * Only this copy marks tool echoes; the client never sees tool output and relies on the
+ * fences marked here.
  */
-function promoteToolCallJsonArtifact(content: string, echoFence: EchoFence, echoOnly: boolean): string {
+function promoteToolCallJsonArtifact(
+  content: string,
+  echoFence: EchoFence,
+  echoOnly: boolean,
+  holds: (value: string) => boolean
+): string {
   // Fence labels a model uses for a tool call; a ```html fence is handled above.
   // The negative lookahead stops ```tool matching inside ```tool_calls etc.
   const fenceRegex = /```(json|tool_code|tool)(?![a-z0-9_])([\s\S]*?)```/gi;
   const afterFences = content.replace(
     fenceRegex,
     (match, label: string, body: string, offset: number, whole: string) => {
+      if (holds(body)) return match;
       const artifact = toolCallJsonToArtifact(body);
       if (!artifact) return match;
       return echoFence(label, body, whole, offset, offset + match.length) ?? (echoOnly ? match : artifact);
@@ -592,7 +613,7 @@ function promoteToolCallJsonArtifact(content: string, echoFence: EchoFence, echo
 
   // A model may also return the bare object as its entire reply (no fence).
   const trimmed = content.trim();
-  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+  if (trimmed.startsWith('{') && trimmed.endsWith('}') && !holds(trimmed)) {
     const artifact = toolCallJsonToArtifact(trimmed);
     if (artifact) {
       const start = content.indexOf(trimmed);
@@ -666,12 +687,18 @@ function looksLikeHtml(value: string): boolean {
  * otherwise render as raw HTML in the chat (parser gap B). Runs last so the
  * fence/artifact guards see all earlier conversions.
  */
-function promoteBareHtmlDocument(content: string, echoFence: EchoFence, echoOnly: boolean): string {
+function promoteBareHtmlDocument(
+  content: string,
+  echoFence: EchoFence,
+  echoOnly: boolean,
+  holds: (value: string) => boolean
+): string {
   // Two forward cursors instead of one <html>...</html> pattern, and guard counts that
   // accumulate over the gap since the previous document instead of re-reading the whole
   // prefix: both of the old shapes re-scanned from the start of the message on every
   // candidate, so this pass cost time quadratic in the message length.
-  // MUST STAY IN SYNC with the twin copy in apps/client/app/utils/artifactParser.ts.
+  // Detection must stay identical to the twin in apps/client/app/utils/artifactParser.ts;
+  // only this copy marks tool echoes.
   const openRegex = /<!DOCTYPE\s+html|<html/gi;
   const closeRegex = /<\/html\s*>/gi;
   let out = '';
@@ -702,6 +729,7 @@ function promoteBareHtmlDocument(content: string, echoFence: EchoFence, echoOnly
     if (fences % 2 === 1 || artifactOpens > artifactCloses) continue;
 
     const doc = content.slice(start, end);
+    if (holds(doc)) continue;
     out += content.slice(copiedTo, start);
     copiedTo = end;
     promoted = true;

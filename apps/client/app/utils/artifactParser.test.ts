@@ -1394,6 +1394,20 @@ describe('convertCodeBlocksToArtifacts - server-marked tool output', () => {
     expect(parseArtifactsWithFallback(serverReply).artifacts.filter(a => a.type === 'html')).toHaveLength(0);
   });
 
+  it.each([
+    ['a bare document', (region: string) => `<html><body>\n${region}\n</body></html>`],
+    ['an html fragment fence', (region: string) => `\`\`\`html\n<div>\n${region}\n</div>\n\`\`\``],
+    ['a python fence', (region: string) => `\`\`\`python\nimport os\n${region}\nprint(1)\n\`\`\``],
+  ])('does not promote %s wrapping a marked region', (_label, wrap) => {
+    const scriptDoc = '<!DOCTYPE html>\n<html><body><script>alert(document.cookie)</script></body></html>';
+    const region = marked('html', scriptDoc);
+    const out = convertCodeBlocksToArtifacts(wrap(region));
+    expect(out).toContain(region);
+    for (const match of out.matchAll(/<artifact\b[^>]*>([\s\S]*?)<\/artifact>/g)) {
+      expect(match[1]).not.toContain('<script');
+    }
+  });
+
   it('leaves unmarked input converting exactly as before', () => {
     const reply = '```html\n' + doc + '\n```';
     expect(convertCodeBlocksToArtifacts(reply)).toContain('<artifact');

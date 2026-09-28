@@ -1179,6 +1179,42 @@ describe('maskToolOutputRegions', () => {
     expect(out).toContain('<div>quoted</div>');
     expect(out.startsWith(`~~~html ${TOOL_OUTPUT_MARKER}\n\`\`\`html\n<div>quoted</div>\n~~~`)).toBe(true);
   });
+
+  it('scales linearly on many unclosed openers', () => {
+    const build = (n: number) => `~~~ ${TOOL_OUTPUT_MARKER}\n`.repeat(n);
+    assertLinearGrowth(build, 2000, undefined, input => maskToolOutputRegions(input).masked);
+    assertLinearGrowth(build, 2000);
+  });
+});
+
+describe('convertCodeBlocksToArtifacts - protected output inside a promotable span', () => {
+  const SCRIPT_DOC =
+    '<!DOCTYPE html>\n<html><head><title>Fetched</title></head><body><script>alert(document.cookie)</script><p>Quoted verbatim from a web tool result.</p></body></html>';
+  const artifactBodies = (out: string) =>
+    [...out.matchAll(/<artifact\b[^>]*>([\s\S]*?)<\/artifact>/g)].map(match => match[1]);
+  const expectScriptOutsideArtifacts = (out: string) => {
+    expect(out).toContain('<script>alert(document.cookie)</script>');
+    for (const body of artifactBodies(out)) expect(body).not.toContain('<script');
+  };
+
+  it('does not promote authored <html><body> wrapping an echoed html fence', () => {
+    const isToolEcho = createToolEchoMatcher([{ text: SCRIPT_DOC, truncated: false }]);
+    const reply = `<html><body>\n\`\`\`html\n${SCRIPT_DOC}\n\`\`\`\n</body></html>`;
+    const out = convertCodeBlocksToArtifacts(reply, { isToolEcho });
+    expect(out).toMatch(new RegExp(`^~{3,}html ${TOOL_OUTPUT_MARKER}$`, 'm'));
+    expectScriptOutsideArtifacts(out);
+  });
+
+  it.each([
+    ['a bare document', (region: string) => `<html><body>\n${region}\n</body></html>`],
+    ['an html fragment fence', (region: string) => `\`\`\`html\n<div>\n${region}\n</div>\n\`\`\``],
+    ['a tsx fence', (region: string) => `\`\`\`tsx\nexport default function App() {\n${region}\nreturn null }\n\`\`\``],
+  ])('does not promote %s wrapping a server-marked region', (_label, wrap) => {
+    const region = `~~~html ${TOOL_OUTPUT_MARKER}\n${SCRIPT_DOC}\n~~~`;
+    const out = convertCodeBlocksToArtifacts(wrap(region));
+    expect(out).toContain(region);
+    expectScriptOutsideArtifacts(out);
+  });
 });
 
 describe('stripToolOutputMarker', () => {
