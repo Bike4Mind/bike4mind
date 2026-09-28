@@ -676,50 +676,30 @@ POST /api/ai/llm
 | maxTokens | number | No | Max output tokens |
 | systemPrompt | string | No | System prompt override |
 
-#### Image Generation (async)
+#### Image Generation and Editing (async)
 
 \`\`\`
-POST /api/ai/generate-image
+POST /api/v1/image-generations
+POST /api/v1/image-edits
 \`\`\`
 
 **Required API-key scope:** \`ai:generate\`.
 
-**Request Body:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| prompt | string | Yes | Image description |
-| model | string | Yes | Image model identifier (e.g. \`gpt-image-1\`); a request without a supported model is rejected \`422\` |
-| n | number | No | Number of images (1-10) |
-| size | string | No | Image dimensions (e.g. \`1024x1024\`) |
-| fabFileIds | string[] | No | Attached files; the first image among them is the input image |
-| referenceImageFabFileIds | string[] | No | Up to 4 gpt-image style-reference images, as fabFile ids (see below) |
-| sessionId | string | No | Existing session; a new one is created if omitted |
-
-**Style reference images** (\`gpt-image-*\` only): pass up to 4 fabFile ids in
-\`referenceImageFabFileIds\` to anchor the render on images you have already uploaded - useful
-for a consistent icon or art style across many generations. They are sent to the model in the
-order given, after the input image from \`fabFileIds\` if there is one. Every id must be one your
-API key can access and must have cleared moderation; otherwise the request is rejected rather
-than rendering a subset. Other model families ignore the field.
-
-Generation is asynchronous - the request enqueues work and returns immediately with a quest
-(no image yet). It never blocks on generation, so it is not subject to the API-gateway request
-timeout. Retrieve the result by polling \`GET /api/quests/{id}\` until \`status\` is \`done\`, then
-read \`files\` (see [Poll Quest Status](#poll-quest-status)).
-
-**Response:**
-
-\`\`\`json
-{
-  "quest": { "id": "quest_abc123", "status": "pending" },
-  "session": { "id": "sess_xyz789" }
-}
-\`\`\`
+> **These endpoints are generated from their contracts.** The full request/response
+> reference - every field, its type, defaults, and validation rules, including the
+> \`referenceImageFabFileIds\` style anchors - lives in the [generated API docs](/api/v1/docs)
+> under \`generateImage\` and \`editImage\`, derived from the same objects the handlers
+> validate with.
+>
+> Both are asynchronous: the call queues the render and returns a quest with no image yet,
+> so it never blocks on generation. Poll \`GET /api/quests/{id}\` until \`status\` is \`done\`
+> (see [Poll Quest Status](#poll-quest-status)); a render that failed arrives there as
+> \`type: "error"\`, not as a 4xx. \`POST /api/ai/generate-image\` and \`POST /api/ai/edit-image\`
+> are legacy aliases of the same handlers and keep working.
 
 #### OpenAPI 3.1 documented endpoints
 
-A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code. Currently: \`/api/chat\`, \`/api/ai/v1/completions\`, \`/api/ai/v1/tools\`, and the audio generation endpoints (\`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`). Everything documented there is omitted from the summary tables below - the spec is the source of truth for those.
+A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code. Currently: \`/api/chat\`, \`/api/ai/v1/completions\`, \`/api/ai/v1/tools\`, the audio generation endpoints (\`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`), and the image endpoints (\`/api/v1/image-generations\`, \`/api/v1/image-edits\`). Everything documented there is omitted from the summary tables below - the spec is the source of truth for those.
 
 | Resource | Path | Description |
 |----------|------|-------------|
@@ -737,8 +717,6 @@ Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI
 | POST | /api/ai/llm | Raw LLM completion |
 | POST | /api/ai/transcribe | Audio/video to text (Whisper) |
 | POST | /api/ai/text-to-speech | Text to speech synthesis (OpenAI; legacy, use /api/ai/tts) |
-| POST | /api/ai/generate-image | Image generation (DALL-E) |
-| POST | /api/ai/edit-image | Image editing (accepts \`referenceImageFabFileIds\` like generate-image) |
 | POST | /api/ai/generate-video | Video generation (Sora) |
 | POST | /api/ai/barkeep-chat | Tavern AI barkeep conversation |
 | POST | /api/ai/tavern-conversation | Tavern NPC conversation |
