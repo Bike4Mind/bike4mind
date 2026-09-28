@@ -12,7 +12,7 @@ const makeAdapters = () => {
 };
 
 describe('recordResearchRunOutcome', () => {
-  // #3298: a run reaching an outcome left no trace in the lake's History tab.
+  // A run reaching an outcome left no trace in the lake's History tab.
   it('records a completed outcome under the system rung, naming the run query', async () => {
     const { adapters, record } = makeAdapters();
 
