@@ -71,6 +71,8 @@ export const DEFAULT_MANIFEST = {
   generatedImagesBucket: { kind: 'bucket' },
   historyImportBucket: { kind: 'bucket' },
   publishedArtifactsBucket: { kind: 'bucket' },
+  // Optional: only the admin /status page reads it, and a self-host install need not run QA ingest.
+  qaArtifactsBucket: { kind: 'bucket', optional: true },
   slackExportBucket: { kind: 'bucket' },
   // --- queue ---
   agentContinuationQueue: { kind: 'queue' },

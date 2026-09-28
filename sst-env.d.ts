@@ -592,6 +592,10 @@ declare module "sst" {
       "name": string
       "type": "sst.aws.Bucket"
     }
+    "qaArtifactsBucket": {
+      "name": string
+      "type": "sst.aws.Bucket"
+    }
     "questExportQueue": {
       "type": "sst.aws.Queue"
       "url": string
