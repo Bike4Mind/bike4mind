@@ -66,13 +66,16 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 const lake = { id: 'lakeDoc1' };
 const existing = { id: 'f1', lakeId: 'lakeDoc1', status: 'open' };
 
+// A fixed PAST instant, so a handler that re-stamps with `new Date()` cannot pass by coincidence.
+const receivedAt = new Date('2026-01-01T00:00:00.000Z');
+
 const invoke = (body: Record<string, unknown>, findingId = 'f1') => {
   const json = vi.fn();
   const res = { json, status: vi.fn(() => ({ json })) };
   return {
     json,
     done: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
-      { method: 'POST', query: { id: 'lake1', findingId }, body, user: { id: 'curator-1' }, logger },
+      { method: 'POST', query: { id: 'lake1', findingId }, body, user: { id: 'curator-1' }, logger, receivedAt },
       res
     ),
   };
@@ -305,18 +308,13 @@ describe('POST /api/data-lakes/[id]/findings/[findingId] (#3039)', () => {
       expect(json.mock.calls[0][0]).not.toHaveProperty('beliefSkipReason');
     });
 
-    it('stamps the shred fence before its own I/O', async () => {
-      // Taken on arrival, ahead of the access gate, the finding read and the CAS write - a purge
-      // landing in any of those windows must refuse the belief rather than lift its own tombstone.
-      const before = Date.now();
-      const { done } = invoke({ action: 'resolve', resolution: 'settled' });
-      await done;
-      const after = Date.now();
+    it("arms the shred fence with the request's arrival, not a handler-local stamp", async () => {
+      // Ahead of baseApi's connectDB and auth, the access gate, the finding read and the CAS write -
+      // a purge landing in any of those windows must refuse the belief rather than lift its own
+      // tombstone. baseApi.receivedAt.test.ts pins that the stamp is taken first.
+      await invoke({ action: 'resolve', resolution: 'settled' }).done;
 
-      const { startedAt } = h.recordFindingResolutionBelief.mock.calls[0][0];
-      expect(startedAt).toBeInstanceOf(Date);
-      expect(startedAt.getTime()).toBeGreaterThanOrEqual(before);
-      expect(startedAt.getTime()).toBeLessThanOrEqual(after);
+      expect(h.recordFindingResolutionBelief.mock.calls[0][0].startedAt).toBe(receivedAt);
     });
 
     it('still returns the committed ruling when the memory write THROWS', async () => {
