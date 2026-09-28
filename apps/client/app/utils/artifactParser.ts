@@ -6,7 +6,12 @@ import {
   mapMimeTypeToArtifactType,
 } from '@bike4mind/common';
 import { detectElidedContent } from '@bike4mind/utils/artifactElision';
-import { stripHtmlComments, hasFullHtmlDocument, hasCompleteSvg } from '@bike4mind/utils/artifactParser';
+import {
+  stripHtmlComments,
+  hasFullHtmlDocument,
+  hasCompleteSvg,
+  maskToolOutputRegions,
+} from '@bike4mind/utils/artifactParser';
 import { tryParseChartJSON } from './chartJsonParser';
 import { hasSingleLineImportFrom, scanImportStatements } from './importStatements';
 
@@ -646,6 +651,11 @@ const MAX_FENCE_SCAN_CHARS = 256000;
  * and converts them to proper artifact syntax as a fallback
  */
 export function convertCodeBlocksToArtifacts(content: string): string {
+  // Fences the server marked as quoted tool output stay text; detection itself is server-only
+  // (b4m-core/utils artifactParser).
+  const mask = maskToolOutputRegions(content);
+  content = mask.masked;
+
   // First, detect tool outputs that should become artifacts
   content = convertToolOutputsToArtifacts(content);
 
@@ -793,7 +803,7 @@ ${trimmedCode}
 
   content = promoteBareHtmlDocument(content);
 
-  return content;
+  return mask.restore(content);
 }
 
 /**

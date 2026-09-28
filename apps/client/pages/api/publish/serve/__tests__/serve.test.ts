@@ -760,6 +760,53 @@ describe('GET /api/publish/serve - reply embedded HTML artifact (#708)', () => {
     expect(doc1).not.toContain('FIRST_ARTIFACT');
   });
 
+  const fencedDoc = (marker: string) =>
+    `<!DOCTYPE html>\n<html><head><title>${marker}</title></head><body><h1>${marker}</h1></body></html>`;
+  const fetchDoc = async (publicId: string, a: string) => {
+    const { res, promise } = run(['r', publicId], { a });
+    await promise;
+    return res;
+  };
+
+  it('keeps ?a= indexes for a reply body holding two fenced html documents', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      htmlReply({
+        publicId: 'rf2',
+        slug: 'rf2',
+        title: 'Two fences',
+        renderedBody:
+          '```html\n' + fencedDoc('FIRST_FENCE') + '\n```\n\n```html\n' + fencedDoc('SECOND_FENCE') + '\n```',
+      })
+    );
+
+    const doc0 = (await fetchDoc('rf2', '0'))._getData() as string;
+    expect(doc0).toContain('FIRST_FENCE');
+    expect(doc0).not.toContain('SECOND_FENCE');
+    const doc1 = (await fetchDoc('rf2', '1'))._getData() as string;
+    expect(doc1).toContain('SECOND_FENCE');
+  });
+
+  it('gives a marked tool-output region no ?a= index, so the authored fence after it is ?a=0', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      htmlReply({
+        publicId: 'rmark',
+        slug: 'rmark',
+        title: 'Marked then authored',
+        renderedBody:
+          '~~~html b4m-tool-output\n' +
+          fencedDoc('QUOTED_TOOL_OUTPUT') +
+          '\n~~~\n\n```html\n' +
+          fencedDoc('AUTHORED_PAGE') +
+          '\n```',
+      })
+    );
+
+    const doc0 = (await fetchDoc('rmark', '0'))._getData() as string;
+    expect(doc0).toContain('AUTHORED_PAGE');
+    expect(doc0).not.toContain('QUOTED_TOOL_OUTPUT');
+    expect((await fetchDoc('rmark', '1'))._getStatusCode()).toBe(404);
+  });
+
   it('treats an empty ?a= as the normal page render, not artifact index 0', async () => {
     mockArtifactFindOne.mockReturnValue(htmlReply());
     const { res, promise } = run(['r', 'rhtml'], { a: '' });
