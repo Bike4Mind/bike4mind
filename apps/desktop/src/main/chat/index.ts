@@ -16,6 +16,8 @@ import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { AttachmentStore } from './AttachmentStore';
 import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
+import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
+import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
 import { ChatService } from './ChatService';
 import { MediaStore } from './media/MediaStore';
 import { registerMediaProtocol } from './media/protocol';
@@ -100,6 +102,8 @@ export function registerChat(auth: AuthService): RegisteredChat {
   const attachments = new AttachmentStore(join(userData, 'attachments'), logger, shrinkImage);
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
+  registerArtifactProtocol();
+  const artifacts = new ArtifactPublisher(() => auth.getApiClient(), logger);
   const models = new ModelCatalog({
     logger,
     getApiClient: () => auth.getApiClient(),
@@ -145,6 +149,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     background,
     media,
     activity,
+    artifacts,
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which is T4's invariant broken through a side door.
     protectedPaths: [userData],
