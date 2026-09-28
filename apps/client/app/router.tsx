@@ -27,6 +27,7 @@ import { premiumRoutes } from './premium-generated/premiumRoutes.generated';
 import { partitionPremiumRoutes } from './premiumRoutePartition';
 import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 import { lazyWithPreload } from './utils/lazyWithPreload';
+import { parseQaStatusSearch } from './hooks/data/qaStatus';
 
 // Lazy load all route components for code splitting
 // /new and /notebooks/$id render through one shell (see notebookShellRoute).
@@ -49,6 +50,9 @@ const AgentExecutionHistoryPage = lazy(() => import('./routes/agent-executions')
 const FeedbackRollupPage = lazy(() => import('./routes/feedback/rollup'));
 const MissionDossierPage = lazy(() => import('./routes/agents/$id/missions/$missionId'));
 const DeepAgentConsolePage = lazy(() => import('./routes/deep-agents'));
+const QaStatusPage = lazy(() => import('./routes/status'));
+const QaRunPage = lazy(() => import('./routes/status/runs/$id'));
+const QaTestPage = lazy(() => import('./routes/status/tests/$testKey'));
 const SharePage = lazy(() => import('./routes/share/$id'));
 const ReportPublicPage = lazy(() => import('./routes/report/$id'));
 const OrganizationsPage = lazy(() => import('./routes/organizations'));
@@ -605,6 +609,47 @@ const deepAgentsRoute = createRoute({
   ),
 });
 
+// QA status (admin only). Exported so pages read typed search/params via
+// `qaStatusRoute.useSearch()` etc.; filters live in the URL so links deep-link.
+export const qaStatusRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/status',
+  validateSearch: parseQaStatusSearch,
+  component: () => (
+    <RestrictedPage requireAdmin>
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <QaStatusPage />
+      </Suspense>
+    </RestrictedPage>
+  ),
+});
+
+export const qaRunRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/status/runs/$id',
+  component: () => (
+    <RestrictedPage requireAdmin>
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <QaRunPage />
+      </Suspense>
+    </RestrictedPage>
+  ),
+});
+
+// The router encodes the key into one segment (it contains / > ? #); the page
+// re-sends it as ?testKey=.
+export const qaTestRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/status/tests/$testKey',
+  component: () => (
+    <RestrictedPage requireAdmin>
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <QaTestPage />
+      </Suspense>
+    </RestrictedPage>
+  ),
+});
+
 // Share route (replaces /share/[id].tsx)
 const shareRoute = createRoute({
   getParentRoute: () => layoutRoute,
@@ -1104,6 +1149,9 @@ const routeTree = rootRoute.addChildren([
     agentExecutionHistoryRoute,
     agentMissionRoute,
     deepAgentsRoute,
+    qaStatusRoute,
+    qaRunRoute,
+    qaTestRoute,
     shareRoute,
     reportPublicRoute,
     organizationsRoute,
