@@ -237,6 +237,23 @@ describe('LakeConfigHistorySection', () => {
     expect(screen.getByText('off -> on')).toBeInTheDocument();
   });
 
+  // #3298: a reviewer's approve/decline/restore decision left no trace in this tab at all.
+  it('renders a proposal-review decision with its action label and source', () => {
+    renderSection({
+      view: view({
+        entries: [
+          entry({
+            action: 'approve-proposal',
+            changes: [{ field: 'proposalReview', kind: 'literal', after: 'approved: https://example.com/report' }],
+          }),
+        ],
+      }),
+    });
+    expect(screen.getByText('Proposal approved')).toBeInTheDocument();
+    expect(screen.getByText('Proposal review')).toBeInTheDocument();
+    expect(screen.getByText('not set -> approved: https://example.com/report')).toBeInTheDocument();
+  });
+
   // These rows are retained for 1095-3650 days, so one can outlive the enum that named it. An
   // unguarded RUNG_LABEL lookup would throw on `.label` and take the whole table down.
   describe('a row whose vocabulary the current code no longer knows', () => {
