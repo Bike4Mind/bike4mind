@@ -290,6 +290,65 @@ describe('BaseBedrockBackend does not duplicate an echoed tool artifact card (#3
     expect(toolResultBlock?.content).toContain('[Artifact rendered and delivered to user]');
   });
 
+  it('pin: a chained tool call turn delivers its own intro text, ahead of the artifact it introduces', async () => {
+    // Regression: the non-streaming path only sent a turn's text after its tool-call branch,
+    // which returns early, so an intro sharing a chunk with a chained tool call was dropped.
+    const RECHARTS_ARTIFACT =
+      '<artifact identifier="chart-1" type="application/vnd.ant.recharts" title="Bar">{"data":[]}</artifact>';
+    const rechartsTool: ICompletionOptionTools = {
+      toolSchema: {
+        name: 'recharts',
+        description: 'Generate a chart',
+        parameters: { type: 'object', properties: { definition: { type: 'string' } }, required: ['definition'] },
+      },
+      toolFn: async () => RECHARTS_ARTIFACT,
+    };
+    const backend = new TestBedrockBackend();
+    let callIndex = 0;
+    const bodies = [
+      asBedrockInvokeBody(nonStreamingToolCallChunk()),
+      asBedrockInvokeBody({
+        choices: [
+          {
+            index: 0,
+            status: ChoiceStatus.END,
+            statusEndReason: ChoiceEndReason.TOOL_USE,
+            chunkText: "Here's the second chart:",
+            tool: { name: 'recharts', id: 'tool_recharts_01', parameters: JSON.stringify({ definition: '{}' }) },
+            usage: { input_tokens: 12, output_tokens: 4 },
+          },
+        ],
+      }),
+      asBedrockInvokeBody(nonStreamingTextChunk('Done.')),
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _bedrockRuntime: any })._bedrockRuntime = {
+      send: async () => ({ body: bodies[callIndex++] }),
+    };
+
+    const messages: IMessage[] = [{ role: 'user', content: 'two charts please' }];
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      TEST_MODEL,
+      messages,
+      { stream: false, tools: [mermaidTool, rechartsTool], executeTools: true } as Partial<ICompletionOptions>,
+      cb
+    );
+
+    const clientText = calls
+      .flatMap(c => c.text)
+      .filter((r): r is string => typeof r === 'string')
+      .join('');
+    const firstChartIndex = clientText.indexOf('identifier="mermaid-1"');
+    const introIndex = clientText.indexOf("Here's the second chart:");
+    const secondChartIndex = clientText.indexOf('identifier="chart-1"');
+    expect(firstChartIndex).toBeGreaterThanOrEqual(0);
+    expect(introIndex).toBeGreaterThan(firstChartIndex);
+    expect(secondChartIndex).toBeGreaterThan(introIndex);
+    expect(clientText.indexOf('Done.')).toBeGreaterThan(secondChartIndex);
+  });
+
   it('pin: a genuinely NEW artifact the model composes in its own reply text is not mistaken for an echo', async () => {
     // Regression: the echo backstop used to strip EVERY complete <artifact> block from the
     // buffered reply, not just ones matching an artifact already delivered this turn - so a
