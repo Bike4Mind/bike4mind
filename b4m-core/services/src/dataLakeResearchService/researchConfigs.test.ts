@@ -136,7 +136,7 @@ describe('createResearchConfig', () => {
     );
   });
 
-  // #3298: creating a research config left no trace in the lake's History tab.
+  // Creating a research config left no trace in the lake's History tab.
   it('records a create-research-config history event naming the config', async () => {
     const { adapters, record } = makeAdapters();
 
@@ -152,7 +152,7 @@ describe('createResearchConfig', () => {
     );
   });
 
-  // #3298 follow-up: a curator's write used to record as `system` because nothing passed the
+  // Follow-up: a curator's write used to record as `system` because nothing passed the
   // gate's own grants through - pinned here so a regression back to an internal re-fetch (which
   // silently returns [] without a wired grant repo) fails loudly.
   it('records the manage rung the passed-in grants actually authorize, not `system`', async () => {
