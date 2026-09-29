@@ -7,7 +7,10 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 // anything outside the set is rejected (falls back to the unrewritten spec).
 const HOST_CHARSET = /^[A-Za-z0-9._\-:[\]]+$/;
 
-export type OpenApiSpecInput = { servers?: ReadonlyArray<{ url?: string }> };
+// The generated document's server objects carry a description (and may carry more), so
+// the element keeps an index signature: without it, the emitters' literals fail
+// excess-property checking.
+export type OpenApiSpecInput = { servers?: ReadonlyArray<{ url?: string } & Record<string, unknown>> };
 
 // The type of the generated deploymentOpenApi.generated.ts. Both of its emitters
 // (generate-premium-glue.mjs and common's generateDeployment.ts) import it by name
