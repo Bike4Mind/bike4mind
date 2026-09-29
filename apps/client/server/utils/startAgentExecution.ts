@@ -353,9 +353,11 @@ export async function startAgentExecution(
 
   logger.info('[Start] Created execution, dispatching executor', { executionId, persistedQuestId });
 
-  // Invoke the agent executor (async - don't wait for completion). If the
-  // invoke throws (throttle, IAM, network), tear down the dispatch-time Quest so we
-  // don't leak a `pending` bubble with no reply and no iteration trace. The
+  // Invoke the agent executor (async - don't wait for completion). If dispatch is
+  // refused (a Lambda invoke error, or an HTTP `AgentExecutorRejectedError`), tear down
+  // the dispatch-time Quest so we don't leak a `pending` bubble with no reply and no
+  // iteration trace. An HTTP failure that is not a rejection (network, timeout, 5xx)
+  // leaves acceptance unconfirmed, so it keeps the Quest and returns early. Either way the
   // AgentExecution doc lingers as `pending`; the stale-active sweep above reaps it on
   // the next start by the same user.
   try {
