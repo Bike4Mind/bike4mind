@@ -25,6 +25,7 @@ import type {
   UpdateProjectRequest,
   UpdateProjectResult,
 } from './chat';
+import type { SkillsState } from './skills';
 
 /**
  * IPC contract shared by the main process and the preload bridge.
@@ -89,6 +90,13 @@ export const IPC_CHANNELS = {
   /** main -> renderer push; one session started or stopped being busy. */
   chatSessionStatus: 'chat:session-status',
   chatGetPendingApprovals: 'chat:get-pending-approvals',
+  chatListSkills: 'chat:list-skills',
+  /**
+   * The one way a project's skills become loadable. Renderer -> main only, driven by the
+   * picker's trust prompt: a project skill is instruction text that arrived with a clone, so
+   * nothing the MODEL can reach may widen this - the same rule as toolsGrantAccess.
+   */
+  chatSetProjectSkillsTrusted: 'chat:set-project-skills-trusted',
   /** main -> renderer push; the whole set of approvals waiting on the user, whenever it moves. */
   chatPendingApprovals: 'chat:pending-approvals',
   mcpGetServers: 'mcp:get-servers',
@@ -247,6 +255,18 @@ export interface DesktopApi {
     getPendingApprovals(): Promise<ChatPendingApproval[]>;
     /** Subscribe to the pending-approval set; returns the unsubscribe. */
     onPendingApprovals(listener: (pending: ChatPendingApproval[]) => void): () => void;
+    /**
+     * The skills this conversation can run as `/name`, for the composer picker. Scoped to the
+     * session: a Chat session gets the user's own, a Code session also gets its project's once
+     * that project is trusted.
+     */
+    listSkills(sessionId: string): Promise<SkillsState>;
+    /**
+     * Trust (or untrust) this session's project to contribute its `.claude/skills/`. Called from
+     * the picker's prompt in response to a click, and from nowhere else - see IPC_CHANNELS.
+     * Returns the state the picker should now draw.
+     */
+    setProjectSkillsTrusted(sessionId: string, trusted: boolean): Promise<SkillsState>;
   };
   files: {
     /**

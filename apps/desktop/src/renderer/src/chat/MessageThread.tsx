@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -75,6 +75,8 @@ function StopReasonRow({ reason, onContinue }: { reason?: string; onContinue?: (
  */
 function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: string | null }) {
   const attachments = message.attachments ?? [];
+  const skill = message.skill;
+  const [expanded, setExpanded] = useState(false);
 
   return (
     <Stack direction="row" justifyContent="flex-end">
@@ -91,14 +93,48 @@ function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: str
             <AttachmentRow sessionId={sessionId} attachments={attachments} />
           </Box>
         )}
-        {/* Literal, where a reply is markdown: this is what the user typed, and rendering it
-            would change it. In a Code session they type paths and identifiers, and
-            some_file_name would come back as some<em>file</em>name with the underscores eaten.
-            A reply is a model writing markdown on purpose; this is not. */}
-        {message.content && (
-          <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-            {message.content}
-          </Typography>
+
+        {/* A skill turn shows the INVOCATION, because that is the sentence the user wrote. The
+            expanded body is what was sent and stays reachable, folded away: a page of someone
+            else's instructions where a one-line prompt belongs makes the thread unreadable, and
+            hiding it outright would leave no way to see what the model was actually told. */}
+        {skill ? (
+          <Stack spacing={0.75} sx={{ minWidth: 0 }}>
+            <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+              <Typography level="title-sm" data-testid="chat-message-skill">
+                /{skill.name}
+                {skill.args ? ` ${skill.args}` : ''}
+              </Typography>
+              <Chip size="sm" variant="soft" color={skill.source === 'project' ? 'warning' : 'neutral'}>
+                {skill.source} skill
+              </Chip>
+            </Stack>
+            <Box>
+              <Typography
+                level="body-xs"
+                sx={{ cursor: 'pointer', textDecoration: 'underline' }}
+                onClick={() => setExpanded(current => !current)}
+                data-testid="chat-message-skill-toggle"
+              >
+                {expanded ? 'Hide what was sent' : 'Show what was sent'}
+              </Typography>
+              {expanded && (
+                <Typography level="body-xs" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', mt: 0.5 }}>
+                  {message.content}
+                </Typography>
+              )}
+            </Box>
+          </Stack>
+        ) : (
+          /* Literal, where a reply is markdown: this is what the user typed, and rendering it
+             would change it. In a Code session they type paths and identifiers, and
+             some_file_name would come back as some<em>file</em>name with the underscores eaten.
+             A reply is a model writing markdown on purpose; this is not. */
+          message.content && (
+            <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {message.content}
+            </Typography>
+          )
         )}
       </Sheet>
     </Stack>

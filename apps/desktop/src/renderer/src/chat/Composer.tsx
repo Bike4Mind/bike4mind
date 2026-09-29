@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -11,7 +11,10 @@ import { AttachmentRow } from './Attachments';
 import { contentColumnSx } from './layout';
 import { QueuedMessageList } from './QueuedMessageList';
 import { mergeIntoDraft } from './queuedMessages';
+import { matchSkills, skillQuery } from './skillMenu';
+import { SkillPicker } from './SkillPicker';
 import { toAttachmentInputs, type AttachmentDraft } from './useAttachments';
+import type { SkillsController } from './useSkills';
 
 export function Composer({
   sessionId,
@@ -29,6 +32,7 @@ export function Composer({
   onReturnedConsumed,
   footer,
   leading,
+  skills,
 }: {
   sessionId: string | null;
   disabled: boolean;
@@ -69,8 +73,14 @@ export function Composer({
    * permission they will forget they granted.
    */
   leading?: ReactNode;
+  /**
+   * The skills `/name` can run here. Omitted in tests and in any host that has none, which
+   * simply leaves `/` an ordinary character.
+   */
+  skills?: SkillsController;
 }) {
   const [text, setText] = useState('');
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const hasContent = text.trim().length > 0 || attachments.attachments.length > 0;
   const blocked = !!blockedReason || !!notReady;
@@ -96,8 +106,78 @@ export function Composer({
     onReturnedConsumed?.();
   }, [returned, onReturnedConsumed]);
 
+  /**
+   * The `/` menu.
+   *
+   * Open is DERIVED from the text rather than stored, so there is no state to get out of step
+   * with what is on screen: the menu is showing exactly when the whole input is a bare `/token`
+   * (see skillQuery). Escape is the one thing that needs memory, and it is remembered against
+   * the text that was dismissed - so typing another character brings the menu back, which is
+   * what makes Escape "not this one" rather than "not until I reload".
+   */
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  const query = skills && !disabled ? skillQuery(text) : null;
+  const pickerOpen = query !== null && dismissed !== text;
+  const matches = useMemo(() => (skills && query !== null ? matchSkills(skills.skills, query) : []), [skills, query]);
+
+  // Whenever the filter changes the old highlight means nothing: it pointed into a different
+  // list, and leaving it would arm Enter with whatever now happens to sit at that index.
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [query]);
+
+  // Re-read on the keystroke that opens the menu, not on an interval: a skill written since the
+  // window opened should be there, and this is the only moment anyone is looking.
+  const justOpened = useRef(false);
+  useEffect(() => {
+    if (!pickerOpen) {
+      justOpened.current = false;
+      return;
+    }
+    if (justOpened.current) return;
+    justOpened.current = true;
+    void skills?.refresh();
+  }, [pickerOpen, skills]);
+
+  const pick = (name: string) => {
+    // The trailing space is what closes the menu (the text is no longer a bare token) and what
+    // leaves the user positioned to type arguments.
+    setText(`/${name} `);
+    setDismissed(null);
+    textareaRef.current?.focus();
+  };
+
   // Enter sends, Shift+Enter breaks the line - the convention every chat client here shares.
+  // While the skill menu is open the same keys drive it instead, because that is the list the
+  // user is looking at; everything else falls through to the textarea untouched.
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (pickerOpen) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setDismissed(text);
+        return;
+      }
+      if (matches.length > 0) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setActiveIndex(current => (current + 1) % matches.length);
+          return;
+        }
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setActiveIndex(current => (current - 1 + matches.length) % matches.length);
+          return;
+        }
+        if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
+          event.preventDefault();
+          pick(matches[Math.min(activeIndex, matches.length - 1)].name);
+          return;
+        }
+      }
+    }
+
     if (event.key !== 'Enter' || event.shiftKey) return;
     event.preventDefault();
     submit();
@@ -158,6 +238,18 @@ export function Composer({
         </Box>
       )}
 
+      {/* Above the input, where an autocomplete belongs: the list has to sit between what was
+          typed and the transcript, not cover the transcript the user is answering. */}
+      {pickerOpen && skills && (
+        <SkillPicker
+          skills={matches}
+          activeIndex={activeIndex}
+          untrustedProject={skills.untrustedProject}
+          onPick={skill => pick(skill.name)}
+          onTrustProject={() => void skills.trustProject()}
+        />
+      )}
+
       <Stack direction="row" spacing={1} alignItems="flex-end" sx={{ ...contentColumnSx, pt: 1.5 }}>
         <Textarea
           value={text}
@@ -170,7 +262,7 @@ export function Composer({
           sx={{ flex: 1 }}
           // onPaste goes on the inner textarea, not Joy's root: the root is a div, and typing
           // the handler for it would lose the element the paste actually happened in.
-          slotProps={{ textarea: { 'data-testid': 'chat-composer-input', onPaste } }}
+          slotProps={{ textarea: { 'data-testid': 'chat-composer-input', onPaste, ref: textareaRef } }}
         />
 
         {/* Both at once while a reply runs: stopping this turn and queueing the next one are

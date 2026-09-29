@@ -24,6 +24,7 @@ import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
 import { useConversation, useModelCatalog, usePendingApprovals, useSessionStatuses, useSessions } from './useChat';
 import { useFileDrop } from './useFileDrop';
+import { useSkills } from './useSkills';
 
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -109,6 +110,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   const [mode, setMode] = useState<ChatSessionMode>('chat');
   const conversation = useConversation(activeId, apply);
   const background = useBackgroundProcesses(activeId);
+  const skills = useSkills(activeId);
   const catalog = useModelCatalog();
   const statuses = useSessionStatuses();
   const pendingApprovals = usePendingApprovals();
@@ -392,6 +394,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
             onCancelQueued={conversation.cancelQueued}
             returned={conversation.returned}
             onReturnedConsumed={conversation.clearReturned}
+            skills={skills}
             leading={
               <ApprovalModePill
                 mode={conversation.session?.approvalMode ?? 'ask'}

@@ -9,6 +9,8 @@
  * Credential-free like @shared/auth, for the same reason - see src/shared/ipc.ts.
  */
 
+import type { SkillSource } from './skills';
+
 export type ChatRole = 'user' | 'assistant';
 
 export type ChatToolStatus = 'awaiting-approval' | 'running' | 'done' | 'error' | 'denied';
@@ -316,6 +318,25 @@ export interface ChatMessage {
    * its own artifact on a follow-up while the body is stored exactly once.
    */
   artifacts?: ChatArtifact[];
+  /**
+   * Set when this user turn was a `/skill` invocation rather than typed prose.
+   *
+   * `content` still holds the EXPANDED body, because that is what the model was asked and the
+   * transcript is what the next request replays - storing the short form would mean the model
+   * loses the instructions it was following on the very next turn. This field is what lets the
+   * thread draw the turn as "/review src/foo.ts" with the expansion folded away, so the user can
+   * see which skill ran instead of a screen of prose they never wrote.
+   */
+  skill?: ChatMessageSkill;
+}
+
+/** Which skill a user turn ran. See ChatMessage.skill. */
+export interface ChatMessageSkill {
+  name: string;
+  /** Whatever followed the name, verbatim. Absent when the skill was run bare. */
+  args?: string;
+  /** 'project' means these instructions came out of the repository, not the user's own folder. */
+  source: SkillSource;
 }
 
 export type BackgroundProcessStatus = 'running' | 'exited' | 'killed' | 'failed';

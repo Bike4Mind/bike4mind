@@ -27,6 +27,9 @@
     "b4m": "./bin/bike4mind-cli.mjs",
     "bike4mind": "./bin/bike4mind-cli.mjs"
   },
+  "exports": {
+    "./skills": "./src/skills/index.ts"
+  },
   "files": [
     "dist",
     "bin"

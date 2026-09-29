@@ -7,6 +7,7 @@ import type {
   ChatAttachment,
   ChatMedia,
   ChatMessage,
+  ChatMessageSkill,
   ChatModelCatalog,
   ChatModelOption,
   ChatPendingApproval,
@@ -27,6 +28,7 @@ import type {
   UpdateProjectResult,
 } from '@shared/chat';
 import { isTurnBudgetStop } from '@shared/chat';
+import { NO_SKILLS, type SkillsState } from '@shared/skills';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
@@ -41,6 +43,8 @@ import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
 import type { SessionActivity } from './SessionActivity';
 import { isValidSessionId, type SessionStore } from './SessionStore';
+import { expandSkill, parseSkillInvocation } from './skills/expand';
+import type { SkillCatalog } from './skills/SkillCatalog';
 import type { McpManager } from './mcp/McpManager';
 import type { AccessStore } from './tools/AccessStore';
 import type { ApprovalGate } from './tools/ApprovalGate';
@@ -182,6 +186,11 @@ export interface ChatServiceDeps {
    * artifacts are still parsed and shown - they simply exist only on this machine.
    */
   artifacts?: ArtifactPublisher;
+  /**
+   * Skills the composer can run as `/name`. Absent in tests, and in that case a message starting
+   * with a slash is sent to the model verbatim, exactly as before skills existed.
+   */
+  skills?: SkillCatalog;
   /**
    * Tightens a turn's budget. Only tests set it: exercising a guard whose production values are
    * hundreds of rounds and half an hour of wall clock is not something a unit test can afford
@@ -487,6 +496,35 @@ export class ChatService {
     return this.deps.store.removeContextDirectory(sessionId, directory);
   }
 
+  /**
+   * The skills this conversation can run, for the composer's picker.
+   *
+   * Scoped the same way the tools are: a Chat session has no project binding at all, so it is
+   * asked for global skills only and a repo skill is never OFFERED where it could not run. A
+   * Code session passes its working directory - the worktree when it has one, which is the
+   * checkout whose `.claude/skills/` the turn would actually execute against.
+   */
+  async listSkills(sessionId: string): Promise<SkillsState> {
+    if (!this.deps.skills) return NO_SKILLS;
+    const session = await this.deps.store.get(sessionId);
+    if (!session) return NO_SKILLS;
+    return this.deps.skills.state(session.project?.workingDirectory ?? null);
+  }
+
+  /**
+   * Record that the user trusts (or no longer trusts) this session's project to contribute
+   * skills. Refused for a session with no project, so there is no path that can trust a
+   * directory the user has not bound a conversation to.
+   */
+  async setProjectSkillsTrusted(sessionId: string, trusted: boolean): Promise<SkillsState> {
+    if (!this.deps.skills) return NO_SKILLS;
+    const session = await this.deps.store.get(sessionId);
+    const root = session?.project?.workingDirectory;
+    if (!root) return this.listSkills(sessionId);
+    await this.deps.skills.setTrusted(root, trusted);
+    return this.deps.skills.state(root);
+  }
+
   getSession(sessionId: string): Promise<ChatSession | null> {
     return this.deps.store.get(sessionId);
   }
@@ -579,6 +617,28 @@ export class ChatService {
     }
 
     /**
+     * A `/name ...` turn runs a skill instead of being sent as typed.
+     *
+     * Resolved HERE, before the queue, so an unknown name is refused while the user is still
+     * looking at what they typed rather than minutes later when the queue drains. The expansion
+     * itself waits until the turn actually goes out (below): it reads `@file` references off
+     * disk, and doing that for a message that is about to sit in the queue would capture files
+     * as they were when it was typed rather than when it runs.
+     *
+     * Anything that is not an invocation falls through untouched, including a message that
+     * merely starts with a slash - see parseSkillInvocation.
+     */
+    const invocation = this.deps.skills ? parseSkillInvocation(prompt) : null;
+    const skillCommand = invocation
+      ? await this.deps.skills?.get(existing.project?.workingDirectory ?? null, invocation.name)
+      : undefined;
+    if (invocation && !skillCommand) {
+      // Named rather than silently sent as prose: a skill the user believes ran, which in fact
+      // reached the model as the literal text "/deploy", is the one outcome worth refusing over.
+      return { ok: false, error: `No skill called /${invocation.name}. Type / to see what is available.` };
+    }
+
+    /**
      * Typing ahead. Decided HERE rather than in the renderer: a reply that finishes between a
      * renderer-side "is it streaming?" check and this call would otherwise queue a message
      * behind a turn that has already ended, and nothing would ever release it.
@@ -608,12 +668,29 @@ export class ChatService {
     const refusal = this.refuseUnreadableImages(reconciled.model, attached);
     if (refusal) return { ok: false, error: refusal };
 
+    // The skill's body becomes the turn, and `skill` records which one so the thread can show
+    // "/review src/foo.ts" rather than the page of instructions that was actually sent.
+    let content = prompt;
+    let skill: ChatMessageSkill | undefined;
+    if (invocation && skillCommand) {
+      const scope = await this.resolveToolScope(existing);
+      const expanded = await expandSkill(skillCommand, invocation.args, scope.roots, scope.workingDirectory);
+      if (!expanded.body.trim()) return { ok: false, error: `/${invocation.name} has an empty body.` };
+      content = expanded.body;
+      skill = {
+        name: skillCommand.name,
+        source: skillCommand.source === 'project' ? 'project' : 'global',
+        ...(invocation.args ? { args: invocation.args } : {}),
+      };
+    }
+
     const userMessage: ChatMessage = {
       id: randomUUID(),
       role: 'user',
-      content: prompt,
+      content,
       createdAt: new Date().toISOString(),
       ...(attached.length > 0 ? { attachments: attached } : {}),
+      ...(skill ? { skill } : {}),
     };
 
     const session = await this.deps.store.appendMessage(sessionId, userMessage);

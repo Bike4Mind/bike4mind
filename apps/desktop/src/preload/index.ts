@@ -104,6 +104,9 @@ const api: DesktopApi = {
       ipcRenderer.on(IPC_CHANNELS.chatPendingApprovals, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.chatPendingApprovals, handler);
     },
+    listSkills: sessionId => ipcRenderer.invoke(IPC_CHANNELS.chatListSkills, sessionId),
+    setProjectSkillsTrusted: (sessionId, trusted) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetProjectSkillsTrusted, sessionId, trusted),
   },
   files: {
     // Electron removed File.path in v32; webUtils is the replacement and it only works on this
