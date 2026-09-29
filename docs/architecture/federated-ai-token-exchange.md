@@ -1,27 +1,72 @@
 # Federated AI-token exchange
 
 `POST /api/oauth/ai-token` lets a registered OAuth client trade an ID token for its
-logged-in user against a short-lived, revocable `ai:generate` API key scoped to that
-user. The app then calls `/api/ai/v1/completions` with the key as `X-API-Key`, so
+logged-in user against a short-lived, revocable API key scoped to that user.
+The default scope is `ai:generate`. The app then calls `/api/ai/v1/completions` with the key as `X-API-Key`, so
 completions bill the user's own B4M credits ("user-pays") with no manual key paste.
 
 Only a client whose registration carries a `federatedIdp` trust config may use the
 exchange. Everything else about the endpoint (consent gate, per-client rate limit,
 reuse-or-replace of the prior key, mint audit entry) is common to every client.
 
+## Requesting scopes
+
+Send `client_id`, `client_secret`, and `id_token` in the POST body. The optional
+`scope` field is a space-separated list; omitting it defaults to `ai:generate`.
+This exchange supports only `ai:generate` and `me:read`, individually or together:
+
+```json
+{
+  "client_id": "<registered client id>",
+  "client_secret": "<client secret>",
+  "id_token": "<user ID token>",
+  "scope": "ai:generate me:read"
+}
+```
+
+Every requested scope must also appear in the client's `allowedScopes`. OIDC
+scopes (`openid`, `email`, `profile`) and other API-key scopes are not supported
+here, even if registered. Empty or whitespace-only scope strings are rejected.
+Scope validation runs before revoking the previous exchange key. A successful
+exchange replaces the previous key for that user/client pair, including when the
+requested scopes differ, and returns the minted scopes in the response's `scope`.
+
+## Grant enforcement and rollout
+
+The SST `production` and `dev` stages enforce grants automatically. Other stages
+use grace mode unless `OAUTH_AI_TOKEN_ENFORCE_GRANT=true`; in grace mode missing
+grants or AI consent produce warnings rather than rejection. The environment
+override cannot disable enforcement in `production` or `dev`.
+
+In enforcement mode, relying-party clients need a durable OAuth grant for the
+user/client pair. Requests containing `ai:generate` additionally require that
+scope in the grant. A `me:read`-only request needs an existing grant but does not
+require `me:read` coverage. First-party clients are exempt from the grant check;
+client registration and policy acceptance checks still apply.
+
+Before deployment, verify existing client registrations contain their requested
+API-key scopes. Newly seeded federated clients include both supported scopes;
+re-running the seed script does not update an existing registration. Check grace
+warnings for relying parties that need re-authorization before enabling enforcement.
+
+For `access_denied` due to missing grants or AI consent, send the user through the
+OAuth authorization flow requesting the needed scope. Refreshing or re-exchanging
+an ID token does not create a grant. A grant lookup failure returns 503 in
+enforcement mode; retry after the underlying service recovers.
+
 ## The two issuer shapes
 
 The client's `federatedIdp.subjectSource` decides how the presented token is verified.
 
-| | `'identities'` (default) | `'sub'` |
-|---|---|---|
-| Who signed the token | the app's own AWS Cognito pool, which federates B4M upstream | B4M's OIDC provider |
-| `issuer` | `https://cognito-idp.<region>.amazonaws.com/<poolId>` | B4M's `APP_URL` |
-| `audience` | the Cognito app-client id | the B4M `client_id` the token was issued to |
-| `jwksUri` | optional; defaults to `${issuer}/.well-known/jwks.json` | **required, stated explicitly** |
-| `providerName` | required; names the `identities[]` entry to read | unused |
-| `token_use` | must be `id` | absent; not asserted |
-| B4M user id comes from | `identities[].userId` of the matching provider | `sub` |
+|                        | `'identities'` (default)                                     | `'sub'`                                     |
+| ---------------------- | ------------------------------------------------------------ | ------------------------------------------- |
+| Who signed the token   | the app's own AWS Cognito pool, which federates B4M upstream | B4M's OIDC provider                         |
+| `issuer`               | `https://cognito-idp.<region>.amazonaws.com/<poolId>`        | B4M's `APP_URL`                             |
+| `audience`             | the Cognito app-client id                                    | the B4M `client_id` the token was issued to |
+| `jwksUri`              | optional; defaults to `${issuer}/.well-known/jwks.json`      | **required, stated explicitly**             |
+| `providerName`         | required; names the `identities[]` entry to read             | unused                                      |
+| `token_use`            | must be `id`                                                 | absent; not asserted                        |
+| B4M user id comes from | `identities[].userId` of the matching provider               | `sub`                                       |
 
 An app is on the `'sub'` row when it signs users in directly against B4M rather than
 standing up a Cognito pool in front of it. `subjectSource` is absent (`'identities'`)
@@ -30,7 +75,7 @@ path; the field is set explicitly at registration time, not inferred from the to
 
 Both shapes verify through `aws-jwt-verify`, which checks the RS256 signature against
 the JWKS and asserts `iss`, `aud`, `exp` and `iat`. That is also what rejects a B4M
-*access* token presented in place of an ID token: access tokens are HS256 session JWTs
+_access_ token presented in place of an ID token: access tokens are HS256 session JWTs
 with no corresponding JWKS key.
 
 Implementation: `apps/client/server/auth/verifyFederatedIdToken.ts`.
@@ -73,11 +118,15 @@ instead, and leave `FEDERATED_JWKS_URI` unset.
 
 ## Failure modes
 
-| Condition | Response |
-|---|---|
-| unknown client or bad `client_secret` | 401 `invalid_client` |
-| client has no `federatedIdp` | 403 `access_denied` |
-| per-client mint budget exhausted | 429 `temporarily_unavailable` |
-| wrong issuer, wrong audience, expired, bad signature, access token in place of an ID token, non-`id` `token_use` on an `'identities'` config, a `'sub'` config without `jwksUri`, an `'identities'` config without `providerName` | 401 `invalid_grant` |
-| subject resolves to no B4M user | 401 `invalid_grant` |
-| user has not accepted the AUP/ToS | 403 `access_denied` |
+| Condition                                                                                                                                                                                                                         | Response                      |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| unknown client or bad `client_secret`                                                                                                                                                                                             | 401 `invalid_client`          |
+| client has no `federatedIdp`                                                                                                                                                                                                      | 403 `access_denied`           |
+| empty, whitespace-only, or non-string `scope`                                                                                                                                                                                     | 400 `invalid_request`         |
+| scope unsupported by the exchange or absent from the client's registration                                                                                                                                                        | 403 `invalid_scope`           |
+| relying-party grant missing, or requested `ai:generate` not consented (enforcement mode)                                                                                                                                          | 403 `access_denied`           |
+| grant lookup fails (enforcement mode)                                                                                                                                                                                             | 503 `temporarily_unavailable` |
+| per-client mint budget exhausted                                                                                                                                                                                                  | 429 `temporarily_unavailable` |
+| wrong issuer, wrong audience, expired, bad signature, access token in place of an ID token, non-`id` `token_use` on an `'identities'` config, a `'sub'` config without `jwksUri`, an `'identities'` config without `providerName` | 401 `invalid_grant`           |
+| subject resolves to no B4M user                                                                                                                                                                                                   | 401 `invalid_grant`           |
+| user has not accepted the AUP/ToS                                                                                                                                                                                                 | 403 `access_denied`           |

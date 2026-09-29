@@ -50,8 +50,11 @@ const AiTokenRequestSchema = z.object({
    * Every requested scope must appear in the client's registered `allowedScopes`. Scopes that
    * authorize spend (ai:generate) additionally require a durable OAuthGrant in enforce mode.
    */
-  scope: z.string().min(1).optional(),
+  scope: z.string().trim().min(1).optional(),
 });
+
+// Keep this exchange limited to scopes whose mint and consent requirements it implements.
+const AiTokenScopesSchema = z.array(z.enum([ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ])).min(1);
 
 /**
  * Scopes that authorize provider spend. A durable OAuthGrant must cover these when grant
@@ -94,7 +97,6 @@ const handler = baseApi({ auth: false })
     }
 
     const { client_id, client_secret, id_token, scope } = parsed.data;
-    const requestedScopes = (scope ?? ApiKeyScope.AI_GENERATE).split(' ').filter(Boolean);
 
     // 1. Client auth - verify the secret directly. Unlike the code exchange we send
     //    no redirect_uri, so we skip validateClientSecret (which also demands one).
@@ -113,6 +115,15 @@ const handler = baseApi({ auth: false })
         error_description: 'Client is not configured for federated AI-token exchange',
       });
     }
+
+    const parsedScopes = AiTokenScopesSchema.safeParse((scope ?? ApiKeyScope.AI_GENERATE).split(' ').filter(Boolean));
+    if (!parsedScopes.success) {
+      return res.status(403).json({
+        error: 'invalid_scope',
+        error_description: 'This exchange supports only ai:generate and me:read scopes',
+      });
+    }
+    const requestedScopes = parsedScopes.data;
 
     // 2.5. Scope gate - every requested scope must appear in the client's registered allowedScopes.
     //      Mirrors code.ts (RFC 6749 4.1.2.1): a clear 403 is better than silently narrowing the
@@ -284,7 +295,7 @@ const handler = baseApi({ auth: false })
       b4mUserId,
       {
         name: `AI (federated: ${client.name})`,
-        scopes: requestedScopes as ApiKeyScope[],
+        scopes: requestedScopes,
         expiresAt: new Date(Date.now() + AI_TOKEN_TTL_SECONDS * 1000),
         metadata: {
           clientIP: clientIp,

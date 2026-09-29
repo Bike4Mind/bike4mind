@@ -368,13 +368,13 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
 
   describe('allowedScopes enforcement (step 2.5)', () => {
     it('scope not in allowedScopes → 403 invalid_scope, no mint', async () => {
-      // Client has no 'admin:write' in its allowedScopes - must be rejected before any further work.
-      const { req, res } = makeReq({ ...VALID_BODY, scope: 'ai:generate admin:write' });
+      mockVerifyClientSecret.mockResolvedValue({ ...FEDERATED_CLIENT, allowedScopes: ['ai:generate'] });
+      const { req, res } = makeReq({ ...VALID_BODY, scope: 'ai:generate me:read' });
       await handler(req as any, res as any);
 
       expect(res._getStatusCode()).toBe(403);
       expect(res._getJSONData().error).toBe('invalid_scope');
-      expect(res._getJSONData().error_description).toContain('admin:write');
+      expect(res._getJSONData().error_description).toContain('me:read');
       expect(mockCreateUserApiKey).not.toHaveBeenCalled();
     });
 
@@ -398,6 +398,82 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
       expect(data.scope).toBe('ai:generate me:read');
       const [, params] = mockCreateUserApiKey.mock.calls[0];
       expect(params.scopes).toEqual(['ai:generate', 'me:read']);
+    });
+  });
+
+  describe('scope validation before key rotation', () => {
+    beforeEach(() => {
+      process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
+      mockFindByUserId.mockResolvedValue([
+        { id: 'old-key', status: 'active', metadata: { createdFrom: 'oauth-exchange', oauthClientId: 'client-1' } },
+      ]);
+    });
+
+    it.each(['', ' ', '   ', '\t', '\n', null, 42])('rejects malformed scope %j without revoking', async scope => {
+      const { req, res } = makeReq({ ...VALID_BODY, scope });
+      await handler(req as unknown as Parameters<typeof handler>[0], res as unknown as Parameters<typeof handler>[1]);
+
+      expect(res._getStatusCode()).toBe(400);
+      expect(res._getJSONData().error).toBe('invalid_request');
+      expect(mockFindByUserId).not.toHaveBeenCalled();
+      expect(mockRevokeUserApiKey).not.toHaveBeenCalled();
+      expect(mockCreateUserApiKey).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      'openid',
+      'email',
+      'profile',
+      'ai:generate openid',
+      'ai:chat',
+      'optihashi:compute',
+      'datalake:query',
+      'admin:*',
+      'embed:chat',
+      'overwatch-ingest:write',
+      'cc-bridge:connect',
+      'AI:GENERATE',
+      'ai:generate\tme:read',
+      'unknown:scope',
+    ])('rejects registered but unsupported scope %j without revoking', async scope => {
+      mockVerifyClientSecret.mockResolvedValue({
+        ...FEDERATED_CLIENT,
+        allowedScopes: [...FEDERATED_CLIENT.allowedScopes, ...scope.split(' ')],
+      });
+      mockFindGrant.mockResolvedValue({ userId: 'b4m-user-1', clientId: 'client-1', scopes: ['openid'] });
+      const { req, res } = makeReq({ ...VALID_BODY, scope });
+      await handler(req as unknown as Parameters<typeof handler>[0], res as unknown as Parameters<typeof handler>[1]);
+
+      expect(res._getStatusCode()).toBe(403);
+      expect(res._getJSONData().error).toBe('invalid_scope');
+      expect(mockVerifyIdToken).not.toHaveBeenCalled();
+      expect(mockFindByUserId).not.toHaveBeenCalled();
+      expect(mockRevokeUserApiKey).not.toHaveBeenCalled();
+      expect(mockCreateUserApiKey).not.toHaveBeenCalled();
+    });
+
+    it('accepts surrounding and repeated spaces in a supported scope set', async () => {
+      const { req, res } = makeReq({ ...VALID_BODY, scope: '  ai:generate  me:read  ' });
+      await handler(req as unknown as Parameters<typeof handler>[0], res as unknown as Parameters<typeof handler>[1]);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().scope).toBe('ai:generate me:read');
+      expect(mockCreateUserApiKey).toHaveBeenCalledWith(
+        'b4m-user-1',
+        expect.objectContaining({ scopes: ['ai:generate', 'me:read'] }),
+        expect.anything()
+      );
+    });
+
+    it('requires AI consent for a mixed supported scope set', async () => {
+      mockFindGrant.mockResolvedValue({ userId: 'b4m-user-1', clientId: 'client-1', scopes: ['openid'] });
+      const { req, res } = makeReq({ ...VALID_BODY, scope: 'ai:generate me:read' });
+      await handler(req as unknown as Parameters<typeof handler>[0], res as unknown as Parameters<typeof handler>[1]);
+
+      expect(res._getStatusCode()).toBe(403);
+      expect(res._getJSONData().error).toBe('access_denied');
+      expect(mockRevokeUserApiKey).not.toHaveBeenCalled();
+      expect(mockCreateUserApiKey).not.toHaveBeenCalled();
     });
   });
 
