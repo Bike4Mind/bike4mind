@@ -112,6 +112,192 @@ const rewardState = (gear: GearStatus): RewardState => {
 };
 
 /**
+ * The reward marker in a card's top-right corner, and again in the long-form
+ * view's header, so opening a card never hides what it pays or lets it be claimed.
+ * The ONLY thing on a card that knows whether the gear is earned: the card itself
+ * stays identical either way - greying the whole card out said "this is spent",
+ * when what is spent is the reward.
+ */
+const RewardChip = ({
+  gear,
+  reward,
+  onClaim,
+  labeled = false,
+}: {
+  gear: GearStatus;
+  reward: RewardState;
+  onClaim: () => void;
+  /** Spell the claim out beside the chip, for the long-form header, which has
+   *  the width a card's top row does not. */
+  labeled?: boolean;
+}) => {
+  const amount = (clickable: boolean) => (
+    <Chip
+      size="sm"
+      variant="soft"
+      color={reward === 'claimable' ? 'success' : 'neutral'}
+      startDecorator={<Bike4MindIcon size="12" />}
+      data-testid={`gear-reward-${gear.key}`}
+      {...(clickable && {
+        onClick: (event: React.MouseEvent) => {
+          event.stopPropagation();
+          onClaim();
+        },
+      })}
+      sx={theme => {
+        const { ink, stroke, fill, hoverFill, activeFill } =
+          reward === 'claimable'
+            ? rewardGreen(theme)
+            : {
+                ink: theme.palette.text.primary,
+                stroke: theme.palette.border.muted,
+                fill: grayAlpha[150][10],
+                hoverFill: grayAlpha[150][10],
+                activeFill: grayAlpha[150][10],
+              };
+        return {
+          gap: '6px',
+          '--Chip-minHeight': '24px',
+          fontSize: '13px',
+          backgroundColor: fill,
+          // A clickable Chip lays its action button over the root and paints it
+          // from these variables, so without them the green under it never shows.
+          '--variant-softBg': fill,
+          '--variant-softHoverBg': hoverFill,
+          '--variant-softActiveBg': activeFill,
+          '--variant-softColor': ink,
+          '--variant-softHoverColor': ink,
+          '--variant-softActiveColor': ink,
+          border: `1px solid ${stroke}`,
+          color: ink,
+          // Bike4MindIcon fills with var(--Icon-color), which Joy's
+          // variant would otherwise set from its own palette.
+          '--Icon-color': ink,
+        };
+      }}
+    >
+      {gear.credits.toLocaleString()}
+    </Chip>
+  );
+
+  // Text and chip are one button rather than two targets for the same action:
+  // one hit area, one tab stop, and the label reads as the button it is.
+  if (labeled && reward === 'claimable') {
+    return (
+      <Box
+        component="button"
+        data-testid={`gear-claim-${gear.key}`}
+        onClick={onClaim}
+        sx={theme => ({
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '10px',
+          p: 0,
+          border: 0,
+          background: 'none',
+          font: 'inherit',
+          fontSize: '13px',
+          fontWeight: 500,
+          color: rewardGreen(theme).ink,
+          cursor: 'pointer',
+          // The chip inside is not clickable itself, so it gets the hover and press
+          // of the clickable one from here.
+          '&:hover > span': { textDecoration: 'underline' },
+          [`&:hover .${chipClasses.root}`]: { backgroundColor: rewardGreen(theme).hoverFill },
+          [`&:active .${chipClasses.root}`]: { backgroundColor: rewardGreen(theme).activeFill },
+          '&:focus-visible': {
+            outline: `2px solid ${theme.palette.primary[500]}`,
+            outlineOffset: '2px',
+            borderRadius: '6px',
+          },
+        })}
+      >
+        <span>Claim {creditText(gear)}</span>
+        {amount(false)}
+      </Box>
+    );
+  }
+
+  return (
+    <>
+      {reward === 'pending' && (
+        <Tooltip title="Reward not claimed yet">
+          <Chip
+            size="sm"
+            variant="soft"
+            color="warning"
+            startDecorator={<Bike4MindIcon size="12" />}
+            data-testid={`gear-pending-${gear.key}`}
+            // Joy sets gap as a plain declaration per size (3px on sm), not
+            // as a variable, so it is overridden directly.
+            sx={theme => ({
+              gap: '6px',
+              '--Chip-minHeight': '24px',
+              fontSize: '13px',
+              // The chip's own text colour, as the green and grey chips are
+              // stroked in theirs.
+              border: `1px solid ${theme.palette.warning.softColor}`,
+            })}
+          >
+            {gear.credits.toLocaleString()}
+          </Chip>
+        </Tooltip>
+      )}
+      {reward === 'claimed' && (
+        <Tooltip title={`Reward claimed - ${creditText(gear)}`}>
+          <Chip
+            size="sm"
+            variant="soft"
+            color="neutral"
+            data-testid={`gear-unlocked-${gear.key}`}
+            sx={theme => ({
+              ...neutralFrame(theme),
+              '--Chip-minHeight': '24px',
+              // Joy sizes a Chip from its content plus padding-inline and
+              // caps it at `max-content`, so a circle needs the padding
+              // cancelled, the cap lifted and the width pinned - otherwise
+              // the 16px glyph plus the border wins at 18px.
+              '--Chip-paddingInline': '0px',
+              width: '24px',
+              minWidth: '24px',
+              maxWidth: '24px',
+              borderRadius: '50%',
+              justifyContent: 'center',
+              color: theme.palette.text.tertiary,
+              // Joy's label slot is an inline-block that grows to fill the
+              // chip, so the glyph inside it sits on the text baseline
+              // rather than in the middle of the circle.
+              [`& .${chipClasses.label}`]: {
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                lineHeight: 1,
+              },
+            })}
+          >
+            <CheckIcon sx={{ fontSize: '16px', display: 'block' }} />
+          </Chip>
+        </Tooltip>
+      )}
+      {/* Locked and claimable share one shape: the neutral frame says "there
+                is a reward here", and green is kept for the one state that asks for
+                something. */}
+      {(reward === 'locked' || reward === 'claimable') && gear.credits > 0 && (
+        <Tooltip
+          title={
+            reward === 'claimable'
+              ? `Claim ${creditText(gear)}`
+              : `Earn ${creditText(gear)} the first time you use this.`
+          }
+        >
+          {amount(reward === 'claimable')}
+        </Tooltip>
+      )}
+    </>
+  );
+};
+
+/**
  * Each glyph's own bounds inside MUI's 24x24 box, measured with getBBox and
  * squared off, used as the icon's viewBox.
  *
@@ -343,117 +529,7 @@ const GearsPage = () => {
                   </Box>
                   <Typography level="title-md">{gear.title}</Typography>
                 </Stack>
-                {/* The ONLY thing on the card that knows whether the gear is earned.
-                The card itself stays identical either way - greying the whole
-                card out said "this is spent", when what is spent is the reward. */}
-                {reward === 'pending' && (
-                  <Tooltip title="Reward not claimed yet">
-                    <Chip
-                      size="sm"
-                      variant="soft"
-                      color="warning"
-                      startDecorator={<Bike4MindIcon size="12" />}
-                      data-testid={`gear-pending-${gear.key}`}
-                      // Joy sets gap as a plain declaration per size (3px on sm), not
-                      // as a variable, so it is overridden directly.
-                      sx={theme => ({
-                        gap: '6px',
-                        '--Chip-minHeight': '24px',
-                        fontSize: '13px',
-                        // The chip's own text colour, as the green and grey chips are
-                        // stroked in theirs.
-                        border: `1px solid ${theme.palette.warning.softColor}`,
-                      })}
-                    >
-                      {gear.credits.toLocaleString()}
-                    </Chip>
-                  </Tooltip>
-                )}
-                {reward === 'claimed' && (
-                  <Tooltip title={`Reward claimed - ${creditText(gear)}`}>
-                    <Chip
-                      size="sm"
-                      variant="soft"
-                      color="neutral"
-                      data-testid={`gear-unlocked-${gear.key}`}
-                      sx={theme => ({
-                        ...neutralFrame(theme),
-                        '--Chip-minHeight': '24px',
-                        // Joy sizes a Chip from its content plus padding-inline and
-                        // caps it at `max-content`, so a circle needs the padding
-                        // cancelled, the cap lifted and the width pinned - otherwise
-                        // the 16px glyph plus the border wins at 18px.
-                        '--Chip-paddingInline': '0px',
-                        width: '24px',
-                        minWidth: '24px',
-                        maxWidth: '24px',
-                        borderRadius: '50%',
-                        justifyContent: 'center',
-                        color: theme.palette.text.tertiary,
-                        // Joy's label slot is an inline-block that grows to fill the
-                        // chip, so the glyph inside it sits on the text baseline
-                        // rather than in the middle of the circle.
-                        [`& .${chipClasses.label}`]: {
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          lineHeight: 1,
-                        },
-                      })}
-                    >
-                      <CheckIcon sx={{ fontSize: '16px', display: 'block' }} />
-                    </Chip>
-                  </Tooltip>
-                )}
-                {/* Locked and claimable share one shape: the neutral frame says "there
-                is a reward here", and green is kept for the one state that asks for
-                something. */}
-                {(reward === 'locked' || reward === 'claimable') && gear.credits > 0 && (
-                  <Tooltip
-                    title={
-                      reward === 'claimable'
-                        ? `Claim ${creditText(gear)}`
-                        : `Earn ${creditText(gear)} the first time you use this.`
-                    }
-                  >
-                    <Chip
-                      size="sm"
-                      variant="soft"
-                      color={reward === 'claimable' ? 'success' : 'neutral'}
-                      startDecorator={<Bike4MindIcon size="12" />}
-                      data-testid={`gear-reward-${gear.key}`}
-                      {...(reward === 'claimable' && {
-                        onClick: (event: React.MouseEvent) => {
-                          event.stopPropagation();
-                          claim(gear);
-                        },
-                      })}
-                      sx={theme => {
-                        const { ink, stroke, fill } =
-                          reward === 'claimable'
-                            ? rewardGreen(theme)
-                            : {
-                                ink: theme.palette.text.primary,
-                                stroke: theme.palette.border.muted,
-                                fill: grayAlpha[150][10],
-                              };
-                        return {
-                          gap: '6px',
-                          '--Chip-minHeight': '24px',
-                          fontSize: '13px',
-                          backgroundColor: fill,
-                          border: `1px solid ${stroke}`,
-                          color: ink,
-                          // Bike4MindIcon fills with var(--Icon-color), which Joy's
-                          // variant would otherwise set from its own palette.
-                          '--Icon-color': ink,
-                        };
-                      }}
-                    >
-                      {gear.credits.toLocaleString()}
-                    </Chip>
-                  </Tooltip>
-                )}
+                <RewardChip gear={gear} reward={reward} onClaim={() => claim(gear)} />
               </Stack>
               <Typography level="body-sm" sx={{ opacity: 0.85, mt: '16px' }}>
                 {gear.intro}
@@ -538,6 +614,7 @@ const GearsPage = () => {
         item={open}
         onBack={() => setOpenKey(null)}
         testIdPrefix="gear-detail"
+        aside={<RewardChip gear={open} reward={rewardState(open)} onClaim={() => claim(open)} labeled />}
         cta={
           <Button
             size="sm"

@@ -17,10 +17,13 @@ export const rewardGreen = (theme: Theme) => {
   // light mode gets a tint instead - the same trick the theme's border.soft uses.
   const dark = theme.palette.mode === 'dark';
   // The fill steps down in dark mode, where the same 10% glows against the surface.
+  // Hover and press each go one alpha step up from there.
   return {
     ink: dark ? green[800] : green[950],
     stroke: dark ? green[800] : greenAlpha[800][30],
     fill: dark ? greenAlpha[800][6] : greenAlpha[800][10],
+    hoverFill: dark ? greenAlpha[800][10] : greenAlpha[800][15],
+    activeFill: dark ? greenAlpha[800][15] : greenAlpha[800][20],
   };
 };
 

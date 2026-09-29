@@ -35,11 +35,14 @@ const Section = ({ heading, body }: { heading: string; body?: string }) => {
 const FeatureDetailView = ({
   item,
   cta,
+  aside,
   onBack,
   testIdPrefix,
 }: {
   item: { key: string; title: string; intro: string };
   cta: ReactNode;
+  /** Pinned to the header's right edge, e.g. the Gears reward marker. */
+  aside?: ReactNode;
   onBack: () => void;
   /** Namespaces this view's test ids, e.g. `gear-detail`. */
   testIdPrefix: string;
@@ -80,6 +83,7 @@ const FeatureDetailView = ({
         <Typography level="title-md" sx={{ fontSize: '18px', fontWeight: 500 }}>
           {item.title}
         </Typography>
+        {aside && <Box sx={{ ml: 'auto', display: 'flex', flexShrink: 0 }}>{aside}</Box>}
       </Box>
 
       <Box sx={{ p: '24px 20px 28px' }}>

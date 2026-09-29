@@ -50,6 +50,22 @@ describe('FeatureDetailView', () => {
     expect(screen.getByTestId('detail-cta')).toHaveTextContent(item.cta);
   });
 
+  it('renders the aside it is given in the header', () => {
+    const item = itemFor('mementos');
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <FeatureDetailView
+          item={item}
+          onBack={vi.fn()}
+          testIdPrefix="gear-detail"
+          cta={null}
+          aside={<span data-testid="detail-aside">100</span>}
+        />
+      </CssVarsProvider>
+    );
+    expect(screen.getByTestId('detail-aside')).toHaveTextContent('100');
+  });
+
   it('calls onBack when Back is clicked', async () => {
     const { onBack } = renderDetail('mementos');
     await userEvent.click(screen.getByTestId('gear-detail-back-btn'));
