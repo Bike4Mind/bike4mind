@@ -270,7 +270,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       title: 'Bike4Mind API',
       version,
       description: infoDescription(),
-      contact: { name: 'Bike4Mind', url: 'https://your-deployment.example.com' },
+      contact: { name: 'Bike4Mind', url: prodUrl() },
       license: { name: 'Proprietary' },
     },
     servers: servers(),
