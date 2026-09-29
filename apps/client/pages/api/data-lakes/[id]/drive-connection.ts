@@ -7,13 +7,14 @@ import {
   fabFileChunkRepository,
   fabFileRepository,
   orgGoogleDriveConnectionRepository,
+  sessionRepository,
   userRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import type { IDataLakeDocument, IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
-import { releaseDriveConnection } from '@server/integrations/google/drive/common';
+import { releaseDriveConnection, enableDriveConnectionForLake } from '@server/integrations/google/drive/common';
 import { shredMemoryForLakeTags } from '@server/dataLakes/shredMemoryForLakeTags';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { getFilesStorage } from '@server/utils/storage';
@@ -79,7 +80,12 @@ async function purgeDriveIngestedFiles(
     error: (msg: string, ...args: unknown[]) => void;
   }
 ): Promise<void> {
-  const files = await fabFileRepository.findByDriveConnectionIdInDataLake(driveConnectionId, lake.datalakeTag);
+  // findAllByDriveConnectionIdInDataLake, NOT the reconcile-scoped findByDriveConnectionIdInDataLake:
+  // the latter filters archivedAt/deletedAt for its sync-reconcile caller, which for an ARCHIVED lake
+  // (every member gets archivedAt-stamped on archive) returned nothing here - so the purge silently
+  // no-op'd while release still revoked the grant and hard-deleted the row, reproducing #3374's
+  // orphan state for archived lakes specifically. The purge needs its own, broader finder.
+  const files = await fabFileRepository.findAllByDriveConnectionIdInDataLake(driveConnectionId, lake.datalakeTag);
   if (files.length === 0) return;
   const purgingLake = { id: lake.id, datalakeTag: lake.datalakeTag, createdByUserId: lake.createdByUserId };
   await dataLakeService.purgeDataLakeConnectionFiles(dataLakeService.lakeMembershipScope(lake), files, {
@@ -88,6 +94,7 @@ async function purgeDriveIngestedFiles(
       fabFileChunks: fabFileChunkRepository,
       users: userRepository,
       dataLakeFindings: dataLakeFindingRepository,
+      sessions: sessionRepository,
     },
     // Undefined everywhere except self-host OpenSearch - Atlas's vector index lives on the
     // FabFileChunk collection itself, so the chunk delete already removes it (same wiring as the
@@ -189,18 +196,29 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       // stranding those files exactly like the bug this purge exists to fix. claimForSync's own
       // `enabled` guard is the other half - either this disable wins or that claim already did, never
       // both.
-      const disabled = await orgGoogleDriveConnectionRepository.disableIfNotSyncing(conn.id);
+      const disabled = await orgGoogleDriveConnectionRepository.disableIfNotSyncing(conn.id, organizationId);
       if (!disabled) {
         return res
           .status(409)
           .json({ error: 'A sync is in progress for this folder. Try disconnecting again once it finishes.' });
       }
-      // Purge what this connection ingested BEFORE releasing the row: purgeDriveIngestedFiles can
-      // throw partway (a storage.delete blip, a self-host retrieval-index failure), and the row
-      // must still resolve on a retried DELETE so findLakeConnection can find it again - releasing
-      // first would hard-delete the row and strand any files the sweep did not reach with no
-      // surface left to purge them by.
-      await purgeDriveIngestedFiles(lake, conn.id, req.logger);
+      try {
+        // Purge what this connection ingested BEFORE releasing the row: purgeDriveIngestedFiles can
+        // throw partway (a storage.delete blip, a self-host retrieval-index failure), and the row
+        // must still resolve on a retried DELETE so findLakeConnection can find it again - releasing
+        // first would hard-delete the row and strand any files the sweep did not reach with no
+        // surface left to purge them by.
+        await purgeDriveIngestedFiles(lake, conn.id, req.logger);
+      } catch (error) {
+        // A purge failure must not leave the connection silently disabled forever: disableIfNotSyncing
+        // already flipped `enabled` false above, and findDueForPoll filters on `enabled: true`, so an
+        // unhealed disable would quietly stop the scheduled re-sync poll for this connection with no
+        // surface telling the user (the wizard's badge derives only from `status`, not `enabled`).
+        // Re-enable before the error propagates so a retried DELETE resumes from a healthy connection
+        // instead of one that looks "Connected" but will never sync again.
+        await enableDriveConnectionForLake(lake.id);
+        throw error;
+      }
       // Through the release seam, not the bare repo delete: it revokes the org-owned credential at
       // Google first, so disconnecting here does not leave the grant live behind a deleted row.
       await releaseDriveConnection(conn.id, organizationId);
