@@ -336,9 +336,8 @@ export class ChatCompletionInvoke {
             // succeeds (or fails for a different, uncoded reason) still reports the old code.
             // Two clears, both needed: this one is what the caller sees, because the function
             // returns this local `q` and not the update's result. It does NOT reach the database
-            // (`q` is a plain object, so the key survives with an `undefined` value and lands in
-            // the `$set` as an absence), which is what the `unset` option below is for. `null` is
-            // not an option: ChatAckSchema types errorCode as an optional enum and rejects null.
+            // (a `$set` of `undefined` is dropped), which is what the `unset` option below is for.
+            // `null` is not an option: ChatAckSchema types errorCode as an optional enum and rejects null.
             q.errorCode = undefined;
             await this.db.quests.update(
               {

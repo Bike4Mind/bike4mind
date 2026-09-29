@@ -202,7 +202,7 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
    */
   ensureUserDetails(organizationId: string, member: { id: string; email: string; name: string }): Promise<void>;
 
-  /** Atomically `$pull` a member from users/userDetails/adminUserIds and vacate managerId if theirs. */
+  /** `$pull` a member from users/userDetails/adminUserIds and vacate managerId if theirs (targeted, idempotent). */
   removeMember(organizationId: string, userId: string): Promise<void>;
 
   /**

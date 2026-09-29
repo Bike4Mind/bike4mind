@@ -147,7 +147,7 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
 
       // Dedupe before appending: a user can hold the same invite link twice (e.g. two browser
       // tabs), and a duplicate id would double-count them in memberCount and duplicate list
-      // rendering. This is a read-modify-write of the whole user document, NOT a `$addToSet` - so
+      // rendering. This is a read-modify-write of `groups`, NOT a `$addToSet` - so
       // the guard alone does not make concurrent accepts safe. Two accepts racing on the same user
       // are serialized by the caller's transaction (they conflict on the same document, and the
       // loser retries against the winner's committed state); the read side is defended separately
