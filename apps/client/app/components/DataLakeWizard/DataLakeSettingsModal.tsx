@@ -281,6 +281,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const [confirmPublicOpen, setConfirmPublicOpen] = useState(false);
   const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
   const [researchDirty, setResearchDirty] = useState(false);
+  const [proposalsDirty, setProposalsDirty] = useState(false);
   // Snapshotted with the form, not rebuilt from the live `lake`: a background refetch that brings in
   // someone else's rename would otherwise count as an edit here.
   const [seed, setSeed] = useState<ReturnType<typeof formSeed> | null>(null);
@@ -371,7 +372,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   // Escape, the backdrop and the close button all come through here; Cancel and a successful save
   // close directly, since both are the user deciding what happens to the edits.
   const requestClose = () => {
-    if (settingsDirty || researchDirty) setConfirmDiscardOpen(true);
+    if (settingsDirty || researchDirty || proposalsDirty) setConfirmDiscardOpen(true);
     else onClose();
   };
   const discardAndClose = () => {
@@ -790,12 +791,13 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                   />
                 </TabPanel>
                 {/* Kept mounted, guarded and keyed like the Research panel below, because a
-                    half-typed decline reason is this panel's own state too. It reports no dirty
-                    state, so an unmount here loses the text with nothing warning at all. */}
+                    half-typed decline reason is this panel's own state too. It reports that
+                    reason as dirty state, and an unmount here would lose the text. */}
                 {showProposalsTab && (
                   <TabPanel value="proposals" sx={{ p: 0 }} keepMounted>
                     <DataLakeProposalsPanel
                       key={lake?.id}
+                      onDirtyChange={setProposalsDirty}
                       view={proposalsView}
                       onViewChange={view => {
                         if (lake?.id) setProposalsViewFor({ lakeId: lake.id, view });
