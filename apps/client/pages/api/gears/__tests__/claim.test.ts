@@ -9,6 +9,7 @@ const { mocks } = vi.hoisted(() => ({
     fabFileExists: vi.fn(),
     publishedExists: vi.fn(),
     txFind: vi.fn(),
+    txFindOne: vi.fn(),
     addCredits: vi.fn(),
     artifactExists: vi.fn(),
     apiKeyExists: vi.fn(),
@@ -20,6 +21,7 @@ const { mocks } = vi.hoisted(() => ({
     overridesByKey: vi.fn(),
     claimOnce: vi.fn(),
     hearthHasAnyChannel: vi.fn(),
+    withTransaction: vi.fn(),
   },
 }));
 
@@ -57,7 +59,10 @@ vi.mock('@bike4mind/database', () => ({
   McpServer: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
   agentRepository: { countByUserId: (...a: unknown[]) => mocks.agentCount(...a) },
   dataLakeRepository: { findOne: (...a: unknown[]) => mocks.dataLakeFindOne(...a) },
-  creditTransactionRepository: { find: (...a: unknown[]) => mocks.txFind(...a) },
+  creditTransactionRepository: {
+    find: (...a: unknown[]) => mocks.txFind(...a),
+    findOne: (...a: unknown[]) => mocks.txFindOne(...a),
+  },
   gearStampRepository: {
     stampedKeys: (...a: unknown[]) => mocks.stampedKeys(...a),
     claimOnce: (...a: unknown[]) => mocks.claimOnce(...a),
@@ -68,6 +73,7 @@ vi.mock('@bike4mind/database', () => ({
   rapidReplyAuditLogRepository: { findOne: (...a: unknown[]) => mocks.miscFindOne(...a) },
   researchDataRepository: { findOne: (...a: unknown[]) => mocks.miscFindOne(...a) },
   userRepository: {},
+  withTransaction: (fn: () => Promise<unknown>) => mocks.withTransaction(fn),
 }));
 vi.mock('@bike4mind/services', () => ({
   creditService: { addCredits: (...a: unknown[]) => mocks.addCredits(...a) },
@@ -107,12 +113,14 @@ const lockEverything = () => {
   mocks.claimOnce.mockResolvedValue(true);
   mocks.hearthHasAnyChannel.mockResolvedValue(false);
   mocks.txFind.mockResolvedValue([]);
+  mocks.txFindOne.mockResolvedValue(null);
 };
 
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
   lockEverything();
   mocks.addCredits.mockResolvedValue({ currentCredits: 100 });
+  mocks.withTransaction.mockImplementation((fn: () => Promise<unknown>) => fn());
 });
 
 describe('POST /api/gears/claim', () => {
@@ -143,6 +151,48 @@ describe('POST /api/gears/claim', () => {
       type: 'generic_add',
       transactionId: 'gear-unlock:u1:projects',
     });
+  });
+
+  it('writes the ledger row and the balance inside one transaction', async () => {
+    unlockProjects();
+    const { promise } = claim({ key: 'projects' });
+    await promise;
+    expect(mocks.withTransaction).toHaveBeenCalledTimes(1);
+    expect(mocks.addCredits).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops without paying when the ledger row appears inside the transaction', async () => {
+    // A concurrent claim committed between this request's check and its transaction.
+    unlockProjects();
+    mocks.txFindOne.mockResolvedValue({ transactionId: 'gear-unlock:u1:projects' });
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getJSONData()).toEqual({ key: 'projects', alreadyClaimed: true });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+    expect(mocks.claimOnce).not.toHaveBeenCalled();
+  });
+
+  it('does not answer alreadyClaimed when the payout failed and rolled back', async () => {
+    // A failed balance write rolls the ledger row back with it, so the gear still reads as
+    // unpaid: the error surfaces (500 via asyncHandler) and a retry can pay.
+    unlockProjects();
+    mocks.withTransaction.mockRejectedValue(new Error('balance write failed'));
+    const { res, promise } = claim({ key: 'projects' });
+    await expect(promise).rejects.toThrow('balance write failed');
+    expect(res._isEndCalled()).toBe(false);
+    expect(mocks.claimOnce).not.toHaveBeenCalled();
+  });
+
+  it('answers alreadyClaimed when the transaction lost a race to a claim that committed first', async () => {
+    unlockProjects();
+    // Unpaid when this request checks, paid by the time its own insert collides.
+    mocks.txFind.mockResolvedValueOnce([]).mockResolvedValue([{ transactionId: 'gear-unlock:u1:projects' }]);
+    mocks.withTransaction.mockRejectedValue(Object.assign(new Error('Transaction aborted'), { code: 251 }));
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ key: 'projects', alreadyClaimed: true });
+    expect(mocks.claimOnce).not.toHaveBeenCalled();
   });
 
   it('refuses a locked gear - the client cannot claim what the server has not seen', async () => {
