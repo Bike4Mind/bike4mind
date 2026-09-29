@@ -89,6 +89,14 @@ describe('FabFileRepository.updateTagsByUserId', () => {
     expect(await rawTagsOf(deleted)).toEqual(['receipts']);
   });
 
+  it("renames a soft-deleted file's primaryTag too", async () => {
+    const deleted = await seed(['invoices'], { deletedAt: new Date(), primaryTag: 'invoices' });
+
+    await fabFileRepository.updateTagsByUserId(userId, 'invoices', 'receipts');
+
+    expect((await rawOf(deleted))?.primaryTag).toBe('receipts');
+  });
+
   it('matches the whole name, so a neighbour containing it is not renamed', async () => {
     const file = await seed(['q1', 'q1-draft']);
 

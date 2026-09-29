@@ -60,6 +60,15 @@ describe('FabFileRepository.removeTagByUserId', () => {
     expect(await rawTagsOf(deleted)).toEqual(['receipts']);
   });
 
+  it("clears a soft-deleted file's primaryTag too", async () => {
+    const deleted = await seed(['invoices'], { deletedAt: new Date(), primaryTag: 'invoices' });
+
+    await fabFileRepository.removeTagByUserId(userId, 'invoices');
+
+    const raw = await FabFile.collection.findOne({ _id: FabFile.base.Types.ObjectId.createFromHexString(deleted) });
+    expect(raw?.primaryTag).toBeUndefined();
+  });
+
   it('matches the whole name, so a tag is not removed by a neighbour that contains it', async () => {
     const neighbours = await seed(['test', 'testing', 'unit-test']);
 

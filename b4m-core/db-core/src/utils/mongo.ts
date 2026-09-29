@@ -462,6 +462,19 @@ export const softDeletePlugin = (
     next();
   });
 
+  // Same default for update queries, so a whole-doc BaseRepository.update(snapshot) - which $sets
+  // deletedAt: null - cannot resurrect a tombstone (SessionModel's explicit deletedAt: null filter is
+  // now redundant but kept). Skipped for includeDeleted, for a caller filter with a top-level
+  // deletedAt (nested $or/$and is not detected), and for upserts: a unique- or _id-keyed upsert onto
+  // a tombstone would otherwise miss and E11000, so an upsert can still write into a tombstone.
+  schema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], { document: false, query: true }, function (next) {
+    const opts = this.getOptions();
+    if (!opts.includeDeleted && !opts.upsert && !Object.hasOwn(this.getFilter(), 'deletedAt')) {
+      this.where({ deletedAt: null });
+    }
+    next();
+  });
+
   // Document-level middleware for deleteOne/deleteMany
   schema.pre(['deleteOne', 'deleteMany'], { document: true, query: false }, async function (next) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Mongoose middleware 'this' type is dynamic

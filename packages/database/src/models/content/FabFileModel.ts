@@ -1522,28 +1522,33 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // metacharacters. Case-insensitive so a `Foo` document also clears files carrying `foo`.
     const nameRegex = new RegExp(`^${escapeRegex(tag)}$`, 'i');
     // No deletedAt conjunct, unlike most reads here: a soft-deleted file that kept the name would
-    // resurrect a tag document that no longer exists the moment it is undeleted.
-    const result = await this.fabFileModel.updateMany(
-      {
-        userId,
-        tags: {
-          $elemMatch: {
-            name: nameRegex,
-          },
-        },
-      },
-      {
-        $pull: {
+    // resurrect a tag document that no longer exists the moment it is undeleted. includeDeleted
+    // opts past softDeletePlugin's update hook, which otherwise skips tombstones.
+    const result = await this.fabFileModel
+      .updateMany(
+        {
+          userId,
           tags: {
-            name: nameRegex,
+            $elemMatch: {
+              name: nameRegex,
+            },
           },
         },
-      }
-    );
+        {
+          $pull: {
+            tags: {
+              name: nameRegex,
+            },
+          },
+        }
+      )
+      .setOptions({ includeDeleted: true });
     // Same reasoning as pullTagsByFabFileId: a primaryTag naming a tag the file no longer carries
     // later fails the data-lake write gate on PUT /api/files/[id]. Separate filtered write because
     // a plain update cannot clear a field conditionally on its own value.
-    await this.fabFileModel.updateMany({ userId, primaryTag: nameRegex }, { $unset: { primaryTag: '' } });
+    await this.fabFileModel
+      .updateMany({ userId, primaryTag: nameRegex }, { $unset: { primaryTag: '' } })
+      .setOptions({ includeDeleted: true });
     return result.modifiedCount;
   }
 
@@ -3171,21 +3176,25 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // `$[elem]` and not `$`: the first-positional operator updates only the FIRST matching element
     // per document, so a file carrying the name twice kept one stale copy.
     // No deletedAt conjunct - see removeTagByUserId; an undelete must not revive the old name.
-    const result = await this.fabFileModel.updateMany(
-      {
-        userId,
-        'tags.name': nameRegex,
-      },
-      {
-        $set: {
-          'tags.$[elem].name': newTag,
+    const result = await this.fabFileModel
+      .updateMany(
+        {
+          userId,
+          'tags.name': nameRegex,
         },
-      },
-      { arrayFilters: [{ 'elem.name': nameRegex }] }
-    );
+        {
+          $set: {
+            'tags.$[elem].name': newTag,
+          },
+        },
+        { arrayFilters: [{ 'elem.name': nameRegex }] }
+      )
+      .setOptions({ includeDeleted: true });
     // Renamed rather than cleared: unlike a delete, the tag still exists under its new name, so
     // the file's primary label should follow it.
-    await this.fabFileModel.updateMany({ userId, primaryTag: nameRegex }, { $set: { primaryTag: newTag } });
+    await this.fabFileModel
+      .updateMany({ userId, primaryTag: nameRegex }, { $set: { primaryTag: newTag } })
+      .setOptions({ includeDeleted: true });
     return result.modifiedCount;
   }
 
