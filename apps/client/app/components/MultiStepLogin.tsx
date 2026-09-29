@@ -40,6 +40,7 @@ import { getWebsiteUrl, WEBSITE_URL } from '@client/config/general';
 import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
 import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
+import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
 
 /**
  * Reads the SPA's current `?redirectTo=` and merges it onto a provider auth
@@ -59,6 +60,14 @@ interface MultiStepLoginProps {
 }
 
 type LoginStep = 'email' | 'otc' | 'register-username' | 'redirect';
+
+const FOOTER_LINK_SX = {
+  color: 'text.tertiary',
+  fontWeight: 600,
+  textDecoration: 'underline',
+  transition: 'color 0.2s ease-in-out',
+  '&:hover': { color: 'text.primary', textDecoration: 'underline' },
+} as const;
 
 const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   enableRegister = true,
@@ -109,6 +118,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   const setupMFA = useSetupMFA();
   const verifyMFASetup = useVerifyMFASetup();
   const { t } = useTranslation();
+  const openCookieSettings = useCookieSettings(s => s.open);
   const theme = useTheme();
   const { inputStyles, dividerStyles } = useCommonStyles();
   const logoUrl = useGetLogo();
@@ -1036,60 +1046,67 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
           </Stack>
         </Box>
         {/* Legal links - only when a marketing site is configured; without WEBSITE_URL
-            getWebsiteUrl yields relative URLs that 404 in the SPA, so hide the sentence. */}
-        {WEBSITE_URL && (
-          <Container
-            className="footer-links-container"
-            sx={{
-              display: 'flex',
-              flexDirection: 'row',
-              gap: 0.5,
-              justifyContent: 'center',
-              alignItems: 'center',
-              marginBottom: '16px',
-            }}
+            getWebsiteUrl yields relative URLs that 404 in the SPA, so hide the sentence.
+            Cookie settings also governs first-party attribution and is always available. */}
+
+        <Container
+          className="footer-links-container"
+          sx={{
+            display: 'flex',
+            flexDirection: 'row',
+            gap: 0.5,
+            justifyContent: 'center',
+            alignItems: 'center',
+            marginBottom: '16px',
+          }}
+        >
+          <Typography
+            className="footer-legal-text"
+            level="body-sm"
+            sx={{ color: 'text.tertiary', fontSize: '12px', textAlign: 'center' }}
           >
-            <Typography
-              className="footer-legal-text"
-              level="body-sm"
-              sx={{ color: 'text.tertiary', fontSize: '12px', textAlign: 'center' }}
-            >
-              By continuing, you agree to our{' '}
+            {WEBSITE_URL && (
+              <>
+                By continuing, you agree to our{' '}
+                <Link
+                  className="terms-link"
+                  href={getWebsiteUrl('terms-of-service')}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  sx={FOOTER_LINK_SX}
+                >
+                  {t('Terms of Service')}
+                </Link>{' '}
+                and{' '}
+                <Link
+                  className="privacy-link"
+                  href={getWebsiteUrl('privacy')}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  sx={FOOTER_LINK_SX}
+                >
+                  {t('Privacy Policy')}
+                </Link>
+                .
+              </>
+            )}
+            <>
+              {WEBSITE_URL && ' '}
+              {/* component="button": an onClick Link with no href is an <a> with no href,
+                      which is not focusable and unreachable by keyboard. */}
               <Link
-                className="terms-link"
-                href={getWebsiteUrl('terms-of-service')}
-                target="_blank"
-                rel="noopener noreferrer"
-                sx={{
-                  color: 'text.tertiary',
-                  fontWeight: 600,
-                  textDecoration: 'underline',
-                  transition: 'color 0.2s ease-in-out',
-                  '&:hover': { color: 'text.primary', textDecoration: 'underline' },
-                }}
+                component="button"
+                type="button"
+                className="cookie-settings-link"
+                data-testid="login-cookie-settings-link"
+                onClick={openCookieSettings}
+                sx={FOOTER_LINK_SX}
               >
-                {t('Terms of Service')}
-              </Link>{' '}
-              and{' '}
-              <Link
-                className="privacy-link"
-                href={getWebsiteUrl('privacy')}
-                target="_blank"
-                rel="noopener noreferrer"
-                sx={{
-                  color: 'text.tertiary',
-                  fontWeight: 600,
-                  textDecoration: 'underline',
-                  transition: 'color 0.2s ease-in-out',
-                  '&:hover': { color: 'text.primary', textDecoration: 'underline' },
-                }}
-              >
-                {t('Privacy Policy')}
+                {t('cookie_settings', 'Cookie settings')}
               </Link>
-              .
-            </Typography>
-          </Container>
-        )}
+            </>
+          </Typography>
+        </Container>
       </Container>
 
       {/* MFA Modal */}
