@@ -155,6 +155,15 @@ function isGrantOrgContained(grant: LakeGrant, lakeOrg: string | undefined): boo
  *
  * `grants` is the lake's active grant set, pre-fetched by the caller; omitted -> `[]`, so a caller
  * that has not threaded grants yet still gets rungs 1, 2 (via creator) and 4.
+ *
+ * WRITE-TIME RESIDUAL. Every manage write decides from a grant read and then writes, so a revoke can
+ * commit in between. The grants door, visibility, promote and demote are serialized against grant
+ * writes (see the SERIALIZATION note on `grantLakeAccess`). Archive/unarchive/restore/delete/cleanup
+ * and file membership are not: each gates immediately before its first irreversible write, so the
+ * window is one request's gate-read -> claim, and a revoke committing after the claim is ordered
+ * after the decision (re-checking post-claim would strand the lake mid-status). `administeredOrgIds`
+ * and `isAdmin` are request snapshots; current-membership enforcement for the org rungs is a
+ * separate, known gap (see the KNOWN LIMITATION in `lapseDepartedMemberLakeAccess.ts`).
  */
 export function canManageLake(
   lake: Pick<IDataLakeDocument, 'createdByUserId' | 'organizationId'>,

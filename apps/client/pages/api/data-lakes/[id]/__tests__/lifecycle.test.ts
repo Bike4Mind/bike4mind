@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
   selfHostOpenSearchEnabled: vi.fn(() => false),
   disableDriveConnectionForLake: vi.fn(),
   enableDriveConnectionForLake: vi.fn(),
+  inTransaction: [] as string[],
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as the serve/gears tests).
@@ -58,6 +59,14 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: async (fn: () => unknown) => {
+    h.inTransaction.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.inTransaction.push('exit');
+    }
+  },
   dataLakeRepository: { releasePurgingToDeleted: h.releasePurgingToDeleted },
   // The config-audit repos this route wires (see lakeConfigAuditDb). Stubbed rather than
   // omitted because the mock replaces the whole module: a missing export is an import-time
@@ -375,5 +384,39 @@ describe('POST /api/data-lakes/[id]/lifecycle - db.users wiring (delete/restore/
     // spread copy of userRepository would still pass. Pull the actual argument and use .toBe.
     const call = h[serviceName].mock.calls[0][2] as Record<string, unknown>;
     expect((call.db as Record<string, unknown>).users).toBe(userRepository);
+  });
+});
+
+describe('POST /api/data-lakes/[id]/lifecycle - transaction scope (promote/demote)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.inTransaction.length = 0;
+    h.assertLakeWritable.mockReturnValue(undefined);
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'active', createdByUserId: 'u1' });
+    h.archiveDataLake.mockResolvedValue({ archivedCount: 0 });
+  });
+
+  // The services gate internally, so wrapping the call puts their grant read inside the transaction
+  // that also writes the lake doc - the collision a concurrent grant revoke serializes against.
+  it.each([
+    ['promote', 'promoteDataLake'],
+    ['demote', 'demoteDataLake'],
+  ] as const)('%s runs the service inside a transaction', async (action, serviceName) => {
+    h[serviceName].mockImplementation(async () => {
+      h.inTransaction.push('service');
+      return { id: 'lake1' };
+    });
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
+
+    expect(h.inTransaction).toEqual(['enter', 'service', 'exit']);
+  });
+
+  it('leaves the long cascades (archive) outside a transaction', async () => {
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'archive' }), res);
+
+    expect(h.archiveDataLake).toHaveBeenCalled();
+    expect(h.inTransaction).toEqual([]);
   });
 });

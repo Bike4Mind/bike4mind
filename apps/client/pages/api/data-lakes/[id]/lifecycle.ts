@@ -3,6 +3,7 @@ import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
+  withTransaction,
   dataLakeRepository,
   dataLakeBatchRepository,
   dataLakeAccessGrantRepository,
@@ -108,25 +109,31 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
         return res.json(result);
       }
       case 'promote': {
-        const result = await dataLakeService.promoteDataLake(actor, lake.id, {
-          db: {
-            dataLakes: dataLakeRepository,
-            dataLakeAccessGrants: dataLakeAccessGrantRepository,
-            ...lakeConfigAuditDb,
-          },
-          logger: req.logger,
-        });
+        // Transactional so a concurrent grant revoke serializes against this lake-doc write and the
+        // service's gate re-runs on retry (see canManageLake's WRITE-TIME RESIDUAL note).
+        const result = await withTransaction(() =>
+          dataLakeService.promoteDataLake(actor, lake.id, {
+            db: {
+              dataLakes: dataLakeRepository,
+              dataLakeAccessGrants: dataLakeAccessGrantRepository,
+              ...lakeConfigAuditDb,
+            },
+            logger: req.logger,
+          })
+        );
         return res.json(result);
       }
       case 'demote': {
-        const result = await dataLakeService.demoteDataLake(actor, lake.id, {
-          db: {
-            dataLakes: dataLakeRepository,
-            dataLakeAccessGrants: dataLakeAccessGrantRepository,
-            ...lakeConfigAuditDb,
-          },
-          logger: req.logger,
-        });
+        const result = await withTransaction(() =>
+          dataLakeService.demoteDataLake(actor, lake.id, {
+            db: {
+              dataLakes: dataLakeRepository,
+              dataLakeAccessGrants: dataLakeAccessGrantRepository,
+              ...lakeConfigAuditDb,
+            },
+            logger: req.logger,
+          })
+        );
         return res.json(result);
       }
       case 'restore': {

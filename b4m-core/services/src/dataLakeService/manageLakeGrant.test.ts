@@ -25,6 +25,7 @@ const makeAdapters = (
     /** More than one account matching the typed address - the case-variant duplicate. */
     usersByEmail?: { id: string }[];
     removed?: boolean;
+    stampError?: Error;
   } = {}
 ) => {
   const matchingUsers =
@@ -32,10 +33,15 @@ const makeAdapters = (
   const upsertGrant = vi.fn(async (input: never) => grantRow(input));
   const removeGrant = vi.fn(async () => over.removed !== false);
   const record = vi.fn(async () => undefined);
+  const updateLake = vi.fn(async () => {
+    if (over.stampError) throw over.stampError;
+    return lake();
+  });
   return {
     upsertGrant,
     removeGrant,
     record,
+    updateLake,
     // The resolved (lake, grants) pair the API route reads from its access gate and hands to the
     // door, spread into each call below so the real argument order stays visible at the call site.
     lakeArgs: [
@@ -51,6 +57,7 @@ const makeAdapters = (
         },
         users: { findAllByEmailsOrUsernames: vi.fn(async () => matchingUsers) },
         lakeConfigChangeEvents: { record },
+        dataLakes: { update: updateLake },
       },
     } as never,
   };
@@ -511,6 +518,64 @@ describe('revokeLakeAccess', () => {
       revokeLakeAccess(owner, ...lakeArgs, { principalType: 'user', principalId: 'u1' }, adapters)
     ).resolves.toEqual({ revoked: false });
     expect(removeGrant).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+  });
+});
+
+// The lake-document write is what serializes a grant change against every other manage write on the
+// lake (see the SERIALIZATION note on grantLakeAccess), so its presence and position are pinned.
+describe('lake-document stamp', () => {
+  const grantInput = { principalType: 'user', principalEmail: 'u1@b.c', role: 'reader' } as const;
+  const revokeInput = { principalType: 'user', principalId: 'u1' } as const;
+
+  it('grant: writes the row, then stamps the lake, then audits', async () => {
+    const { adapters, lakeArgs, upsertGrant, updateLake, record } = makeAdapters({ grants: curatorGrants });
+    await grantLakeAccess(curator, ...lakeArgs, grantInput, adapters);
+
+    expect(updateLake).toHaveBeenCalledWith({ id: 'lake1', lastUpdatedByUserId: 'cur' });
+    expect(upsertGrant.mock.invocationCallOrder[0]).toBeLessThan(updateLake.mock.invocationCallOrder[0]);
+    expect(updateLake.mock.invocationCallOrder[0]).toBeLessThan(record.mock.invocationCallOrder[0]);
+  });
+
+  it('revoke: removes the row, then stamps the lake, then audits', async () => {
+    const { adapters, lakeArgs, removeGrant, updateLake, record } = makeAdapters({
+      existing: grantRow({ principalId: 'u1', role: 'reader' }),
+    });
+    await revokeLakeAccess(owner, ...lakeArgs, revokeInput, adapters);
+
+    expect(updateLake).toHaveBeenCalledWith({ id: 'lake1', lastUpdatedByUserId: 'creator' });
+    expect(removeGrant.mock.invocationCallOrder[0]).toBeLessThan(updateLake.mock.invocationCallOrder[0]);
+    expect(updateLake.mock.invocationCallOrder[0]).toBeLessThan(record.mock.invocationCallOrder[0]);
+  });
+
+  it('does not stamp a no-op re-grant', async () => {
+    const { adapters, lakeArgs, updateLake } = makeAdapters({
+      existing: grantRow({ principalId: 'u1', role: 'reader' }),
+    });
+    await grantLakeAccess(owner, ...lakeArgs, grantInput, adapters);
+    expect(updateLake).not.toHaveBeenCalled();
+  });
+
+  it('does not stamp a revoke that removed nothing', async () => {
+    const none = makeAdapters({ existing: null });
+    await revokeLakeAccess(owner, ...none.lakeArgs, revokeInput, none.adapters);
+    expect(none.updateLake).not.toHaveBeenCalled();
+
+    const lost = makeAdapters({ existing: grantRow({ principalId: 'u1', role: 'reader' }), removed: false });
+    await revokeLakeAccess(owner, ...lost.lakeArgs, revokeInput, lost.adapters);
+    expect(lost.updateLake).not.toHaveBeenCalled();
+  });
+
+  it('skips the stamp for an unattributable actor', async () => {
+    const { adapters, lakeArgs, updateLake, upsertGrant } = makeAdapters();
+    await grantLakeAccess({ userId: '', isAdmin: true }, ...lakeArgs, grantInput, adapters);
+    expect(upsertGrant).toHaveBeenCalled();
+    expect(updateLake).not.toHaveBeenCalled();
+  });
+
+  it('propagates a stamp failure so the surrounding transaction aborts, and records no audit', async () => {
+    const { adapters, lakeArgs, record } = makeAdapters({ stampError: new Error('write conflict') });
+    await expect(grantLakeAccess(owner, ...lakeArgs, grantInput, adapters)).rejects.toThrow('write conflict');
     expect(record).not.toHaveBeenCalled();
   });
 });

@@ -3,12 +3,14 @@ import type {
   DataLakePrincipalType,
   IDataLakeAccessGrantRepository,
   IDataLakeDocument,
+  IDataLakeRepository,
   IUserRepository,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
 import { canManageLake, type LakeGrant, type ManageActor } from './manageRule';
 import { assertLakeGrantable } from './assertLakeAccess';
 import { grantChange } from './diffLakeConfig';
+import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { refuseGrantWrite, refuseOwnerGrantChange } from './lakeGrantWriteRule';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 
@@ -21,6 +23,7 @@ import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLa
 interface ManageLakeGrantAdapters extends LakeConfigAuditAdapters {
   db: LakeConfigAuditAdapters['db'] & {
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
+    dataLakes: Pick<IDataLakeRepository, 'update'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'findGrant' | 'upsertGrant' | 'removeGrant'>;
     users: Pick<IUserRepository, 'findAllByEmailsOrUsernames'>;
   };
@@ -103,9 +106,18 @@ function assertManageableLake(lake: IDataLakeDocument, actor: ManageActor, grant
  * Neither is a re-grant that only moves the EXPIRY: the expiry is part of what the grant confers, so
  * it rides in the audited value (see `grantChange`) instead of landing as a silent write.
  *
- * ONE write, so no transaction is needed - contrast `transferLakeOwnership`'s explicit NOT ATOMIC
- * note, which covers a multi-write loop. The audit is still recorded LAST, so it can never claim a
- * grant that failed.
+ * SERIALIZATION against every other manage write on the same lake. A real grant change also writes
+ * the lake DOCUMENT (the actor stamp), and the route runs the gate and this door inside
+ * `withTransaction`, gate inside the callback. So a curator's revoke and a concurrent manage write
+ * by that curator (another grant, visibility, promote/demote - which all write the lake doc) touch a
+ * common document, Mongo aborts whichever commits second, and its retry re-reads the grants. Same
+ * shape as `lapseDepartedMemberLakeAccess` vs `transferLakeOwnership`. Holds only while the actor is
+ * attributable (`lakeConfigWriteStamp` returns `{}` for a blank id); the sole caller is a route
+ * passing `req.user.id`. The stamp bumps `updatedAt` on purpose, including on a transitional lake
+ * (see `strandedCutoffMsFor`): skipping it there would let a revoked curator's grant land unserialized.
+ * The manage writes that are NOT serialized this way are listed on `canManageLake`.
+ *
+ * Order is grant row -> stamp -> audit, so the audit can never claim a grant that failed.
  *
  * Reader grants are RECORDED here and RESOLVED at read time only while the `EnforceLakeReadGrants`
  * platform setting is on - the source interlock has flipped, so that setting is the whole
@@ -173,6 +185,15 @@ export async function grantLakeAccess(
   const previousExpiresAt = lapsed ? null : (existing?.expiresAt ?? null);
   const nextExpiresAt = expiresAt !== undefined ? expiresAt : (existing?.expiresAt ?? null);
 
+  const change = grantChange(
+    input.principalType,
+    principalId,
+    previousRole,
+    input.role,
+    previousExpiresAt,
+    nextExpiresAt
+  );
+
   await db.dataLakeAccessGrants.upsertGrant({
     dataLakeId: lake.id,
     principalType: input.principalType,
@@ -181,6 +202,8 @@ export async function grantLakeAccess(
     grantedByUserId: actor.userId,
     ...(expiresAt !== undefined ? { expiresAt } : {}),
   });
+  // A no-op re-grant changed nothing, so it needs no serialization and should not move the last-editor.
+  if (change) await stampLake(lake, actor, db);
 
   await recordLakeConfigChange(
     {
@@ -190,9 +213,7 @@ export async function grantLakeAccess(
       // than collapsing to the creator arm.
       grants,
       action: 'grant-access',
-      changes: [
-        grantChange(input.principalType, principalId, previousRole, input.role, previousExpiresAt, nextExpiresAt),
-      ].filter(c => c !== null),
+      changes: [change].filter(c => c !== null),
     },
     { db, logger }
   );
@@ -228,6 +249,7 @@ export async function revokeLakeAccess(
 
   const revoked = await db.dataLakeAccessGrants.removeGrant(lake.id, input.principalType, input.principalId);
   if (!revoked) return { revoked: false };
+  await stampLake(lake, actor, db);
 
   await recordLakeConfigChange(
     {
@@ -247,6 +269,12 @@ export async function revokeLakeAccess(
   );
 
   return { revoked: true };
+}
+
+/** The lake-document write the SERIALIZATION note on `grantLakeAccess` depends on. */
+async function stampLake(lake: IDataLakeDocument, actor: ManageActor, db: ManageLakeGrantAdapters['db']) {
+  const stamp = lakeConfigWriteStamp(actor);
+  if (stamp.lastUpdatedByUserId) await db.dataLakes.update({ id: lake.id, ...stamp });
 }
 
 /**
