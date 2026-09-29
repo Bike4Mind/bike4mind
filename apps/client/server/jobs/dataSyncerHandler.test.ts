@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Context } from 'aws-lambda';
 
-// No B4M_PROD_API_KEY on the Resource: the handler must not need one.
+// The Resource links only MONGODB_URI: the handler must not need a prod API key.
 vi.mock('sst', () => ({ Resource: { MONGODB_URI: { value: 'mongodb://target/%STAGE%' } } }));
 
 const inserted = vi.hoisted(() => new Map<string, number>());
