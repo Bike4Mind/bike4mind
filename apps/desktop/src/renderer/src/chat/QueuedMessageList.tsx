@@ -43,13 +43,17 @@ export function QueuedMessageList({
             py: 0.75,
           }}
           data-testid="composer-queued-message"
+          data-relay={message.relay ? 'true' : undefined}
         >
+          {/* A relayed message is named by its sender, not labelled "Queued": the user did not
+              write it, and a row that does not say so reads as their own text about to go out. */}
           <Typography
             level="body-xs"
             textColor="text.tertiary"
-            sx={{ flexShrink: 0, alignSelf: 'flex-start', pt: 0.25 }}
+            noWrap
+            sx={{ flexShrink: 0, alignSelf: 'flex-start', pt: 0.25, maxWidth: 160 }}
           >
-            Queued
+            {message.relay ? `From ${message.relay.fromTitle}` : 'Queued'}
           </Typography>
 
           <Typography
@@ -81,7 +85,7 @@ export function QueuedMessageList({
             color="neutral"
             sx={{ alignSelf: 'flex-start' }}
             onClick={() => onCancel(message.id)}
-            aria-label="Cancel this queued message"
+            aria-label={message.relay ? 'Do not run this message' : 'Cancel this queued message'}
             data-testid="composer-cancel-queued-btn"
           >
             <CloseIcon />

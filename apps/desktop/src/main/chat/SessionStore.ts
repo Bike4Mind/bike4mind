@@ -416,7 +416,11 @@ export class SessionStore {
     // filenames are the only thing left to name the conversation after.
     if (isFirstPrompt && session.title === UNTITLED) {
       const attachmentNames = (message.attachments ?? []).map(attachment => attachment.name).join(', ');
-      session.title = deriveTitle(message.content || attachmentNames);
+      // A skill turn is named after the INVOCATION. `content` is the expanded body, which is
+      // somebody else's instructions - naming the conversation after a sentence from the middle
+      // of a SKILL.md tells the user nothing about what they asked for.
+      const invocation = message.skill && `/${message.skill.name}${message.skill.args ? ` ${message.skill.args}` : ''}`;
+      session.title = deriveTitle(invocation || message.content || attachmentNames);
     }
 
     session.messages.push(message);

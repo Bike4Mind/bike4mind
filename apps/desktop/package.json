@@ -30,6 +30,7 @@
     "@tanstack/react-router": "^1.170.17",
     "axios": "1.18.0",
     "eventsource-parser": "^3.1.0",
+    "gray-matter": "^4.0.3",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-markdown": "^10.1.0",
@@ -40,6 +41,8 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@bike4mind/agents": "workspace:*",
+    "@bike4mind/cli": "workspace:*",
     "@bike4mind/typescript-config": "workspace:*",
     "@types/node": "^24.0.0",
     "@types/react": "^19.2.17",

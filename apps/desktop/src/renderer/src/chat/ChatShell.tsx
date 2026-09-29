@@ -23,7 +23,9 @@ import { describeActivity } from './statusLine';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
 import { useConversation, useModelCatalog, usePendingApprovals, useSessionStatuses, useSessions } from './useChat';
+import { usePromptSuggestion } from './usePromptSuggestion';
 import { useFileDrop } from './useFileDrop';
+import { useSkills } from './useSkills';
 
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -109,12 +111,14 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   const [mode, setMode] = useState<ChatSessionMode>('chat');
   const conversation = useConversation(activeId, apply);
   const background = useBackgroundProcesses(activeId);
+  const skills = useSkills(activeId);
   const catalog = useModelCatalog();
   const statuses = useSessionStatuses();
   const pendingApprovals = usePendingApprovals();
   const [collapsed, setCollapsed] = useState(false);
   const [showArtifacts, setShowArtifacts] = useState(false);
   const draft = useAttachmentDraft(activeId);
+  const nextPrompt = usePromptSuggestion(activeId);
 
   const onFilesDropped = useCallback(
     (files: File[]) => {
@@ -388,10 +392,13 @@ export function ChatShell({ account }: { account?: ReactNode }) {
             }
             onSend={text => void onSend(text)}
             onStop={conversation.stop}
+            suggestion={nextPrompt.suggestion}
+            onSuggestionDismissed={nextPrompt.dismiss}
             queued={conversation.queued}
             onCancelQueued={conversation.cancelQueued}
             returned={conversation.returned}
             onReturnedConsumed={conversation.clearReturned}
+            skills={skills}
             leading={
               <ApprovalModePill
                 mode={conversation.session?.approvalMode ?? 'ask'}

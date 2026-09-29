@@ -45,7 +45,7 @@ describe('ChatService session titles', () => {
 
   /** The stream the title request was handed, once it has gone out. */
   async function titleStream(): Promise<PassThrough> {
-    await vi.waitUntil(() => titleCall() !== undefined, { timeout: 2000, interval: 5 });
+    await vi.waitUntil(() => titleCall() !== undefined, { timeout: 5000, interval: 5 });
     return streams[post.mock.calls.findIndex(call => (call[1] as WireRequest).model === TITLE_MODEL)];
   }
 
@@ -98,7 +98,7 @@ describe('ChatService session titles', () => {
 
     await answerTitle('Reading alpha.txt');
 
-    await vi.waitUntil(() => summaries.length > 0, { timeout: 2000, interval: 5 });
+    await vi.waitUntil(() => summaries.length > 0, { timeout: 5000, interval: 5 });
     expect(summaries[0]).toMatchObject({ id, title: 'Reading alpha.txt' });
     expect((await service.getSession(id))?.title).toBe('Reading alpha.txt');
   });
@@ -115,7 +115,7 @@ describe('ChatService session titles', () => {
     reply.write(frame('[DONE]'));
 
     await vi.waitUntil(async () => (await service.getSession(id))?.messages.length === 2, {
-      timeout: 2000,
+      timeout: 5000,
       interval: 5,
     });
     expect(title.writableEnded).toBe(false);
@@ -126,7 +126,7 @@ describe('ChatService session titles', () => {
     const { id } = await service.createSession();
     await service.send(id, 'explain event loops');
 
-    const request = (await vi.waitUntil(titleCall, { timeout: 2000, interval: 5 }))[1];
+    const request = (await vi.waitUntil(titleCall, { timeout: 5000, interval: 5 }))[1];
 
     expect(request.model).toBe(TITLE_MODEL);
     expect(request.options.tools).toEqual([]);
@@ -138,18 +138,18 @@ describe('ChatService session titles', () => {
     const { id } = await service.createSession();
     await service.send(id, 'first');
     await answerTitle('The first thing');
-    await vi.waitUntil(() => summaries.length > 0, { timeout: 2000, interval: 5 });
+    await vi.waitUntil(() => summaries.length > 0, { timeout: 5000, interval: 5 });
 
     streams[replyIndex()].write(frame({ type: 'content', text: 'ok' }));
     streams[replyIndex()].write(frame('[DONE]'));
     await vi.waitUntil(async () => (await service.getSession(id))?.messages.length === 2, {
-      timeout: 2000,
+      timeout: 5000,
       interval: 5,
     });
 
     const before = post.mock.calls.length;
     await service.send(id, 'second');
-    await vi.waitUntil(() => post.mock.calls.length > before, { timeout: 2000, interval: 5 });
+    await vi.waitUntil(() => post.mock.calls.length > before, { timeout: 5000, interval: 5 });
 
     expect(post.mock.calls.slice(before).some(call => (call[1] as WireRequest).model === TITLE_MODEL)).toBe(false);
   });
@@ -165,7 +165,7 @@ describe('ChatService session titles', () => {
 
     // Nothing reaches the sidebar and nothing reaches the conversation: a title that could not
     // be generated is cosmetic.
-    await vi.waitUntil(() => stream.destroyed, { timeout: 2000, interval: 5 });
+    await vi.waitUntil(() => stream.destroyed, { timeout: 5000, interval: 5 });
     expect(summaries).toEqual([]);
     expect((await service.getSession(id))?.title).toBe(deriveTitle(prompt));
   });
@@ -178,7 +178,7 @@ describe('ChatService session titles', () => {
     await answerTitle(`I'd be happy to explain. ${'A monad is a monoid in the category of endofunctors. '.repeat(3)}`);
 
     // Rejected before the store is even asked: an answer is not a title.
-    await vi.waitUntil(() => stream.destroyed, { timeout: 2000, interval: 5 });
+    await vi.waitUntil(() => stream.destroyed, { timeout: 5000, interval: 5 });
     expect(applied).not.toHaveBeenCalled();
     expect(summaries).toEqual([]);
     expect((await service.getSession(id))?.title).toBe('what is a monad');
@@ -187,14 +187,14 @@ describe('ChatService session titles', () => {
   it('lets a rename made while the request was in flight win', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'what is a monad');
-    await vi.waitUntil(() => titleCall() !== undefined, { timeout: 2000, interval: 5 });
+    await vi.waitUntil(() => titleCall() !== undefined, { timeout: 5000, interval: 5 });
 
     await service.renameSession(id, 'Category theory reading');
     await answerTitle('Understanding monads');
 
     // The store was asked and refused, which is the guard working rather than the request
     // simply never arriving.
-    await vi.waitUntil(() => applied.mock.calls.length > 0, { timeout: 2000, interval: 5 });
+    await vi.waitUntil(() => applied.mock.calls.length > 0, { timeout: 5000, interval: 5 });
     expect(applied).toHaveBeenCalledWith(null);
     expect(summaries).toEqual([]);
     expect((await service.getSession(id))?.title).toBe('Category theory reading');

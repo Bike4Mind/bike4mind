@@ -1,6 +1,6 @@
 import { bashBackground, bashKill, bashList, bashOutput } from './backgroundTools';
 import { fileRead, globFiles, grepSearch } from './fileTools';
-import { sessionArchive, sessionDelete, sessionList, sessionRead, sessionSpawn } from './hostTools';
+import { sessionArchive, sessionDelete, sessionList, sessionRead, sessionSend, sessionSpawn } from './hostTools';
 import { generateImageTool, generateMusicTool, generateSoundEffectTool, generateSpeechTool } from './mediaTools';
 import { bashExecute } from './shellTools';
 import { fileEdit, fileWrite } from './writeTools';
@@ -50,10 +50,17 @@ const MEDIA_TOOLS: readonly ToolDefinition[] = [
  * The tools that drive this app: starting, listing, reading and removing conversations.
  *
  * Code sessions only, because every one of them is scoped to the calling session's project -
- * see hostTools.ts. Reads are ungated; spawning is gated on cost and autonomy, and deleting is
- * gated as irreversible, which no standing approval can cover.
+ * see hostTools.ts. Reads are ungated; spawning and messaging are gated on cost and autonomy,
+ * and deleting is gated as irreversible, which no standing approval can cover.
  */
-const HOST_TOOLS: readonly ToolDefinition[] = [sessionList, sessionRead, sessionSpawn, sessionArchive, sessionDelete];
+const HOST_TOOLS: readonly ToolDefinition[] = [
+  sessionList,
+  sessionRead,
+  sessionSpawn,
+  sessionSend,
+  sessionArchive,
+  sessionDelete,
+];
 
 const BY_NAME = new Map([...LOCAL_TOOLS, ...MEDIA_TOOLS, ...HOST_TOOLS].map(tool => [tool.schema.name, tool]));
 

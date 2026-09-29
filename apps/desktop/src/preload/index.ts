@@ -64,6 +64,7 @@ const api: DesktopApi = {
     sendMessage: (request: SendMessageRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatSendMessage, request),
     stopReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatStopReply, sessionId),
     continueReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatContinueReply, sessionId),
+    suggestNextPrompt: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatSuggestNextPrompt, sessionId),
     getQueuedMessages: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetQueued, sessionId),
     cancelQueuedMessage: (sessionId: string, queuedId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatCancelQueued, sessionId, queuedId),
@@ -110,6 +111,9 @@ const api: DesktopApi = {
       ipcRenderer.on(IPC_CHANNELS.chatPendingApprovals, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.chatPendingApprovals, handler);
     },
+    listSkills: sessionId => ipcRenderer.invoke(IPC_CHANNELS.chatListSkills, sessionId),
+    setProjectSkillsTrusted: (sessionId, trusted) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetProjectSkillsTrusted, sessionId, trusted),
   },
   files: {
     // Electron removed File.path in v32; webUtils is the replacement and it only works on this

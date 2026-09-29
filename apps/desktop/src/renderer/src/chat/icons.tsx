@@ -195,3 +195,13 @@ export function ContrastIcon() {
     </Glyph>
   );
 }
+
+/** Suggested next prompt: a four-point spark, with a smaller one beside it. */
+export function SparkIcon() {
+  return (
+    <Glyph>
+      <path d="M6.5 2.5l1.1 2.9 2.9 1.1-2.9 1.1-1.1 2.9-1.1-2.9L2.5 6.5l2.9-1.1z" />
+      <path d="M11.5 9.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z" />
+    </Glyph>
+  );
+}

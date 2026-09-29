@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -8,10 +8,14 @@ import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
 import type { ChatQueuedMessage } from '@shared/chat';
 import { AttachmentRow } from './Attachments';
+import { composerKeyAction, composerPlaceholder, shownSuggestion } from './composerInput';
 import { contentColumnSx } from './layout';
 import { QueuedMessageList } from './QueuedMessageList';
 import { mergeIntoDraft } from './queuedMessages';
+import { matchSkills, skillQuery } from './skillMenu';
+import { SkillPicker } from './SkillPicker';
 import { toAttachmentInputs, type AttachmentDraft } from './useAttachments';
+import type { SkillsController } from './useSkills';
 
 export function Composer({
   sessionId,
@@ -29,6 +33,9 @@ export function Composer({
   onReturnedConsumed,
   footer,
   leading,
+  skills,
+  suggestion,
+  onSuggestionDismissed,
 }: {
   sessionId: string | null;
   disabled: boolean;
@@ -69,11 +76,32 @@ export function Composer({
    * permission they will forget they granted.
    */
   leading?: ReactNode;
+  /**
+   * The skills `/name` can run here. Omitted in tests and in any host that has none, which
+   * simply leaves `/` an ordinary character.
+   */
+  skills?: SkillsController;
+  /**
+   * A guess at the next message, drawn greyed out INSIDE the empty input - the one place a user
+   * looking at a finished reply is already looking. Tab takes it into the draft.
+   *
+   * It is a draft and never a turn. Tab fills the box and stops there; Enter still sends
+   * whatever is actually in the box, so taking a suggestion and sending it are two separate
+   * keystrokes with the user's own decision in between. Nothing here submits, and there is no
+   * setting that makes it - a hint that sent itself would let model output choose the next turn.
+   */
+  suggestion?: string | null;
+  /** The hint is gone - the user typed over it, or took it. Asks the owner to drop it. */
+  onSuggestionDismissed?: () => void;
 }) {
   const [text, setText] = useState('');
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const hasContent = text.trim().length > 0 || attachments.attachments.length > 0;
   const blocked = !!blockedReason || !!notReady;
+
+  // See composerInput.ts for what wins here and why.
+  const shown = shownSuggestion({ disabled, text, suggestion });
   // `streaming` is NOT here: a send during a live turn is queued, not dropped. It used to be
   // the first condition, which is why pressing Enter mid-reply did nothing at all.
   const canSubmit = hasContent && !disabled && !attachments.busy && !blocked;
@@ -96,11 +124,111 @@ export function Composer({
     onReturnedConsumed?.();
   }, [returned, onReturnedConsumed]);
 
-  // Enter sends, Shift+Enter breaks the line - the convention every chat client here shares.
+  /**
+   * The `/` menu.
+   *
+   * Open is DERIVED from the text rather than stored, so there is no state to get out of step
+   * with what is on screen: the menu is showing exactly when the whole input is a bare `/token`
+   * (see skillQuery). Escape is the one thing that needs memory, and it is remembered against
+   * the text that was dismissed - so typing another character brings the menu back, which is
+   * what makes Escape "not this one" rather than "not until I reload".
+   */
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  const query = skills && !disabled ? skillQuery(text) : null;
+  const pickerOpen = query !== null && dismissed !== text;
+  const matches = useMemo(() => (skills && query !== null ? matchSkills(skills.skills, query) : []), [skills, query]);
+
+  // Whenever the filter changes the old highlight means nothing: it pointed into a different
+  // list, and leaving it would arm Enter with whatever now happens to sit at that index.
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [query]);
+
+  // Re-read on the keystroke that opens the menu, not on an interval: a skill written since the
+  // window opened should be there, and this is the only moment anyone is looking.
+  const justOpened = useRef(false);
+  useEffect(() => {
+    if (!pickerOpen) {
+      justOpened.current = false;
+      return;
+    }
+    if (justOpened.current) return;
+    justOpened.current = true;
+    void skills?.refresh();
+  }, [pickerOpen, skills]);
+
+  const pick = (name: string) => {
+    // The trailing space is what closes the menu (the text is no longer a bare token) and what
+    // leaves the user positioned to type arguments.
+    onTextChange(`/${name} `);
+    setDismissed(null);
+    textareaRef.current?.focus();
+  };
+
+  /**
+   * Enter sends, Shift+Enter breaks the line, Tab takes the hint. Which is which lives in
+   * composerInput.ts, where the rule that accepting is not sending is stated and tested.
+   *
+   * The skill menu is asked FIRST, because while it is open it is the list the user is looking
+   * at and Enter/Tab belong to it. The two cannot both want a key in practice - a suggestion is
+   * only offered into an EMPTY input, and the menu only opens once a `/` has been typed - but
+   * the order is stated rather than left to that coincidence, so a later change to either
+   * condition cannot quietly make Tab do the wrong one.
+   */
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== 'Enter' || event.shiftKey) return;
+    if (pickerOpen) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setDismissed(text);
+        return;
+      }
+      if (matches.length > 0) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setActiveIndex(current => (current + 1) % matches.length);
+          return;
+        }
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setActiveIndex(current => (current - 1 + matches.length) % matches.length);
+          return;
+        }
+        if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
+          event.preventDefault();
+          pick(matches[Math.min(activeIndex, matches.length - 1)].name);
+          return;
+        }
+      }
+    }
+
+    const action = composerKeyAction(event.key, event.shiftKey, !!shown);
+    if (action === 'default') return;
     event.preventDefault();
-    submit();
+    if (action === 'submit') {
+      submit();
+      return;
+    }
+    // Fills the draft and stops. The user still has to press Enter, on text they can now read
+    // and edit - which is the whole reason this is a different key from the one that sends.
+    if (shown) {
+      setText(shown);
+      onSuggestionDismissed?.();
+    }
+  };
+
+  /**
+   * The user is composing their own message, so the hint stops being one.
+   *
+   * Dropped rather than hidden: it is thrown away on the first keystroke and the ordinary
+   * placeholder is what comes back if they delete it all again, because a hint that reappeared
+   * under a box the user has already emptied once would be offering the same guess about a
+   * conversation they have moved on from. Covers paste and drop too - both change the value.
+   */
+  const onTextChange = (next: string) => {
+    setText(next);
+    if (suggestion && next.length > 0) onSuggestionDismissed?.();
   };
 
   /**
@@ -158,15 +286,27 @@ export function Composer({
         </Box>
       )}
 
+      {/* Above the input, where an autocomplete belongs: the list has to sit between what was
+          typed and the transcript, not cover the transcript the user is answering. */}
+      {pickerOpen && skills && (
+        <SkillPicker
+          skills={matches}
+          activeIndex={activeIndex}
+          untrustedProject={skills.untrustedProject}
+          onPick={skill => pick(skill.name)}
+          onTrustProject={() => void skills.trustProject()}
+        />
+      )}
+
       <Box sx={{ ...contentColumnSx, pt: 1.5 }}>
         {/* Send and Stop ride INSIDE the input rather than beside it. As siblings in a row they
             took their own width out of the column, so the input's right edge stopped ~74px short
             of where the transcript ends while every other composer row reached it. */}
         <Textarea
           value={text}
-          onChange={event => setText(event.target.value)}
+          onChange={event => onTextChange(event.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={disabled ? 'Pick a conversation to start typing' : placeholder}
+          placeholder={composerPlaceholder({ disabled, text, suggestion, placeholder })}
           disabled={disabled}
           minRows={1}
           maxRows={8}
@@ -187,7 +327,17 @@ export function Composer({
           }
           // onPaste goes on the inner textarea, not Joy's root: the root is a div, and typing
           // the handler for it would lose the element the paste actually happened in.
-          slotProps={{ textarea: { 'data-testid': 'chat-composer-input', onPaste } }}
+          slotProps={{
+            textarea: {
+              'data-testid': 'chat-composer-input',
+              onPaste,
+              // Held so selecting a skill can put focus back where the arguments get typed.
+              ref: textareaRef,
+              // So the hint is distinguishable from the ordinary placeholder without reading
+              // the text, and so a screen reader is told Tab does something here.
+              ...(shown ? { 'data-suggested-prompt': shown, 'aria-keyshortcuts': 'Tab' } : {}),
+            },
+          }}
         />
       </Box>
 

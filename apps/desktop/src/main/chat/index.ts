@@ -34,6 +34,8 @@ import { ModelCatalog } from './ModelCatalog';
 import { SessionActivity } from './SessionActivity';
 import { SessionStore } from './SessionStore';
 import { currentBranch, isGitRepository, listBranches, projectDisplayName } from './project/git';
+import { ProjectTrustStore } from './skills/ProjectTrustStore';
+import { SkillCatalog } from './skills/SkillCatalog';
 import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
@@ -126,6 +128,9 @@ export function registerChat(auth: AuthService): RegisteredChat {
   const userData = app.getPath('userData');
   const store = new SessionStore(join(userData, 'sessions'), PREFERRED_MODEL);
   const access = new AccessStore(join(userData, 'tool-access.json'));
+  // Its own file beside tool-access.json, and for the same reason: both record a consent the
+  // user gave once and should not be asked for again on every launch.
+  const skills = new SkillCatalog(new ProjectTrustStore(join(userData, 'project-skill-trust.json')));
   const attachments = new AttachmentStore(join(userData, 'attachments'), logger, shrinkImage);
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
@@ -192,6 +197,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     mcp,
     artifacts,
     queue,
+    skills,
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which is T4's invariant broken through a side door.
     protectedPaths: [userData],
@@ -206,6 +212,12 @@ export function registerChat(auth: AuthService): RegisteredChat {
     service.setSessionArchived(sessionId, archived)
   );
   ipcMain.handle(IPC_CHANNELS.chatGetPendingApprovals, () => service.pendingApprovals());
+  ipcMain.handle(IPC_CHANNELS.chatListSkills, (_event, sessionId: string) => service.listSkills(sessionId));
+  // Coerced rather than trusted, like the approval mode above: this is the only door to project
+  // trust, so anything that is not an explicit `true` has to land as "not trusted".
+  ipcMain.handle(IPC_CHANNELS.chatSetProjectSkillsTrusted, (_event, sessionId: string, trusted: boolean) =>
+    service.setProjectSkillsTrusted(sessionId, trusted === true)
+  );
   ipcMain.handle(IPC_CHANNELS.chatSetSessionModel, (_event, sessionId: string, model: string) =>
     service.setSessionModel(sessionId, model)
   );
@@ -273,6 +285,9 @@ export function registerChat(auth: AuthService): RegisteredChat {
   );
   ipcMain.handle(IPC_CHANNELS.chatStopReply, (_event, sessionId: string) => service.stop(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatContinueReply, (_event, sessionId: string) => service.continueReply(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatSuggestNextPrompt, (_event, sessionId: string) =>
+    service.suggestNextPrompt(sessionId)
+  );
   ipcMain.handle(IPC_CHANNELS.chatGetQueued, (_event, sessionId: string) => service.queuedMessages(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatCancelQueued, (_event, sessionId: string, queuedId: string) =>
     service.cancelQueued(sessionId, queuedId)
