@@ -305,13 +305,28 @@ export interface IDataLake {
    * #1674 governance path - see isTrustedForInjection), the holder of an owner/curator GRANT on it
    * (#2495), or a manager admitted to a scoped session via `preauthorizedLakeIds`. A user who
    * reaches the lake only by a tag, an entitlement, or a `reader` grant reads it WITHOUT this
-   * prompt. Note the org arm is membership, not manage rights - so "trusted" is deliberately
+   * prompt, unless the lake opts in via `injectPromptForReaders` AND that user's session explicitly
+   * scopes to the lake. Note the org arm is membership, not manage rights - so "trusted" is deliberately
    * curator-or-above for the GRANT arm specifically, not a property of the whole rule. The org
    * prompt stays authoritative on conflict. Editable
    * only via canManageLake and withheld from non-managers by the server; uncapped, matching
    * the other system prompts in the codebase. Absent/empty = no per-lake prompt.
    */
   systemPrompt?: string;
+  /**
+   * Manager-set opt-in: `systemPrompt` also steers a READER who reaches the lake by its
+   * `requiredUserTag` / `requiredEntitlement`, but only on a session scoped to this lake
+   * (`session.retrievalTags`). That scope is produced any of several ways: the `lakeScope` picker
+   * or a `dataLakeId` create seed at session creation, a direct write of `retrievalTags` (session
+   * update), or derivation from a lake file attached to an otherwise-unscoped session - attaching
+   * one of the lake's files counts as consent too. It is always the session OWNER's scope, honored
+   * only on the owner's own turns (never a share's or a teammate's) - so an opted-in lake can never
+   * steer a turn that merely happened to retrieve from it, or a turn acting on someone else's
+   * session - see the READER OPT-IN arm in getAccessibleDataLakePrompts. Reader-visible, so a
+   * reader can see a prompt is active. Has no effect on a lake with no tag/entitlement gate.
+   * Absent = false.
+   */
+  injectPromptForReaders?: boolean;
   /**
    * Optional preferred registry system prompt for this lake, by `promptId` (e.g. 'triage_router').
    * When a session is created FOR this lake (see resolveLakeSessionDefaults), this seeds the

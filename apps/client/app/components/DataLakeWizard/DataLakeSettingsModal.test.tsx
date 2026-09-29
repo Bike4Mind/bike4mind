@@ -202,6 +202,7 @@ const gatedLake = {
   origin: 'curated' as const,
   requiredPassageTokenTarget: null,
   lakeMemoryEnabled: false,
+  injectPromptForReaders: false,
   canManage: true,
 };
 
@@ -219,6 +220,7 @@ const openLake = {
   origin: 'curated' as const,
   requiredPassageTokenTarget: null,
   lakeMemoryEnabled: false,
+  injectPromptForReaders: false,
   canManage: true,
 };
 
@@ -236,6 +238,7 @@ const entitlementGatedLake = {
   origin: 'curated' as const,
   requiredPassageTokenTarget: null,
   lakeMemoryEnabled: false,
+  injectPromptForReaders: false,
   canManage: true,
 };
 
@@ -461,7 +464,12 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
 
     const help = screen.getByTestId('datalake-systemprompt-help');
     expect(help).toHaveTextContent(/anyone holding an owner or curator grant on this lake/i);
-    expect(help).toHaveTextContent(/not to users given read-only access by tag, entitlement, or a reader grant/i);
+    // Since injectPromptForReaders (#reader opt-in): readers by tag/entitlement/reader-grant are
+    // named as NOT reached by default, but the copy now also points at the opt-in toggle rather
+    // than stating a flat exclusion.
+    expect(help).toHaveTextContent(
+      /users given read-only access by tag, entitlement, or a reader grant don't get them unless you turn on "apply to readers"/i
+    );
   });
 
   it('states the retrieval-scoped condition, so the copy cannot regress to always-on wording', () => {
@@ -1645,6 +1653,78 @@ describe('DataLakeSettingsModal - lake memory toggle', () => {
 
     expect(screen.getByTestId('datalake-memory-toggle')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-memory-toggle-help')).toHaveTextContent(/disabled platform-wide/i);
+  });
+});
+
+describe('DataLakeSettingsModal - reader-prompt toggle (injectPromptForReaders)', () => {
+  beforeEach(() => {
+    updateMutate.mockReset();
+  });
+
+  it('renders for a manager and does not render for a non-manager', () => {
+    const readerLake = { ...openLake, id: 'lake-reader-1', canManage: false };
+    const { rerender } = render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-reader-2' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.getByTestId('datalake-reader-prompt-toggle')).toBeInTheDocument();
+
+    rerender(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.queryByTestId('datalake-reader-prompt-toggle')).not.toBeInTheDocument();
+  });
+
+  it('sends injectPromptForReaders: true only when the editor toggles it and saves', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-reader-3' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-reader-prompt-toggle'));
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ injectPromptForReaders: true });
+  });
+
+  it('never sends injectPromptForReaders when the editor leaves it unchanged', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-reader-4' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).not.toHaveProperty('injectPromptForReaders');
+  });
+
+  it('warns the toggle has no effect when the lake has no access tag or entitlement', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-reader-5' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-reader-prompt-toggle-help')).toHaveTextContent(/has no effect/i);
+  });
+
+  it('describes what the toggle does once the lake has an access tag', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...gatedLake, id: 'lake-reader-6' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-reader-prompt-toggle-help')).not.toHaveTextContent(/has no effect/i);
   });
 });
 

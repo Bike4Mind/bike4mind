@@ -390,6 +390,12 @@ export interface DataLakeConfig {
    */
   lakeMemoryEnabled?: boolean;
   /**
+   * Reader opt-in for the lake's system prompt (see IDataLake.injectPromptForReaders). Reader-visible
+   * like lakeMemoryEnabled: it answers "does this lake's prompt steer my scoped turns", never the
+   * prompt text itself.
+   */
+  injectPromptForReaders?: boolean;
+  /**
    * Whether the requesting caller may WRITE/MANAGE this lake (add files, edit settings,
    * archive, remove files). Server-computed per request from the manage rule (admin or
    * creator; fallback lakes are read-only for everyone) - the SAME predicate the write
@@ -756,6 +762,7 @@ export function toDataLakeConfig(dl: {
   description?: string;
   isPublic?: boolean;
   lakeMemoryEnabled?: boolean;
+  injectPromptForReaders?: boolean;
   status?: DataLakeStatus;
   origin?: DataLakeOrigin;
 }): DataLakeConfig {
@@ -771,6 +778,7 @@ export function toDataLakeConfig(dl: {
     description: dl.description,
     isPublic: dl.isPublic,
     lakeMemoryEnabled: dl.lakeMemoryEnabled,
+    injectPromptForReaders: dl.injectPromptForReaders,
     status: dl.status,
     origin: dl.origin,
   };
