@@ -14,6 +14,7 @@ import {
 import mongoose, { Model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { softDeletePlugin } from '../../utils/mongo';
+import { NotFoundError } from '@bike4mind/utils';
 
 export const QuestMasterDataSchema = new Schema<QuestMasterData>(
   {
@@ -203,6 +204,15 @@ QuestMasterPlanSchema.plugin(softDeletePlugin);
 export const QuestMasterPlan =
   mongoose.models.QuestMasterPlan ?? mongoose.model('QuestMasterPlan', QuestMasterPlanSchema);
 
+/**
+ * Filter arms that keep a write to a plan the caller can still write: owner or sharedWith, and not
+ * soft-deleted. ANDed into every sharee-reachable write so a revoke or delete landing after the
+ * route's access check turns the write into a no-op. Public visibility is read-only, so it has no
+ * arm. Must stay in sync with verifyQuestPlanWriteAccess (apps/client/server/utils/questMasterPlanAccess.ts)
+ * and callerCanWritePlan (b4m-core/services/src/llm/ChatCompletionFeatures.ts).
+ */
+const writableBy = (userId: string) => ({ deletedAt: null, $or: [{ userId }, { sharedWith: userId }] });
+
 class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument> implements IQuestMasterPlanRepository {
   constructor(private questMasterPlanModel: Model<IQuestMasterPlanDocument>) {
     super(questMasterPlanModel);
@@ -246,6 +256,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
 
   async updateTaskStatus(
     questMasterPlanId: string,
+    userId: string,
     mainQuestId: string,
     subQuestId: string,
     status: QuestMasterData['subQuests'][number]['status']
@@ -255,6 +266,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
     const result = await this.questMasterPlanModel.findOneAndUpdate(
       {
         _id: questMasterPlanId,
+        ...writableBy(userId),
         'quests.id': mainQuestId,
         'quests.subQuests.id': subQuestId,
       },
@@ -458,7 +470,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
     // Try to increment existing session entry atomically
     // This prevents race conditions when multiple requests hit concurrently
     const existingResult = await this.questMasterPlanModel.findOneAndUpdate(
-      { _id: planId, 'sessionHistory.sessionId': sessionId },
+      { _id: planId, ...writableBy(userId), 'sessionHistory.sessionId': sessionId },
       {
         $set: {
           'sessionHistory.$.lastAccessed': new Date(),
@@ -475,8 +487,8 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
 
     // Session doesn't exist in history - add new entry with cap enforcement
     // Using $slice to keep only the most recent entries (negative value keeps last N)
-    const result = await this.questMasterPlanModel.findByIdAndUpdate(
-      planId,
+    const result = await this.questMasterPlanModel.findOneAndUpdate(
+      { _id: planId, ...writableBy(userId) },
       {
         $push: {
           sessionHistory: {
@@ -489,8 +501,9 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
       { new: true }
     );
 
+    // Access is re-checked in the filter, so a revoke or delete since the read above lands here.
     if (!result) {
-      throw new Error('Failed to update quest plan');
+      throw new Error('Access denied');
     }
 
     return result;
@@ -498,6 +511,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
 
   async updateQuestProgress(
     planId: string,
+    userId: string,
     questId: string,
     subQuestId: string,
     updates: {
@@ -572,6 +586,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
     // Build query - optionally include auto-resume logic for paused plans
     const query: Record<string, unknown> = {
       _id: planId,
+      ...writableBy(userId),
       'quests.id': questId,
       'quests.subQuests.id': subQuestId,
     };
@@ -611,7 +626,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
     });
 
     if (!result) {
-      throw new Error('Quest plan or sub-quest not found');
+      throw new NotFoundError('Quest plan or sub-quest not found');
     }
 
     this.scheduleMetricsUpdate(planId);
@@ -623,9 +638,14 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
    * This prevents race conditions when multiple requests try to create sessions
    * @returns true if update succeeded, false if notebookId was already changed
    */
-  async atomicUpdateNotebookId(planId: string, expectedNotebookId: string, newNotebookId: string): Promise<boolean> {
+  async atomicUpdateNotebookId(
+    planId: string,
+    userId: string,
+    expectedNotebookId: string,
+    newNotebookId: string
+  ): Promise<boolean> {
     const result = await this.questMasterPlanModel.findOneAndUpdate(
-      { _id: planId, notebookId: expectedNotebookId },
+      { _id: planId, ...writableBy(userId), notebookId: expectedNotebookId },
       { $set: { notebookId: newNotebookId } },
       { new: true }
     );
@@ -678,13 +698,17 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
     return this.questMasterPlanModel.findByIdAndUpdate(planId, updateOp, { new: true });
   }
 
-  async updateHandoff(planId: string, handoff: QuestHandoff): Promise<IQuestMasterPlanDocument | null> {
-    return this.questMasterPlanModel.findByIdAndUpdate(planId, { $set: { handoff } }, { new: true });
+  async updateHandoff(planId: string, userId: string, handoff: QuestHandoff): Promise<IQuestMasterPlanDocument | null> {
+    return this.questMasterPlanModel.findOneAndUpdate(
+      { _id: planId, ...writableBy(userId) },
+      { $set: { handoff } },
+      { new: true }
+    );
   }
 
-  async addBlocker(planId: string, blocker: QuestBlocker): Promise<IQuestMasterPlanDocument | null> {
-    return this.questMasterPlanModel.findByIdAndUpdate(
-      planId,
+  async addBlocker(planId: string, userId: string, blocker: QuestBlocker): Promise<IQuestMasterPlanDocument | null> {
+    return this.questMasterPlanModel.findOneAndUpdate(
+      { _id: planId, ...writableBy(userId) },
       {
         $push: {
           blockers: {
@@ -699,11 +723,12 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
 
   async resolveBlocker(
     planId: string,
+    userId: string,
     blockerId: string,
     resolution: string
   ): Promise<IQuestMasterPlanDocument | null> {
     return this.questMasterPlanModel.findOneAndUpdate(
-      { _id: planId, 'blockers.id': blockerId },
+      { _id: planId, ...writableBy(userId), 'blockers.id': blockerId },
       {
         $set: {
           'blockers.$.resolvedAt': new Date(),
@@ -714,9 +739,9 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
     );
   }
 
-  async addDecision(planId: string, decision: QuestDecision): Promise<IQuestMasterPlanDocument | null> {
-    return this.questMasterPlanModel.findByIdAndUpdate(
-      planId,
+  async addDecision(planId: string, userId: string, decision: QuestDecision): Promise<IQuestMasterPlanDocument | null> {
+    return this.questMasterPlanModel.findOneAndUpdate(
+      { _id: planId, ...writableBy(userId) },
       {
         $push: {
           decisions: {
@@ -731,6 +756,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
 
   async updateReviewGate(
     planId: string,
+    userId: string,
     questId: string,
     subQuestId: string,
     reviewStatus: ReviewGateStatus,
@@ -747,6 +773,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
     return this.questMasterPlanModel.findOneAndUpdate(
       {
         _id: planId,
+        ...writableBy(userId),
         'quests.id': questId,
         'quests.subQuests.id': subQuestId,
       },

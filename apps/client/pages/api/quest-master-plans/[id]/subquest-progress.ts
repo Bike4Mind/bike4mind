@@ -34,6 +34,7 @@ const handler = baseApi()
 
     const updatedPlan = await questMasterPlanRepository.updateQuestProgress(
       planId,
+      req.user!.id,
       questId,
       subQuestId,
       { status, evidence, timeSpent },

@@ -1192,7 +1192,12 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     const session = isObjectIdShaped(plan.notebookId)
       ? await this.chatCompletion.db.sessions.findById(plan.notebookId)
       : null;
-    return session?.userId === userId;
+    if (session?.userId !== userId) return false;
+    // Backfill like the HTTP side does, so the owner arm of the plan's write filter (writableBy in
+    // QuestMasterPlanModel.ts) matches the write that follows.
+    await this.chatCompletion.db.questMasterPlans.update({ id: plan.id, userId });
+    plan.userId = userId;
+    return true;
   }
 
   async onComplete({
@@ -1227,6 +1232,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
 
     await this.chatCompletion.db.questMasterPlans.updateTaskStatus(
       questMaster.questMasterPlanId,
+      this.user.id,
       questMaster.questId,
       questMaster.subQuestId,
       'completed'
@@ -1287,6 +1293,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
 
     await this.chatCompletion.db.questMasterPlans.updateTaskStatus(
       questMaster.questMasterPlanId,
+      this.user.id,
       questMaster.questId,
       questMaster.subQuestId,
       'in_progress'

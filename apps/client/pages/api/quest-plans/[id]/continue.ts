@@ -97,6 +97,7 @@ const handler = baseApi()
         // Skip if notebookId already changed by a concurrent request
         const updateResult = await questMasterPlanRepository.atomicUpdateNotebookId(
           planId,
+          userId,
           existingPlan.notebookId, // expected current value (placeholder)
           newSession.id // new value
         );
@@ -120,13 +121,15 @@ const handler = baseApi()
         }
       }
 
-      // Auto-resume if paused
-      if (existingPlan.state === 'paused') {
-        existingPlan.state = 'active';
-        await questMasterPlanRepository.update(existingPlan);
-      }
-
       const plan = await questMasterPlanRepository.continueInSession(planId, actualSessionId, userId);
+
+      // Auto-resume if paused. After continueInSession, whose write re-checks access in its filter, so
+      // a caller revoked since the check above is refused before reaching this; targeted, not the
+      // whole stale plan.
+      if (plan.state === 'paused') {
+        plan.state = 'active';
+        await questMasterPlanRepository.update({ id: planId, state: 'active' });
+      }
 
       const contextMessage = await questRepository.create({
         sessionId: actualSessionId,

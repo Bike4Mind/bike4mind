@@ -48,6 +48,7 @@ const handler = baseApi()
     // Returns the updated plan with fresh metrics, avoiding a second fetch
     const updatedPlan = await questMasterPlanRepository.updateQuestProgress(
       planId,
+      req.user!.id,
       questId,
       subQuestId,
       {
