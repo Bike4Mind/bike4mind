@@ -791,8 +791,8 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                   />
                 </TabPanel>
                 {/* Kept mounted, guarded and keyed like the Research panel below, because a
-                    half-typed decline reason is this panel's own state too. It reports no dirty
-                    state, so an unmount here loses the text with nothing warning at all. */}
+                    half-typed decline reason is this panel's own state too. It reports that
+                    reason as dirty state, and an unmount here would lose the text. */}
                 {showProposalsTab && (
                   <TabPanel value="proposals" sx={{ p: 0 }} keepMounted>
                     <DataLakeProposalsPanel
