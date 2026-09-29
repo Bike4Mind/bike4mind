@@ -259,7 +259,7 @@ export interface ToolContext {
   /**
    * Lake ids this session was pre-authorized for at session-create time (a manager admitted to a
    * lake they can manage but are not a member of - see canManageLake, checked once at
-   * pages/api/sessions/create.ts, never re-derived here). Unioned into the resolved lake access
+   * pages/api/v1/sessions/index.ts, never re-derived here). Unioned into the resolved lake access
    * set BEFORE narrowLakeAccessToSession runs (see unionPreauthorizedLakeAccess) so the lake's
    * files and prompt become reachable for exactly this session. Absent/empty = no widening - the
    * ordinary case for every session that isn't a maintainer's admitted test session.

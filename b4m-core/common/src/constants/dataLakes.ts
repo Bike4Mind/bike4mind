@@ -469,7 +469,7 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * ordinary tag/entitlement gate would not give them.
    *
    * NOT the same predicate as `canManage`, and the difference is the point: this one is resolved
-   * with `isAdmin: false`, exactly as `pages/api/sessions/create.ts` and `filterStillManagedLakes`
+   * with `isAdmin: false`, exactly as `pages/api/v1/sessions/index.ts` and `filterStillManagedLakes`
    * both resolve it. Platform-admin is deliberately not an admission rung there (the admission
    * widens FILE retrieval, not just prompt injection - see unionPreauthorizedLakeAccess), so a
    * platform admin who holds no other rung on the lake gets `canManage: true` and

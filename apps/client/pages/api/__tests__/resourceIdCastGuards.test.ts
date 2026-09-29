@@ -32,25 +32,34 @@ const handlers = vi.hoisted(() => ({
   post: null as null | ((req: any, res: any) => unknown),
 }));
 
+// A contract route registers its param/body parsers ahead of the handler, so run the whole chain.
+const runChain = (fns: Array<(req: any, res: any, next: () => void) => unknown>) => async (req: any, res: any) => {
+  for (const fn of fns) await fn(req, res, () => undefined);
+};
+
 vi.mock('@server/middlewares/baseApi', () => {
-  const chain: any = {
-    use: () => chain,
-    put: () => chain,
-    patch: () => chain,
-    get: (fn: any) => {
-      handlers.get = fn;
-      return chain;
-    },
-    delete: (fn: any) => {
-      handlers.delete = fn;
-      return chain;
-    },
-    post: (fn: any) => {
-      handlers.post = fn;
-      return chain;
-    },
+  // Fresh per call: nextRouteForContract rewrites the verb registrars it is handed.
+  const makeChain = () => {
+    const chain: any = {
+      use: () => chain,
+      put: () => chain,
+      patch: () => chain,
+      get: (...fns: any[]) => {
+        handlers.get = runChain(fns);
+        return chain;
+      },
+      delete: (...fns: any[]) => {
+        handlers.delete = runChain(fns);
+        return chain;
+      },
+      post: (...fns: any[]) => {
+        handlers.post = runChain(fns);
+        return chain;
+      },
+    };
+    return chain;
   };
-  return { baseApi: () => chain };
+  return { baseApi: () => makeChain() };
 });
 
 const spies = vi.hoisted(() => ({

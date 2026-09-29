@@ -350,7 +350,6 @@ export const KNOWN_UNPOSTURED = new Set<string>([
   'sessions/[id]/tool-approvals.ts',
   'sessions/bulk.ts',
   'sessions/count.ts',
-  'sessions/create.ts',
   'sessions/download.ts',
   'sessions/favorites.ts',
   'sessions/index.ts',
