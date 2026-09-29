@@ -15,6 +15,8 @@
  *   server/premium-generated/premiumLlmTools.generated.ts - LLM tool contributions
  *   server/premium-generated/premiumSystemPrompts.generated.ts - system prompt contributions
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
+ *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
+ *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
  *
  * Two distinct "empty" forms when no premium packages are present:
  *   SPA/nav   -> emit the file with an empty exported array
@@ -25,7 +27,7 @@
  * real imports for an unlinked package fails typecheck/build repo-wide, which is
  * worse than the overlay's features being un-wired until it is linked.
  *
- * Relative-import glue (infra + migrations) is exempt: it imports overlay source by
+ * Relative-import glue (infra + migrations + contracts) is exempt: it imports overlay source by
  * relative path and needs no link. Note: infra glue itself is link-independent, but
  * the handler stubs it references (from generateServerHandlerStubs) are bare-specifier
  * and therefore omitted in the unlinked case. This is caught at deploy/bundle time
@@ -747,6 +749,62 @@ function generateMigrations(packages) {
   );
 }
 
+// Premium overlays contribute API contracts for the public routes they mount
+// (b4mContributions.contractsExport -> a module exporting `contracts: EndpointContract[]`).
+// Consumed by b4m-core/common's openapi:generate:deployment, which builds this deployment's
+// spec from core CONTRACTS plus these. That package cannot bare-import an overlay, and the
+// file is loaded by path from there, so the import is relative - same reasoning and same
+// declared-path resolution as generateMigrations() above.
+//
+// Also resets the deployment spec module to its null form. The real document needs the
+// overlay SOURCE (a Docker install layer runs this script before sources are copied), so it
+// is written later, by the client prebuild/predev; until then the spec route falls back to
+// the committed core spec. Emitted here so the route's import always resolves.
+function generateContracts(packages) {
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumContracts.generated.ts');
+  const typeImport = `import type { EndpointContract } from '@bike4mind/common';`;
+
+  writeFile(
+    join(CLIENT_ROOT, 'server/premium-generated/deploymentOpenApi.generated.ts'),
+    `${GENERATED_BANNER}// Overwritten by: pnpm --filter @bike4mind/common openapi:generate:deployment\n\n` +
+      `export const deploymentOpenApiSpec: Record<string, unknown> | null = null;\n`
+  );
+
+  const contributors = packages.filter(p => p.contributions.contractsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumContracts: readonly EndpointContract[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p => assertModuleSpecifier(p.contributions.contractsExport, p.name, 'contractsExport'));
+
+  const relSpecs = contributors.map(p => {
+    const sourceFile = resolveExportToDeclaredPath(p, p.contributions.contractsExport);
+    if (!sourceFile) {
+      throw new Error(
+        `[codegen] cannot resolve contractsExport ${JSON.stringify(p.contributions.contractsExport)} ` +
+          `from package "${p.name}" to a declared path - its package.json "exports" map has no ` +
+          `plain-string entry for that subpath. See generateContracts().`
+      );
+    }
+    let rel = relative(dirname(outPath), sourceFile).split(sep).join('/').replace(/\.ts$/, '');
+    if (!rel.startsWith('.')) rel = `./${rel}`;
+    return rel;
+  });
+
+  const imports = relSpecs.map((spec, i) => `import { contracts as contracts${i} } from '${spec}';`).join('\n');
+  const spreads = contributors.map((_, i) => `  ...contracts${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumContracts: readonly EndpointContract[] = [\n${spreads}\n];\n`
+  );
+}
+
 // --- Generate infra glue ---
 
 // For each premium package that declares `b4mContributions.infra`, emit a thin
@@ -876,6 +934,7 @@ generateSystemPrompts(linkedPackages);
 // Relative-import glue: needs no node_modules link, so it gets the full list.
 // Any NEW generator goes in whichever group matches how it imports the overlay.
 generateMigrations(packages);
+generateContracts(packages);
 generateInfraGlue(packages);
 // No-import glue: pure data copied out of package.json, so it imports the overlay
 // not at all and is link-independent for an even simpler reason than the group above.

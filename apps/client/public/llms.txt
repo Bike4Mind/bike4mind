@@ -21,6 +21,9 @@ self-hosted deployment.
 - [OpenAPI contract](/api/v1/openapi.json): the machine-readable HTTP API. Served
   with the current deployment as its `servers` entry, so it is ready for SDK
   codegen.
+- [Deployment OpenAPI contract](/api/v1/openapi.deployment.json): the contract
+  above plus the endpoints of any add-on packages this deployment mounts. Identical
+  to it when there are none.
 - [API reference](/api/v1/docs): the same contract, rendered for reading.
 
 ## MCP
