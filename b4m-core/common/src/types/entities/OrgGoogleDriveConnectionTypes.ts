@@ -343,6 +343,12 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
   enableUnlessDisconnecting(id: string): Promise<boolean>;
 
   /**
+   * Refresh an existing `disconnectRequestedAt` without touching `enabled` or `status`, so a purge
+   * deferring behind a sync keeps reading as live. Never creates a stamp; returns whether it matched.
+   */
+  touchDisconnect(id: string, organizationId: string): Promise<boolean>;
+
+  /**
    * Continuation-only claim take-over: refreshes `syncClaimedAt` iff the connection is still 'syncing'
    * for THIS `activeIngestBatchId` AND still presents `claimToken` (the value the previous slice's
    * renewSyncClaim/adoptSyncClaim minted). A sliced ingest hands the claim from one run to the next

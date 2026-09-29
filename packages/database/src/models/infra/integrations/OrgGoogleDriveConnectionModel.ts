@@ -434,6 +434,14 @@ class OrgGoogleDriveConnectionRepository
     return result.matchedCount > 0;
   }
 
+  async touchDisconnect(id: string, organizationId: string): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, organizationId, disconnectRequestedAt: { $ne: null } },
+      { $set: { disconnectRequestedAt: new Date() } }
+    );
+    return result.matchedCount > 0;
+  }
+
   /**
    * Continuation-only take-over of a live claim (see the type docs): matches on the batch id AND the
    * one-time token this chain's previous slice minted (renewSyncClaim), so only that chain's own next

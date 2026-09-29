@@ -717,6 +717,29 @@ describe('OrgGoogleDriveConnectionModel - disconnect/claimForSync race (F2)', ()
     expect(row?.disconnectRequestedAt?.toISOString()).toBe(b!.stamp.toISOString());
   });
 
+  it('touchDisconnect advances an existing stamp, even while syncing, and never creates one', async () => {
+    const first = new Date('2026-01-01T00:00:00Z');
+    const pending = await OrgGoogleDriveConnection.create({
+      ...base,
+      enabled: false,
+      status: 'syncing',
+      disconnectRequestedAt: first,
+    });
+    const idle = await OrgGoogleDriveConnection.create({
+      ...base,
+      driveFolderId: 'folder-2',
+      targetDataLakeId: 'lake-2',
+    });
+
+    expect(await orgGoogleDriveConnectionRepository.touchDisconnect(pending.id, base.organizationId)).toBe(true);
+    const touched = await OrgGoogleDriveConnection.findById(pending.id);
+    expect(touched!.disconnectRequestedAt!.getTime()).toBeGreaterThan(first.getTime());
+    expect(touched?.status).toBe('syncing');
+
+    expect(await orgGoogleDriveConnectionRepository.touchDisconnect(idle.id, base.organizationId)).toBe(false);
+    expect((await OrgGoogleDriveConnection.findById(idle.id))?.disconnectRequestedAt).toBeUndefined();
+  });
+
   it('enableUnlessDisconnecting re-enables a disabled row but not one with a pending disconnect', async () => {
     const idle = await OrgGoogleDriveConnection.create({ ...base, enabled: false });
     const pending = await OrgGoogleDriveConnection.create({
