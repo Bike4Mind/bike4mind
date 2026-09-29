@@ -224,11 +224,39 @@ export class SessionStore {
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
+  /**
+   * Name a conversation deliberately, and mark the name as chosen.
+   *
+   * `titleLocked` is what stops a generated title landing on top of it later - see
+   * `applyGeneratedTitle`. It is set here and nowhere else, because this is the only path a
+   * name arrives on that somebody meant.
+   */
   async rename(id: string, title: string): Promise<ChatSessionSummary | null> {
     const session = await this.get(id);
     if (!session) return null;
     session.title = deriveTitle(title);
+    session.titleLocked = true;
     session.updatedAt = new Date().toISOString();
+    await this.write(session);
+    return summarize(session);
+  }
+
+  /**
+   * Replace the provisional truncation with a generated name, if the session still wants one.
+   *
+   * The whole race lives here. Generation runs alongside the turn, so the user can rename the
+   * row while the request is in flight, and `titleLocked` is read at the moment of the write
+   * rather than when the request went out - a chosen name wins however late this arrives.
+   * Returns null when it declined, which the caller treats as "nothing to tell the sidebar".
+   *
+   * Leaves `updatedAt` alone, as pinning does: this says nothing about when the conversation
+   * was last talked to, and bumping it would reorder the sidebar behind the user's back.
+   */
+  async applyGeneratedTitle(id: string, title: string): Promise<ChatSessionSummary | null> {
+    const session = await this.get(id);
+    if (!session || session.titleLocked) return null;
+    if (session.title === title) return null;
+    session.title = title;
     await this.write(session);
     return summarize(session);
   }
@@ -436,6 +464,7 @@ export class SessionStore {
         this.launchId
       ),
       ...(parsed.mode === 'code' && project ? { project } : {}),
+      ...(parsed.titleLocked ? { titleLocked: true } : {}),
       ...(parsed.pinned ? { pinned: true } : {}),
       ...(parsed.archived ? { archived: true } : {}),
       ...(origin ? { origin } : {}),

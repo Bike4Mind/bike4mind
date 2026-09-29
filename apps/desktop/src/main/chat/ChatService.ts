@@ -39,6 +39,7 @@ import { MediaApiClient } from './media/MediaApiClient';
 import type { MediaStore } from './media/MediaStore';
 import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
+import { pickTitleModel, sanitizeGeneratedTitle, titleRequestMessages } from './sessionTitle';
 import type { SessionActivity } from './SessionActivity';
 import { isValidSessionId, type SessionStore } from './SessionStore';
 import type { McpManager } from './mcp/McpManager';
@@ -136,6 +137,14 @@ const MAX_CONCURRENT_SPAWNED = 3;
  */
 const MAX_SPAWN_DEPTH = 2;
 
+/**
+ * How long a title request may take before it is dropped.
+ *
+ * Short on purpose: the sidebar row already reads acceptably, so a slow answer is worth less
+ * than a socket held open beside every new conversation.
+ */
+const TITLE_TIMEOUT_MS = 15_000;
+
 export interface ChatServiceLogger {
   debug(message: string): void;
   warn(message: string): void;
@@ -193,6 +202,14 @@ export interface ChatServiceDeps {
   /** Identifies the cached completions endpoint; changing environments invalidates it. */
   getEnvironmentUrl(): string;
   emit(event: ChatStreamEvent): void;
+  /**
+   * A session's stored summary changed outside any reply - today only its generated title.
+   *
+   * Separate from `emit` because that union is per-reply progress: this lands after the turn it
+   * belongs to has been accepted, can land after the reply has finished, and matters to a
+   * sidebar in a window that has the conversation closed. Absent in tests.
+   */
+  summaryChanged?(summary: ChatSessionSummary): void;
 }
 
 /** One model-requested tool call, as it arrives on the wire. */
@@ -616,6 +633,14 @@ export class ChatService {
       ...(attached.length > 0 ? { attachments: attached } : {}),
     };
 
+    // Read off the session as it was BEFORE this message, which is the same question
+    // appendMessage asks to decide whether to title it; `system` is excluded on both sides
+    // because a spawned session reporting back is not a prompt. A session somebody has already
+    // named is skipped here rather than at the write, so an explicitly named spawn never spends
+    // the credits at all.
+    const isFirstPrompt =
+      !existing.titleLocked && !existing.messages.some(message => message.role === 'user' && !message.system);
+
     const session = await this.deps.store.appendMessage(sessionId, userMessage);
     if (!session) return { ok: false, error: 'That conversation no longer exists.' };
 
@@ -628,6 +653,16 @@ export class ChatService {
     if (released) this.deps.queue?.sent(sessionId, released.id, userMessage);
 
     const replyId = this.startReply(session, api);
+
+    // After the reply is in flight, and never awaited: a first answer that waited on a title
+    // request would be a worse product than one with a truncated name. The row changes when
+    // the title lands, which is usually while the reply is still streaming.
+    //
+    // A turn with no prose - an attachment on its own - is left with the filenames appendMessage
+    // named it after. There is nothing there to summarise, so the call would spend credits to
+    // rephrase a list of files the user recognises as written.
+    if (isFirstPrompt && prompt) void this.nameSession(session, api, prompt);
+
     return { ok: true, messageId: replyId, ...(notice ? { notice } : {}) };
   }
 
@@ -1579,6 +1614,61 @@ export class ChatService {
 
   private pickModel(models: readonly ChatModelOption[]): string | null {
     return resolveDefaultModel(models, this.deps.preferredModel ?? '');
+  }
+
+  /**
+   * Give a new conversation a name of its own, replacing the truncated first prompt.
+   *
+   * Runs BESIDE the turn: this request and the turn's own go out concurrently and neither
+   * waits on the other, which is the whole point - a first answer held up by a title request
+   * would be a worse product than a conversation with a truncated name. Every failure path
+   * lands on the same outcome: the session keeps the truncation it already has. Nothing here reaches the
+   * conversation - a title that could not be generated is cosmetic, and an error message about
+   * one would be the most annoying thing in the app.
+   *
+   * Titles Code sessions too. SessionStore.create leaves one untitled because the project name
+   * is already the group header, which is an argument about not REUSING the project name - the
+   * row underneath it still has to say which of five conversations about that repo this is, and
+   * a generated name does that better than the truncation it gets today.
+   */
+  private async nameSession(session: ChatSession, api: AuthenticatedApiClient, prompt: string): Promise<void> {
+    const controller = new AbortController();
+    let timer: NodeJS.Timeout | undefined;
+
+    // Everything is inside, including reading the catalog: this runs as a floating promise, so
+    // a throw out of it would be an unhandled rejection in main rather than a missing title.
+    try {
+      if (!prompt.trim()) return;
+
+      const model = pickTitleModel(this.deps.models?.cached() ?? [], session.model);
+      if (!model) return;
+
+      // Bounded on its own rather than tied to the turn: a title is worth a few seconds and no
+      // more, and the reply it runs beside can legitimately last half an hour.
+      timer = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS);
+
+      const { endpoint } = await this.resolveServerConfig(api);
+      let reply = '';
+      await streamCompletion(
+        api.getAxiosInstance(),
+        endpoint,
+        { model, messages: titleRequestMessages(prompt), tools: [] },
+        event => {
+          if (event.type === 'content' || event.type === 'tool_use') reply += event.text ?? '';
+        },
+        controller.signal
+      );
+
+      const title = sanitizeGeneratedTitle(reply);
+      if (!title) return;
+
+      const summary = await this.deps.store.applyGeneratedTitle(session.id, title);
+      if (summary) this.deps.summaryChanged?.(summary);
+    } catch (err) {
+      this.deps.logger.debug(`CHAT: could not name ${session.id}: ${err instanceof Error ? err.message : 'unknown'}`);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**

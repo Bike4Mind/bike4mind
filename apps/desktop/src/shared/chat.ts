@@ -469,7 +469,17 @@ export interface ChatSessionOrigin {
 
 interface ChatSessionMeta {
   id: string;
+  /**
+   * What the sidebar row says. Provisionally a truncation of the first prompt, replaced moments
+   * later by a generated name unless `titleLocked` says otherwise.
+   */
   title: string;
+  /**
+   * Set once somebody named this conversation on purpose - the user renaming it, or the agent
+   * naming a session it spawned. It exists to be read by the title generator, which never
+   * overwrites a title it did not put there; nothing in the renderer draws it.
+   */
+  titleLocked?: boolean;
   model: string;
   createdAt: string;
   updatedAt: string;

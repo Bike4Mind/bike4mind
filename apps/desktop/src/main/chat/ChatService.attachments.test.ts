@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AttachmentStore } from './AttachmentStore';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
+import { TITLE_INSTRUCTION } from './sessionTitle';
 import type { AccessStore } from './tools/AccessStore';
 import type { ModelCatalog } from './ModelCatalog';
 
@@ -19,9 +20,23 @@ function waitFor(events: ChatStreamEvent[], type: ChatStreamEvent['type']): Prom
   return vi.waitUntil(() => events.find(event => event.type === type), { timeout: 2000, interval: 5 });
 }
 
-/** The content array of the user turn in the request body, whatever shape the rest took. */
+interface WireBody {
+  messages: { role: string; content: unknown }[];
+}
+
+/**
+ * The turn's own request among the calls, rather than whichever went out first.
+ *
+ * A turn puts out two: the reply, and the request that names the session. They are concurrent
+ * by design, so neither is reliably first, and only the leading system turn tells them apart.
+ */
+function replyCallIndex(post: ReturnType<typeof vi.fn>): number {
+  return post.mock.calls.findIndex(call => (call[1] as WireBody).messages[0]?.content !== TITLE_INSTRUCTION);
+}
+
+/** The content array of the user turn in the reply request, whatever shape the rest took. */
 function userContent(post: ReturnType<typeof vi.fn>): unknown[] {
-  const body = post.mock.calls[0][1] as { messages: { role: string; content: unknown }[] };
+  const body = post.mock.calls[replyCallIndex(post)][1] as WireBody;
   const turn = body.messages.find(message => message.role === 'user');
   return Array.isArray(turn?.content) ? (turn.content as unknown[]) : [];
 }
@@ -31,7 +46,8 @@ describe('ChatService attachments', () => {
   let attachments: AttachmentStore;
   let service: ChatService;
   let events: ChatStreamEvent[];
-  let stream: PassThrough;
+  /** One stream per request: a turn now puts two out, the reply and the session's title. */
+  let streams: PassThrough[];
   let post: ReturnType<typeof vi.fn>;
   let cachedModels: ChatModelOption[];
 
@@ -40,8 +56,12 @@ describe('ChatService attachments', () => {
     store = new SessionStore(join(root, 'sessions'), 'vision-model');
     attachments = new AttachmentStore(join(root, 'attachments'), { debug: vi.fn(), warn: vi.fn() });
     events = [];
-    stream = new PassThrough();
-    post = vi.fn().mockResolvedValue({ data: stream, status: 200 });
+    streams = [];
+    post = vi.fn().mockImplementation(() => {
+      const stream = new PassThrough();
+      streams.push(stream);
+      return Promise.resolve({ data: stream, status: 200 });
+    });
     cachedModels = [{ id: 'vision-model', name: 'Vision Model', supportsVision: true }];
 
     service = new ChatService({
@@ -71,8 +91,10 @@ describe('ChatService attachments', () => {
 
   const settle = async () => {
     await waitFor(events, 'start');
-    stream.write(frame({ type: 'content', text: 'ok', stopReason: 'end_turn' }));
-    stream.write(frame('[DONE]'));
+    await vi.waitUntil(() => replyCallIndex(post) !== -1, { timeout: 2000, interval: 5 });
+    const reply = streams[replyCallIndex(post)];
+    reply.write(frame({ type: 'content', text: 'ok', stopReason: 'end_turn' }));
+    reply.write(frame('[DONE]'));
     await waitFor(events, 'done');
   };
 
@@ -128,13 +150,12 @@ describe('ChatService attachments', () => {
 
     // A stateless endpoint means the image is resent verbatim with every later turn.
     events.length = 0;
-    stream = new PassThrough();
-    post.mockResolvedValue({ data: stream, status: 200 });
+    streams.length = 0;
     post.mockClear();
     await service.send(id, 'and now?');
     await settle();
 
-    const resent = (post.mock.calls[0][1] as { messages: { role: string; content: unknown }[] }).messages;
+    const resent = (post.mock.calls[replyCallIndex(post)][1] as WireBody).messages;
     const firstUser = resent.find(message => message.role === 'user');
     expect(firstUser?.content).toEqual([expect.objectContaining({ type: 'image' }), expect.anything()]);
   });
@@ -183,7 +204,7 @@ describe('ChatService attachments', () => {
     await settle();
 
     expect((await service.getSession(id))?.messages[0].attachments).toBeUndefined();
-    const body = post.mock.calls[0][1] as { messages: { role: string; content: unknown }[] };
+    const body = post.mock.calls[replyCallIndex(post)][1] as WireBody;
     expect(body.messages.find(message => message.role === 'user')?.content).toBe('look');
   });
 

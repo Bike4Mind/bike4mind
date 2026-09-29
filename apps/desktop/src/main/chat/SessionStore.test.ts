@@ -70,6 +70,47 @@ describe('SessionStore', () => {
     expect((await store.get(id))?.title).toBe('first thing');
   });
 
+  it('replaces the provisional truncation with a generated title', async () => {
+    const { id } = await store.create();
+    await store.appendMessage(id, {
+      id: 'm1',
+      role: 'user',
+      content: 'In my shared folder, read alpha.txt and tell me what it says',
+      createdAt: new Date().toISOString(),
+    });
+
+    const summary = await store.applyGeneratedTitle(id, 'Reading alpha.txt');
+
+    expect(summary?.title).toBe('Reading alpha.txt');
+    expect((await store.get(id))?.title).toBe('Reading alpha.txt');
+  });
+
+  // The race the feature turns on: generation is in flight while the user renames the row.
+  it('refuses a generated title once the user has named the session', async () => {
+    const { id } = await store.create();
+    await store.rename(id, 'My own name');
+
+    expect(await store.applyGeneratedTitle(id, 'Something The Model Chose')).toBeNull();
+    expect((await store.get(id))?.title).toBe('My own name');
+  });
+
+  it('keeps the lock across a reload, so a later run cannot rename it either', async () => {
+    const { id } = await store.create();
+    await store.rename(id, 'My own name');
+
+    const reopened = new SessionStore(directory, MODEL);
+    expect(await reopened.applyGeneratedTitle(id, 'Something The Model Chose')).toBeNull();
+  });
+
+  // Leaves updatedAt alone, as pinning does: naming a row says nothing about when it was
+  // last talked to, and bumping it would reorder the sidebar behind the user's back.
+  it('does not reorder the sidebar when a title lands', async () => {
+    const { id, updatedAt } = await store.create();
+    await store.applyGeneratedTitle(id, 'A generated name');
+
+    expect((await store.get(id))?.updatedAt).toBe(updatedAt);
+  });
+
   it('settles a streamed reply in place via updateMessage', async () => {
     const { id } = await store.create();
     await store.appendMessage(id, { id: 'r1', role: 'assistant', content: '', createdAt: new Date().toISOString() });
@@ -83,7 +124,10 @@ describe('SessionStore', () => {
     const older = await store.create();
     const newer = await store.create();
     // updatedAt is an ISO string at whole-millisecond resolution, so two creates in the same
-    // tick would otherwise tie and make the assertion depend on readdir order.
+    // tick would otherwise tie and make the assertion depend on readdir order. The rename is
+    // held back a tick for the same reason: on a warm process it lands in the creates' own
+    // millisecond and the tie comes straight back.
+    await new Promise(resolve => setTimeout(resolve, 2));
     await store.rename(newer.id, 'touched later');
 
     const listed = await store.list();
