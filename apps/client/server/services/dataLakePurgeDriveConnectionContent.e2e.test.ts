@@ -89,6 +89,22 @@ const fakeStorage = () => {
   return { deleted, storage: { delete: async (path: string) => void deleted.push(path) } };
 };
 
+/** In-memory stand-in for the session repository: tracks knowledgeIds unlink calls. */
+const fakeSessions = (initial: { id: string; knowledgeIds: string[] }[]) => {
+  const state = new Map(initial.map(s => [s.id, { ...s }]));
+  return {
+    state,
+    sessions: {
+      findAllWithKnowledgeId: async (knowledgeId: string) =>
+        [...state.values()].filter(s => s.knowledgeIds.includes(knowledgeId)),
+      update: async ({ id, knowledgeIds }: { id: string; knowledgeIds: string[] }) => {
+        const existing = state.get(id);
+        if (existing) state.set(id, { ...existing, knowledgeIds });
+      },
+    },
+  };
+};
+
 const purgeConnection = (
   lake: { datalakeTag: string; fileTagPrefix: string; createdByUserId: string },
   files: unknown
@@ -155,6 +171,70 @@ describe('data lake purge Drive teardown - ingested content (real repos + Mongo)
 
     expect(await FabFile.findById(manualFile.id)).toBeTruthy();
     expect(await FabFileChunk.countDocuments({ fabFileId: manualFile.id })).toBe(1);
+  });
+
+  it('reaches an archived-lake file that the reconcile-scoped finder would miss (F1)', async () => {
+    // Archiving a lake stamps archivedAt on every member (archiveDataLake.ts), so
+    // findByDriveConnectionIdInDataLake - tuned for sync-reconcile, which must exclude archived
+    // members - returns nothing for it. The route's purge must use the archivedAt-blind sibling
+    // instead, or an archived lake's disconnect silently purges nothing while still revoking the
+    // connection, reproducing #3374's exact orphan state.
+    const lake = await seedLake();
+    const connectionId = new mongoose.Types.ObjectId().toHexString();
+    const archivedFile = await seedFile({ datalakeTag: lake.datalakeTag, driveConnectionId: connectionId });
+    await FabFile.updateOne({ _id: archivedFile.id }, { $set: { archivedAt: new Date() } });
+
+    expect(await fabFileRepository.findByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag)).toHaveLength(0);
+    const files = await fabFileRepository.findAllByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag);
+    expect(files.map(f => f.id)).toEqual([archivedFile.id]);
+
+    const result = await purgeConnection(lake, files);
+    expect(result.filesPurged).toBe(1);
+    expect(await FabFile.countDocuments({ _id: archivedFile.id }, { includeDeleted: true })).toBe(0);
+  });
+
+  it('reaches a soft-deleted file from an active lake that the reconcile-scoped finder would miss (F1)', async () => {
+    const lake = await seedLake();
+    const connectionId = new mongoose.Types.ObjectId().toHexString();
+    const softDeletedFile = await seedFile({ datalakeTag: lake.datalakeTag, driveConnectionId: connectionId });
+    await FabFile.updateOne({ _id: softDeletedFile.id }, { $set: { deletedAt: new Date() } });
+
+    expect(await fabFileRepository.findByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag)).toHaveLength(0);
+    const files = await fabFileRepository.findAllByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag);
+    expect(files.map(f => f.id)).toEqual([softDeletedFile.id]);
+
+    const result = await purgeConnection(lake, files);
+    expect(result.filesPurged).toBe(1);
+  });
+
+  it("countByDriveConnectionIdInDataLake matches the purge's own finder, including an archived file", async () => {
+    const lake = await seedLake();
+    const connectionId = new mongoose.Types.ObjectId().toHexString();
+    const archivedFile = await seedFile({ datalakeTag: lake.datalakeTag, driveConnectionId: connectionId });
+    await FabFile.updateOne({ _id: archivedFile.id }, { $set: { archivedAt: new Date() } });
+
+    const count = await fabFileRepository.countByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag);
+    const files = await fabFileRepository.findAllByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag);
+    expect(count).toBe(files.length);
+  });
+
+  it("unlinks each deleted file from every chat session's knowledgeIds (F2)", async () => {
+    const lake = await seedLake();
+    const connectionId = new mongoose.Types.ObjectId().toHexString();
+    const fileA = await seedFile({ datalakeTag: lake.datalakeTag, driveConnectionId: connectionId });
+
+    const { sessions, state } = fakeSessions([
+      { id: 'session-1', knowledgeIds: [fileA.id, 'other-file'] },
+      { id: 'session-2', knowledgeIds: ['unrelated-file'] },
+    ]);
+
+    const files = await fabFileRepository.findByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag);
+    await dataLakeService.purgeDataLakeConnectionFiles(dataLakeService.lakeMembershipScope(lake), files, {
+      db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository, users: userRepository, sessions },
+    });
+
+    expect(state.get('session-1')?.knowledgeIds).toEqual(['other-file']);
+    expect(state.get('session-2')?.knowledgeIds).toEqual(['unrelated-file']);
   });
 
   it('is a no-op when the connection ingested no files', async () => {
