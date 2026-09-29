@@ -139,6 +139,20 @@ describe('checkRateLimit (JWT per-user rate limiter)', () => {
       }
       await expect(checkRateLimit(userId, 'cli')).rejects.toThrow(/Rate limit exceeded/);
     });
+
+    it('gives the desktop app the CLI cap even though its requests resolve to source: api', async () => {
+      for (let i = 0; i < 1000; i++) {
+        await checkRateLimit(userId, 'api', 'b4m-desktop/0.1.0');
+      }
+      await expect(checkRateLimit(userId, 'api', 'b4m-desktop/0.1.0')).rejects.toThrow(/Rate limit exceeded/);
+    });
+
+    it('keeps the 100 cap for any other API client', async () => {
+      for (let i = 0; i < 100; i++) {
+        await checkRateLimit(userId, 'api', 'my-script/1.0');
+      }
+      await expect(checkRateLimit(userId, 'api', 'my-script/1.0')).rejects.toThrow(/Rate limit exceeded/);
+    });
   });
 
   describe('error message', () => {

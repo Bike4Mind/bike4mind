@@ -392,6 +392,14 @@ const JWT_RATE_LIMIT_BY_SOURCE: Record<CompletionSource, number> = {
 const JWT_RATE_LIMIT_DEFAULT = 100;
 const JWT_RATE_WINDOW_MS = 60 * 60_000; // 1 hour
 
+/**
+ * First-party clients that run the CLI's client-side tool loop against the completions endpoint,
+ * so one turn fans out into as many completions. They get the CLI cap; `source` itself, which
+ * drives credit and analytics attribution, is left alone. Matched on the User-Agent the client
+ * sets, like `resolveApiCompletionSource` does for `b4m-cli/`.
+ */
+const CLI_TIER_CLIENT = /^b4m-desktop\//i;
+
 function getJwtRateLimit(source?: CompletionSource): number {
   if (!source) return JWT_RATE_LIMIT_DEFAULT;
   return JWT_RATE_LIMIT_BY_SOURCE[source] ?? JWT_RATE_LIMIT_DEFAULT;
@@ -409,10 +417,10 @@ function getJwtRateLimit(source?: CompletionSource): number {
  * hit the cap could never recover without going idle for a full hour from
  * their *most recent* request.
  */
-export async function checkRateLimit(userId: string, source?: CompletionSource): Promise<void> {
+export async function checkRateLimit(userId: string, source?: CompletionSource, client?: string): Promise<void> {
   const key = `rate-limit:ws-auth:${userId}`;
   const adapters = { db: { caches: cacheRepository } };
-  const limit = getJwtRateLimit(source);
+  const limit = getJwtRateLimit(client && CLI_TIER_CLIENT.test(client) ? 'cli' : source);
 
   const current = await cacheService.get({ key }, { ...adapters, schema: z.coerce.number() });
   if (current === null) {
