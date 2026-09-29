@@ -10,7 +10,7 @@ import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import { isObjectIdShaped } from '../../base/objectId';
 import { buildNewModel, isModelOwner } from '../../../../latticeService/latticeModelService';
-import { splitEquals } from '../../../../latticeService/intentScan';
+import { splitEquals } from '@bike4mind/common';
 import type { ILatticeModel, LatticeEntityType, LatticeDataType, LatticeOperation } from '@bike4mind/common';
 import { escapeArtifactBodyJson, sanitizeArtifactTitle } from '../../utils/artifactEmission';
 

@@ -1,5 +1,5 @@
 import { Logger } from '@bike4mind/observability';
-import { matchExplain, matchFormula, matchSetValue } from './intentScan';
+import { matchExplain, matchFormula, matchSetValue } from '@bike4mind/common';
 /**
  * IntentParser
  *

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { matchExplain, matchFormula, matchSetValue, splitEquals } from './intentScan';
+import { matchExplain, matchFormula, matchSetValue, splitEquals } from './latticeIntentScan';
 
 // The regexes the scanners replaced, kept as the differential oracle.
 const SITES: Array<[string, RegExp, (s: string) => string[] | null]> = [
