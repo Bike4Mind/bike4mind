@@ -8,7 +8,7 @@ import {
   MessageContentObject,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
-import BaseRepository from '@bike4mind/db-core';
+import BaseRepository, { convertId } from '@bike4mind/db-core';
 
 export interface IChatHistoryItemModel extends Model<IChatHistoryItemDocument> {}
 
@@ -766,6 +766,17 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   constructor(private questModel: IChatHistoryItemModel) {
     super(questModel);
     this.ctx = null;
+  }
+
+  /** Partial update of one live quest, matched only inside `sessionId` so it cannot land on another session's quest. */
+  async updateInSession(
+    sessionId: string,
+    data: Partial<IChatHistoryItemDocument> & { id: string }
+  ): Promise<IChatHistoryItemDocument | null> {
+    const { id, ...updateData } = data;
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    // deletedAt is explicit: softDeletePlugin does not hook _plainUpdate's findOneAndUpdate.
+    return this._plainUpdate({ _id: convertId(id), sessionId, deletedAt: null }, updateData as Record<string, unknown>);
   }
 
   async findBySessionIdAndId(sessionId: string, id: string) {

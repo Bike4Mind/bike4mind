@@ -97,13 +97,21 @@ const handler = baseApi()
         allowedUpdates.replies = updates.replies;
       }
 
-      const updatedMessage = await questRepository.update({
-        ...message,
+      // Re-checked right before the write: the grant lives on the session and the write is to a
+      // quest, so it cannot share one filter. A revoke landing between this read and the write still
+      // lands; closing that needs a transaction, which this edit is not worth.
+      const stillWritable = await sessionRepository.shareable.findUpdateAccessById(req.user!, sessionId!);
+      if (!stillWritable) {
+        return res.status(403).json({ error: 'Not authorized to update this session' });
+      }
+
+      const updatedMessage = await questRepository.updateInSession(sessionId!, {
+        id: message.id,
         ...allowedUpdates,
       });
 
       // Only reachable if the quest was deleted between the findBySessionIdAndId check above and
-      // this update (or update() encounters some other unmatched-document case) - report it as a
+      // this update (or updateInSession() encounters some other unmatched-document case) - report it as a
       // real failure rather than a 200 whose data.promptMeta is silently undefined.
       if (!updatedMessage) {
         return res.status(404).json({ error: 'Message not found' });
