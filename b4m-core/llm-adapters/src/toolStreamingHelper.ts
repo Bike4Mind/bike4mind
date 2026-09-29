@@ -109,16 +109,18 @@ export function createRecursiveArtifactGuard<Cb extends LooseCompletionCallback>
   // Memoized so a concurrent caller awaits the in-flight cb() instead of resolving early. The slot
   // is claimed before cb() runs, so a flush() re-entered synchronously from inside cb() cannot
   // start a second cb() call.
+  // Not `flushPromise ??= (async () => ...)()`: an async IIFE runs synchronously up to its first
+  // await, so cb() would run before the slot is assigned.
   let flushPromise: Promise<void> | null = null;
   const flush = () => {
     if (flushPromise) return flushPromise;
+    const cleaned = stripDeliveredArtifactBlocks(buffer, deliveredMarkup).trim();
     let resolve!: () => void;
     let reject!: (reason: unknown) => void;
     flushPromise = new Promise<void>((res, rej) => {
       resolve = res;
       reject = rej;
     });
-    const cleaned = stripDeliveredArtifactBlocks(buffer, deliveredMarkup).trim();
     (async () => cb(cleaned ? [cleaned] : [], meta))().then(() => resolve(), reject);
     return flushPromise;
   };
