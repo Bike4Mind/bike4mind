@@ -6,9 +6,12 @@ import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
 import type { SelfHostWorker } from './selfHostWorker';
 
+/** Scheduler cadence (hosted cron runs on a schedule; self-host polls the schedule table). */
+const SCHEDULER_INTERVAL_MS = 5 * 60_000;
+
 export function registerTaskScheduler(worker: Pick<SelfHostWorker, 'registerScheduledTask'>, logger: Logger): void {
   // Mirrors cron/scheduler.ts (hosted). Keep the handler map in sync with it.
-  worker.registerScheduledTask('scheduler', 5 * 60_000, async () => {
+  worker.registerScheduledTask('scheduler', SCHEDULER_INTERVAL_MS, async () => {
     await taskSchedulerService.process({
       db: { taskSchedules: taskScheduleRepository },
       logger,
