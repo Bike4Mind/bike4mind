@@ -43,14 +43,13 @@ import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 
 /**
- * The model a new conversation prefers, matching the CLI's default so the two clients agree
- * about what "the default" means for one account.
+ * The model a new conversation prefers.
  *
  * A PREFERENCE, not a list: the real set comes from the server (see ModelCatalog), and a
  * deployment that does not offer this one gets the first model it does offer instead. It is
  * still the fallback for a session file written before the catalog could be read.
  */
-const PREFERRED_MODEL: string = ChatModels.CLAUDE_4_5_SONNET;
+const PREFERRED_MODEL: string = ChatModels.CLAUDE_5_OPUS;
 
 /** How much of a background process's output the panel asks for when it rejoins after a reload. */
 const PANEL_TAIL_CHARS = 20_000;

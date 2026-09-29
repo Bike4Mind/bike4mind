@@ -171,9 +171,8 @@ export function selectUsableModels(wire: unknown): ChatModelOption[] {
  * Which model a new conversation starts on, and which one a conversation falls back to when
  * its saved model is gone.
  *
- * `preferred` is the CLI's default, so the two clients agree about what "the default model"
- * means on a given account; when this deployment does not offer it, the first model the server
- * listed wins rather than a second hardcoded guess - only the server knows what it has.
+ * When this deployment does not offer `preferred`, the first model the server listed wins
+ * rather than a second hardcoded guess - only the server knows what it has.
  */
 export function resolveDefaultModel(models: readonly ChatModelOption[], preferred: string): string | null {
   if (models.some(model => model.id === preferred)) return preferred;
