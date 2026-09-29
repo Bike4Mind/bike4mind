@@ -66,10 +66,10 @@ void app.whenReady().then(async () => {
   // After ready, not before: safeStorage is only usable once the app is ready, and the vault
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
-  const { service: chat, background } = registerChat(auth);
+  const { service: chat, background, mcp } = registerChat(auth);
 
   /**
-   * Kill every background process before the app goes, in two passes.
+   * Kill every background process and MCP server child before the app goes, in two passes.
    *
    * `before-quit` is the only hook that can wait, so the graceful pass lives here: the quit is
    * vetoed once, the process groups are SIGTERMed and given a moment to shut down cleanly (a
@@ -77,17 +77,19 @@ void app.whenReady().then(async () => {
    * veto from looping forever, and Electron's own force-quit paths still land on `will-quit`
    * below, which SIGKILLs whatever survived.
    *
-   * Neither of these runs if main is SIGKILLed or crashes. That case is covered inside the
-   * child instead - see tools/backgroundScript.ts - because it is the case that actually
-   * happened: a dev server from an earlier task held port 3000 for three days.
+   * Neither of these runs if main is SIGKILLed or crashes. For a background command that case
+   * is covered inside the child instead - see tools/backgroundScript.ts - because it is the
+   * case that actually happened: a dev server from an earlier task held port 3000 for three
+   * days. A stdio MCP server has no such third line: it is someone else's program, and
+   * wrapping it in a watchdog shell would put a layer between this app and the JSON-RPC stream
+   * it speaks. An MCP child therefore survives a crash of main, and nothing else.
    */
   let quitting = false;
   app.on('before-quit', event => {
     if (quitting) return;
     quitting = true;
     event.preventDefault();
-    void background
-      .shutdown()
+    void Promise.all([background.shutdown(), mcp.shutdown()])
       .catch(() => undefined)
       .finally(() => app.quit());
   });
@@ -98,6 +100,7 @@ void app.whenReady().then(async () => {
     // Synchronous and unconditional: this handler cannot await, and a quit that raced the
     // grace period above must not leave a process group behind.
     background.shutdownSync();
+    mcp.shutdownSync();
   });
 
   // Ctrl-C in a dev terminal, or a `kill` of the app. Our children are detached into their own
@@ -106,6 +109,7 @@ void app.whenReady().then(async () => {
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
     process.on(signal, () => {
       background.shutdownSync();
+      mcp.shutdownSync();
       app.quit();
     });
   }

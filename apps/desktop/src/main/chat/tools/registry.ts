@@ -64,23 +64,33 @@ export function findTool(name: string): ToolDefinition | undefined {
 /**
  * Tool declarations for the request body, in the endpoint's `{ toolSchema }` envelope.
  *
- * The three families are declared independently, because they become available for unrelated
+ * The four families are declared independently, because they become available for unrelated
  * reasons. No granted folder means no local tools at all: declaring file tools the model can
  * only be denied teaches it to keep retrying, and an undeclared tool is a cleaner "not
  * available" than one that always fails. The generation tools need only a signed-in session,
  * so they are offered to a user who has shared nothing. The host tools need a project, which
- * is what makes them Code-only.
+ * is what makes them Code-only. MCP tools are a fourth family, passed in rather than declared
+ * here because they only exist once a server the user configured is connected.
  */
 export function toolsForRequest(options: {
   roots: readonly string[];
   media: boolean;
   /** A Code session's project binding. Without one the host tools have nothing to scope to. */
   host: boolean;
+  /**
+   * Schemas contributed by the user's connected MCP servers, already namespaced and framed
+   * (see chat/mcp/names.ts). They are appended rather than merged into a family above because
+   * a name collision with a built-in must be impossible, not resolved here.
+   */
+  mcp?: readonly ToolSchema[];
 }): { toolSchema: ToolSchema }[] {
   const available = [
     ...(options.roots.length > 0 ? LOCAL_TOOLS : []),
     ...(options.media ? MEDIA_TOOLS : []),
     ...(options.host ? HOST_TOOLS : []),
   ];
-  return available.map(tool => ({ toolSchema: tool.schema }));
+  return [
+    ...available.map(tool => ({ toolSchema: tool.schema })),
+    ...(options.mcp ?? []).map(toolSchema => ({ toolSchema })),
+  ];
 }

@@ -1,4 +1,5 @@
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
+import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
 import type {
   AddAttachmentsResult,
   BackgroundProcessInfo,
@@ -86,6 +87,14 @@ export const IPC_CHANNELS = {
   chatGetPendingApprovals: 'chat:get-pending-approvals',
   /** main -> renderer push; the whole set of approvals waiting on the user, whenever it moves. */
   chatPendingApprovals: 'chat:pending-approvals',
+  mcpGetServers: 'mcp:get-servers',
+  mcpAddServer: 'mcp:add-server',
+  mcpUpdateServer: 'mcp:update-server',
+  mcpRemoveServer: 'mcp:remove-server',
+  mcpSetServerEnabled: 'mcp:set-server-enabled',
+  mcpReconnectServer: 'mcp:reconnect-server',
+  /** main -> renderer push; a server changed state, which the renderer never polls for. */
+  mcpServersChanged: 'mcp:servers-changed',
   toolsGetAccess: 'tools:get-access',
   toolsGrantAccess: 'tools:grant-access',
   toolsRevokeAccess: 'tools:revoke-access',
@@ -230,6 +239,22 @@ export interface DesktopApi {
      * there; it reads nothing, it only names what the user already dropped.
      */
     pathFor(file: File): string;
+  };
+  /**
+   * The user's MCP servers. Configs travel renderer -> main WITH their secrets (that is where
+   * the user types them) and come back without: an McpServersState names a server's env
+   * variables and headers and never carries a value. See @shared/mcp.
+   */
+  mcp: {
+    getServers(): Promise<McpServersState>;
+    addServer(input: McpServerInput): Promise<McpMutationResult>;
+    updateServer(id: string, input: McpServerInput): Promise<McpMutationResult>;
+    removeServer(id: string): Promise<McpServersState>;
+    setServerEnabled(id: string, enabled: boolean): Promise<McpServersState>;
+    /** Drop a connection and dial again, for a server the user has just fixed. */
+    reconnectServer(id: string): Promise<McpServersState>;
+    /** Subscribe to connection-state pushes; returns the unsubscribe. */
+    onChanged(listener: (state: McpServersState) => void): () => void;
   };
   tools: {
     getAccess(): Promise<ToolAccessState>;

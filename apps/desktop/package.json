@@ -23,6 +23,7 @@
   "dependencies": {
     "@bike4mind/client-auth": "workspace:*",
     "@bike4mind/common": "workspace:*",
+    "@bike4mind/mcp": "workspace:*",
     "@bike4mind/utils": "workspace:*",
     "@mui/joy": "^5.0.0-beta.52",
     "@mui/system": "^5.15.15",

@@ -9,6 +9,7 @@ import type { ChatProject, ChatSessionMode } from '@shared/chat';
 import { BackgroundProcessPanel } from './BackgroundProcessPanel';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
+import { McpCard } from './McpCard';
 import { MessageThread } from './MessageThread';
 import { PendingApprovalBar } from './PendingApprovalBar';
 import { contentColumnSx } from './layout';
@@ -279,7 +280,12 @@ export function ChatShell({ account }: { account?: ReactNode }) {
         onDelete={sessionId => void onDelete(sessionId)}
         onTogglePin={session => void togglePin(session)}
         onToggleArchived={session => void toggleArchived(session)}
-        card={<SidebarCard />}
+        card={
+          <>
+            <SidebarCard />
+            <McpCard />
+          </>
+        }
         footer={account}
       />
 
