@@ -7,7 +7,6 @@ import type {
   ChatModelOption,
   ChatPendingApproval,
   ChatQueuedMessage,
-  ChatReplyRound,
   ChatSession,
   ChatSessionStatus,
   ChatSessionSummary,
@@ -15,6 +14,7 @@ import type {
   UpdateProjectRequest,
 } from '@shared/chat';
 import { describeReturn } from './queuedMessages';
+import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { applyReplyDone } from './replyDone';
 import { applyStatusEvents } from './sessionStatus';
 import { totalTokens, type TurnProgress } from './statusLine';
@@ -254,31 +254,6 @@ export function useModelCatalog(): ModelCatalogController {
   return { models, loading, error, reload };
 }
 
-/**
- * Rebuild the reply's round structure from the stream, which does not carry it.
- *
- * It does not need to: a round is prose and then the tools that prose announced, so the FIRST
- * text after a round has run something opens the next round. That is the whole rule, and it
- * reproduces exactly what main stores - the point being that the thread reads in order while it
- * is streaming, instead of every row sitting at the bottom until 'done' rearranges them.
- */
-function appendText(rounds: ChatReplyRound[] | undefined, text: string): ChatReplyRound[] {
-  const open = rounds?.[rounds.length - 1];
-  if (!rounds || !open || open.toolCallIds.length > 0) {
-    // The blank line main puts between rounds belongs to the flattened `content`, not to the
-    // round that follows it, which would otherwise open on an empty line of its own.
-    return [...(rounds ?? []), { text: text.replace(/^\n+/, ''), toolCallIds: [] }];
-  }
-  return [...rounds.slice(0, -1), { ...open, text: open.text + text }];
-}
-
-/** Put a call in the round that is open, starting one for a round that announced itself in silence. */
-function attachCall(rounds: ChatReplyRound[] | undefined, callId: string): ChatReplyRound[] {
-  const open = rounds?.[rounds.length - 1];
-  if (!rounds || !open) return [{ text: '', toolCallIds: [callId] }];
-  return [...rounds.slice(0, -1), { ...open, toolCallIds: [...open.toolCallIds, callId] }];
-}
-
 export interface ProjectBindingError {
   message: string;
   /** Refused on timing rather than validity: the same change works once the session is idle. */
@@ -399,9 +374,9 @@ export function useConversation(
       if (!current) return;
       setSession(loaded);
       setMessages(loaded?.messages ?? []);
-      // A reply already running for this session keeps streaming into main; this view just
-      // rejoins at whatever is persisted until the next event arrives. The status line stays
-      // off until it does: this window never saw that turn start, so it cannot time it.
+      // A reply already running arrives here as main's live copy of it (getSession), and the
+      // events from now on extend that. The status line stays off until one arrives: this
+      // window never saw that turn start, so it cannot time it.
       setStreaming(false);
       setTurn(null);
     });
@@ -451,25 +426,7 @@ export function useConversation(
       if (event.type === 'start') {
         setStreaming(true);
         setTurn({ startedAt: Date.now(), tokens: null });
-        // A continued reply starts on a message that is already here, and keeps its text and
-        // tool rows: the deltas extend them. Only the stop reason goes, because the turn it
-        // described is running again.
-        setMessages(current =>
-          current.some(message => message.id === event.messageId)
-            ? current.map(message => (message.id === event.messageId ? { ...message, stopReason: undefined } : message))
-            : [...current, { id: event.messageId, role: 'assistant', content: '', createdAt: new Date().toISOString() }]
-        );
-        return;
-      }
-
-      if (event.type === 'delta') {
-        setMessages(current =>
-          current.map(message =>
-            message.id === event.messageId
-              ? { ...message, content: message.content + event.text, rounds: appendText(message.rounds, event.text) }
-              : message
-          )
-        );
+        setMessages(current => startReply(current, event.messageId));
         return;
       }
 
@@ -481,39 +438,13 @@ export function useConversation(
         return;
       }
 
-      if (event.type === 'tool-start' || event.type === 'tool-end') {
-        setMessages(current =>
-          current.map(message => {
-            if (message.id !== event.messageId) return message;
-            const existing = message.toolCalls ?? [];
-            const known = existing.some(call => call.id === event.call.id);
-            return {
-              ...message,
-              toolCalls: known
-                ? // Wholesale, with nothing carried over from the state it replaces. The
-                  // approval prompt's diff is a proposal and must not outlive the answer; the
-                  // record of what landed arrives on the settled call itself as `diff`.
-                  existing.map(call => (call.id === event.call.id ? event.call : call))
-                : [...existing, event.call],
-              rounds: known ? message.rounds : attachCall(message.rounds, event.call.id),
-            };
-          })
-        );
-        return;
-      }
-
-      if (event.type === 'tool-progress') {
-        setMessages(current =>
-          current.map(message => {
-            if (message.id !== event.messageId) return message;
-            return {
-              ...message,
-              toolCalls: (message.toolCalls ?? []).map(call =>
-                call.id === event.callId ? { ...call, progress: event.text } : call
-              ),
-            };
-          })
-        );
+      if (
+        event.type === 'delta' ||
+        event.type === 'tool-start' ||
+        event.type === 'tool-end' ||
+        event.type === 'tool-progress'
+      ) {
+        setMessages(current => current.map(message => applyLiveEvent(message, event)));
         return;
       }
 
@@ -533,12 +464,17 @@ export function useConversation(
 
       setStreaming(false);
       setTurn(null);
-      setMessages(current =>
-        current.map(message => {
+      setMessages(current => {
+        // Absent when this window opened in the gap between main dropping its live copy and
+        // storing the reply; the terminal event is then the only copy it will get.
+        const base = current.some(message => message.id === event.messageId)
+          ? current
+          : startReply(current, event.messageId);
+        return base.map(message => {
           if (message.id !== event.messageId) return message;
           return event.type === 'done' ? applyReplyDone(message, event) : { ...message, error: event.message };
-        })
-      );
+        });
+      });
     });
   }, []);
 
