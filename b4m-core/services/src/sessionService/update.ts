@@ -239,7 +239,7 @@ const addFilesToProjects = async (
   for (const project of projects) {
     project.fileIds = uniq([...project.fileIds, ...fileIds]);
 
-    await updateShareableFiles(user.id, { project, files }, adapters);
+    await updateShareableFiles(user, { project, files }, adapters);
 
     await db.projects.update(project);
   }

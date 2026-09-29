@@ -18,7 +18,7 @@ describe('addSystemPrompts authorization', () => {
     // Owned by the sharee, so only the project gate decides the outcome.
     const file = { id: 'file-1', userId: SHAREE, users: [], groups: [] };
 
-    const projectUpdate = vi.fn().mockResolvedValue(undefined);
+    const projectUpdate = vi.fn().mockResolvedValue({});
     const fabFileUpdate = vi.fn().mockResolvedValue(undefined);
 
     return {
@@ -27,7 +27,7 @@ describe('addSystemPrompts authorization', () => {
       fabFileUpdate,
       adapters: {
         db: {
-          projects: { shareable: createShareableFake([project as never]), update: projectUpdate },
+          projects: { shareable: createShareableFake([project as never]), updateWithUpdateAccess: projectUpdate },
           fabFiles: { shareable: createShareableFake([file as never]), update: fabFileUpdate },
         },
       },

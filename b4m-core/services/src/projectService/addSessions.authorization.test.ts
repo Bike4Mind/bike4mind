@@ -19,7 +19,7 @@ describe('addSessions authorization', () => {
     // Owned by the sharee, so only the project gate decides the outcome.
     const session = { id: 'session-1', userId: SHAREE, users: [], groups: [] };
 
-    const projectUpdate = vi.fn().mockResolvedValue(undefined);
+    const projectUpdate = vi.fn().mockResolvedValue({});
     const sessionUpdate = vi.fn().mockResolvedValue(undefined);
 
     return {
@@ -28,7 +28,7 @@ describe('addSessions authorization', () => {
       sessionUpdate,
       adapters: {
         db: {
-          projects: { shareable: createShareableFake([project as never]), update: projectUpdate },
+          projects: { shareable: createShareableFake([project as never]), updateWithUpdateAccess: projectUpdate },
           sessions: { shareable: createShareableFake([session as never]), update: sessionUpdate },
           fabFiles: { findAllByIds: vi.fn().mockResolvedValue([]) },
         },
