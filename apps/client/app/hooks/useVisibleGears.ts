@@ -63,3 +63,13 @@ export function useGearsNavSignal(): { startHere: boolean; claimableCount: numbe
     claimableCount: gears.filter(g => g.claimable).length,
   };
 }
+
+export type GearsMenuDot = 'claim' | 'start' | null;
+
+/**
+ * The dot on the phone header's menu button, which stands in for the Gears
+ * row's tag while the sidenav is closed behind it. Same precedence as the tag: a
+ * reward to claim wins over Start here.
+ */
+export const gearsMenuDot = ({ startHere, claimableCount }: ReturnType<typeof useGearsNavSignal>): GearsMenuDot =>
+  claimableCount > 0 ? 'claim' : startHere ? 'start' : null;

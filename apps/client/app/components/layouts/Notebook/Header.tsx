@@ -17,6 +17,8 @@ import { gray } from '@client/app/utils/themes/colors';
 import SessionOwnerBadge from '@client/app/components/Session/SessionOwnerBadge';
 import Typography from '@mui/joy/Typography';
 import { useMobileHeaderStore } from '@client/app/hooks/useMobileHeader';
+import { gearsMenuDot, useGearsNavSignal } from '@client/app/hooks/useVisibleGears';
+import { rewardGreen } from '@client/app/components/common/gearRewardStyles';
 
 const NotebookHeader = () => {
   const [openSideNav, setOpenSideNav, showMessageCounts] = useNotebookLayout(
@@ -33,6 +35,9 @@ const NotebookHeader = () => {
   const { data: favoriteSessions = [] } = useGetFavoriteSessions();
   const pageTitle = useMobileHeaderStore(s => s.title);
   const pageAction = useMobileHeaderStore(s => s.action);
+  // The phone's sidenav is behind this button, so the tag on its Gears row is
+  // unseen until the menu is opened; a dot stands in for it.
+  const menuDot = gearsMenuDot(useGearsNavSignal());
 
   return (
     <Sheet
@@ -60,8 +65,27 @@ const NotebookHeader = () => {
         onClick={() => {
           setOpenSideNav(!openSideNav);
         }}
+        sx={{ position: 'relative' }}
       >
         <MenuIcon />
+        {menuDot && (
+          <Box
+            component="span"
+            aria-hidden
+            data-testid={`mobile-header-menu-dot-${menuDot}`}
+            sx={theme => ({
+              position: 'absolute',
+              top: '-4px',
+              right: '-4px',
+              width: '10px',
+              height: '10px',
+              borderRadius: '50%',
+              // Start here's own tag is neutral, which a bare dot cannot be and still
+              // be seen - so it takes the text colour, and the reward its green.
+              backgroundColor: menuDot === 'claim' ? rewardGreen(theme).ink : theme.palette.text.primary,
+            })}
+          />
+        )}
       </IconButton>
       {isNotebookPage && currentSession ? (
         <Box

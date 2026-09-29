@@ -20,7 +20,7 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (select: (s: typeof userState) => unknown) => select(userState),
 }));
 
-import { useGearsNavSignal, useVisibleGears } from './useVisibleGears';
+import { gearsMenuDot, useGearsNavSignal, useVisibleGears } from './useVisibleGears';
 
 const gear = (key: GearKey, kind: GearKind, state: Partial<GearStatus> = {}): GearStatus => ({
   key,
@@ -122,5 +122,19 @@ describe('useGearsNavSignal', () => {
       gear('video', 'skill', { claimed: true }),
     ]);
     expect(signal()).toEqual({ startHere: false, claimableCount: 2 });
+  });
+});
+
+describe('gearsMenuDot', () => {
+  it('is green while a reward waits, even for a new account', () => {
+    expect(gearsMenuDot({ startHere: true, claimableCount: 2 })).toBe('claim');
+  });
+
+  it('stands in for Start here when nothing is claimable', () => {
+    expect(gearsMenuDot({ startHere: true, claimableCount: 0 })).toBe('start');
+  });
+
+  it('is absent when the row has no tag', () => {
+    expect(gearsMenuDot({ startHere: false, claimableCount: 0 })).toBeNull();
   });
 });
