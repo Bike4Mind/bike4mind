@@ -71,6 +71,15 @@ describe('OAuthGrantModel repository', () => {
     expect((await oauthGrantRepository.findGrant('u3', 'c3'))?.scopes).toEqual(['openid']);
   });
 
+  it('revoke returns null for an already-revoked grant instead of re-stamping revokedAt', async () => {
+    await oauthGrantRepository.upsertGrant({ userId: 'u8', clientId: 'c8', scopes: ['openid'], source: 'authorize' });
+    const first = await oauthGrantRepository.revoke('u8', 'c8');
+    expect(first).not.toBeNull();
+    // A second revoke on an already-revoked grant must return null, not update the timestamp.
+    const second = await oauthGrantRepository.revoke('u8', 'c8');
+    expect(second).toBeNull();
+  });
+
   it('listActiveByUser returns only non-revoked grants for that user', async () => {
     await oauthGrantRepository.upsertGrant({ userId: 'u6', clientId: 'c6a', scopes: ['openid'], source: 'authorize' });
     await oauthGrantRepository.upsertGrant({ userId: 'u6', clientId: 'c6b', scopes: ['profile'], source: 'authorize' });

@@ -61,15 +61,11 @@ describe('GET /api/oauth/grants', () => {
     expect(body.grants[0].scopes).toEqual(['openid', 'profile']);
   });
 
-  it('falls back to clientId as name when the client record is not found', async () => {
+  it('falls back to clientId as name when the client record has a null name', async () => {
     mockRefs.grants = [
       { clientId: 'unknown-client', scopes: ['email'], createdAt: new Date('2026-01-01') },
     ];
     mockRefs.clientName = null as any;
-    vi.doMock('@bike4mind/database', () => ({
-      oauthGrantRepository: { listActiveByUser: () => Promise.resolve(mockRefs.grants) },
-      oauthClientRepository: { findByClientId: () => Promise.resolve(null) },
-    }));
     const { req, res } = createMocks({ method: 'GET' });
     req.user = { id: 'u1' };
     await mockRefs.getHandler!(req, res);

@@ -19,7 +19,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useSearch } from '@tanstack/react-router';
+import { useNavigate, useSearch, Link } from '@tanstack/react-router';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { CircularProgress, Box, Typography, Button, List, ListItem, Sheet } from '@mui/joy';
 import useGetLogo from '@client/app/hooks/useGetLogo';
@@ -266,8 +266,9 @@ const OAuthAuthorizePage = () => {
           <Typography level="body-xs" color="neutral" sx={{ mt: 1 }}>
             You can revoke this access at any time from{' '}
             <Typography
-              component="a"
-              href="/settings"
+              component={Link}
+              to="/profile"
+              search={{ tab: 'settings' }}
               level="body-xs"
               color="neutral"
               sx={{ textDecoration: 'underline' }}

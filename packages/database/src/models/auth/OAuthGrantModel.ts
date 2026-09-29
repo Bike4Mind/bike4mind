@@ -55,6 +55,8 @@ const OAuthGrantSchema = new Schema<IOAuthGrantDocument>(
 
 // One grant per (client, user); the upsert keys on it.
 OAuthGrantSchema.index({ clientId: 1, userId: 1 }, { unique: true });
+// Covers listActiveByUser: equality on userId + revokedAt, sort on createdAt.
+OAuthGrantSchema.index({ userId: 1, revokedAt: 1, createdAt: -1 });
 
 class OAuthGrantRepository extends BaseRepository<IOAuthGrantDocument> implements IOAuthGrantRepository {
   constructor(m: IOAuthGrantModel) {
@@ -95,7 +97,9 @@ class OAuthGrantRepository extends BaseRepository<IOAuthGrantDocument> implement
   }
 
   revoke(userId: string, clientId: string) {
-    return this.model.findOneAndUpdate({ userId, clientId }, { $set: { revokedAt: new Date() } }, { new: true }).exec();
+    return this.model
+      .findOneAndUpdate({ userId, clientId, revokedAt: null }, { $set: { revokedAt: new Date() } }, { new: true })
+      .exec();
   }
 }
 
