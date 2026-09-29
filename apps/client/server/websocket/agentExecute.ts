@@ -2,11 +2,11 @@
  * WebSocket Route: agent_execute
  *
  * Dedicated route for agent execution lifecycle management.
- * This handler dispatches commands to the Agent Executor Lambda
+ * This handler dispatches commands to the agent executor
  * and manages execution state - it does NOT run the agent itself.
  *
  * Client -> Server actions:
- * - start: invoke Agent Executor Lambda with query
+ * - start: invoke agent executor with query
  * - abort: set abort flag on AgentExecutionDoc
  * - permission_response: update permission state, re-invoke executor
  * - gate_response: respond to a confidence-gate pause
@@ -78,7 +78,7 @@ const StartCommandSchema = BaseMessageSchema.extend({
   // onto the resolved profile rather than a pinned selection that replaces it.
   enabledToolsAreAmbient: z.boolean().optional(),
   // Bounded ceiling: each iteration is a full LLM round-trip. Without a cap,
-  // a client could request enough iterations to span all 5 Lambda handoffs
+  // a client could request enough iterations to span all 5 executor handoffs
   // (~65 min total) and inflate cost.
   maxIterations: z.number().int().positive().max(100).optional(),
   // Knowledge / file context forwarded from the client. Session-level
@@ -114,7 +114,7 @@ const StartCommandSchema = BaseMessageSchema.extend({
   // Lattice parity with chat_completion. When true, the executor
   // appends the Lattice tools to the agent's toolbelt so the ReAct loop gets
   // the same context-window optimization quest_processor offers. Persisted on
-  // the AgentExecution doc so it survives Lambda handoffs / continuations.
+  // the AgentExecution doc so it survives executor handoffs / continuations.
   enableLattice: z.boolean().optional(),
   // Artifact parity with chat_completion's `enableArtifacts` body field: the caller's per-request
   // intent, which the executor ANDs with the admin `EnableArtifacts` setting via
@@ -268,7 +268,7 @@ async function handleStart(
   endpoint: string,
   logger: Logger
 ): Promise<void> {
-  // Guards, document creation and Lambda dispatch are shared with the public REST
+  // Guards, document creation and executor dispatch are shared with the public REST
   // route (`pages/api/v1/agent-executions/index.ts`) so the two transports cannot
   // drift; this handler only translates the outcome into `agent_error` frames.
   const result = await startAgentExecution(
@@ -329,9 +329,9 @@ async function handleAbort(
 
   await agentExecutionRepository.setAbortFlag(cmd.executionId);
 
-  // No Lambda is currently running for these statuses, so the abort flag won't be
+  // No executor is currently running for these statuses, so the abort flag won't be
   // polled. Mark aborted directly. `awaiting_subagent` joins the list because the
-  // parent is between Lambda invocations (waiting on a dispatched child).
+  // parent is between executor invocations (waiting on a dispatched child).
   // `awaiting_dag_children` joins for the same reason - parent is between invocations.
   if (
     execution.status === 'awaiting_permission' ||
@@ -343,7 +343,7 @@ async function handleAbort(
   }
 
   // Cascade abort to the synchronous child the parent is waiting on, if any.
-  // The dispatched child Lambda polls its own abort flag at each iteration boundary.
+  // The dispatched child executor polls its own abort flag at each iteration boundary.
   if (execution.waitingOnChild?.childExecutionId) {
     await agentExecutionRepository.setAbortFlag(execution.waitingOnChild.childExecutionId).catch(err => {
       logger.warn('[Abort] Failed to set abort on waiting subagent child', {
@@ -354,8 +354,8 @@ async function handleAbort(
   }
 
   // Phase 4a - cascade abort to all DAG children of this parent. Running
-  // children's Lambdas poll the abort flag; pending children that haven't
-  // dispatched yet stay safely in `pending` (their dispatched Lambda will
+  // children's executors poll the abort flag; pending children that haven't
+  // dispatched yet stay safely in `pending` (their dispatched executor will
   // see `abortedAt` set and exit before claiming).
   if (execution.dagSpec) {
     const dagChildren = await agentExecutionRepository
@@ -370,7 +370,7 @@ async function handleAbort(
         });
       });
       // Same logic as subagent / background - terminal-mark statuses that no
-      // Lambda is actively running so they're recorded as aborted, not stuck.
+      // executor is actively running so they're recorded as aborted, not stuck.
       if (child.status === 'pending' || child.status === 'awaiting_permission' || child.status === 'paused') {
         await agentExecutionRepository.markAborted(childId).catch(() => {});
       }
@@ -380,7 +380,7 @@ async function handleAbort(
   // Cascade abort to all background children spawned by this parent. Without
   // cascading, background children would keep burning credits unattended after the
   // parent is aborted (Phase 3 will add per-child abort UI; until then, cascade
-  // protects against orphan cost). Both `running` Lambdas (poll the flag) and
+  // protects against orphan cost). Both `running` executors (poll the flag) and
   // `awaiting_permission/paused/awaiting_subagent` (mark aborted directly) are
   // covered by mirroring the parent's status check.
   const backgroundChildren = await agentExecutionRepository.findBackgroundChildrenOf(cmd.executionId).catch(() => []);
@@ -447,8 +447,8 @@ async function rememberToolDecision(
  * this after a failed first attempt cannot double-run the resumed work.
  *
  * Note: checkpointDepth is not carried here - it lives in the SQS message from the
- * previous Lambda handoff, not in the AgentExecution document, so this handler cannot
- * read it. The resumed Lambda starts at depth 0. This is safe on two counts: permission
+ * previous executor handoff, not in the AgentExecution document, so this handler cannot
+ * read it. The resumed executor starts at depth 0. This is safe on two counts: permission
  * pauses are user-driven, not loop-driven, so they cannot self-dispatch a runaway on
  * their own; and the resume runs as status `continuing`, which the executor still
  * bounds via the persisted `lambdaInvocationCount` guard (MAX_LAMBDA_HANDOFFS) - a
@@ -474,9 +474,9 @@ export async function handlePermissionResponse(
   if (!execution || execution.userId !== userId) return;
 
   // Recovery for a stuck `continuing` pause: an earlier call of this handler flipped
-  // the status via `updateStatus` and then threw during the Lambda dispatch that
+  // the status via `updateStatus` and then threw during the executor dispatch that
   // follows it, leaving the doc `continuing` with `pendingPermission.approved` true
-  // and no Lambda running. The client retries with the same approval; that retry
+  // and no executor running. The client retries with the same approval; that retry
   // would otherwise be dropped by the `awaiting_permission` guard below, since this
   // doc no longer satisfies it - so match it to the stuck pause here first and
   // re-drive the dispatch instead. `dispatchPermissionResume` is safe to call twice
@@ -494,7 +494,7 @@ export async function handlePermissionResponse(
     const recoveryTarget = resolveAgentExecutorTarget();
     if (!recoveryTarget) throw new Error('Agent execution is not configured');
     await dispatchPermissionResume(cmd.executionId, connectionId, recoveryTarget);
-    logger.info('[Permission] Approved - Lambda re-invoked (recovered retry)', {
+    logger.info('[Permission] Approved - executor re-invoked (recovered retry)', {
       executionId: cmd.executionId,
     });
     return;
@@ -604,7 +604,7 @@ export async function handlePermissionResponse(
     // The CAS can lose for two different reasons that need different answers. Tell
     // them apart by re-reading the doc: if THIS exact pause is already marked
     // approved, the CAS lost to an earlier call of this same handler (a retry after
-    // `updateStatus`/the Lambda invoke below failed, or the response simply arrived
+    // `updateStatus`/the executor dispatch below failed, or the response simply arrived
     // twice) - the resume dispatch just never happened, so drive it again. Anything
     // else (a different pause entirely, or one already past `awaiting_permission`) is
     // a genuinely stale response with nothing left to resume.
@@ -629,7 +629,7 @@ export async function handlePermissionResponse(
         toolName: cmd.toolName,
       });
       await dispatchPermissionResume(cmd.executionId, connectionId, executorTarget);
-      logger.info('[Permission] Approved - Lambda re-invoked (recovered retry)', {
+      logger.info('[Permission] Approved - executor re-invoked (recovered retry)', {
         executionId: cmd.executionId,
       });
       return;
@@ -666,7 +666,7 @@ export async function handlePermissionResponse(
     throw error;
   }
 
-  logger.info('[Permission] Approved — Lambda re-invoked', {
+  logger.info('[Permission] Approved - executor re-invoked', {
     executionId: cmd.executionId,
   });
 }
@@ -674,7 +674,7 @@ export async function handlePermissionResponse(
 /**
  * Handle a client response to a confidence-gate pause. Two outcomes:
  * - `continue` -> clear `pendingGate`, transition `paused -> continuing`,
- *   re-invoke the executor Lambda. Mirrors the structural template of
+ *   re-invoke the executor. Mirrors the structural template of
  *   `handlePermissionResponse` so the CAS contract on the executor side
  *   (`['continuing'] -> 'running'`) is satisfied identically.
  * - `stop` -> mark the execution complete with the partial answer captured
@@ -783,7 +783,7 @@ export async function handleGateResponse(
     throw error;
   }
 
-  logger.info('[Gate] Continue — Lambda re-invoked', { executionId: cmd.executionId });
+  logger.info('[Gate] Continue - executor re-invoked', { executionId: cmd.executionId });
 }
 
 async function handleReconnect(
