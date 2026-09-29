@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
     updateHandoff: vi.fn(),
     resolveBlocker: vi.fn(),
     updateReviewGate: vi.fn(),
+    updateQuestProgress: vi.fn(),
   } as Record<string, ReturnType<typeof vi.fn>>,
   verify: vi.fn(),
 }));
@@ -50,6 +51,7 @@ const routes = [
   ['handoff', 'updateHandoff', { summary: 's', nextSteps: [], pendingDecisions: [], blockers: [] }],
   ['resolve-blocker', 'resolveBlocker', { blockerId: 'b1', resolution: 'done' }],
   ['review-gate', 'updateReviewGate', { questId: 'q1', subQuestId: 'sq1', reviewStatus: 'approved' }],
+  ['subquest-progress', 'updateQuestProgress', { questId: 'q1', subQuestId: 'sq1', status: 'in_progress' }],
 ] as const;
 
 describe.each(routes)('POST /api/quest-master-plans/[id]/%s', (route, method, body) => {

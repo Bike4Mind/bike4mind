@@ -1,5 +1,5 @@
 import { questMasterPlanRepository } from '@bike4mind/database';
-import { BadRequestError, SUBQUEST_STATUS_VALUES } from '@bike4mind/common';
+import { BadRequestError, NotFoundError, SUBQUEST_STATUS_VALUES } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -40,8 +40,9 @@ const handler = baseApi()
       { status, evidence, timeSpent },
       { autoResumeIfPaused: status === 'in_progress' }
     );
+    if (!updatedPlan) throw new NotFoundError('Quest plan not found');
 
-    res.json({ success: true, plan: updatedPlan, metrics: updatedPlan?.metrics });
+    res.json({ success: true, plan: updatedPlan, metrics: updatedPlan.metrics });
   });
 
 export default handler;
