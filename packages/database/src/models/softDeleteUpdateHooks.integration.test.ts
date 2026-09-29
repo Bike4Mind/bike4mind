@@ -165,10 +165,11 @@ describe('softDeletePlugin update hook', () => {
     expect((await rawDoc(id))?.name).toBe('up');
   });
 
-  it('doc.updateOne() on a doc loaded with includeDeleted writes to the tombstone', async () => {
+  it('doc.updateOne() on a doc loaded with includeDeleted needs its own includeDeleted', async () => {
     const { id, deletedAt } = await seedTombstone();
     const tomb = await SoftModel.findById(id).setOptions(includeDeleted);
 
+    expect((await tomb!.updateOne({ $set: { name: 'lost' } })).matchedCount).toBe(0);
     await tomb!.updateOne({ $set: { name: 'doc' } }).setOptions(includeDeleted);
 
     expect(await rawDoc(id)).toMatchObject({ name: 'doc', deletedAt });
