@@ -20,7 +20,9 @@ const BodySchema = z.object({
   key: z.enum(GEAR_DEFAULTS.map(g => g.key) as [GearKey, ...GearKey[]]),
 });
 
-const handler = baseApi().post(
+// jwtOnly: claiming pays credits and is a click in the Gears UI, so there is no
+// reason for an API key to reach it.
+const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler(async (req, res) => {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'Authentication required' });
