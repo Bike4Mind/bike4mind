@@ -112,7 +112,7 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
 
   // Status-filtered in the same write, not checked on a prior read, so a re-revoke or a revoke
   // racing deactivateAllByUserId keeps the first audit stamp instead of overwriting it.
-  async revokeIfActive(id: string, revokedBy: string, revokedReason?: string) {
+  async revokeIfNotDisabled(id: string, revokedBy: string, revokedReason?: string) {
     await this.model.updateOne(
       { _id: id, status: { $ne: ApiKeyStatus.DISABLED } },
       {

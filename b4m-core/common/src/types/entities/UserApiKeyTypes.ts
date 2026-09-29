@@ -299,8 +299,11 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   updateLastUsed: (id: string) => Promise<void>;
   findActiveByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   deactivateAllByUserId: (userId: string) => Promise<void>;
-  /** Disables the key and stamps revokedAt/revokedBy/revokedReason, only if it is not already DISABLED. */
-  revokeIfActive: (id: string, revokedBy: string, revokedReason?: string) => Promise<void>;
+  /**
+   * Disables the key and stamps revokedAt/revokedBy/revokedReason, only if it is not already DISABLED.
+   * Optional so adding it stays additive: an external implementer of this interface is not broken by the new member.
+   */
+  revokeIfNotDisabled?: (id: string, revokedBy: string, revokedReason?: string) => Promise<void>;
   findExpiredKeys: () => Promise<IUserApiKeyDocument[]>;
   countActiveByUserId: (userId: string) => Promise<number>;
   findByProductId: (productId: string) => Promise<IUserApiKeyDocument[]>;
