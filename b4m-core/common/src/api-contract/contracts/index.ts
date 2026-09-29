@@ -10,6 +10,7 @@ import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
 import { generateImageContract } from './imageGeneration.contract';
 import { editImageContract } from './imageEdit.contract';
+import { createFileUploadContract, getFileContract } from './files.contract';
 
 /**
  * Every public endpoint, as a contract. The OpenAPI generator registers each of
@@ -30,4 +31,6 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getMeContract,
   generateImageContract,
   editImageContract,
+  createFileUploadContract,
+  getFileContract,
 ];

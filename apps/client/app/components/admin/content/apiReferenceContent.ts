@@ -296,18 +296,34 @@ GET /api/files
 #### Upload a File
 
 \`\`\`
-POST /api/files/createFabFileURL
+POST /api/v1/files
 \`\`\`
 
-Returns a presigned S3 URL for direct upload.
+**Required API-key scope:** \`files:write\`.
 
-**Request Body:**
+> **This endpoint is generated from its contract.** The full request/response
+> reference - every field, its type, defaults, and validation rules - lives in the
+> [generated API docs](/api/v1/docs) under \`createFileUpload\`, derived from the same
+> object the handler validates with.
+>
+> Uploading is three steps: call this endpoint with the file's name, MIME type, and size;
+> \`PUT\` the raw bytes to the returned \`upload_url\` (no \`Authorization\` header - the URL
+> signature is the credential); then poll \`GET /api/v1/files/[id]\` until the file is
+> downloadable. The returned \`id\` is what you pass to any endpoint that takes a file id.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| fileName | string | Yes | Original filename |
-| contentType | string | Yes | MIME type |
-| projectId | string | No | Associate with a project |
+#### Get a File
+
+\`\`\`
+GET /api/v1/files/[id]
+\`\`\`
+
+**Required API-key scope:** \`files:read\`.
+
+> See the [generated API docs](/api/v1/docs) under \`getFile\`. Returns the file's metadata and
+> a short-lived signed \`download_url\`, which stays \`null\` until the upload has landed and
+> passed moderation. It is both the upload poll and the way to fetch any file id another
+> endpoint returns. GET requests here are exempt from the per-day API-key quota; the
+> per-minute burst limit still applies.
 
 #### Trigger Chunking
 
@@ -328,6 +344,8 @@ Initiates the chunking and embedding pipeline for a file.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| POST | /api/v1/files | Start a file upload (presigned PUT) |
+| GET | /api/v1/files/[id] | Get a file and its download URL |
 | GET | /api/files | List files with pagination and filters |
 | GET | /api/files/[id] | Get file details |
 | PUT | /api/files/[id] | Update file metadata |
@@ -339,11 +357,11 @@ Initiates the chunking and embedding pipeline for a file.
 | POST | /api/files/bulk-delete | Delete multiple files |
 | GET | /api/files/byIds | Get multiple files by ID |
 | POST | /api/files/copy-generated-image | Copy AI-generated image to files |
-| GET | /api/files/download | Download file content |
-| POST | /api/files/generate-presigned-url | Generate download URL |
+| GET | /api/files/download | Download every exportable file as a zip |
+| POST | /api/files/generate-presigned-url | Generate presigned upload URL (internal; use /api/v1/files) |
 | POST | /api/files/generate-smart-name | AI-generated filename |
 | GET | /api/files/getFabFileNameById | Get filename by ID |
-| GET | /api/files/presigned-url | Get presigned URL |
+| GET | /api/files/presigned-url | Get presigned download URLs by storage key |
 | GET | /api/files/tags | List all tags |
 | GET | /api/files/tags/counts | Tag usage counts |
 | POST | /api/files/tags/toggle | Toggle tag on a file |
