@@ -71,7 +71,10 @@ describe('artifactService - update (permission/visibility escalation guard)', ()
 
   it('lets a non-owner writer edit content', async () => {
     await update(sharedWriterId, { id: 'artifact-1', content: 'new body' }, adapters);
-    expect(adapters.db.artifacts.updateWithWriteAccess).toHaveBeenCalled();
+    expect(adapters.db.artifacts.updateWithWriteAccess).toHaveBeenLastCalledWith(
+      sharedWriterId,
+      expect.objectContaining({ id: 'artifact-1', version: 2, currentVersionId: 'version-new' })
+    );
   });
 
   it('lets the owner change permissions and visibility', async () => {
@@ -89,9 +92,10 @@ describe('artifactService - update (permission/visibility escalation guard)', ()
 describe('artifactService - update (write-time re-check)', () => {
   const writerId = 'writer-id';
   let adapters: any;
+  let artifact: any;
 
   beforeEach(() => {
-    const artifact = {
+    artifact = {
       id: 'artifact-1',
       userId: 'owner-id',
       deletedAt: null,
@@ -124,37 +128,100 @@ describe('artifactService - update (write-time re-check)', () => {
     };
   });
 
+  const gate = () => adapters.db.artifacts.updateWithWriteAccess;
+
   it('writes no version or content row when the gated claim matches nothing', async () => {
-    adapters.db.artifacts.updateWithWriteAccess.mockResolvedValueOnce(null);
+    gate().mockResolvedValueOnce(null);
 
-    await expect(update(writerId, { id: 'artifact-1', content: 'new body' }, adapters)).rejects.toThrow(
-      UnauthorizedError
-    );
+    await expect(
+      update(writerId, { id: 'artifact-1', title: 'Renamed', content: 'new body' }, adapters)
+    ).rejects.toThrow(UnauthorizedError);
 
+    // The claim carries no metadata: only the id and updatedAt.
+    expect(gate()).toHaveBeenCalledTimes(1);
+    expect(gate()).toHaveBeenCalledWith(writerId, { id: 'artifact-1', updatedAt: expect.any(Date) });
     expect(adapters.db.artifactContents.createOrUpdate).not.toHaveBeenCalled();
     expect(adapters.db.artifactVersions.createOrUpdate).not.toHaveBeenCalled();
     expect(adapters.db.artifactVersions.update).not.toHaveBeenCalled();
   });
 
-  it('points the artifact at the new version through the same gate', async () => {
-    await update(writerId, { id: 'artifact-1', content: 'new body' }, adapters);
+  it('writes no metadata when creating the content row fails', async () => {
+    adapters.db.artifactContents.createOrUpdate.mockRejectedValueOnce(new Error('write failed'));
 
-    expect(adapters.db.artifacts.updateWithWriteAccess).toHaveBeenLastCalledWith(
+    await expect(
+      update(writerId, { id: 'artifact-1', title: 'Renamed', content: 'new body' }, adapters)
+    ).rejects.toThrow('write failed');
+
+    expect(gate()).toHaveBeenCalledTimes(1);
+    expect(gate()).toHaveBeenCalledWith(writerId, { id: 'artifact-1', updatedAt: expect.any(Date) });
+  });
+
+  it('writes metadata and the version pointer together in one gated write', async () => {
+    await update(writerId, { id: 'artifact-1', title: 'Renamed', content: 'new body' }, adapters);
+
+    expect(gate()).toHaveBeenCalledTimes(2);
+    expect(gate()).toHaveBeenLastCalledWith(
       writerId,
-      expect.objectContaining({ id: 'artifact-1', version: 2, currentVersionId: 'version-new' })
+      expect.objectContaining({
+        id: 'artifact-1',
+        title: 'Renamed',
+        version: 2,
+        currentVersionId: 'version-new',
+        contentHash: expect.any(String),
+        contentSize: expect.any(Number),
+      })
     );
   });
 
-  it('rolls the new rows back and reactivates the previous version when the pointer write is refused', async () => {
-    adapters.db.artifacts.updateWithWriteAccess
+  it('makes a single gated write for a metadata-only update', async () => {
+    await update(writerId, { id: 'artifact-1', title: 'Renamed' }, adapters);
+
+    expect(gate()).toHaveBeenCalledTimes(1);
+    expect(gate()).toHaveBeenCalledWith(writerId, expect.objectContaining({ id: 'artifact-1', title: 'Renamed' }));
+    expect(adapters.db.artifactVersions.createOrUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rolls the new rows back and reactivates the previous version when the final write is refused', async () => {
+    gate()
       .mockImplementationOnce(async (_u: string, data: any) => data)
       .mockResolvedValueOnce(null);
+
+    await expect(
+      update(writerId, { id: 'artifact-1', title: 'Renamed', content: 'new body' }, adapters)
+    ).rejects.toThrow(UnauthorizedError);
+
+    expect(adapters.db.artifactVersions.delete).toHaveBeenCalledWith('version-new');
+    expect(adapters.db.artifactContents.delete).toHaveBeenCalledWith('content-new');
+    expect(adapters.db.artifactVersions.update).toHaveBeenLastCalledWith({ id: 'version-prev', isActive: true });
+  });
+
+  it('leaves the rows alone when a concurrent saver already points the artifact at them', async () => {
+    gate()
+      .mockImplementationOnce(async (_u: string, data: any) => data)
+      .mockResolvedValueOnce(null);
+    adapters.db.artifacts.findOne
+      .mockResolvedValueOnce(artifact)
+      .mockResolvedValueOnce({ ...artifact, version: 2, currentVersionId: 'version-new' });
 
     await expect(update(writerId, { id: 'artifact-1', content: 'new body' }, adapters)).rejects.toThrow(
       UnauthorizedError
     );
 
-    expect(adapters.db.artifactVersions.delete).toHaveBeenCalledWith('version-new');
+    expect(adapters.db.artifactVersions.delete).not.toHaveBeenCalled();
+    expect(adapters.db.artifactContents.delete).not.toHaveBeenCalled();
+    expect(adapters.db.artifactVersions.update).not.toHaveBeenCalledWith({ id: 'version-prev', isActive: true });
+  });
+
+  it('still refuses, and runs the remaining steps, when a rollback step throws', async () => {
+    gate()
+      .mockImplementationOnce(async (_u: string, data: any) => data)
+      .mockResolvedValueOnce(null);
+    adapters.db.artifactVersions.delete.mockRejectedValueOnce(new Error('delete failed'));
+
+    await expect(update(writerId, { id: 'artifact-1', content: 'new body' }, adapters)).rejects.toThrow(
+      UnauthorizedError
+    );
+
     expect(adapters.db.artifactContents.delete).toHaveBeenCalledWith('content-new');
     expect(adapters.db.artifactVersions.update).toHaveBeenLastCalledWith({ id: 'version-prev', isActive: true });
   });
