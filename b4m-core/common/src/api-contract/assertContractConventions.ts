@@ -153,16 +153,6 @@ function carriesTypedStreamErrorFrame(schema: z.ZodTypeAny): boolean {
 }
 
 /**
- * A >= 400 response whose body is JSON, so the envelope rule applies to it.
- *
- * A missing `schema` does NOT mean "not JSON": registerContract falls back to
- * `application/json` carrying an opaque binary schema, so treating schema-less as
- * exempt would let a forgotten `schema` on a 500 bypass the envelope gate AND
- * publish a JSON media type holding raw bytes. Only an explicit non-JSON
- * `contentType` opts out - which the schema-less check below forces authors to
- * declare.
- */
-/**
  * A GET whose 200 body carries a `data` array is a list, and a list pages by cursor (CONVENTIONS.md
  * section 8). Probed with `safeParse` like the envelope check: `next_cursor` must be required and
  * nullable, and the query must carry an optional-or-defaulted `limit` and an optional `cursor`.
@@ -191,6 +181,16 @@ function carriesCursorPagination(contract: EndpointContract): boolean {
   return cursorOk && paramsOk;
 }
 
+/**
+ * A >= 400 response whose body is JSON, so the envelope rule applies to it.
+ *
+ * A missing `schema` does NOT mean "not JSON": registerContract falls back to
+ * `application/json` carrying an opaque binary schema, so treating schema-less as
+ * exempt would let a forgotten `schema` on a 500 bypass the envelope gate AND
+ * publish a JSON media type holding raw bytes. Only an explicit non-JSON
+ * `contentType` opts out - which the schema-less check below forces authors to
+ * declare.
+ */
 function isJsonErrorResponse(status: number, spec: ResponseSpec): boolean {
   return status >= 400 && (spec.contentType ?? 'application/json') === 'application/json';
 }

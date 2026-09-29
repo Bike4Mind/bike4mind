@@ -25,7 +25,13 @@ import { loadRegistryLakeStats, toPublicDataLake } from '@server/dataLakes/toPub
 const CURSOR_SCOPE = 'v1.data-lakes';
 
 const handler = nextRouteForContract(listDataLakesContract, {
-  rateLimit: rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user), windowMs: 60 * 1000 }),
+  rateLimit: rateLimit({
+    limit: req => resolveUserRateLimitPerMin(req.user),
+    windowMs: 60 * 1000,
+    // Static route: the default pathname bucket is already stable, but named explicitly to match
+    // the id-scoped routes' style and make the bucket auditable at a glance.
+    bucket: '/api/v1/data-lakes',
+  }),
 })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req, res) => {

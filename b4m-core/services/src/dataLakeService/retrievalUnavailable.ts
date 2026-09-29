@@ -156,6 +156,20 @@ export function partitionByIndexAvailability<T extends IndexStateFile>(
 }
 
 /**
+ * Whether a file has ANY passage retrievable right now, reading a null `vectorizedChunkCount` the
+ * same way `partitionByIndexAvailability`'s servable arm does: it predates the field, so a legacy
+ * row with chunks is content served by those chunks alone, not a zero. `classifyIngestionStatus`
+ * below is the only caller - keeping the reading here, rather than re-deriving it inline, is what
+ * stops the per-file status from drifting from what search actually withholds (the defect this
+ * closes: a legacy null-count file with an error used to read `!vectorized` as true and report
+ * `failed` even though `partitionByIndexAvailability` counted it servable).
+ */
+function hasRetrievablePassage(file: Pick<IndexStateFile, 'chunkCount' | 'vectorizedChunkCount'>): boolean {
+  const chunkCount = file.chunkCount ?? 0;
+  return (file.vectorizedChunkCount ?? (chunkCount > 0 ? 1 : 0)) > 0;
+}
+
+/**
  * One lake member's public ingestion status (GET /api/v1/data-lakes/{id}/files/{file_id}). Built on
  * `partitionByIndexAvailability` and the same paused/indexing split as the report below, so the
  * status a caller polls always agrees with what search withholds for that file.
@@ -163,12 +177,12 @@ export function partitionByIndexAvailability<T extends IndexStateFile>(
 export function classifyIngestionStatus(file: IndexStateFile): DataLakeFileIngestionStatus {
   const [withheld] = partitionByIndexAvailability([file]).withheld;
   if (withheld) return isChunkStalledFile(withheld) ? 'paused' : 'indexing';
-  const vectorized = file.vectorizedChunkCount;
   const hasError = typeof file.error === 'string' && file.error.length > 0;
-  // A partly-embedded file that later errored still serves its embedded passages, so it is ready.
-  if (hasError && !vectorized) return 'failed';
-  // A null vector count predates the field; such a file was served by its chunks alone.
-  if ((vectorized ?? 0) > 0 || (vectorized == null && (file.chunkCount ?? 0) > 0)) return 'ready';
+  const retrievable = hasRetrievablePassage(file);
+  // A partly-embedded (or legacy null-count) file that later errored still serves its passages, so
+  // it is ready; only a file with nothing retrievable at all is reported failed.
+  if (hasError && !retrievable) return 'failed';
+  if (retrievable) return 'ready';
   return 'not_ingested';
 }
 

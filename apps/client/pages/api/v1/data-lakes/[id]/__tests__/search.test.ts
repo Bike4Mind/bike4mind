@@ -66,8 +66,11 @@ vi.mock('@server/middlewares/rateLimit', () => ({
     return (_req: unknown, _res: unknown, next: () => void) => next();
   },
 }));
+// Two DISTINCT contexts so a test can tell which builder the route actually called: the admin
+// context bypasses lake access and must never reach `assertLakeAccess` on this member-scoped route.
 vi.mock('@server/dataLakes/toAccessContext', () => ({
-  toAccessContext: async () => ({ userId: 'u1', isAdmin: false, userTags: [], organizationIds: [] }),
+  toAccessContext: async () => ({ userId: 'u1', isAdmin: true, userTags: [], organizationIds: [] }),
+  toMemberAccessContext: async () => ({ userId: 'u1', isAdmin: false, userTags: [], organizationIds: [] }),
 }));
 vi.mock('@server/dataLakes/resolveRetrievalLakeScope', () => ({ resolveRetrievalLakeScope: mockResolveScope }));
 vi.mock('@server/dataLakes/runLakeSemanticSearch', () => ({ runLakeSemanticSearch: mockRunSearch }));
@@ -178,6 +181,9 @@ describe('POST /api/v1/data-lakes/{id}/search', () => {
       tags: ['policy'],
       restrictToDataLake: true,
       embeddingModelExplicit: false,
+      // Its own value, distinct from the SPA route's, so the two doors' traffic can be told apart
+      // in the lake access history even though they share this same search core.
+      surface: 'data-lake-api-v1-search',
     });
     expect(logger.warn).not.toHaveBeenCalled();
   });
@@ -238,5 +244,16 @@ describe('POST /api/v1/data-lakes/{id}/search', () => {
 
   it('is published under the query-only scope', () => {
     expect(searchDataLakeContract.scopes).toEqual(['datalake:query']);
+  });
+
+  // Regression for the admin-bypass gap: fails if the route resolved `toAccessContext` (isAdmin:
+  // true) instead of `toMemberAccessContext` (isAdmin: false).
+  it('resolves a member-scoped context, never the admin-bypass one', async () => {
+    await run();
+    expect(mockAssertLakeAccess).toHaveBeenCalledWith(
+      'target',
+      expect.objectContaining({ isAdmin: false }),
+      expect.anything()
+    );
   });
 });

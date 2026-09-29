@@ -237,6 +237,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         embeddingModelExplicit: parsed.data.embedding_model !== undefined,
         scope,
         isAborted,
+        surface: 'data-lake-semantic-search',
       });
 
       if (outcome.kind === 'aborted') return res.end();

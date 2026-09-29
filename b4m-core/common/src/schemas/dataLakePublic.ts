@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { DATA_LAKE_STATUSES } from '../types/entities/DataLakeTypes';
+import { MAX_LAKE_FILE_TAG_NAME_LENGTH, MAX_TAXONOMY_TAGS } from '../constants/dataLakes';
 import type { ApiErrorCode } from '../apiErrorCodes';
 import { ApiErrorSchema } from './chat';
 import { paginatedResponseSchema } from './pagination';
@@ -80,7 +81,9 @@ export const DataLakeSearchRequestSchema = z.object({
   query: z.string().min(1).max(4000),
   top_k: z.number().int().min(1).max(100).default(10),
   min_score: z.number().min(-1).max(1).default(0),
-  tags: z.array(z.string()).optional(),
+  // Bounds match the taxonomy write path (schemas/dataLake.ts) so a search request can never
+  // exceed what a lake's own tags could carry.
+  tags: z.array(z.string().min(1).max(MAX_LAKE_FILE_TAG_NAME_LENGTH)).max(MAX_TAXONOMY_TAGS).optional(),
 });
 export type DataLakeSearchRequest = z.infer<typeof DataLakeSearchRequestSchema>;
 

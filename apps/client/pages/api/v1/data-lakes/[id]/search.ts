@@ -7,6 +7,9 @@
  * members. The scope is the retrieval resolver's own output NARROWED to the target lake, never a
  * scope built from the lake document, so a lake the caller can read but is not entitled to retrieve
  * from stays unsearchable here too. Auth mode, scopes and validation come from `searchDataLakeContract`.
+ *
+ * Member-scoped (`toMemberAccessContext`) for the same reason as GET /api/v1/data-lakes/{id}: a
+ * platform admin who is not a member of the lake cannot search it through the public API.
  */
 import { searchDataLakeContract, type DataLakeSearchResponse, type IDataLakeDocument } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
@@ -15,7 +18,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { HTTPError, NotFoundError } from '@server/utils/errors';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toMemberAccessContext } from '@server/dataLakes/toAccessContext';
 import { resolveRetrievalLakeScope, type RetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
 import { runLakeSemanticSearch } from '@server/dataLakes/runLakeSemanticSearch';
 import { SEMANTIC_SEARCH_RATE_LIMIT } from '@server/dataLakes/semanticSearchRateLimit';
@@ -44,7 +47,7 @@ const handler = nextRouteForContract(searchDataLakeContract, {
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req, res) => {
     const { query, top_k, min_score, tags } = req.validated;
-    const ctx = await toAccessContext(req);
+    const ctx = await toMemberAccessContext(req);
     const lake = await dataLakeService.assertLakeAccess(req.validatedParams.id, ctx, {
       db: {
         dataLakes: dataLakeRepository,
@@ -78,6 +81,7 @@ const handler = nextRouteForContract(searchDataLakeContract, {
       scope,
       restrictToDataLake: true,
       isAborted: () => clientAborted,
+      surface: 'data-lake-api-v1-search',
     });
 
     if (outcome.kind === 'aborted') return res.end();

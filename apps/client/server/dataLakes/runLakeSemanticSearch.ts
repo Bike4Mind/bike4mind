@@ -32,6 +32,7 @@ import {
   isSupportedEmbeddingModel,
   insufficientCreditsError,
   usdToCredits,
+  type LakeAccessSurface,
   type SettingScope,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
@@ -107,6 +108,8 @@ export type LakeSemanticSearchInput = {
    * ORs in. Set by a door scoped to one lake, whose contract promises exactly that lake's files.
    */
   restrictToDataLake?: boolean;
+  /** Which door made this call, for the lake access event - see LAKE_ACCESS_SURFACES for the vocabulary. */
+  surface: LakeAccessSurface;
   /** Checked between the long-running steps, so a disconnected caller stops costing work. */
   isAborted: () => boolean;
 };
@@ -130,7 +133,7 @@ export async function runLakeSemanticSearch(
   req: Request,
   input: LakeSemanticSearchInput
 ): Promise<LakeSemanticSearchOutcome> {
-  const { query, topK, minScore, tags, embeddingModel, scope, isAborted } = input;
+  const { query, topK, minScore, tags, embeddingModel, scope, isAborted, surface } = input;
   const { dataLakeTags, dataLakeTagPrefixes, lakes } = scope;
 
   // The pre-flight needs a token count on the request path, where the old best-effort
@@ -415,7 +418,7 @@ export async function runLakeSemanticSearch(
         chunkIds: search.results.map(r => r.chunkId),
         scores: search.results.map(r => r.score),
         fileIds: [...new Set(search.results.map(r => r.fileId))],
-        surface: 'data-lake-semantic-search',
+        surface,
         queryText: query,
       },
       req.logger,

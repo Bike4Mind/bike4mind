@@ -3661,8 +3661,11 @@
           "tags": {
             "type": "array",
             "items": {
-              "type": "string"
-            }
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 130
+            },
+            "maxItems": 100
           }
         },
         "required": [
@@ -10747,7 +10750,7 @@
       "post": {
         "operationId": "searchDataLake",
         "summary": "Search a data lake",
-        "description": "Semantic (vector) search over one lake: the query is embedded with the model the corpus was indexed with and the top `top_k` passages at or above `min_score` are returned. Only members of this lake are searched - never the caller's other files. `tags` narrows to files carrying every listed tag. Files still being indexed or paused are withheld rather than searched stale: `partial_results` is then true and `retrieval_unavailable` counts them (poll `GET /api/v1/data-lakes/{id}/files/{file_id}` for a specific file). The query embedding is billed as credits. Limited to 10 searches per minute per caller, shared with the product UI.",
+        "description": "Semantic (vector) search over one lake: the query is embedded with the model the corpus was indexed with and the top `top_k` passages at or above `min_score` are returned. Only members of this lake are searched - never the caller's other files. `tags` narrows to files carrying any of the listed tags. Files still being indexed or paused are withheld rather than searched stale: `partial_results` is then true and `retrieval_unavailable` counts them (poll `GET /api/v1/data-lakes/{id}/files/{file_id}` for a specific file). The query embedding is billed as credits. Limited to 10 searches per minute per caller, shared with the product UI.",
         "tags": [
           "Data Lakes"
         ],
@@ -10908,7 +10911,7 @@
             }
           },
           "404": {
-            "description": "No lake with that id or slug is visible to the caller. A lake that exists but is not yours to read is reported as 404 too, so lake ids cannot be probed through this endpoint. A lake the caller can read but is not entitled to search is reported the same way.",
+            "description": "No lake with that id or slug is visible to the caller. A lake that exists but is not yours to read is reported as 404 too, so lake ids cannot be probed through this endpoint. A lake the caller can read but is not entitled to search is reported the same way, as is a lake that is not `active` yet (a draft lake is readable but not yet searchable).",
             "content": {
               "application/json": {
                 "schema": {

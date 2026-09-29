@@ -10,6 +10,10 @@
  * a caller who can read the lake but not manage it gets a 403 from an explicit manage pre-check
  * (the SPA door lets the service refuse it as a 400), and a malformed `file_id` is a 404 before
  * any query rather than a CastError.
+ *
+ * Member-scoped (`toMemberAccessContext`) for the same reason as GET /api/v1/data-lakes/{id}: a
+ * platform admin who is not a member of the lake reaches neither its files nor its membership
+ * through the public API.
  */
 import type { Request, Response } from 'express';
 import {
@@ -36,12 +40,19 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { toObjectIdString } from '@server/utils/objectId';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toMemberAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 
-const perUserRateLimit = () => rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user), windowMs: 60 * 1000 });
+// Required: the raw pathname embeds `id`/`file_id`, so without a stable bucket each file gets its
+// own counter instead of one budget per caller.
+const perUserRateLimit = () =>
+  rateLimit({
+    limit: req => resolveUserRateLimitPerMin(req.user),
+    windowMs: 60 * 1000,
+    bucket: '/api/v1/data-lakes/[id]/files/[file_id]',
+  });
 
 const lakeAccessDb = {
   dataLakes: dataLakeRepository,
@@ -92,7 +103,7 @@ const membershipWriteDb = {
 const getRouter = nextRouteForContract(getDataLakeFileContract, { rateLimit: perUserRateLimit() })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req, res) => {
-    const ctx = await toAccessContext(req);
+    const ctx = await toMemberAccessContext(req);
     const lake = await dataLakeService.assertLakeAccess(req.validatedParams.id, ctx, {
       db: lakeAccessDb,
       logger: req.logger,
@@ -122,7 +133,7 @@ const getRouter = nextRouteForContract(getDataLakeFileContract, { rateLimit: per
 const addRouter = nextRouteForContract(addDataLakeFileContract, { rateLimit: perUserRateLimit() })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req, res) => {
-    const ctx = await toAccessContext(req);
+    const ctx = await toMemberAccessContext(req);
     const lake = await assertLakeMembershipWritable(req.validatedParams.id, ctx, req.logger);
     const fileId = fileIdOrNotFound(req.validatedParams.file_id);
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo) };
@@ -142,7 +153,7 @@ const addRouter = nextRouteForContract(addDataLakeFileContract, { rateLimit: per
 const removeRouter = nextRouteForContract(removeDataLakeFileContract, { rateLimit: perUserRateLimit() })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .delete(async (req, res) => {
-    const ctx = await toAccessContext(req);
+    const ctx = await toMemberAccessContext(req);
     const lake = await assertLakeMembershipWritable(req.validatedParams.id, ctx, req.logger);
     const fileId = fileIdOrNotFound(req.validatedParams.file_id);
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo) };

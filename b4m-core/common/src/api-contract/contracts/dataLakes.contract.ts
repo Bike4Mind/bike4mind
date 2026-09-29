@@ -204,8 +204,8 @@ export const searchDataLakeContract = defineEndpoint({
   description:
     'Semantic (vector) search over one lake: the query is embedded with the model the corpus was ' +
     'indexed with and the top `top_k` passages at or above `min_score` are returned. Only members of ' +
-    "this lake are searched - never the caller's other files. `tags` narrows to files carrying every " +
-    'listed tag. Files still being indexed or paused are withheld rather than searched stale: ' +
+    "this lake are searched - never the caller's other files. `tags` narrows to files carrying any " +
+    'of the listed tags. Files still being indexed or paused are withheld rather than searched stale: ' +
     '`partial_results` is then true and `retrieval_unavailable` counts them (poll ' +
     '`GET /api/v1/data-lakes/{id}/files/{file_id}` for a specific file). The query embedding is ' +
     'billed as credits. Limited to 10 searches per minute per caller, shared with the product UI.',
@@ -226,7 +226,9 @@ export const searchDataLakeContract = defineEndpoint({
       schema: ApiErrorSchema,
     },
     404: {
-      description: `${NOT_VISIBLE_LAKE} A lake the caller can read but is not entitled to search is reported the same way.`,
+      description:
+        `${NOT_VISIBLE_LAKE} A lake the caller can read but is not entitled to search is reported the same way, ` +
+        'as is a lake that is not `active` yet (a draft lake is readable but not yet searchable).',
       schema: ApiErrorSchema,
     },
     422: {

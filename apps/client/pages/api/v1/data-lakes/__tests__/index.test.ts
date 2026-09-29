@@ -7,14 +7,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { DATA_LAKES, ListDataLakesResponseSchema } from '@bike4mind/common';
 
-const { mockListDataLakes, mockFindLakes, mockComputeStats, mockFeatureEnabled, mockToMemberAccessContext } =
-  vi.hoisted(() => ({
-    mockListDataLakes: vi.fn(),
-    mockFindLakes: vi.fn(),
-    mockComputeStats: vi.fn(),
-    mockFeatureEnabled: { value: true },
-    mockToMemberAccessContext: vi.fn(),
-  }));
+const {
+  mockListDataLakes,
+  mockFindLakes,
+  mockComputeStats,
+  mockFeatureEnabled,
+  mockToMemberAccessContext,
+  mockRateLimitOptions,
+} = vi.hoisted(() => ({
+  mockListDataLakes: vi.fn(),
+  mockFindLakes: vi.fn(),
+  mockComputeStats: vi.fn(),
+  mockFeatureEnabled: { value: true },
+  mockToMemberAccessContext: vi.fn(),
+  mockRateLimitOptions: vi.fn(),
+}));
 
 // Keeps next-connect's registrar shape and runs `.use()` middleware ahead of each handler, so the
 // feature-flag gate is exercised alongside the contract prelude.
@@ -52,7 +59,10 @@ vi.mock('@server/middlewares/featureFlag', () => ({
         : res.status(403).json({ error: 'Feature not available', code: 'FEATURE_DISABLED' }),
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({
-  rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  rateLimit: (options: unknown) => {
+    mockRateLimitOptions(options);
+    return (_req: unknown, _res: unknown, next: () => void) => next();
+  },
 }));
 vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toMemberAccessContext: mockToMemberAccessContext }));
@@ -68,6 +78,8 @@ vi.mock('@bike4mind/services', async importOriginal => {
 });
 
 const { default: handler } = await import('@pages/api/v1/data-lakes/index');
+// Captured before any beforeEach clears it: the limiter is built once, at module load.
+const rateLimitOptionsAtLoad: unknown = mockRateLimitOptions.mock.calls[0]?.[0];
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 const MEMBER_CTX = { userId: 'u1', isAdmin: false, userTags: [], organizationIds: [], entitlementKeys: [] };
@@ -178,5 +190,11 @@ describe('GET /api/v1/data-lakes', () => {
     expect(res._getStatusCode()).toBe(403);
     expect(res._getJSONData()).toMatchObject({ code: 'FEATURE_DISABLED' });
     expect(mockListDataLakes).not.toHaveBeenCalled();
+  });
+
+  // Named explicitly for consistency with the id-scoped v1 routes, even though this static route's
+  // default pathname bucket would already be stable.
+  it('rate-limits on the named static-route bucket', () => {
+    expect(rateLimitOptionsAtLoad).toEqual(expect.objectContaining({ bucket: '/api/v1/data-lakes', windowMs: 60_000 }));
   });
 });

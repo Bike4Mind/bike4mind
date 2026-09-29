@@ -21,6 +21,7 @@ const {
   mockRemoveFile,
   mockFindFile,
   mockFeatureEnabled,
+  mockRateLimitOptions,
 } = vi.hoisted(() => ({
   mockAssertLakeAccess: vi.fn(),
   mockAssertLakeAccessWithGrants: vi.fn(),
@@ -29,6 +30,7 @@ const {
   mockRemoveFile: vi.fn(),
   mockFindFile: vi.fn(),
   mockFeatureEnabled: { value: true },
+  mockRateLimitOptions: vi.fn(),
 }));
 
 // Keeps next-connect's registrar shape and runs `.use()` middleware ahead of each handler, so the
@@ -67,11 +69,17 @@ vi.mock('@server/middlewares/featureFlag', () => ({
         : res.status(403).json({ error: 'Feature not available', code: 'FEATURE_DISABLED' }),
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({
-  rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  rateLimit: (options: unknown) => {
+    mockRateLimitOptions(options);
+    return (_req: unknown, _res: unknown, next: () => void) => next();
+  },
 }));
 vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
+// Two DISTINCT contexts so a test can tell which builder the route actually called: the admin
+// context bypasses lake access and must never reach the service on this member-scoped route.
 vi.mock('@server/dataLakes/toAccessContext', () => ({
-  toAccessContext: async () => ({ userId: 'u1', isAdmin: false, userTags: [], organizationIds: [] }),
+  toAccessContext: async () => ({ userId: 'u1', isAdmin: true, userTags: [], organizationIds: [] }),
+  toMemberAccessContext: async () => ({ userId: 'u1', isAdmin: false, userTags: [], organizationIds: [] }),
 }));
 vi.mock('@server/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
 vi.mock('@server/dataLakes/lakeMembershipAuditDb', () => ({ lakeMembershipAuditDb: {} }));
@@ -102,6 +110,8 @@ vi.mock('@bike4mind/services', async importOriginal => {
 });
 
 const { default: handler } = await import('@pages/api/v1/data-lakes/[id]/files/[file_id]');
+// Captured before any beforeEach clears it: all three routers build their limiter once, at module load.
+const rateLimitOptionsAtLoad: unknown[] = mockRateLimitOptions.mock.calls.map(call => call[0]);
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
@@ -263,6 +273,29 @@ describe('DELETE /api/v1/data-lakes/{id}/files/{file_id}', () => {
     await expect(run('DELETE')).rejects.toMatchObject({ statusCode: 404 });
     mockCanManageLake.mockReturnValue(false);
     await expect(run('DELETE')).rejects.toMatchObject({ statusCode: 403 });
+  });
+});
+
+describe('rate limit bucket', () => {
+  // The raw pathname embeds `id`/`file_id`; without a stable bucket, every GET/POST/DELETE across
+  // the three routers built here would each get its own per-id/per-file counter.
+  it('shares one stable bucket across GET, POST and DELETE', () => {
+    expect(rateLimitOptionsAtLoad.length).toBeGreaterThan(0);
+    for (const options of rateLimitOptionsAtLoad) {
+      expect(options).toEqual(
+        expect.objectContaining({ bucket: '/api/v1/data-lakes/[id]/files/[file_id]', windowMs: 60_000 })
+      );
+    }
+  });
+});
+
+describe('admin reach', () => {
+  // Regression for the admin-bypass gap: GET/POST/DELETE must all resolve the member-scoped
+  // context, never the admin-bypass one - fails if any of the three route used `toAccessContext`.
+  it.each(['GET', 'POST', 'DELETE'] as const)('%s resolves a member-scoped context', async method => {
+    await run(method);
+    const spy = method === 'GET' ? mockAssertLakeAccess : mockAssertLakeAccessWithGrants;
+    expect(spy).toHaveBeenCalledWith('handbook', expect.objectContaining({ isAdmin: false }), expect.anything());
   });
 });
 

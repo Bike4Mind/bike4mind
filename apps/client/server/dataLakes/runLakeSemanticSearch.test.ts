@@ -70,6 +70,7 @@ const input = (overrides: Partial<LakeSemanticSearchInput> = {}): LakeSemanticSe
   embeddingModelExplicit: false,
   scope: SCOPE,
   isAborted: () => false,
+  surface: 'data-lake-semantic-search',
   ...overrides,
 });
 

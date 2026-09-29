@@ -7,10 +7,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { DATA_LAKES, DataLakeResourceSchema, NotFoundError } from '@bike4mind/common';
 
-const { mockAssertLakeAccess, mockComputeStats, mockFeatureEnabled } = vi.hoisted(() => ({
+const { mockAssertLakeAccess, mockComputeStats, mockFeatureEnabled, mockRateLimitOptions } = vi.hoisted(() => ({
   mockAssertLakeAccess: vi.fn(),
   mockComputeStats: vi.fn(),
   mockFeatureEnabled: { value: true },
+  mockRateLimitOptions: vi.fn(),
 }));
 
 // Keeps next-connect's registrar shape and runs `.use()` middleware ahead of each handler, so the
@@ -49,11 +50,17 @@ vi.mock('@server/middlewares/featureFlag', () => ({
         : res.status(403).json({ error: 'Feature not available', code: 'FEATURE_DISABLED' }),
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({
-  rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  rateLimit: (options: unknown) => {
+    mockRateLimitOptions(options);
+    return (_req: unknown, _res: unknown, next: () => void) => next();
+  },
 }));
 vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
+// Two DISTINCT contexts so a test can tell which builder the route actually called: the admin
+// context bypasses lake access and must never reach `assertLakeAccess` on this member-scoped route.
 vi.mock('@server/dataLakes/toAccessContext', () => ({
-  toAccessContext: async () => ({ userId: 'u1', isAdmin: false, userTags: [], organizationIds: [] }),
+  toAccessContext: async () => ({ userId: 'u1', isAdmin: true, userTags: [], organizationIds: [] }),
+  toMemberAccessContext: async () => ({ userId: 'u1', isAdmin: false, userTags: [], organizationIds: [] }),
 }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
@@ -67,6 +74,8 @@ vi.mock('@bike4mind/services', async importOriginal => {
 });
 
 const { default: handler } = await import('@pages/api/v1/data-lakes/[id]/index');
+// Captured before any beforeEach clears it: the limiter is built once, at module load.
+const rateLimitOptionsAtLoad: unknown = mockRateLimitOptions.mock.calls[0]?.[0];
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
@@ -151,5 +160,25 @@ describe('GET /api/v1/data-lakes/{id}', () => {
     expect(res._getStatusCode()).toBe(403);
     expect(res._getJSONData()).toMatchObject({ code: 'FEATURE_DISABLED' });
     expect(mockAssertLakeAccess).not.toHaveBeenCalled();
+  });
+
+  // Regression for the admin-bypass gap: the public API must never grant a platform admin reach
+  // into a lake they are not a member of. Fails if the route resolved `toAccessContext` (isAdmin:
+  // true) instead of `toMemberAccessContext` (isAdmin: false).
+  it('resolves a member-scoped context, never the admin-bypass one', async () => {
+    await run('handbook');
+    expect(mockAssertLakeAccess).toHaveBeenCalledWith(
+      'handbook',
+      expect.objectContaining({ isAdmin: false }),
+      expect.anything()
+    );
+  });
+
+  // The raw pathname embeds `id`; without a stable bucket two different lake ids would each get
+  // their own rate-limit counter instead of sharing one budget per caller.
+  it('rate-limits on a stable bucket, not the per-id pathname', () => {
+    expect(rateLimitOptionsAtLoad).toEqual(
+      expect.objectContaining({ bucket: '/api/v1/data-lakes/[id]', windowMs: 60_000 })
+    );
   });
 });
