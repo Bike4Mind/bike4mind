@@ -17,13 +17,14 @@ const questMaster = { questMasterPlanId: 'plan1', questId: 'q1', subQuestId: 'sq
 const makeHarness = () => {
   const updateTaskStatus = vi.fn().mockResolvedValue(undefined);
   const findById = vi.fn();
+  const planUpdate = vi.fn().mockResolvedValue(undefined);
   const sessionsFindById = vi.fn();
 
   const chatCompletion = {
     logger: { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     user: { id: CALLER },
     db: {
-      questMasterPlans: { findById, updateTaskStatus },
+      questMasterPlans: { findById, updateTaskStatus, update: planUpdate },
       sessions: { findById: sessionsFindById },
     },
   };
@@ -32,7 +33,7 @@ const makeHarness = () => {
   const feature = new QuestMasterFeature(
     chatCompletion as unknown as ConstructorParameters<typeof QuestMasterFeature>[0]
   );
-  return { feature, findById, updateTaskStatus, sessionsFindById };
+  return { feature, findById, updateTaskStatus, sessionsFindById, planUpdate };
 };
 
 const call = (feature: QuestMasterFeature) =>
@@ -50,7 +51,7 @@ describe('QuestMasterFeature.onComplete plan access guard', () => {
 
     await call(feature);
 
-    expect(updateTaskStatus).toHaveBeenCalledWith('plan1', 'q1', 'sq1', 'completed');
+    expect(updateTaskStatus).toHaveBeenCalledWith('plan1', CALLER, 'q1', 'sq1', 'completed');
   });
 
   it('marks the sub-quest complete when the plan is shared with the caller', async () => {
@@ -59,7 +60,7 @@ describe('QuestMasterFeature.onComplete plan access guard', () => {
 
     await call(feature);
 
-    expect(updateTaskStatus).toHaveBeenCalledWith('plan1', 'q1', 'sq1', 'completed');
+    expect(updateTaskStatus).toHaveBeenCalledWith('plan1', CALLER, 'q1', 'sq1', 'completed');
   });
 
   it('refuses to mutate a plan owned by another user', async () => {
@@ -72,14 +73,16 @@ describe('QuestMasterFeature.onComplete plan access guard', () => {
   });
 
   it('binds a legacy plan (no userId) to its notebook owner - allows when the caller owns it', async () => {
-    const { feature, findById, updateTaskStatus, sessionsFindById } = makeHarness();
+    const { feature, findById, updateTaskStatus, sessionsFindById, planUpdate } = makeHarness();
     findById.mockResolvedValueOnce({ id: 'plan1', notebookId: NB, quests: [{ id: 'q1' }] });
     sessionsFindById.mockResolvedValueOnce({ id: NB, userId: CALLER });
 
     await call(feature);
 
     expect(sessionsFindById).toHaveBeenCalledWith(NB);
-    expect(updateTaskStatus).toHaveBeenCalledWith('plan1', 'q1', 'sq1', 'completed');
+    // Backfilled first, so the owner arm of updateTaskStatus's write filter matches.
+    expect(planUpdate).toHaveBeenCalledWith({ id: 'plan1', userId: CALLER });
+    expect(updateTaskStatus).toHaveBeenCalledWith('plan1', CALLER, 'q1', 'sq1', 'completed');
   });
 
   it('binds a legacy plan (no userId) to its notebook owner - refuses a foreign notebook', async () => {

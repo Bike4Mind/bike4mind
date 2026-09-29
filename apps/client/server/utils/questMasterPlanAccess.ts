@@ -51,7 +51,9 @@ async function verifyQuestPlanAccess(
   } else {
     // Legacy plans without userId - check session ownership and backfill.
     // Only backfill when the caller actually owns the session, so orphaned
-    // plans cannot be claimed by arbitrary users.
+    // plans cannot be claimed by arbitrary users. The backfill is also what lets the
+    // owner arm of the repository's write filter match; callerCanWritePlan in
+    // ChatCompletionFeatures.ts does the same and must stay in sync.
     if (isValidObjectId(plan.notebookId)) {
       const session = await sessionRepository.findById(plan.notebookId);
       if (session && session.userId === userId) {

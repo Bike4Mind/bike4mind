@@ -1,5 +1,5 @@
 import { questMasterPlanRepository } from '@bike4mind/database';
-import { QuestHandoff } from '@bike4mind/common';
+import { NotFoundError, QuestHandoff } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -31,7 +31,9 @@ const handler = baseApi()
       updatedAt: new Date(),
     };
 
-    const updatedPlan = await questMasterPlanRepository.updateHandoff(planId, handoff);
+    const updatedPlan = await questMasterPlanRepository.updateHandoff(planId, req.user!.id, handoff);
+
+    if (!updatedPlan) throw new NotFoundError('Quest plan not found');
 
     res.json({ success: true, plan: updatedPlan });
   });
