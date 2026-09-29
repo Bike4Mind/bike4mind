@@ -908,6 +908,12 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   findAllWithKnowledgeId: (knowledgeId: string) => Promise<ISessionDocument[]>;
 
   /**
+   * Atomically remove the given file ids from every session's `knowledgeIds` (a `$pull`, so
+   * concurrent callers cannot overwrite each other's removals). Resolves to the sessions modified.
+   */
+  pullKnowledgeIds: (fabFileIds: string[]) => Promise<number>;
+
+  /**
    * Search for sessions by user ID
    *
    * @param search - The search query
