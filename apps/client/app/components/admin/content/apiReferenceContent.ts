@@ -684,7 +684,7 @@ POST /api/v1/image-edits
 
 #### OpenAPI 3.1 documented endpoints
 
-A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code. Currently: \`/api/chat\`, \`/api/ai/v1/completions\`, \`/api/ai/v1/tools\`, the audio generation endpoints (\`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`), and the image endpoints (\`/api/v1/image-generations\`, \`/api/v1/image-edits\`). Everything documented there is omitted from the summary tables below - the spec is the source of truth for those.
+A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code. Currently: \`/api/chat\`, \`/api/ai/v1/completions\`, \`/api/ai/v1/tools\`, the audio generation endpoints (\`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`), the image endpoints (\`/api/v1/image-generations\`, \`/api/v1/image-edits\`), and \`/api/v1/embeddings\`. Everything documented there is omitted from the summary tables below - the spec is the source of truth for those.
 
 | Resource | Path | Description |
 |----------|------|-------------|
@@ -838,6 +838,27 @@ issues no browser session \u2014 unlike \`/api/identify\`, which does both.
 > **This endpoint is generated from its contract.** The full response reference lives
 > in the [generated API docs](/api/v1/docs) under \`getMe\`, derived from the same
 > object the handler validates against.
+
+---
+
+### Embeddings
+
+#### Create Embeddings
+
+\`\`\`
+POST /api/v1/embeddings
+\`\`\`
+
+**Required API-key scope:** \`ai:generate\`.
+
+Returns one embedding vector per input string, for integrations that keep their own vector
+index. The request and success bodies follow the OpenAI embeddings API shape (\`model\`,
+\`input\`, \`dimensions\`, \`encoding_format\`), so an OpenAI SDK client can call it with its base
+URL set to \`<your deployment>/api/v1\` and a \`b4m_live_\` key; errors use the standard B4M error
+envelope rather than OpenAI's. Billed in credits per input token.
+
+> **This endpoint is generated from its contract.** The full request and response reference
+> lives in the [generated API docs](/api/v1/docs) under \`createEmbeddings\`.
 
 ---
 

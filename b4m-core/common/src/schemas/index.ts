@@ -19,6 +19,7 @@ export * from './promptMeta';
 export * from './analytics';
 export * from './llm';
 export * from './me';
+export * from './embeddingsApi';
 export * from './toolSideEffects';
 export * from './bfl';
 export * from './embedding';
