@@ -45,7 +45,7 @@ describe('buildMcpSetupSnippets', () => {
   // Double quotes would let the shell expand the key into Claude Code's config file on disk.
   it('single-quotes the Claude Code key reference so the shell leaves it unexpanded', () => {
     expect(snippetCode('claude-code')).toContain("-e 'B4M_API_KEY=${B4M_API_KEY}'");
-    expect(snippetCode('claude-code')).toContain('-- npx -y @bike4mind/cli mcp serve');
+    expect(snippetCode('claude-code')).toContain('-- npx -y @bike4mind/cli@latest mcp serve');
   });
 
   it('forwards the key to Codex by name rather than by value', () => {
@@ -61,7 +61,7 @@ describe('buildCursorInstallLink', () => {
     expect(new URL(link).searchParams.get('name')).toBe('bike4mind');
     expect(decodeCursorConfig(link)).toEqual({
       command: 'npx',
-      args: ['-y', '@bike4mind/cli', 'mcp', 'serve'],
+      args: ['-y', '@bike4mind/cli@latest', 'mcp', 'serve'],
       env: { B4M_API_KEY: '${env:B4M_API_KEY}', B4M_API_URL: ORIGIN },
     });
   });
