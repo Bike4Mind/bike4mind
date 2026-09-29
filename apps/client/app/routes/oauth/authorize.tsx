@@ -232,9 +232,15 @@ const OAuthAuthorizePage = () => {
                 <Box>
                   {/* An unmapped scope shows its raw id as the heading rather than being skipped:
                       never show fewer permissions than the client is actually granted. */}
-                  <Typography level="body-sm">{label ?? id}</Typography>
+                  {/* textColor is explicit because Joy resolves body-sm to text.tertiary, which this
+                      theme defines at 50% alpha - 2.23:1 on the card in light mode, under WCAG AA.
+                      That left the plain-language line dimmer than the raw id below it, inverting
+                      the hierarchy: the explanation must stay the most readable text in the row. */}
+                  <Typography level="body-sm" textColor="text.primary" data-testid="oauth-consent-scope-label">
+                    {label ?? id}
+                  </Typography>
                   {label && (
-                    <Typography level="body-xs" color="neutral">
+                    <Typography level="body-xs" color="neutral" data-testid="oauth-consent-scope-id">
                       {id}
                     </Typography>
                   )}
