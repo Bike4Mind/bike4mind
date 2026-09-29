@@ -1,10 +1,10 @@
 import { Tab } from '@mui/joy';
 import { styled } from '@mui/system';
-import { profileTabListSx } from '@client/app/routes/profile/profileTabListSx';
+import { profileTabListSx } from '@client/app/components/common/profileTabListSx';
 
 /**
- * The /profile tab strip, for the full-page surfaces that sit in a PageFrame
- * (Gears), plus one fix those pages need.
+ * The page-level tab strip: /profile and the full-page surfaces that sit in a
+ * PageFrame (Gears), plus one fix those framed pages need.
  *
  * Joy derives a child radius from `--List-radius` and applies it to the items
  * marked data-first-child / data-last-child, which rounds the OUTER corners of
@@ -23,20 +23,25 @@ export const pageTabListSx = {
   '& .MuiTab-root': { ...profileTabListSx['& .MuiTab-root'], flexDirection: 'row' },
 } as const;
 
-/** StyledTab from /profile, minus its icon rules (these tabs are text only). */
+/**
+ * The page-level tab, shared by /profile and Gears. An unselected tab recedes by
+ * opacity: 0.7 on its label and 0.5 on its icon, back to full when hovered or selected.
+ *
+ * Kept apart from components/common/StyledTab, which recedes by colour (text.tertiary)
+ * instead: side by side on Gears that read too dim for tabs that head a whole page.
+ * Opacity fades everything inside the label, so anything that must stay at full
+ * strength on an unselected tab (the Gears claim counts) is a Box, not a Typography.
+ */
 export const PageTab = styled(Tab)(({ theme }) => ({
   borderBottomLeftRadius: '0',
   borderBottomRightRadius: '0',
   '&:hover:not([aria-selected="true"])': {
     backgroundColor: `${theme.palette.notebooklist.hoverBg} !important`,
-    '& .MuiTypography-root': {
-      opacity: 1,
-    },
+    '& .MuiTypography-root': { opacity: 1 },
+    '& .MuiSvgIcon-root': { opacity: 1 },
   },
-  '& .MuiTypography-root': {
-    opacity: 0.7,
-  },
-  '&[aria-selected="true"] .MuiTypography-root': {
-    opacity: 1,
-  },
+  '& .MuiTypography-root': { opacity: 0.7 },
+  '& .MuiSvgIcon-root': { opacity: 0.5 },
+  '&[aria-selected="true"] .MuiTypography-root': { opacity: 1 },
+  '&[aria-selected="true"] .MuiSvgIcon-root': { opacity: 1 },
 }));
