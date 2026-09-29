@@ -1,14 +1,13 @@
 // @vitest-environment node
 /**
- * Integration test for POST /api/ai/generate-image scope enforcement.
+ * Integration test for POST /api/v1/image-generations (and its legacy alias
+ * /api/ai/generate-image).
  *
- * Drives the real next-connect chain `baseApi` assembles (see quests/[id] and
- * events integration tests for the rationale) to prove the
- * `baseApi({ requiredScopes: [AI_GENERATE] })` wiring reaches `apiKeyAuth`: a
- * key lacking `ai:generate` is rejected 403 before the handler runs (and before
- * any billable generation is enqueued); a key holding it, and JWT callers, pass
- * through. This guards a billable + access-control surface against an accidental
- * future removal of `requiredScopes`.
+ * Drives the real next-connect chain `nextRouteForContract` assembles (see quests/[id]
+ * and events integration tests for the rationale) to prove `generateImageContract`
+ * reaches `apiKeyAuth` and body validation: a key lacking `ai:generate` is rejected 403
+ * and a malformed body 422, both before any billable generation is enqueued; a key
+ * holding the scope, and JWT callers, pass through.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
@@ -100,17 +99,21 @@ vi.mock('@server/auth/auth', async orig => {
   };
 });
 
-import handler from '../generate-image';
-import { ApiKeyScope } from '@bike4mind/common';
+import handler from '../image-generations';
+import legacyHandler from '../../ai/generate-image';
+import { ApiKeyScope, GenerateImageResponseSchema } from '@bike4mind/common';
 
 const VALID_KEY = 'sk-test-valid-key';
 
-function fire({ apiKey = VALID_KEY as string | null }: { apiKey?: string | null } = {}) {
+function fire({
+  apiKey = VALID_KEY as string | null,
+  body = { prompt: 'a red bicycle on a white background', model: 'gpt-image-1' } as Record<string, unknown>,
+}: { apiKey?: string | null; body?: Record<string, unknown> } = {}) {
   const { req, res } = createMocks(
     {
       method: 'POST',
-      url: '/api/ai/generate-image',
-      body: { prompt: 'a red bicycle on a white background' },
+      url: '/api/v1/image-generations',
+      body,
       headers: { ...(apiKey ? { 'x-api-key': apiKey } : {}) },
     },
     { eventEmitter: EventEmitter }
@@ -129,7 +132,7 @@ function validateWithScopes(scopes: ApiKeyScope[] | string[]) {
   });
 }
 
-describe('POST /api/ai/generate-image (integration — ai:generate scope enforcement)', () => {
+describe('POST /api/v1/image-generations (integration - contract auth + validation)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUserFindById.mockResolvedValue({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false });
@@ -141,7 +144,7 @@ describe('POST /api/ai/generate-image (integration — ai:generate scope enforce
       asyncPromises: [],
       session: { id: 'sess-1' },
     });
-    mockInvoke.mockResolvedValue({ id: 'quest-1', status: 'pending' });
+    mockInvoke.mockResolvedValue({ id: 'quest-1', sessionId: 'sess-1', type: 'message' });
   });
 
   it('rejects a key lacking ai:generate (403) before enqueuing generation', async () => {
@@ -159,7 +162,43 @@ describe('POST /api/ai/generate-image (integration — ai:generate scope enforce
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ quest: { id: 'quest-1' } });
+    expect(GenerateImageResponseSchema.safeParse(res._getJSONData()).success).toBe(true);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a body that fails the contract schema (422) before enqueuing generation', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = fire({ body: { prompt: 'a red bicycle' } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData().error).toMatch(/model/);
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it('ignores a caller-sent intent/promptEnhancement: both come from the prompt resolver', async () => {
+    const { req, res } = fire({
+      apiKey: null,
+      body: {
+        prompt: 'a red bicycle on a white background',
+        model: 'gpt-image-1',
+        intent: 'continuation',
+        promptEnhancement: { originalPrompt: 'x', enhancedPrompt: 'y', promptWasEnhanced: true },
+      },
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          intent: 'fresh',
+          promptEnhancement: expect.objectContaining({ originalPrompt: 'a red bicycle on a white background' }),
+        }),
+      })
+    );
+  });
+
+  it('serves the legacy /api/ai/generate-image path with the same handler', () => {
+    expect(legacyHandler).toBe(handler);
   });
 
   it('leaves JWT/browser callers unaffected (200, no api key)', async () => {
