@@ -60,11 +60,22 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
-  // Whose update access the summary write re-checks: the requester of a sharee-triggered job.
-  // Resolved before the LLM call so a vanished requester costs nothing. Mirrors sessionTagging.ts.
-  const writer = requesterId ? await User.findById(requesterId) : null;
-  if (requesterId && !writer) {
+  // Whose update access the summary write re-checks: the requester of a sharee-triggered job, else
+  // the owner (whose arm always matches, so that write only adds not-deleted). Mirrors
+  // sessionTagging.ts. summary.ts authorizes a requester with CASL, which grants update on a
+  // global-write session, hence the opt-in for that case only.
+  const requester = requesterId ? await User.findById(requesterId) : null;
+  if (requesterId && !requester) {
     logger.warn(`Requester ${requesterId} not found, skipping summarization for session ${sessionId}`);
+    return;
+  }
+  const writer = requester ? { id: requester.id, groups: requester.groups } : { id: session.userId, groups: [] };
+  const writeOpts = requester ? { includeGlobalWrite: true } : undefined;
+
+  // Before the LLM call, so a requester revoked while the job sat in the queue does not bill the
+  // owner for a summary that the write below would refuse anyway.
+  if (requester && !(await sessionRepository.shareable.findUpdateAccessById(requester, sessionId, writeOpts))) {
+    logger.warn(`Session ${sessionId} no longer writable by ${writer.id}, skipping summarization`);
     return;
   }
 
@@ -204,21 +215,12 @@ export const handler = withEventContext(async (event, logger) => {
     // here - omitting it leaves the field undefined on every document.
     summaryTrigger: session.summaryTrigger,
   };
-  if (writer) {
-    // Re-checks update access and not-deleted, so a revoke or delete during the completion drops
-    // the result - and with it the FabFile, upload and tag job below. summary.ts authorizes with
-    // CASL, which grants update on a global-write session.
-    const written = await sessionRepository.updateWithUpdateAccess(
-      { id: writer.id, groups: writer.groups },
-      summaryFields,
-      { includeGlobalWrite: true }
-    );
-    if (!written) {
-      logger.warn(`Session ${sessionId} no longer writable by ${writer.id}, skipping summary write`);
-      return;
-    }
-  } else {
-    await sessionRepository.update(summaryFields);
+  // Re-checks update access and not-deleted, so a revoke or delete during the completion drops the
+  // result - and with it the FabFile, upload and tag job below.
+  const written = await sessionRepository.updateWithUpdateAccess(writer, summaryFields, writeOpts);
+  if (!written) {
+    logger.warn(`Session ${sessionId} no longer writable by ${writer.id}, skipping summary write`);
+    return;
   }
 
   // Attempt to create/update the FabFile for RAG indexing.
