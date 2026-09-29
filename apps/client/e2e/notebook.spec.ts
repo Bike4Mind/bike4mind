@@ -2,7 +2,8 @@ import { test, expect } from './fixtures';
 import { TIMEOUTS, MONITORED_MODELS } from './constants';
 import { type ModelCreditsData } from './helpers/slack';
 import { writeCreditsData } from './helpers/credits-store';
-import { apiCreateSession, apiDeleteSession, apiRenameSession } from './helpers/api';
+import { apiCreateSession, apiCreateThrowawayUser, apiDeleteSession, apiRenameSession } from './helpers/api';
+import { seedAuthOnPage } from './helpers/auth-seed';
 import { getTestUsers } from './helpers/test-users';
 
 // Shared with warmup.setup.ts (which warms these before the measured runs). See constants.ts.
@@ -123,15 +124,17 @@ test.describe('Notebook - Router resilience', () => {
   // Guards against TanStack Router / React Query regressions on deep-route reload
   // and browser history navigation - the surface most likely to break on router/query upgrades.
   // @realauth: exercises hard reload + history nav, which must hit the app's real refresh-cookie
-  // bootstrap - so this test opts out of the /auth/success seed (see fixtures.ts authState) and
-  // relies on the pristine cookie the setup planted (see seedAuthStorageState).
+  // bootstrap - so this test opts out of the /auth/success seed (see fixtures.ts authState). It
+  // plants a fresh user's refresh cookie per attempt: a retry that replayed the setup's cookie,
+  // already rotated by the first attempt, would have its session revoked by reuse detection.
   test(
     'survives hard reload and history nav on a deep notebook route',
     { tag: '@realauth' },
     async ({ page, request, basePage, consoleTracker }) => {
       const NOTEBOOK_NAME = `E2E Router ${Date.now().toString().slice(-6)}`;
-      const { specUsers } = getTestUsers();
-      const token = specUsers.notebook.accessToken;
+      const user = await apiCreateThrowawayUser(request, 'router');
+      const token = user.accessToken;
+      await seedAuthOnPage(page, { accessToken: user.accessToken, refreshToken: user.refreshToken });
 
       const sessionId = await apiCreateSession(request, token);
       await apiRenameSession(request, token, sessionId, NOTEBOOK_NAME);

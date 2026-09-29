@@ -76,7 +76,7 @@ export const test = base.extend<TestFixtures>({
   authState: async ({}, use, testInfo) => {
     // @realauth tests drive the app's real refresh-cookie bootstrap (e.g. the hard-reload guard),
     // so they must NOT be wrapped through /auth/success - null passes their gotos through untouched
-    // and they authenticate from the pristine cookie the setup planted (see seedAuthStorageState).
+    // and they plant their own never-exchanged refresh cookie (see seedAuthStorageState for why).
     const current = testInfo.tags.includes('@realauth') ? null : specAuthForProject(testInfo.project.name);
     await use({ current });
   },
