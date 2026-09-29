@@ -388,6 +388,30 @@ contract and no stated deprecation; they need one before they can go.
 
 ---
 
+## 8. Pagination
+
+A list endpoint is **cursor-paginated**, never offset-paginated: an offset re-counts a set that
+moved under it and skips or repeats rows, and a cursor does not.
+
+- **Request:** use `PaginationQuerySchema` (`schemas/pagination.ts`) as the contract's
+  `queryParams`, or `.extend()` it with filters: `limit` (1-100, default 25) and an optional
+  opaque `cursor`.
+- **Response:** build the `200` schema with `paginatedResponseSchema(itemSchema)`: the page under
+  `data` and `next_cursor`, which is **always present** and `null` on the last page. A caller
+  loops until it reads `null`; it never has to test for an absent key.
+- **Cursors are opaque.** A caller passes back exactly the `next_cursor` it was given. The server
+  helper (`apps/client/server/utils/cursorPagination.ts`) encodes a format version, the scope the
+  cursor was issued for and the last id served, and answers `422` for a cursor that is malformed or
+  was minted by a different endpoint. Order is by `id`, so a page boundary is stable while rows are
+  added or removed around it.
+- **Filters are not part of the cursor.** A caller that changes a filter starts again without one.
+
+**[gated]** A `GET` contract whose `200` body has an array `data` field must publish
+`next_cursor` as a present, nullable string and accept optional `limit` and `cursor` query params.
+A non-`GET` endpoint that happens to return `data` is not a list and is not gated.
+
+---
+
 ## What is not gated yet
 
 Honest list of the rules above that a reviewer still has to catch by hand, so nobody

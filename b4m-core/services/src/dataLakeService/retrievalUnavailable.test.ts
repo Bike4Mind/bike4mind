@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildRetrievalUnavailableReport,
+  classifyIngestionStatus,
   describeRetrievalUnavailable,
   describeSearchLimitations,
   emptyRetrievalUnavailableReport,
@@ -328,5 +329,52 @@ describe('describeSearchLimitations / isPartialSearch', () => {
     );
     expect(text).not.toContain('\n');
     expect(text).not.toContain('[x]');
+  });
+});
+
+describe('classifyIngestionStatus', () => {
+  it('reports a fully-embedded file as ready', () => {
+    expect(classifyIngestionStatus(settled)).toBe('ready');
+  });
+
+  it('reports a legacy file with chunks but no vector count as ready', () => {
+    expect(classifyIngestionStatus({ ...settled, vectorizedChunkCount: null })).toBe('ready');
+  });
+
+  it('reports a file mid-embed as indexing', () => {
+    expect(classifyIngestionStatus({ ...settled, vectorizedChunkCount: 3 })).toBe('indexing');
+  });
+
+  it('reports a chunkless member with a rebuild pending as indexing', () => {
+    expect(
+      classifyIngestionStatus({
+        ...settled,
+        chunkCount: 0,
+        vectorizedChunkCount: 0,
+        chunkRebuildRequestedAt: new Date(),
+      })
+    ).toBe('indexing');
+  });
+
+  it('reports a kill-switch stalled file with nothing retrievable as paused', () => {
+    expect(
+      classifyIngestionStatus({ ...settled, vectorizedChunkCount: 0, chunkStallReason: CHUNK_STALL_REASONS[0] })
+    ).toBe('paused');
+  });
+
+  it('reports an errored file with nothing embedded as failed', () => {
+    expect(classifyIngestionStatus({ ...settled, vectorizedChunkCount: 0, error: 'boom' })).toBe('failed');
+    expect(classifyIngestionStatus({ ...settled, chunkCount: 0, vectorizedChunkCount: 0, error: 'boom' })).toBe(
+      'failed'
+    );
+  });
+
+  it('keeps a partly-embedded file that later errored ready, since its passages still serve', () => {
+    expect(classifyIngestionStatus({ ...settled, vectorizedChunkCount: 3, error: 'boom' })).toBe('ready');
+  });
+
+  it('reports a file with no chunks and no error as not_ingested', () => {
+    expect(classifyIngestionStatus({ id: 'f1', chunkCount: 0, vectorizedChunkCount: 0 })).toBe('not_ingested');
+    expect(classifyIngestionStatus({ id: 'f1' })).toBe('not_ingested');
   });
 });

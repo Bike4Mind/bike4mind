@@ -241,6 +241,20 @@ describe('semanticDataLakeSearch lakeMemberships (#2243)', () => {
     expect(search.mock.calls[0][5]).not.toHaveProperty('scopedTagPrefixes');
   });
 
+  it('restrictToDataLake reaches the search options only when the caller opts in', async () => {
+    const defaultSearch = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
+    await semanticDataLakeSearch({ ...baseParams(), lakeMemberships: [MEMBERSHIP] }, {
+      db: { fabfiles: { search: defaultSearch }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+    expect(defaultSearch.mock.calls[0][5]).not.toHaveProperty('restrictToDataLake');
+
+    const restrictedSearch = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
+    await semanticDataLakeSearch({ ...baseParams(), lakeMemberships: [MEMBERSHIP], restrictToDataLake: true }, {
+      db: { fabfiles: { search: restrictedSearch }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+    expect(restrictedSearch.mock.calls[0][5]).toMatchObject({ restrictToDataLake: true });
+  });
+
   it('ownFilesOnly with no lake tags still sends lakeMemberships: [] + includeShared: true', async () => {
     const search = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
     await semanticDataLakeSearch({ ...baseParams(), dataLakeTags: [], ownFilesOnly: true }, {

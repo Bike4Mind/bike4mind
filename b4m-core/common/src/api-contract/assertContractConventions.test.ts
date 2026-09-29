@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import { assertContractConventions } from './assertContractConventions';
 import { ApiErrorSchema } from '../schemas/chat';
+import { PaginationQuerySchema, paginatedResponseSchema } from '../schemas/pagination';
 import { CONTRACTS } from './contracts';
 import { ApiKeyScope } from '../types/entities/UserApiKeyTypes';
 import type { EndpointContract, ResponseSpec } from './types';
@@ -376,6 +377,50 @@ describe('assertContractConventions', () => {
     // conditions as a classified 422, which the status table and envelope gates cover.
     it('does not apply to a non-streaming contract', () => {
       expect(() => assertContractConventions([contract()])).not.toThrow();
+    });
+  });
+
+  describe('pagination', () => {
+    const item = z.object({ id: z.string() });
+    const list = (overrides: Partial<EndpointContract> = {}) =>
+      contract({
+        method: 'get',
+        queryParams: PaginationQuerySchema,
+        responses: { 200: { description: 'A page.', schema: paginatedResponseSchema(item) } },
+        ...overrides,
+      });
+
+    it('accepts a GET list built from the shared pagination pieces', () => {
+      expect(() => assertContractConventions([list()])).not.toThrow();
+    });
+
+    it('rejects a list with no next_cursor', () => {
+      const bare = list({ responses: { 200: { description: 'A page.', schema: z.object({ data: z.array(item) }) } } });
+      expect(() => assertContractConventions([bare])).toThrow(/\[pagination\]/);
+    });
+
+    it('rejects an optional next_cursor, so a caller can always loop on it', () => {
+      const schema = z.object({ data: z.array(item), next_cursor: z.string().nullable().optional() });
+      expect(() =>
+        assertContractConventions([list({ responses: { 200: { description: 'A page.', schema } } })])
+      ).toThrow(/\[pagination\]/);
+    });
+
+    it('rejects a list that declares no limit/cursor query params', () => {
+      expect(() => assertContractConventions([list({ queryParams: undefined })])).toThrow(/\[pagination\]/);
+    });
+
+    it('rejects a required cursor param', () => {
+      const queryParams = z.object({ limit: z.coerce.number().default(25), cursor: z.string() });
+      expect(() => assertContractConventions([list({ queryParams })])).toThrow(/\[pagination\]/);
+    });
+
+    it('does not apply to a non-list GET or to a POST that returns a data array', () => {
+      expect(() => assertContractConventions([contract({ method: 'get' })])).not.toThrow();
+      const post = contract({
+        responses: { 200: { description: 'Batch.', schema: z.object({ data: z.array(item) }) } },
+      });
+      expect(() => assertContractConventions([post])).not.toThrow();
     });
   });
 

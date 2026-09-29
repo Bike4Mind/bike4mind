@@ -3,6 +3,7 @@ import {
   isChunkStalledFile,
   isMemberIndexingInFlight,
   type ChunkStallReason,
+  type DataLakeFileIngestionStatus,
 } from '@bike4mind/common';
 import { describeEmbeddingMismatch, type EmbeddingMismatchReport } from './embeddingMismatch';
 import { toSingleLine } from './renderDataLakePromptBlock';
@@ -152,6 +153,23 @@ export function partitionByIndexAvailability<T extends IndexStateFile>(
     else servable.push(file);
   }
   return { servable, withheld };
+}
+
+/**
+ * One lake member's public ingestion status (GET /api/v1/data-lakes/{id}/files/{file_id}). Built on
+ * `partitionByIndexAvailability` and the same paused/indexing split as the report below, so the
+ * status a caller polls always agrees with what search withholds for that file.
+ */
+export function classifyIngestionStatus(file: IndexStateFile): DataLakeFileIngestionStatus {
+  const [withheld] = partitionByIndexAvailability([file]).withheld;
+  if (withheld) return isChunkStalledFile(withheld) ? 'paused' : 'indexing';
+  const vectorized = file.vectorizedChunkCount;
+  const hasError = typeof file.error === 'string' && file.error.length > 0;
+  // A partly-embedded file that later errored still serves its embedded passages, so it is ready.
+  if (hasError && !vectorized) return 'failed';
+  // A null vector count predates the field; such a file was served by its chunks alone.
+  if ((vectorized ?? 0) > 0 || (vectorized == null && (file.chunkCount ?? 0) > 0)) return 'ready';
+  return 'not_ingested';
 }
 
 const nameSample = (files: readonly IndexStateFile[]) =>

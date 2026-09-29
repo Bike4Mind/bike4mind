@@ -58,7 +58,8 @@ const CAMEL_CASE = /^[a-z][A-Za-z0-9]*$/;
  * these are enforced but not exemptable via `conventionExemptions`
  * (`error-envelope` uses the finer-grained per-response `bespokeErrorShape`).
  */
-type ConventionLabel = ConventionRule | 'operation-id' | 'error-envelope' | 'rate-limit-headers' | 'stream-error-frame';
+type ConventionLabel =
+  ConventionRule | 'operation-id' | 'error-envelope' | 'rate-limit-headers' | 'stream-error-frame' | 'pagination';
 
 function fail(contract: EndpointContract, rule: ConventionLabel, problem: string, remedy: string): never {
   throw new Error(
@@ -161,6 +162,35 @@ function carriesTypedStreamErrorFrame(schema: z.ZodTypeAny): boolean {
  * `contentType` opts out - which the schema-less check below forces authors to
  * declare.
  */
+/**
+ * A GET whose 200 body carries a `data` array is a list, and a list pages by cursor (CONVENTIONS.md
+ * section 8). Probed with `safeParse` like the envelope check: `next_cursor` must be required and
+ * nullable, and the query must carry an optional-or-defaulted `limit` and an optional `cursor`.
+ * The other half of the convention - that `limit` bounds the page and the cursor is opaque - lives
+ * in the handler, and the server helper (`apps/client/server/utils/cursorPagination.ts`) keeps it.
+ */
+function isListResponse(schema: z.ZodTypeAny | undefined): boolean {
+  const data = schema ? shapeOf(schema)?.data : undefined;
+  return !!data && data.safeParse([]).success && !data.safeParse({}).success;
+}
+
+function carriesCursorPagination(contract: EndpointContract): boolean {
+  const listSchema = contract.responses[200]?.schema;
+  const nextCursor = listSchema ? shapeOf(listSchema)?.next_cursor : undefined;
+  const cursorOk =
+    !!nextCursor &&
+    nextCursor.safeParse(null).success &&
+    nextCursor.safeParse('opaque').success &&
+    !nextCursor.safeParse(undefined).success;
+
+  const query = contract.queryParams?.shape as Record<string, z.ZodTypeAny> | undefined;
+  const limit = query?.limit;
+  const cursor = query?.cursor;
+  const paramsOk = !!limit && !!cursor && limit.safeParse(undefined).success && cursor.safeParse(undefined).success;
+
+  return cursorOk && paramsOk;
+}
+
 function isJsonErrorResponse(status: number, spec: ResponseSpec): boolean {
   return status >= 400 && (spec.contentType ?? 'application/json') === 'application/json';
 }
@@ -245,6 +275,20 @@ export function assertContractConventions(contracts: readonly EndpointContract[]
             'An untyped classifier leaves callers regex-matching the prose `message`.'
         );
       }
+    }
+
+    if (
+      contract.method === 'get' &&
+      isListResponse(contract.responses[200]?.schema) &&
+      !carriesCursorPagination(contract)
+    ) {
+      fail(
+        contract,
+        'pagination',
+        'a GET whose 200 body is a `data` array does not follow the cursor-pagination shape.',
+        'Declare `queryParams: PaginationQuerySchema` and build the 200 with `paginatedResponseSchema(item)`, ' +
+          'so the list carries a required, nullable `next_cursor`.'
+      );
     }
 
     for (const [rawStatus, spec] of Object.entries(contract.responses)) {
