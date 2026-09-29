@@ -70,7 +70,8 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
       // retrieval where its source does not, until the source is itself updated.
       forceKnowledgeRetrieval: session.forceKnowledgeRetrieval,
     },
-    adapters
+    adapters,
+    { knowledgeIdsFromSourceSession: true }
   );
 
   const messagesToSnip = await db.chatHistories.findAllBySessionIdAndGreaterThanOrEqualToTimestamp(

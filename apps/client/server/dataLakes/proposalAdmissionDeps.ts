@@ -91,6 +91,7 @@ export function admitProposedSource(
       // so that org lakes survive their creator - is refused the write its role entitles it to.
       administeredOrgIds: actor.administeredOrgIds,
       deleteCreatedFile: (id: string) => FabFile.findByIdAndDelete(id),
+      nameFile: fabFilesService.urlFileName,
     }
   );
 }

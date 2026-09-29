@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer } from '../../__test__/createMongoServer';
-import { PublishedArtifact, publishedArtifactRepository, liveShareTokens } from './PublishedArtifactModel';
+import {
+  PublishedArtifact,
+  publishedArtifactRepository,
+  liveShareTokens,
+  shareTokenFilter,
+} from './PublishedArtifactModel';
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 
@@ -133,5 +138,64 @@ describe('PublishedArtifact shareToken', () => {
   it('folds an un-mirrored legacy token in, so a pre-backfill row still reports its link', async () => {
     const doc = await make({ shareToken: 'LEGACY-ONLY' });
     expect(liveShareTokens(doc).map(e => e.token)).toEqual(['LEGACY-ONLY']);
+  });
+});
+
+describe('per-entry view counting (#3255 step 2)', () => {
+  // The serve route counts a share view with an arrayFilters update built on the entry's real
+  // ObjectId. The route's own suite mocks the driver, so the ObjectId round trip and the no-match
+  // behavior are only ever exercised here, against real Mongo.
+  const bump = (publicId: string, entryId: unknown) =>
+    PublishedArtifact.updateOne(
+      { publicId },
+      {
+        $inc: { viewCount: 1, 'shareTokens.$[entry].viewCount': 1 },
+        $set: { 'shareTokens.$[entry].lastViewedAt': new Date() },
+      },
+      { arrayFilters: [{ 'entry._id': entryId }] }
+    );
+
+  it('increments only the matched entry, leaving its siblings untouched', async () => {
+    const doc = await make({
+      shareToken: 'COUNT-A',
+      shareTokens: [{ token: 'COUNT-A' }, { token: 'COUNT-B' }],
+    });
+    const [first, second] = doc.shareTokens!;
+
+    await bump(doc.publicId, first._id);
+    await bump(doc.publicId, first._id);
+
+    const after = await PublishedArtifact.findOne({ publicId: doc.publicId }).lean();
+    expect(after!.shareTokens![0].viewCount).toBe(2);
+    expect(after!.shareTokens![0].lastViewedAt).toBeInstanceOf(Date);
+    expect(after!.shareTokens![1].viewCount).toBe(0);
+    expect(after!.shareTokens![1].lastViewedAt).toBeNull();
+    expect(after!.viewCount).toBe(2);
+    expect(second._id).toBeDefined();
+  });
+
+  it('leaves the artifact counter intact when arrayFilters matches nothing', async () => {
+    const doc = await make({ shareToken: 'NO-MATCH', shareTokens: [{ token: 'NO-MATCH' }] });
+
+    await bump(doc.publicId, new mongoose.Types.ObjectId());
+
+    const after = await PublishedArtifact.findOne({ publicId: doc.publicId }).lean();
+    // The aggregate bump still lands; only the per-entry half is a no-op. This is the shape a
+    // stale entry id would produce, and it must not cost the artifact its view.
+    expect(after!.viewCount).toBe(1);
+    expect(after!.shareTokens![0].viewCount).toBe(0);
+  });
+
+  it('shareTokenFilter resolves both shapes and refuses a revoked entry', async () => {
+    const legacy = await make({ shareToken: 'SCALAR-ONLY' });
+    const arrayed = await make({ shareTokens: [{ token: 'ARRAY-LIVE' }] });
+    await make({ shareTokens: [{ token: 'ARRAY-DEAD', revokedAt: new Date() }, { token: 'SIBLING-LIVE' }] });
+
+    const find = (token: string) => PublishedArtifact.findOne({ deletedAt: null, ...shareTokenFilter(token) }).lean();
+
+    expect((await find('SCALAR-ONLY'))?.publicId).toBe(legacy.publicId);
+    expect((await find('ARRAY-LIVE'))?.publicId).toBe(arrayed.publicId);
+    // The $elemMatch is what stops this one resolving on SIBLING-LIVE's strength.
+    expect(await find('ARRAY-DEAD')).toBeNull();
   });
 });

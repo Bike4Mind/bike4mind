@@ -14,6 +14,7 @@ import {
   type ToolDefinition,
 } from '@bike4mind/services/llm';
 import { getSettingsMap, getSettingsValue, type IQueueService } from '@bike4mind/utils';
+import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import { type Logger } from '@bike4mind/observability';
 import {
   buildClientToolPassthrough,
@@ -182,7 +183,7 @@ async function runFullPipeline(
 
   // process() mutates the quest in place. Use the last reply item (the visible
   // answer after any thinking reply) to match what onReplyStream forwarded.
-  return quest.replies?.[quest.replies.length - 1] ?? quest.reply ?? '';
+  return stripToolOutputMarker(quest.replies?.[quest.replies.length - 1] ?? quest.reply ?? '');
 }
 
 export const config = {

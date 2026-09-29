@@ -19,6 +19,7 @@ const { removeFileMutate, reprocessMutate, reprocessLakeId, currentUserId, cited
 
 vi.mock('@client/app/hooks/data/fabFiles', () => ({
   useGetFabFileContent: () => ({ data: 'content', isLoading: false }),
+  useGetFabFile: () => ({ data: undefined }),
 }));
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useReprocessFabFile: (dataLakeId: string | null) => {

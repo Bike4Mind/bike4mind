@@ -38,6 +38,9 @@ const FIELD_LABEL: Record<LakeConfigChangeField, string> = {
   createdByUserId: 'Created by',
   effectiveOwnerUserId: 'Owner',
   accessGrant: 'Access grant',
+  proposalReview: 'Proposal review',
+  researchConfig: 'Research configuration',
+  researchRun: 'Research run',
 };
 
 /** Total, for the same reason as FIELD_LABEL. */
@@ -62,6 +65,14 @@ const ACTION_LABEL: Record<LakeConfigChangeAction, string> = {
   // matched 'Ownership transferred' would read as a deliberate handover an owner could go looking
   // for in vain.
   'membership-succession': 'Ownership passed on (creator left the org)',
+  'approve-proposal': 'Proposal approved',
+  'decline-proposal': 'Proposal declined',
+  'restore-proposal': 'Proposal restored',
+  'create-research-config': 'Research configuration created',
+  'update-research-config': 'Research configuration updated',
+  'delete-research-config': 'Research configuration deleted',
+  'start-research-run': 'Research run started',
+  'complete-research-run': 'Research run finished',
 };
 
 /**
