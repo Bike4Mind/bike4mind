@@ -3,10 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   assertLakeResearchManage: vi.fn(),
   startResearchRun: vi.fn(),
-  recordResearchRunOutcome: vi.fn(),
   listByLake: vi.fn(),
-  settleQueuedRun: vi.fn(),
-  sendToQueue: vi.fn(),
+  queueResearchRun: vi.fn(),
   queueUrl: undefined as string | undefined,
 }));
 
@@ -23,21 +21,18 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/services', () => ({
-  dataLakeResearchService: {
-    startResearchRun: h.startResearchRun,
-    recordResearchRunOutcome: h.recordResearchRunOutcome,
-  },
+  dataLakeResearchService: { startResearchRun: h.startResearchRun },
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeResearchConfigRepository: {},
-  dataLakeResearchRunRepository: { listByLake: h.listByLake, settleQueuedRun: h.settleQueuedRun },
+  dataLakeResearchRunRepository: { listByLake: h.listByLake },
   lakeConfigChangeEventRepository: {},
   adminSettingsRepository: {},
 }));
 vi.mock('@server/dataLakes/assertLakeResearchManage', () => ({
   assertLakeResearchManage: h.assertLakeResearchManage,
 }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@server/dataLakes/queueResearchRun', () => ({ queueResearchRun: h.queueResearchRun }));
 vi.mock('sst', () => ({
   Resource: {
     get dataLakeResearchQueue() {
@@ -58,7 +53,7 @@ const req = (method: string, query: Record<string, string>, body?: unknown) =>
 
 const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(r, res);
 
-const queuedRun = { id: 'run-1', status: 'queued', totals: { searchHits: 0 }, levers: { query: 'coastal erosion' } };
+const queuedRun = { id: 'run-1', dataLakeId: 'lake-oid-1', status: 'queued', totals: { searchHits: 0 } };
 const LAKE = { id: 'lake-oid-1', name: 'Ops Lake' };
 const ACTOR = { userId: 'user-1', isAdmin: false, administeredOrgIds: [] };
 const GRANTS: unknown[] = [];
@@ -69,9 +64,7 @@ beforeEach(() => {
   h.assertLakeResearchManage.mockResolvedValue({ lake: LAKE, actor: ACTOR, grants: GRANTS });
   h.listByLake.mockResolvedValue([queuedRun]);
   h.startResearchRun.mockResolvedValue(queuedRun);
-  h.sendToQueue.mockResolvedValue(undefined);
-  h.settleQueuedRun.mockResolvedValue(true);
-  h.recordResearchRunOutcome.mockResolvedValue(undefined);
+  h.queueResearchRun.mockResolvedValue(undefined);
 });
 
 describe('GET /api/data-lakes/[id]/research/runs', () => {
@@ -102,11 +95,13 @@ describe('POST /api/data-lakes/[id]/research/runs', () => {
 
     await call(req('POST', { id: 'my-lake' }, { configId: 'config-1' }), res);
 
-    expect(h.startResearchRun).toHaveBeenCalledWith('config-1', LAKE, ACTOR, GRANTS, expect.anything());
-    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example/research', {
-      runId: 'run-1',
-      dataLakeId: 'lake-oid-1',
-    });
+    expect(h.startResearchRun).toHaveBeenCalledWith(
+      'config-1',
+      LAKE,
+      { trigger: 'on_demand', actor: ACTOR, grants: GRANTS },
+      expect.anything()
+    );
+    expect(h.queueResearchRun).toHaveBeenCalledWith(queuedRun, LAKE, 'https://sqs.example/research', expect.anything());
     expect(res.status).toHaveBeenCalledWith(202);
     expect(json).toHaveBeenCalledWith({ data: queuedRun });
   });
@@ -121,80 +116,11 @@ describe('POST /api/data-lakes/[id]/research/runs', () => {
     expect(h.startResearchRun).not.toHaveBeenCalled();
   });
 
-  it('settles the row failed when the enqueue itself fails, so it does not hold the guard', async () => {
-    h.sendToQueue.mockRejectedValue(new Error('sqs is down'));
+  it('propagates an enqueue failure rather than answering 202', async () => {
+    h.queueResearchRun.mockRejectedValue(new Error('sqs is down'));
     const { res } = makeRes();
 
     await expect(call(req('POST', { id: 'l' }, { configId: 'config-1' }), res)).rejects.toThrow(/sqs is down/);
-
-    expect(h.settleQueuedRun).toHaveBeenCalledWith(
-      'run-1',
-      expect.objectContaining({
-        status: 'failed',
-        spentMicroUsd: 0,
-        error: expect.stringMatching(/could not be queued/i),
-      })
-    );
-  });
-
-  // Without this, History showed "started" with no matching outcome - this settle path
-  // bypasses runLakeResearch.ts entirely (the executor never gets a message), so the route itself
-  // has to record the outcome.
-  it('records a failed outcome when the enqueue fails, so History does not show "started" forever', async () => {
-    h.sendToQueue.mockRejectedValue(new Error('sqs is down'));
-    const { res } = makeRes();
-
-    await expect(call(req('POST', { id: 'l' }, { configId: 'config-1' }), res)).rejects.toThrow(/sqs is down/);
-
-    expect(h.recordResearchRunOutcome).toHaveBeenCalledWith(
-      LAKE,
-      'coastal erosion',
-      'failed',
-      'run-1',
-      expect.anything()
-    );
-  });
-
-  // sendToQueue can reject after the message actually landed (an ack lost to a timeout). If the
-  // executor claimed the run in that window, settleQueuedRun's queued-only filter makes the settle
-  // here a no-op (it returns false) - the route must not then record a SECOND, contradictory
-  // outcome on top of the one the executor's own runLakeResearch.ts already recorded for real.
-  it('skips the outcome record when the run was already settled elsewhere', async () => {
-    h.sendToQueue.mockRejectedValue(new Error('sqs is down'));
-    h.settleQueuedRun.mockResolvedValue(false);
-    const { res } = makeRes();
-
-    await expect(call(req('POST', { id: 'l' }, { configId: 'config-1' }), res)).rejects.toThrow(/sqs is down/);
-
-    expect(h.recordResearchRunOutcome).not.toHaveBeenCalled();
-  });
-
-  // Best-effort like every other outcome record - a failed write here must not mask the real
-  // enqueue failure or stop the settle from having already landed.
-  it('still rethrows the enqueue error even when the outcome write itself fails', async () => {
-    h.sendToQueue.mockRejectedValue(new Error('sqs is down'));
-    h.recordResearchRunOutcome.mockRejectedValue(new Error('replica set stepped down'));
-    const { res } = makeRes();
-
-    await expect(call(req('POST', { id: 'l' }, { configId: 'config-1' }), res)).rejects.toThrow(/sqs is down/);
-  });
-
-  // A settleQueuedRun call that itself throws (not a guarded no-op) is a different, unknown case -
-  // the outcome record must still run, same as before this guard existed.
-  it('still records the outcome when settleQueuedRun itself fails, not just when it returns false', async () => {
-    h.sendToQueue.mockRejectedValue(new Error('sqs is down'));
-    h.settleQueuedRun.mockRejectedValue(new Error('replica set stepped down'));
-    const { res } = makeRes();
-
-    await expect(call(req('POST', { id: 'l' }, { configId: 'config-1' }), res)).rejects.toThrow(/sqs is down/);
-
-    expect(h.recordResearchRunOutcome).toHaveBeenCalledWith(
-      LAKE,
-      'coastal erosion',
-      'failed',
-      'run-1',
-      expect.anything()
-    );
   });
 
   it('requires a configId', async () => {
@@ -213,6 +139,6 @@ describe('POST /api/data-lakes/[id]/research/runs', () => {
 
     expect(h.listByLake).not.toHaveBeenCalled();
     expect(h.startResearchRun).not.toHaveBeenCalled();
-    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(h.queueResearchRun).not.toHaveBeenCalled();
   });
 });

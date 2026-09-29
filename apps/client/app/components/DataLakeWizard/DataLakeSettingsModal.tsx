@@ -837,6 +837,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                       runs={researchRuns.data}
                       isLoading={researchConfigs.isLoading}
                       error={researchConfigs.isForbidden ? null : (researchConfigs.error ?? researchRuns.error)}
+                      pendingProposals={researchConfigs.pendingProposals}
                       modelOptions={researchModelOptions}
                       defaultModelLabel={researchDefaultModel}
                       isCreating={createResearchConfig.isPending}

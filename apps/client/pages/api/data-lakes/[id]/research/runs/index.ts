@@ -9,7 +9,7 @@ import { Resource } from 'sst';
 import { z } from 'zod';
 import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchManage';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
-import { sendToQueue } from '@server/utils/sqs';
+import { queueResearchRun } from '@server/dataLakes/queueResearchRun';
 
 const StartInput = z.object({ configId: z.string() });
 
@@ -56,56 +56,21 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       throw new InternalServerError('Research runs are not available on this deployment');
     }
 
-    const run = await dataLakeResearchService.startResearchRun(configId, lake, actor, grants, {
-      db: {
-        dataLakeResearchConfigs: dataLakeResearchConfigRepository,
-        dataLakeResearchRuns: dataLakeResearchRunRepository,
-        ...lakeConfigAuditDb,
-      },
-      logger: req.logger,
-    });
-
-    try {
-      await sendToQueue(queueUrl, { runId: run.id, dataLakeId: lake.id });
-    } catch (error) {
-      // Settle the row rather than leaving it `queued`: nothing will ever pick it up, and a
-      // permanently-queued run holds the one-at-a-time guard closed against every later attempt.
-      // Best-effort: a settle failure here must not mask the original enqueue error re-thrown
-      // below, and must not skip the outcome record that follows.
-      //
-      // `sendToQueue` can reject after the message actually landed (an ack lost to a timeout) - if
-      // the executor claimed the run in that window, it owns the row (`running`), not this route.
-      // `settleQueuedRun` matches ONLY `queued`, so in that case it is a no-op and resolves false -
-      // this route must not settle (or record an outcome for) a run the executor is already
-      // handling. A `settleQueuedRun` call that outright fails is a different, unknown case - the
-      // outcome record below still runs for it, same as before.
-      let alreadySettledElsewhere = false;
-      await dataLakeResearchRunRepository
-        .settleQueuedRun(run.id, {
-          status: 'failed',
-          completedAt: new Date(),
-          spentMicroUsd: 0,
-          totals: run.totals,
-          error: 'The run could not be queued for execution. Try again shortly.',
-        })
-        .then(settled => {
-          alreadySettledElsewhere = !settled;
-        })
-        .catch(err => req.logger.warn(`[research/runs] settle failed: ${err}`));
-      // Without this, History shows "started" with no matching outcome - the run row is
-      // settled failed here directly, never through runLakeResearch.ts (the only other place an
-      // outcome is recorded), since the executor never gets a message to pick up. Best-effort, same
-      // as every other outcome record.
-      if (!alreadySettledElsewhere) {
-        await dataLakeResearchService
-          .recordResearchRunOutcome(lake, run.levers.query, 'failed', run.id, {
-            db: { ...lakeConfigAuditDb },
-            logger: req.logger,
-          })
-          .catch(err => req.logger.warn(`[research/runs] outcome record failed: ${err}`));
+    const run = await dataLakeResearchService.startResearchRun(
+      configId,
+      lake,
+      { trigger: 'on_demand', actor, grants },
+      {
+        db: {
+          dataLakeResearchConfigs: dataLakeResearchConfigRepository,
+          dataLakeResearchRuns: dataLakeResearchRunRepository,
+          ...lakeConfigAuditDb,
+        },
+        logger: req.logger,
       }
-      throw error;
-    }
+    );
+
+    await queueResearchRun(run, lake, queueUrl, req.logger);
 
     return res.status(202).json({ data: run });
   });

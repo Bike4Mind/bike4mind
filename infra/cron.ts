@@ -14,6 +14,7 @@ import {
   dataLakeTaxonomyQueue,
   fabFileChunkQueue,
   driveLakeIngestQueue,
+  dataLakeResearchQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
@@ -505,6 +506,27 @@ const deepAgentWakeCron = new sst.aws.Cron('deepAgentWakeCron', {
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+// Data Lake Research Schedule - fires research configs whose cadence is due, skipping any lake whose
+// pending-proposal queue is at the config's review limit. 15 minutes is plenty for a daily-at-most
+// cadence; self-host drives the same tick from worker/main.ts.
+const dataLakeResearchScheduleCron = new sst.aws.Cron('dataLakeResearchScheduleCron', {
+  schedule: 'rate(15 minutes)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/client/server/cron/dataLakeResearchSchedule.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, dataLakeResearchQueue],
+    timeout: '2 minutes',
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 /**
  * SRE Stale Dispatch Cleanup
  * Detects dispatches stuck in 'fixing' status (>60 minutes) and transitions them to 'failed'.
@@ -966,6 +988,7 @@ export {
   liveOpsTriageJobCleanupCron,
   securityScanSchedulerCron,
   deepAgentWakeCron,
+  dataLakeResearchScheduleCron,
   telemetryCleanupCron,
   creditLotSweepCron,
   sreStaleDispatchCron,
