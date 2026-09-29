@@ -382,6 +382,11 @@ describe('mergeRetrievalSummary', () => {
       expect(merged && 'preauthorizedLakeIdsUsed' in merged).toBe(false);
     });
 
+    it('is present-and-empty when a side ran but reached no pre-authorized lake', () => {
+      const merged = mergeRetrievalSummary(base(), base({ preauthorizedLakeIdsUsed: [] }));
+      expect(merged?.preauthorizedLakeIdsUsed).toEqual([]);
+    });
+
     it('survives a side that never asserted the field', () => {
       const merged = mergeRetrievalSummary(base({ preauthorizedLakeIdsUsed: ['lake1'] }), base());
       expect(merged?.preauthorizedLakeIdsUsed).toEqual(['lake1']);
@@ -400,6 +405,11 @@ describe('mergeRetrievalSummary', () => {
     it('stays absent when neither side reached a lake by grant', () => {
       const merged = mergeRetrievalSummary(base(), base());
       expect(merged && 'grantedLakeIdsUsed' in merged).toBe(false);
+    });
+
+    it('is present-and-empty when a side ran but reached no lake by grant', () => {
+      const merged = mergeRetrievalSummary(base(), base({ grantedLakeIdsUsed: [] }));
+      expect(merged?.grantedLakeIdsUsed).toEqual([]);
     });
 
     it('survives a side that never asserted the field', () => {
@@ -431,6 +441,11 @@ describe('mergeRetrievalSummary', () => {
     it('stays absent when neither side used the reader opt-in arm', () => {
       const merged = mergeRetrievalSummary(base(), base());
       expect(merged && 'readerOptInLakeIdsUsed' in merged).toBe(false);
+    });
+
+    it('is present-and-empty when a side ran but the reader opt-in arm admitted nothing', () => {
+      const merged = mergeRetrievalSummary(base(), base({ readerOptInLakeIdsUsed: [] }));
+      expect(merged?.readerOptInLakeIdsUsed).toEqual([]);
     });
 
     it('survives a side that never asserted the field', () => {

@@ -745,7 +745,9 @@ export const RetrievalSummarySchema = z.object({
    *
    * CAUSATION, unlike the two fields above: a lake the caller also reaches by the pre-authorized,
    * grant, creator or org arm is NOT listed, so a non-empty value is exactly the prompts that would
-   * not have been injected without the opt-in. Absent means none did.
+   * not have been injected without the opt-in. Absent means none did. A turn can run both injection
+   * sites (forced retrieval and the knowledge tools); the merged value is a union, so a lake is
+   * listed if EITHER site's own causation check admitted it via the opt-in alone.
    */
   readerOptInLakeIdsUsed: z.array(z.string()).optional(),
   /**

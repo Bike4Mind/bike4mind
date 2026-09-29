@@ -19,4 +19,10 @@ describe('vetReaderConsentDatalakeTags', () => {
 
     expect(vetReaderConsentDatalakeTags(session, 'owner-1')).toBeUndefined();
   });
+
+  it('passes an explicitly empty scope through as present-and-empty, not absent', () => {
+    const session = { userId: 'owner-1', retrievalTags: [] };
+
+    expect(vetReaderConsentDatalakeTags(session, 'owner-1')).toEqual([]);
+  });
 });

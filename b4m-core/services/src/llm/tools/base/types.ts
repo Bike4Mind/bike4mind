@@ -237,7 +237,7 @@ export interface ToolContext {
    */
   sessionRetrievalTags?: string[];
   /**
-   * Owner-vetted subset of `sessionRetrievalTags` - the reader's consent for the lake-prompt READER
+   * Owner-vetted copy of `sessionRetrievalTags` - the reader's consent for the lake-prompt READER
    * OPT-IN arm (see getAccessibleDataLakePrompts), which widens prompt-injection trust but never
    * file access. Deliberately a SEPARATE field from `sessionRetrievalTags` rather than a reuse of
    * it: that one must stay populated for a non-owner request (a share, a teammate reply) so

@@ -1987,7 +1987,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   /** `session.lakeScopeExplicit` - see sessionGroundsOnNoLake for why an empty scope needs it. */
   private lakeScopeExplicit: boolean | undefined;
   /**
-   * Owner-vetted subset of `retrievalTags` - the reader's consent for the lake-prompt READER
+   * Owner-vetted copy of `retrievalTags` - the reader's consent for the lake-prompt READER
    * OPT-IN arm. Kept separate from `retrievalTags`, which stays populated for a non-owner turn so
    * retrieval scoping keeps working; see ToolContext.sessionReaderConsentDatalakeTags.
    */
