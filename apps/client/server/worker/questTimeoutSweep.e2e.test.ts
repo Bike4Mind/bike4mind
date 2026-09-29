@@ -4,7 +4,8 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { Quest, questRepository } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { emitMetric } from '@server/utils/cloudwatch';
-import { resolveQuestTimeoutRecovery } from '@server/chatCompletion/questTimeoutRecovery';
+import { resolveQuestTimeoutRecovery, UNFINISHED_REPLY_NOTICE } from '@server/chatCompletion/questTimeoutRecovery';
+import { RUN_TIMED_OUT_FINISH_REASON } from '@bike4mind/common';
 import * as sweepModule from '@server/cron/questTimeoutSweep';
 import { SelfHostWorker } from './selfHostWorker';
 import { QUEST_TIMEOUT_SWEEP_INTERVAL_MS, registerQuestTimeoutSweep } from './questTimeoutSweep';
@@ -16,6 +17,10 @@ vi.mock('@server/utils/cloudwatch', () => ({ emitMetric: vi.fn() }));
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 const SECOND = 1000;
+const CUT_OFF = {
+  replies: ['partial answer', `\n\n${UNFINISHED_REPLY_NOTICE}`],
+  promptMeta: { finishReason: RUN_TIMED_OUT_FINISH_REASON },
+};
 const MINUTE = 60 * SECOND;
 const DAY = 24 * 60 * MINUTE;
 const now = new Date('2026-09-25T00:00:00Z');
@@ -83,7 +88,7 @@ describe('self-host quest timeout sweep against Mongo', () => {
     start(true);
     await vi.waitFor(async () => {
       expect(await quest(stale)).toMatchObject({ status: 'done', type: 'error' });
-      expect(await quest(staleWithAnswer)).toMatchObject({ status: 'done', replies: ['partial answer'] });
+      expect(await quest(staleWithAnswer)).toMatchObject({ status: 'done', ...CUT_OFF });
     }, SETTLE_WAIT);
     expect((await quest(stale))?.reply).toMatch(/timed out/);
     expect((await quest(staleWithAnswer))?.type).toBe('message');
@@ -121,7 +126,7 @@ describe('self-host quest timeout sweep against Mongo', () => {
       // The run commits its real answer, and a client's read-time recovery settles the other.
       await Quest.collection.updateOne({ _id: completed }, { $set: { status: 'done', reply: 'real answer' } });
       const onRead = candidates.find(c => c.id === recoveredOnRead.toString())!;
-      await questRepository.update({ id: onRead.id, ...resolveQuestTimeoutRecovery(onRead, now.getTime())! });
+      await questRepository.settleIfUnfinished(onRead.id, resolveQuestTimeoutRecovery(onRead, now.getTime())!);
       return candidates;
     });
 
@@ -133,7 +138,7 @@ describe('self-host quest timeout sweep against Mongo', () => {
     expect(await quest(recoveredOnRead)).toMatchObject({
       status: 'done',
       type: 'message',
-      replies: ['partial answer'],
+      ...CUT_OFF,
     });
   });
 });
