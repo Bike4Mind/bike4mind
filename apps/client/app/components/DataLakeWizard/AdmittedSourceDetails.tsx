@@ -80,7 +80,9 @@ export default function AdmittedSourceDetails({ file }: { file: IFabFileDocument
   // update on its own while chunking/vectorization continues in the background, so "Queued" could
   // sit on screen long after the file actually finished. Polled only while non-terminal (see
   // isFabFileProcessingTerminal), so an already-settled file costs nothing here.
-  const { data: liveFile } = useGetFabFile(file.id, { pollWhileProcessing: true });
+  const { data: liveFile } = useGetFabFile(file.sourceType === FabFileSourceType.PROPOSAL_APPROVAL ? file.id : null, {
+    pollWhileProcessing: true,
+  });
   const processingFile = liveFile ?? file;
 
   if (file.sourceType !== FabFileSourceType.PROPOSAL_APPROVAL) return null;

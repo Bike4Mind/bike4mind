@@ -283,7 +283,9 @@ describe('approveDataLakeProposal', () => {
     const { deps } = adapters({ admitSource });
 
     const rejection = approveDataLakeProposal('prop-1', ctx(), deps);
-    await expect(rejection).rejects.not.toMatchObject({ statusCode: 502 });
+    await expect(rejection).rejects.toMatchObject({ message: 'socket hang up', code: 'ECONNRESET' });
+    await expect(rejection).rejects.not.toHaveProperty('statusCode');
+    await expect(rejection).rejects.not.toHaveProperty('expected');
     expect(admitSource).toHaveBeenCalledTimes(1);
   });
 

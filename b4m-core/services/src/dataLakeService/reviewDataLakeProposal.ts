@@ -139,6 +139,10 @@ const SOURCE_NETWORK_ERROR_CODES = new Set(['ECONNRESET', 'ECONNREFUSED', 'ENOTF
  */
 function asReviewerFacingAdmissionError(err: unknown): unknown {
   if (err instanceof HTTPError) return err;
+  // A non-axios network error (e.g. a storage-upload ECONNRESET, which createByUrl rethrows from
+  // the same catch) is passed through untouched upstream, so it keeps its 500 and error-level log.
+  const { code, isAxiosError } = (err ?? {}) as { code?: string; isAxiosError?: boolean };
+  if (!isAxiosError && typeof code === 'string' && SOURCE_NETWORK_ERROR_CODES.has(code)) return err;
   const mapped = mapFetchFailure(err);
   if (mapped.statusCode >= 500) mapped.expected = true;
   return mapped;
@@ -158,10 +162,8 @@ function mapFetchFailure(err: unknown): HTTPError {
     message?: string;
     isAxiosError?: boolean;
   };
-  // Gated on isAxiosError, same as isSourceTimeout above: createFabFileByUrl rethrows storage-upload
-  // errors from this same catch, and an upload-side ECONNRESET is an infrastructure failure, not
-  // evidence the source site is unreachable - it must keep its ordinary (error-level, non-"expected")
-  // handling rather than being misclassified as a retryable-by-the-reviewer 502.
+  // A non-axios network error already returned unchanged above, so isAxiosError here means the
+  // source fetch itself failed - a 502 the reviewer can retry, not an infrastructure fault.
   if (isAxiosError && response?.status) {
     return new BadGatewayError(
       `Could not add this source: the source returned HTTP ${response.status}. ${consequence}`

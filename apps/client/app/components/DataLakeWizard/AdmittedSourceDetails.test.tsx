@@ -4,6 +4,7 @@ import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { FabFileSourceType, type IFabFileDocument } from '@bike4mind/common';
+import { useGetFabFile } from '@client/app/hooks/data/fabFiles';
 import AdmittedSourceDetails, { describeProcessingState } from './AdmittedSourceDetails';
 
 // The panel polls the live file while processing continues (see AdmittedSourceDetails). Mocked
@@ -11,7 +12,7 @@ import AdmittedSourceDetails, { describeProcessingState } from './AdmittedSource
 // control exactly what the "live" fetch returns.
 let liveFile: IFabFileDocument | undefined;
 vi.mock('@client/app/hooks/data/fabFiles', () => ({
-  useGetFabFile: () => ({ data: liveFile }),
+  useGetFabFile: vi.fn(() => ({ data: liveFile })),
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -86,6 +87,14 @@ describe('AdmittedSourceDetails', () => {
     renderDetails(admitted({ sourceType: FabFileSourceType.SLACK }));
 
     expect(screen.queryByTestId('datalake-admitted-source')).toBeNull();
+  });
+
+  // A non-proposal file never shows this panel, so polling it would be wasted work on every lake
+  // file - passing null keeps the query disabled (see useGetFabFile's `enabled: !!id`).
+  it('does not poll a file that did not come through proposal approval', () => {
+    renderDetails(admitted({ sourceType: FabFileSourceType.SLACK }));
+
+    expect(vi.mocked(useGetFabFile)).toHaveBeenCalledWith(null, { pollWhileProcessing: true });
   });
 });
 

@@ -98,6 +98,7 @@ describe('POST /api/data-lakes/:id/proposals/:proposalId', () => {
     expect(h.approveDataLakeProposal).toHaveBeenCalledWith(
       'prop-1',
       expect.objectContaining({ auditPrincipal: expect.objectContaining({ principalKind: 'apiKey' }) }),
+      expect.anything(),
       expect.anything()
     );
   });
