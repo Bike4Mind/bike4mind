@@ -1278,6 +1278,42 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
 
     expect(screen.getByTestId('datalake-proposal-decline-reason')).toHaveValue('Paywalled');
   });
+
+  it('asks before discarding an unsaved decline reason', async () => {
+    withQueue([queued()]);
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={onClose} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
+    await user.click(screen.getByTestId('datalake-proposal-decline-btn'));
+    await user.type(screen.getByTestId('datalake-proposal-decline-reason'), 'Paywalled');
+    await user.click(screen.getByTestId('datalake-settings-close-btn'));
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('datalake-discard-confirm')).toBeInTheDocument();
+  });
+
+  it('closes without asking when a decline was opened but no reason typed', async () => {
+    withQueue([queued()]);
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={onClose} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
+    await user.click(screen.getByTestId('datalake-proposal-decline-btn'));
+    await user.click(screen.getByTestId('datalake-settings-close-btn'));
+
+    expect(onClose).toHaveBeenCalled();
+  });
 });
 
 describe('DataLakeSettingsModal - Research tab', () => {
