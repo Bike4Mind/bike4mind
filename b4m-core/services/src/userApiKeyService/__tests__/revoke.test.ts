@@ -21,6 +21,13 @@ function makeSyncedRepo() {
     }),
     findByUserIdAndId: vi.fn().mockImplementation(() => Promise.resolve(stored)),
     update: vi.fn().mockResolvedValue(undefined),
+    // Mirrors the repo's status-filtered write: a no-op on an already-DISABLED key.
+    revokeIfActive: vi.fn().mockImplementation((_id: string, revokedBy: string, revokedReason?: string) => {
+      if (stored && stored.status !== ApiKeyStatus.DISABLED) {
+        Object.assign(stored, { status: ApiKeyStatus.DISABLED, revokedAt: new Date(), revokedBy, revokedReason });
+      }
+      return Promise.resolve();
+    }),
   };
   return { repo, getStored: () => stored };
 }
@@ -77,13 +84,8 @@ describe('revokeUserApiKey', () => {
     expect(getStored()!.revokedBy).toBe('user1');
     expect(getStored()!.revokedReason).toBe('Leaked in a build log');
     expect(getStored()!.revokedAt!.getTime()).toBeGreaterThanOrEqual(before);
-    expect(repo.update).toHaveBeenCalledWith({
-      id: 'key-1',
-      status: ApiKeyStatus.DISABLED,
-      revokedAt: expect.any(Date),
-      revokedBy: 'user1',
-      revokedReason: 'Leaked in a build log',
-    });
+    expect(repo.revokeIfActive).toHaveBeenCalledWith('key-1', 'user1', 'Leaked in a build log');
+    expect(repo.update).not.toHaveBeenCalled();
   });
 
   it('leaves revokedReason unset when no reason is supplied', async () => {
@@ -129,7 +131,7 @@ describe('revokeUserApiKey', () => {
 
     expect(getStored()!.revokedAt).toBe(firstRevokedAt);
     expect(getStored()!.revokedReason).toBe('Leaked in a build log');
-    expect(repo.update).toHaveBeenLastCalledWith({ id: 'key-1', status: ApiKeyStatus.DISABLED });
+    expect(repo.revokeIfActive).toHaveBeenLastCalledWith('key-1', 'user1', 'Second attempt');
   });
 
   // #909: an org admin can revoke a key billed to an org they administer, even a
@@ -148,7 +150,7 @@ describe('revokeUserApiKey', () => {
       const repo = {
         findByUserIdAndId: vi.fn().mockResolvedValue(null),
         findByOrganizationIdsAndId: vi.fn().mockResolvedValue(stored),
-        update: vi.fn().mockResolvedValue(undefined),
+        revokeIfActive: vi.fn().mockResolvedValue(undefined),
       };
       const orgs = { findIdsAdministeredBy: vi.fn().mockResolvedValue(['org-1']) };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -158,22 +160,21 @@ describe('revokeUserApiKey', () => {
 
       expect(orgs.findIdsAdministeredBy).toHaveBeenCalledWith('admin-user');
       expect(repo.findByOrganizationIdsAndId).toHaveBeenCalledWith(['org-1'], 'key-1');
-      expect(stored.status).toBe(ApiKeyStatus.DISABLED);
-      expect(stored.revokedBy).toBe('admin-user');
+      expect(repo.revokeIfActive).toHaveBeenCalledWith('key-1', 'admin-user', undefined);
     });
 
     it('throws NotFound when the caller neither minted nor administers the key', async () => {
       const repo = {
         findByUserIdAndId: vi.fn().mockResolvedValue(null),
         findByOrganizationIdsAndId: vi.fn().mockResolvedValue(null),
-        update: vi.fn().mockResolvedValue(undefined),
+        revokeIfActive: vi.fn().mockResolvedValue(undefined),
       };
       const orgs = { findIdsAdministeredBy: vi.fn().mockResolvedValue([]) };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const adapters = { db: { userApiKeys: repo as any, organizations: orgs as any } };
 
       await expect(revokeUserApiKey('other-user', { keyId: 'key-1' }, adapters)).rejects.toThrow(/not found/);
-      expect(repo.update).not.toHaveBeenCalled();
+      expect(repo.revokeIfActive).not.toHaveBeenCalled();
     });
   });
 });

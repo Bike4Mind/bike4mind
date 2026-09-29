@@ -116,6 +116,35 @@ describe('userApiKeyService writers vs concurrent writes (real repo + Mongo)', (
     expect(after!.usage.totalSpendCredits).toBe(5);
   });
 
+  it('revoke racing a ban keeps the ban audit stamp instead of overwriting it', async () => {
+    const minted = await mintEmbedKey();
+
+    await userApiKeyService.revokeUserApiKey(
+      'owner-1',
+      { keyId: minted.id, reason: 'late revoke' },
+      { db: { ...baseDb, userApiKeys: racingOwnedReadRepo(1, true) } }
+    );
+
+    const after = await reload(minted.id);
+    expect(after!.status).toBe(ApiKeyStatus.DISABLED);
+    expect(after!.revokedAt).toBeInstanceOf(Date);
+    expect(after!.revokedBy).toBeUndefined();
+    expect(after!.revokedReason).toBeUndefined();
+  });
+
+  it('re-revoking keeps the first revocation', async () => {
+    const minted = await mintEmbedKey();
+    const db = { ...baseDb, userApiKeys: userApiKeyRepository };
+
+    await userApiKeyService.revokeUserApiKey('owner-1', { keyId: minted.id, reason: 'first' }, { db });
+    const first = await reload(minted.id);
+    await userApiKeyService.revokeUserApiKey('owner-1', { keyId: minted.id, reason: 'second' }, { db });
+
+    const after = await reload(minted.id);
+    expect(after!.revokedReason).toBe('first');
+    expect(after!.revokedAt).toEqual(first!.revokedAt);
+  });
+
   it('rotate does not resurrect a key deactivated mid-flight or reset its spend', async () => {
     const minted = await mintEmbedKey();
     const before = await reload(minted.id);

@@ -1,4 +1,4 @@
-import { ApiKeyStatus, IOrganizationRepository, IUserApiKeyDocument, IUserApiKeyRepository } from '@bike4mind/common';
+import { IOrganizationRepository, IUserApiKeyRepository } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { resolveOwnedApiKey } from './resolveOwnedApiKey';
@@ -41,19 +41,7 @@ export const revokeUserApiKey = async (
     throw new NotFoundError('API key not found');
   }
 
-  const patch: Partial<IUserApiKeyDocument> = { id: apiKey.id, status: ApiKeyStatus.DISABLED };
-  // Stamp only on the actual transition, so re-revoking never resets the audit
-  // trail and a key disabled before these fields existed keeps an honest blank.
-  if (apiKey.status !== ApiKeyStatus.DISABLED) {
-    patch.revokedAt = new Date();
-    patch.revokedBy = userId;
-    if (params.reason) {
-      patch.revokedReason = params.reason;
-    }
-  }
-
-  Object.assign(apiKey, patch);
-  await db.userApiKeys.update(patch);
+  await db.userApiKeys.revokeIfActive(apiKey.id, userId, params.reason);
 
   return { name: apiKey.name };
 };
