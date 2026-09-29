@@ -79,6 +79,9 @@ export async function runDriveDisconnectPurge(
     if (syncDeferrals > MAX_SYNC_DEFERRALS) {
       throw new Error(`Drive disconnect purge for ${connectionId} is still blocked by a sync; giving up`);
     }
+    // Waiting out a sync is still progress; without this the chain reads as stalled mid-deferral and
+    // the UI offers a retry the route would only 409.
+    await orgGoogleDriveConnectionRepository.touchDisconnect(connectionId, organizationId);
     await enqueue({ ...payload, syncDeferrals }, SYNC_DEFERRAL_DELAY_SEC);
     logger.info('[driveDisconnectPurge] a sync is in flight; deferred', { connectionId, syncDeferrals });
     return 'deferred';

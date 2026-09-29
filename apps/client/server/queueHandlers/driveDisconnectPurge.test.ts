@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   connMarkDisconnecting: vi.fn(
     async (): Promise<{ stamp: Date; created: boolean; previousEnabled: boolean } | null> => null
   ),
+  connTouchDisconnect: vi.fn(async () => true),
   findFiles: vi.fn(async (): Promise<unknown[]> => []),
   purge: vi.fn(async () => ({ filesPurged: 0, storageObjectsDeleted: 0 })),
   recomputeLakeStats: vi.fn(async () => ({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 })),
@@ -22,6 +23,7 @@ vi.mock('@bike4mind/database', () => ({
   orgGoogleDriveConnectionRepository: {
     findByDataLakeIdAny: h.connFindByDataLakeIdAny,
     markDisconnecting: h.connMarkDisconnecting,
+    touchDisconnect: h.connTouchDisconnect,
   },
   fabFileRepository: { findByDriveConnectionIdInDataLake: h.findFiles },
   fabFileChunkRepository: {},
@@ -161,6 +163,8 @@ describe('driveDisconnectPurge consumer', () => {
     await run();
     expect(h.findFiles).not.toHaveBeenCalled();
     expect(h.sendToQueue).toHaveBeenCalledWith('purge-queue-url', { ...payload, syncDeferrals: 1 }, 300);
+    // Keeps the stall clock fresh, so the UI does not offer a retry on a chain that is still live.
+    expect(h.connTouchDisconnect).toHaveBeenCalledWith('conn1', 'orgA');
   });
 
   it('gives up into the DLQ once the sync deferrals are exhausted', async () => {
