@@ -85,3 +85,17 @@ export function flushUtmCapture(): void {
   }
   pending = undefined;
 }
+
+/**
+ * Expire every attribution cookie and drop any held capture. Called when consent
+ * resolves to denied after an earlier grant, so a later decline actually stops
+ * checkout from copying stale attribution into Stripe.
+ */
+export function clearAttributionCookies(): void {
+  if (typeof document === 'undefined') return;
+
+  for (const name of [UTM_COOKIE_NAME, LAST_TOUCH_COOKIE_NAME, APP_FIRST_TOUCH_COOKIE_NAME]) {
+    document.cookie = `${name}=; path=/; SameSite=Strict; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+  }
+  pending = undefined;
+}

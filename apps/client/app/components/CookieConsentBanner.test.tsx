@@ -346,4 +346,60 @@ describe('CookieConsentBanner', () => {
     expect(mockLoadRedditPixel).not.toHaveBeenCalled();
     expect(mockLoadMetaPixel).not.toHaveBeenCalled();
   });
+
+  // A later decline has to actually stop checkout from copying stale attribution
+  // into Stripe, not just gate new pixel loads.
+  describe('clearing attribution cookies on a later decline', () => {
+    function setAttributionCookies() {
+      document.cookie = 'b4m_utm=%7B%22source%22%3A%22newsletter%22%7D; path=/';
+      document.cookie = 'b4m_last_touch=%7B%22source%22%3A%22newsletter%22%7D; path=/';
+      document.cookie = 'b4m_app_first_touch=%7B%22source%22%3A%22newsletter%22%7D; path=/';
+    }
+
+    function attributionCookiesPresent(): boolean {
+      return ['b4m_utm', 'b4m_last_touch', 'b4m_app_first_touch'].some(name =>
+        document.cookie.split('; ').some(c => c.startsWith(`${name}=`))
+      );
+    }
+
+    it('expires held attribution cookies when this origin already decided denied', () => {
+      setAttributionCookies();
+      localStorageMock.setItem('cookie_consent', 'denied');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(attributionCookiesPresent()).toBe(false);
+    });
+
+    it('expires held attribution cookies when the marketing site decided denied', () => {
+      setAttributionCookies();
+      setSharedDecision('denied');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(attributionCookiesPresent()).toBe(false);
+    });
+
+    it('expires held attribution cookies on a Decline click', () => {
+      setAttributionCookies();
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+
+      expect(attributionCookiesPresent()).toBe(false);
+    });
+  });
 });
