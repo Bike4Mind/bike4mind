@@ -85,20 +85,21 @@ beforeEach(() => {
   mockLoad.mockReset().mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareTokens: [] });
   mockFindOneAndUpdate.mockReset().mockResolvedValue({ shareTokens: [entry('TESTTOKEN')] }); // won the CAS
   mockCurrent.mockReset().mockResolvedValue({ shareTokens: [entry('TESTTOKEN')] });
-  mockUpdateOne.mockReset().mockResolvedValue({});
+  mockUpdateOne.mockReset().mockResolvedValue({ matchedCount: 1 });
 });
 
-// The pipeline's shareTokens stage, shaped for assertion: $concatArrays is [existing, [new]],
-// where `existing` is a raw $map stage on a rotate and the appended entry is a plain object.
+type ShareEntry = { _id?: unknown; token?: string; createdAt?: Date; revokedAt?: Date | null; viewCount?: number };
+
+// The pipeline's shareTokens stage, shaped for assertion. $concatArrays is
+// [existing, legacyMirror, [new]]: `existing` is a raw $map stage on a rotate, `legacyMirror`
+// is empty except when `additional` has to rescue a pre-backfill scalar-only link, and the
+// appended entry is a plain object.
 interface SharePipelineStage {
   $set: {
     shareToken: string;
     shareTokenUpdatedAt: Date;
     shareTokens: {
-      $concatArrays: [
-        { $map?: { in: { $cond: unknown[] } } },
-        { _id?: unknown; token?: string; revokedAt?: Date | null; viewCount?: number }[],
-      ];
+      $concatArrays: [{ $map?: { in: { $cond: unknown[] } } }, ShareEntry[], ShareEntry[]];
     };
   };
 }
@@ -153,7 +154,7 @@ describe('POST /api/publish/[publicId]/share-token', () => {
     const { promise } = run();
     await promise;
     const [, pipeline] = mockFindOneAndUpdate.mock.calls[0] as [unknown, SharePipelineStage[]];
-    const appended = pipeline[0].$set.shareTokens.$concatArrays[1][0];
+    const appended = pipeline[0].$set.shareTokens.$concatArrays[2][0];
     expect(appended.token).toBe('TESTTOKEN');
     expect(appended.revokedAt).toBeNull();
     expect(appended.viewCount).toBe(0);
@@ -166,18 +167,18 @@ describe('POST /api/publish/[publicId]/share-token', () => {
     const { res, promise } = run();
     await promise;
     const [, pipeline] = mockFindOneAndUpdate.mock.calls[0] as [unknown, SharePipelineStage[]];
-    expect(res._getJSONData().id).toBe(String(pipeline[0].$set.shareTokens.$concatArrays[1][0]._id));
+    expect(res._getJSONData().id).toBe(String(pipeline[0].$set.shareTokens.$concatArrays[2][0]._id));
   });
 
   it('a rotate revokes EVERY live entry in the same write as the append', async () => {
-    // `regenerate: true` has always meant "revoke every outstanding link", and #281's Replace
+    // `regenerate: true` has always meant "revoke every outstanding link", and the shipped Replace
     // button still means that - so with N links it revokes all N, not just the pinned one.
     const live = [entry('OUTGOING-A'), entry('OUTGOING-B')];
     mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareTokens: live });
     const { promise } = run({ body: { regenerate: true } });
     await promise;
     const [, pipeline] = mockFindOneAndUpdate.mock.calls[0] as [unknown, SharePipelineStage[]];
-    const [kept, appended] = pipeline[0].$set.shareTokens.$concatArrays;
+    const [kept, , appended] = pipeline[0].$set.shareTokens.$concatArrays;
     // Matched on liveness, not on one token: splitting this into a second write would let a
     // crash leave a rotated-away link live.
     expect(kept.$map?.in.$cond[0]).toEqual({ $eq: [{ $ifNull: ['$$entry.revokedAt', null] }, null] });
@@ -250,6 +251,42 @@ describe('POST /api/publish/[publicId]/share-token', () => {
       ]);
     });
 
+    it('folds a stranded legacy link into the array instead of overwriting it', async () => {
+      // The pipeline overwrites the scalar with the new token. On a row the backfill missed,
+      // that is the ONLY copy of the existing link - dropping it would kill a URL the owner
+      // has already shared, in the one call that says "keep what I have and add one".
+      mockLoad.mockResolvedValue({
+        publicId: 'pub1',
+        ownerId: 'owner1',
+        shareToken: 'LEGACY',
+        shareTokenUpdatedAt: new Date('2026-09-10T00:00:00.000Z'),
+        shareTokens: [],
+      });
+      const { promise } = run({ body: { additional: true } });
+      await promise;
+      const [filter, pipeline] = mockFindOneAndUpdate.mock.calls[0] as [Record<string, unknown>, SharePipelineStage[]];
+      // Pinned, so a racer that rotated the legacy token away cannot have it resurrected.
+      expect(filter.shareToken).toBe('LEGACY');
+      const parts = pipeline[0].$set.shareTokens.$concatArrays as unknown as Record<string, unknown>[][];
+      const mirrored = parts[1][0] as { token: string; createdAt: Date; revokedAt: null };
+      expect(mirrored.token).toBe('LEGACY');
+      expect(mirrored.revokedAt).toBeNull();
+      // Not "now": the backfill migration made the same choice, so the owner's list does not
+      // claim an old link was created today.
+      expect(mirrored.createdAt).toEqual(new Date('2026-09-10T00:00:00.000Z'));
+      // ...and the new link still lands after it.
+      expect((parts[2][0] as { token: string }).token).toBe('TESTTOKEN');
+    });
+
+    it('adds no mirror entry when every live link is already in the array', async () => {
+      mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareTokens: [entry('EXISTING')] });
+      const { promise } = run({ body: { additional: true } });
+      await promise;
+      const [, pipeline] = mockFindOneAndUpdate.mock.calls[0] as [unknown, SharePipelineStage[]];
+      const parts = pipeline[0].$set.shareTokens.$concatArrays as unknown as unknown[][];
+      expect(parts[1]).toEqual([]);
+    });
+
     it('400s past the live-link ceiling rather than growing the array without bound', async () => {
       const links = Array.from({ length: 20 }, (_, i) => entry(`T${i}`));
       mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareTokens: links });
@@ -313,9 +350,55 @@ describe('DELETE /api/publish/[publicId]/share-token', () => {
     const { promise } = run({ method: 'DELETE', query: { id: String(a._id) } });
     await promise;
     const [, pipeline] = mockUpdateOne.mock.calls[0] as [unknown, Record<string, unknown>[]];
-    const mirror = pipeline[2] as { $set: { shareToken: unknown } };
+    const mirror = pipeline[2] as { $set: { shareToken: unknown; shareTokenUpdatedAt: unknown } };
     expect(mirror.$set.shareToken).toEqual({ $ifNull: [{ $last: '$__live.token' }, '$$REMOVE'] });
+    // From the SAME survivor as the token: carrying the old value over would leave the
+    // timestamp describing the link this write just revoked.
+    expect(mirror.$set.shareTokenUpdatedAt).toEqual({ $ifNull: [{ $last: '$__live.createdAt' }, null] });
     expect(pipeline[3]).toEqual({ $unset: '__live' }); // the scratch field never persists
+  });
+
+  it('pins a surviving sibling in the WRITE filter when a gate depends on one', async () => {
+    // The in-memory survivor count reads a snapshot, so two concurrent revoke-by-id calls on
+    // the last two links would each see one survivor, both pass, and together orphan the gate.
+    const [a, b] = [entry('A'), entry('B')];
+    mockLoad.mockResolvedValue({
+      publicId: 'pub1',
+      ownerId: 'owner1',
+      shareTokens: [a, b],
+      visibility: 'private',
+      accessGate: { kind: 'passphrase', passphraseHash: 'x' },
+    });
+    const { promise } = run({ method: 'DELETE', query: { id: String(a._id) } });
+    await promise;
+    const [filter] = mockUpdateOne.mock.calls[0] as [Record<string, unknown>];
+    expect(filter.shareTokens).toEqual({ $elemMatch: { _id: { $ne: a._id }, revokedAt: null } });
+  });
+
+  it('400s the racer whose sibling vanished before its write landed', async () => {
+    const [a, b] = [entry('A'), entry('B')];
+    mockLoad.mockResolvedValue({
+      publicId: 'pub1',
+      ownerId: 'owner1',
+      shareTokens: [a, b],
+      visibility: 'private',
+      accessGate: { kind: 'passphrase', passphraseHash: 'x' },
+    });
+    mockUpdateOne.mockResolvedValue({ matchedCount: 0 }); // the survivor pin matched nothing
+    const { res, promise } = run({ method: 'DELETE', query: { id: String(a._id) } });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().code).toBe('REVOKE_WOULD_ORPHAN_GATE');
+  });
+
+  it('leaves the filter unpinned when no gate depends on a surviving link', async () => {
+    // An ungated artifact has nothing to orphan, so it keeps the cheap unconditional filter.
+    const [a, b] = [entry('A'), entry('B')];
+    mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareTokens: [a, b] });
+    const { promise } = run({ method: 'DELETE', query: { id: String(a._id) } });
+    await promise;
+    const [filter] = mockUpdateOne.mock.calls[0] as [Record<string, unknown>];
+    expect(filter).toEqual({ publicId: 'pub1', deletedAt: null });
   });
 
   it('404s an id that names no live link, WITHOUT writing', async () => {
@@ -460,7 +543,7 @@ describe('GET /api/publish/[publicId]/share-token', () => {
         lastViewedAt: null,
       },
     ]);
-    // The single-link fields #281's shipped UI reads describe the NEWEST live link, so that UI
+    // The single-link fields the shipped owner UI reads describe the NEWEST live link, so that UI
     // keeps working unchanged on deploy.
     expect(body).toMatchObject({ hasShareToken: true, shareToken: 'B', shareUrl: '/a/B' });
     // Soft-deleted artifacts must stay invisible to the read, same as POST/DELETE.

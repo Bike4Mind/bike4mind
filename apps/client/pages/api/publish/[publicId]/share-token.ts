@@ -145,7 +145,10 @@ function revokeStages(target: Record<string, unknown>, now: Date): Record<string
     {
       $set: {
         shareToken: { $ifNull: [{ $last: '$__live.token' }, '$$REMOVE'] },
-        shareTokenUpdatedAt: { $cond: [{ $gt: [{ $size: '$__live' }, 0] }, '$shareTokenUpdatedAt', null] },
+        // Derived from the SAME survivor as the token, not carried over: after revoking the
+        // newest of several links the scalar moves to an older one, and a carried-over
+        // timestamp would then describe the link that was just revoked.
+        shareTokenUpdatedAt: { $ifNull: [{ $last: '$__live.createdAt' }, null] },
       },
     },
     { $unset: '__live' },
@@ -163,7 +166,7 @@ const handler = baseApi()
     if (!artifact) return;
 
     // Read-only: never mints. `shareLinks` drives the owner's list; the four single-link
-    // fields beside it are what #281's shipped UI reads, kept so this response does not
+    // fields beside it are what the shipped single-link owner UI reads, kept so this response does not
     // break on deploy. Both describe the same links.
     const shareLinks = liveLinkViews(artifact);
     const newest = newestLive(shareLinks);
@@ -215,8 +218,17 @@ const handler = baseApi()
     // (256-bit tokens, so a partial-unique-index collision is negligible.)
     const candidate = generateShareToken();
     const rotatingFrom = regenerate ? newestLive(live) : undefined;
+    // A live link the backfill never mirrored: it exists only as the scalar, which this write
+    // is about to overwrite with the new token. `additional` means "keep what is live and add
+    // one", so the legacy link is folded into the array in the SAME write rather than being
+    // silently killed - every other path here already tolerates such a row, and this makes it
+    // self-healing. Its precondition pins the scalar, so a racer that rotated it away first
+    // cannot have the entry resurrected underneath them.
+    const strandedLegacy = additional ? live.find(link => link.id === null) : undefined;
     const precondition = additional
-      ? {}
+      ? strandedLegacy
+        ? { shareToken: strandedLegacy.shareToken }
+        : {}
       : rotatingFrom?.id
         ? { shareTokens: { $elemMatch: { _id: new Types.ObjectId(rotatingFrom.id), revokedAt: null } } }
         : rotatingFrom
@@ -236,7 +248,7 @@ const handler = baseApi()
       // UI revokes by.
       //
       // A rotate marks EVERY live entry revoked, not just the pinned one: `regenerate: true`
-      // has always meant "revoke every outstanding link", and #281's Replace button still
+      // has always meant "revoke every outstanding link", and the shipped Replace control still
       // means that. Replacing one link of several is revoke-by-id followed by `additional`.
       [
         {
@@ -254,6 +266,22 @@ const handler = baseApi()
                       },
                     }
                   : { $ifNull: ['$shareTokens', []] },
+                // The stranded legacy link, mirrored into the array before the new entry so it
+                // keeps resolving through shareTokenFilter once the scalar moves on. Its
+                // createdAt is the closest truth the row carries, the same choice the backfill
+                // migration made.
+                strandedLegacy
+                  ? [
+                      {
+                        _id: new Types.ObjectId(),
+                        token: strandedLegacy.shareToken,
+                        createdAt: artifact.shareTokenUpdatedAt ?? now,
+                        revokedAt: null,
+                        viewCount: 0,
+                        lastViewedAt: null,
+                      },
+                    ]
+                  : [],
                 [{ _id: entryId, token: candidate, createdAt: now, revokedAt: null, viewCount: 0, lastViewedAt: null }],
               ],
             },
@@ -313,7 +341,8 @@ const handler = baseApi()
     // owner decide, rather than silently dropping a gate they set. Revoking one of several is
     // fine: the survivors keep enforcing it. (See GATE_REQUIRES_ENFORCING_SURFACE in
     // `artifacts/[id].ts` - these two must stay in sync.)
-    if (live.length && survivors === 0 && artifact.accessGate && artifact.visibility !== 'public') {
+    const gateNeedsALink = Boolean(artifact.accessGate) && artifact.visibility !== 'public';
+    if (live.length && survivors === 0 && gateNeedsALink) {
       return res.status(400).json({
         error:
           "This share link is the only thing enforcing the artifact's access gate - clear the gate or set visibility to public before revoking the link",
@@ -325,10 +354,31 @@ const handler = baseApi()
       // Stamped rather than pulled, so each token stays claimed in the unique index (a revoked
       // link can never be re-minted) and its view count survives. The mirrored scalar is
       // re-derived from the survivors in the same write.
-      await PublishedArtifact.updateOne(
-        { publicId: artifact.publicId, deletedAt: null },
+      //
+      // The survivor requirement has to be part of the FILTER, not just the in-memory check
+      // above: that check reads the `loadOwnedArtifact` snapshot, so two concurrent
+      // revoke-by-id calls on the last two links each see one survivor, both pass, and between
+      // them they orphan the gate the refusal exists to protect. Pinning "some OTHER entry is
+      // still live" makes the loser match nothing - the same compare-and-set move the mint and
+      // rotate paths make. Only applied when a gate actually needs a link, so an ungated
+      // artifact keeps the cheap unconditional filter.
+      const pinSurvivor = gateNeedsALink && !!target;
+      const survivorPin = pinSurvivor
+        ? { shareTokens: { $elemMatch: { _id: { $ne: new Types.ObjectId(target!.id!) }, revokedAt: null } } }
+        : {};
+      const result = await PublishedArtifact.updateOne(
+        { publicId: artifact.publicId, deletedAt: null, ...survivorPin },
         revokeStages(target ? { $eq: ['$$entry._id', new Types.ObjectId(target.id!)] } : { $literal: true }, new Date())
       );
+      // Lost that race: the siblings this revoke was counting on are gone, so it would now be
+      // dropping the last link. Same refusal as the snapshot check, for the same reason.
+      if (pinSurvivor && result?.matchedCount === 0) {
+        return res.status(400).json({
+          error:
+            "This share link is the only thing enforcing the artifact's access gate - clear the gate or set visibility to public before revoking the link",
+          code: 'REVOKE_WOULD_ORPHAN_GATE',
+        });
+      }
       req.logger.info(
         `[PUBLISH] share-token revoked publicId=${artifact.publicId} count=${revoking.length} remaining=${survivors} by=${req.user!.id}`
       );
