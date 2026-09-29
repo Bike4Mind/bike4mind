@@ -15,7 +15,7 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatSessionMode, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { groupSessions, orderedSessions, type ProjectGroup } from './grouping';
-import { ChevronIcon, MoreIcon, PanelLeftIcon, PlusIcon, SearchIcon, SlidersIcon } from './icons';
+import { ArtifactIcon, ChevronIcon, MoreIcon, PanelLeftIcon, PlusIcon, SearchIcon, SlidersIcon } from './icons';
 import { ModeSwitcher } from './ModeSwitcher';
 import { SessionBadge } from './SessionBadge';
 
@@ -122,7 +122,9 @@ function SessionRow({ session, activeId, statuses, onSelect, onDelete, onToggleP
       >
         <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center', minWidth: 0, width: '100%' }}>
           <SessionBadge status={status} />
-          <Typography level="body-sm" noWrap sx={{ minWidth: 0 }}>
+          {/* Between Joy's body-sm and body-xs: at body-xs the row matches its own group header,
+              which is bold, so the header outweighs the content it labels. */}
+          <Typography level="body-xs" noWrap sx={{ minWidth: 0, fontSize: '0.8125rem' }}>
             {session.title}
           </Typography>
           {/* A session the agent started is marked, because the user did not open it and will
@@ -213,9 +215,8 @@ function ProjectHeader({
  * sessions under a header per project, Chat sessions in one flat list - and the account strip.
  *
  * Adapted from Claude Code desktop's layout, with its nav entries dropped rather than shipped
- * as dead links: "Artifacts" has nothing to point at, because desktop conversations are local
- * and produce none, and "Customize" and "More" were removed on the user's instruction. New is
- * the only nav entry left, and it behaves identically in both modes.
+ * as dead links: "Customize" and "More" were removed on the user's instruction. "Artifacts"
+ * came back once replies started producing them. New behaves identically in both modes.
  */
 export function SessionList({
   sessions,
@@ -228,6 +229,7 @@ export function SessionList({
   onToggleCollapsed,
   onSelect,
   onCreate,
+  onOpenArtifacts,
   onCreateInProject,
   onDelete,
   onTogglePin,
@@ -246,6 +248,7 @@ export function SessionList({
   onToggleCollapsed: () => void;
   onSelect: (sessionId: string) => void;
   onCreate: () => void;
+  onOpenArtifacts: () => void;
   onCreateInProject: (directory: string) => void;
   onDelete: (sessionId: string) => void;
   onTogglePin: (session: ChatSessionSummary) => void;
@@ -354,9 +357,8 @@ export function SessionList({
       data-testid="sidebar"
     >
       <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, px: 1.5, pt: 1.5, pb: 1 }}>
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <ModeSwitcher mode={mode} onChange={onModeChange} />
-        </Box>
+        <ModeSwitcher mode={mode} onChange={onModeChange} />
+        <Box sx={{ flex: 1 }} />
         <IconButton
           size="sm"
           variant="plain"
@@ -373,6 +375,9 @@ export function SessionList({
         {/* One label and one behaviour in both modes: it makes a session and opens nothing.
             A Code session starts unbound and its chip row is where a project is chosen. */}
         <NavItem icon={<PlusIcon />} label="New" onClick={onCreate} testId="chat-new-session-btn" />
+        {/* Not scoped to the open session: the list is the server's, so it spans machines and
+            outlives the local session files. */}
+        <NavItem icon={<ArtifactIcon />} label="Artifacts" onClick={onOpenArtifacts} testId="chat-artifacts-btn" />
         <Box sx={{ px: 0.5, pt: 0.5 }}>
           <Input
             size="sm"

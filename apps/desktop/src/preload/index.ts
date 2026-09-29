@@ -80,6 +80,8 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatDiscardAttachment, sessionId, attachmentId),
     respondToApproval: (approvalId: string, decision: ChatApprovalDecision) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatRespondToApproval, approvalId, decision),
+    listArtifacts: () => ipcRenderer.invoke(IPC_CHANNELS.chatListArtifacts),
+    readArtifact: (artifactId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatReadArtifact, artifactId),
     listBackgroundProcesses: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatListBackground, sessionId),
     readBackgroundOutput: (sessionId: string, processId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatReadBackground, sessionId, processId),

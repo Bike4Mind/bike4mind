@@ -5,6 +5,8 @@ import type {
   BackgroundProcessInfo,
   ChatApprovalDecision,
   ChatApprovalMode,
+  ChatArtifactContent,
+  ChatArtifactLibrary,
   ChatAttachmentInput,
   ChatModelCatalog,
   ChatPendingApproval,
@@ -76,6 +78,8 @@ export const IPC_CHANNELS = {
   chatAddAttachments: 'chat:add-attachments',
   chatReadAttachment: 'chat:read-attachment',
   chatDiscardAttachment: 'chat:discard-attachment',
+  chatListArtifacts: 'chat:list-artifacts',
+  chatReadArtifact: 'chat:read-artifact',
   chatListBackground: 'chat:list-background',
   chatReadBackground: 'chat:read-background',
   chatStopBackground: 'chat:stop-background',
@@ -202,6 +206,16 @@ export interface DesktopApi {
      * ignored, so a double click cannot approve a second, different command.
      */
     respondToApproval(approvalId: string, decision: ChatApprovalDecision): Promise<void>;
+    /**
+     * Every artifact this account has made from a desktop client, newest first.
+     *
+     * Read from the SERVER, not from the local session files, so it spans machines and shows
+     * whatever the current body is. Never rejects: an offline or signed-out read comes back as
+     * `error` on the result, which the panel renders (see ChatArtifactLibrary).
+     */
+    listArtifacts(): Promise<ChatArtifactLibrary>;
+    /** One artifact's body, fetched when the user opens its row. Never rejects. */
+    readArtifact(artifactId: string): Promise<ChatArtifactContent>;
     /**
      * Background commands belonging to this conversation, running and recently finished.
      *

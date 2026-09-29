@@ -6,6 +6,7 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatProject, ChatSessionMode } from '@shared/chat';
+import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { BackgroundProcessPanel } from './BackgroundProcessPanel';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
@@ -112,6 +113,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   const statuses = useSessionStatuses();
   const pendingApprovals = usePendingApprovals();
   const [collapsed, setCollapsed] = useState(false);
+  const [showArtifacts, setShowArtifacts] = useState(false);
   const draft = useAttachmentDraft(activeId);
 
   const onFilesDropped = useCallback(
@@ -203,6 +205,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
    * and no way back in. Nothing is asked up front now, so there is nothing left to cancel.
    */
   const onCreate = useCallback(async () => {
+    setShowArtifacts(false);
     if (mode !== 'code') {
       setActiveId(await create());
       return;
@@ -223,6 +226,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
     async (directory: string) => {
       const sibling = sessions.find(session => session.project?.directory === directory)?.project;
       if (!sibling) return;
+      setShowArtifacts(false);
       const created = await createCode({
         directory: sibling.directory,
         branch: sibling.branch,
@@ -274,8 +278,14 @@ export function ChatShell({ account }: { account?: ReactNode }) {
         statuses={statuses}
         collapsed={collapsed}
         onToggleCollapsed={() => setCollapsed(current => !current)}
-        onSelect={setActiveId}
+        onSelect={sessionId => {
+          // The library takes over the same pane the transcript lives in, so picking a
+          // conversation has to put it back or the click reads as doing nothing.
+          setShowArtifacts(false);
+          setActiveId(sessionId);
+        }}
         onCreate={() => void onCreate()}
+        onOpenArtifacts={() => setShowArtifacts(true)}
         onCreateInProject={directory => void onCreateInProject(directory)}
         onDelete={sessionId => void onDelete(sessionId)}
         onTogglePin={session => void togglePin(session)}
@@ -289,114 +299,121 @@ export function ChatShell({ account }: { account?: ReactNode }) {
         footer={account}
       />
 
-      <Stack sx={{ flex: 1, minWidth: 0 }}>
-        <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
-          <Box sx={{ ...contentColumnSx, py: 1.25 }}>
-            {conversation.session ? (
-              <>
-                <SessionHeader title={conversation.session.title} onRename={title => void conversation.rename(title)} />
-                {conversation.session.project && <WorkingDirectoryLine project={conversation.session.project} />}
-              </>
-            ) : (
-              <Typography level="title-sm" textColor="text.tertiary">
-                No conversation open
-              </Typography>
-            )}
+      {showArtifacts ? (
+        <ArtifactLibraryPanel onClose={() => setShowArtifacts(false)} />
+      ) : (
+        <Stack sx={{ flex: 1, minWidth: 0 }}>
+          <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
+            <Box sx={{ ...contentColumnSx, py: 1.25 }}>
+              {conversation.session ? (
+                <>
+                  <SessionHeader
+                    title={conversation.session.title}
+                    onRename={title => void conversation.rename(title)}
+                  />
+                  {conversation.session.project && <WorkingDirectoryLine project={conversation.session.project} />}
+                </>
+              ) : (
+                <Typography level="title-sm" textColor="text.tertiary">
+                  No conversation open
+                </Typography>
+              )}
+            </Box>
           </Box>
-        </Box>
 
-        <MessageThread
-          messages={conversation.messages}
-          sessionId={activeId}
-          // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
-          // one parked at the approval gate - is still running, and Continue must not be
-          // offered on top of it.
-          streaming={turnOpen}
-          onRespond={conversation.respondToApproval}
-          onContinue={() => void conversation.continueReply()}
-          status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
-        />
+          <MessageThread
+            messages={conversation.messages}
+            sessionId={activeId}
+            // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
+            // one parked at the approval gate - is still running, and Continue must not be
+            // offered on top of it.
+            streaming={turnOpen}
+            onRespond={conversation.respondToApproval}
+            onContinue={() => void conversation.continueReply()}
+            status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
+          />
 
-        {conversation.sendError && (
-          <Alert size="sm" color="danger" variant="soft" sx={contentColumnSx} data-testid="chat-send-error">
-            {conversation.sendError}
-          </Alert>
-        )}
+          {conversation.sendError && (
+            <Alert size="sm" color="danger" variant="soft" sx={contentColumnSx} data-testid="chat-send-error">
+              {conversation.sendError}
+            </Alert>
+          )}
 
-        {conversation.notice && (
-          <Alert
-            size="sm"
-            color="warning"
-            variant="soft"
-            sx={{ ...contentColumnSx, cursor: 'pointer' }}
-            onClick={conversation.dismissNotice}
-            data-testid="chat-notice"
-          >
-            {conversation.notice}
-          </Alert>
-        )}
+          {conversation.notice && (
+            <Alert
+              size="sm"
+              color="warning"
+              variant="soft"
+              sx={{ ...contentColumnSx, cursor: 'pointer' }}
+              onClick={conversation.dismissNotice}
+              data-testid="chat-notice"
+            >
+              {conversation.notice}
+            </Alert>
+          )}
 
-        <PendingApprovalBar
-          pending={pendingApprovals}
-          openSessionId={activeId}
-          onRespond={conversation.respondToApproval}
-          onOpenSession={setActiveId}
-        />
+          <PendingApprovalBar
+            pending={pendingApprovals}
+            openSessionId={activeId}
+            onRespond={conversation.respondToApproval}
+            onOpenSession={setActiveId}
+          />
 
-        <BackgroundProcessPanel processes={background.processes} onStop={background.stop} />
+          <BackgroundProcessPanel processes={background.processes} onStop={background.stop} />
 
-        {codeError && (
-          <Alert
-            size="sm"
-            color="danger"
-            variant="soft"
-            sx={{ ...contentColumnSx, cursor: 'pointer' }}
-            onClick={clearCodeError}
-            data-testid="chat-code-create-error"
-          >
-            {codeError}
-          </Alert>
-        )}
+          {codeError && (
+            <Alert
+              size="sm"
+              color="danger"
+              variant="soft"
+              sx={{ ...contentColumnSx, cursor: 'pointer' }}
+              onClick={clearCodeError}
+              data-testid="chat-code-create-error"
+            >
+              {codeError}
+            </Alert>
+          )}
 
-        {/* Every Code session, bound or not. The chips are how a project is chosen, so gating
+          {/* Every Code session, bound or not. The chips are how a project is chosen, so gating
             them on one already being chosen is what made them unreachable. */}
-        {conversation.session?.mode === 'code' && (
-          <SessionChips project={conversation.session.project ?? null} binding={conversation.project} />
-        )}
+          {conversation.session?.mode === 'code' && (
+            <SessionChips project={conversation.session.project ?? null} binding={conversation.project} />
+          )}
 
-        <Composer
-          sessionId={activeId}
-          disabled={!activeId || creatingCode}
-          streaming={turnOpen}
-          attachments={draft}
-          blockedReason={blockedReason}
-          notReady={unbound ? 'No folder' : null}
-          placeholder={
-            conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'
-          }
-          onSend={text => void onSend(text)}
-          onStop={conversation.stop}
-          queued={conversation.queued}
-          onCancelQueued={conversation.cancelQueued}
-          returned={conversation.returned}
-          onReturnedConsumed={conversation.clearReturned}
-          leading={
-            <ApprovalModePill
-              mode={conversation.session?.approvalMode ?? 'ask'}
-              disabled={!activeId}
-              onSelect={mode => void conversation.setApprovalMode(mode)}
-            />
-          }
-          footer={
-            <ModelPicker
-              catalog={catalog}
-              modelId={conversation.session?.model ?? null}
-              disabled={!activeId}
-              onSelect={model => void conversation.setModel(model)}
-            />
-          }
-        />
-      </Stack>
+          <Composer
+            sessionId={activeId}
+            disabled={!activeId || creatingCode}
+            streaming={turnOpen}
+            attachments={draft}
+            blockedReason={blockedReason}
+            notReady={unbound ? 'No folder' : null}
+            placeholder={
+              conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'
+            }
+            onSend={text => void onSend(text)}
+            onStop={conversation.stop}
+            queued={conversation.queued}
+            onCancelQueued={conversation.cancelQueued}
+            returned={conversation.returned}
+            onReturnedConsumed={conversation.clearReturned}
+            leading={
+              <ApprovalModePill
+                mode={conversation.session?.approvalMode ?? 'ask'}
+                disabled={!activeId}
+                onSelect={mode => void conversation.setApprovalMode(mode)}
+              />
+            }
+            footer={
+              <ModelPicker
+                catalog={catalog}
+                modelId={conversation.session?.model ?? null}
+                disabled={!activeId}
+                onSelect={model => void conversation.setModel(model)}
+              />
+            }
+          />
+        </Stack>
+      )}
     </Box>
   );
 }

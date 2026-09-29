@@ -20,6 +20,7 @@ import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { AttachmentStore } from './AttachmentStore';
 import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
+import { ArtifactLibrary } from './artifacts/ArtifactLibrary';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
 import { ChatService } from './ChatService';
@@ -129,6 +130,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
   registerMediaProtocol(media);
   registerArtifactProtocol();
   const artifacts = new ArtifactPublisher(() => auth.getApiClient(), logger);
+  const artifactLibrary = new ArtifactLibrary(() => auth.getApiClient(), logger);
   const models = new ModelCatalog({
     logger,
     getApiClient: () => auth.getApiClient(),
@@ -316,6 +318,8 @@ export function registerChat(auth: AuthService): RegisteredChat {
     attachments.discard(sessionId, attachmentId)
   );
 
+  ipcMain.handle(IPC_CHANNELS.chatListArtifacts, () => artifactLibrary.list());
+  ipcMain.handle(IPC_CHANNELS.chatReadArtifact, (_event, artifactId: string) => artifactLibrary.read(artifactId));
   ipcMain.handle(IPC_CHANNELS.chatListBackground, (_event, sessionId: string) => background.list(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatReadBackground, (_event, sessionId: string, processId: string) =>
     background.tail(processId, sessionId, PANEL_TAIL_CHARS)

@@ -139,6 +139,16 @@ export function MoreIcon() {
   );
 }
 
+export function ArtifactIcon() {
+  return (
+    <Glyph>
+      <rect x="2.5" y="2.75" width="11" height="10.5" rx="1.5" />
+      <path d="M2.5 6.25h11" />
+      <path d="M5.25 9.25h5.5M5.25 11.25h3.5" />
+    </Glyph>
+  );
+}
+
 /** The three approval modes, in the order the popover offers them, and the selected marker. */
 export function HandIcon() {
   return (
