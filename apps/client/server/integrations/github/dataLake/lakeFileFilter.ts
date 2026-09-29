@@ -67,9 +67,10 @@ export type GitHubLakeCandidate = { path: string; sha: string; size: number };
 export type TreeEntryRejection = 'not_blob' | 'symlink' | 'denied_path' | 'lockfile' | 'extension' | 'oversized';
 
 const EXTENSIONS = new Set<string>(GITHUB_LAKE_FILE_RULES.extensions);
-const EXTENSIONLESS_NAMES = new Set<string>(GITHUB_LAKE_FILE_RULES.extensionlessNames);
+// Name lists match case-insensitively: repos ship `readme`, `Readme`, `gemfile.lock` as often as the canonical case.
+const EXTENSIONLESS_NAMES = new Set<string>(GITHUB_LAKE_FILE_RULES.extensionlessNames.map(name => name.toLowerCase()));
 const DENIED_SEGMENTS = new Set<string>(GITHUB_LAKE_FILE_RULES.deniedPathSegments);
-const DENIED_FILE_NAMES = new Set<string>(GITHUB_LAKE_FILE_RULES.deniedFileNames);
+const DENIED_FILE_NAMES = new Set<string>(GITHUB_LAKE_FILE_RULES.deniedFileNames.map(name => name.toLowerCase()));
 const SYMLINK_MODE = '120000';
 const BINARY_SNIFF_BYTES = 8 * 1024;
 const strictUtf8 = new TextDecoder('utf-8', { fatal: true });
@@ -84,10 +85,11 @@ export function classifyTreeEntry(
   if (entry.mode === SYMLINK_MODE) return { ok: false, reason: 'symlink' };
   const segments = entry.path.split('/');
   const fileName = segments[segments.length - 1];
+  const lowerFileName = fileName.toLowerCase();
   if (segments.some(segment => DENIED_SEGMENTS.has(segment))) return { ok: false, reason: 'denied_path' };
-  if (DENIED_FILE_NAMES.has(fileName)) return { ok: false, reason: 'lockfile' };
+  if (DENIED_FILE_NAMES.has(lowerFileName)) return { ok: false, reason: 'lockfile' };
   const ext = extensionOf(fileName);
-  if (ext ? !EXTENSIONS.has(ext) : !EXTENSIONLESS_NAMES.has(fileName)) return { ok: false, reason: 'extension' };
+  if (ext ? !EXTENSIONS.has(ext) : !EXTENSIONLESS_NAMES.has(lowerFileName)) return { ok: false, reason: 'extension' };
   const size = entry.size ?? 0;
   if (size > maxFileBytes) return { ok: false, reason: 'oversized' };
   return { ok: true, candidate: { path: entry.path, sha: entry.sha, size } };

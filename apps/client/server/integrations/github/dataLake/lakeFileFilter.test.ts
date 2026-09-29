@@ -28,6 +28,10 @@ describe('classifyTreeEntry', () => {
     'Dockerfile',
     'Makefile',
     'services/api/Makefile',
+    'readme',
+    'Readme',
+    'license',
+    'makefile',
   ])('accepts %s', path => {
     expect(classifyTreeEntry(blob(path), MB)).toEqual({ ok: true, candidate: { path, sha: `sha-${path}`, size: 10 } });
   });
@@ -55,6 +59,8 @@ describe('classifyTreeEntry', () => {
     ['Gemfile.lock', 'lockfile'],
     ['go.sum', 'lockfile'],
     ['composer.lock', 'lockfile'],
+    ['gemfile.lock', 'lockfile'],
+    ['Yarn.lock', 'lockfile'],
   ] as const)('rejects %s as %s', (path, reason) => {
     expect(classifyTreeEntry(blob(path), MB)).toEqual({ ok: false, reason });
   });
