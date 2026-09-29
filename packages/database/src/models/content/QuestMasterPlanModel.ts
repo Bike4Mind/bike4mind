@@ -14,7 +14,7 @@ import {
 import mongoose, { Model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { softDeletePlugin } from '../../utils/mongo';
-import { NotFoundError } from '@bike4mind/utils';
+import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
 
 export const QuestMasterDataSchema = new Schema<QuestMasterData>(
   {
@@ -458,13 +458,13 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
     // First, verify plan exists and check access (still needs a read)
     const plan = await this.findById(planId);
     if (!plan) {
-      throw new Error('Quest plan not found');
+      throw new NotFoundError('Quest plan not found');
     }
 
     // Check access - only owner and explicitly shared users can continue a plan
     // Public plans are read-only (viewing only, no session continuation)
     if (plan.userId !== userId && !plan.sharedWith?.includes(userId)) {
-      throw new Error('Access denied');
+      throw new ForbiddenError('Access denied');
     }
 
     // Try to increment existing session entry atomically
@@ -503,7 +503,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
 
     // Access is re-checked in the filter, so a revoke or delete since the read above lands here.
     if (!result) {
-      throw new Error('Access denied');
+      throw new ForbiddenError('Access denied');
     }
 
     return result;

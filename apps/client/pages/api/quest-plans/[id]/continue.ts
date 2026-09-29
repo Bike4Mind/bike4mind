@@ -7,6 +7,7 @@ import {
   fabFileRepository,
 } from '@bike4mind/database';
 import { sessionService } from '@bike4mind/services';
+import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -150,6 +151,14 @@ const handler = baseApi()
         },
       });
     } catch (error: unknown) {
+      // continueInSession re-checks access in its write, so a revoke or delete since the check above
+      // surfaces here; a placeholder session created for it was already cleaned up as a lost race.
+      if (error instanceof ForbiddenError) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+      if (error instanceof NotFoundError) {
+        return res.status(404).json({ error: 'Quest plan not found' });
+      }
       console.error('Error continuing quest plan:', error);
       // Return generic error to prevent information leakage
       res.status(500).json({ error: 'Failed to continue quest plan' });
