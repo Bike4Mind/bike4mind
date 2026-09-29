@@ -3210,60 +3210,63 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // rows carry elements with a missing or non-string `name` - six other call sites defend the
     // same shape. Without the guard one bad element decides the whole user's dedupe.
     const isMatch = (expr: unknown) => ({ $eq: [{ $toLower: { $ifNull: [expr, ''] } }, folded] });
-    const result = await this.fabFileModel.updateMany(
-      {
-        userId,
-        // Index-eligible prefilter first, then the $expr narrows to documents that genuinely carry
-        // the name more than once, so the write set stays small.
-        'tags.name': new RegExp(`^${escapeRegex(name)}$`, 'i'),
-        $expr: {
-          $gt: [
-            {
-              $size: {
-                $filter: {
-                  input: { $ifNull: ['$tags', []] },
-                  as: 't',
-                  cond: isMatch('$$t.name'),
+    const result = await this.fabFileModel
+      .updateMany(
+        {
+          userId,
+          // Index-eligible prefilter first, then the $expr narrows to documents that genuinely carry
+          // the name more than once, so the write set stays small.
+          'tags.name': new RegExp(`^${escapeRegex(name)}$`, 'i'),
+          $expr: {
+            $gt: [
+              {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ['$tags', []] },
+                    as: 't',
+                    cond: isMatch('$$t.name'),
+                  },
                 },
               },
-            },
-            1,
-          ],
+              1,
+            ],
+          },
         },
-      },
-      [
-        {
-          $set: {
-            tags: {
-              $reduce: {
-                input: { $ifNull: ['$tags', []] },
-                initialValue: [],
-                in: {
-                  $cond: {
-                    if: isMatch('$$this.name'),
-                    // Keep the FIRST match, normalized to the passed casing, and drop later ones.
-                    // $mergeObjects rather than a rebuilt {name, strength} so `strength` and any
-                    // field this schema does not declare survive.
-                    then: {
-                      $cond: {
-                        if: {
-                          $anyElementTrue: {
-                            $map: { input: '$$value', as: 'kept', in: isMatch('$$kept.name') },
+        [
+          {
+            $set: {
+              tags: {
+                $reduce: {
+                  input: { $ifNull: ['$tags', []] },
+                  initialValue: [],
+                  in: {
+                    $cond: {
+                      if: isMatch('$$this.name'),
+                      // Keep the FIRST match, normalized to the passed casing, and drop later ones.
+                      // $mergeObjects rather than a rebuilt {name, strength} so `strength` and any
+                      // field this schema does not declare survive.
+                      then: {
+                        $cond: {
+                          if: {
+                            $anyElementTrue: {
+                              $map: { input: '$$value', as: 'kept', in: isMatch('$$kept.name') },
+                            },
                           },
+                          then: '$$value',
+                          else: { $concatArrays: ['$$value', [{ $mergeObjects: ['$$this', { name }] }]] },
                         },
-                        then: '$$value',
-                        else: { $concatArrays: ['$$value', [{ $mergeObjects: ['$$this', { name }] }]] },
                       },
+                      else: { $concatArrays: ['$$value', ['$$this']] },
                     },
-                    else: { $concatArrays: ['$$value', ['$$this']] },
                   },
                 },
               },
             },
           },
-        },
-      ]
-    );
+        ]
+      )
+      // Must reach the same tombstones updateTagsByUserId renamed, or they keep both copies.
+      .setOptions({ includeDeleted: true });
     return result.modifiedCount;
   }
 
