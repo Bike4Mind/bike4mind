@@ -402,8 +402,7 @@ async function readSetting(name: string): Promise<string | null> {
  * BOTH BRANCHES FIGHT THE SAME SOFT-DELETE ASYMMETRY, which is invisible at the call site.
  * `AdminSettingsSchema.plugin(softDeletePlugin)` (`AdminSettingsModel.ts:47`) replaces `deleteOne`
  * with an `updateOne` that stamps `deletedAt` (`db-core/src/utils/mongo.ts:412`), and the plugin
- * filters `find`/`findOne` on `deletedAt: null` but hooks NEITHER `updateOne` NOR
- * `findOneAndUpdate`. A plain `deleteOne` here would therefore leave a tombstoned row that still
+ * filters `find`/`findOne` on `deletedAt: null` but its update hook skips upserts. A plain `deleteOne` here would therefore leave a tombstoned row that still
  * carries the sweep's last value: `readSetting` reports it unset, so the next run captures a false
  * baseline; the upsert below would match the tombstone without clearing `deletedAt`, so every
  * subsequent configuration writes into a document `AdminSettingsCache` cannot see and every row in

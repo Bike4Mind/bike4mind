@@ -167,7 +167,7 @@ async function readSetting(name: string): Promise<string | null> {
 /**
  * Write a setting and drop the in-process settings caches, exactly as recall-probe.ts's
  * `writeSetting` does - including the hard-delete path, for the same reason: the soft-delete
- * plugin does not hook `updateOne`/`findOneAndUpdate`, so a plain `deleteOne` would tombstone a row
+ * plugin's update hook skips upserts, so a plain `deleteOne` would tombstone a row
  * that still carries this probe's last value and break every future read AND write of this setting
  * on the stage. See `AdminSettingsModel.ts` (`softDeletePlugin`) and `db-core/src/utils/mongo.ts`.
  */
