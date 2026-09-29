@@ -5,7 +5,13 @@ import type {
   IDataLakeProposalRepository,
   IDataLakeRepository,
 } from '@bike4mind/common';
-import { DATALAKE_TAG_STRENGTH, FabFileSourceType, isLakeIngestable } from '@bike4mind/common';
+import {
+  BadGatewayError,
+  DATALAKE_TAG_STRENGTH,
+  FabFileSourceType,
+  GatewayTimeoutError,
+  isLakeIngestable,
+} from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, HTTPError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
@@ -103,6 +109,19 @@ async function resolveReviewable(
 }
 
 /**
+ * A timeout of the SOURCE fetch: axios's timeout codes, plus the redirect-chain deadline
+ * `fetchAndParseURL` throws itself. Gated on `isAxiosError` so a storage-upload `ETIMEDOUT`, which
+ * happens after the row is written, is never retried as if nothing had been created.
+ */
+function isSourceTimeout(err: unknown): boolean {
+  const { code, message, isAxiosError } = (err ?? {}) as { code?: string; message?: string; isAxiosError?: boolean };
+  if (isAxiosError && (code === 'ECONNABORTED' || code === 'ETIMEDOUT')) return true;
+  return typeof message === 'string' && /^timeout of \d+ms exceeded|^Timed out while following redirects/.test(message);
+}
+
+const SOURCE_NETWORK_ERROR_CODES = new Set(['ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH']);
+
+/**
  * Turn an admission failure into something the REVIEWER can act on.
  *
  * The ingestion door rethrows whatever the fetch threw, so without this a reviewer who approves a
@@ -110,20 +129,50 @@ async function resolveReviewable(
  * that names neither the cause (the source, not their click) nor the consequence (nothing was added,
  * the proposal is back in the queue). Verified on a live walk before this existed.
  *
+ * The status says whose fault it was: the source site timing out (504) or failing (502) is an
+ * upstream problem the reviewer can retry, not a malformed request, so it must not read as a 400.
+ * Marked `expected` so a dead third-party link does not page as a server fault.
+ *
  * Deliberate refusals pass through untouched: `assertCanWriteDataLakeTags` and `assertLakeWritable`
  * already say something true and specific, and rewording them here would bury a permission problem
  * behind a fetch message.
  */
 function asReviewerFacingAdmissionError(err: unknown): unknown {
   if (err instanceof HTTPError) return err;
+  // A non-axios network error (e.g. a storage-upload ECONNRESET, which createByUrl rethrows from
+  // the same catch) is passed through untouched upstream, so it keeps its 500 and error-level log.
+  const { code, isAxiosError } = (err ?? {}) as { code?: string; isAxiosError?: boolean };
+  if (!isAxiosError && typeof code === 'string' && SOURCE_NETWORK_ERROR_CODES.has(code)) return err;
+  const mapped = mapFetchFailure(err);
+  if (mapped.statusCode >= 500) mapped.expected = true;
+  return mapped;
+}
 
-  const status = (err as { response?: { status?: number } })?.response?.status;
-  const detail = status
-    ? `the source returned HTTP ${status}`
-    : ((err as { message?: string })?.message ?? 'the fetch failed');
-  return new BadRequestError(
-    `Could not add this source: ${detail}. Nothing was added to the lake and the proposal is still waiting for review.`
-  );
+function mapFetchFailure(err: unknown): HTTPError {
+  const consequence = 'Nothing was added to the lake and the proposal is still waiting for review.';
+  if (isSourceTimeout(err)) {
+    return new GatewayTimeoutError(
+      `Could not add this source: the source site did not respond in time. ${consequence} Try approving it again.`
+    );
+  }
+
+  const { response, code, message, isAxiosError } = (err ?? {}) as {
+    response?: { status?: number };
+    code?: string;
+    message?: string;
+    isAxiosError?: boolean;
+  };
+  // A non-axios network error already returned unchanged above, so isAxiosError here means the
+  // source fetch itself failed - a 502 the reviewer can retry, not an infrastructure fault.
+  if (isAxiosError && response?.status) {
+    return new BadGatewayError(
+      `Could not add this source: the source returned HTTP ${response.status}. ${consequence}`
+    );
+  }
+  if (isAxiosError && code && SOURCE_NETWORK_ERROR_CODES.has(code)) {
+    return new BadGatewayError(`Could not add this source: the source site could not be reached. ${consequence}`);
+  }
+  return new BadRequestError(`Could not add this source: ${message ?? 'the fetch failed'}. ${consequence}`);
 }
 
 /** The same writability rule the upload and Slack doors apply. */
@@ -139,10 +188,16 @@ export interface ApprovedProposal {
   fabFile: AdmittedFile;
 }
 
+export interface ApproveOptions {
+  /** Shown as the approver on the admitted file; the id alone is not readable to other lake editors. */
+  approverName?: string;
+}
+
 export async function approveDataLakeProposal(
   proposalId: string,
   actor: ManageActor,
-  adapters: ReviewAdapters
+  adapters: ReviewAdapters,
+  { approverName }: ApproveOptions = {}
 ): Promise<ApprovedProposal> {
   const { db, admitSource, logger } = adapters;
   const { proposal, lake, grants } = await resolveReviewable(proposalId, actor, { db });
@@ -160,30 +215,39 @@ export async function approveDataLakeProposal(
   });
   if (!claimed) throw new BadRequestError('This proposal has already been reviewed');
 
+  const admitParams: AdmitSourceParams = {
+    url: proposal.sourceUrl,
+    // The lake's meta-tag ONLY. Producer-proposed tags are advisory metadata for the reviewer and
+    // are deliberately not stamped: an arbitrary producer string can collide with another lake's
+    // `fileTagPrefix`, and the prefix membership arm would then admit this file into that lake too
+    // - a side door opened by a value no human ever approved.
+    tags: [{ name: lake.datalakeTag, strength: DATALAKE_TAG_STRENGTH }],
+    provenance: {
+      sourceType: FabFileSourceType.PROPOSAL_APPROVAL,
+      // Which run, which source, when retrieved, who approved - the provenance every admitted
+      // document carries, readable by any lake editor auditing where content came from.
+      sourceMetadata: {
+        proposalId: proposal.id,
+        sourceUrl: proposal.sourceUrl,
+        producer: proposal.provenance.producer,
+        runId: proposal.provenance.runId,
+        query: proposal.provenance.query,
+        retrievedAt: proposal.provenance.retrievedAt,
+        approvedByUserId: actor.userId,
+        ...(approverName && { approvedByName: approverName }),
+        approvedAt,
+      },
+    },
+  };
+
   let fabFile: AdmittedFile;
   try {
-    fabFile = await admitSource(actor, {
-      url: proposal.sourceUrl,
-      // The lake's meta-tag ONLY. Producer-proposed tags are advisory metadata for the reviewer and
-      // are deliberately not stamped: an arbitrary producer string can collide with another lake's
-      // `fileTagPrefix`, and the prefix membership arm would then admit this file into that lake too
-      // - a side door opened by a value no human ever approved.
-      tags: [{ name: lake.datalakeTag, strength: DATALAKE_TAG_STRENGTH }],
-      provenance: {
-        sourceType: FabFileSourceType.PROPOSAL_APPROVAL,
-        // Which run, which source, when retrieved, who approved - the provenance every admitted
-        // document carries, readable by any lake editor auditing where content came from.
-        sourceMetadata: {
-          proposalId: proposal.id,
-          sourceUrl: proposal.sourceUrl,
-          producer: proposal.provenance.producer,
-          runId: proposal.provenance.runId,
-          query: proposal.provenance.query,
-          retrievedAt: proposal.provenance.retrievedAt,
-          approvedByUserId: actor.userId,
-          approvedAt,
-        },
-      },
+    // One retry, on a timeout only: the fetch runs before any row is written, so a timed-out
+    // attempt left nothing behind, and a source the research run fetched moments ago is far more
+    // likely slow than gone. Any other failure is not something an immediate retry fixes.
+    fabFile = await admitSource(actor, admitParams).catch(err => {
+      if (!isSourceTimeout(err)) throw err;
+      return admitSource(actor, admitParams);
     });
   } catch (err) {
     // Admission failed after the claim, so the row would otherwise read as approved with nothing

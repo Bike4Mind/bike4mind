@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ApiErrorSchema, BadRequestError } from '@bike4mind/common';
+import { ApiErrorSchema, BadGatewayError, BadRequestError } from '@bike4mind/common';
 import { z } from 'zod';
 import errorHandler from './errorHandler';
 
@@ -208,5 +208,22 @@ describe('errorHandler - a ZodError becomes a 422', () => {
     expect(message).toMatch(/^Validation error: /);
     expect(message).not.toContain('invalid_type');
     expect(message).not.toContain('"path"');
+  });
+});
+
+describe('errorHandler - expected upstream failures', () => {
+  it('logs a 5xx marked expected at warn, keeping its status', () => {
+    const { req, res, status } = makeReqRes();
+    const err = Object.assign(new BadGatewayError('the source returned HTTP 404'), { expected: true });
+    errorHandler(err, req, res);
+    expect(status).toHaveBeenCalledWith(502);
+    expect(req.logger.warn).toHaveBeenCalled();
+    expect(req.logger.error).not.toHaveBeenCalled();
+  });
+
+  it('still logs an unmarked 5xx as a server error', () => {
+    const { req, res } = makeReqRes();
+    errorHandler(new BadGatewayError('provider down'), req, res);
+    expect(req.logger.error).toHaveBeenCalled();
   });
 });

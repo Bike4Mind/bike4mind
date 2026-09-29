@@ -71,11 +71,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       return res.json({ data: declined });
     }
 
-    const { proposal: approved, fabFile } = await dataLakeService.approveDataLakeProposal(proposalId, actor, {
-      db,
-      admitSource: admitProposedSource,
-      logger: req.logger,
-    });
+    const { proposal: approved, fabFile } = await dataLakeService.approveDataLakeProposal(
+      proposalId,
+      actor,
+      { db, admitSource: admitProposedSource, logger: req.logger },
+      { approverName: req.user?.name || req.user?.username || undefined }
+    );
     return res.json({ data: approved, fabFile: { id: fabFile.id, fileName: fabFile.fileName } });
   });
 

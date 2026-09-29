@@ -33,6 +33,21 @@ type CreateFabFileByUrlParameters = z.infer<typeof createFabFileByUrlSchema>;
  */
 const MIN_CONTENT_LENGTH_FOR_DEDUP = 100;
 
+const URL_FILE_EXTENSIONS: Record<string, string> = { 'application/pdf': '.pdf', 'text/plain': '.txt' };
+const MAX_URL_FILE_NAME_LENGTH = 200;
+
+/**
+ * A file name for a fetched page: the page title made path-safe, with the extension of what was
+ * actually stored. Opt-in through `nameFile` below; the web and Slack URL doors keep the title with no extension.
+ */
+export function urlFileName(title: string, mimeType: string): string {
+  const extension = URL_FILE_EXTENSIONS[mimeType] ?? '';
+  // eslint-disable-next-line no-control-regex
+  const base = title.replace(/[\u0000-\u001f\u007f/\\]+/g, ' ').replace(/\s+/g, ' ').trim() || 'Untitled page';
+  const stem = extension && base.toLowerCase().endsWith(extension) ? base.slice(0, -extension.length) : base;
+  return `${stem.slice(0, MAX_URL_FILE_NAME_LENGTH).trim()}${extension}`;
+}
+
 type CreateFabFileByUrlAdapters = {
   db: {
     fabFiles: {
@@ -90,12 +105,23 @@ type CreateFabFileByUrlAdapters = {
    * link path opts in. Return the existing match to skip, or null to proceed.
    */
   checkDuplicate?: (contentHash: string) => Promise<IFabFileDocument | null>;
+  /** Names the created file from the fetched title and stored mime type. Absent, the bare title. */
+  nameFile?: (title: string, mimeType: string) => string;
 };
 
 export const createFabFileByUrl = async (
   userId: string,
   parameters: CreateFabFileByUrlParameters,
-  { db, storage, tags, provenance, deleteCreatedFile, administeredOrgIds, checkDuplicate }: CreateFabFileByUrlAdapters
+  {
+    db,
+    storage,
+    tags,
+    provenance,
+    deleteCreatedFile,
+    administeredOrgIds,
+    checkDuplicate,
+    nameFile,
+  }: CreateFabFileByUrlAdapters
 ) => {
   const logger = new Logger();
   const params = secureParameters(parameters, createFabFileByUrlSchema);
@@ -148,7 +174,7 @@ export const createFabFileByUrl = async (
   const fabFile = await createFabFile(
     userId,
     {
-      fileName: title,
+      fileName: nameFile ? nameFile(title, mimeType) : title,
       mimeType,
       fileSize,
       type: KnowledgeType.URL,

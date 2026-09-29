@@ -303,6 +303,20 @@ describe('fetchAndParseURL content typing and naming after redirects', () => {
 
     expect(result.title).toBe('final-document');
   });
+
+  it('titles a page from its <head> title alone, without icon labels or the site suffix', async () => {
+    axiosGet.mockResolvedValueOnce(
+      html(
+        '<html><head><title>An Article | Example Site</title>' +
+          '<meta property="og:site_name" content="Example Site"></head><body>' +
+          '<button><svg><title>Close banner</title></svg></button><p>Hello</p></body></html>'
+      )
+    );
+
+    const result = await fetchAndParseURL('http://93.184.216.34/article', { logger });
+
+    expect(result.title).toBe('An Article');
+  });
 });
 
 /**
