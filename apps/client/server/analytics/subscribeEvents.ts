@@ -50,7 +50,11 @@ function sourceProducts(touches: AcquisitionTouches | undefined): Map<string, So
  * `attribution: 'self-reported'` - see ATTRIBUTION above for why that matters before these counts
  * are trusted. `occurrence` makes the eventId, so a retry of the same conversion sends the same id
  * and the receiver keeps one event. Never throws; emitProductEvent fails open and times out on its
- * own. Resolves to the products it sent to.
+ * own.
+ *
+ * Resolves to the products it ATTEMPTED, not the ones that succeeded: each emit swallows its own
+ * rejection, so a product whose post failed is still in this list. Do not treat the return value
+ * as delivery - nothing here observes the outcome.
  */
 async function emitForSourceProducts(opts: {
   event: 'signup' | 'subscribe';
@@ -76,8 +80,14 @@ async function emitForSourceProducts(opts: {
 }
 
 /**
- * Tell each product the customer came through that they subscribed. Awaited by the caller (the
- * invoice webhook) but never throws.
+ * Tell each product the customer came through that they subscribed. Never throws.
+ *
+ * GROUNDWORK, NOT LIVE: nothing calls this. The invoice-webhook call site was removed in
+ * 31f12201b when #3362 deferred cookie-routed subscribe events, and this PR does not restore it -
+ * only the signup path below is wired. `invoicePaymentSucceeded.test.ts` still asserts that the
+ * webhook emits nothing, and that assertion passes. Kept so the two conversions stay one shape
+ * for whenever the subscribe decision is settled; delete it, and the `signup | subscribe`
+ * parameterization with it, if that decision lands the other way.
  */
 export function emitSubscribeForSourceProducts(opts: {
   userId: string;

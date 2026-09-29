@@ -116,9 +116,11 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0 });
   });
 
+  const firstTouch = `b4m-first-touch=${encodeURIComponent(JSON.stringify({ source: 'widgets' }))}`;
+
   it("credits the new account's signup to the product in its touch cookies, as an otc signup", async () => {
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
-    (req as any).headers.cookie = `b4m-first-touch=${encodeURIComponent(JSON.stringify({ source: 'widgets' }))}`;
+    (req as any).headers.cookie = `${firstTouch}; b4m-consent-decision=granted`;
 
     await handler(req, res);
 
@@ -128,6 +130,21 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       touches: { firstTouch: { source: 'widgets' } },
       method: 'otc',
     });
+  });
+
+  // This cookie is the reason the gate has to exist. `b4m-first-touch` lives on the parent
+  // domain, `clearAttributionCookies` deliberately leaves it alone on a decline, and
+  // readAcquisitionCookies PREFERS it over the app's own first-touch cookie - so a visitor who
+  // declined still arrives here carrying a perfectly readable touch. Without the gate they would
+  // be attributed anyway.
+  it('withholds a surviving marketing touch when consent was declined', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `${firstTouch}; b4m-consent-decision=denied`;
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'user-1', touches: {}, method: 'otc' });
   });
 
   it('is a sanity check that the fixture domain actually confers the product credit sum', () => {

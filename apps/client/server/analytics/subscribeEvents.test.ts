@@ -138,4 +138,42 @@ describe('emitSignupForSourceProducts', () => {
       emitSignupForSourceProducts({ userId: 'u1', method: 'otc', touches: { lastTouch: { source: 'widgets' } } })
     ).resolves.toEqual(['widgets']);
   });
+
+  // The host guard is only reachable when the host HAS a key, which is the production case:
+  // OVERWATCH_INGEST_KEY is what ingestKeyFor returns for bike4mind. With the default mock (keys
+  // for widgets/gadgets only) the host falls out on the keyless check instead, so deleting
+  // `productId === HOST_PRODUCT_ID` left every test in this file passing.
+  it('still excludes the host when the host has an ingest key, and sends the others', async () => {
+    mockKeyFor.mockImplementation((p: string) =>
+      p === 'widgets' || p === 'gadgets' || p === 'bike4mind' ? 'key' : undefined
+    );
+
+    await expect(
+      emitSignupForSourceProducts({
+        userId: 'u1',
+        method: 'google',
+        touches: { firstTouch: { source: 'bike4mind' }, lastTouch: { source: 'widgets' } },
+      })
+    ).resolves.toEqual(['widgets']);
+
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    expect(mockEmit.mock.calls[0][0]).toMatchObject({ productId: 'widgets' });
+  });
+
+  it('attempts every product even when one of them rejects', async () => {
+    mockEmit.mockImplementation((opts: { productId: string }) =>
+      opts.productId === 'widgets' ? Promise.reject(new Error('down')) : Promise.resolve(undefined)
+    );
+
+    // Both are attempted and the rejection is swallowed, so both appear in the result - which is
+    // why the docblock calls these attempts rather than deliveries.
+    await expect(
+      emitSignupForSourceProducts({
+        userId: 'u1',
+        method: 'otc',
+        touches: { firstTouch: { source: 'widgets' }, lastTouch: { source: 'gadgets' } },
+      })
+    ).resolves.toEqual(['widgets', 'gadgets']);
+    expect(mockEmit).toHaveBeenCalledTimes(2);
+  });
 });

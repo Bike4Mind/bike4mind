@@ -74,15 +74,34 @@ describe('captureUtmParams', () => {
     expect(readUtmCookie()).toEqual({ source: 'email', campaign: 'launch' });
   });
 
-  it('writes a SameSite=Strict, path=/ cookie', () => {
+  it('writes a SameSite=Lax, path=/ cookie', () => {
     const setSpy = vi.spyOn(document, 'cookie', 'set');
     setSearch('?utm_source=email');
     captureUtmParams();
     const written = setSpy.mock.calls[0][0];
     expect(written).toContain('b4m_utm=');
     expect(written).toContain('path=/');
-    expect(written).toContain('SameSite=Strict');
+    expect(written).toContain('SameSite=Lax');
     expect(written).toContain('expires=');
+  });
+
+  // Load-bearing, not cosmetic: an OAuth signup reaches /api/auth/<strategy>/callback by a
+  // top-level cross-site GET from the IdP, and SameSite=Strict is withheld on exactly that
+  // navigation (see oauthFlowCookie.ts, which keeps the auth nonce Lax for the same reason).
+  // Tightening any of these three back to Strict silently makes every OAuth signup
+  // unattributable, with no test failing anywhere near the auth code - so it fails here.
+  it('writes every campaign cookie SameSite=Lax, so the OAuth callback can read them', () => {
+    const setSpy = vi.spyOn(document, 'cookie', 'set');
+    setSearch('?utm_source=email');
+    captureUtmParams();
+
+    const written = setSpy.mock.calls.map(([value]) => value as string);
+    for (const name of ['b4m_utm', 'b4m_last_touch', 'b4m_app_first_touch']) {
+      const cookie = written.find(value => value.startsWith(`${name}=`));
+      expect(cookie, `${name} was not written`).toBeDefined();
+      expect(cookie).toContain('SameSite=Lax');
+      expect(cookie).not.toContain('SameSite=Strict');
+    }
   });
 
   describe('purchase-attribution touches', () => {

@@ -14,7 +14,7 @@ import passport from 'passport';
 import { z } from 'zod';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { readAcquisitionTouches } from '@server/analytics/acquisition';
+import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/subscribeEvents';
 import { AuthEvents } from '@bike4mind/common';
 import { resolveOAuthFailureReason, oauthFailureRedirectMessage } from '@server/utils/auth/oauthFailureReason';
@@ -144,11 +144,17 @@ const handler = baseApi({ auth: false })
           } catch (logError) {
             console.error('Failed to log OAuth registration:', logError);
           }
-          // Credit the signup to the product the visitor came through, if any. The provider's
-          // redirect back here is a top-level GET, so the first-party touch cookies arrive.
+          // Credit the signup to the product the visitor came through, if any, and only with
+          // consent - see readConsentedAcquisitionTouches.
+          //
+          // The IdP returns the browser here by a top-level CROSS-SITE GET, so the app's own
+          // campaign cookies only arrive because utmCapture.ts writes them SameSite=Lax; under
+          // Strict they would be withheld on exactly this request and every OAuth signup would
+          // emit nothing. That coupling is easy to undo by accident, so it is asserted in
+          // utmCapture.test.ts rather than left to this comment.
           await emitSignupForSourceProducts({
             userId: user.id,
-            touches: readAcquisitionTouches(req),
+            touches: readConsentedAcquisitionTouches(req),
             method: strategy,
           });
         }

@@ -176,7 +176,10 @@ describe('[strategy]/callback - invite gate', () => {
 });
 
 describe('[strategy]/callback - signup credited to the source product', () => {
-  const touchCookie = `b4m_last_touch=${encodeURIComponent(JSON.stringify({ source: 'widgets', medium: 'landing' }))}`;
+  const touch = `b4m_last_touch=${encodeURIComponent(JSON.stringify({ source: 'widgets', medium: 'landing' }))}`;
+  // Attribution is gated server-side on the marketing site's decision cookie, so a touch cookie
+  // alone is no longer enough to emit - see readConsentedAcquisitionTouches.
+  const touchCookie = `${touch}; b4m-consent-decision=granted`;
 
   it("sends a new account's touches, read from its own cookies, with the provider as the method", async () => {
     const res = await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
@@ -198,5 +201,21 @@ describe('[strategy]/callback - signup credited to the source product', () => {
 
     expect(mockIssueBrowserSession).toHaveBeenCalled();
     expect(mockEmitSignup).not.toHaveBeenCalled();
+  });
+
+  // The gate fails closed, so each of these is a separate way of NOT saying granted. Absent is
+  // the one that matters most in practice: the marketing site publishes the decision cookie only
+  // when a visitor actually decides, so a visitor who never opened the banner carries none.
+  it.each([
+    ['denied', `${touch}; b4m-consent-decision=denied`],
+    ['absent', touch],
+    ['unrecognised', `${touch}; b4m-consent-decision=yes`],
+  ])('sends no touches when consent is %s', async (_label, cookie) => {
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie });
+    await new Promise(resolve => setImmediate(resolve));
+
+    // The signup itself is still reported - only the attribution is withheld, so a suppressed
+    // visitor is not silently dropped from the funnel by the consent gate.
+    expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'u-new', touches: {}, method: 'github' });
   });
 });

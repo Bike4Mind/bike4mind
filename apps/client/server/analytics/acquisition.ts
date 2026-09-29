@@ -4,6 +4,7 @@ import type { SubscriptionAcquisition, SubscriptionAcquisitionTouch } from '@cli
 import { ACQUISITION_FIELD_LIMIT, readAcquisitionCookies } from '@client/lib/subscriptions/acquisition';
 import type { AcquisitionTouches } from '@client/lib/subscriptions/acquisition';
 import { parseCookies } from './cookies';
+import { resolveServerConsent } from './serverConsent';
 
 // Re-exported so the emitter beside this file takes the touch type from the same module it
 // takes the readers from, rather than reaching past it into lib/.
@@ -15,6 +16,24 @@ const UTM_FIELDS = ['source', 'medium', 'campaign', 'content'] as const;
 export function readAcquisitionTouches(req: Pick<Request, 'headers'>): AcquisitionTouches {
   const cookies = parseCookies(req.headers.cookie);
   return readAcquisitionCookies(name => cookies[name]);
+}
+
+/**
+ * The touches this browser carries, or nothing at all unless consent was granted.
+ *
+ * The gate belongs here rather than at each call site: the raw reader above cannot tell whether
+ * its caller is checkout (which carries its own `attributionConsent` flag from the client) or a
+ * path with no flag to carry, and a new emitting call site that simply forgot the check is the
+ * failure this shape is meant to make impossible. Anything that emits attribution off a bare
+ * request should use this, not the reader above.
+ *
+ * Note the parent-domain `b4m-first-touch` is exactly why this matters: `clearAttributionCookies`
+ * deliberately leaves it in place on a decline, and `readAcquisitionCookies` prefers it over the
+ * app's own first-touch cookie, so a declining visitor still carries a readable touch.
+ */
+export function readConsentedAcquisitionTouches(req: Pick<Request, 'headers'>): AcquisitionTouches {
+  if (resolveServerConsent(req) !== 'granted') return {};
+  return readAcquisitionTouches(req);
 }
 
 // Flat keys, because Stripe metadata is a flat string map (keys cap at 40 characters).

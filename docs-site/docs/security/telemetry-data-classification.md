@@ -48,9 +48,40 @@ Organization checkout and admin grants do not record these touches. Later denial
 prevents future collection; it does not delete existing Stripe or MongoDB records.
 
 Configured GA conversion events can receive source, medium, and campaign fields
-through the shared consent-gated attribution reader. The subscription webhook
-does not emit events into products selected by a browser's `utm_source`. Such
-reporting needs verified attribution or a separately defined reporting stream.
+through the shared consent-gated attribution reader.
+
+## Cross-product signup reporting (self-reported)
+
+Account creation emits a `signup` event to each Overwatch product named by the
+consenting visitor's campaign touches, for products this deployment holds an
+ingest key for. The host product is excluded, because its own funnel already
+counts its signups. The subscription webhook emits nothing; that path stays
+deferred.
+
+**These counts are self-reported, not verified.** The credited product comes from
+`utm.source` in a first-party cookie, which is a claim the visitor's browser
+makes. Nothing in this app or at the ingest end checks it against where the
+visitor actually came from, so anyone who puts `?utm_source=<product>` on a link
+they share can cause a real signup to be credited to that product. This is the
+only place where a client-supplied string selects which product's record is
+written; every other emit sends to a product its caller fixed. Every event
+carries `metadata.attribution: 'self-reported'` so a consumer can identify and
+filter it.
+
+Treat these as a directional signal only. Do not use them for a payout, a
+contractual count, or an external report without a verified attribution signal
+the server observes for itself, such as a referrer correlated at landing and
+signed so it cannot be forged.
+
+Signup attribution is gated server-side and fails closed: only an explicit
+`granted` in the marketing site's decision cookie permits reading the campaign
+cookies. Denied, absent, malformed, and unrecognised values all suppress the
+touches while still reporting the signup itself. This gate is deliberately
+stricter than the browser's, which also treats the `row` region as an implicit
+grant: the server cannot see the app origin's stored decision, so it does not
+infer a grant from a cookie the visitor never answered. A visitor who was
+auto-granted by region but never opened the banner therefore carries no decision
+cookie and is not attributed.
 
 ## Troubleshooting missing attribution
 
