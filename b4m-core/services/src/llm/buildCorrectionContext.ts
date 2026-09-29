@@ -1,4 +1,5 @@
 import type { IMessage, MessageContentObject } from '@bike4mind/common';
+import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 
 /**
  * How much of the flagged answer is quoted back. A corrected answer is often long, and the point of
@@ -80,8 +81,8 @@ export function readAnswerText(turn: CorrectedTurn): string {
   const fromStructured = readStructuredText(turn);
   if (fromStructured) return fromStructured;
   const fromReplies = turn.replies?.filter(Boolean).join('\n').trim();
-  if (fromReplies) return fromReplies;
-  return turn.reply?.trim() ?? '';
+  if (fromReplies) return stripToolOutputMarker(fromReplies);
+  return stripToolOutputMarker(turn.reply?.trim() ?? '');
 }
 
 /**

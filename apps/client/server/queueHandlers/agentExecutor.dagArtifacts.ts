@@ -1,4 +1,5 @@
-import { parseArtifacts, convertCodeBlocksToArtifacts } from '@bike4mind/utils';
+import { buildToolEchoSourcesFromSteps } from '@bike4mind/services/llm';
+import { parseArtifacts, convertCodeBlocksToArtifacts, createToolEchoMatcher } from '@bike4mind/utils';
 
 /**
  * DAG subagent artifact bubble-up.
@@ -20,23 +21,33 @@ import { parseArtifacts, convertCodeBlocksToArtifacts } from '@bike4mind/utils';
  * blocks - so a block the parent reproduced, or two children emitting the same
  * id, renders exactly once. Extraction mirrors chat's pipeline
  * (`convertCodeBlocksToArtifacts` then `parseArtifacts`) so fenced chart/code
- * output counts the same as explicit `<artifact>` tags.
+ * output counts the same as explicit `<artifact>` tags. `childSteps[i]` is child i's persisted
+ * steps: web tool output that child quoted back is not promoted, same as chat's echo matcher.
  */
-export function collectDagChildArtifactBlocks(args: { parentAnswer: string; childAnswers: string[] }): string[] {
-  const { parentAnswer, childAnswers } = args;
+export function collectDagChildArtifactBlocks(args: {
+  parentAnswer: string;
+  childAnswers: string[];
+  childSteps?: ReadonlyArray<readonly unknown[] | undefined>;
+}): string[] {
+  const { parentAnswer, childAnswers, childSteps } = args;
 
   const keyOf = (a: { identifier?: string; content: string }): string =>
     a.identifier ? `id:${a.identifier}` : `content:${a.content.trim()}`;
 
-  const parseBlocks = (text: string) => (text ? parseArtifacts(convertCodeBlocksToArtifacts(text)).artifacts : []);
+  const parseBlocks = (text: string, steps?: readonly unknown[]) => {
+    if (!text) return [];
+    const sources = steps ? buildToolEchoSourcesFromSteps(steps) : [];
+    const options = sources.length > 0 ? { isToolEcho: createToolEchoMatcher(sources) } : {};
+    return parseArtifacts(convertCodeBlocksToArtifacts(text, options)).artifacts;
+  };
 
   // Seed the seen-set with the parent's own artifacts so a block the parent
   // already reproduced isn't rendered a second time.
   const seen = new Set(parseBlocks(parentAnswer).map(keyOf));
 
   const blocks: string[] = [];
-  for (const answer of childAnswers) {
-    for (const artifact of parseBlocks(answer)) {
+  for (const [i, answer] of childAnswers.entries()) {
+    for (const artifact of parseBlocks(answer, childSteps?.[i])) {
       const key = keyOf(artifact);
       if (seen.has(key)) continue;
       seen.add(key);

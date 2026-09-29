@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -51,8 +51,9 @@ export interface DataLakeResearchPanelProps {
   savingConfigId?: string | null;
   deletingConfigId?: string | null;
   startingConfigId?: string | null;
-  onCreate: (input: ResearchConfigInput) => void;
-  onUpdate: (configId: string, input: ResearchConfigInput) => void;
+  /** Settles when the save does: the form closes on resolve and keeps the draft on reject. */
+  onCreate: (input: ResearchConfigInput) => Promise<unknown>;
+  onUpdate: (configId: string, input: ResearchConfigInput) => Promise<unknown>;
   onDelete: (configId: string) => void;
   onStartRun: (configId: string) => void;
   /** Whether the open create/edit form holds edits not yet saved, so the host can confirm before closing. */
@@ -341,9 +342,14 @@ export function DataLakeResearchPanel({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<ConfigDraft>(emptyDraft);
   const [draftBaseline, setDraftBaseline] = useState<ConfigDraft>(emptyDraft);
+  // Bumped each time the form opens, so a save settling late can tell whether its own session is still
+  // the one on screen. `editingId` cannot: every create is '', and re-editing a row reuses its id.
+  const formSession = useRef(0);
   const isDirty =
     editingId !== null && (Object.keys(draft) as (keyof ConfigDraft)[]).some(key => draft[key] !== draftBaseline[key]);
-  // The cleanup reports clean on unmount too: Joy unmounts an inactive TabPanel, which drops the draft.
+  // Cleanup reports clean so a dismissed panel cannot leave the host confirming edits that no
+  // longer exist. Must stay in sync with DataLakeSettingsModal: it passes `keepMounted` on this
+  // panel's TabPanel, because an unmount takes the draft with it.
   useEffect(() => {
     onDirtyChange?.(isDirty);
     return () => onDirtyChange?.(false);
@@ -371,21 +377,30 @@ export function DataLakeResearchPanel({
     setDraft(emptyDraft());
     setDraftBaseline(emptyDraft());
     setEditingId('');
+    formSession.current += 1;
   };
   const openEdit = (config: IDataLakeResearchConfigDocument) => {
     setDraft(draftFromConfig(config));
     setDraftBaseline(draftFromConfig(config));
     setEditingId(config.id);
+    formSession.current += 1;
   };
   const closeForm = () => setEditingId(null);
 
-  const submit = () => {
+  const submit = async () => {
+    const submittedId = editingId;
+    if (submittedId === null) return;
+    const session = formSession.current;
     const input = draftToInput(draft);
-    if (editingId) onUpdate(editingId, input);
-    else onCreate(input);
-    // Closed optimistically: the mutation toasts its own refusal, and leaving the form open on
-    // success would look like the save had not registered.
-    closeForm();
+    try {
+      if (submittedId) await onUpdate(submittedId, input);
+      else await onCreate(input);
+    } catch {
+      // The mutation toasts its own refusal; staying open keeps the draft for a retry.
+      return;
+    }
+    // Only close the form this save came from: it may have been cancelled, or another opened, meanwhile.
+    if (formSession.current === session) closeForm();
   };
 
   if (isLoading) {

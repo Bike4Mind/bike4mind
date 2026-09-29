@@ -36,7 +36,12 @@ import {
   isAppWrapperHost,
   VIEWER_SANDBOX,
 } from '@server/services/publish/viewerSecurity';
-import { buildShareFooterHtml, buildSignupGateHtml } from '@client/app/utils/shareFooter';
+import {
+  buildShareFooterHtml,
+  buildSignupGateHtml,
+  shouldShowSignupGate,
+  stripSignupGateHtml,
+} from '@client/app/utils/shareFooter';
 // Use require for all Prism imports so ESM/CJS interop can't split the singleton:
 // language component files call require('../prism-core') and must get the exact same
 // object reference that our highlight calls use.
@@ -525,6 +530,21 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // user-initiated download is not a hot path, so there is nothing to trade away.
   const exportCacheControl = 'private, no-store, must-revalidate';
 
+  const viewerIsProspect = shouldShowSignupGate(effectiveVisibility, req.user as { id?: string });
+  // Exports and the plain-text alternate are never rendered pages, so they never carry it.
+  // A share-link holder is already authorized to see everything on this page, so there is
+  // nothing to invite them past. Stored bundle bytes may have the gate baked in at publish
+  // time; it is stripped below whenever this is false, which also covers a visibility
+  // change after publish.
+  const showSignupGate = viewerIsProspect && !isShare && !exportFormat && !isFormatRaw;
+  // An authenticated view of an open-public page drops the gate, so it must not land in the
+  // shared cache and be handed to anonymous viewers.
+  const viewCacheControl = isShare
+    ? SHARE_CACHE_CONTROL
+    : isOpenPublic && !viewerIsProspect
+      ? 'private, no-store'
+      : cacheControlFor(effectiveVisibility);
+
   // Whether a plain, credential-free navigation to this artifact re-authorizes - the
   // condition for OFFERING an export link on a viewer surface. A `?export=` click is a
   // fresh top-level request with no Authorization header, so anything that needs a Bearer
@@ -634,10 +654,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       canFrameArtifacts,
       exportFormats,
       sharedBy: ownerName ?? undefined,
-      // A share-link holder is already authorized to see everything on this page, and a
-      // signed-in viewer already has an account - the prompt is only for an anonymous
-      // visitor who arrived at a plain public link.
-      signupPrompt: !isShare && !req.user,
+      signupGate: showSignupGate,
     });
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     // The page itself stays script-free (`script-src 'none'` neutralizes any markup that
@@ -658,7 +675,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
         "frame-ancestors 'self'",
       ].join('; ')
     );
-    res.setHeader('Cache-Control', isShare ? SHARE_CACHE_CONTROL : cacheControlFor(effectiveVisibility));
+    res.setHeader('Cache-Control', viewCacheControl);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     bumpViewCount(
       artifact,
@@ -731,6 +748,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       error: isKnownOlderVersion ? 'Version not found' : 'Artifact index.html missing from storage',
     });
   }
+  if (!showSignupGate) indexHtml = stripSignupGateHtml(indexHtml);
 
   if (isFormatRaw) {
     if (!isOpenPublic) {
@@ -868,11 +886,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
 
   // `?v={sha}` historical views are a cold path served `no-store` (removes the
   // dependency on whether the CDN keys on the `v` query string).
-  const bundleCacheControl = isShare
-    ? SHARE_CACHE_CONTROL
-    : isKnownOlderVersion
-      ? 'private, no-store'
-      : cacheControlFor(effectiveVisibility);
+  const bundleCacheControl = !isShare && isKnownOlderVersion ? 'private, no-store' : viewCacheControl;
 
   // The per-artifact isolated origin (Approach B), e.g. `abc123.usercontent.app.<domain>`.
   // Empty when SERVER_DOMAIN is unset (Approach B disabled) OR the artifact is non-public:
@@ -1696,13 +1710,10 @@ function renderViewerPage(
     /** Display name of the artifact owner, shown in the page header. Omitted when unknown. */
     sharedBy?: string;
     /**
-     * Show the anonymous-visitor sign-up affordances (header link + prompt card). The
-     * content on this page is already fully delivered either way, so this only controls
-     * whether we invite the visitor to make their own - never whether they can read this
-     * one. False for a share-link viewer (already authorized by the link) and a signed-in
-     * viewer (already has an account); see the call site for the exact condition.
+     * Show the anonymous-visitor sign-up affordances (header link + prompt card). See
+     * shouldShowSignupGate; ignored for a standalone export, which never carries either.
      */
-    signupPrompt?: boolean;
+    signupGate?: boolean;
   }
 ): string {
   const {
@@ -1713,7 +1724,7 @@ function renderViewerPage(
     exportFormats = [],
     standalone = false,
     sharedBy,
-    signupPrompt = false,
+    signupGate = false,
   } = opts;
   const body = replyBodyForExport(artifact);
   let contentHtml: string;
@@ -1788,10 +1799,10 @@ function renderViewerPage(
         reportPublicId: artifact.publicId,
       }) + buildExportActionsHtml(selfPath, exportFormats);
 
-  // Sign-up prompt: shown to anonymous, non-share-link viewers only (not standalone
-  // exports, share-link holders, or signed-in viewers - all of whom already have full
-  // access, so there is nothing to invite them past).
-  const gate = standalone || !signupPrompt ? null : buildSignupGateHtml();
+  // Sign-up prompt: shown to anonymous, non-share-link viewers of an open-public page only
+  // (not standalone exports, share-link holders, or signed-in viewers - all of whom already
+  // have full access, so there is nothing to invite them past). See shouldShowSignupGate.
+  const gate = signupGate && !standalone ? buildSignupGateHtml() : null;
   const gateStyles = gate?.styles ?? '';
   const gateHtml = gate?.html ?? '';
 
@@ -1884,7 +1895,7 @@ ${
   </div>
   <div class="b4m-ph-right">
     <span class="b4m-live">Live</span>
-    ${signupPrompt ? '<a href="/register" class="b4m-ph-share">Sign up</a>' : ''}
+    ${signupGate ? '<a href="/register" class="b4m-ph-share">Sign up</a>' : ''}
   </div>
 </header>`
 }

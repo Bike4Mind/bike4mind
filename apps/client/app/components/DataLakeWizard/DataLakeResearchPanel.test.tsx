@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { IDataLakeResearchConfigDocument, IDataLakeResearchRunDocument } from '@bike4mind/common';
@@ -67,8 +67,8 @@ const run = (overrides: Partial<IDataLakeResearchRunDocument> = {}) =>
   }) as IDataLakeResearchRunDocument;
 
 const handlers = () => ({
-  onCreate: vi.fn(),
-  onUpdate: vi.fn(),
+  onCreate: vi.fn().mockResolvedValue(undefined),
+  onUpdate: vi.fn().mockResolvedValue(undefined),
   onDelete: vi.fn(),
   onStartRun: vi.fn(),
 });
@@ -295,6 +295,109 @@ describe('DataLakeResearchPanel', () => {
       fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
 
       expect(spies.onUpdate.mock.calls[0][1].recencyDays).toBeNull();
+    });
+
+    it('closes the form once a save succeeds', async () => {
+      const spies = renderPanel();
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+      expect(spies.onCreate).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(screen.queryByTestId('datalake-research-form')).toBeNull());
+    });
+
+    it('keeps a new draft on screen when the create is refused, so Save can be retried', async () => {
+      const onCreate = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(undefined);
+      renderPanel({ onCreate });
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
+      fireEvent.change(screen.getByTestId('datalake-research-recency-input'), { target: { value: '45' } });
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+      await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+      await Promise.resolve();
+      expect(screen.getByTestId('datalake-research-form')).toBeInTheDocument();
+      expect((screen.getByTestId('datalake-research-name-input') as HTMLInputElement).value).toBe('Weekly');
+      expect((screen.getByTestId('datalake-research-query-input') as HTMLTextAreaElement).value).toBe('erosion');
+      expect((screen.getByTestId('datalake-research-recency-input') as HTMLInputElement).value).toBe('45');
+
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+      expect(onCreate).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'Weekly', recencyDays: 45 }));
+      await waitFor(() => expect(screen.queryByTestId('datalake-research-form')).toBeNull());
+    });
+
+    it('keeps edits on screen when the update is refused', async () => {
+      const onUpdate = vi.fn().mockRejectedValue(new Error('forbidden'));
+      renderPanel({ configs: [config()], onUpdate });
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'dune erosion' } });
+      fireEvent.change(screen.getByTestId('datalake-research-recency-input'), { target: { value: '7' } });
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledWith('config-1', expect.anything()));
+      await Promise.resolve();
+      expect(screen.getByTestId('datalake-research-form')).toBeInTheDocument();
+      expect((screen.getByTestId('datalake-research-query-input') as HTMLTextAreaElement).value).toBe('dune erosion');
+      expect((screen.getByTestId('datalake-research-recency-input') as HTMLInputElement).value).toBe('7');
+    });
+
+    // The save's own settle must not close a form that was opened after it was sent.
+    it('leaves a newer form open when an earlier save settles', async () => {
+      let resolveCreate: () => void = () => {};
+      const onCreate = vi.fn(() => new Promise<void>(resolve => (resolveCreate = resolve)));
+      renderPanel({ configs: [config()], onCreate });
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-cancel-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+
+      resolveCreate();
+      await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+      await Promise.resolve();
+      expect(screen.getByTestId('datalake-research-form')).toBeInTheDocument();
+      expect((screen.getByTestId('datalake-research-name-input') as HTMLInputElement).value).toBe('Weekly sweep');
+    });
+
+    // Every create session shares editingId '', so the guard has to tell sessions apart, not ids.
+    it('leaves a second new-configuration draft open when the first create settles', async () => {
+      let resolveCreate: () => void = () => {};
+      const onCreate = vi.fn(() => new Promise<void>(resolve => (resolveCreate = resolve)));
+      renderPanel({ onCreate });
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-cancel-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Monthly' } });
+
+      resolveCreate();
+      await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+      await Promise.resolve();
+      expect(screen.getByTestId('datalake-research-form')).toBeInTheDocument();
+      expect((screen.getByTestId('datalake-research-name-input') as HTMLInputElement).value).toBe('Monthly');
+    });
+
+    it('leaves a reopened edit of the same configuration open when the earlier update settles', async () => {
+      let resolveUpdate: () => void = () => {};
+      const onUpdate = vi.fn(() => new Promise<void>(resolve => (resolveUpdate = resolve)));
+      renderPanel({ configs: [config()], onUpdate });
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-cancel-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'dune erosion' } });
+
+      resolveUpdate();
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+      await Promise.resolve();
+      expect(screen.getByTestId('datalake-research-form')).toBeInTheDocument();
+      expect((screen.getByTestId('datalake-research-query-input') as HTMLTextAreaElement).value).toBe('dune erosion');
     });
 
     it('closes without saving on cancel', () => {
