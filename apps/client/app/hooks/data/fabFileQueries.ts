@@ -102,12 +102,29 @@ export function useGetFabFilesByQuestId(questId: string, options: { enabled?: bo
   });
 }
 
-export function useGetFabFile(id: string | null) {
+const FAB_FILE_PROCESSING_POLL_MS = 4000;
+
+/**
+ * Whether a file's chunk/vector pipeline has reached a terminal state - matches the states
+ * `describeProcessingState` (AdmittedSourceDetails) treats as final. Shared so a poller and its
+ * display stop agreeing to disagree.
+ */
+export function isFabFileProcessingTerminal(
+  file: Pick<IFabFileDocument, 'error' | 'chunkStallReason' | 'noExtractableTextAt' | 'chunkEmbeddingModelStampedAt'>
+): boolean {
+  return !!(file.error || file.chunkStallReason || file.noExtractableTextAt || file.chunkEmbeddingModelStampedAt);
+}
+
+export function useGetFabFile(id: string | null, options: { pollWhileProcessing?: boolean } = {}) {
   return useQuery({
     queryKey: fabFileKeys.doc(id),
     queryFn: () => getFabFileByIdFromServer(id!),
     staleTime: !!id ? undefined : 1000 * 60 * 30, // 30 minutes
     enabled: !!id,
+    refetchInterval: options.pollWhileProcessing
+      ? query =>
+          query.state.data && !isFabFileProcessingTerminal(query.state.data) ? FAB_FILE_PROCESSING_POLL_MS : false
+      : undefined,
   });
 }
 

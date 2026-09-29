@@ -8,6 +8,15 @@ export const secrets = {
   GOOGLE_CLIENT_SECRET: new sst.Secret('GOOGLE_CLIENT_SECRET', 'not-configured'),
   GITHUB_CLIENT_ID: new sst.Secret('GITHUB_CLIENT_ID', 'not-configured'),
   GITHUB_CLIENT_SECRET: new sst.Secret('GITHUB_CLIENT_SECRET', 'not-configured'),
+  // Read-only GitHub App that feeds data lakes (contents:read + metadata:read, installed on selected
+  // repositories only). Separate from the MCP OAuth app and OrgGitHubConnection automation on purpose.
+  // The client id/secret are the App's own OAuth credentials, used to prove the installer can see the
+  // installation. The private key is the PEM, newlines kept or escaped as \n.
+  GITHUB_LAKE_APP_CLIENT_ID: new sst.Secret('GITHUB_LAKE_APP_CLIENT_ID', 'not-configured'),
+  GITHUB_LAKE_APP_CLIENT_SECRET: new sst.Secret('GITHUB_LAKE_APP_CLIENT_SECRET', 'not-configured'),
+  GITHUB_LAKE_APP_ID: new sst.Secret('GITHUB_LAKE_APP_ID', 'not-configured'),
+  GITHUB_LAKE_APP_PRIVATE_KEY: new sst.Secret('GITHUB_LAKE_APP_PRIVATE_KEY', 'not-configured'),
+  GITHUB_LAKE_APP_SLUG: new sst.Secret('GITHUB_LAKE_APP_SLUG', 'not-configured'),
   STRIPE_SECRET_KEY: new sst.Secret('STRIPE_SECRET_KEY', 'not-configured'),
   STRIPE_PUBLISHABLE_KEY: new sst.Secret('STRIPE_PUBLISHABLE_KEY', 'not-configured'),
   STRIPE_WEBHOOK_SECRET: new sst.Secret('STRIPE_WEBHOOK_SECRET', 'not-configured'),
@@ -158,6 +167,11 @@ export const secrets = {
   // Migration to standalone Overwatch = repoint OVERWATCH_INGEST_URL + re-mint key. Zero code change.
   OVERWATCH_INGEST_URL: new sst.Secret('OVERWATCH_INGEST_URL', 'not-configured'),
   OVERWATCH_INGEST_KEY: new sst.Secret('OVERWATCH_INGEST_KEY', 'not-configured'),
+  // Ingest keys for the other Overwatch products this deployment serves (premium overlays), as JSON:
+  // {"<productId>": "<ingest key>"}. Each key is minted in Overwatch bound to its own productId, since
+  // the ingest endpoint rejects an event whose productId is not the key's. Adding a product is a
+  // secret change, not a code change. Set per-stage like the key above.
+  OVERWATCH_PRODUCT_INGEST_KEYS: new sst.Secret('OVERWATCH_PRODUCT_INGEST_KEYS', 'not-configured'),
   // b4m-side kill switch for analytics emission. Set to 'false' to silence emission without
   // touching the receiver. Separate from OVERWATCH_INGEST_ENABLED (receiver-side).
   B4M_ANALYTICS_ENABLED: new sst.Secret('B4M_ANALYTICS_ENABLED', 'true'),

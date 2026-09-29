@@ -46,6 +46,11 @@ describe('DrivePendingConnectAction', () => {
     expect(screen.getByTestId('drive-connect-btn')).not.toBeDisabled();
   });
 
+  it('says what the grant can read before the user reaches Google consent', () => {
+    wrap(<DrivePendingConnectAction />);
+    expect(screen.getByTestId('drive-access-disclosure')).toHaveTextContent(/whole Google Drive/);
+  });
+
   it('parks the picked folder in wizard state instead of connecting it', () => {
     wrap(<DrivePendingConnectAction />);
 

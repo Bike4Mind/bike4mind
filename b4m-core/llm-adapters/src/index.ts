@@ -545,6 +545,13 @@ export {
 } from './_anthropicSemaphore';
 export * from './PipelineTimer';
 export * from './realtimeVoicePricing';
+export {
+  TOOL_RESULT_TRUNCATION_NOTICE,
+  MAX_FULL_TOOL_RESULT_CHARS,
+  attachFullToolResult,
+  getFullToolResult,
+  type FullToolResult,
+} from './recordToolResult';
 export * from './resolveDeprecatedModel';
 export * from './deprecationHorizon';
 export * from './staleReferences';

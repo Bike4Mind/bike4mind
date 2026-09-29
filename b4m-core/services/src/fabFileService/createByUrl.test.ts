@@ -14,7 +14,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   fetchAndParseURL,
 }));
 
-import { createFabFileByUrl } from './createByUrl';
+import { createFabFileByUrl, urlFileName } from './createByUrl';
 
 const URL_UNDER_TEST = 'https://example.com/article';
 
@@ -367,5 +367,35 @@ describe('createFabFileByUrl upload failure', () => {
     await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), deleteCreatedFile } as never);
 
     expect(deleteCreatedFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('urlFileName', () => {
+  it('gives a fetched page the extension of what was stored', () => {
+    expect(urlFileName('How tides work', 'text/plain')).toBe('How tides work.txt');
+    expect(urlFileName('annual-report', 'application/pdf')).toBe('annual-report.pdf');
+  });
+
+  it('does not double an extension the title already carries', () => {
+    expect(urlFileName('report.PDF', 'application/pdf')).toBe('report.pdf');
+  });
+
+  it('makes the title path-safe and never empty', () => {
+    expect(urlFileName('Q3/Q4 results\\draft', 'text/plain')).toBe('Q3 Q4 results draft.txt');
+    expect(urlFileName('   ', 'text/plain')).toBe('Untitled page.txt');
+  });
+
+  it('caps a very long title before the extension', () => {
+    const name = urlFileName('x'.repeat(500), 'text/plain');
+    expect(name.endsWith('.txt')).toBe(true);
+    expect(name.length).toBe(204);
+  });
+});
+
+describe('createFabFileByUrl nameFile', () => {
+  it('names the file through the supplied namer when a caller opts in', async () => {
+    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), nameFile: urlFileName });
+
+    expect(fabFilesCreate.mock.calls[0][0].fileName).toBe('An Article.txt');
   });
 });

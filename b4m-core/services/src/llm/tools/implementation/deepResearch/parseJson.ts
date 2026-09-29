@@ -44,7 +44,7 @@ export function parseTolerantJson<T>(raw: string): T | null {
   const direct = tryParse<T>(raw.trim());
   if (direct !== undefined) return direct;
 
-  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const fenceMatch = raw.match(/```(?:json)?([\s\S]*?)```/i);
   if (fenceMatch) {
     const fenced = tryParse<T>(fenceMatch[1].trim());
     if (fenced !== undefined) return fenced;

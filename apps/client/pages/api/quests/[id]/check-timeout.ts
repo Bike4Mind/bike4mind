@@ -38,7 +38,10 @@ const handler = baseApi().post(async (req: Request<{}, {}, {}, { id: string }>, 
     return res.json(quest);
   }
 
-  const updatedQuest = await questRepository.update({ id: quest.id, ...recovery });
+  // Conditional, so a real answer that landed after the read above is returned rather than
+  // overwritten; the re-read returns whichever state won.
+  await questRepository.settleIfUnfinished(quest.id, recovery);
+  const updatedQuest = await questRepository.findById(quest.id);
   if (!updatedQuest) {
     throw new NotFoundError('Quest not found');
   }

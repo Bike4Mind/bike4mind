@@ -59,3 +59,4 @@ export type {
   DagHandoffSignal,
   DagNodeHandle,
 } from './tools/implementation/coordinateTask';
+export * from './toolEchoSources';

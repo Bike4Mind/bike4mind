@@ -84,7 +84,65 @@ describe('DataLakeSpendPanel', () => {
     });
     expect(screen.queryByTestId('datalake-spend-empty')).not.toBeInTheDocument();
     expect(screen.getByTestId('datalake-spend-model-table')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-spend-feature-table')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-spend-overtime-table')).toBeInTheDocument();
+  });
+
+  // Research judge cost reaches the ledger under feature 'operations', but a curator who
+  // never touched an upload would not recognize that name - this is the one place it says "Research".
+  it('labels research and ingestion spend distinctly in the by-feature breakdown', () => {
+    renderPanel({
+      summary: baseSummary({
+        embeddingSpendMicroUsd: 5_000_000,
+        ledger: {
+          ...emptyLedger,
+          byFeature: [
+            { feature: 'embedding', requests: 3, cogsUsd: 4, creditsCharged: 0 },
+            { feature: 'operations', requests: 12, cogsUsd: 1, creditsCharged: 0 },
+          ],
+          totals: { requests: 15, cogsUsd: 5, creditsCharged: 0 },
+        },
+      }),
+    });
+    expect(screen.getByText('File ingestion')).toBeInTheDocument();
+    expect(screen.getByText('Research')).toBeInTheDocument();
+  });
+
+  // A feature this build does not know a friendly label for must still render something legible
+  // rather than crash the table - same defensive-degrade rule LakeConfigHistorySection follows.
+  it('falls back to the raw feature name for one this build has no label for', () => {
+    renderPanel({
+      summary: baseSummary({
+        embeddingSpendMicroUsd: 1,
+        ledger: {
+          ...emptyLedger,
+          byFeature: [{ feature: 'chat', requests: 1, cogsUsd: 1, creditsCharged: 0 }],
+          totals: { requests: 1, cogsUsd: 1, creditsCharged: 0 },
+        },
+      }),
+    });
+    expect(screen.getByText('chat')).toBeInTheDocument();
+  });
+
+  // The by-day breakdown buckets in UTC, so an evening run showed up under the next day
+  // with nothing telling the viewer why - the fix is labeling the bucket, not re-deriving it.
+  it("labels the by-day breakdown as UTC rather than implying the viewer's own timezone", () => {
+    renderPanel({
+      summary: baseSummary({
+        embeddingSpendMicroUsd: 1,
+        ledger: { ...emptyLedger, totals: { requests: 1, cogsUsd: 1, creditsCharged: 0 } },
+      }),
+    });
+    expect(screen.getByText('By day (UTC)')).toBeInTheDocument();
+  });
+
+  // The copy cited the per-upload-batch budget even when the spend on screen came from a
+  // research run, which never touches an upload batch at all.
+  it("names the per-run budget as an ingestion figure, distinct from a research run's own ceiling", () => {
+    renderPanel();
+    const copy = screen.getByTestId('datalake-spend-perrun-cap');
+    expect(copy).toHaveTextContent(/ingestion per-run budget/i);
+    expect(copy).toHaveTextContent(/research run has its own cost ceiling/i);
   });
 
   it('shows the halted-indexing alert (not an "off = unconstrained" reading) when spendEnabled is false', () => {

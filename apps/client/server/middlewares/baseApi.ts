@@ -96,6 +96,15 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     onError: errorHandler,
   });
 
+  // FIRST, ahead of every middleware that can await (connectDB, the auth/api-key chain, route
+  // feature gates): the crypto-shred fence (MemoryPrincipalKeyModel) refuses a write only when a
+  // purge lands at or after this instant, so a later stamp lets a mid-request purge lift its own
+  // tombstone.
+  router.use((req, _res, next) => {
+    req.receivedAt = new Date();
+    next();
+  });
+
   // Add req.logger early in the middleware chain, so subsequent
   // middlewares can take advantage of it.
   router.use(logging);

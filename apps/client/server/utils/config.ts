@@ -43,6 +43,21 @@ const Config = {
   GOOGLE_CLIENT_SECRET: Resource.GOOGLE_CLIENT_SECRET.value,
   GITHUB_CLIENT_ID: Resource.GITHUB_CLIENT_ID.value,
   GITHUB_CLIENT_SECRET: Resource.GITHUB_CLIENT_SECRET.value,
+  // Read-only data-lake GitHub App; resolved (and 'not-configured' rejected) by getGitHubLakeAppConfig.
+  GITHUB_LAKE_APP_CLIENT_ID: readOptionalSecret(
+    'GITHUB_LAKE_APP_CLIENT_ID',
+    () => Resource.GITHUB_LAKE_APP_CLIENT_ID.value
+  ),
+  GITHUB_LAKE_APP_CLIENT_SECRET: readOptionalSecret(
+    'GITHUB_LAKE_APP_CLIENT_SECRET',
+    () => Resource.GITHUB_LAKE_APP_CLIENT_SECRET.value
+  ),
+  GITHUB_LAKE_APP_ID: readOptionalSecret('GITHUB_LAKE_APP_ID', () => Resource.GITHUB_LAKE_APP_ID.value),
+  GITHUB_LAKE_APP_PRIVATE_KEY: readOptionalSecret(
+    'GITHUB_LAKE_APP_PRIVATE_KEY',
+    () => Resource.GITHUB_LAKE_APP_PRIVATE_KEY.value
+  ),
+  GITHUB_LAKE_APP_SLUG: readOptionalSecret('GITHUB_LAKE_APP_SLUG', () => Resource.GITHUB_LAKE_APP_SLUG.value),
   STRIPE_WEBHOOK_SECRET: Resource.STRIPE_WEBHOOK_SECRET.value,
   STRIPE_SECRET_KEY: Resource.STRIPE_SECRET_KEY.value,
   STRIPE_PUBLISHABLE_KEY: Resource.STRIPE_PUBLISHABLE_KEY.value,
@@ -90,6 +105,11 @@ const Config = {
   ),
   OVERWATCH_INGEST_URL: readOptionalSecret('OVERWATCH_INGEST_URL', () => Resource.OVERWATCH_INGEST_URL.value),
   OVERWATCH_INGEST_KEY: readOptionalSecret('OVERWATCH_INGEST_KEY', () => Resource.OVERWATCH_INGEST_KEY.value),
+  // JSON map of productId -> ingest key, for other products this deployment serves.
+  OVERWATCH_PRODUCT_INGEST_KEYS: readOptionalSecret(
+    'OVERWATCH_PRODUCT_INGEST_KEYS',
+    () => Resource.OVERWATCH_PRODUCT_INGEST_KEYS.value
+  ),
   B4M_ANALYTICS_ENABLED: readOptionalSecret('B4M_ANALYTICS_ENABLED', () => Resource.B4M_ANALYTICS_ENABLED.value),
   OVERWATCH_PSEUDONYM_SALT: readOptionalSecret(
     'OVERWATCH_PSEUDONYM_SALT',

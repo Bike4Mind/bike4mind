@@ -1,18 +1,29 @@
 import {
-  ARTIFACT_ATTRS_PATTERN,
   ArtifactPayload,
   ArtifactOperation,
   ArtifactType,
   mapMimeTypeToArtifactType,
+  matchArtifactBlocks,
+  scanArtifactOpenTag,
 } from '@bike4mind/common';
 import { detectElidedContent } from '@bike4mind/utils/artifactElision';
-import { stripHtmlComments, hasFullHtmlDocument, hasCompleteSvg } from '@bike4mind/utils/artifactParser';
+import {
+  stripHtmlComments,
+  hasFullHtmlDocument,
+  hasCompleteSvg,
+  extractHTMLTitle,
+  maskToolOutputRegions,
+} from '@bike4mind/utils/artifactParser';
 import { tryParseChartJSON } from './chartJsonParser';
 import { hasSingleLineImportFrom, scanImportStatements } from './importStatements';
+import {
+  ResultReplacer,
+  replaceDirectTypeObjects,
+  replaceEscapedResultObjects,
+  replaceLazyResultObjects,
+  replaceLogFormatResultObjects,
+} from './toolOutputResultScan';
 
-// Built from the shared ARTIFACT_ATTRS_PATTERN so the attribute sub-pattern
-// stays in sync with the core parser and PromptReplies truncation detector.
-const ARTIFACT_REGEX = new RegExp(`<artifact\\s+(${ARTIFACT_ATTRS_PATTERN})>([\\s\\S]*?)<\\/artifact>`, 'gi');
 // Value is anchored to its own quote kind so a double-quoted value can contain
 // apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
 // body, group 3 the single-quoted one; exactly one matches.
@@ -66,15 +77,10 @@ export function parseArtifacts(
 ): ArtifactParseResult {
   const artifacts: ParsedArtifact[] = [];
   let cleanedContent = content;
-  let match;
 
-  // Reset regex lastIndex to ensure we start from the beginning
-  ARTIFACT_REGEX.lastIndex = 0;
-
-  while ((match = ARTIFACT_REGEX.exec(content)) !== null) {
-    const [fullMatch, attributesString, artifactContent] = match;
-    const startIndex = match.index;
-    const endIndex = match.index + fullMatch.length;
+  for (const block of matchArtifactBlocks(content)) {
+    const { index: startIndex, fullMatch, attrs: attributesString, body: artifactContent } = block;
+    const endIndex = startIndex + fullMatch.length;
 
     // Parse attributes
     const attributes: Record<string, string> = {};
@@ -475,7 +481,7 @@ export function validateArtifactContent(
  * Sanitizes model-controlled text bound for a title="..." attribute in a tag this file
  * rebuilds. The artifact attribute parser (ATTRIBUTE_REGEX) has no escape mechanism, so a
  * " would truncate the attribute and leave the rest to be read as further attributes.
- * ARTIFACT_REGEX here is quote-aware, but the repo's other artifact matchers
+ * parseArtifacts here is quote-aware, but the repo's other artifact matchers
  * (sharedToolBuilder, notebookCurationService, openaiBackend) match attributes as [^>],
  * so a < or > reaching them closes the tag early; newlines break the single-line ones.
  * extractHTMLTitle applies the quote half of this rule to a <title> element.
@@ -495,7 +501,7 @@ function sanitizeToolOutputTitle(title: unknown): string {
 
 /**
  * Escapes the literal "</artifact>" sequence in a JSON artifact body so it cannot truncate
- * ARTIFACT_REGEX's non-greedy body match and leave a following "<artifact ...>" to be read
+ * parseArtifacts' non-greedy body match and leave a following "<artifact ...>" to be read
  * as a second, model-chosen artifact. JSON.parse reads "\/" as "/", so the consumer
  * restores the original losslessly. Twin of escapeArtifactBodyJson in b4m-core services
  * (llm/tools/utils/artifactEmission), which this package cannot import; keep in sync.
@@ -516,7 +522,7 @@ function stripArtifactTagsFromRawBody(body: string): string {
 /**
  * Detects tool outputs (JSON responses from tools) and converts them to artifact syntax
  */
-function convertToolOutputsToArtifacts(content: string): string {
+function convertToolOutputsToArtifacts(content: string, holds: (value: string) => boolean): string {
   // Look for any JSON-like structure that contains type field with our target types
   // This approach is more forgiving of escaping variations
   const typePattern = /(?:rechart|recharts|mermaid)/g;
@@ -528,23 +534,26 @@ function convertToolOutputsToArtifacts(content: string): string {
 
   // Try to find and extract JSON objects that contain our artifact types
   // We'll look for various patterns of escaping around the "result" field
-  const patterns = [
+  // Patterns 1, 3, 4 and 5 are linear scanners (./toolOutputResultScan) with the same results
+  // as the regexes they replaced, which were quadratic on repeated unclosed prefixes or braces.
+  const steps: Array<(text: string, replacer: ResultReplacer) => string> = [
     // Pattern 1: Standard result field with escaped JSON (most common from logs)
-    /"result":\s*"(\{\\?"[^"]*\\?":\s*\\?"[^"]*\\?"[^}]*\})"/g,
+    replaceEscapedResultObjects,
     // Pattern 2: Result field with simpler escaping
-    /"result":\s*"(\{[^"]*(?:\\"[^"]*)*\})"/g,
+    (text, replacer) => text.replace(/"result":\s*"(\{[^"]*(?:\\"[^"]*)*\})"/g, replacer),
     // Pattern 3: More permissive result field matching
-    /"result":\s*"(\{.*?\})"/g,
+    replaceLazyResultObjects,
     // Pattern 4: Direct JSON object (less common but possible)
-    /(\{[^{}]*"type"\s*:\s*"(?:rechart|recharts|mermaid)"[^{}]*\})/g,
+    replaceDirectTypeObjects,
     // Pattern 5: Very specific pattern for the exact log format
-    /"result":\s*"\{(\\\\"type\\\\":\\\\"(?:rechart|recharts|mermaid)\\\\"[^}]*)\}"/g,
+    replaceLogFormatResultObjects,
   ];
 
   let processedContent = content;
 
-  for (const pattern of patterns) {
-    processedContent = processedContent.replace(pattern, (match, captured) => {
+  for (const step of steps) {
+    processedContent = step(processedContent, (match, captured) => {
+      if (holds(match)) return match;
       try {
         let jsonString = captured || match;
 
@@ -646,8 +655,16 @@ const MAX_FENCE_SCAN_CHARS = 256000;
  * and converts them to proper artifact syntax as a fallback
  */
 export function convertCodeBlocksToArtifacts(content: string): string {
+  // Fences the server marked as quoted tool output stay text; detection itself is server-only
+  // (b4m-core/utils artifactParser).
+  // A span holding a placeholder is never promoted: restore would put the marked output
+  // back inside the artifact.
+  const mask = maskToolOutputRegions(content);
+  content = mask.masked;
+  const { holds } = mask;
+
   // First, detect tool outputs that should become artifacts
-  content = convertToolOutputsToArtifacts(content);
+  content = convertToolOutputsToArtifacts(content, holds);
 
   // Then process code blocks
   // The fence patterns below put no \s* in front of the body group: it is greedy over
@@ -660,6 +677,7 @@ export function convertCodeBlocksToArtifacts(content: string): string {
   const reactCodeBlockRegex = /```(tsx?|jsx|javascript|typescript)([\s\S]*?)```/gi;
 
   content = content.replace(reactCodeBlockRegex, (match, language, codeContent) => {
+    if (holds(codeContent)) return match;
     // For tsx/jsx, always treat as React
     if (language === 'tsx' || language === 'jsx') {
       const componentName = extractComponentName(codeContent) || 'component';
@@ -715,7 +733,7 @@ ${codeContent.trim()}
   const htmlCodeBlockRegex = /```html([\s\S]*?)```/gi;
 
   content = content.replace(htmlCodeBlockRegex, (match, codeContent) => {
-    if (!hasFullHtmlDocument(codeContent)) return match;
+    if (!hasFullHtmlDocument(codeContent) || holds(codeContent)) return match;
     const title = sanitizeHTMLTitle(extractHTMLTitle(codeContent), 'HTML Page');
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
@@ -731,7 +749,7 @@ ${codeContent.trim()}
   const htmlFragmentFenceRegex = /```html([\s\S]*?)```/gi;
   content = content.replace(htmlFragmentFenceRegex, (match, codeContent) => {
     // Require at least one HTML tag so a mislabeled fence of plain text is left alone.
-    if (!/<[a-z][a-z0-9]*[\s/>]/i.test(codeContent)) return match;
+    if (!/<[a-z][a-z0-9]*[\s/>]/i.test(codeContent) || holds(codeContent)) return match;
     const title = sanitizeHTMLTitle(extractHTMLTitle(codeContent), 'HTML Snippet');
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
     return `<artifact identifier="${identifier}" type="text/html" title="${title}">
@@ -747,7 +765,7 @@ ${codeContent.trim()}
 
   content = content.replace(svgCodeBlockRegex, (match, codeContent) => {
     // Not a complete <svg>...</svg> - leave the fence unchanged.
-    if (!hasCompleteSvg(codeContent)) return match;
+    if (!hasCompleteSvg(codeContent) || holds(codeContent)) return match;
     const identifier = 'svg-graphic';
 
     return `<artifact identifier="${identifier}" type="image/svg+xml" title="SVG Graphic">
@@ -759,6 +777,7 @@ ${codeContent.trim()}
   const pythonCodeBlockRegex = /```(?:python|py)([\s\S]*?)```/gi;
 
   content = content.replace(pythonCodeBlockRegex, (match, codeContent) => {
+    if (holds(codeContent)) return match;
     const trimmedCode = codeContent.trim();
 
     // Only convert if it's substantial code (more than a simple one-liner)
@@ -789,11 +808,11 @@ ${trimmedCode}
     return `\`\`\`markdown${updatedContent}\`\`\``;
   });
 
-  content = promoteToolCallJsonArtifact(content);
+  content = promoteToolCallJsonArtifact(content, holds);
 
-  content = promoteBareHtmlDocument(content);
+  content = promoteBareHtmlDocument(content, holds);
 
-  return content;
+  return mask.restore(content);
 }
 
 /**
@@ -811,19 +830,21 @@ ${trimmedCode}
  * model that merely SHOWS such tool-call JSON as an example from having it
  * swallowed and re-rendered as an artifact.
  *
- * MUST STAY IN SYNC with the twin copy in b4m-core/utils/src/artifactParser.ts
- * so client render and server persistence never diverge.
+ * Recognition must stay identical to the twin in b4m-core/utils/src/artifactParser.ts.
+ * Only the server copy marks tool echoes; this one skips spans it already marked.
  */
-function promoteToolCallJsonArtifact(content: string): string {
+function promoteToolCallJsonArtifact(content: string, holds: (value: string) => boolean): string {
   // Fence labels a model uses for a tool call; a ```html fence is handled above.
   // The negative lookahead stops ```tool matching inside ```tool_calls etc.
   const fenceRegex = /```(?:json|tool_code|tool)(?![a-z0-9_])([\s\S]*?)```/gi;
-  const afterFences = content.replace(fenceRegex, (match, body) => toolCallJsonToArtifact(body) ?? match);
+  const afterFences = content.replace(fenceRegex, (match, body) =>
+    holds(body) ? match : (toolCallJsonToArtifact(body) ?? match)
+  );
   if (afterFences !== content) return afterFences;
 
   // A model may also return the bare object as its entire reply (no fence).
   const trimmed = content.trim();
-  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+  if (trimmed.startsWith('{') && trimmed.endsWith('}') && !holds(trimmed)) {
     const artifact = toolCallJsonToArtifact(trimmed);
     if (artifact) return content.replace(trimmed, () => artifact);
   }
@@ -893,12 +914,13 @@ function looksLikeHtml(value: string): boolean {
  * otherwise render as raw HTML in the chat. Runs last so the fence/artifact guards
  * see all earlier conversions.
  */
-function promoteBareHtmlDocument(content: string): string {
+function promoteBareHtmlDocument(content: string, holds: (value: string) => boolean): string {
   // Two forward cursors instead of one <html>...</html> pattern, and guard counts that
   // accumulate over the gap since the previous document instead of re-reading the whole
   // prefix: both of the old shapes re-scanned from the start of the message on every
   // candidate, so this pass cost time quadratic in the message length.
-  // MUST STAY IN SYNC with the twin copy in b4m-core/utils/src/artifactParser.ts.
+  // Detection must stay identical to the twin in b4m-core/utils/src/artifactParser.ts;
+  // only the server copy marks tool echoes.
   const openRegex = /<!DOCTYPE\s+html|<html/gi;
   const closeRegex = /<\/html\s*>/gi;
   let out = '';
@@ -929,6 +951,7 @@ function promoteBareHtmlDocument(content: string): string {
     if (fences % 2 === 1 || artifactOpens > artifactCloses) continue;
 
     const doc = content.slice(start, end);
+    if (holds(doc)) continue;
     const title = sanitizeHTMLTitle(extractHTMLTitle(doc), 'HTML Page');
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
     out += content.slice(copiedTo, start);
@@ -958,11 +981,6 @@ function extractComponentName(code: string): string | null {
   if (classMatch) return classMatch[1];
 
   return null;
-}
-
-function extractHTMLTitle(code: string): string | null {
-  const titleMatch = code.match(/<title>(.*?)<\/title>/i);
-  return titleMatch ? titleMatch[1] : null;
 }
 
 // Strip <, >, and " before interpolating a document-controlled title into title="...".
@@ -1035,7 +1053,7 @@ export function generateCompleteArtifactId(type: string, identifier: string, tim
  * whether to best-effort close the tag or drop the partial.
  */
 export function hasCompleteOpeningTag(tail: string): boolean {
-  return new RegExp(`^<artifact\\s+${ARTIFACT_ATTRS_PATTERN}>`).test(tail);
+  return tail.startsWith('<artifact') && scanArtifactOpenTag(tail, 0, 'run') !== null;
 }
 
 /**

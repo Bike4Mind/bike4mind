@@ -1015,12 +1015,30 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    * overwrite a real answer with the abandoned-run error. Callers count only
    * the writes that matched, so a quest that finished in that window is
    * reported as not settled rather than as settled.
+   *
+   * `finishReason` lands on `promptMeta.finishReason` through an update
+   * pipeline, not a dotted `$set`: a quest whose `promptMeta` is null would make
+   * the dotted path fail on every attempt, so that quest could never settle,
+   * while `$mergeObjects` treats a null or missing operand as empty. Values go
+   * through `$literal` because a pipeline reads a string starting with `$` as a
+   * field path, and a reply can start with one.
    */
   async settleIfUnfinished(
     id: string,
-    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply'>>
+    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply' | 'replies'>> & { finishReason?: string }
   ): Promise<boolean> {
-    const result = await this.model.updateOne({ _id: id, status: { $nin: TERMINAL_QUEST_STATUSES } }, { $set: patch });
+    const filter = { _id: id, status: { $nin: TERMINAL_QUEST_STATUSES } };
+    const { finishReason, ...fields } = patch;
+    const result = finishReason
+      ? await this.model.updateOne(filter, [
+          {
+            $set: {
+              ...Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, { $literal: value }])),
+              promptMeta: { $mergeObjects: ['$promptMeta', { finishReason: { $literal: finishReason } }] },
+            },
+          },
+        ])
+      : await this.model.updateOne(filter, { $set: fields });
     return result.matchedCount > 0;
   }
 

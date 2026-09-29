@@ -87,6 +87,7 @@ export * from './JiraWebhookConfigTypes';
 export * from './JiraWebhookSubscriptionTypes';
 export * from './JiraWebhookDeliveryTypes';
 export * from './OrgGitHubConnectionTypes';
+export * from './OrgGitHubLakeConnectionTypes';
 export * from './OrgGoogleDriveConnectionTypes';
 export * from './OrgJiraConnectionTypes';
 export * from './QuestCapabilityTypes';

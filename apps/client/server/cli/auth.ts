@@ -9,7 +9,13 @@ import {
   type IEmbedBranding,
 } from '@bike4mind/common';
 import { User, userApiKeyRepository, cacheRepository } from '@bike4mind/database';
-import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
+import {
+  userApiKeyService,
+  cacheService,
+  userService,
+  isTokenVersionCurrent,
+  isTokenTypeAcceptable,
+} from '@bike4mind/services';
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '@server/auth/consentGate';
 import { UnauthorizedError, ForbiddenError } from '@server/utils/errors';
@@ -190,12 +196,12 @@ function toApiKeyInfo(v: {
  * touching that middleware. Without this a banned, charged-back or suspended
  * owner's key kept working on exactly the surfaces that spend money.
  *
- * MUST STAY IN SYNC with the equivalent block in
- * apps/client/server/middlewares/apiKeyAuth.ts - same lookup, same order, same thrown error
- * classes. The thrown STATUS is not observable end to end on these paths, though: the
- * Function-URL adapter (defineLambdaRoute) reports any auth throw as 401, and the apiKeyOrJwt
- * resolver swallows a key failure to fall through to JWT - so a 403 raised here can surface as
- * 401 downstream. Keep the messages aligned, but do not rely on the status code reaching the caller.
+ * Exactly one copy of the gate: `apiKeyAuth` calls {@link assertAccountStateUsable} rather than
+ * repeating these conditions. The thrown STATUS is not observable end to end on these paths,
+ * though: the Function-URL adapter (defineLambdaRoute) reports any auth throw as 401, and the
+ * apiKeyOrJwt resolver swallows a key failure to fall through to JWT - so a 403 raised here can
+ * surface as 401 downstream. Keep the messages aligned, but do not rely on the status code
+ * reaching the caller.
  *
  * This is the `User.findById` the consent gate above deliberately declines to pay
  * on the api-key path. Account state is not the same trade: consent can be proven
@@ -215,18 +221,23 @@ async function assertOwnerAccountUsable(userId: string): Promise<void> {
  * The account-state checks of {@link assertOwnerAccountUsable} against an already-loaded
  * user, so the JWT path (verifyJwtToken, which already holds the user) can apply the same
  * gate without a second lookup. One helper so the two entry points can't drift.
+ *
+ * Which conditions block comes from `userService.accountBlockReasons`, the single definition
+ * shared with the admin update and the Stripe dispute path. The error classes and messages
+ * below are this client's mapping and must follow that list's precedence.
  */
-function assertAccountStateUsable(user: IUserDocument): void {
-  if (user.isBanned) {
-    throw new UnauthorizedError('User not found or banned');
-  }
-  if (user.disputePending) {
-    throw new ForbiddenError('Account suspended pending dispute resolution. Please contact support.');
-  }
-  if (user.moderation?.status === 'suspended') {
-    throw new ForbiddenError(
-      'Your account is suspended for repeated content-policy violations. Please contact support to appeal.'
-    );
+export function assertAccountStateUsable(user: IUserDocument): void {
+  switch (userService.accountBlockReasons(user)[0]) {
+    case 'banned':
+      throw new UnauthorizedError('User not found or banned');
+    case 'disputePending':
+      throw new ForbiddenError('Account suspended pending dispute resolution. Please contact support.');
+    case 'suspended':
+      throw new ForbiddenError(
+        'Your account is suspended for repeated content-policy violations. Please contact support to appeal.'
+      );
+    default:
+      return;
   }
 }
 

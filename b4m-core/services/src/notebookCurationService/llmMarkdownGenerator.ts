@@ -1,4 +1,5 @@
 import { ExtractedArtifact, CurationArtifactType as ArtifactType } from '@bike4mind/common';
+import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 
 /**
  * LLM-powered "Executive Summary" markdown generator for curated notebooks (Option 2).
@@ -490,7 +491,9 @@ function sampleConversation(messages: any[], maxChars: number): string {
 
     const message = messages[idx];
     const userPrompt = message.prompt || '';
-    const assistantReply = message.reply || message.questMasterReply || (message.replies && message.replies[0]) || '';
+    const assistantReply = stripToolOutputMarker(
+      message.reply || message.questMasterReply || (message.replies && message.replies[0]) || ''
+    );
 
     const messageSample = `User: ${userPrompt}\n\nAssistant: ${assistantReply}`;
 
@@ -528,7 +531,7 @@ function findArtifactContext(artifact: ExtractedArtifact, messages: any[]): stri
 
   // Return prompt + reply that generated this artifact
   const prompt = message.prompt || '';
-  const reply = message.reply || message.questMasterReply || '';
+  const reply = stripToolOutputMarker(message.reply || message.questMasterReply || '');
 
   return `User: ${prompt.substring(0, 200)}...\n\nAssistant: ${reply.substring(0, 200)}...`;
 }

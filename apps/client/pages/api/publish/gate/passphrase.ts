@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
-import { PublishedArtifact } from '@bike4mind/database';
+import { PublishedArtifact, shareTokenFilter } from '@bike4mind/database';
 import { parsePublishPath, segmentsFromViewerPathname } from '@server/services/publish/parsePublishPath';
 import { setGateProofCookie } from '@server/services/publish/publishGateToken';
 import { checkLock, recordFailure, clear } from '@server/services/publish/passphraseLockout';
@@ -53,7 +53,7 @@ const handler = baseApi({ auth: false })
       resolved.kind === 'bundle'
         ? { tier: resolved.tier, scopeId: resolved.scopeId, slug: resolved.slug, deletedAt: null }
         : resolved.kind === 'share'
-          ? { shareToken: resolved.shareToken, deletedAt: null }
+          ? { ...shareTokenFilter(resolved.shareToken), deletedAt: null }
           : { publicId: resolved.publicId, 'source.kind': resolved.kind, deletedAt: null };
     // Project LEAF sub-paths only, never the parent `accessGate` together with a
     // child - MongoDB rejects `{ accessGate: 1, 'accessGate.passphraseHash': 1 }`

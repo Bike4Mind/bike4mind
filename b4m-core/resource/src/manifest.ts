@@ -18,6 +18,11 @@ export const DEFAULT_MANIFEST = {
   GEMINI_API_KEY: { kind: 'secret', optional: true },
   GITHUB_CLIENT_ID: { kind: 'secret', optional: true },
   GITHUB_CLIENT_SECRET: { kind: 'secret', optional: true },
+  GITHUB_LAKE_APP_CLIENT_ID: { kind: 'secret', optional: true },
+  GITHUB_LAKE_APP_CLIENT_SECRET: { kind: 'secret', optional: true },
+  GITHUB_LAKE_APP_ID: { kind: 'secret', optional: true },
+  GITHUB_LAKE_APP_PRIVATE_KEY: { kind: 'secret', optional: true },
+  GITHUB_LAKE_APP_SLUG: { kind: 'secret', optional: true },
   GITHUB_ZAP_REF: { kind: 'secret', optional: true },
   GOOGLE_CLIENT_ID: { kind: 'secret', optional: true },
   GOOGLE_CLIENT_SECRET: { kind: 'secret', optional: true },
@@ -38,6 +43,7 @@ export const DEFAULT_MANIFEST = {
   OVERWATCH_INGEST_ENABLED: { kind: 'secret', optional: true }, // transient: removed after product extraction
   OVERWATCH_INGEST_KEY: { kind: 'secret', optional: true }, // transient: removed after product extraction
   OVERWATCH_INGEST_URL: { kind: 'secret', optional: true }, // transient: removed after product extraction
+  OVERWATCH_PRODUCT_INGEST_KEYS: { kind: 'secret', optional: true }, // transient: removed after product extraction
   OVERWATCH_PSEUDONYM_SALT: { kind: 'secret', optional: true }, // transient: removed after product extraction
   OPTIHASHI_API_TOKEN: { kind: 'secret', optional: true },
   OPTIHASHI_API_URL: { kind: 'secret', optional: true },

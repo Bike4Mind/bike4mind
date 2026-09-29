@@ -17,7 +17,9 @@ const stubCommon: Plugin = {
         "export const ARTIFACT_ATTRS_PATTERN = '';\n" +
         'export const ArtifactType = {};\n' +
         'export const ArtifactOperation = {};\n' +
-        'export const mapMimeTypeToArtifactType = () => undefined;\n',
+        'export const mapMimeTypeToArtifactType = () => undefined;\n' +
+        'export const matchArtifactBlocks = () => [];\n' +
+        'export const scanArtifactOpenTag = () => null;\n',
       loader: 'js',
     }));
   },

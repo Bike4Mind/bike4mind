@@ -44,7 +44,6 @@ const mintParams = {
 describe('rotateUserApiKey — round-trip regression guard', () => {
   it('rotated key validates successfully and prefix length matches KEY_PREFIX_LENGTH', async () => {
     const { repo, getStored } = makeSyncedRepo();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const adapters = {
       db: {
         userApiKeys: repo as any,
@@ -73,7 +72,6 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
 
   it('rotation preserves spendCap and accumulated spend (rotating the secret must not reset the meter)', async () => {
     const { repo, getStored } = makeSyncedRepo();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const adapters = {
       db: {
         userApiKeys: repo as any,
@@ -106,7 +104,6 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
 
   it('original key is invalid after rotation', async () => {
     const { repo } = makeSyncedRepo();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const adapters = {
       db: {
         userApiKeys: repo as any,
@@ -149,7 +146,12 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
       expect(orgs.findIdsAdministeredBy).toHaveBeenCalledWith('admin-user');
       expect(repo.findByOrganizationIdsAndId).toHaveBeenCalledWith(['org-1'], 'key-1');
       expect(key).toMatch(/^b4m_live_/);
-      expect(repo.update).toHaveBeenCalled();
+      expect(repo.update).toHaveBeenCalledWith({
+        id: 'key-1',
+        keyHash: expect.any(String),
+        keyPrefix: expect.any(String),
+        userId: 'admin-user',
+      });
 
       // The rotated credential must authenticate as the admin who now holds it,
       // not as the teammate who minted it.
@@ -177,6 +179,11 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
 
       expect(stored.userId).toBe('minter');
       expect(previousOwnerUserId).toBeUndefined();
+      expect(repo.update).toHaveBeenCalledWith({
+        id: 'key-1',
+        keyHash: expect.any(String),
+        keyPrefix: expect.any(String),
+      });
     });
 
     it('throws NotFound when the caller neither minted nor administers the key', async () => {

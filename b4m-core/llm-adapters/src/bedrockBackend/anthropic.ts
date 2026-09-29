@@ -934,6 +934,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
   }
 
   formatMessages(messages: IMessage[]): IMessage[] {
+    // Pure: base.ts re-runs this over the SAME messages array every tool round, so the merges
+    // below push shallow copies (content arrays are replaced, never mutated in place).
+    // Regression context: anthropic.cacheControlToolRounds.test.ts.
     const formattedMessages = messages.reduce((cur, value) => {
       const previousMessage = cur[cur.length - 1];
 
@@ -958,7 +961,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
           // Only merge if current value.content is also a string (not an array with images)
           if (typeof value.content !== 'string') {
-            cur.push(value);
+            cur.push({ ...value });
             return cur;
           }
 
@@ -981,7 +984,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         } else {
           // Only merge if current value.content is a string (not an array with images)
           if (typeof value.content !== 'string') {
-            cur.push(value);
+            cur.push({ ...value });
             return cur;
           }
 
@@ -1007,7 +1010,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       }
 
       // Push the message if the role is different
-      cur.push(value);
+      cur.push({ ...value });
 
       return cur;
     }, [] as IMessage[]);

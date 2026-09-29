@@ -14,6 +14,7 @@ import { sendFriendRequest } from '../friendshipService/sendFriendRequest';
 import { addCredits } from '../creditService/addCredits';
 import { subtractCredits } from '../creditService/subtractCredits';
 import { MODERATION_POLICY } from './moderationPolicy';
+import { entersBlockedState } from './accountState';
 
 export const adminUpdateUserSchema = updateUserSchema.extend({
   id: z.string(),
@@ -129,12 +130,13 @@ export async function adminUpdateUser(
   // so they never land as stray top-level fields on the user doc.
   const previousBalance = user.currentCredits ?? 0;
   const { moderationStatus, creditReason, creditDelta: signedDelta, ...baseParams } = params;
-  // Only `suspended` counts: `suspend_pending` awaits admin review and `throttled` is a rate
-  // limit, and neither is refused at key-use time (see assertAccountStateUsable).
-  const enteringBlockedState =
-    (params.isBanned === true && !user.isBanned) ||
-    (params.disputePending === true && !user.disputePending) ||
-    (moderationStatus === 'suspended' && user.moderation?.status !== 'suspended');
+  // Which moderation statuses block (only `suspended`) lives in accountState.ts, shared with the
+  // Stripe dispute path and the client use-time gate.
+  const enteringBlockedState = entersBlockedState(user, {
+    isBanned: params.isBanned ?? user.isBanned,
+    disputePending: params.disputePending ?? user.disputePending,
+    moderation: { status: moderationStatus ?? user.moderation?.status },
+  });
   // A signed `creditDelta` is applied verbatim (no interim-spend refund). Absolute
   // `currentCredits` falls back to delta-from-snapshot.
   const rawDelta =

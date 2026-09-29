@@ -3,6 +3,7 @@ import { Chip, Stack } from '@mui/joy';
 import { type ReactArtifact } from '@bike4mind/common';
 import InlineArtifactPreview from './InlineArtifactPreview';
 import ArtifactPreviewCard from './ArtifactPreviewCard';
+import { artifactFileName } from '@client/app/utils/artifactFileName';
 
 interface ReactArtifactPreviewCardProps {
   artifact: ReactArtifact;
@@ -28,7 +29,7 @@ const ReactArtifactPreviewCard: React.FC<ReactArtifactPreviewCardProps> = ({ art
       copyMessage="React component copied to clipboard"
       saveTooltip="Save as TypeScript file"
       saveFile={() => ({
-        fileName: `${artifact.title.toLowerCase().replace(/\s+/g, '_')}_${Date.now()}.tsx`,
+        fileName: artifactFileName(artifact.title, 'tsx', 'react-component'),
         mimeType: 'text/typescript',
         successMessage: 'Saved React component as TypeScript file',
       })}

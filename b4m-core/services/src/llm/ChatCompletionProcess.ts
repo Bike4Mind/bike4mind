@@ -101,7 +101,8 @@ import { ToolBuilder } from './tools/ToolBuilder';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
 import { resolveAggregateToolModel, settleToolCallCredits } from './settleToolCredits';
 import { resolvePersonalCorpusOnly } from './resolvePersonalCorpusOnly';
-import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
+import { toolsUsedToFunctionCalls, type ToolsUsedEntry } from './toolsUsedToFunctionCalls';
+import { buildToolEchoSources } from './toolEchoSources';
 import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedReplyAccumulator';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { resolveCorrectionContext } from './buildCorrectionContext';
@@ -113,6 +114,7 @@ import {
   warnIfManyLakeMemberships,
   type MeasurableDataLakeAccessContext,
   type EntitlementResolution,
+  type GetDynamicDataLakeAccessOptions,
 } from '../dataLakeService/getDynamicDataLakeTags';
 // Re-exported so the resolver below and the type it returns stay reachable from one import, while
 // the declaration stays beside the context contract it has to satisfy.
@@ -899,6 +901,16 @@ export class ChatCompletionProcess {
    */
   private accessibleDataLakeAccessMemo: ResolvedLakeAccessSetWithAdmissions | undefined;
   /**
+   * Per-turn memo for the ATTACHMENT scope - the same resolution as
+   * `accessibleDataLakeAccessMemo` above but with DRAFT lakes included, as browse includes them.
+   * Kept separate rather than widening that one: it feeds the tool-offer gate, the inline-defer
+   * plan and the retrieval seed's `lakeScope`, and an unpublished lake must not become ground truth
+   * for a question the user never pointed at. Resolved lazily off the SAME `DataLakeAccessContext`
+   * object, so the second pass re-runs one lake query and re-uses that turn's
+   * membership/grant/supersession snapshot rather than taking a second, possibly divergent one.
+   */
+  private attachmentDataLakeAccessMemo: ResolvedLakeAccessSetWithAdmissions | undefined;
+  /**
    * The SAME `DataLakeAccessContext` object for the whole turn (#3055), so every call into
    * `getDynamicDataLakeTags.ts`'s per-turn memos (membershipOrgIdsForTurn, grantedLakeReachForTurn,
    * supersededOwnLakeIdsForTurn - see scopedAsyncMemo's WeakMap-on-identity doc) shares one
@@ -1074,6 +1086,8 @@ export class ChatCompletionProcess {
         // #3155: lets the exclusion-telemetry count tell a legitimately empty entitlement list
         // apart from a failed lookup - see `entitlementResolutionFailed`'s own doc.
         entitlementKeysResolved: resolved,
+        // The one caller that reads the account-wide count (the retrieval summary's excludedLakes).
+        measureExcludedByAccessCount: true,
         // Without this, a countGateExcludedLakes failure warns into a void: the resolver
         // swallows it internally (never throws), so this call's own try/catch never sees it.
         logger: this.logger,
@@ -1089,34 +1103,47 @@ export class ChatCompletionProcess {
    * empty access (treated as "no lake"), never breaks the turn.
    */
   private async getAccessibleDataLakeAccess(): Promise<ResolvedLakeAccessSetWithAdmissions> {
-    if (this.accessibleDataLakeAccessMemo === undefined) {
-      try {
-        const resolved = await getDynamicDataLakeAccess(await this.getDataLakeAccessContext());
-        // Same union the retrieval and tool doors run, so all three agree on what this session can
-        // reach; it re-derives the manage gate per call, so a revoked maintainer's memo comes back
-        // un-widened exactly as it would have before the admission.
-        this.accessibleDataLakeAccessMemo = await unionPreauthorizedLakeAccess(
-          resolved,
-          this.turnPreauthorizedLakeIds,
-          this.user.id,
-          this.db
-        );
-      } catch (err) {
-        this.logger.warn(
-          `[dataLakes] accessible-lake resolution failed; treating as no lake: ${(err as Error)?.message}`
-        );
-        this.accessibleDataLakeAccessMemo = {
-          dataLakeTags: [],
-          dataLakeTagPrefixes: [],
-          scopedTagPrefixes: [],
-          lakes: [],
-          // excludedByAccessCount omitted, not 0: resolution failed outright, so whether access
-          // shaped anything is unknown, not "nothing was excluded" (#3055).
-          admittedPreauthorizedTags: new Set(),
-        };
-      }
-    }
+    this.accessibleDataLakeAccessMemo ??= await this.resolveDataLakeAccess({});
     return this.accessibleDataLakeAccessMemo;
+  }
+
+  /**
+   * The same resolution with DRAFT lakes included - the ATTACHMENT scope. Separate memo,
+   * separate query, deliberately: see `attachmentDataLakeAccessMemo`. Lazy, so a turn with no
+   * attachments never pays for it.
+   */
+  private async getAttachmentDataLakeAccess(): Promise<ResolvedLakeAccessSetWithAdmissions> {
+    this.attachmentDataLakeAccessMemo ??= await this.resolveDataLakeAccess({ includeDraftLakes: true });
+    return this.attachmentDataLakeAccessMemo;
+  }
+
+  /**
+   * The body both memos above share, so retrieval and attachment can differ ONLY by the status set
+   * they admit - never by the union, the fail direction, or the context they resolve against.
+   */
+  private async resolveDataLakeAccess(
+    opts: GetDynamicDataLakeAccessOptions
+  ): Promise<ResolvedLakeAccessSetWithAdmissions> {
+    try {
+      const resolved = await getDynamicDataLakeAccess(await this.getDataLakeAccessContext(), opts);
+      // Same union the retrieval and tool doors run, so all three agree on what this session can
+      // reach; it re-derives the manage gate per call, so a revoked maintainer's memo comes back
+      // un-widened exactly as it would have before the admission.
+      return await unionPreauthorizedLakeAccess(resolved, this.turnPreauthorizedLakeIds, this.user.id, this.db);
+    } catch (err) {
+      this.logger.warn(
+        `[dataLakes] accessible-lake resolution failed; treating as no lake: ${(err as Error)?.message}`
+      );
+      return {
+        dataLakeTags: [],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [],
+        lakes: [],
+        // excludedByAccessCount omitted, not 0: resolution failed outright, so whether access
+        // shaped anything is unknown, not "nothing was excluded" (#3055).
+        admittedPreauthorizedTags: new Set(),
+      };
+    }
   }
 
   /**
@@ -1134,6 +1161,10 @@ export class ChatCompletionProcess {
    * the question is "is this file lake content", not "can the caller read it by any route".
    * `restrictToFileIds` bounds it to the requested ids. Returns `null` when it cannot
    * tell, which callers must treat as "cannot judge".
+   *
+   * Deliberately RETRIEVAL-scoped (active lakes only), not the draft-inclusive
+   * `getAttachmentDataLakeAccess`: a draft-lake attachment is inlined, but retrieval cannot reach
+   * its lake, so it must not count as lake content here - that keeps the corpus personal.
    */
   private async countLakeReachableAttachments(ids: string[]): Promise<number | null> {
     if (ids.length === 0) return 0;
@@ -1196,19 +1227,63 @@ export class ChatCompletionProcess {
    * one `$or` is the cross-tenant promotion the SCOPED/OPEN split forbids. Registry lakes are
    * covered by `dataLakeTagPrefixes` instead. Never construct `lakeMemberships` any other way here.
    *
-   * Fail direction is inherited from `getAccessibleDataLakeAccess`, which catches its own failures
+   * Fail direction is inherited from `resolveDataLakeAccess`, which catches its own failures
    * and returns an empty access set - so a lake-resolution outage degrades to today's
    * ownership-only behaviour. Never widen on error.
+   *
+   * Resolved through `getAttachmentDataLakeAccess`, NOT the retrieval memo: browse admits a
+   * DRAFT lake's file to the workbench, so re-authorizing that same named file against an
+   * active-only lake set would be narrower than the door that admitted it. The retrieval memo stays
+   * active-only - the two are separate on purpose, and the three attachment doors
+   * (`resolveAttachmentLakeAccess`, `createAttachmentLakeAccess`, this one) must stay in step.
    */
   private async attachmentLakeAccess(): Promise<AttachmentLakeAccess> {
-    const access = await this.getAccessibleDataLakeAccess();
+    return this.toAttachmentLakeAccess(await this.getAttachmentDataLakeAccess(), 'attachment-resolution');
+  }
+
+  private toAttachmentLakeAccess(access: ResolvedLakeAccessSetWithAdmissions, site: string): AttachmentLakeAccess {
     const lakeMemberships = lakeMembershipsFrom(access.lakes);
-    warnIfManyLakeMemberships(lakeMemberships, this.logger, 'attachment-resolution');
+    warnIfManyLakeMemberships(lakeMemberships, this.logger, site);
     return {
       lakeMemberships,
       dataLakeTags: access.dataLakeTags,
       dataLakeTagPrefixes: access.dataLakeTagPrefixes,
     };
+  }
+
+  /**
+   * The subset of `attachedFiles` the knowledge tools can actually READ, for the tool-offer gate.
+   *
+   * `attachedFiles` came through the draft-inclusive attachment scope, but the tools search through
+   * the active-only retrieval scope, so a file reachable only through a DRAFT lake is inlined yet
+   * unreturnable by the tool. Counting it would offer a tool that can only reply empty - the
+   * "I cannot access this file" pattern `hasAttachedKnowledge` exists to prevent.
+   *
+   * Re-reads only when the attachment scope reaches a lake the retrieval scope does not; otherwise
+   * the two reads are identical and `attachedFiles` is returned as-is. `null` in or on a failed
+   * re-read means "cannot tell", which the gate treats as offer (fail open), as it already does.
+   */
+  private async getToolReadableAttachedFiles(
+    attachedFiles: IFabFileDocument[] | null
+  ): Promise<IFabFileDocument[] | null> {
+    if (attachedFiles === null || attachedFiles.length === 0) return attachedFiles;
+    const retrieval = await this.getAccessibleDataLakeAccess();
+    const attachment = await this.getAttachmentDataLakeAccess();
+    const retrievalLakeIds = new Set(retrieval.lakes.map(l => l.id));
+    if (attachment.lakes.every(l => retrievalLakeIds.has(l.id))) return attachedFiles;
+    try {
+      const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
+      return await this.db.fabfiles.getAccessibleFiles(
+        attachedFiles.map(f => f.id),
+        scope,
+        this.toAttachmentLakeAccess(retrieval, 'attachment-offer-gate')
+      );
+    } catch (err) {
+      this.logger.warn(
+        `[knowledge] tool-readable attachment check failed; treating attached knowledge as indexed (fail open): ${(err as Error)?.message}`
+      );
+      return null;
+    }
   }
 
   /**
@@ -1962,9 +2037,14 @@ export class ChatCompletionProcess {
       // discarding the content already in front of it. `attachedKnowledgeFiles` is `null` both
       // when the lookup was skipped above and when it failed - fail toward offering rather than
       // stranding a genuinely indexed corpus with no retrieval path (see getAttachedKnowledgeFiles).
+      // Narrowed to what the tool can READ, which excludes a draft-lake-only attachment (see
+      // getToolReadableAttachedFiles).
+      const toolReadableAttachedFiles = hasAnyAttachment
+        ? await this.getToolReadableAttachedFiles(attachedKnowledgeFiles)
+        : attachedKnowledgeFiles;
       const hasAttachedKnowledge =
         hasAnyAttachment &&
-        (attachedKnowledgeFiles === null || attachedKnowledgeFiles.some(attachmentHasIndexedContent));
+        (toolReadableAttachedFiles === null || toolReadableAttachedFiles.some(attachmentHasIndexedContent));
       // Only pay the accessible-lake lookup when it could change the offer: not skipped
       // (prompt-mode), and attached knowledge hasn't already triggered the offer anyway.
       const hasAccessibleDataLake =
@@ -4263,6 +4343,9 @@ export class ChatCompletionProcess {
 
       try {
         const modelInferenceStartTime = Date.now();
+        // The live array the backend mutates (recordToolResult stamps results in place), so it
+        // still holds the final tool result at post_process when no callback followed it.
+        let echoToolsUsed: ToolsUsedEntry[] = [];
 
         // Loop covers the primary attempt plus up to MAX_FALLBACK_HOPS cross-model hops
         // (same-model overload/timeout retries below re-enter without advancing fallbackAttempt).
@@ -4309,6 +4392,7 @@ export class ChatCompletionProcess {
             // annotation compiled fine (the extras are optional) but hid returnValue/success from
             // TypeScript entirely, defeating toolsUsedToFunctionCalls's whole reason for existing.
             let toolsUsed: NonNullable<CompletionInfo['toolsUsed']> = [];
+            echoToolsUsed = toolsUsed;
 
             // Get idle timeout settings for Anthropic streaming hang detection
             const enableIdleTimeout = getSettingsValue('EnableStreamIdleTimeout', defaultAdminSettings) === true;
@@ -4405,6 +4489,8 @@ export class ChatCompletionProcess {
               },
               async (streamedTexts, completionInfo) => {
                 toolsUsed = completionInfo?.toolsUsed || [];
+                // Not reset by a text-only callback, which carries no toolsUsed.
+                if (completionInfo?.toolsUsed) echoToolsUsed = completionInfo.toolsUsed;
                 // Include tool ID for Anthropic API tool pairing reconstruction
                 quest.promptMeta!.functionCalls = toolsUsedToFunctionCalls(
                   toolsUsed,
@@ -4888,7 +4974,8 @@ export class ChatCompletionProcess {
         if (artifactsEnabled) {
           // The barrel is the only export path for these two; there is no artifactParser subpath
           // that carries them, so this import stays as-is.
-          const { parseArtifacts, convertCodeBlocksToArtifacts } = await import('@bike4mind/utils');
+          const { parseArtifacts, convertCodeBlocksToArtifacts, createToolEchoMatcher } =
+            await import('@bike4mind/utils');
           // The detector DOES have its own subpath, so use it here too - same reasoning as the
           // client: nothing should pull the whole of @bike4mind/utils for a dependency-free scan.
           //
@@ -4917,8 +5004,11 @@ export class ChatCompletionProcess {
           // worth a storage change on this path. If per-reply metadata ever lands, scope this with it.
           const elisionHits: Array<{ confidence: 'high' | 'low'; signals: string[] }> = [];
 
+          const echoSources = buildToolEchoSources(echoToolsUsed);
+          const convertOptions = echoSources.length > 0 ? { isToolEcho: createToolEchoMatcher(echoSources) } : {};
+
           quest.replies = quest.replies?.map(reply => {
-            const processedReply = convertCodeBlocksToArtifacts(reply);
+            const processedReply = convertCodeBlocksToArtifacts(reply, convertOptions);
             const { artifacts } = parseArtifacts(processedReply);
 
             // Guarded because this runs inside the try whose catch RE-THROWS, and the outer handler

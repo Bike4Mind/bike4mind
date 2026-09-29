@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockExport, captured, storageBytes } = vi.hoisted(() => ({
+const { mockExport, captured, storageBytes, mockCreateLakeAccess } = vi.hoisted(() => ({
   mockExport: vi.fn(),
+  mockCreateLakeAccess: vi.fn(),
   // The route builds its adapters inline, so the only way to reach them is off the constructor.
   captured: { adapters: undefined as Record<string, unknown> | undefined },
   storageBytes: { value: Buffer.alloc(0) },
@@ -72,6 +73,10 @@ vi.mock('@server/utils/storage', () => ({
     upload: async () => undefined,
     getSignedUrl: async () => 'https://example.invalid/signed',
   }),
+}));
+
+vi.mock('@server/queueHandlers/agentExecutor.attachmentLakeAccess', () => ({
+  createAttachmentLakeAccess: mockCreateLakeAccess,
 }));
 
 import handler from '../export';
@@ -227,5 +232,29 @@ describe('the storage adapter the route hands the export service', () => {
     // anyway. Only the type check distinguishes the two.
     expect(Buffer.isBuffer(result)).toBe(true);
     expect(result).toEqual(text);
+  });
+});
+
+describe('the knowledge access the route hands the export service', () => {
+  const LAKE_ACCESS = { lakeMemberships: [], dataLakeTags: ['lake:x'], dataLakeTagPrefixes: [] };
+
+  it("wires the exporter's groups and a memoized attachment-door lake resolver", async () => {
+    const resolve = vi.fn().mockResolvedValue(LAKE_ACCESS);
+    mockCreateLakeAccess.mockReset().mockReturnValue(resolve);
+    const user = { id: 'user-1', groups: ['group-1'] };
+    const { promise } = run({ notebookIds: [HEX_ID] }, user);
+    await promise;
+
+    const access = captured.adapters?.knowledgeAccess as {
+      userGroups?: string[];
+      resolveLakeAccess: () => Promise<unknown>;
+    };
+    expect(access.userGroups).toEqual(['group-1']);
+    expect(await access.resolveLakeAccess()).toBe(LAKE_ACCESS);
+    // Once per export, however many notebooks call it.
+    expect(await access.resolveLakeAccess()).toBe(LAKE_ACCESS);
+    expect(mockCreateLakeAccess).toHaveBeenCalledTimes(1);
+    expect(mockCreateLakeAccess).toHaveBeenCalledWith(user, logger);
+    expect(resolve).toHaveBeenCalledTimes(1);
   });
 });

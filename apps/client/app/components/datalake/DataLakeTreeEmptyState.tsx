@@ -3,6 +3,7 @@ import AddIcon from '@mui/icons-material/Add';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
+import ConnectSourceMenu from './ConnectSourceMenu';
 import type { DataLakeEmptyVariant } from './resolveEmptyVariant';
 
 interface DataLakeTreeEmptyStateProps {
@@ -13,6 +14,8 @@ interface DataLakeTreeEmptyStateProps {
   onRetryLakes?: () => void;
   /** Add files to the scoped lake - offered only in `lake-empty`. */
   onAddFiles?: () => void;
+  /** The scoped lake's org scope, which decides the sources it can hold. Offered only with `onAddFiles`. */
+  sourceLake?: { organizationId?: string | null };
 }
 
 /**
@@ -35,6 +38,7 @@ export default function DataLakeTreeEmptyState({
   onCreate,
   onRetryLakes,
   onAddFiles,
+  sourceLake,
 }: DataLakeTreeEmptyStateProps) {
   const { copy } = useDataLakeSurface();
 
@@ -91,6 +95,11 @@ export default function DataLakeTreeEmptyState({
         >
           Add files
         </Button>
+      )}
+      {/* Drive is picked from the wizard's source step, which carries the what-it-can-read
+          disclosure, so connecting routes through the same wizard Add files opens. */}
+      {variant === 'lake-empty' && onAddFiles && sourceLake && (
+        <ConnectSourceMenu lake={sourceLake} onConnectDrive={onAddFiles} />
       )}
     </Box>
   );

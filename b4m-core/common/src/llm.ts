@@ -90,7 +90,12 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
 });
 export type GenerateImageIvokeParams = z.infer<typeof GenerateImageIvokeParamsSchema>;
 
-export const GenerateImageRequestBodySchema = GenerateImageIvokeParamsSchema.extend({
+// `intent` and `promptEnhancement` are outputs of the route's prompt resolver, which always sets
+// them, so they are not part of the public request (api-contract/contracts/imageGeneration.contract.ts).
+export const GenerateImageRequestBodySchema = GenerateImageIvokeParamsSchema.omit({
+  intent: true,
+  promptEnhancement: true,
+}).extend({
   sessionId: z.string().optional(),
   sessionName: z.string().optional(),
   projectId: z.string().optional(),

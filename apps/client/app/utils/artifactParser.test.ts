@@ -126,8 +126,7 @@ describe('parseArtifactsWithFallback', () => {
   });
 
   it('sanitizes < > and " from the title of a promoted bare HTML document', () => {
-    const dangerous =
-      '<!DOCTYPE html><html><head><title>Attack <script>"xss"</title></head><body></body></html>';
+    const dangerous = '<!DOCTYPE html><html><head><title>Attack <script>"xss"</title></head><body></body></html>';
     const result = parseArtifactsWithFallback(dangerous);
     expect(result.artifacts).toHaveLength(1);
     // All three problem characters must be gone from the title attribute.
@@ -135,8 +134,7 @@ describe('parseArtifactsWithFallback', () => {
   });
 
   it('sanitizes < > and " from the title of a fenced full HTML document', () => {
-    const fence =
-      '```html\n<!DOCTYPE html><html><head><title>A "test" <page></title></head><body></body></html>\n```';
+    const fence = '```html\n<!DOCTYPE html><html><head><title>A "test" <page></title></head><body></body></html>\n```';
     const result = parseArtifactsWithFallback(fence);
     expect(result.artifacts).toHaveLength(1);
     expect(result.artifacts[0].title).toBe('A test page');
@@ -820,7 +818,7 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
 
   it('drops tag brackets from a tool-output title', () => {
     // </> survive the deep-unescape loop, so a bracket reaches metadata.title
-    // intact. This file's ARTIFACT_REGEX reads a quoted value as a unit, but the repo's
+    // intact. This file's parseArtifacts reads a quoted value as a unit, but the repo's
     // other artifact matchers read attributes as [^>], where a bare > closes the tag and
     // hands everything after it to a re-typed artifact.
     const recharts =
@@ -837,7 +835,7 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
 
   it('does not let a tool-output mermaid body inject a second artifact', () => {
     // toolOutput.content is model-controlled and lands in the rebuilt tag's body, which
-    // ARTIFACT_REGEX ends at the first </artifact>. Unescaped, the tail below parses as a
+    // parseArtifacts ends at the first </artifact>. Unescaped, the tail below parses as a
     // second artifact of the model's chosen type.
     const payload =
       '{"type":"mermaid","metadata":{"title":"Diagram"},"content":' +
@@ -1357,5 +1355,61 @@ describe('hasSelfClosingTag differential vs the original regex', () => {
   it('matches a self-closing tag with a 600-char and a ~5000-char attribute span', () => {
     expect(hasSelfClosingTag(case600)).toBe(true);
     expect(hasSelfClosingTag(case5000)).toBe(true);
+  });
+});
+
+describe('convertCodeBlocksToArtifacts - server-marked tool output', () => {
+  const doc = '<!DOCTYPE html>\n<html><head><title>Quoted</title></head><body><h1>Fetched page</h1></body></html>';
+  const marked = (lang: string, body: string) => `~~~${lang} b4m-tool-output\n${body}\n~~~`;
+
+  it.each([
+    ['full document', marked('html', doc)],
+    ['html fragment', marked('html', '<div class="card"><h2>Title</h2><p>Some fetched fragment text.</p></div>')],
+    ['tool-call json', marked('json', JSON.stringify({ name: 'build_html', arguments: { html: doc } }))],
+    ['bare document', marked('', doc)],
+  ])('leaves a marked %s as text', (_label, region) => {
+    const reply = `Here is what the tool returned:\n\n${region}\n\nDone.`;
+    expect(convertCodeBlocksToArtifacts(reply)).toBe(reply);
+    expect(parseArtifactsWithFallback(reply).artifacts).toHaveLength(0);
+  });
+
+  it('keeps a marked region after a markdown block untouched', () => {
+    const reply = '```markdown\n# Notes\n```\n\n' + marked('html', doc);
+    const out = convertCodeBlocksToArtifacts(reply);
+    expect(out).toContain(marked('html', doc));
+    expect(out).not.toContain('<artifact');
+  });
+
+  it('still promotes an authored fence next to a marked region', () => {
+    const authored = '```html\n<!DOCTYPE html>\n<html><body><h1>Mine</h1></body></html>\n```';
+    const result = parseArtifactsWithFallback(`${marked('html', doc)}\n\n${authored}`);
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].content).toContain('Mine');
+  });
+
+  it('finds no html artifact in a reply the server already processed', () => {
+    const reply = 'Quoting it:\n\n```html\n' + doc + '\n```\n';
+    const serverReply = coreConvertCodeBlocksToArtifacts(reply, { isToolEcho: body => body.includes('Fetched page') });
+    expect(serverReply).toContain('b4m-tool-output');
+    expect(parseArtifactsWithFallback(serverReply).artifacts.filter(a => a.type === 'html')).toHaveLength(0);
+  });
+
+  it.each([
+    ['a bare document', (region: string) => `<html><body>\n${region}\n</body></html>`],
+    ['an html fragment fence', (region: string) => `\`\`\`html\n<div>\n${region}\n</div>\n\`\`\``],
+    ['a python fence', (region: string) => `\`\`\`python\nimport os\n${region}\nprint(1)\n\`\`\``],
+  ])('does not promote %s wrapping a marked region', (_label, wrap) => {
+    const scriptDoc = '<!DOCTYPE html>\n<html><body><script>alert(document.cookie)</script></body></html>';
+    const region = marked('html', scriptDoc);
+    const out = convertCodeBlocksToArtifacts(wrap(region));
+    expect(out).toContain(region);
+    for (const match of out.matchAll(/<artifact\b[^>]*>([\s\S]*?)<\/artifact>/g)) {
+      expect(match[1]).not.toContain('<script');
+    }
+  });
+
+  it('leaves unmarked input converting exactly as before', () => {
+    const reply = '```html\n' + doc + '\n```';
+    expect(convertCodeBlocksToArtifacts(reply)).toContain('<artifact');
   });
 });

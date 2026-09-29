@@ -111,7 +111,8 @@ export interface DataLakeAccessContext {
    *   otherwise. A count cannot express its own doubt: an entitlement-gated lake the caller really
    *   holds the key for is indistinguishable from an excluded one once the keys degrade to the
    *   fail-safe `[]`, so an unvouched context must get no number rather than a confident wrong one.
-   *   Costs nothing where a host does not state it, because nothing else reads those counts.
+   *   The account-wide count additionally needs `measureExcludedByAccessCount` - vouching for the
+   *   keys says the count WOULD be trustworthy, not that this caller reads it.
    *
    * `MeasurableDataLakeAccessContext` below carries the same rule in the type for the identity-
    * scoped measurement, whose parameter can require it without breaking a structural host.
@@ -121,6 +122,16 @@ export interface DataLakeAccessContext {
    * (see `EntitlementResolution`), and this field cannot see that.
    */
   entitlementKeysResolved?: boolean;
+  /**
+   * Opt-in for the account-wide `excludedByAccessCount` query, which is an extra DB round trip on
+   * every resolve. Only `ChatCompletionProcess.getDataLakeAccessContext` reads the result (the
+   * retrieval-summary telemetry); every other vouched host (lake-memory card, forced retrieval,
+   * lake-prompt injection, `resolveRetrievalLakeScope`) needs `entitlementKeysResolved` for
+   * `lakeViewComplete` but would throw the number away. Separate from that flag for exactly this
+   * reason. Still requires `entitlementKeysResolved: true` - opting in never buys an untrustworthy
+   * count. `measureIdentityNamedExclusion` does not read this: calling it is its own opt-in.
+   */
+  measureExcludedByAccessCount?: boolean;
   /** Optional; only used to report a swallowed dataLakes read failure (see below). */
   logger?: Logger;
 }
@@ -250,6 +261,24 @@ export async function getDynamicDataLakeTags(context: DataLakeAccessContext): Pr
 }
 
 /**
+ * Per-CALL options, deliberately not fields on `DataLakeAccessContext`: the context object is
+ * memoized per turn BY IDENTITY (see `dataLakeAccessContextMemo` in ChatCompletionProcess and
+ * `scopedAsyncMemo`'s WeakMap), so a caller wanting a differently-scoped resolution must be able to
+ * reuse the SAME context - spreading it into a copy would miss every membership/grant/supersession
+ * memo and re-read them against a possibly different snapshot.
+ */
+export interface GetDynamicDataLakeAccessOptions {
+  /**
+   * Resolve the ATTACHMENT scope rather than the retrieval one: draft lakes join active ones, as
+   * they already do on the browse door that admitted the file to the workbench. Only the
+   * three attachment doors may pass this - `ChatCompletionProcess.attachmentLakeAccess`,
+   * `resolveAttachmentLakeAccess`, and the app layer's `createAttachmentLakeAccess`. Every
+   * retrieval surface leaves it unset.
+   */
+  includeDraftLakes?: boolean;
+}
+
+/**
  * Returns BOTH the meta-tags AND the file tag prefixes for a user's accessible data lakes.
  * Use this for fabfiles.search() so files are matched by either the datalake:* meta-tag
  * (when present) OR by their content tag prefix (e.g. opti:*, acme:*) - many data lake
@@ -263,9 +292,11 @@ export async function getDynamicDataLakeTags(context: DataLakeAccessContext): Pr
  * The DB pre-filter's owner bypass is honoured too: a lake the caller created resolves even
  * when they do not hold its own declared gate. Ownership is re-verified here against the
  * persisted `createdByUserId` rather than assumed from the query, and stays bounded by the
- * pre-filter's `status: 'active'`, so a caller's own DRAFT lake remains browse-only. The
- * bypass is org-independent, matching browse: a creator who has since moved orgs still reaches
- * a gated lake they made in the old one, and only they or an admin could have put files in it.
+ * pre-filter's status set - `active` alone by default, so a DRAFT lake stays out of retrieval;
+ * `opts.includeDraftLakes` widens that to browse's own draft+active for the attachment doors, and
+ * for them only. The bypass is org-independent, matching browse: a creator who has since
+ * moved orgs still reaches a gated lake they made in the old one, and only they or an admin could
+ * have put files in it.
  *
  * Persisted access GRANTS are honoured on the same terms browse honours them (`grantedLakeReachFor`),
  * when a grant repo is wired: the grant row IS the authorization, so a granted lake bypasses the
@@ -274,7 +305,10 @@ export async function getDynamicDataLakeTags(context: DataLakeAccessContext): Pr
  * the lake's CREATOR, not the caller, so a granted lake's files match the moment the lake is in
  * this set.
  */
-export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): Promise<{
+export async function getDynamicDataLakeAccess(
+  context: DataLakeAccessContext,
+  opts: GetDynamicDataLakeAccessOptions = {}
+): Promise<{
   dataLakeTags: string[];
   dataLakeTagPrefixes: string[];
   scopedTagPrefixes: string[];
@@ -299,6 +333,8 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
    * count trusts, so a degraded input produces a confidently WRONG number rather than an honest
    * failure; see `excludedByAccessCountPrerequisitesComplete` at this function's call site for the
    * four failure directions this guards against.
+   *
+   * Never measured unless the caller sets `measureExcludedByAccessCount` (see its doc).
    */
   excludedByAccessCount?: number;
   /**
@@ -522,7 +558,7 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
         entitlementKeys,
         organizationIds,
         userId,
-        { ...reach, supersededOwnLakeIds: [...supersededOwnLakeIds] }
+        { ...reach, supersededOwnLakeIds: [...supersededOwnLakeIds], includeDraftLakes: opts.includeDraftLakes }
       );
       dynamicDataLakes = dbLakes.map(toDataLakeConfig);
       for (const dl of dbLakes) {
@@ -572,28 +608,40 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
     // a successful query - see `excludedByAccessCountPrerequisitesComplete`'s own doc for why
     // running the count on a degraded input would produce a confidently wrong number in either
     // direction rather than the honest "unknown" this field's contract requires.
-    if (excludedByAccessCountPrerequisitesComplete) {
-      try {
-        excludedByAccessCount = await context.db.dataLakes.countGateExcludedLakes(
-          userTags,
-          entitlementKeys,
-          organizationIds,
-          userId,
-          // supersededOwnLakeIds (#3055): withholds the owner-bypass exemption from a lake
-          // whose ownership has since moved off the caller - see countGateExcludedLakes's own doc.
-          { ...reach, supersededOwnLakeIds: [...supersededOwnLakeIds] }
+    // Not requested means skipped silently: no warn even on a failed prerequisite, because no
+    // number was going to be reported for that failure to corrupt.
+    //
+    // Also skipped on the attachment pass, even when the shared context requests the count. That
+    // pass is a SECOND resolution in the same turn off the same context, and every one of its
+    // consumers builds an `AttachmentLakeAccess` from the tag/prefix/lake buckets alone - none reads
+    // this count. The count is also status-scoped to ACTIVE lakes and `includeDraftLakes` does not
+    // touch it, so re-running it here would spend a second whole-account query to recompute the
+    // identical number. Leaving the field `undefined` is the honest "not measured" its own contract
+    // already defines, not a false zero.
+    if (context.measureExcludedByAccessCount === true && !opts.includeDraftLakes) {
+      if (excludedByAccessCountPrerequisitesComplete) {
+        try {
+          excludedByAccessCount = await context.db.dataLakes.countGateExcludedLakes(
+            userTags,
+            entitlementKeys,
+            organizationIds,
+            userId,
+            // supersededOwnLakeIds (#3055): withholds the owner-bypass exemption from a lake
+            // whose ownership has since moved off the caller - see countGateExcludedLakes's own doc.
+            { ...reach, supersededOwnLakeIds: [...supersededOwnLakeIds] }
+          );
+        } catch (err) {
+          context.logger?.warn('[dataLakes] gate-excluded-lake count failed; reporting as unknown', err);
+        }
+      } else if (countPrerequisiteReadFailed) {
+        // Only an actual read failure warns. A host that simply never stated entitlement completeness
+        // also skips the count, silently: that is its standing contract, not a per-turn incident, and
+        // logging it every turn would bury the failures this line is here to surface.
+        context.logger?.warn(
+          '[dataLakes] gate-excluded-lake count skipped; an entitlement, enforce-flag, grant-exemption, ' +
+            'or supersession prerequisite read failed this turn'
         );
-      } catch (err) {
-        context.logger?.warn('[dataLakes] gate-excluded-lake count failed; reporting as unknown', err);
       }
-    } else if (countPrerequisiteReadFailed) {
-      // Only an actual read failure warns. A host that simply never stated entitlement completeness
-      // also skips the count, silently: that is its standing contract, not a per-turn incident, and
-      // logging it every turn would bury the failures this line is here to surface.
-      context.logger?.warn(
-        '[dataLakes] gate-excluded-lake count skipped; an entitlement, enforce-flag, grant-exemption, ' +
-          'or supersession prerequisite read failed this turn'
-      );
     }
   }
   const accessibleLakes = getAccessibleDataLakes(userTags, dynamicDataLakes, entitlementKeys);

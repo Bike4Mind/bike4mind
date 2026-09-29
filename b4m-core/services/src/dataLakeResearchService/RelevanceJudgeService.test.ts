@@ -10,6 +10,7 @@ let nextUsage: { inputTokens?: number; outputTokens?: number } | undefined;
 let usageFrames: Array<{ inputTokens?: number; outputTokens?: number }> | undefined;
 let lastPrompt = '';
 let llmAvailable = true;
+let completeError: Error | undefined;
 
 vi.mock('@bike4mind/llm-adapters', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/llm-adapters')>('@bike4mind/llm-adapters');
@@ -25,6 +26,7 @@ vi.mock('@bike4mind/llm-adapters', async () => {
               callback: (texts: string[], info?: unknown) => Promise<void>
             ) => {
               lastPrompt = messages[0].content;
+              if (completeError) throw completeError;
               if (usageFrames) {
                 for (const frame of usageFrames) await callback([''], frame);
                 await callback([nextResponse], undefined);
@@ -79,6 +81,7 @@ beforeEach(() => {
   usageFrames = undefined;
   lastPrompt = '';
   llmAvailable = true;
+  completeError = undefined;
   vi.clearAllMocks();
 });
 
@@ -98,7 +101,12 @@ describe('RelevanceJudgeService.judge', () => {
     nextResponse = JSON.stringify({ relevance: 0.82, rationale: '  Directly on topic.  ' });
     nextUsage = { inputTokens: 1_000, outputTokens: 1_000 };
 
-    expect(await judge()).toEqual({ relevance: 0.82, rationale: 'Directly on topic.', costMicroUsd: 1_000 });
+    expect(await judge()).toEqual({
+      outcome: 'judged',
+      relevance: 0.82,
+      rationale: 'Directly on topic.',
+      costMicroUsd: 1_000,
+    });
   });
 
   it('reads the judgment out of a response wrapped in prose or a code fence', async () => {
@@ -108,20 +116,20 @@ describe('RelevanceJudgeService.judge', () => {
 
   it('clamps an out-of-range score, so a caller comparing against minRelevance never sees one', async () => {
     nextResponse = JSON.stringify({ relevance: 7 });
-    expect((await judge())?.relevance).toBe(1);
+    expect(await judge()).toMatchObject({ relevance: 1 });
 
     nextResponse = JSON.stringify({ relevance: -3 });
-    expect((await judge())?.relevance).toBe(0);
+    expect(await judge()).toMatchObject({ relevance: 0 });
   });
 
   it('drops a blank rationale rather than showing an empty line on the card', async () => {
     nextResponse = JSON.stringify({ relevance: 0.7, rationale: '   ' });
-    expect((await judge())?.rationale).toBeUndefined();
+    expect(await judge()).toMatchObject({ outcome: 'judged', rationale: undefined });
   });
 
   it('reports zero cost when the provider reported no usage', async () => {
     nextResponse = JSON.stringify({ relevance: 0.9 });
-    expect((await judge())?.costMicroUsd).toBe(0);
+    expect((await judge()).costMicroUsd).toBe(0);
   });
 
   // Providers report a RUNNING TOTAL per stream. Accumulating the frames would over-count the spend
@@ -132,35 +140,46 @@ describe('RelevanceJudgeService.judge', () => {
       { inputTokens: 400, outputTokens: 100 },
       { inputTokens: 1_000, outputTokens: 1_000 },
     ];
-    expect((await judge())?.costMicroUsd).toBe(1_000);
+    expect((await judge()).costMicroUsd).toBe(1_000);
   });
 
+  // Every failure is a `failed` outcome, never a score: a model that fails on every call must read
+  // as judgeFailed on the run card, not as "N below the relevance floor".
   describe('fail-soft', () => {
     // A malformed response still burned tokens. Not charging them would let a model that always
     // returns junk loop against a ceiling that never moves.
-    it('scores 0 but still charges what a malformed response burned', async () => {
+    it('fails but still charges what a malformed response burned', async () => {
       nextResponse = 'not json at all';
       nextUsage = { inputTokens: 1_000, outputTokens: 1_000 };
 
-      expect(await judge()).toEqual({ relevance: 0, costMicroUsd: 1_000 });
+      expect(await judge()).toMatchObject({ outcome: 'failed', costMicroUsd: 1_000 });
     });
 
-    it('scores 0 when the response is JSON of the wrong shape', async () => {
+    it('fails when the response is JSON of the wrong shape', async () => {
       nextResponse = JSON.stringify({ verdict: 'yes' });
-      expect(await judge()).toMatchObject({ relevance: 0 });
+      expect(await judge()).toMatchObject({ outcome: 'failed' });
     });
 
-    // Null means nothing was even attempted, so there is nothing to charge. The caller counts it as
-    // below-relevance either way.
-    it('returns null when the model is not in this deployment catalog', async () => {
-      expect(await judge({ model: 'a-model-that-does-not-exist' })).toBeNull();
+    it('fails with the provider error message when the model call throws', async () => {
+      completeError = new Error('Invocation of model ID with on-demand throughput is not supported');
+      expect(await judge()).toEqual({
+        outcome: 'failed',
+        error: 'Invocation of model ID with on-demand throughput is not supported',
+        costMicroUsd: 0,
+      });
     });
 
-    // The model IS in the catalog here, so the failure is priced (at zero, nothing was sent) rather
-    // than reported as "never attempted". Either way the caller counts it as below-relevance.
-    it('scores 0 at no cost when the adapter cannot be initialized', async () => {
+    it('fails at no cost when the model is not in this deployment catalog', async () => {
+      expect(await judge({ model: 'a-model-that-does-not-exist' })).toMatchObject({
+        outcome: 'failed',
+        error: expect.stringContaining('a-model-that-does-not-exist'),
+        costMicroUsd: 0,
+      });
+    });
+
+    it('fails at no cost when the adapter cannot be initialized', async () => {
       llmAvailable = false;
-      expect(await judge()).toEqual({ relevance: 0, costMicroUsd: 0 });
+      expect(await judge()).toMatchObject({ outcome: 'failed', costMicroUsd: 0 });
     });
   });
 

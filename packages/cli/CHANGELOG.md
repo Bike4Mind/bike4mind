@@ -1,5 +1,35 @@
 # @bike4mind/cli
 
+## 1.2.0
+
+### Minor Changes
+
+- [#3036](https://github.com/Bike4Mind/bike4mind/pull/3036) [`31e0dd9`](https://github.com/Bike4Mind/bike4mind/commit/31e0dd9a905a7a125f7489efc951a7d21157bc17) Thanks [@julsanchez](https://github.com/julsanchez)! - harden the CLI trust boundary against a hostile cloned repo
+
+  Behavior changes (all user-visible effects of hardening the CLI against an untrusted clone):
+
+  - The shared utils barrel no longer runs `dotenv.config()` on import, so a project-local `.env` is no longer auto-loaded. Configuration now resolves from the real process environment. Set the variables in your shell (or your process manager) instead of relying on a cwd `.env`.
+  - Non-YAML frontmatter in a skill, command, or agent file (e.g. a `---js` fence) no longer evaluates; such frontmatter is treated as empty instead of running code at load time.
+  - A `--session-id`/`--resume` value outside the strict session-id charset is now rejected up front rather than used as a filesystem path component.
+  - A project skill/command/agent whose file is a symlink escaping the project root is refused when loading from an untrusted checkout.
+  - A `global` or `remote` skill whose name is reserved (a built-in or live feature/plugin command) is no longer advertised to the model or invokable, matching the dispatch gate.
+  - Agent lifecycle hooks (PreToolUse/PostToolUse/Stop and friends) that previously ran their shell command unprompted are now gated through the same permission prompt as any other shell command, and can be denied. Trusting the project folder loads the hook definitions; it no longer pre-authorizes the commands they carry.
+  - A `.b4m/checkpoints.json` whose root is not an object (e.g. a committed `[]`) no longer overwrites the metadata container, so checkpoints created after such a file is read are kept across restarts instead of being silently discarded.
+
+- [#3173](https://github.com/Bike4Mind/bike4mind/pull/3173) [`c5caa17`](https://github.com/Bike4Mind/bike4mind/commit/c5caa1792c8d7bb54da303842d74aa0e76ecee86) Thanks [@julsanchez](https://github.com/julsanchez)! - Harden the CLI sandbox network gate. Network egress is now fail-closed by default: with the sandbox enabled, all IP egress is denied unless it is explicitly turned on, and the runtime treats network as enabled only when a filtering proxy is actually running (no command sequence can leave the flag on with no proxy). Adds a `/sandbox:network <on|off>` command to toggle egress at runtime. When enabled, HTTP(S)_PROXY-aware clients are filtered against the allowed-domain list; raw sockets bypass the proxy, so leave egress off to deny all outbound connections.
+
+### Patch Changes
+
+- [#3172](https://github.com/Bike4Mind/bike4mind/pull/3172) [`319d72b`](https://github.com/Bike4Mind/bike4mind/commit/319d72b4431751e1531015bfa2e2111ee071865a) Thanks [@julsanchez](https://github.com/julsanchez)! - escape control chars in the permission-prompt Arguments block
+
+- [#3173](https://github.com/Bike4Mind/bike4mind/pull/3173) [`c5caa17`](https://github.com/Bike4Mind/bike4mind/commit/c5caa1792c8d7bb54da303842d74aa0e76ecee86) Thanks [@julsanchez](https://github.com/julsanchez)! - confine sandbox writable root and honor network.enabled
+
+- [#3177](https://github.com/Bike4Mind/bike4mind/pull/3177) [`052574d`](https://github.com/Bike4Mind/bike4mind/commit/052574d726ef6bdd2042f07b592e404135f34774) Thanks [@julsanchez](https://github.com/julsanchez)! - re-confirm silent fuzzy edit_local_file edits under trust/auto-accept
+
+- [#3178](https://github.com/Bike4Mind/bike4mind/pull/3178) [`cdab71d`](https://github.com/Bike4Mind/bike4mind/commit/cdab71dd2e14ad509746f7a037d11c2b9601cf66) Thanks [@julsanchez](https://github.com/julsanchez)! - authenticate the bridge peer before disclosing hookSecret
+
+- [#3218](https://github.com/Bike4Mind/bike4mind/pull/3218) [`9050e73`](https://github.com/Bike4Mind/bike4mind/commit/9050e73ced9ca0c6c9d6344abcc5f8346841fc04) Thanks [@julsanchez](https://github.com/julsanchez)! - escape Unicode bidi/isolate overrides in the permission prompt
+
 ## 1.1.0
 
 ### Minor Changes

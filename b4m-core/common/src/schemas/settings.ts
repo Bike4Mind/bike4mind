@@ -299,6 +299,7 @@ export const SettingKeySchema = z.enum([
   'LakeConvergenceBulkChangeSharePct',
   'EnforceLakeReadGrants',
   'EnableDataLakeDrivePoll',
+  'EnableDataLakeGitHub',
   'EnforceLakeAdmission',
   'EnforceLakeOriginOnIngest',
   'EnableBriefcase',
@@ -2163,7 +2164,7 @@ export const settingsMap = {
     name: 'Data Lakes: Use Atlas $vectorSearch',
     defaultValue: false,
     description:
-      'Kill-switch for the Atlas $vectorSearch cutover on Data Lake semantic search. Off by default; even when on, only files whose chunks are fully re-indexed on an Atlas backend actually use it - everything else keeps using the brute-force scan.',
+      'Kill-switch for the Atlas $vectorSearch cutover on Data Lake semantic search. Off by default; even when on, only files whose chunks are fully re-indexed on an Atlas backend actually use it - everything else keeps using the brute-force scan. Also lets forced retrieval choose which files to score by relevance on a scope larger than its candidate cap, instead of alphabetically by file name.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 92,
@@ -2239,6 +2240,17 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 95,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnableDataLakeGitHub: makeBooleanSetting({
+    key: 'EnableDataLakeGitHub',
+    name: 'Data Lakes: GitHub repository source',
+    defaultValue: false,
+    description:
+      'Server-side gate for connecting a GitHub repository to a data lake through the read-only GitHub App (contents:read + metadata:read on the one selected repository). Off by default while the connect, ingest and purge pieces land dark; every GitHub lake route answers 403 until it is on.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 96,
     dependsOn: 'EnableDataLakes',
   }),
   EnforceLakeAdmission: makeBooleanSetting({

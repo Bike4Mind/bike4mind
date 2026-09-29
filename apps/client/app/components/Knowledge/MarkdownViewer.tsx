@@ -8,6 +8,7 @@ import { Box, Typography, IconButton, Tooltip } from '@mui/joy';
 import { ContentCopy, Check } from '@mui/icons-material';
 import MermaidChart from '../Charts/MermaidChart';
 import { locateCitedPassage, blockIntersectsPassage, type PassageRange } from './citedPassage';
+import { extractMermaidFence } from '@client/app/utils/mermaidFence';
 
 interface Props {
   content: string;
@@ -111,10 +112,14 @@ const MarkdownViewer: React.FC<Props> = ({ content, citedPassage }) => {
   // the PROMOTED source - locating it in `content` would shift every offset by whatever that
   // transform inserted and mark the wrong blocks.
   const promotedContent = useMemo(() => promoteInlineLatexDollars(content), [content]);
-  const citedRange = useMemo(
-    () => (citedPassage ? locateCitedPassage(promotedContent, citedPassage) : null),
-    [promotedContent, citedPassage]
-  );
+  const citedRange = useMemo(() => {
+    if (!citedPassage) return null;
+    // Preserve literal matches inside code; otherwise apply the document's math transform.
+    return (
+      locateCitedPassage(promotedContent, citedPassage) ??
+      locateCitedPassage(promotedContent, promoteInlineLatexDollars(citedPassage))
+    );
+  }, [promotedContent, citedPassage]);
 
   // True when the passage WAS located in the source but no rendered block carries it - the cited
   // text sits in an element type this viewer does not override, a table cell being the common one.
@@ -144,7 +149,7 @@ const MarkdownViewer: React.FC<Props> = ({ content, citedPassage }) => {
     content.trim().startsWith('mindmap');
 
   // Check if the content is a Mermaid diagram wrapped in code blocks
-  const mermaidMatch = content.match(/```mermaid\s*([\s\S]*?)```/);
+  const mermaidBody = extractMermaidFence(content);
 
   // A diagram has no prose blocks to mark, but the prop's contract is that the reader always gets
   // to SEE the cited passage - so these two early returns still render the callout rather than
@@ -163,8 +168,8 @@ const MarkdownViewer: React.FC<Props> = ({ content, citedPassage }) => {
     );
   }
 
-  if (mermaidMatch) {
-    const chartContent = mermaidMatch[1].trim();
+  if (mermaidBody !== null) {
+    const chartContent = mermaidBody;
     return (
       <>
         {mermaidCitedFallback}
