@@ -54,7 +54,7 @@ export type ResourceShim<M extends Manifest = Manifest> = { App: App } & {
 type Env = Record<string, string | undefined>;
 
 /** camelCase / SCREAMING_SNAKE resource name to SCREAMING_SNAKE env-var key.
- *  Names already SCREAMING_SNAKE (secrets like `B4M_PROD_API_KEY`,
+ *  Names already SCREAMING_SNAKE (secrets like `B4M_ANALYTICS_ENABLED`,
  *  `E2E_CLEANUP_SECRET`) pass through unchanged - splitting on their
  *  digit-to-uppercase boundaries would corrupt the real secret name. */
 export function toEnvKey(name: string): string {
