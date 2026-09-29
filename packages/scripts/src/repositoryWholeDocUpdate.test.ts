@@ -24,8 +24,9 @@ import path from 'node:path';
  *
  * ALLOWED is keyed by `relpath::argText` (not line number, so edits do not churn it). Each entry
  * must match exactly its expected number of sites (1 unless SITE_COUNT says otherwise), so a stale
- * entry fails and so does a NEW same-shaped write in an allow-listed file. Nothing stops a new
- * entry being added alongside a new site; that is a review call, and the list should only shrink.
+ * entry fails and so does a NEW same-shaped write in an allow-listed file. ALLOWED_ENTRIES pins the
+ * list's size, so adding an entry means raising it in the same diff, where review sees it; lower it
+ * whenever an entry is converted.
  */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SCAN_ROOTS = ['apps', 'b4m-core', 'packages'];
@@ -42,11 +43,7 @@ const ALLOWED = new Map<string, string>([
     'b4m-core/services/src/llm/ChatCompletionProcess.ts::quest',
     'saveQuest: deliberate whole-doc write by the streaming owner (see comment there)',
   ],
-  // userApiKeyService writers are being converted separately; remove each entry as it lands.
-  ['b4m-core/services/src/userApiKeyService/revoke.ts::apiKey', 'pending API-key writer conversion'],
-  ['b4m-core/services/src/userApiKeyService/rotate.ts::apiKey', 'pending API-key writer conversion'],
-  ['b4m-core/services/src/userApiKeyService/updateEmbedKey.ts::apiKey', 'pending API-key writer conversion'],
-  ['b4m-core/services/src/userApiKeyService/validate.ts::apiKey', 'pending API-key writer conversion'],
+  ['b4m-core/services/src/userApiKeyService/updateEmbedKey.ts::patch', PARTIAL],
   ['apps/client/pages/api/email/change.ts::user', PASSTHROUGH],
   ['apps/client/pages/api/email/verify-change.ts::user', PASSTHROUGH],
   ['apps/client/pages/api/research/agents/[id]/tasks/[taskId]/data/[dataId].tsx::fabFile', PASSTHROUGH],
@@ -55,11 +52,12 @@ const ALLOWED = new Map<string, string>([
   ['apps/client/pages/api/admin/team-members.ts::payload', 'parsed request body'],
   ['apps/client/pages/api/agents/[id]/index.ts::agentData', 'validated request body plus id'],
   ['apps/client/pages/api/quest-plans/[id]/index.ts::changes', PARTIAL],
+  ['apps/client/pages/api/sessions/[id]/agents/[agentId]/config.ts::patch', 'leaf paths of the validated body'],
   ['apps/client/pages/api/secret-rotations/[id]/index.ts::params', 'parsed request body'],
   ['apps/client/pages/api/skills/[id]/index.ts::patch', PARTIAL],
   ['apps/client/pages/api/sre/patterns/[id].ts::updates', PARTIAL],
   ['b4m-core/auth/src/mfaService/verify.ts::updateData', PARTIAL],
-  ['b4m-core/services/src/artifactService/delete.ts::updateData as any', PARTIAL],
+  ['b4m-core/services/src/artifactService/delete.ts::updateData', PARTIAL],
   ['b4m-core/services/src/artifactService/update.ts::updateData', PARTIAL],
   ['b4m-core/services/src/fabFileService/edit.ts::updatedFile', PARTIAL],
   ['b4m-core/services/src/latticeService/latticeModelService.ts::updateData', PARTIAL],
@@ -71,6 +69,7 @@ const ALLOWED = new Map<string, string>([
   ['b4m-core/services/src/userService/adminUpdate.ts::writeData', 'built by toUserUpdatePartial'],
   ['packages/scripts/generateAgentSystemPrompts.ts::updateData', PARTIAL],
 ]);
+const ALLOWED_ENTRIES = 27;
 const SITE_COUNT = new Map<string, number>([
   ['b4m-core/services/src/latticeService/latticeModelService.ts::updatedModel', 3],
 ]);
@@ -202,6 +201,10 @@ describe('repository whole-document update guard', () => {
     expect(offenders, 'pass only the changed fields ({ id: doc.id, ...changed }) or use an atomic repo method').toEqual(
       []
     );
+  });
+
+  it('keeps ALLOWED at its pinned size', () => {
+    expect(ALLOWED.size, 'convert the new site instead, or raise ALLOWED_ENTRIES deliberately').toBe(ALLOWED_ENTRIES);
   });
 
   it('matches each ALLOWED entry to exactly its expected number of sites', () => {

@@ -121,4 +121,30 @@ describe('BaseRepository.update whole-document hazard (via userRepository)', () 
     expect(after!.numReferralsAvailable).toBe(0);
     expect(after!.regInvites.map(String)).toEqual([existingInvite.toString(), invite1, invite2]);
   });
+
+  it('recordReferrals records the invites before charging, so a failed charge under-charges', async () => {
+    const u = await User.create({
+      username: 'referrer',
+      name: 'R',
+      email: 'r@example.com',
+      numReferralsAvailable: 3,
+      regInvites: [],
+    });
+    const id = String(u._id);
+    const invite = new Types.ObjectId().toString();
+    const realUpdateOne = User.updateOne.bind(User);
+    const spy = vi
+      .spyOn(User, 'updateOne')
+      .mockImplementationOnce((...args: Parameters<typeof User.updateOne>) => realUpdateOne(...args))
+      .mockImplementationOnce(() => {
+        throw new Error('charge failed');
+      });
+
+    await expect(userRepository.recordReferrals(id, 1, [invite])).rejects.toThrow('charge failed');
+    spy.mockRestore();
+
+    const after = await User.findById(id);
+    expect(after!.regInvites.map(String)).toEqual([invite]);
+    expect(after!.numReferralsAvailable).toBe(3);
+  });
 });

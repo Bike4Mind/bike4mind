@@ -168,6 +168,11 @@ describe('/api/sessions/[id]/agents/[agentId]/config', () => {
 
     it('writes leaf paths only, never the read-time lastProactiveMessageAt, and clears omitted optionals', async () => {
       mockRefs.sessionFindById.mockResolvedValue(OWNED_SESSION);
+      mockRefs.findBySessionAndAgent.mockResolvedValue({
+        id: 'config-1',
+        userId: 'owner',
+        proactiveMessaging: { enabled: false, lastProactiveMessageAt: new Date('2026-01-01T00:00:00Z') },
+      });
       const { req, res } = invoke('PUT', 'owner', body);
       await mockRefs.putHandler!(req, res);
       const [data, options] = mockRefs.update.mock.calls[0];
