@@ -5,6 +5,7 @@ import type {
   IFabFileChunkRepository,
   IFabFileDocument,
   IFabFileRepository,
+  ISessionRepository,
   IUserRepository,
 } from '@bike4mind/common';
 import {
@@ -16,9 +17,11 @@ import {
 
 /**
  * The subset of a FabFile row this sweep needs. Callers resolve the connection-scoped list
- * themselves (Drive's caller uses `findByDriveConnectionIdInDataLake`; a future connector - the
- * GitHub connector this helper is deliberately shaped for - supplies its own equivalent finder),
- * so this stays uncoupled from any one connector's lookup predicate.
+ * themselves (Drive's caller uses `findAllByDriveConnectionIdInDataLake` - archivedAt/deletedAt-
+ * blind, unlike the sync-reconcile-scoped `findByDriveConnectionIdInDataLake` - so a disconnected
+ * archived lake's members are still reached; a future connector - the GitHub connector this helper
+ * is deliberately shaped for - supplies its own equivalent finder), so this stays uncoupled from
+ * any one connector's lookup predicate.
  */
 export type PurgeableConnectionFile = Pick<
   IFabFileDocument,
@@ -38,6 +41,14 @@ export interface PurgeDataLakeConnectionFilesAdapters {
      * just destroyed, unswept by anything short of a later whole-lake purge.
      */
     dataLakeFindings?: Pick<IDataLakeFindingRepository, 'deleteForPurgedDocuments'>;
+    /**
+     * Unlink each deleted file from every chat session's `knowledgeIds` - the same unlink
+     * `purgeDataLakeDocument` performs and calls "Same unlink `deleteFabFile` performs". Optional
+     * because a host with no reason to exercise it (a script, a test) simply skips the unlink;
+     * omitting it in production leaves every chat that had one of these files attached pointing at
+     * a row that no longer exists (a stale attachment chip, an unclassifiable session).
+     */
+    sessions?: Pick<ISessionRepository, 'findAllWithKnowledgeId' | 'update'>;
   };
   retrievalIndex?: RetrievalIndexPort;
   /** The object store holding each file's bytes. Optional for the same reason as cleanupDeletedDataLake's `storage`: a host that never wires it is unaffected structurally, but every purged file's bytes are then orphaned and still billed - see the unwired warning below. */
@@ -56,7 +67,7 @@ export interface PurgeDataLakeConnectionFilesAdapters {
    * skip or block another file's shred in the same `Promise.all`.
    */
   shredDocumentMemory?: (args: { tagNames: string[]; fabFileId: string; ownerUserId: string }) => Promise<void>;
-  logger?: { warn: (msg: string, ...args: unknown[]) => void };
+  logger?: { warn: (msg: string, ...args: unknown[]) => void; error?: (msg: string, ...args: unknown[]) => void };
   /** Bounds peak concurrency of the per-file delete fan-out, mirroring cleanupDeletedDataLake's chunked sweep. */
   chunkSize?: number;
 }
@@ -73,9 +84,9 @@ const DEFAULT_CHUNK_SIZE = 100;
 
 /**
  * Purge a pre-resolved, connection-scoped subset of a lake's files - their rows, chunks,
- * retrieval-index entries, stored objects and (when wired) findings that quote them - WITHOUT
- * touching the lake record, its batches, access grants, proposals or research configs. This is
- * the CONNECTION-scoped counterpart to
+ * retrieval-index entries, stored objects and (when wired) findings that quote them and chat
+ * sessions that reference them - WITHOUT touching the lake record, its batches, access grants,
+ * proposals or research configs. This is the CONNECTION-scoped counterpart to
  * `cleanupDeletedDataLake`'s file/chunk/index/storage sweep: that one tears down a whole lake;
  * this one tears down one connector's contribution to a lake that keeps existing (e.g. disconnecting
  * Google Drive must not touch a sibling connection's files or a manually-uploaded file in the same
@@ -167,6 +178,23 @@ export const purgeDataLakeConnectionFiles = async (
               .map(tag => tag?.name)
               .filter((name): name is string => typeof name === 'string');
             await shredDocumentMemory?.({ tagNames, fabFileId: file.id, ownerUserId: file.userId });
+            // Own try/catch, like purgeDataLakeDocument's own unlink: a failure here must not cost
+            // another file in the same chunk its shred or its refund, and the file is gone either way
+            // (there is no retry door left for the unlink specifically once the row has hard-deleted).
+            try {
+              const linkedSessions = await db.sessions?.findAllWithKnowledgeId(file.id);
+              for (const session of linkedSessions ?? []) {
+                await db.sessions?.update({
+                  id: session.id,
+                  knowledgeIds: (session.knowledgeIds ?? []).filter(knowledgeId => knowledgeId !== file.id),
+                });
+              }
+            } catch (error) {
+              logger?.error?.('[dataLake] connection purge removed a file but could not unlink it from sessions', {
+                fabFileId: file.id,
+                error: error instanceof Error ? error.message : 'Unknown error',
+              });
+            }
           }
         })
       );
