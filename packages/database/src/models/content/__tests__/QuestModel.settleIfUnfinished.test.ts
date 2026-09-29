@@ -80,4 +80,60 @@ describe('QuestModel.settleIfUnfinished', () => {
 
     expect(await questRepository.settleIfUnfinished(missing, ABANDONED)).toBe(false);
   });
+
+  describe('with a finishReason', () => {
+    const UNFINISHED = {
+      status: 'done' as const,
+      replies: ['$5 would cover it', '\n\nnotice'],
+      reply: '$5 would cover it\n\nnotice',
+      finishReason: 'timeout',
+    };
+
+    it('merges it into the existing promptMeta and writes the other fields verbatim', async () => {
+      const quest = await questRepository.create(
+        makeQuest({ status: 'running', promptMeta: { session: { id: 'session-a', userId: 'u1' }, warnings: ['w'] } })
+      );
+      const stale = new Date(0);
+      await Quest.collection.updateOne({ _id: new mongoose.Types.ObjectId(quest.id) }, { $set: { updatedAt: stale } });
+
+      expect(await questRepository.settleIfUnfinished(quest.id, UNFINISHED)).toBe(true);
+
+      const after = await Quest.findById(quest.id).lean();
+      expect(after?.status).toBe('done');
+      expect(after?.type).toBe('message');
+      // A reply starting with `$` is text, not a pipeline field path.
+      expect(after?.replies).toEqual(UNFINISHED.replies);
+      expect(after?.reply).toBe(UNFINISHED.reply);
+      expect(after?.promptMeta).toMatchObject({
+        session: { id: 'session-a', userId: 'u1' },
+        warnings: ['w'],
+        finishReason: 'timeout',
+      });
+      // The sweeps key off updatedAt, so the pipeline write must still bump it.
+      expect(after?.updatedAt.getTime()).toBeGreaterThan(stale.getTime());
+      expect(after).not.toHaveProperty('finishReason');
+    });
+
+    it('still settles a quest whose promptMeta is null or missing', async () => {
+      const withNull = await questRepository.create(makeQuest({ status: 'running' }));
+      await Quest.collection.updateOne(
+        { _id: new mongoose.Types.ObjectId(withNull.id) },
+        { $set: { promptMeta: null } }
+      );
+      const missing = await questRepository.create(makeQuest({ status: 'pending' }));
+
+      expect(await questRepository.settleIfUnfinished(withNull.id, UNFINISHED)).toBe(true);
+      expect(await questRepository.settleIfUnfinished(missing.id, UNFINISHED)).toBe(true);
+
+      expect((await Quest.findById(withNull.id).lean())?.promptMeta).toEqual({ finishReason: 'timeout' });
+      expect((await Quest.findById(missing.id).lean())?.promptMeta).toMatchObject({ finishReason: 'timeout' });
+    });
+
+    it('refuses a quest that finished first', async () => {
+      const quest = await questRepository.create(makeQuest({ status: 'done', reply: 'the real answer' }));
+
+      expect(await questRepository.settleIfUnfinished(quest.id, UNFINISHED)).toBe(false);
+      expect((await Quest.findById(quest.id).lean())?.promptMeta?.finishReason).toBeUndefined();
+    });
+  });
 });
