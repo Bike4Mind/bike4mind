@@ -106,6 +106,11 @@ export interface EditableLake {
    */
   systemPrompt: string;
   /**
+   * Whether the system prompt also steers tag/entitlement readers on sessions scoped to this lake
+   * (see IDataLake.injectPromptForReaders). Editor-only control, always a concrete boolean.
+   */
+  injectPromptForReaders: boolean;
+  /**
    * Preferred registry system prompt bound to this lake, by promptId ('' = none). Editor-only,
    * same as systemPrompt: the field renders off `canManage`, not off this value.
    */
@@ -162,6 +167,7 @@ const formSeed = (lake: EditableLake) => ({
   // response missing this field would otherwise set state to undefined and crash the character-count
   // helper text below (`.trim()` on undefined).
   systemPrompt: lake.systemPrompt ?? '',
+  injectPromptForReaders: lake.injectPromptForReaders,
   preferredSystemPromptId: lake.preferredSystemPromptId ?? '',
   groundingMode: lake.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
   origin: lake.origin ?? DEFAULT_DATA_LAKE_ORIGIN,
@@ -298,6 +304,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const [requiredUserTag, setRequiredUserTag] = useState('');
   const [requiredEntitlement, setRequiredEntitlement] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
+  const [injectPromptForReaders, setInjectPromptForReaders] = useState(false);
   const [preferredSystemPromptId, setPreferredSystemPromptId] = useState('');
   const [groundingMode, setGroundingMode] = useState<DataLakeGroundingMode>(DEFAULT_DATA_LAKE_GROUNDING_MODE);
   const [origin, setOrigin] = useState<DataLakeOrigin>(DEFAULT_DATA_LAKE_ORIGIN);
@@ -336,6 +343,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       setRequiredUserTag(initial.requiredUserTag);
       setRequiredEntitlement(initial.requiredEntitlement);
       setSystemPrompt(initial.systemPrompt);
+      setInjectPromptForReaders(initial.injectPromptForReaders);
       setPreferredSystemPromptId(initial.preferredSystemPromptId);
       setGroundingMode(initial.groundingMode);
       setOrigin(initial.origin);
@@ -364,6 +372,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       requiredUserTag !== seed.requiredUserTag ||
       requiredEntitlement !== seed.requiredEntitlement ||
       systemPrompt !== seed.systemPrompt ||
+      injectPromptForReaders !== seed.injectPromptForReaders ||
       preferredSystemPromptId !== seed.preferredSystemPromptId ||
       groundingMode !== seed.groundingMode ||
       origin !== seed.origin ||
@@ -416,6 +425,8 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         // guards a path no user can currently take. Blank from an EDITOR is a deliberate clear,
         // and '' is what unsets it.
         ...(lake.canManage ? { systemPrompt: systemPrompt.trim() } : {}),
+        // Editor-only, sent only when changed - same shape and reason as lakeMemoryEnabled below.
+        ...(lake.canManage && injectPromptForReaders !== lake.injectPromptForReaders ? { injectPromptForReaders } : {}),
         // Send only when the editor actually changed the binding. Omitting an unchanged value is
         // "leave as-is" server-side, which (a) never re-sends a now-delisted id that the write
         // boundary would 400 on - that would block saving name/description/gate too - and (b) still
@@ -503,11 +514,29 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
             data-testid="datalake-systemprompt-input"
           />
           <FormHelperText data-testid="datalake-systemprompt-help">
-            {`Extra instructions added to answers on turns that actually pull content from this lake. They apply to you, to anyone holding an owner or curator grant on this lake, to members of this lake's organization, and to a manager testing it in a scoped session - not to users given read-only access by tag, entitlement, or a reader grant - and never fire on turns that don't use the lake. Your organization's prompt stays authoritative on conflict, and only people who can manage this lake can read this text in the app.${
+            {`Extra instructions added to answers on turns that actually pull content from this lake. They apply to you, to anyone holding an owner or curator grant on this lake, to members of this lake's organization, and to a manager testing it in a scoped session. Users given read-only access by tag, entitlement, or a reader grant don't get them unless you turn on "Apply to readers" below. They never fire on turns that don't use the lake. Your organization's prompt stays authoritative on conflict, and only people who can manage this lake can read this text in the app.${
               // Count what SAVE will persist (trimmed), not the raw field contents.
               systemPrompt.trim() ? ` (${systemPrompt.trim().length} characters)` : ''
             }`}
           </FormHelperText>
+        </FormControl>
+      )}
+      {lake?.canManage && (
+        <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <Box>
+            <FormLabel>Apply to readers</FormLabel>
+            <FormHelperText data-testid="datalake-reader-prompt-toggle-help" sx={{ mt: 0 }}>
+              {requiredUserTag.trim() || requiredEntitlement.trim()
+                ? 'Also apply the system prompt for users who reach this lake by its access tag or entitlement, ' +
+                  "but only in chats they've scoped to this lake. They can see that it's on, but can't read the text."
+                : 'Has no effect until this lake has an access tag or required entitlement.'}
+            </FormHelperText>
+          </Box>
+          <Switch
+            checked={injectPromptForReaders}
+            onChange={e => setInjectPromptForReaders(e.target.checked)}
+            slotProps={{ input: { 'data-testid': 'datalake-reader-prompt-toggle' } }}
+          />
         </FormControl>
       )}
       {/* Per-lake config, editor-only (canManage). This section is the home for lake-scoped

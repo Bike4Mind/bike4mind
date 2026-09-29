@@ -30,6 +30,8 @@ export interface DataLakePrompt {
   id: string;
   name: string;
   systemPrompt: string;
+  /** True when ONLY the reader opt-in arm admitted this lake - feeds `readerOptInLakeIdsUsed`. */
+  admittedByReaderOptIn?: boolean;
 }
 
 /**
@@ -65,6 +67,11 @@ export interface DataLakePrompt {
  * allows (a DB lake's trust never reaches beyond one org either). The value is still stored and
  * editable regardless of scope (see updateFallbackLakeSettings) - this is the ONLY gate on whether
  * it is ever read into a turn.
+ *
+ * A FOURTH arm, READER OPT-IN, also lives outside this predicate - see getAccessibleDataLakePrompts.
+ * It does not relax the transparency argument above so much as satisfy it from both ends: the
+ * lake's manager discloses (`injectPromptForReaders`, itself reader-visible), and the reader
+ * consents by explicitly scoping their own session to the lake. Neither alone admits anything.
  *
  * NOTE (#1668): the owner arm keys on `createdByUserId`, which never moves - so a TRANSFERRED lake
  * is not trusted for its new owner by this predicate. That case, and the shared-across-orgs curator
@@ -105,6 +112,10 @@ function isTrustedForInjection(
  * MUST NOT FOLLOW - a READER's read access must not become authority to write instructions into
  * another user's system prompt (injection lands in the system prompt, a higher-trust position than
  * the retrieved content `renderRetrievedContentBlock` sanitizes precisely because it is untrusted).
+ *
+ * The READER OPT-IN arm does not breach this floor: a reader GRANT alone still carries no injection
+ * trust. That arm needs the manager's per-lake opt-in AND the reader's own explicit session scope,
+ * so the authority it rests on is the reader choosing the lake, not their read access to it.
  */
 const INCLUDE_READER_GRANTS = false;
 
@@ -237,19 +248,34 @@ async function injectionSupersededOwnLakeIds(context: DataLakeAccessContext, use
  * is the transparency argument the trust rule's doc comment makes at the top of this file.
  * `restrictTags` remains an unconditional separate conjunct, so a granted lake still contributes
  * only on a turn that actually retrieved from it.
+ *
+ * READER OPT-IN ARM: a reader who reaches a lake by its `requiredUserTag` / `requiredEntitlement`
+ * is trusted for its prompt when the lake sets `injectPromptForReaders` AND the caller's session
+ * names the lake in `sessionScopedDatalakeTags` (its `retrievalTags` - set by `lakeScope`, or seeded
+ * by a `dataLakeId` create). The session-scope conjunct is the load-bearing one: a lake's gate tag is
+ * chosen by its owner and the tag arm crosses orgs, so without it one owner could steer every holder
+ * of a common tag whose retrieval happened to rank a chunk of theirs. A gateless lake never qualifies
+ * (`lakeMatchesAccess` admits it to everyone), and the tag is screened for well-formedness like the
+ * grant arm's, so a shadowing row cannot ride a reader's consent to the registry lake it shadows.
  */
 export async function getAccessibleDataLakePrompts(
   // The re-check slice is intersected here rather than added to DataLakeAccessContext because only
   // this function runs the manage re-check; getDynamicDataLakeAccess shares the context and has no
   // pre-authorization concept.
   context: DataLakeAccessContext & { db: ManageRecheckAdapter },
-  options?: { restrictToDatalakeTags?: Iterable<string>; preauthorizedLakeIds?: Iterable<string> }
+  options?: {
+    restrictToDatalakeTags?: Iterable<string>;
+    preauthorizedLakeIds?: Iterable<string>;
+    /** The session's explicit lake scope (`retrievalTags`) - the reader's consent for the opt-in arm. */
+    sessionScopedDatalakeTags?: Iterable<string>;
+  }
 ): Promise<DataLakePrompt[]> {
   // Normalize the scope once. An EMPTY (but present) restrict set means "this turn retrieved no
   // lake" -> inject nothing; only an ABSENT set means "do not scope". Distinguished by undefined.
   const restrictTags = options?.restrictToDatalakeTags ? new Set(options.restrictToDatalakeTags) : undefined;
   if (restrictTags && restrictTags.size === 0) return [];
   const preauthorizedIds = options?.preauthorizedLakeIds ? new Set(options.preauthorizedLakeIds) : undefined;
+  const sessionScopedTags = new Set(options?.sessionScopedDatalakeTags ?? []);
 
   const userTags = context.user.tags || [];
   const entitlementKeys = context.entitlementKeys ?? [];
@@ -373,33 +399,55 @@ export async function getAccessibleDataLakePrompts(
   const normalizedTags = userTags.map(tag => tag.toLowerCase());
   const normalizedKeys = entitlementKeys.map(normalizeEntitlementKey);
 
-  const dbPrompts = lakes
-    .filter(
-      lake =>
-        // Two short-circuits of the ordinary access+trust check, both standing on a MANAGE-level
-        // relationship to the lake rather than on read access to its files:
-        //   - a pre-authorized lake, trusted BY the admission itself - re-derived above against the
-        //     current manage rights, not taken on the session's word (see the doc comment);
-        //   - an owner/curator GRANT, which is simultaneously the read authorization (as at the
-        //     browse gate) and the injection trust, so it has to bypass the grant-blind
-        //     `lakeMatchesAccess` as well as `isTrustedForInjection` (see GRANT ARM).
-        // `restrictTags` stays OUTSIDE this OR as an unconditional separate conjunct below, so
-        // neither short-circuit ever injects a prompt the turn did not actually retrieve.
-        (!!stillManagedPreauthorizedIds?.has(lake.id) ||
-          // Well-formedness mirrors the SAME screen retrieval puts on its grant restoration
-          // (getDynamicDataLakeAccess's grantedGatedLakes). Without it a granted row whose
-          // datalakeTag shadows a registry lake's could inject on a turn that retrieved the
-          // REGISTRY lake's files - retrieval drops such a row, and injection must not be a
-          // superset of retrieval. Needs a legacy shadowing row to reach, so this is
-          // defense-in-depth, not a live repro.
-          (grantedLakeIds.has(lake.id) && isDatalakeTagWellFormed(lake)) ||
-          (lakeMatchesAccess(lake, normalizedTags, normalizedKeys) &&
-            isTrustedForInjection(lake, { userId, organizationIds, supersededOwnLakeIds }))) &&
-        // Retrieval scope: keep only lakes this turn actually used. `datalakeTag` is the exact
-        // string a lake's files carry, so this is a precise lake<->retrieval match, not a prefix.
-        (!restrictTags || restrictTags.has(lake.datalakeTag))
-    )
-    .map(lake => ({ id: lake.id, name: lake.name, systemPrompt: (lake.systemPrompt ?? '').trim() }));
+  // Which arm admits a lake's prompt, or undefined for none. The first three are the manage-level
+  // and ordinary trust arms, checked BEFORE the reader opt-in so `readerOptIn` means that arm alone
+  // made the difference - the causation `readerOptInLakeIdsUsed` records.
+  const admissionArm = (lake: IDataLakeDocument): 'trusted' | 'readerOptIn' | undefined => {
+    // Two short-circuits of the ordinary access+trust check, both standing on a MANAGE-level
+    // relationship to the lake rather than on read access to its files:
+    //   - a pre-authorized lake, trusted BY the admission itself - re-derived above against the
+    //     current manage rights, not taken on the session's word (see the doc comment);
+    //   - an owner/curator GRANT, which is simultaneously the read authorization (as at the
+    //     browse gate) and the injection trust, so it has to bypass the grant-blind
+    //     `lakeMatchesAccess` as well as `isTrustedForInjection` (see GRANT ARM).
+    if (stillManagedPreauthorizedIds?.has(lake.id)) return 'trusted';
+    // Well-formedness mirrors the SAME screen retrieval puts on its grant restoration
+    // (getDynamicDataLakeAccess's grantedGatedLakes). Without it a granted row whose
+    // datalakeTag shadows a registry lake's could inject on a turn that retrieved the
+    // REGISTRY lake's files - retrieval drops such a row, and injection must not be a
+    // superset of retrieval. Needs a legacy shadowing row to reach, so this is
+    // defense-in-depth, not a live repro.
+    if (grantedLakeIds.has(lake.id) && isDatalakeTagWellFormed(lake)) return 'trusted';
+    if (!lakeMatchesAccess(lake, normalizedTags, normalizedKeys)) return undefined;
+    if (isTrustedForInjection(lake, { userId, organizationIds, supersededOwnLakeIds })) return 'trusted';
+    // READER OPT-IN (see the doc comment): manager disclosure + reader consent + a real gate.
+    const declaresGate = !!lake.requiredUserTag || !!lake.requiredEntitlement;
+    if (
+      lake.injectPromptForReaders === true &&
+      declaresGate &&
+      sessionScopedTags.has(lake.datalakeTag) &&
+      isDatalakeTagWellFormed(lake)
+    ) {
+      return 'readerOptIn';
+    }
+    return undefined;
+  };
+
+  const dbPrompts: DataLakePrompt[] = [];
+  for (const lake of lakes) {
+    // Retrieval scope: keep only lakes this turn actually used. `datalakeTag` is the exact string a
+    // lake's files carry, so this is a precise lake<->retrieval match, not a prefix. An unconditional
+    // conjunct on EVERY arm, so no arm ever injects a prompt the turn did not actually retrieve.
+    if (restrictTags && !restrictTags.has(lake.datalakeTag)) continue;
+    const arm = admissionArm(lake);
+    if (!arm) continue;
+    dbPrompts.push({
+      id: lake.id,
+      name: lake.name,
+      systemPrompt: (lake.systemPrompt ?? '').trim(),
+      ...(arm === 'readerOptIn' ? { admittedByReaderOptIn: true } : {}),
+    });
+  }
 
   // Registry candidates (Phase 2) - see the function doc comment. Deliberately NOT gated behind
   // `lakes.length === 0`: a caller with zero matching DB lakes but org membership on a registry
@@ -455,12 +503,20 @@ export async function getAccessibleDataLakePrompts(
 }
 
 /**
+ * The `readerOptInLakeIdsUsed` telemetry for a resolved prompt set: the ids ONLY the reader opt-in
+ * arm admitted. Pure, unlike grantedLakeIdsUsedFor - the resolver already knows the arm.
+ */
+export const readerOptInLakeIdsUsedFrom = (prompts: readonly DataLakePrompt[]): string[] =>
+  prompts.filter(prompt => prompt.admittedByReaderOptIn).map(prompt => prompt.id);
+
+/**
  * Which of `injectedLakePromptIds` the caller holds an owner/curator GRANT on - the grant arm's
  * telemetry sibling of the caller-side `preauthorizedLakeIdsUsed` intersection, derived the same
  * way and at the same places (both injection sites), because both answer one operator question:
  * WHICH ARM admitted this lake into a system prompt. Without it `injectedLakePromptIds` records
- * that a lake was injected but never why - and the grant arm is the one that can reach across an
- * org boundary, so it is the arm an operator most needs named.
+ * that a lake was injected but never why - and the grant arm can reach across an org boundary
+ * (as can the reader opt-in arm, see readerOptInLakeIdsUsedFrom), so it is an arm an operator
+ * most needs named.
  *
  * Costs no extra grant read on a turn that resolved prompts through `getAccessibleDataLakePrompts`
  * with the SAME `context` object: the arm resolved this reach under the same memo key, so this is

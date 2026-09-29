@@ -2315,24 +2315,28 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
     expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBe(1);
   });
 
-  it('leaves promptMeta.retrieval unset when no lake-tagged file was grounded on (site never ran)', async () => {
+  it('records present-and-empty injectedLakePromptIds when no lake-tagged file was grounded on, without calling the resolver', async () => {
     const quest = makeQuest();
+    const ctx = makeCtx([{ id: 'plain', fileName: 'plain.pdf', tags: [] }], [makeLake()]);
     const feature = new KnowledgeRetrievalFeature(
-      makeCtx([{ id: 'plain', fileName: 'plain.pdf', tags: [] }], [makeLake()]) as unknown as ConstructorParameters<
-        typeof KnowledgeRetrievalFeature
-      >[0]
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
     );
     await feature.getContextMessages(
       quest,
       embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
       'anything'
     );
-    // No datalake-tagged file was grounded on, so resolveRetrievedLakePromptMessage's own write
-    // never runs (contrast prependRetrievedLakePrompts, whose site runs even when its scoped tags
-    // resolve to no qualifying prompt) - only the coarser outcome-tracking write elsewhere in this
-    // feature touches promptMeta.retrieval here.
-    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toBeUndefined();
-    expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBeUndefined();
+    // The site still ran (it recorded attempted:true + present-and-empty ids) even though no
+    // datalake-tagged file was grounded on - "the site ran and found no lake file" must stay
+    // distinguishable from "the site never ran". But it returns BEFORE ever resolving prompts, so
+    // getAccessibleDataLakePrompts' own DB read never fires - only retrieval's OWN lake-access
+    // resolution (getDynamicDataLakeAccess) calls this same mock, once, to build the search scope.
+    // getAccessibleDataLakePrompts would be a SECOND call (with a 2-key options object, no
+    // orgGrantedLakes - getDynamicDataLakeAccess's own call carries that extra key), so pinning the
+    // count to 1 is what proves the injection resolver's read never happened.
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual([]);
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBe(0);
+    expect(ctx.db.dataLakes?.findActiveByUserTagsAndEntitlements).toHaveBeenCalledTimes(1);
   });
 
   // The field measures MEMBERSHIP in the admitted set, not causation: a lake the caller could
@@ -2478,6 +2482,52 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
       'anything'
     );
     expect(quest.promptMeta?.retrieval?.grantedLakeIdsUsed).toBeUndefined();
+  });
+
+  describe('reader opt-in arm (injectPromptForReaders)', () => {
+    // Not the creator, no org, no grant, no preauth - only the reader opt-in arm could admit this.
+    const makeReaderLake = () =>
+      makeLake({
+        createdByUserId: 'someone-else',
+        requiredUserTag: 'reader-team',
+        injectPromptForReaders: true,
+        systemPrompt: 'Reader-visible prompt.',
+      });
+
+    it('forwards the retrievalTags ctor arg as sessionScopedDatalakeTags, admitting + recording the opt-in arm', async () => {
+      const quest = makeQuest();
+      const ctx = makeCtx([lakeFile('fA', 'datalake:x')], [makeReaderLake()]);
+      ctx.user.tags = ['reader-team'];
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:x']
+      );
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'anything'
+      );
+      expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual(['lakeX']);
+      expect(quest.promptMeta?.retrieval?.readerOptInLakeIdsUsed).toEqual(['lakeX']);
+    });
+
+    it('does NOT admit the reader opt-in arm when the session is not explicitly scoped to the lake', async () => {
+      const quest = makeQuest();
+      const ctx = makeCtx([lakeFile('fA', 'datalake:x')], [makeReaderLake()]);
+      ctx.user.tags = ['reader-team'];
+      // No retrievalTags ctor arg here - the caller holds the gate tag and the file grounds on the
+      // lake, but the caller's own session never named it, so sessionScopedDatalakeTags is empty.
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'anything'
+      );
+      expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual([]);
+      expect(quest.promptMeta?.retrieval?.readerOptInLakeIdsUsed).toBeUndefined();
+    });
   });
 });
 

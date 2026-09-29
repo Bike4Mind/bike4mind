@@ -232,7 +232,8 @@ export interface ToolContext {
    * access to the lake(s) this session is FOR, so a session created for one lake stops searching
    * every lake its owner can reach. Purely subtractive - see narrowLakeAccessToSession, which also
    * documents why the prefix buckets are filtered rather than rebuilt. Absent = unscoped; EMPTY is
-   * decided by the sidecar below, not by this field.
+   * decided by the sidecar below, not by this field. Also the reader's consent for the lake-prompt
+   * READER OPT-IN arm (see getAccessibleDataLakePrompts), which widens prompt trust but never file access.
    */
   sessionRetrievalTags?: string[];
   /**

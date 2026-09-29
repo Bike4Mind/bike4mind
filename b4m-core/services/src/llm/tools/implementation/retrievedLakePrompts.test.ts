@@ -2,10 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const getAccessibleDataLakePromptsMock = vi.fn();
 const grantedLakeIdsUsedForMock = vi.fn();
-vi.mock('../../../dataLakeService/getDataLakePrompts', () => ({
-  getAccessibleDataLakePrompts: (...args: unknown[]) => getAccessibleDataLakePromptsMock(...args),
-  grantedLakeIdsUsedFor: (...args: unknown[]) => grantedLakeIdsUsedForMock(...args),
-}));
+// readerOptInLakeIdsUsedFrom is kept as the REAL (pure) implementation - it derives straight from
+// the resolved prompts array, so mocking it would just re-implement it a second time in the test.
+vi.mock('../../../dataLakeService/getDataLakePrompts', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../dataLakeService/getDataLakePrompts')>();
+  return {
+    ...actual,
+    getAccessibleDataLakePrompts: (...args: unknown[]) => getAccessibleDataLakePromptsMock(...args),
+    grantedLakeIdsUsedFor: (...args: unknown[]) => grantedLakeIdsUsedForMock(...args),
+  };
+});
 
 import { prependRetrievedLakePrompts } from './retrievedLakePrompts';
 import type { ToolContext } from './base/types';
@@ -104,6 +110,52 @@ describe('prependRetrievedLakePrompts', () => {
       preauthorizedLakeIds: ['managed'],
     });
     expect(result).toContain('Sales playbook.');
+  });
+
+  it('forwards sessionRetrievalTags as sessionScopedDatalakeTags into the injection call', async () => {
+    getAccessibleDataLakePromptsMock.mockResolvedValueOnce([
+      { id: 'reader1', name: 'Reader Lake', systemPrompt: 'Reader prompt.', admittedByReaderOptIn: true },
+    ]);
+    const context = makeContext({ sessionRetrievalTags: ['datalake:reader1'] });
+    await prependRetrievedLakePrompts(context, 'result text', ['datalake:reader1'], new Set());
+
+    expect(getAccessibleDataLakePromptsMock).toHaveBeenCalledWith(context, {
+      restrictToDatalakeTags: ['datalake:reader1'],
+      preauthorizedLakeIds: undefined,
+      sessionScopedDatalakeTags: ['datalake:reader1'],
+    });
+  });
+
+  it('records readerOptInLakeIdsUsed for a prompt admitted via the reader opt-in arm', async () => {
+    getAccessibleDataLakePromptsMock.mockResolvedValueOnce([
+      { id: 'reader1', name: 'Reader Lake', systemPrompt: 'Reader prompt.', admittedByReaderOptIn: true },
+      { id: 'ordinary', name: 'Ordinary Lake', systemPrompt: 'Ordinary.' },
+    ]);
+    const context = makeContext({ sessionRetrievalTags: ['datalake:reader1'] });
+    await prependRetrievedLakePrompts(context, 'result text', ['datalake:reader1', 'datalake:ordinary'], new Set());
+
+    expect(context.statusUpdate).toHaveBeenCalledWith({
+      promptMeta: {
+        retrieval: {
+          attempted: true,
+          surfaces: [],
+          dataLakeTags: [],
+          injectedLakePromptIds: ['reader1', 'ordinary'],
+          readerOptInLakeIdsUsed: ['reader1'],
+        },
+      },
+    });
+  });
+
+  it('omits readerOptInLakeIdsUsed when no injected prompt was admitted via the opt-in arm', async () => {
+    getAccessibleDataLakePromptsMock.mockResolvedValueOnce([
+      { id: 'ordinary', name: 'Ordinary Lake', systemPrompt: 'Ordinary.' },
+    ]);
+    const context = makeContext();
+    await prependRetrievedLakePrompts(context, 'result text', ['datalake:ordinary'], new Set());
+
+    const call = (context.statusUpdate as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect('readerOptInLakeIdsUsed' in call.promptMeta.retrieval).toBe(false);
   });
 
   it('records preauthorizedLakeIdsUsed for an injected id drawn from the pre-authorized set', async () => {

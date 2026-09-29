@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DATA_LAKES, type DataLakeConfig, type IDataLakeDocument } from '@bike4mind/common';
-import { getAccessibleDataLakePrompts, datalakeTagsFrom, grantedLakeIdsUsedFor } from './getDataLakePrompts';
+import {
+  getAccessibleDataLakePrompts,
+  datalakeTagsFrom,
+  grantedLakeIdsUsedFor,
+  readerOptInLakeIdsUsedFrom,
+} from './getDataLakePrompts';
 import { grantedLakeReachForTurn } from './resolveLakeReadAccess';
 import type { DataLakeAccessContext } from './getDynamicDataLakeTags';
 
@@ -826,6 +831,171 @@ describe('getAccessibleDataLakePrompts', () => {
         const idx = DATA_LAKES.indexOf(GATELESS);
         if (idx !== -1) DATA_LAKES.splice(idx, 1);
       }
+    });
+  });
+
+  /**
+   * READER OPT-IN arm: a reader who reaches a gated lake by `requiredUserTag`/`requiredEntitlement`
+   * (never the creator, no grant, no preauth) is admitted when the lake sets
+   * `injectPromptForReaders` AND the caller's session explicitly scopes to it via
+   * `sessionScopedDatalakeTags`. Every lake here is a stranger's and org-less, so the trust arms
+   * above (owner/org/grant/preauth) cannot fire - only this arm could admit it.
+   */
+  describe('reader opt-in arm (injectPromptForReaders)', () => {
+    const READER = 'user-reader';
+    const tagGatedLake = makeLake({
+      id: 'reader-tag',
+      name: 'Reader Tag Lake',
+      slug: 'reader-tag',
+      datalakeTag: 'datalake:reader-tag',
+      createdByUserId: 'stranger',
+      organizationId: undefined,
+      requiredUserTag: 'reader-team',
+      injectPromptForReaders: true,
+      systemPrompt: 'Reader-visible prompt.',
+    });
+
+    it('(a) admits a tag-gated org-less lake for a scoped reader, marked admittedByReaderOptIn', async () => {
+      const ctx = makeContext([tagGatedLake], { id: READER, tags: ['reader-team'] });
+      const prompts = await getAccessibleDataLakePrompts(ctx, {
+        sessionScopedDatalakeTags: ['datalake:reader-tag'],
+      });
+      expect(prompts).toEqual([
+        {
+          id: 'reader-tag',
+          name: 'Reader Tag Lake',
+          systemPrompt: 'Reader-visible prompt.',
+          admittedByReaderOptIn: true,
+        },
+      ]);
+    });
+
+    it('(b) does NOT admit without sessionScopedDatalakeTags (absent session scope)', async () => {
+      const ctx = makeContext([tagGatedLake], { id: READER, tags: ['reader-team'] });
+      expect(await getAccessibleDataLakePrompts(ctx)).toEqual([]);
+    });
+
+    it('(c) does NOT admit when injectPromptForReaders is false or absent, even scoped', async () => {
+      const flagFalse = makeLake({
+        ...tagGatedLake,
+        injectPromptForReaders: false,
+      });
+      const flagAbsent = makeLake({
+        ...tagGatedLake,
+        injectPromptForReaders: undefined,
+      });
+      for (const lake of [flagFalse, flagAbsent]) {
+        const ctx = makeContext([lake], { id: READER, tags: ['reader-team'] });
+        const prompts = await getAccessibleDataLakePrompts(ctx, {
+          sessionScopedDatalakeTags: ['datalake:reader-tag'],
+        });
+        expect(prompts).toEqual([]);
+      }
+    });
+
+    it('(d) an entitlement-gated variant works the same way', async () => {
+      const entitlementGatedLake = makeLake({
+        id: 'reader-ent',
+        name: 'Reader Entitlement Lake',
+        slug: 'reader-ent',
+        datalakeTag: 'datalake:reader-ent',
+        createdByUserId: 'stranger',
+        organizationId: undefined,
+        requiredEntitlement: 'product:pro',
+        injectPromptForReaders: true,
+        systemPrompt: 'Entitlement reader prompt.',
+      });
+      const ctx = makeContext([entitlementGatedLake], { id: READER, tags: [] });
+      ctx.entitlementKeys = ['product:pro'];
+      const prompts = await getAccessibleDataLakePrompts(ctx, {
+        sessionScopedDatalakeTags: ['datalake:reader-ent'],
+      });
+      expect(prompts).toEqual([
+        {
+          id: 'reader-ent',
+          name: 'Reader Entitlement Lake',
+          systemPrompt: 'Entitlement reader prompt.',
+          admittedByReaderOptIn: true,
+        },
+      ]);
+    });
+
+    it('(e) a gateless lake (no tag/entitlement) never qualifies, even flagged and scoped', async () => {
+      const gateless = makeLake({
+        id: 'reader-gateless',
+        name: 'Gateless Lake',
+        slug: 'reader-gateless',
+        datalakeTag: 'datalake:reader-gateless',
+        createdByUserId: 'stranger',
+        organizationId: undefined,
+        injectPromptForReaders: true,
+        systemPrompt: 'Should never inject for a stranger.',
+      });
+      const ctx = makeContext([gateless], { id: READER, tags: [] });
+      const prompts = await getAccessibleDataLakePrompts(ctx, {
+        sessionScopedDatalakeTags: ['datalake:reader-gateless'],
+      });
+      expect(prompts).toEqual([]);
+    });
+
+    it('(f) flag + scope but the caller lacks the gate tag entirely: dropped before the arm runs', async () => {
+      const ctx = makeContext([tagGatedLake], { id: READER, tags: [] });
+      const prompts = await getAccessibleDataLakePrompts(ctx, {
+        sessionScopedDatalakeTags: ['datalake:reader-tag'],
+      });
+      expect(prompts).toEqual([]);
+    });
+
+    it('(g) restrictToDatalakeTags excluding the lake still wins over the opt-in arm', async () => {
+      const ctx = makeContext([tagGatedLake], { id: READER, tags: ['reader-team'] });
+      const prompts = await getAccessibleDataLakePrompts(ctx, {
+        sessionScopedDatalakeTags: ['datalake:reader-tag'],
+        restrictToDatalakeTags: ['datalake:something-else'],
+      });
+      expect(prompts).toEqual([]);
+    });
+
+    it('(h) a creator-trusted lake with the flag set and scoped is returned WITHOUT admittedByReaderOptIn', async () => {
+      // The owner arm is checked BEFORE the reader opt-in arm, but lakeMatchesAccess is an
+      // unconditional gate ahead of BOTH (see "drops a lake the shared access predicate rejects"
+      // above) - so the owner must also hold the gate tag for either arm to even be reachable.
+      const ownLake = makeLake({
+        id: 'own-flagged',
+        name: 'Own Flagged Lake',
+        slug: 'own-flagged',
+        datalakeTag: 'datalake:own-flagged',
+        createdByUserId: OWNER,
+        requiredUserTag: 'reader-team',
+        injectPromptForReaders: true,
+        systemPrompt: 'Owner prompt.',
+      });
+      const ctx = makeContext([ownLake], { id: OWNER, tags: ['reader-team'] });
+      const prompts = await getAccessibleDataLakePrompts(ctx, {
+        sessionScopedDatalakeTags: ['datalake:own-flagged'],
+      });
+      expect(prompts).toEqual([{ id: 'own-flagged', name: 'Own Flagged Lake', systemPrompt: 'Owner prompt.' }]);
+    });
+
+    it('(i) readerOptInLakeIdsUsedFrom returns only the ids admitted through the opt-in arm', async () => {
+      const ownLake = makeLake({
+        id: 'own-flagged',
+        name: 'Own Flagged Lake',
+        slug: 'own-flagged',
+        datalakeTag: 'datalake:own-flagged',
+        createdByUserId: READER,
+        requiredUserTag: 'reader-team',
+        injectPromptForReaders: true,
+        systemPrompt: 'Owner prompt.',
+      });
+      const foreignReaderLake = makeLake({
+        ...tagGatedLake,
+      });
+      const ctx = makeContext([ownLake, foreignReaderLake], { id: READER, tags: ['reader-team'] });
+      const prompts = await getAccessibleDataLakePrompts(ctx, {
+        sessionScopedDatalakeTags: ['datalake:own-flagged', 'datalake:reader-tag'],
+      });
+      expect(prompts.map(p => p.id).sort()).toEqual(['own-flagged', 'reader-tag']);
+      expect(readerOptInLakeIdsUsedFrom(prompts)).toEqual(['reader-tag']);
     });
   });
 });

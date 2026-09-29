@@ -1,5 +1,9 @@
 import type { ToolContext } from '../base/types';
-import { getAccessibleDataLakePrompts, grantedLakeIdsUsedFor } from '../../../dataLakeService/getDataLakePrompts';
+import {
+  getAccessibleDataLakePrompts,
+  grantedLakeIdsUsedFor,
+  readerOptInLakeIdsUsedFrom,
+} from '../../../dataLakeService/getDataLakePrompts';
 import { renderDataLakePromptSection } from '../../../dataLakeService/renderDataLakePromptBlock';
 
 /**
@@ -34,6 +38,7 @@ export async function prependRetrievedLakePrompts(
     const prompts = await getAccessibleDataLakePrompts(context, {
       restrictToDatalakeTags: fresh,
       preauthorizedLakeIds: context.sessionPreauthorizedLakeIds,
+      sessionScopedDatalakeTags: context.sessionRetrievalTags,
     });
     const injectedLakePromptIds = prompts.map(p => p.id);
     const preauthorizedSet = new Set(context.sessionPreauthorizedLakeIds ?? []);
@@ -42,6 +47,7 @@ export async function prependRetrievedLakePrompts(
     // second read (see grantedLakeIdsUsedFor). Never throws, so it cannot reach the outer catch and
     // drop the injection.
     const grantedLakeIdsUsed = await grantedLakeIdsUsedFor(context, injectedLakePromptIds);
+    const readerOptInLakeIdsUsed = readerOptInLakeIdsUsedFrom(prompts);
     // Recorded whenever this injection site ran, even if nothing qualified - see the field's own
     // comment in promptMeta.ts. Merges onto whatever the tool's own retrieval outcome write already
     // set (applyQuestStatusChanges / mergeRetrievalSummary), not a replacement. Its own try/catch:
@@ -58,6 +64,7 @@ export async function prependRetrievedLakePrompts(
             injectedLakePromptIds,
             ...(preauthorizedLakeIdsUsed.length ? { preauthorizedLakeIdsUsed } : {}),
             ...(grantedLakeIdsUsed.length ? { grantedLakeIdsUsed } : {}),
+            ...(readerOptInLakeIdsUsed.length ? { readerOptInLakeIdsUsed } : {}),
           },
         },
       });

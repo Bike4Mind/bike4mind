@@ -719,10 +719,11 @@ export const RetrievalSummarySchema = z.object({
    * A subset of injectedLakePromptIds, never a superset. Derived at both injection sites via
    * grantedLakeIdsUsedFor.
    *
-   * THE ARM WORTH NAMING SEPARATELY: the grant arm (#2495) is the only one that can cross an org
+   * THE ARM WORTH NAMING SEPARATELY: the grant arm (#2495) is one of the two that can cross an org
    * boundary - `grantLakeAccess` can hand a CURATOR grant to an arbitrary cross-tenant user, and
-   * that grant carries injection trust. The creator and org arms cannot reach past one org, and a
-   * reader grant is excluded permanently, so a lake listed here is the case an operator auditing
+   * that grant carries injection trust. The other is the reader opt-in arm, recorded separately in
+   * `readerOptInLakeIdsUsed` below. The creator and org arms cannot reach past one org, and a
+   * reader grant is excluded permanently, so these two fields are the cases an operator auditing
    * cross-tenant prompt influence is actually looking for.
    *
    * MEMBERSHIP, NOT CAUSATION, the same caveat the field above carries: a granted lake its holder
@@ -737,6 +738,16 @@ export const RetrievalSummarySchema = z.object({
    * carry nothing, and no backfill is possible - a past turn's grant rows have moved on.
    */
   grantedLakeIdsUsed: z.array(z.string()).optional(),
+  /**
+   * Which of this turn's injected lake prompt ids entered ONLY through the READER OPT-IN arm - a
+   * reader (tag/entitlement holder) on a session explicitly scoped to a lake whose manager set
+   * `injectPromptForReaders`. A subset of injectedLakePromptIds.
+   *
+   * CAUSATION, unlike the two fields above: a lake the caller also reaches by the pre-authorized,
+   * grant, creator or org arm is NOT listed, so a non-empty value is exactly the prompts that would
+   * not have been injected without the opt-in. Absent means none did.
+   */
+  readerOptInLakeIdsUsed: z.array(z.string()).optional(),
   /**
    * How many lakes were excluded from this turn's scope because the caller lacks the access to
    * search them, and why (#3055). Resolved at the seed alongside `lakeScope`, from a dedicated

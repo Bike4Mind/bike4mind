@@ -419,6 +419,26 @@ describe('mergeRetrievalSummary', () => {
     });
   });
 
+  describe('readerOptInLakeIdsUsed', () => {
+    it('unions ids without duplicates, independent of injectedLakePromptIds', () => {
+      const merged = mergeRetrievalSummary(
+        base({ injectedLakePromptIds: ['lake1'], readerOptInLakeIdsUsed: ['lake1'] }),
+        base({ injectedLakePromptIds: ['lake1', 'lake2'], readerOptInLakeIdsUsed: ['lake2'] })
+      );
+      expect(merged?.readerOptInLakeIdsUsed).toEqual(['lake1', 'lake2']);
+    });
+
+    it('stays absent when neither side used the reader opt-in arm', () => {
+      const merged = mergeRetrievalSummary(base(), base());
+      expect(merged && 'readerOptInLakeIdsUsed' in merged).toBe(false);
+    });
+
+    it('survives a side that never asserted the field', () => {
+      const merged = mergeRetrievalSummary(base({ readerOptInLakeIdsUsed: ['lake1'] }), base());
+      expect(merged?.readerOptInLakeIdsUsed).toEqual(['lake1']);
+    });
+  });
+
   describe('answerability', () => {
     const probe = {
       topScore: 0.88,
