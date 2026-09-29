@@ -418,6 +418,71 @@ describe('updateResearchConfig', () => {
 
     expect(record).not.toHaveBeenCalled();
   });
+
+  it('does not record a history event when allowedDomains, blockedDomains and proposedTags are resubmitted reordered', async () => {
+    const stored = storedConfig({
+      allowedDomains: ['a.example.com', 'b.example.com'],
+      blockedDomains: ['x.example.com', 'y.example.com'],
+      proposedTags: ['one', 'two'],
+    });
+    const { adapters, record } = makeAdapters({ findByIdInLake: vi.fn(async () => stored) });
+
+    await updateResearchConfig(
+      'config-1',
+      lake(),
+      actor(),
+      NO_GRANTS,
+      {
+        name: stored.name,
+        query: stored.query,
+        maxResults: stored.maxResults,
+        maxProposals: stored.maxProposals,
+        allowedDomains: ['b.example.com', 'a.example.com'],
+        blockedDomains: ['y.example.com', 'x.example.com'],
+        minRelevance: stored.minRelevance,
+        costCeilingMicroUsd: stored.costCeilingMicroUsd,
+        proposedTags: ['two', 'one'],
+      },
+      adapters
+    );
+
+    expect(record).not.toHaveBeenCalled();
+  });
+});
+
+describe('updateResearchConfig - a real lever change still records history', () => {
+  const put = async (patch: Record<string, unknown>) => {
+    const stored = storedConfig();
+    const { adapters, record } = makeAdapters({ findByIdInLake: vi.fn(async () => stored) });
+    await updateResearchConfig(
+      'config-1',
+      lake(),
+      actor(),
+      NO_GRANTS,
+      {
+        name: stored.name,
+        query: stored.query,
+        maxResults: stored.maxResults,
+        maxProposals: stored.maxProposals,
+        allowedDomains: stored.allowedDomains,
+        blockedDomains: stored.blockedDomains,
+        minRelevance: stored.minRelevance,
+        costCeilingMicroUsd: stored.costCeilingMicroUsd,
+        proposedTags: stored.proposedTags,
+        ...patch,
+      },
+      adapters
+    );
+    return record;
+  };
+
+  it.each([
+    ['an added allowed domain', { allowedDomains: ['example.com', 'other.example.org'] }],
+    ['an added blocked domain', { blockedDomains: ['spam.example.net'] }],
+    ['a replaced proposed tag', { proposedTags: ['different'] }],
+  ])('records for %s', async (_label, patch) => {
+    expect(await put(patch)).toHaveBeenCalled();
+  });
 });
 
 describe('deleteResearchConfig', () => {

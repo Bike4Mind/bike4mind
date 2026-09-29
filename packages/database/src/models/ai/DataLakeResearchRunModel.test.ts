@@ -216,6 +216,51 @@ describe('DataLakeResearchRunRepository', () => {
       expect(settled).toBe(true);
       expect(await repo.findByIdInLake(created.id, LAKE)).toMatchObject({ status: 'failed' });
     });
+
+    it.each(['completed', 'failed'] as const)('is a no-op against a row already %s', async terminal => {
+      const created = await repo.createRun(input());
+      await repo.settleRun(created.id, {
+        status: terminal,
+        completedAt: new Date(),
+        spentMicroUsd: 100,
+        totals: emptyResearchRunTotals(),
+      });
+
+      const settled = await repo.settleQueuedRun(created.id, {
+        status: 'failed',
+        completedAt: new Date(),
+        spentMicroUsd: 0,
+        totals: emptyResearchRunTotals(),
+        error: 'a late enqueue-failure settle',
+      });
+
+      expect(settled).toBe(false);
+      expect(await repo.findByIdInLake(created.id, LAKE)).toMatchObject({ status: terminal, spentMicroUsd: 100 });
+    });
+
+    // Seeded straight through the driver: createRun always writes the schema default (null), so only
+    // a pre-populated row can show the settle actually nulls an omitted stopReason and judgeModel.
+    it('nulls a pre-populated stopReason and judgeModel when the settle omits them', async () => {
+      const created = await repo.createRun(input());
+      await mongoose
+        .model('DataLakeResearchRun')
+        .collection.updateOne(
+          { _id: new mongoose.Types.ObjectId(created.id) },
+          { $set: { stopReason: 'proposal_limit', judgeModel: 'gpt-4.1-mini' } }
+        );
+
+      await repo.settleQueuedRun(created.id, {
+        status: 'failed',
+        completedAt: new Date(),
+        spentMicroUsd: 0,
+        totals: emptyResearchRunTotals(),
+        error: 'the enqueue could not be confirmed',
+      });
+
+      const reread = await repo.findByIdInLake(created.id, LAKE);
+      expect(reread?.stopReason).toBeNull();
+      expect(reread?.judgeModel).toBeNull();
+    });
   });
 
   it('settles a failure with its message and no stop reason', async () => {
