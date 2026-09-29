@@ -14,14 +14,18 @@ import path from 'node:path';
  * `db.quests.update(quest)`, so this scan is the only guard.
  *
  * Flags a repository-shaped receiver (`db.<coll>`, `...Repository`) whose `.update(` first argument
- * is a bare identifier / member expression, or an object literal opening with a spread of one
- * (`{ ...doc, x }`, the same hazard). Object literals naming their fields (`{ id, status }`) pass.
+ * is a bare identifier / member expression, or an object literal that opens with a spread of one
+ * (`{ ...doc, x }`) or spreads the doc it takes its id from (`{ id: doc.id, ...doc }`), the same
+ * hazard. Object literals naming their fields (`{ id, status }`, `{ id, ...changes }`) pass.
  *
- * Not covered: dynamic receivers (`db[name].update(x)`) and non-repository receivers.
+ * Not covered: dynamic receivers (`db[name].update(x)`), non-repository receivers (`this.repo`,
+ * `deps.users`), and a doc spread under a bare id (`{ id, ...doc }`), which is indistinguishable
+ * from the sanctioned `{ id, ...changes }` without type information.
  *
- * ALLOWED is keyed by `relpath::argText` (not line number, so edits do not churn it). It only
- * shrinks: each entry must match exactly its expected number of sites (1 unless SITE_COUNT says
- * otherwise), so a stale entry fails and so does a NEW same-shaped write in an allow-listed file.
+ * ALLOWED is keyed by `relpath::argText` (not line number, so edits do not churn it). Each entry
+ * must match exactly its expected number of sites (1 unless SITE_COUNT says otherwise), so a stale
+ * entry fails and so does a NEW same-shaped write in an allow-listed file. Nothing stops a new
+ * entry being added alongside a new site; that is a review call, and the list should only shrink.
  */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SCAN_ROOTS = ['apps', 'b4m-core', 'packages'];
@@ -55,6 +59,7 @@ const ALLOWED = new Map<string, string>([
   ['apps/client/pages/api/skills/[id]/index.ts::patch', PARTIAL],
   ['apps/client/pages/api/sre/patterns/[id].ts::updates', PARTIAL],
   ['b4m-core/auth/src/mfaService/verify.ts::updateData', PARTIAL],
+  ['b4m-core/services/src/artifactService/delete.ts::updateData as any', PARTIAL],
   ['b4m-core/services/src/artifactService/update.ts::updateData', PARTIAL],
   ['b4m-core/services/src/fabFileService/edit.ts::updatedFile', PARTIAL],
   ['b4m-core/services/src/latticeService/latticeModelService.ts::updateData', PARTIAL],
@@ -70,7 +75,7 @@ const SITE_COUNT = new Map<string, number>([
   ['b4m-core/services/src/latticeService/latticeModelService.ts::updatedModel', 3],
 ]);
 
-const RECEIVER = /(?:^|[^\w$.])((?:[\w$]+[?!]?\.)*[\w$]+)[?!]?\s*\.update\(/g;
+const RECEIVER = /(?:^|[^\w$.])((?:[\w$]+[?!]?\.)*[\w$]+)[?!]?\s*\.update(?:<[^>()]*>)?\(/g;
 const isRepositoryReceiver = (r: string) => /Repository$/.test(r) || /(?:^|\.)db\.[\w$]+$/.test(r);
 
 /** Returns the first-argument text of the call whose `(` is at `open`, or null when unbalanced. */
@@ -120,7 +125,42 @@ function stripComments(src: string): string {
   return out;
 }
 
-const isWholeDoc = (arg: string) => /^[\w$]+(?:[?!]?\.[\w$]+)*!?$/.test(arg) || /^\{\s*\.\.\.[\w$.]+\s*[,}]/.test(arg);
+/** Expressions spread at the top level of an object-literal argument (`{ a, ...x, b: { ...y } }` -> ['x']). */
+function topLevelSpreads(arg: string): string[] {
+  const spreads: string[] = [];
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = 0; i < arg.length; i++) {
+    const ch = arg[i];
+    if (quote) {
+      if (ch === '\\') i++;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') quote = ch;
+    else if (ch === '(' || ch === '{' || ch === '[') depth++;
+    else if (ch === ')' || ch === '}' || ch === ']') depth--;
+    else if (depth === 1 && arg.startsWith('...', i)) {
+      const m = /^\.\.\.\(?([\w$]+(?:[?!]?\.[\w$]+)*)/.exec(arg.slice(i));
+      if (m) spreads.push(m[1]);
+    }
+  }
+  return spreads;
+}
+
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const MEMBER = String.raw`[\w$]+(?:[?!]?\.[\w$]+)*`;
+
+const isWholeDoc = (arg: string) =>
+  // `doc`, `req.user`, `doc!`, `doc as IDoc`, `doc.toObject()`, `Object.assign(doc, ...)`
+  new RegExp(String.raw`^${MEMBER}!?(?:\s+as\s+[\w$.<>\[\], ]+)?$`).test(arg) ||
+  new RegExp(String.raw`^${MEMBER}\.to(?:Object|JSON)\(\)$`).test(arg) ||
+  /^Object\.assign\(\s*[\w$]/.test(arg) ||
+  // `{ ...doc, x }`, `{ ...doc.toObject(), x }`, `{ ...(doc as IDoc) }`
+  /^\{\s*\.\.\.\(?[\w$.]+/.test(arg) ||
+  // `{ id: doc.id, ...doc }`: spreads the doc it takes its id from
+  (arg.startsWith('{') &&
+    topLevelSpreads(arg).some(e => new RegExp(String.raw`(?:^|[^\w$.])${escapeRegExp(e)}\??\.`).test(arg)));
 
 function* walk(dir: string): Generator<string> {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -179,5 +219,18 @@ describe('repository whole-document update guard', () => {
     expect(isWholeDoc('{ ...project, name }')).toBe(true);
     expect(isWholeDoc('{ id: quest.id, status }')).toBe(false);
     expect(isWholeDoc('{ id, ...changes }')).toBe(false);
+    expect(isWholeDoc('{ id: doc.id, ...doc }')).toBe(true);
+    expect(isWholeDoc('{ id: doc.id, status, ...doc }')).toBe(true);
+    expect(isWholeDoc('{ id: quest.id, ...changes }')).toBe(false);
+    expect(isWholeDoc('{ id: agent.id, visual: { ...agent.visual, portraitUrl } }')).toBe(false);
+    expect(isWholeDoc("{ note: '{', ...user, id: user.id }")).toBe(true);
+    expect(isWholeDoc("{ note: '}', x: { ...changes }, id: changes.id }")).toBe(false);
+    expect(isWholeDoc('{ id: exchanges.id, ...changes }')).toBe(false);
+    expect(isWholeDoc('user as IUser')).toBe(true);
+    expect(isWholeDoc('user.toJSON()')).toBe(true);
+    expect(isWholeDoc('Object.assign(user, { name })')).toBe(true);
+    expect(isWholeDoc('{ ...user.toObject(), name }')).toBe(true);
+    expect(isWholeDoc('{ ...(user as IUser) }')).toBe(true);
+    expect(isWholeDoc('{ id, ...changes } as Partial<IUser>')).toBe(false);
   });
 });
