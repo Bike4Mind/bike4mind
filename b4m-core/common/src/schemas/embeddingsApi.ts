@@ -17,8 +17,9 @@ import { SupportedEmbeddingModelSchema } from './embedding';
 export const MAX_EMBEDDING_INPUTS = 2048;
 
 /**
- * Token ceiling across all inputs of one request - OpenAI's per-request limit, so an OpenAI model is
- * always a single provider call and every provider's request stays inside one Lambda invocation.
+ * Token ceiling across all inputs of one request - OpenAI's per-request limit, so every provider's
+ * request stays inside one Lambda invocation. (An OpenAI request past OPENAI_EFFECTIVE_TOKEN_LIMIT
+ * is still split into sequential provider calls by OpenAIEmbeddingService.)
  */
 export const MAX_EMBEDDING_REQUEST_TOKENS = 300_000;
 

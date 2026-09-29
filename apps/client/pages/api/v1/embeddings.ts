@@ -12,6 +12,7 @@
 import {
   createEmbeddingsContract,
   getEmbeddingModelCost,
+  hasPublishedEmbeddingRate,
   MAX_EMBEDDING_REQUEST_TOKENS,
   MAX_EMBEDDING_RESPONSE_VALUES,
   usdToCredits,
@@ -42,6 +43,13 @@ let sharedTokenizer: ITokenizer | undefined;
 
 const handler = nextRouteForContract(createEmbeddingsContract).post(async (req, res) => {
   const { model, input, dimensions, encoding_format } = req.validated;
+  // A model with no rate would price at $0 and skip the credit gate while the platform key pays the
+  // provider (same hole semantic-search closes). Ollama's explicit 0 rates still pass.
+  if (!hasPublishedEmbeddingRate(model)) {
+    return res
+      .status(422)
+      .json({ error: `${model} has no published credit rate and cannot be billed on this endpoint.` });
+  }
   const texts = Array.isArray(input) ? input : [input];
   const userId = req.user.id;
   const provider = getProviderFromModel(model);
@@ -99,6 +107,7 @@ const handler = nextRouteForContract(createEmbeddingsContract).post(async (req, 
   const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
   const costUsd = getEmbeddingModelCost(model, promptTokens);
   // Gate on USD, not usdToCredits' one-credit floor: a free embedder (Ollama) reserves nothing.
+  // An unpriced model never gets here (rejected above), so cost 0 always means a genuine 0 rate.
   const reservation = await reserveRequestCredits({
     req,
     requiredCredits: costUsd > 0 ? usdToCredits(costUsd) : 0,

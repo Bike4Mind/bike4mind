@@ -186,10 +186,20 @@ async function settleReservation({
 }: SettleReservationParams): Promise<number> {
   const overReserved = reservedCredits - chargedCredits;
   // The ledger row records the post-settlement balance, so it must see the refund.
-  const settledHolder =
-    overReserved > 0
-      ? ((await holderMethods.incrementCredits(ownerId, overReserved)) ?? reservedHolder)
-      : reservedHolder;
+  let settledHolder = reservedHolder;
+  if (overReserved > 0) {
+    // Settlement runs after the provider already delivered, so a failed partial refund is logged
+    // rather than thrown: throwing would 500 a paid-for result and strand the whole reservation.
+    try {
+      settledHolder = (await holderMethods.incrementCredits(ownerId, overReserved)) ?? reservedHolder;
+    } catch (err) {
+      logger.error(`${featureLabel} over-reserved credit refund failed - caller over-charged`, {
+        ownerId,
+        overReserved,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      });
+    }
+  }
   if (chargedCredits === 0) return 0;
 
   try {

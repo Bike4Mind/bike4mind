@@ -83,6 +83,29 @@ describe('reserveRequestCredits', () => {
     );
   });
 
+  it('still settles and writes the ledger row when the partial refund fails', async () => {
+    const reservation = await reserveRequestCredits({
+      req: userReq(),
+      requiredCredits: 3,
+      enforceCredits: true,
+      featureLabel: 'embeddings',
+    });
+    userIncrement.mockRejectedValueOnce(new Error('db down'));
+
+    expect(await reservation.settle(1, ledger)).toBe(1);
+
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('over-reserved credit refund failed'),
+      expect.objectContaining({ overReserved: 2 })
+    );
+    expect(deductCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ credits: 1 }),
+      expect.anything(),
+      // No refund landed, so the ledger row carries the reservation's balance.
+      { skipBalanceUpdate: true, currentCreditHolder: { currentCredits: 97 } }
+    );
+  });
+
   it('writes no ledger row when the settled charge rounds to zero, and refunds it all', async () => {
     const reservation = await reserveRequestCredits({
       req: userReq(),

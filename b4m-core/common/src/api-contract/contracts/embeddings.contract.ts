@@ -35,7 +35,9 @@ export const createEmbeddingsContract = defineEndpoint({
     `\`input\` is a string or up to ${MAX_EMBEDDING_INPUTS} strings, at most ${MAX_EMBEDDING_REQUEST_TOKENS} ` +
     'tokens in total and each within the model context window. The input count is further capped so ' +
     `inputs x output width stays within ${MAX_EMBEDDING_RESPONSE_VALUES} values (128 inputs at 1536 ` +
-    'dimensions) - page larger jobs across requests. `dimensions` shortens the vector on models ' +
+    'dimensions) - page larger jobs across requests. Pre-tokenized input (arrays of token ids) is not ' +
+    "accepted; clients that send it by default, such as LangChain's Python `OpenAIEmbeddings`, must be " +
+    'set to send strings (`check_embedding_ctx_length=False`). `dimensions` shortens the vector on models ' +
     'that support it (OpenAI `text-embedding-3-*`, and Voyage models with several published widths). ' +
     'Billed in credits per input token from the per-model embedding rate, reserved before the provider ' +
     'call and refunded if it fails. Authenticate with an API key (`b4m_live_`) carrying `ai:generate`, ' +
@@ -59,7 +61,12 @@ export const createEmbeddingsContract = defineEndpoint({
         usage: { prompt_tokens: 9, total_tokens: 9 },
       },
     },
-    400: { description: 'The billing user or organization could not be resolved.', schema: ApiErrorSchema },
+    400: {
+      description:
+        'The billing user or organization could not be resolved, or the API key bills an organization ' +
+        'its owner is no longer a member of.',
+      schema: ApiErrorSchema,
+    },
     401: {
       description:
         'Missing/invalid credentials, or the embedding provider refused the configured key ' +
@@ -69,7 +76,8 @@ export const createEmbeddingsContract = defineEndpoint({
     422: {
       description:
         'Request body failed validation, an input exceeds the model context window, the request exceeds ' +
-        'the token or response-size ceiling, the model cannot produce the requested `dimensions`, or the caller cannot ' +
+        'the token or response-size ceiling, the model has no published credit rate, the model cannot produce ' +
+        'the requested `dimensions`, or the caller cannot ' +
         'afford the request - the last is tagged `errorCode: "insufficient_credits"`.',
       schema: EmbeddingsErrorSchema,
     },

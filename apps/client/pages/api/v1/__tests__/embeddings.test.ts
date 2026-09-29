@@ -12,6 +12,7 @@ const {
   reserve,
   refund,
   settle,
+  settlementDraw,
 } = vi.hoisted(() => ({
   getEffectiveLLMApiKeys: vi.fn(),
   countTokens: vi.fn(),
@@ -22,7 +23,17 @@ const {
   reserve: vi.fn(),
   refund: vi.fn(),
   settle: vi.fn(),
+  settlementDraw: vi.fn(),
 }));
+
+// The real stochastic rounding, with its draw pinned so the settled amount is assertable.
+vi.mock('@bike4mind/common', async importActual => {
+  const actual = await importActual<typeof import('@bike4mind/common')>();
+  return {
+    ...actual,
+    usdToCreditsStochastic: (usd: number) => actual.usdToCreditsStochastic(usd, () => settlementDraw()),
+  };
+});
 
 // Contract-adapter mock, as in pages/api/ai/__tests__/sound-effects.test.ts: runs the contract's own
 // request schema into `req.validated` so body validation stays under test.
@@ -70,6 +81,7 @@ vi.mock('@bike4mind/fab-pipeline', async importActual => {
   const modelDimensions: Record<string, number[]> = {
     'text-embedding-3-small': [1536],
     'voyage-3-large': [1024, 256, 512, 2048],
+    'nomic-embed-text': [768],
   };
   return {
     ...(await importActual<typeof import('@bike4mind/fab-pipeline')>()),
@@ -120,6 +132,7 @@ describe('POST /api/v1/embeddings', () => {
     getSettingsValue.mockReturnValue(true);
     recordUsage.mockResolvedValue(undefined);
     settle.mockImplementation(async (credits: number) => credits);
+    settlementDraw.mockReturnValue(0.999999);
     reserve.mockResolvedValue({
       ownerId: 'u1',
       ownerType: CreditHolderType.User,
@@ -152,8 +165,9 @@ describe('POST /api/v1/embeddings', () => {
     expect(reserve).toHaveBeenCalledWith(
       expect.objectContaining({ requiredCredits: 1, enforceCredits: true, featureLabel: 'embeddings' })
     );
+    // A sub-credit cost settles stochastically, not at usdToCredits' one-credit reservation floor.
     expect(settle).toHaveBeenCalledWith(
-      expect.any(Number),
+      0,
       expect.objectContaining({ type: 'text_generation_usage', inputTokens: 5, outputTokens: 0, source: 'api' })
     );
     expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ feature: 'embedding', status: 'ok' }));
@@ -238,6 +252,27 @@ describe('POST /api/v1/embeddings', () => {
     expect(status).toBe(401);
     expect(body.errorCode).toBe('provider_rejected');
     expect(refund).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a supported model with no published rate, before any credential lookup or spend', async () => {
+    const { status, body } = await run({ model: 'voyage-finance-3', input: 'a' });
+
+    expect(status).toBe(422);
+    expect(body.error).toContain('voyage-finance-3 has no published credit rate');
+    expect(getEffectiveLLMApiKeys).not.toHaveBeenCalled();
+    expect(reserve).not.toHaveBeenCalled();
+  });
+
+  it('serves a zero-rate self-hosted model without reserving, and forwards credits-off', async () => {
+    getEffectiveLLMApiKeys.mockResolvedValue({ ollama: 'http://localhost:11434' });
+    getSettingsValue.mockReturnValue(false);
+    generateEmbeddingBatch.mockImplementation(async (texts: string[]) => texts.map(() => vectorOf(768)));
+
+    const { status } = await run({ model: 'nomic-embed-text', input: 'a' });
+
+    expect(status).toBe(200);
+    expect(reserve).toHaveBeenCalledWith(expect.objectContaining({ requiredCredits: 0, enforceCredits: false }));
+    expect(settle).toHaveBeenCalledWith(0, expect.anything());
   });
 
   it('rejects an unknown model and an empty input through the contract schema', async () => {
