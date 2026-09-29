@@ -19,8 +19,9 @@ const PageFrame = ({ children, testId }: { children: ReactNode; testId?: string 
       overflowY: 'auto',
       overflowX: 'hidden',
       // One tight gap on every side: the frame is itself a bordered card, so it
-      // only needs to clear the shell, not float in it.
-      p: '8px',
+      // only needs to clear the shell, not float in it. None on a phone, where the
+      // screen is too narrow to spend any of it on a gutter.
+      p: { xs: 0, sm: '8px' },
     }}
   >
     <Sheet
@@ -36,7 +37,10 @@ const PageFrame = ({ children, testId }: { children: ReactNode; testId?: string 
         minHeight: '100%',
         display: 'flex',
         flexDirection: 'column',
-        borderRadius: '12px',
+        // Edge to edge on a phone, so there it is the screen rather than a card:
+        // no corners, and no border beside the one the mobile header already draws.
+        borderRadius: { xs: 0, sm: '12px' },
+        borderWidth: { xs: 0, sm: '1px' },
         borderColor: theme.palette.divider,
         // The sidebar surface in dark mode, the Joy Sheet default in light.
         backgroundColor: theme.palette.mode === 'dark' ? theme.palette.background.surface2 : undefined,

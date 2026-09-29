@@ -15,6 +15,8 @@ import SearchBarWithToggle from '@client/app/components/Session/SearchBarWithTog
 import { useGetFavoriteSessions } from '@client/app/hooks/data/sessions';
 import { gray } from '@client/app/utils/themes/colors';
 import SessionOwnerBadge from '@client/app/components/Session/SessionOwnerBadge';
+import Typography from '@mui/joy/Typography';
+import { useMobileHeaderStore } from '@client/app/hooks/useMobileHeader';
 
 const NotebookHeader = () => {
   const [openSideNav, setOpenSideNav, showMessageCounts] = useNotebookLayout(
@@ -29,6 +31,8 @@ const NotebookHeader = () => {
   const { setSearch } = useNotebookSearch();
   const { t } = useTranslation();
   const { data: favoriteSessions = [] } = useGetFavoriteSessions();
+  const pageTitle = useMobileHeaderStore(s => s.title);
+  const pageAction = useMobileHeaderStore(s => s.action);
 
   return (
     <Sheet
@@ -110,6 +114,19 @@ const NotebookHeader = () => {
             </IconButton>
           </Box>
         </Box>
+      ) : pageTitle ? (
+        <>
+          {/* Centred on the header, not on the space left by the menu button: the
+              right slot is as wide as that button even when empty. */}
+          <Typography
+            data-testid="mobile-header-title"
+            noWrap
+            sx={{ flex: 1, minWidth: 0, textAlign: 'center', fontSize: '16px', fontWeight: 500, color: 'text.primary' }}
+          >
+            {pageTitle}
+          </Typography>
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', minWidth: '32px' }}>{pageAction}</Box>
+        </>
       ) : null}
     </Sheet>
   );

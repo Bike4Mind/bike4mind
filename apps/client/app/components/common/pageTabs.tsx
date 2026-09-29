@@ -18,6 +18,9 @@ export const pageTabListSx = {
   // own height on a short frame. profileTabListSx only pins the tabs INSIDE the
   // strip (the horizontal axis); this pins the strip itself.
   flexShrink: 0,
+  // /profile stacks each tab's icon over its label on a phone. These tabs have no
+  // icon, only a label and maybe a count, which should stay beside it.
+  '& .MuiTab-root': { ...profileTabListSx['& .MuiTab-root'], flexDirection: 'row' },
 } as const;
 
 /** StyledTab from /profile, minus its icon rules (these tabs are text only). */

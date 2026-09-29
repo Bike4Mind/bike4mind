@@ -1,6 +1,6 @@
 import { Box, Button, Card, Chip, chipClasses, Stack, TabList, TabPanel, Tabs, Tooltip, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
-import { cloneElement, useState } from 'react';
+import { cloneElement, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import CheckIcon from '@mui/icons-material/Check';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
@@ -49,6 +49,8 @@ import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
 import { gray, grayAlpha } from '@client/app/utils/themes/colors';
 import HelpCenterButton from '@client/app/components/common/HelpCenterButton';
 import { PageTab, pageTabListSx } from '@client/app/components/common/pageTabs';
+import { useIsMobile } from '@client/app/hooks/useIsMobile';
+import { useMobileHeader } from '@client/app/hooks/useMobileHeader';
 
 /**
  * Gears - the earned-nav progression page.
@@ -187,6 +189,8 @@ const RewardChip = ({
       <Box
         component="button"
         data-testid={`gear-claim-${gear.key}`}
+        // The label is hidden on a phone, so the name cannot come from it.
+        aria-label={`Claim ${creditText(gear)}`}
         onClick={onClaim}
         sx={theme => ({
           display: 'inline-flex',
@@ -212,7 +216,11 @@ const RewardChip = ({
           },
         })}
       >
-        <span>Claim {creditText(gear)}</span>
+        {/* A phone's header has no room beside the title, so there it is the chip
+            alone - still the same button. */}
+        <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+          Claim {creditText(gear)}
+        </Box>
         {amount(false)}
       </Box>
     );
@@ -370,6 +378,12 @@ const GearsPage = () => {
   const navigate = useNavigate();
   const { gears, isPending, refetch } = useVisibleGears();
   const { setOpen: setFileBrowserOpen } = useFileBrowser();
+  // On a phone the Help Center moves up into the app header, beside the page name.
+  const isMobile = useIsMobile();
+  const helpCenter = useMemo(() => <HelpCenterButton testId="gears-helpcenter-btn" />, []);
+  // Desktop hides the header but still mounts it, so the button goes there only on a
+  // phone - otherwise it would be in the DOM twice.
+  useMobileHeader('Gears', isMobile ? helpCenter : undefined);
 
   const { mutate: claimGear, isPending: claiming } = useClaimGear();
   const claim = (gear: GearStatus) => {
@@ -635,33 +649,48 @@ const GearsPage = () => {
   return (
     <PageFrame testId="gears-page">
       <Box data-testid="gears-page-body">
+        {/* A grid so the button can span the whole text column's height, top-aligned,
+            as a sibling of the block. On a phone the button lives in the app header
+            instead, and the copy takes the full width. */}
         <Box
           sx={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            justifyContent: 'space-between',
-            gap: '16px',
-            flexWrap: 'wrap',
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 1fr) auto',
+            columnGap: '16px',
+            alignItems: 'start',
           }}
         >
-          <Box>
-            <Typography level="h2" sx={{ fontWeight: 500, fontSize: '20px' }}>
-              Gears
-            </Typography>
-            <Typography level="body-sm" sx={{ mt: '6px', maxWidth: '600px', fontSize: '14px', color: 'text.tertiary' }}>
-              A tour of what Bike4Mind can do - the models you can put a question to, the places your work lives, the
-              media you can generate, and what it all connects to.
-            </Typography>
-            <Typography
-              level="body-sm"
-              data-testid="gears-reward-notice"
-              sx={{ mt: '6px', maxWidth: '600px', fontSize: '14px', fontWeight: 500, color: 'primary.500' }}
-            >
-              Every gear here pays a one-time credit bonus the first time you use it.
-            </Typography>
-          </Box>
-
-          <HelpCenterButton testId="gears-helpcenter-btn" />
+          <Typography level="h2" sx={{ fontWeight: 500, fontSize: '20px' }}>
+            Gears
+          </Typography>
+          {!isMobile && <Box sx={{ gridColumn: 2, gridRow: '1 / span 3' }}>{helpCenter}</Box>}
+          <Typography
+            level="body-sm"
+            sx={{
+              gridColumn: { xs: '1 / -1', sm: 1 },
+              mt: '6px',
+              maxWidth: '600px',
+              fontSize: '14px',
+              color: 'text.tertiary',
+            }}
+          >
+            A tour of what Bike4Mind can do - the models you can put a question to, the places your work lives, the
+            media you can generate, and what it all connects to.
+          </Typography>
+          <Typography
+            level="body-sm"
+            data-testid="gears-reward-notice"
+            sx={{
+              gridColumn: { xs: '1 / -1', sm: 1 },
+              mt: '6px',
+              maxWidth: '600px',
+              fontSize: '14px',
+              fontWeight: 500,
+              color: 'primary.500',
+            }}
+          >
+            Every gear here pays a one-time credit bonus the first time you use it.
+          </Typography>
         </Box>
 
         {/* The tabs are static, so they render before the status lands - only the
