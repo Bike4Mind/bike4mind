@@ -1534,6 +1534,7 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
         'fileCount',
         'fileTagPrefix',
         'id',
+        'injectPromptForReaders',
         'isPublic',
         'lakeMemoryEnabled',
         'lastSyncAt',
