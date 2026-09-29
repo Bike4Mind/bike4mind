@@ -9,6 +9,7 @@ import {
   formatSummary,
   nextPageSize,
   runBackfill,
+  toBackfillOptions,
   type BackfillDeps,
   type BackfillOptions,
   type DateExtractor,
@@ -225,31 +226,75 @@ describe('runBackfill (real DB)', () => {
   describe('a file chunked before serverTextHash existed', () => {
     // Its chunkedCharCount may be a rollup refilled from chunks older than the stored bytes, and no
     // hash is there to catch it, so nothing on the row says whether the served chunks match.
-    async function seedUnhashed() {
-      const id = await seed('dated.md');
+    async function seedUnhashed(overrides: Record<string, unknown> = {}) {
+      const id = await seed('dated.md', overrides);
       await fabFiles().updateOne({ _id: id }, { $unset: { serverTextHash: '' } });
       return id;
     }
 
-    it('is skipped and counted as unhashed by default, without reading its bytes', async () => {
+    it('is not selected and only counted by default, without reading its bytes', async () => {
       const id = await seedUnhashed();
 
       const { deps, reads } = makeDeps();
       const result = await runBackfill(execute, deps);
 
-      expect(result.counts).toMatchObject({ unhashed: 1, dated: 0 });
+      expect(result.unhashed).toBe(1);
+      expect(result.counts.dated).toBe(0);
       expect(reads).toEqual([]);
       expect(await load(id)).not.toHaveProperty('documentDate');
-      expect(formatSummary(result, true)[0]).toContain('1 skipped (chunked before serverTextHash');
+      expect(formatSummary(result, true)[0]).toContain('1 not selected (chunked before serverTextHash');
     });
 
-    it('is dated under --trust-unhashed', async () => {
+    it('does not consume the --limit budget ahead of files that can be dated', async () => {
+      for (let i = 0; i < 3; i++) await seedUnhashed();
+      const hashed = await seed('dated.md');
+
+      const result = await runBackfill({ ...execute, limit: 2 }, makeDeps().deps);
+
+      expect(result.unhashed).toBe(3);
+      expect(result.counts.dated).toBe(1);
+      expect(await load(hashed)).toMatchObject({ documentDate: FRONTMATTER_DATE });
+    });
+
+    it('still nulls an unpinned Drive Editors file, which needs no hash (in step with isUnpinnedDriveEditorsFile)', async () => {
+      const editors = await Promise.all([
+        seedUnhashed({ sourceType: FabFileSourceType.GOOGLE_DRIVE }),
+        seedUnhashed({ sourceType: FabFileSourceType.GOOGLE_DRIVE, driveMd5Checksum: null }),
+        seedUnhashed({ sourceType: FabFileSourceType.GOOGLE_DRIVE, driveMd5Checksum: '' }),
+      ]);
+      const nativeDrive = await seedUnhashed({ sourceType: FabFileSourceType.GOOGLE_DRIVE, driveMd5Checksum: 'md5' });
+
+      const result = await runBackfill(execute, makeDeps().deps);
+
+      expect(result.counts['editors-unrecoverable']).toBe(3);
+      expect(result.unhashed).toBe(1);
+      for (const id of editors) expect(await load(id)).toMatchObject({ documentDate: null, documentDateSource: null });
+      expect(await load(nativeDrive)).not.toHaveProperty('documentDate');
+    });
+
+    it('is dated under --trust-unhashed, and reported as unverified', async () => {
       const id = await seedUnhashed();
 
       const result = await runBackfill({ ...execute, trustUnhashed: true }, makeDeps().deps);
 
-      expect(result.counts).toMatchObject({ unhashed: 0, dated: 1 });
+      expect(result).toMatchObject({ unhashed: 0, unverified: 1, counts: { dated: 1 } });
       expect(await load(id)).toMatchObject({ documentDate: FRONTMATTER_DATE });
+      expect(formatSummary(result, true)).toContain(
+        '1 of those dated or nulled without verifying the served chunks (--trust-unhashed).'
+      );
+    });
+
+    it('loses the race to a chunk commit that sets a hash between the read and the write', async () => {
+      const id = await seedUnhashed();
+      const { deps } = makeDeps(async () => {
+        await fabFiles().updateOne({ _id: id }, { $set: { serverTextHash: hashOf('other') } });
+      });
+
+      const result = await runBackfill({ ...execute, trustUnhashed: true }, deps);
+
+      expect(result.counts.raced).toBe(1);
+      expect(result.unverified).toBe(0);
+      expect(await load(id)).not.toHaveProperty('documentDate');
     });
   });
 
@@ -343,7 +388,22 @@ describe('runBackfill (real DB)', () => {
     const limited = await runBackfill({ ...dryRun, limit: 3 }, makeDeps().deps);
 
     expect(all.counts.undated).toBe(5);
+    expect(all.resumeAfterId).toBeUndefined();
     expect(limited.counts.undated).toBe(3);
+  });
+
+  it('prints a cursor at --limit that continues past files skipped for a lasting reason', async () => {
+    const gone = [await seed('gone.md'), await seed('gone.md')];
+    const dated = await seed('dated.md');
+
+    const first = await runBackfill({ ...execute, limit: 2 }, makeDeps().deps);
+    expect(first.counts['bytes-missing']).toBe(2);
+    expect(first.resumeAfterId).toBe(gone[1].toString());
+    expect(formatSummary(first, true)).toContain(`Stopped at --limit; continue with --after-id ${gone[1]}`);
+
+    const resumed = await runBackfill({ ...execute, limit: 2, afterId: first.resumeAfterId }, makeDeps().deps);
+    expect(resumed.counts).toMatchObject({ dated: 1, 'bytes-missing': 0 });
+    expect(await load(dated)).toMatchObject({ documentDate: FRONTMATTER_DATE });
   });
 
   it('restricts to --file-id', async () => {
@@ -385,8 +445,27 @@ describe('checkOptions', () => {
     ['a zero --batch-size', { ...valid, batchSize: 0 }, '--batch-size'],
     ['a non-numeric --batch-size', { ...valid, batchSize: Number.NaN }, '--batch-size'],
     ['a non-ObjectId --file-id', { ...valid, fileIds: ['not-an-id'] }, 'not-an-id'],
+    ['a non-ObjectId --after-id', { ...valid, afterId: 'nope' }, '--after-id'],
   ])('rejects %s', (_label, opts, expected) => {
     expect(checkOptions(opts)).toContain(expected);
+  });
+});
+
+describe('toBackfillOptions', () => {
+  it('binds every CLI flag to its option', () => {
+    const fileId = new mongoose.Types.ObjectId().toString();
+    const afterId = new mongoose.Types.ObjectId().toString();
+
+    expect(
+      toBackfillOptions({
+        execute: true,
+        'batch-size': 7,
+        limit: 3,
+        'file-id': [fileId],
+        'after-id': afterId,
+        'trust-unhashed': true,
+      })
+    ).toEqual({ execute: true, batchSize: 7, limit: 3, fileIds: [fileId], afterId, trustUnhashed: true });
   });
 });
 

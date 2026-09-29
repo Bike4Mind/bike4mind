@@ -14,6 +14,15 @@ export type ResolvedDocumentDate = {
 };
 
 /**
+ * A Google Editors file that never got its DRIVE_CREATED pin (a legacy row, or a createdTime ingest
+ * couldn't read). driveMd5Checksum is only ever populated for a native Drive upload (see
+ * driveClient.ts), so its absence on a GOOGLE_DRIVE row identifies an Editors file.
+ */
+export function isUnpinnedDriveEditorsFile(file: Pick<IFabFile, 'sourceType' | 'driveMd5Checksum'>): boolean {
+  return file.sourceType === FabFileSourceType.GOOGLE_DRIVE && !file.driveMd5Checksum;
+}
+
+/**
  * The vintage a content pass must write for this file when the file's bytes cannot change the
  * answer, or `undefined` when the date extracted from its bytes decides (see resolveDocumentDate).
  *
@@ -37,12 +46,9 @@ export function resolveDocumentDateWithoutContent(file: DocumentDatePrecedenceIn
     return { documentDate: file.documentDate, documentDateSource: file.documentDateSource };
   }
 
-  // An Editors file that never got that pin (a legacy row, or a createdTime ingest couldn't read)
-  // still has no bytes of its own, so any date embedded in its rendition is the export moment.
-  // driveMd5Checksum is only ever populated for a native Drive upload (see driveClient.ts), so its
-  // absence on a GOOGLE_DRIVE row identifies an Editors file. There is nothing trustworthy to fall
-  // back to here.
-  if (file.sourceType === FabFileSourceType.GOOGLE_DRIVE && !file.driveMd5Checksum) {
+  // An Editors file that never got that pin still has no bytes of its own, so any date embedded in
+  // its rendition is the export moment. There is nothing trustworthy to fall back to here.
+  if (isUnpinnedDriveEditorsFile(file)) {
     return { documentDate: null, documentDateSource: null };
   }
 

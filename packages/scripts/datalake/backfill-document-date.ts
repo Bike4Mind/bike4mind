@@ -14,14 +14,17 @@
  * content pass since #3048 writes the pair (null when nothing was found), so an ABSENT field means
  * the file predates the feature. That same predicate, plus the `serverTextHash`
  * read, guards the write, so a Reprocess that lands between the read and the write wins, and a rerun
- * after a partial failure picks up where it left off.
+ * retries only what is still undated. Files skipped for a lasting reason (missing bytes, stale chunks)
+ * stay eligible, so a run that stops at --limit prints an --after-id to continue from instead of
+ * re-examining them.
  *
  * The date must describe the chunks being SERVED. A content rewrite replaces the stored bytes but
  * keeps the old chunks until the next re-chunk, so dating the new bytes would date text retrieval is
  * not returning. Each file's re-extracted text is therefore checked against the `serverTextHash` its
  * last chunk commit recorded; a mismatch is left untouched and listed as stale for its next re-chunk.
- * A file last chunked before that hash existed (#1679) cannot be checked, so it is skipped and counted
- * as unhashed. --trust-unhashed dates those anyway, accepting that a legacy rewrite may be misdated.
+ * A file last chunked before that hash existed (#1679) cannot be checked, so it is not selected at all
+ * and only counted. --trust-unhashed dates those anyway, accepting that a legacy rewrite may be
+ * misdated, and the summary reports how many were written that way.
  *
  * Unrecoverable by design: a Google Editors file ingested before #3048 has no pinned Drive
  * `createdTime`, and its stored bytes are an export rendition that cannot date it. It is written
@@ -31,11 +34,13 @@
  * A row whose S3 object is gone or empty is left untouched and listed separately: nothing can date it, and
  * counting it as a failure would fail every rerun. Rows with no filePath at all are never selected.
  *
- * Dry-run by default: it still downloads and extracts, so the summary shows what would be written.
+ * Dry-run by default: it still downloads and extracts every file whose date depends on its bytes, so
+ * the summary shows what would be written.
  * Pass --execute to write, and --trust-unhashed to include the files the hash cannot verify.
  *
  * Usage (needs DB + the fabFile bucket, provided by `sst shell`):
  *   npx sst shell --stage dev        -- tsx packages/scripts/datalake/backfill-document-date.ts --limit 50
+ *   npx sst shell --stage dev        -- tsx packages/scripts/datalake/backfill-document-date.ts --limit 50 --after-id <id>
  *   npx sst shell --stage production -- tsx packages/scripts/datalake/backfill-document-date.ts --execute
  */
 
@@ -46,7 +51,14 @@ import { OpenAIEmbeddingModel } from '@bike4mind/common';
 import { connectDB } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { S3Storage, SmartChunker } from '@bike4mind/fab-pipeline';
-import { checkOptions, exitCode, formatSummary, runBackfill, type BackfillOptions } from './documentDateBackfill';
+import {
+  checkOptions,
+  exitCode,
+  formatSummary,
+  runBackfill,
+  toBackfillOptions,
+  type BackfillOptions,
+} from './documentDateBackfill';
 
 // Only sizes the chunks, which are thrown away; it has no bearing on which date is extracted.
 const CHUNKER_MODEL = OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL;
@@ -75,24 +87,15 @@ const argv = yargs(hideBin(process.argv))
     describe: 'Also date files chunked before serverTextHash existed, whose served chunks cannot be verified',
   })
   .option('file-id', { type: 'string', array: true, default: [], describe: 'Restrict to these FabFile ids' })
+  .option('after-id', { type: 'string', describe: 'Only files with a greater _id (the id a --limit run prints)' })
   .check(checkedArgv => {
-    const error = checkOptions({
-      batchSize: checkedArgv['batch-size'],
-      limit: checkedArgv.limit,
-      fileIds: checkedArgv['file-id'],
-    });
+    const error = checkOptions(toBackfillOptions(checkedArgv));
     if (error) throw new Error(error);
     return true;
   })
   .parseSync();
 
-main({
-  execute: argv.execute,
-  batchSize: argv['batch-size'],
-  limit: argv.limit,
-  fileIds: argv['file-id'],
-  trustUnhashed: argv['trust-unhashed'],
-})
+main(toBackfillOptions(argv))
   .then(code => process.exit(code))
   .catch(err => {
     console.error(err);

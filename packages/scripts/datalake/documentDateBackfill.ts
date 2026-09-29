@@ -4,7 +4,7 @@
  */
 
 import mongoose, { Types } from 'mongoose';
-import type { IFabFile } from '@bike4mind/common';
+import { FabFileSourceType, type IFabFile } from '@bike4mind/common';
 import { FabFile } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import type { ExtractedDocumentDate, S3Storage } from '@bike4mind/fab-pipeline';
@@ -14,6 +14,8 @@ export type BackfillOptions = {
   batchSize: number;
   limit?: number;
   fileIds: string[];
+  /** Resume point: only files with a greater `_id` are selected. */
+  afterId?: string;
   /** Date files last chunked before serverTextHash existed, whose served chunks cannot be verified. */
   trustUnhashed: boolean;
 };
@@ -32,10 +34,16 @@ export type BackfillDeps = {
 };
 
 export type Outcome =
-  'dated' | 'undated' | 'editors-unrecoverable' | 'bytes-missing' | 'stale-chunks' | 'unhashed' | 'raced' | 'failed';
+  'dated' | 'undated' | 'editors-unrecoverable' | 'bytes-missing' | 'stale-chunks' | 'raced' | 'failed';
 
 export type BackfillResult = {
   counts: Record<Outcome, number>;
+  /** Eligible files left out of the selection because they have no serverTextHash (see UNHASHED). */
+  unhashed: number;
+  /** Files dated or nulled under `trustUnhashed` with no hash to verify the served chunks against. */
+  unverified: number;
+  /** Set when the run stopped at `limit`: the `afterId` that continues from where it left off. */
+  resumeAfterId?: string;
   missingBytes: string[];
   staleChunks: string[];
   failures: string[];
@@ -70,8 +78,48 @@ const ELIGIBLE = {
   chunkedCharCount: { $not: { $type: 'null' } },
 };
 
+/**
+ * Mongo form of fabFilesService.isUnpinnedDriveEditorsFile; must stay in sync with it. `$in: [null, '']`
+ * matches the absent, null and empty checksum that the predicate's falsy test accepts.
+ */
+const UNPINNED_DRIVE_EDITORS = {
+  sourceType: FabFileSourceType.GOOGLE_DRIVE,
+  driveMd5Checksum: { $in: [null, ''] },
+};
+
+/**
+ * Files last chunked before serverTextHash existed (#1679): their served chunks cannot be verified, so
+ * they are left out of the selection unless `trustUnhashed`. Kept out of the query rather than skipped
+ * per file, so they never consume the `--limit` budget. An unpinned Editors file is exempt: it is nulled
+ * without reading its bytes, so there are no chunks to verify.
+ */
+const UNHASHED = { serverTextHash: { $exists: false }, $nor: [UNPINNED_DRIVE_EDITORS] };
+
+export type BackfillArgv = {
+  execute: boolean;
+  'batch-size': number;
+  limit?: number;
+  'file-id': string[];
+  'after-id'?: string;
+  'trust-unhashed': boolean;
+};
+
+/** Maps the CLI's parsed flags onto the options runBackfill takes. */
+export function toBackfillOptions(argv: BackfillArgv): BackfillOptions {
+  return {
+    execute: argv.execute,
+    batchSize: argv['batch-size'],
+    limit: argv.limit,
+    fileIds: argv['file-id'],
+    afterId: argv['after-id'],
+    trustUnhashed: argv['trust-unhashed'],
+  };
+}
+
 /** Returns an error message for the first invalid option, or undefined when all are usable. */
-export function checkOptions(opts: Pick<BackfillOptions, 'batchSize' | 'limit' | 'fileIds'>): string | undefined {
+export function checkOptions(
+  opts: Pick<BackfillOptions, 'batchSize' | 'limit' | 'fileIds' | 'afterId'>
+): string | undefined {
   // Integer >= 1: yargs yields NaN for a non-number, and 0 means an unbounded page under `.limit()`.
   if (!Number.isInteger(opts.batchSize) || opts.batchSize < 1) return '--batch-size must be an integer of at least 1';
   if (opts.limit !== undefined && (!Number.isInteger(opts.limit) || opts.limit < 1)) {
@@ -79,6 +127,9 @@ export function checkOptions(opts: Pick<BackfillOptions, 'batchSize' | 'limit' |
   }
   const badIds = opts.fileIds.filter(id => !mongoose.isObjectIdOrHexString(id));
   if (badIds.length > 0) return `--file-id is not an ObjectId: ${badIds.join(', ')}`;
+  if (opts.afterId !== undefined && !mongoose.isObjectIdOrHexString(opts.afterId)) {
+    return `--after-id is not an ObjectId: ${opts.afterId}`;
+  }
   return undefined;
 }
 
@@ -86,14 +137,22 @@ export function nextPageSize(opts: Pick<BackfillOptions, 'batchSize' | 'limit'>,
   return opts.limit === undefined ? opts.batchSize : Math.min(opts.batchSize, opts.limit - processed);
 }
 
-export function candidateFilter(opts: Pick<BackfillOptions, 'fileIds'>, afterId: Types.ObjectId | undefined) {
+function idFilter(opts: Pick<BackfillOptions, 'fileIds'>, afterId: Types.ObjectId | undefined) {
   const idClause = {
     ...(afterId ? { $gt: afterId } : {}),
     ...(opts.fileIds.length > 0 ? { $in: opts.fileIds.map(id => new Types.ObjectId(id)) } : {}),
   };
+  return Object.keys(idClause).length > 0 ? { _id: idClause } : {};
+}
+
+function candidateFilter(
+  opts: Pick<BackfillOptions, 'fileIds' | 'trustUnhashed'>,
+  afterId: Types.ObjectId | undefined
+) {
   return {
     ...ELIGIBLE,
-    ...(Object.keys(idClause).length > 0 ? { _id: idClause } : {}),
+    ...idFilter(opts, afterId),
+    ...(opts.trustUnhashed ? {} : { $nor: [UNHASHED] }),
   };
 }
 
@@ -102,7 +161,7 @@ export function candidateFilter(opts: Pick<BackfillOptions, 'fileIds'>, afterId:
  * by a chunk commit (the hash of the text it chunked, or null for a text-less pass) and is nulled by
  * a content rewrite, so a mismatch with the re-extracted text means the bytes moved on since the
  * chunks were cut. Absent means the last chunk pass predates the hash (#1679): there is nothing to
- * compare, so such a file reaches here only under `trustUnhashed`, which accepts that risk.
+ * compare, so such a file is selected only under `trustUnhashed`, which accepts that risk.
  */
 function servesStoredBytes(file: CandidateFile, extractedText: string | undefined): boolean {
   if (file.serverTextHash === undefined) return true;
@@ -138,12 +197,8 @@ function pinServerTextHash(hash: CandidateFile['serverTextHash']) {
 }
 
 async function processFile(file: CandidateFile, opts: BackfillOptions, deps: BackfillDeps): Promise<Outcome> {
-  const pinned = fabFilesService.resolveDocumentDateWithoutContent(file);
-  const isEditorsFile = pinned !== undefined;
-
-  let resolved = pinned;
+  let resolved = fabFilesService.resolveDocumentDateWithoutContent(file);
   if (!resolved) {
-    if (file.serverTextHash === undefined && !opts.trustUnhashed) return 'unhashed';
     const content = await readStoredBytes(file, deps.storage);
     if (!content) return 'bytes-missing';
     await deps.chunker.chunkFile(content, file.mimeType);
@@ -166,7 +221,7 @@ async function processFile(file: CandidateFile, opts: BackfillOptions, deps: Bac
     if (matchedCount === 0) return 'raced';
   }
 
-  if (isEditorsFile) return 'editors-unrecoverable';
+  if (fabFilesService.isUnpinnedDriveEditorsFile(file)) return 'editors-unrecoverable';
   return resolved.documentDate ? 'dated' : 'undated';
 }
 
@@ -179,16 +234,21 @@ export async function runBackfill(opts: BackfillOptions, deps: BackfillDeps): Pr
       'editors-unrecoverable': 0,
       'bytes-missing': 0,
       'stale-chunks': 0,
-      unhashed: 0,
       raced: 0,
       failed: 0,
     },
+    unhashed: 0,
+    unverified: 0,
     missingBytes: [],
     staleChunks: [],
     failures: [],
   };
   let processed = 0;
-  let afterId: Types.ObjectId | undefined;
+  let afterId = opts.afterId ? new Types.ObjectId(opts.afterId) : undefined;
+
+  if (!opts.trustUnhashed) {
+    result.unhashed = await FabFile.countDocuments({ ...ELIGIBLE, ...idFilter(opts, afterId), ...UNHASHED });
+  }
 
   while (opts.limit === undefined || processed < opts.limit) {
     const page = await FabFile.find(candidateFilter(opts, afterId))
@@ -207,6 +267,7 @@ export async function runBackfill(opts: BackfillOptions, deps: BackfillDeps): Pr
       try {
         const outcome = await processFile(file, opts, deps);
         result.counts[outcome]++;
+        if ((outcome === 'dated' || outcome === 'undated') && file.serverTextHash === undefined) result.unverified++;
         if (outcome === 'bytes-missing') result.missingBytes.push(file._id.toString());
         if (outcome === 'stale-chunks') result.staleChunks.push(file._id.toString());
       } catch (error) {
@@ -221,6 +282,9 @@ export async function runBackfill(opts: BackfillOptions, deps: BackfillDeps): Pr
     deps.log(`  ${opts.execute ? 'processed' : '[dry-run] examined'} ${processed} file(s) so far`);
   }
 
+  // Skipped files (missing bytes, stale chunks) stay eligible, so a limited rerun from the start would
+  // re-examine them forever; the cursor lets it continue past them instead.
+  if (opts.limit !== undefined && processed >= opts.limit && afterId) result.resumeAfterId = afterId.toString();
   return result;
 }
 
@@ -231,10 +295,14 @@ export function formatSummary(result: BackfillResult, execute: boolean): string[
       `${counts['editors-unrecoverable']} unpinned Drive Editors file(s) set null without a download; ` +
       `${counts['bytes-missing']} skipped (stored bytes missing or empty); ` +
       `${counts['stale-chunks']} skipped (served chunks predate the stored bytes); ` +
-      `${counts.unhashed} skipped (chunked before serverTextHash, so the served chunks cannot be verified; ` +
+      `${result.unhashed} not selected (chunked before serverTextHash, so the served chunks cannot be verified; ` +
       `--trust-unhashed dates them); ` +
       `${counts.raced} skipped (changed by a concurrent pass); ${counts.failed} failed.`,
   ];
+  if (result.unverified > 0) {
+    lines.push(`${result.unverified} of those dated or nulled without verifying the served chunks (--trust-unhashed).`);
+  }
+  if (result.resumeAfterId) lines.push(`Stopped at --limit; continue with --after-id ${result.resumeAfterId}`);
   if (result.missingBytes.length > 0) lines.push(`Missing-bytes file ids: ${result.missingBytes.join(', ')}`);
   if (result.staleChunks.length > 0) lines.push(`Stale-chunk file ids: ${result.staleChunks.join(', ')}`);
   if (result.failures.length > 0) lines.push(`Failed file ids: ${result.failures.join(', ')}`);
