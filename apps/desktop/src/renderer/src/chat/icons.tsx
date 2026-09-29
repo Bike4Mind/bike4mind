@@ -148,3 +148,40 @@ export function ArtifactIcon() {
     </Glyph>
   );
 }
+
+/** The three approval modes, in the order the popover offers them, and the selected marker. */
+export function HandIcon() {
+  return (
+    <Glyph>
+      <path d="M5 8.5V4.25a1 1 0 0 1 2 0V8m0-.5V3.25a1 1 0 0 1 2 0V8m0-.75V4.25a1 1 0 0 1 2 0V8.5" />
+      <path d="M13 6.75a1 1 0 0 1 2 0V10a4.5 4.5 0 0 1-4.5 4.5H9.2a4 4 0 0 1-3.1-1.47L3.6 9.95a1 1 0 0 1 1.5-1.3L7 10.5" />
+    </Glyph>
+  );
+}
+
+export function ShieldIcon() {
+  return (
+    <Glyph>
+      <path d="M8 1.75 13.25 3.5v4.25c0 3-2.15 5.65-5.25 6.5-3.1-.85-5.25-3.5-5.25-6.5V3.5Z" />
+      <path d="m5.9 7.9 1.5 1.5 2.9-2.9" />
+    </Glyph>
+  );
+}
+
+export function WarningIcon() {
+  return (
+    <Glyph>
+      <path d="M7.14 2.4a1 1 0 0 1 1.72 0l5.4 9.35a1 1 0 0 1-.86 1.5H2.6a1 1 0 0 1-.86-1.5Z" />
+      <path d="M8 6v3.25" />
+      <circle cx="8" cy="11.25" r="0.75" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+export function CheckIcon() {
+  return (
+    <Glyph>
+      <path d="m3.5 8.5 3 3 6-7" />
+    </Glyph>
+  );
+}

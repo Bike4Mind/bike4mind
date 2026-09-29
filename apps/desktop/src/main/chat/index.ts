@@ -1,9 +1,12 @@
-import { basename, join, resolve } from 'node:path';
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, type WebContents } from 'electron';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, safeStorage, type WebContents } from 'electron';
 import { ChatModels } from '@bike4mind/common';
 import type {
   ChatApprovalDecision,
+  ChatApprovalMode,
   ChatAttachmentInput,
+  ChatQueueEvent,
   ChatSessionStatusEvent,
   ChatStreamEvent,
   CreateCodeSessionRequest,
@@ -12,6 +15,7 @@ import type {
   UpdateProjectRequest,
 } from '@shared/chat';
 import { IPC_CHANNELS } from '@shared/ipc';
+import type { McpMutationResult, McpServerInput, McpServersState } from '@shared/mcp';
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { AttachmentStore } from './AttachmentStore';
@@ -20,7 +24,10 @@ import { ArtifactLibrary } from './artifacts/ArtifactLibrary';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
 import { ChatService } from './ChatService';
+import { McpManager } from './mcp/McpManager';
+import { McpServerStore, type StoreFile } from './mcp/McpServerStore';
 import { MediaStore } from './media/MediaStore';
+import { MessageQueue } from './MessageQueue';
 import { registerMediaProtocol } from './media/protocol';
 import { ModelCatalog } from './ModelCatalog';
 import { SessionActivity } from './SessionActivity';
@@ -85,6 +92,24 @@ export interface RegisteredChat {
   service: ChatService;
   /** Background processes, exposed so main/index.ts can tear them down on every quit path. */
   background: BackgroundProcessRegistry;
+  /** MCP connections, torn down on the same two quit passes for the same reason. */
+  mcp: McpManager;
+}
+
+/**
+ * The MCP config file, written the same way the auth vault is: mode 0600 and write-then-rename,
+ * because a crash mid-write would otherwise leave a truncated list of servers.
+ */
+function mcpStoreFile(path: string): StoreFile {
+  return {
+    read: () => readFile(path, 'utf8').catch(() => null),
+    write: async contents => {
+      await mkdir(dirname(path), { recursive: true });
+      const temporary = `${path}.tmp`;
+      await writeFile(temporary, contents, { encoding: 'utf8', mode: 0o600 });
+      await rename(temporary, path);
+    },
+  };
 }
 
 /** The OS folder picker, parented to the window that asked when there is one. */
@@ -125,6 +150,10 @@ export function registerChat(auth: AuthService): RegisteredChat {
   // replying, and this turns the pair into the one status a sidebar row draws.
   const activity = new SessionActivity((event: ChatSessionStatusEvent) => send(IPC_CHANNELS.chatSessionStatus, event));
 
+  // Typed-ahead messages, on their own channel: this is per-session state that outlives any
+  // one reply, so it travels beside the status pushes rather than inside the reply stream.
+  const queue = new MessageQueue((event: ChatQueueEvent) => send(IPC_CHANNELS.chatQueueChanged, event));
+
   const approvals = new ApprovalGate({
     requested: sessionId => activity.approvalRequested(sessionId),
     settled: sessionId => activity.approvalSettled(sessionId),
@@ -140,6 +169,14 @@ export function registerChat(auth: AuthService): RegisteredChat {
     status: (sessionId, process) => broadcast({ type: 'background-status', sessionId, process }),
   });
 
+  // safeStorage for the same reason as the auth vault: an env variable holding an API key and a
+  // header holding a bearer token are credentials, and neither goes to plain JSON in userData.
+  const mcp = new McpManager(
+    new McpServerStore(safeStorage, mcpStoreFile(join(userData, 'mcp-servers.json')), logger),
+    logger,
+    (state: McpServersState) => send(IPC_CHANNELS.mcpServersChanged, state)
+  );
+
   const service = new ChatService({
     store,
     access,
@@ -151,7 +188,9 @@ export function registerChat(auth: AuthService): RegisteredChat {
     background,
     media,
     activity,
+    mcp,
     artifacts,
+    queue,
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which is T4's invariant broken through a side door.
     protectedPaths: [userData],
@@ -170,6 +209,12 @@ export function registerChat(auth: AuthService): RegisteredChat {
   );
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPinned, (_event, sessionId: string, pinned: boolean) =>
     service.setSessionPinned(sessionId, pinned)
+  );
+  // Validated here rather than trusted, for the same reason the folder grant goes through a
+  // native picker: this is the only door to the approval mode, so an unrecognised value must
+  // not reach the store and land as something looser than the user asked for.
+  ipcMain.handle(IPC_CHANNELS.chatSetApprovalMode, (_event, sessionId: string, mode: ChatApprovalMode) =>
+    mode === 'ask' || mode === 'auto' || mode === 'full' ? service.setApprovalMode(sessionId, mode) : null
   );
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
   ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => service.sessionStatuses());
@@ -225,6 +270,11 @@ export function registerChat(auth: AuthService): RegisteredChat {
     service.send(request.sessionId, request.text, request.attachments)
   );
   ipcMain.handle(IPC_CHANNELS.chatStopReply, (_event, sessionId: string) => service.stop(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatContinueReply, (_event, sessionId: string) => service.continueReply(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatGetQueued, (_event, sessionId: string) => service.queuedMessages(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatCancelQueued, (_event, sessionId: string, queuedId: string) =>
+    service.cancelQueued(sessionId, queuedId)
+  );
   ipcMain.handle(IPC_CHANNELS.chatRespondToApproval, (_event, approvalId: string, decision: ChatApprovalDecision) =>
     approvals.resolve(approvalId, decision)
   );
@@ -278,6 +328,32 @@ export function registerChat(auth: AuthService): RegisteredChat {
     background.kill(processId, sessionId).then(() => undefined)
   );
 
+  // Every mutation returns the whole state rather than the one row: a change to one server can
+  // move another (a rename frees a name, a removal drops its tools), and a renderer that
+  // patched one entry would be showing a list main no longer agrees with.
+  const mutate = async (work: () => Promise<McpServersState>): Promise<McpMutationResult> => {
+    try {
+      return { ok: true, state: await work() };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : 'Could not save that server.' };
+    }
+  };
+
+  ipcMain.handle(IPC_CHANNELS.mcpGetServers, () => mcp.state());
+  ipcMain.handle(IPC_CHANNELS.mcpAddServer, (_event, input: McpServerInput) => mutate(() => mcp.addServer(input)));
+  ipcMain.handle(IPC_CHANNELS.mcpUpdateServer, (_event, id: string, input: McpServerInput) =>
+    mutate(() => mcp.updateServer(id, input))
+  );
+  ipcMain.handle(IPC_CHANNELS.mcpRemoveServer, (_event, id: string) => mcp.removeServer(id));
+  ipcMain.handle(IPC_CHANNELS.mcpSetServerEnabled, (_event, id: string, enabled: boolean) =>
+    mcp.setEnabled(id, enabled)
+  );
+  ipcMain.handle(IPC_CHANNELS.mcpReconnectServer, async (_event, id: string) => {
+    await mcp.disconnect(id);
+    await mcp.connect(id);
+    return mcp.state();
+  });
+
   ipcMain.handle(IPC_CHANNELS.toolsGetAccess, async () => ({ roots: await access.list() }));
   // The picker is the ONLY way a root is added. Keeping the grant behind an OS dialog the user
   // drives is what stops a crafted prompt from widening the tools' reach on its own.
@@ -293,7 +369,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     roots: await access.revoke(root),
   }));
 
-  return { service, background };
+  return { service, background, mcp };
 }
 
 export { ChatService } from './ChatService';

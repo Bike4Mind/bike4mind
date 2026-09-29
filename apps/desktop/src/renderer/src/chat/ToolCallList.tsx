@@ -223,13 +223,18 @@ const ROW_TONE: Record<ChatToolStatus, string> = {
  *
  * Muted and unboxed on purpose: the assistant's prose is the thing being read, and a panel per
  * tool call turns a turn that touched six files into a wall the reply is buried in.
+ *
+ * The rule down the left is what makes "this is not the reply" land at a glance. Colour alone
+ * did not: a page of body-xs in text.tertiary still reads as more paragraphs when there are
+ * twenty of them, and the reader is scanning for where the answer resumes. An indented aside
+ * with a rule is the shape of a transcript, and the eye skips it without having to read it.
  */
 function ToolGroupRow({ group }: { group: ToolCallGroup }) {
   const [open, setOpen] = useState(false);
   const running = group.status === 'running';
 
   return (
-    <Box>
+    <Box sx={{ borderLeft: '2px solid', borderColor: 'divider', pl: 1.25 }}>
       <Box
         component="details"
         open={open}
@@ -270,7 +275,9 @@ function ToolGroupRow({ group }: { group: ToolCallGroup }) {
           </Box>
         </Stack>
 
-        <Stack spacing={1} sx={{ ml: 0.5, pl: 1.5, pt: 0.5, pb: 0.5, borderLeft: '2px solid', borderColor: 'divider' }}>
+        {/* No rule of its own: the group already sits behind one, and nesting a second turns an
+            expanded row into a ladder. */}
+        <Stack spacing={1} sx={{ pt: 0.5, pb: 0.5 }}>
           {group.calls.map(call => (
             <ToolCallDetail key={call.id} call={call} />
           ))}
@@ -278,7 +285,8 @@ function ToolGroupRow({ group }: { group: ToolCallGroup }) {
       </Box>
 
       {/* Outside the <details>, both of them: a generated image nobody can see until they
-          expand a collapsed row is not a rendered image, and "out of credits" is not a detail. */}
+          expand a collapsed row is not a rendered image, and "out of credits" is not a detail.
+          Still inside the rule, because both belong to the call that produced them. */}
       {group.calls.map(call => (
         <Box key={call.id}>
           {call.notice && <NoticeBanner notice={call.notice} />}

@@ -1,13 +1,17 @@
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
+import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
 import type {
   AddAttachmentsResult,
   BackgroundProcessInfo,
   ChatApprovalDecision,
+  ChatApprovalMode,
   ChatArtifactContent,
   ChatArtifactLibrary,
   ChatAttachmentInput,
   ChatModelCatalog,
   ChatPendingApproval,
+  ChatQueueEvent,
+  ChatQueuedMessage,
   ChatSession,
   ChatSessionStatusEvent,
   ChatSessionSummary,
@@ -45,6 +49,11 @@ export const IPC_CHANNELS = {
   chatListModels: 'chat:list-models',
   chatSetSessionModel: 'chat:set-session-model',
   chatSetSessionPinned: 'chat:set-session-pinned',
+  /**
+   * The one way an approval mode changes. Renderer -> main only, driven by the composer pill:
+   * there is deliberately no tool, no MCP surface and no model-facing path to this channel.
+   */
+  chatSetApprovalMode: 'chat:set-approval-mode',
   chatSetSessionArchived: 'chat:set-session-archived',
   chatListSessions: 'chat:list-sessions',
   chatCreateSession: 'chat:create-session',
@@ -59,6 +68,11 @@ export const IPC_CHANNELS = {
   chatDeleteSession: 'chat:delete-session',
   chatSendMessage: 'chat:send-message',
   chatStopReply: 'chat:stop-reply',
+  chatContinueReply: 'chat:continue-reply',
+  chatGetQueued: 'chat:get-queued',
+  chatCancelQueued: 'chat:cancel-queued',
+  /** main -> renderer push; one session's queue of typed-ahead messages changed. */
+  chatQueueChanged: 'chat:queue-changed',
   chatRespondToApproval: 'chat:respond-to-approval',
   chatPickAttachments: 'chat:pick-attachments',
   chatAddAttachments: 'chat:add-attachments',
@@ -77,6 +91,14 @@ export const IPC_CHANNELS = {
   chatGetPendingApprovals: 'chat:get-pending-approvals',
   /** main -> renderer push; the whole set of approvals waiting on the user, whenever it moves. */
   chatPendingApprovals: 'chat:pending-approvals',
+  mcpGetServers: 'mcp:get-servers',
+  mcpAddServer: 'mcp:add-server',
+  mcpUpdateServer: 'mcp:update-server',
+  mcpRemoveServer: 'mcp:remove-server',
+  mcpSetServerEnabled: 'mcp:set-server-enabled',
+  mcpReconnectServer: 'mcp:reconnect-server',
+  /** main -> renderer push; a server changed state, which the renderer never polls for. */
+  mcpServersChanged: 'mcp:servers-changed',
   toolsGetAccess: 'tools:get-access',
   toolsGrantAccess: 'tools:grant-access',
   toolsRevokeAccess: 'tools:revoke-access',
@@ -116,6 +138,11 @@ export interface DesktopApi {
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
+    /**
+     * Set how much this conversation may do without asking. Called from the composer pill, in
+     * response to the user clicking it, and from nowhere else - see IPC_CHANNELS above.
+     */
+    setApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<ChatSessionSummary | null>;
     /** Move a conversation into or out of the sidebar's Archived section. Reversible. */
     setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null>;
     listSessions(): Promise<ChatSessionSummary[]>;
@@ -146,6 +173,21 @@ export interface DesktopApi {
     sendMessage(request: SendMessageRequest): Promise<SendMessageResult>;
     /** Stop an in-flight reply, keeping what has streamed so far. No-op if none is running. */
     stopReply(sessionId: string): Promise<void>;
+    /**
+     * Carry on the last reply if the agent loop's budget cut it short. Streams into the SAME
+     * message, so the events are indistinguishable from the turn never having stopped.
+     */
+    continueReply(sessionId: string): Promise<SendMessageResult>;
+    /**
+     * Messages typed ahead for this conversation, waiting for the live turn to finish. Read on
+     * open for the same reason as getSessionStatuses: the pushes below carry only CHANGES, and
+     * a window opening onto a session that was queued into elsewhere would see nothing.
+     */
+    getQueuedMessages(sessionId: string): Promise<ChatQueuedMessage[]>;
+    /** Take a queued message back; its text returns to the composer. Unknown ids are ignored. */
+    cancelQueuedMessage(sessionId: string, queuedId: string): Promise<void>;
+    /** Subscribe to queue changes; returns the unsubscribe. */
+    onQueueChanged(listener: (event: ChatQueueEvent) => void): () => void;
     /** Open the OS file picker and take in whatever is chosen. Resolves empty if the user cancels. */
     pickAttachments(sessionId: string): Promise<AddAttachmentsResult>;
     /** Take in dropped or pasted files. The bytes are written to disk before this resolves. */
@@ -211,6 +253,22 @@ export interface DesktopApi {
      * there; it reads nothing, it only names what the user already dropped.
      */
     pathFor(file: File): string;
+  };
+  /**
+   * The user's MCP servers. Configs travel renderer -> main WITH their secrets (that is where
+   * the user types them) and come back without: an McpServersState names a server's env
+   * variables and headers and never carries a value. See @shared/mcp.
+   */
+  mcp: {
+    getServers(): Promise<McpServersState>;
+    addServer(input: McpServerInput): Promise<McpMutationResult>;
+    updateServer(id: string, input: McpServerInput): Promise<McpMutationResult>;
+    removeServer(id: string): Promise<McpServersState>;
+    setServerEnabled(id: string, enabled: boolean): Promise<McpServersState>;
+    /** Drop a connection and dial again, for a server the user has just fixed. */
+    reconnectServer(id: string): Promise<McpServersState>;
+    /** Subscribe to connection-state pushes; returns the unsubscribe. */
+    onChanged(listener: (state: McpServersState) => void): () => void;
   };
   tools: {
     getAccess(): Promise<ToolAccessState>;

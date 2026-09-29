@@ -8,7 +8,9 @@ import Typography from '@mui/joy/Typography';
 import type { ChatProject, ChatSessionMode } from '@shared/chat';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { BackgroundProcessPanel } from './BackgroundProcessPanel';
+import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
+import { McpCard } from './McpCard';
 import { MessageThread } from './MessageThread';
 import { PendingApprovalBar } from './PendingApprovalBar';
 import { contentColumnSx } from './layout';
@@ -141,6 +143,18 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   // send?". Main's refusal stays as the guard, and surfaces through chat-send-error if a turn
   // ever reaches it.
   const unbound = conversation.session?.mode === 'code' && !conversation.session.project;
+
+  /**
+   * Whether this conversation has a turn open, for the composer's controls.
+   *
+   * `conversation.streaming` alone is what THIS window witnessed, and it is deliberately false
+   * after a reload or a session switch (see useConversation) - so the composer would offer Send
+   * and hide Stop while main was still replying. The sidebar's status is main's own answer for
+   * every session at once, so it covers exactly that gap. 'needs-action' counts: a turn parked
+   * at the approval gate is still a turn, and the next message still queues behind it.
+   */
+  const sessionStatus = activeId ? statuses.get(activeId) : undefined;
+  const turnOpen = conversation.streaming || sessionStatus === 'processing' || sessionStatus === 'needs-action';
 
   // What the turn in flight is doing, read off the reply being streamed into the thread. Only
   // the last message can be that reply, so nothing earlier is consulted.
@@ -276,7 +290,12 @@ export function ChatShell({ account }: { account?: ReactNode }) {
         onDelete={sessionId => void onDelete(sessionId)}
         onTogglePin={session => void togglePin(session)}
         onToggleArchived={session => void toggleArchived(session)}
-        card={<SidebarCard />}
+        card={
+          <>
+            <SidebarCard />
+            <McpCard />
+          </>
+        }
         footer={account}
       />
 
@@ -305,7 +324,13 @@ export function ChatShell({ account }: { account?: ReactNode }) {
           <MessageThread
             messages={conversation.messages}
             sessionId={activeId}
+            // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
+            // one parked at the approval gate - is still running, and Continue must not be
+            // offered on top of it.
+            streaming={turnOpen}
             onRespond={conversation.respondToApproval}
+            onContinue={() => void conversation.continueReply()}
+            status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
           />
 
           {conversation.sendError && (
@@ -358,7 +383,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
           <Composer
             sessionId={activeId}
             disabled={!activeId || creatingCode}
-            streaming={conversation.streaming}
+            streaming={turnOpen}
             attachments={draft}
             blockedReason={blockedReason}
             notReady={unbound ? 'No folder' : null}
@@ -367,6 +392,17 @@ export function ChatShell({ account }: { account?: ReactNode }) {
             }
             onSend={text => void onSend(text)}
             onStop={conversation.stop}
+            queued={conversation.queued}
+            onCancelQueued={conversation.cancelQueued}
+            returned={conversation.returned}
+            onReturnedConsumed={conversation.clearReturned}
+            leading={
+              <ApprovalModePill
+                mode={conversation.session?.approvalMode ?? 'ask'}
+                disabled={!activeId}
+                onSelect={mode => void conversation.setApprovalMode(mode)}
+              />
+            }
             footer={
               <ModelPicker
                 catalog={catalog}
@@ -375,7 +411,6 @@ export function ChatShell({ account }: { account?: ReactNode }) {
                 onSelect={model => void conversation.setModel(model)}
               />
             }
-            status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
           />
         </Stack>
       )}

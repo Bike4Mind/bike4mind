@@ -2,14 +2,17 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
 import type {
   ChatApprovalDecision,
+  ChatApprovalMode,
   ChatAttachmentInput,
   ChatPendingApproval,
+  ChatQueueEvent,
   ChatSessionStatusEvent,
   ChatStreamEvent,
   CreateCodeSessionRequest,
   SendMessageRequest,
   UpdateProjectRequest,
 } from '@shared/chat';
+import type { McpServerInput, McpServersState } from '@shared/mcp';
 import { IPC_CHANNELS, type DesktopApi } from '@shared/ipc';
 
 // Written out one method per channel rather than a generic invoke(channel, ...args)
@@ -39,6 +42,8 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionModel, sessionId, model),
     setSessionPinned: (sessionId: string, pinned: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPinned, sessionId, pinned),
+    setApprovalMode: (sessionId: string, mode: ChatApprovalMode) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetApprovalMode, sessionId, mode),
     setSessionArchived: (sessionId: string, archived: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionArchived, sessionId, archived),
     listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSessions),
@@ -57,6 +62,15 @@ const api: DesktopApi = {
     deleteSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatDeleteSession, sessionId),
     sendMessage: (request: SendMessageRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatSendMessage, request),
     stopReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatStopReply, sessionId),
+    continueReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatContinueReply, sessionId),
+    getQueuedMessages: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetQueued, sessionId),
+    cancelQueuedMessage: (sessionId: string, queuedId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatCancelQueued, sessionId, queuedId),
+    onQueueChanged: listener => {
+      const handler = (_event: unknown, queueEvent: ChatQueueEvent) => listener(queueEvent);
+      ipcRenderer.on(IPC_CHANNELS.chatQueueChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatQueueChanged, handler);
+    },
     pickAttachments: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatPickAttachments, sessionId),
     addAttachments: (sessionId: string, inputs: ChatAttachmentInput[]) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatAddAttachments, sessionId, inputs),
@@ -101,6 +115,20 @@ const api: DesktopApi = {
       } catch {
         return '';
       }
+    },
+  },
+  mcp: {
+    getServers: () => ipcRenderer.invoke(IPC_CHANNELS.mcpGetServers),
+    addServer: (input: McpServerInput) => ipcRenderer.invoke(IPC_CHANNELS.mcpAddServer, input),
+    updateServer: (id: string, input: McpServerInput) => ipcRenderer.invoke(IPC_CHANNELS.mcpUpdateServer, id, input),
+    removeServer: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.mcpRemoveServer, id),
+    setServerEnabled: (id: string, enabled: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.mcpSetServerEnabled, id, enabled),
+    reconnectServer: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.mcpReconnectServer, id),
+    onChanged: listener => {
+      const handler = (_event: unknown, state: McpServersState) => listener(state);
+      ipcRenderer.on(IPC_CHANNELS.mcpServersChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.mcpServersChanged, handler);
     },
   },
   tools: {

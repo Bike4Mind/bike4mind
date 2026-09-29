@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { ChatStreamEvent } from '@shared/chat';
+import { isTurnBudgetStop, type ChatStreamEvent } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChatService } from './ChatService';
+import { ChatService, type ChatServiceDeps } from './ChatService';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
@@ -23,6 +23,24 @@ describe('ChatService tool loop', () => {
   let post: ReturnType<typeof vi.fn>;
   let streams: PassThrough[];
   let root: string;
+  let store: SessionStore;
+
+  /** `turnLimits` is how a test reaches a budget whose real values it could not afford to. */
+  function build(turnLimits?: ChatServiceDeps['turnLimits']): ChatService {
+    return new ChatService({
+      store,
+      access: { list: async () => [root] } as unknown as AccessStore,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      ...(turnLimits ? { turnLimits } : {}),
+      getApiClient: () =>
+        ({
+          get: vi.fn().mockResolvedValue({}),
+          getAxiosInstance: () => ({ post }),
+        }) as unknown as AuthenticatedApiClient,
+      getEnvironmentUrl: () => 'http://localhost:3000',
+      emit: event => events.push(event),
+    });
+  }
 
   /**
    * Wait for the request itself, not the 'start' event: 'start' is emitted before the endpoint
@@ -37,7 +55,7 @@ describe('ChatService tool loop', () => {
     await writeFile(join(root, 'huge.bin'), 'z'.repeat(4096), 'utf8');
     await writeFile(join(root, 'tiny.txt'), 'z', 'utf8');
 
-    const store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-loop-sessions-')), 'test-model');
+    store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-loop-sessions-')), 'test-model');
     events = [];
     streams = [];
     // A fresh stream per POST, so each turn of the loop has its own response.
@@ -47,18 +65,7 @@ describe('ChatService tool loop', () => {
       return Promise.resolve({ data: stream, status: 200 });
     });
 
-    service = new ChatService({
-      store,
-      access: { list: async () => [root] } as unknown as AccessStore,
-      logger: { debug: vi.fn(), warn: vi.fn() },
-      getApiClient: () =>
-        ({
-          get: vi.fn().mockResolvedValue({}),
-          getAxiosInstance: () => ({ post }),
-        }) as unknown as AuthenticatedApiClient,
-      getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
-    });
+    service = build();
   });
 
   it('declares every tool once a folder is granted', async () => {
@@ -170,22 +177,174 @@ describe('ChatService tool loop', () => {
     expect(events.find(event => event.type === 'tool-end')).toMatchObject({ call: { status: 'error' } });
   });
 
-  it('stops after the tool-turn ceiling instead of looping forever', async () => {
+  /**
+   * Drive `rounds` replies that each ask for one tool, giving the model whatever `argumentsFor`
+   * says so a test can choose between a stuck model (the same call every round) and a busy one.
+   */
+  async function driveRounds(rounds: number, argumentsFor: (round: number) => string): Promise<void> {
+    for (let round = 0; round < rounds; round++) {
+      await vi.waitUntil(() => streams.length === round + 1, { timeout: 3000, interval: 5 });
+      streams[round].write(
+        frame({ type: 'tool_use', tools: [{ id: `c${round}`, name: 'glob_files', arguments: argumentsFor(round) }] })
+      );
+      streams[round].write(frame('[DONE]'));
+    }
+  }
+
+  it('stops a model repeating the same round, well short of the round ceiling', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'loop');
     await firstRequest();
 
-    // A model that only ever asks for another tool would otherwise never terminate.
-    for (let turn = 0; turn < 10; turn++) {
-      await vi.waitUntil(() => streams.length === turn + 1, { timeout: 3000, interval: 5 });
-      streams[turn].write(
-        frame({ type: 'tool_use', tools: [{ id: `c${turn}`, name: 'glob_files', arguments: '{}' }] })
-      );
-      streams[turn].write(frame('[DONE]'));
-    }
+    // The identical call every round IS the runaway: no result it gets back changes what it
+    // asks for next, so it would otherwise run until some far larger budget noticed.
+    await driveRounds(6, () => '{"pattern":"*"}');
+
+    const done = await waitFor(events, 'done');
+    expect(done).toMatchObject({ stopReason: 'tool_stall_limit' });
+    expect(post).toHaveBeenCalledTimes(6);
+  });
+
+  it('lets a model that varies its calls run on, then stops it at the round ceiling', async () => {
+    service = build({ rounds: 12 });
+    const { id } = await service.createSession();
+    await service.send(id, 'work');
+    await firstRequest();
+
+    // Past the stall budget on purpose: work that keeps changing is not a runaway, and the
+    // only thing that may end it is the ceiling.
+    await driveRounds(12, round => `{"pattern":"*${round}"}`);
 
     const done = await waitFor(events, 'done');
     expect(done).toMatchObject({ stopReason: 'tool_turn_limit' });
-    expect(post).toHaveBeenCalledTimes(10);
+    expect(post).toHaveBeenCalledTimes(12);
+  });
+
+  it('stops a turn that outruns its wall clock', async () => {
+    service = build({ wallClockMs: 0 });
+    const { id } = await service.createSession();
+    await service.send(id, 'slow');
+    await firstRequest();
+
+    await driveRounds(1, () => '{"pattern":"*"}');
+
+    const done = await waitFor(events, 'done');
+    expect(done).toMatchObject({ stopReason: 'turn_time_limit' });
+    // The round that was already in flight still finished; nothing after it started.
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues a budget-stopped turn in the same message, keeping what it already said', async () => {
+    service = build({ rounds: 1 });
+    const { id } = await service.createSession();
+    const sent = await service.send(id, 'build it');
+    await firstRequest();
+
+    streams[0].write(frame({ type: 'content', text: 'Reading the config.' }));
+    await driveRounds(1, () => '{"pattern":"*"}');
+    const stopped = await waitFor(events, 'done');
+    expect(stopped).toMatchObject({ stopReason: 'tool_turn_limit' });
+
+    events.length = 0;
+    const resumed = await service.continueReply(id);
+    expect(resumed).toMatchObject({ ok: true, messageId: sent.ok && !sent.queued ? sent.messageId : '' });
+    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+
+    // The resumed request replays the interrupted turn's own tool call and its result, which is
+    // the whole point: the model carries on with what it already found rather than starting over.
+    const replayed = post.mock.calls[1][1].messages;
+    expect(replayed[replayed.length - 2].content).toContainEqual(
+      expect.objectContaining({ type: 'tool_use', name: 'glob_files' })
+    );
+    expect(replayed[replayed.length - 1].content[0]).toMatchObject({ type: 'tool_result' });
+
+    streams[1].write(frame({ type: 'content', text: 'Done.' }));
+    streams[1].write(frame('[DONE]'));
+
+    const finished = await waitFor(events, 'done');
+    expect(finished).toMatchObject({ messageId: resumed.ok && !resumed.queued ? resumed.messageId : '', stopReason: undefined });
+    // One message, both rounds, one blank line between them - and the budget stop cleared.
+    expect(finished).toMatchObject({ content: 'Reading the config.\n\nDone.' });
+
+    const session = await service.getSession(id);
+    expect(session?.messages.filter(message => message.role === 'assistant')).toHaveLength(1);
+
+    // The resumed round is a round of its own rather than being folded into the one before it,
+    // so the thread still draws the tool call where it happened.
+    const reply = session?.messages.find(message => message.role === 'assistant');
+    expect(reply?.rounds).toEqual([
+      { text: 'Reading the config.', toolCallIds: [expect.any(String)] },
+      { text: 'Done.', toolCallIds: [] },
+    ]);
+  });
+
+  it('records each round with the calls it made, so a reply can be drawn in order', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'go');
+    await firstRequest();
+
+    streams[0].write(frame({ type: 'content', text: 'Looking for the config.' }));
+    await driveRounds(1, () => '{"pattern":"*.json"}');
+    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+    streams[1].write(frame({ type: 'content', text: 'Now reading it.' }));
+    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+    streams[1].write(
+      frame({ type: 'tool_use', tools: [{ id: 'c2', name: 'glob_files', arguments: '{"pattern":"*"}' }] })
+    );
+    streams[1].write(frame('[DONE]'));
+    await vi.waitUntil(() => streams.length === 3, { timeout: 3000, interval: 5 });
+    streams[2].write(frame({ type: 'content', text: 'Here is what I found.' }));
+    streams[2].write(frame('[DONE]'));
+
+    const done = await waitFor(events, 'done');
+    expect(done).toMatchObject({
+      content: 'Looking for the config.\n\nNow reading it.\n\nHere is what I found.',
+      rounds: [
+        { text: 'Looking for the config.', toolCallIds: [expect.any(String)] },
+        { text: 'Now reading it.', toolCallIds: ['c2'] },
+        // The round that ends the turn ran nothing, and is still a round: it carries the answer.
+        { text: 'Here is what I found.', toolCallIds: [] },
+      ],
+    });
+  });
+
+  it('ends a turn whose context ran out with its own reason, keeping the work before it', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'a long one');
+    await firstRequest();
+
+    streams[0].write(frame({ type: 'content', text: 'Working through it.' }));
+    await driveRounds(1, () => '{"pattern":"*"}');
+    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+
+    // What a provider says when the conversation has outgrown the window. It arrives as a
+    // failed request, and the turn must not be thrown away over it.
+    streams[1].destroy(new Error('prompt is too long: 213000 tokens > 200000 maximum'));
+
+    const done = await waitFor(events, 'done');
+    expect(done).toMatchObject({ stopReason: 'context_limit', content: 'Working through it.' });
+    // Not a budget stop, so no Continue is offered: the same oversized request cannot succeed.
+    expect(isTurnBudgetStop('context_limit')).toBe(false);
+  });
+
+  it('still fails the reply on an error that is not the context running out', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'go');
+    await firstRequest();
+
+    streams[0].destroy(new Error('the server fell over'));
+
+    await expect(waitFor(events, 'error')).resolves.toMatchObject({ message: 'the server fell over' });
+  });
+
+  it('refuses to continue a turn that was not stopped by a budget', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'hi');
+    await firstRequest();
+    streams[0].write(frame({ type: 'content', text: 'All done.' }));
+    streams[0].write(frame('[DONE]'));
+    await waitFor(events, 'done');
+
+    await expect(service.continueReply(id)).resolves.toMatchObject({ ok: false });
   });
 });

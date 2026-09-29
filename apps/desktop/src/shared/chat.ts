@@ -274,13 +274,27 @@ export interface ChatMessage {
   /** Tools this assistant turn ran, in the order the model asked for them. */
   toolCalls?: ChatToolCall[];
   /**
+   * The same turn split the way it was PRODUCED: one entry per tool round, each carrying that
+   * round's prose and the calls it went on to make.
+   *
+   * `content` and `toolCalls` stay the flattened view, because that is what the request builder,
+   * the plain-text transcript and search all want. This is what the thread reads to draw a reply
+   * in the order it happened rather than every tool row piled up after every word.
+   *
+   * Absent on messages stored before rounds were recorded, and on a message that ran no tools at
+   * all. A reader that finds it missing has to fall back to `content` then `toolCalls`: the
+   * ordering was never captured for those and cannot be recovered.
+   */
+  rounds?: ChatReplyRound[];
+  /**
    * Provider-shaped reasoning blocks (Anthropic extended thinking). Opaque: they are replayed
    * verbatim into the next request, because dropping them breaks thinking-plus-tools turns.
    */
   thinking?: unknown[];
   /**
    * Normalized reason generation ended, on assistant messages. 'max_tokens' means the reply
-   * was CUT OFF rather than finished; 'aborted' is this client stopping it.
+   * was CUT OFF rather than finished; 'aborted' is this client stopping it. The three values
+   * `isTurnBudgetStop` covers mean the agent loop's own budget ran out mid-task.
    */
   stopReason?: string;
   /** Set instead of a reply when the turn failed; the message is kept so the thread shows why. */
@@ -389,6 +403,29 @@ export interface ChatUsage {
 export type ChatSessionMode = 'chat' | 'code';
 
 /**
+ * How much the user has agreed to be asked before a tool that runs code or changes a file
+ * goes ahead.
+ *
+ * Deliberately NOT ChatSessionMode, which says what a conversation is FOR. This says what it
+ * may do without stopping, and it governs one axis only: filesystem and execution. The
+ * generation tools are gated on COST, not safety, and ask in every mode - approving
+ * `bash_execute` says nothing about whether the user wants to spend credits on an image.
+ *
+ *  - 'ask'  every gated tool asks. The behaviour this client had before modes existed.
+ *  - 'auto' a gated call runs unasked only when it is provably confined: see
+ *           main/chat/tools/riskAssessment.ts, which is the whole definition of "safe" here.
+ *           Anything it cannot prove - including any tool it does not know, such as one from
+ *           an MCP server - falls back to asking.
+ *  - 'full' no gate at all for the filesystem and the shell. A command can then read any file
+ *           this user can read and reach the internet with nobody looking. Chosen per
+ *           conversation, never inherited by a spawned one, and reset to 'ask' on relaunch.
+ *
+ * Changed by the user in the renderer and nowhere else. No tool, no MCP server and no model
+ * output can raise it; see ChatService.setApprovalMode and HostContext.
+ */
+export type ChatApprovalMode = 'ask' | 'auto' | 'full';
+
+/**
  * What a Code session is grounded in, once the user has chosen it.
  *
  * `workingDirectory` is the one field the tools read, and it is stored rather than recomputed
@@ -437,6 +474,12 @@ interface ChatSessionMeta {
   createdAt: string;
   updatedAt: string;
   mode: ChatSessionMode;
+  /**
+   * Per conversation, not app-wide: the risk of running unattended is a property of what this
+   * thread is pointed at, and one runaway conversation must not loosen the next. Always on
+   * screen in the composer pill, so it is never a setting the user has forgotten they set.
+   */
+  approvalMode: ChatApprovalMode;
   /**
    * Set on Code sessions that have been pointed at a directory. Absent on a Chat session, and
    * on a Code session nobody has chosen a folder for yet - which is a usable state, not a
@@ -510,6 +553,8 @@ export type ChatStreamEvent =
       stopReason?: string;
       usage?: ChatUsage;
       toolCalls?: ChatToolCall[];
+      /** The reply's round structure; see ChatMessage.rounds. Absent when no tool ever ran. */
+      rounds?: ChatReplyRound[];
       /** `content` has had their markup removed, so these ride with it rather than following it. */
       artifacts?: ChatArtifact[];
     }
@@ -563,12 +608,91 @@ export interface SendMessageRequest {
 }
 
 /**
+ * What the user typed while a reply was still running, waiting to become the next turn.
+ *
+ * There is at most one per session: sending again while something is already pending appends
+ * to it, so the whole wait produces a single next turn rather than a line of them.
+ *
+ * Queued messages live in the MAIN process, keyed by session, and are never persisted. That
+ * lifetime is chosen rather than defaulted: one is only ever meaningful for as long as the
+ * turn it was queued behind is still open, and a reply is anchored to an in-memory
+ * AbortController - so after a restart there is no turn left for a queued message to follow,
+ * and anything that survived would fire against a conversation the user last saw hours ago.
+ * Main is still the owner rather than the renderer, because main streams replies for sessions
+ * no window has open (see useConversation) and a queue in renderer state would die on a
+ * session switch while the turn it belongs to carried on.
+ */
+export interface ChatQueuedMessage {
+  id: string;
+  sessionId: string;
+  text: string;
+  /** Descriptors whose bytes are already on disk; they are held back from pruning while queued. */
+  attachments?: ChatAttachment[];
+  queuedAt: string;
+}
+
+/**
+ * Why a queued message left the queue WITHOUT being sent.
+ *
+ * Every one of these hands the text back to the composer rather than dropping it - see
+ * ChatQueueEvent.returned. 'stopped' is the case the whole design turns on: pressing stop is
+ * the user changing their mind about the answer they were queueing against, so firing the
+ * queued message into that is the opposite of what they meant.
+ */
+export type ChatQueueReturnReason =
+  /** The user cancelled it from the pending row. */
+  | 'cancelled'
+  /** The user stopped the reply it was waiting behind. */
+  | 'stopped'
+  /** That reply ended in an error. */
+  | 'failed'
+  /** Its turn came and main refused it - signed out, or a model that cannot read its image. */
+  | 'refused';
+
+/**
+ * One session's queue changing, pushed main -> renderer.
+ *
+ * Deliberately NOT a member of ChatStreamEvent, for the same reason ChatSessionStatusEvent is
+ * not: that union is progress within one reply, and this is per-session state that outlives
+ * any single reply and matters for conversations no window is showing.
+ *
+ * `queued` is always the AUTHORITATIVE list for the session, so a renderer replaces rather
+ * than reconciles. `returned` is the separate half: messages that are no longer queued and
+ * whose text the composer must take back.
+ */
+export interface ChatQueueEvent {
+  sessionId: string;
+  queued: ChatQueuedMessage[];
+  /**
+   * A queued message that just became a real turn, and the thread message it became.
+   *
+   * The renderer cannot draw this one itself. A turn it sends by hand is drawn optimistically
+   * from the text in its own composer, but a flushed message is appended to the thread by main
+   * with no window involved - so without this, the reply would stream in under no visible
+   * prompt at all. Emitted BEFORE the reply's 'start', so the prompt lands above it.
+   */
+  sent?: { queuedId: string; message: ChatMessage };
+  returned?: {
+    messages: ChatQueuedMessage[];
+    reason: ChatQueueReturnReason;
+    /** The refusal, on 'refused'. Absent on the others, which the reason alone explains. */
+    detail?: string;
+  };
+}
+
+/**
  * `sendMessage` resolves as soon as the turn is accepted, not when the reply finishes - the
  * reply arrives as stream events. A rejection here means the turn never started.
+ *
+ * `queued: true` is the third outcome: the conversation was already replying, so nothing was
+ * sent and the message is waiting. Main decides this, not the renderer - a reply finishing
+ * between a renderer-side "is it streaming?" check and the IPC call would otherwise queue a
+ * message behind a turn that had already ended, and nothing would ever release it.
  */
 export type SendMessageResult =
   | {
       ok: true;
+      queued?: false;
       messageId: string;
       /**
        * Set when accepting the turn changed something the user did not ask for - today only
@@ -577,6 +701,7 @@ export type SendMessageResult =
        */
       notice?: string;
     }
+  | { ok: true; queued: true; message: ChatQueuedMessage }
   | { ok: false; error: string };
 
 /**
@@ -691,4 +816,30 @@ export interface ChatPendingApproval {
   /** True when "always in this chat" must not be offered; see ChatToolCall.approvalIrreversible. */
   irreversible?: boolean;
   requestedAt: string;
+}
+
+/**
+ * One tool round of a reply: what the model said, and then what it went on to run.
+ *
+ * Holds call IDS rather than the calls, so a call has exactly one home - the message's
+ * `toolCalls` - and a round naming one that is no longer there draws prose with no row instead
+ * of the same row twice.
+ */
+export interface ChatReplyRound {
+  text: string;
+  toolCallIds: string[];
+}
+
+/**
+ * The stop reasons that mean the agent loop ran out of ITS budget rather than the model
+ * finishing, the server truncating, or the user pressing Stop.
+ *
+ * Every one of them describes a turn that was still working when it was cut, so all three are
+ * resumable: the transcript already ends on a complete round of tool results, which is exactly
+ * the state a fresh request needs to carry on from. Callers that care about "stopped short vs
+ * answered" - the Continue affordance, and a parent reading a spawned session's outcome - go
+ * through here so a fourth budget added later reaches both without being wired twice.
+ */
+export function isTurnBudgetStop(reason?: string): boolean {
+  return reason === 'tool_turn_limit' || reason === 'turn_time_limit' || reason === 'tool_stall_limit';
 }
