@@ -762,6 +762,10 @@ function generateMigrations(packages) {
 // the committed core spec. Emitted here so the route's import always resolves.
 function generateContracts(packages) {
   const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumContracts.generated.ts');
+  // Each contributor's module path, relative to the generated dir. loadDeploymentContracts
+  // (b4m-core/common/src/openapi/deployment.ts) must extend the zod each add-on resolves
+  // BEFORE importing the list, so it cannot read these off the list module itself.
+  const sourcesPath = join(CLIENT_ROOT, 'server/premium-generated/premiumContractSources.generated.json');
   const typeImport = `import type { EndpointContract } from '@bike4mind/common';`;
 
   writeFile(
@@ -778,6 +782,7 @@ function generateContracts(packages) {
       outPath,
       `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumContracts: readonly EndpointContract[] = [];\n`
     );
+    writeFile(sourcesPath, '[]\n');
     return;
   }
 
@@ -804,6 +809,7 @@ function generateContracts(packages) {
     outPath,
     `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumContracts: readonly EndpointContract[] = [\n${spreads}\n];\n`
   );
+  writeFile(sourcesPath, JSON.stringify(relSpecs, null, 2) + '\n');
 }
 
 // --- Generate infra glue ---

@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDeploymentOpenApiDocument, loadDeploymentContracts } from './deployment';
@@ -35,4 +35,21 @@ export async function writeDeploymentOpenApiModule(options: {
   );
 
   return { outputPath, contractCount: extraContracts.length };
+}
+
+/**
+ * What `openapi:generate:deployment` runs: sources the spec version from
+ * `repoRoot`/b4m-core/common/package.json, then writes the module. Throws on a missing
+ * version - JSON.stringify would drop an undefined `info.version` and serve an invalid spec.
+ */
+export async function generateDeploymentOpenApiModule(
+  repoRoot: string = MONOREPO_ROOT
+): Promise<{ outputPath: string; contractCount: number }> {
+  const pkgPath = resolve(repoRoot, 'b4m-core/common/package.json');
+  const pkg: unknown = JSON.parse(readFileSync(pkgPath, 'utf8'));
+  const version = typeof pkg === 'object' && pkg !== null && 'version' in pkg ? pkg.version : undefined;
+  if (typeof version !== 'string' || version === '') {
+    throw new Error(`[openapi] ${pkgPath} has no version for the deployment spec`);
+  }
+  return writeDeploymentOpenApiModule({ repoRoot, version });
 }

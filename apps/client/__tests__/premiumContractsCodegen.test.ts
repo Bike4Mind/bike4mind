@@ -58,6 +58,7 @@ describe('premium contracts codegen', () => {
     const content = read('premiumContracts.generated.ts');
     expect(content).toContain('export const premiumContracts: readonly EndpointContract[] = [];');
     expect(content).not.toMatch(/^import \{/m);
+    expect(JSON.parse(read('premiumContractSources.generated.json'))).toEqual([]);
   });
 
   it('emits a relative import to the declared source path when one does', () => {
@@ -69,6 +70,10 @@ describe('premium contracts codegen', () => {
     );
     expect(content).toContain('...contracts0');
     expect(content).not.toContain("from '@bike4mind/premium-fixtureoverlay");
+    // The loader extends the zod each listed add-on resolves before importing the list.
+    expect(JSON.parse(read('premiumContractSources.generated.json'))).toEqual([
+      '../../../../packages/premium/fixtureoverlay/src/api/contracts',
+    ]);
   });
 
   it('gives each contributing overlay its own import and spread', () => {
@@ -85,6 +90,7 @@ describe('premium contracts codegen', () => {
     ]);
     expect(content).toContain('...contracts0');
     expect(content).toContain('...contracts1');
+    expect(JSON.parse(read('premiumContractSources.generated.json')).sort()).toEqual(imports.map(m => m[2]).sort());
   });
 
   it('resets the deployment spec module to null either way', () => {

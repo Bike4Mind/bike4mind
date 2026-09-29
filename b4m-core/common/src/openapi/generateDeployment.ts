@@ -1,6 +1,4 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { MONOREPO_ROOT, writeDeploymentOpenApiModule } from './writeDeploymentModule';
+import { generateDeploymentOpenApiModule } from './writeDeploymentModule';
 
 /**
  * Build-time entry for the deployment spec served at /api/v1/openapi.deployment.json.
@@ -14,13 +12,6 @@ import { MONOREPO_ROOT, writeDeploymentOpenApiModule } from './writeDeploymentMo
  * never touched - generate.ts owns it.
  */
 
-const pkg = JSON.parse(readFileSync(resolve(MONOREPO_ROOT, 'b4m-core/common/package.json'), 'utf8')) as {
-  version: string;
-};
-
-const { outputPath, contractCount } = await writeDeploymentOpenApiModule({
-  repoRoot: MONOREPO_ROOT,
-  version: pkg.version,
-});
+const { outputPath, contractCount } = await generateDeploymentOpenApiModule();
 
 console.log(`[openapi] wrote ${outputPath} (${contractCount} add-on contract(s))`);
