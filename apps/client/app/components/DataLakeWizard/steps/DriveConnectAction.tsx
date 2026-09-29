@@ -88,17 +88,25 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
         <Chip size="sm" variant="soft" color={color}>
           {label}
         </Chip>
-        <Button
-          data-testid="drive-resync-btn"
-          size="sm"
-          variant="outlined"
-          color="neutral"
-          startDecorator={<SyncIcon />}
-          loading={connect.isPending || isPicking}
-          onClick={openFolderPicker}
-        >
-          Re-sync
-        </Button>
+        {/* drive-sync refuses a folder whose disconnect purge is still queued. */}
+        {!connection.disconnecting && (
+          <Button
+            data-testid="drive-resync-btn"
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            startDecorator={<SyncIcon />}
+            loading={connect.isPending || isPicking}
+            onClick={openFolderPicker}
+          >
+            Re-sync
+          </Button>
+        )}
+        {connection.disconnecting && (
+          <Typography level="body-xs" data-testid="drive-disconnecting-note" sx={{ flexBasis: '100%' }}>
+            Removing {connection.fileCount} remaining file{connection.fileCount === 1 ? '' : 's'} in the background.
+          </Typography>
+        )}
         {confirmingDisconnect ? (
           <>
             <Typography
@@ -121,7 +129,9 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
                 disconnect.mutate(lakeId, {
                   onSuccess: () => {
                     setConfirmingDisconnect(false);
-                    toast.success('Disconnected the Google Drive folder.');
+                    toast.success(
+                      'Disconnecting the Google Drive folder. Its files are being removed in the background.'
+                    );
                   },
                   // Surface e.g. the 409 "a sync is in progress" so the user knows to retry later.
                   onError: (e: unknown) => toast.error(serverError(e) || 'Could not disconnect. Please try again.'),
@@ -150,7 +160,7 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
             startDecorator={<LinkOffIcon />}
             onClick={() => setConfirmingDisconnect(true)}
           >
-            Disconnect
+            {connection.disconnecting ? 'Retry disconnect' : 'Disconnect'}
           </Button>
         )}
         {connection.lastError && (

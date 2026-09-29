@@ -36,6 +36,7 @@ const mockDlqUrls = vi.hoisted(() => ({
   'lake-memory': 'https://sqs.us-east-2.amazonaws.com/123456789/lakeMemoryQueueDLQ',
   'lake-inconsistency-model': 'https://sqs.us-east-2.amazonaws.com/123456789/lakeInconsistencyModelQueueDLQ',
   'drive-lake-ingest': 'https://sqs.us-east-2.amazonaws.com/123456789/driveLakeIngestQueueDLQ',
+  'drive-disconnect-purge': 'https://sqs.us-east-2.amazonaws.com/123456789/driveDisconnectPurgeQueueDLQ',
 }));
 
 const mockSourceQueueUrls = vi.hoisted(() => ({
@@ -73,6 +74,7 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   lakeMemoryQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/lakeMemoryQueue',
   lakeInconsistencyModelQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/lakeInconsistencyModelQueue',
   driveLakeIngestQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/driveLakeIngestQueue',
+  driveDisconnectPurgeQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/driveDisconnectPurgeQueue',
 }));
 
 // Mock SST Resource bindings: both DLQ and source queue URLs via Linkables
@@ -87,9 +89,9 @@ import { getDlqRegistry, getDlqByLabel, getSourceQueueUrl, getDlqUrl } from './d
 
 describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
-    it('returns all 34 DLQ entries', () => {
+    it('returns all 35 DLQ entries', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(34);
+      expect(registry).toHaveLength(35);
     });
 
     it('each entry has required fields', () => {

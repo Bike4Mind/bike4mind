@@ -38,6 +38,7 @@ const connected = (over: Partial<LakeDriveConnection> = {}): LakeDriveConnection
   lastUsedAt: null,
   connectedAt: null,
   fileCount: 3,
+  disconnecting: false,
   ...over,
 });
 
@@ -121,6 +122,17 @@ describe('DriveConnectAction', () => {
 
     fireEvent.click(screen.getByTestId('drive-disconnect-btn'));
     expect(screen.getByTestId('drive-disconnect-warning')).toHaveTextContent('42 files');
+  });
+
+  it('reads Disconnecting while the queued purge runs, with no Re-sync the route would refuse', () => {
+    h.connection.current = connected({ disconnecting: true, fileCount: 7 });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+
+    expect(screen.getByTestId('drive-connection-status')).toHaveTextContent('Disconnecting');
+    expect(screen.getByTestId('drive-disconnecting-note')).toHaveTextContent('7 remaining files');
+    expect(screen.queryByTestId('drive-resync-btn')).toBeNull();
+    // Still offered, so a purge that landed in the DLQ can be re-queued from the UI.
+    expect(screen.getByTestId('drive-disconnect-btn')).toHaveTextContent('Retry disconnect');
   });
 
   it('uses singular wording for exactly one file', () => {

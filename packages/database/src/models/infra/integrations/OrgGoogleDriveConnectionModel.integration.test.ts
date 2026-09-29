@@ -655,55 +655,86 @@ describe('OrgGoogleDriveConnectionModel - findDueForPoll (re-sync scan)', () => 
 
 describe('OrgGoogleDriveConnectionModel - disconnect/claimForSync race (F2)', () => {
   it('claimForSync refuses an already-disabled connection regardless of status', async () => {
-    // The disconnect route's disableIfNotSyncing already won (enabled: false) - a message still on
+    // The disconnect route's markDisconnecting already won (enabled: false) - a message still on
     // the ingest queue must not be able to claim on top of a disconnect that already committed.
     const created = await OrgGoogleDriveConnection.create({ ...base, enabled: false, status: 'connected' });
     expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBeNull();
   });
 
-  it('disableIfNotSyncing disables an idle connection and returns true', async () => {
+  it('markDisconnecting disables an idle connection, stamps the pending disconnect, and returns true', async () => {
     const created = await OrgGoogleDriveConnection.create({ ...base, status: 'connected' });
-    expect(await orgGoogleDriveConnectionRepository.disableIfNotSyncing(created.id, base.organizationId)).toBe(true);
+    expect(await orgGoogleDriveConnectionRepository.markDisconnecting(created.id, base.organizationId)).toBe(true);
+    const row = await OrgGoogleDriveConnection.findById(created.id);
+    expect(row?.enabled).toBe(false);
+    expect(row?.disconnectRequestedAt).toBeInstanceOf(Date);
+  });
+
+  it('markDisconnecting keeps the first stamp when re-run by a retried DELETE or the purge consumer', async () => {
+    const first = new Date('2026-01-01T00:00:00Z');
+    const created = await OrgGoogleDriveConnection.create({ ...base, disconnectRequestedAt: first });
+    expect(await orgGoogleDriveConnectionRepository.markDisconnecting(created.id, base.organizationId)).toBe(true);
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.disconnectRequestedAt?.toISOString()).toBe(
+      first.toISOString()
+    );
+  });
+
+  it('cancelDisconnect clears the pending stamp and restores the prior enabled value', async () => {
+    const created = await OrgGoogleDriveConnection.create({ ...base, status: 'connected' });
+    await orgGoogleDriveConnectionRepository.markDisconnecting(created.id, base.organizationId);
+    await orgGoogleDriveConnectionRepository.cancelDisconnect(created.id, base.organizationId, true);
+    const row = await OrgGoogleDriveConnection.findById(created.id);
+    expect(row?.enabled).toBe(true);
+    expect(row?.disconnectRequestedAt).toBeUndefined();
+  });
+
+  it('updateCredential refuses a connection with a pending disconnect, leaving it disabled', async () => {
+    // A reconnect would re-enable the row and let an ingest land files after the queued purge
+    // resolved its list, which the release then strands.
+    const created = await OrgGoogleDriveConnection.create({ ...base, status: 'connected' });
+    await orgGoogleDriveConnectionRepository.markDisconnecting(created.id, base.organizationId);
+    expect(
+      await orgGoogleDriveConnectionRepository.updateCredential(created.id, base.organizationId, 'enc-new', 'user-2')
+    ).toBeNull();
     expect((await OrgGoogleDriveConnection.findById(created.id))?.enabled).toBe(false);
   });
 
-  it('disableIfNotSyncing refuses a syncing connection, leaving it enabled', async () => {
+  it('markDisconnecting refuses a syncing connection, leaving it enabled', async () => {
     const created = await OrgGoogleDriveConnection.create(base);
     await orgGoogleDriveConnectionRepository.claimForSync(created.id);
 
-    expect(await orgGoogleDriveConnectionRepository.disableIfNotSyncing(created.id, base.organizationId)).toBe(false);
+    expect(await orgGoogleDriveConnectionRepository.markDisconnecting(created.id, base.organizationId)).toBe(false);
     expect((await OrgGoogleDriveConnection.findById(created.id))?.enabled).toBe(true);
   });
 
-  it('disableIfNotSyncing refuses a connection belonging to a different org', async () => {
+  it('markDisconnecting refuses a connection belonging to a different org', async () => {
     // organizationId is required and filtered on, matching updateCredential/release, so a mismatched
     // org id cannot disable a connection it does not own even if a caller's own gate were ever skipped.
     const created = await OrgGoogleDriveConnection.create({ ...base, status: 'connected' });
-    expect(await orgGoogleDriveConnectionRepository.disableIfNotSyncing(created.id, 'org-2')).toBe(false);
+    expect(await orgGoogleDriveConnectionRepository.markDisconnecting(created.id, 'org-2')).toBe(false);
     expect((await OrgGoogleDriveConnection.findById(created.id))?.enabled).toBe(true);
   });
 
   it('a disable that lands first closes the window a same-moment claim would otherwise win', async () => {
     // Reproduces julsanchez's live finding directly: before the `enabled` guard, a message already
-    // on the ingest queue could still claimForSync AFTER disableIfNotSyncing (or the old
+    // on the ingest queue could still claimForSync AFTER markDisconnecting (or the old
     // unconditional disable) ran, creating FabFiles past the purge's snapshot and stranding them
     // when release hard-deleted the row. The atomic pair below closes it - once disable wins, the
     // claim that follows must lose.
     const created = await OrgGoogleDriveConnection.create({ ...base, status: 'connected' });
 
-    expect(await orgGoogleDriveConnectionRepository.disableIfNotSyncing(created.id, base.organizationId)).toBe(true);
+    expect(await orgGoogleDriveConnectionRepository.markDisconnecting(created.id, base.organizationId)).toBe(true);
     expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBeNull();
     expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('connected');
   });
 
   it('a claim that lands first closes the window a same-moment disable would otherwise win', async () => {
     // The other direction: an ingest already claimed the connection into 'syncing' just before the
-    // disconnect route runs. disableIfNotSyncing must refuse (409 at the route), not disable out
+    // disconnect route runs. markDisconnecting must refuse (409 at the route), not disable out
     // from under a live sync.
     const created = await OrgGoogleDriveConnection.create({ ...base, status: 'connected' });
 
     expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).not.toBeNull();
-    expect(await orgGoogleDriveConnectionRepository.disableIfNotSyncing(created.id, base.organizationId)).toBe(false);
+    expect(await orgGoogleDriveConnectionRepository.markDisconnecting(created.id, base.organizationId)).toBe(false);
     expect((await OrgGoogleDriveConnection.findById(created.id))?.enabled).toBe(true);
   });
 });

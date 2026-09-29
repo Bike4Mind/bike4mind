@@ -124,6 +124,13 @@ export interface IOrgGoogleDriveConnection {
    * any other change an incremental run could not resolve.
    */
   lastFullWalkAt?: Date;
+
+  /**
+   * Set when a disconnect was accepted and its file purge queued (driveDisconnectPurge consumer).
+   * While set the connection stays disabled and cannot be re-enabled or re-credentialed; the row is
+   * hard-deleted once the purge finishes.
+   */
+  disconnectRequestedAt?: Date;
 }
 
 export interface IOrgGoogleDriveConnectionDocument extends IOrgGoogleDriveConnection, IMongoDocument {}
@@ -292,14 +299,21 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
   claimForSync(id: string): Promise<string | null>;
 
   /**
-   * Route-side half of the disconnect/claimForSync race: atomically disables the connection only if
-   * it is not currently 'syncing', instead of a snapshot-read-then-unconditional-disable that a
-   * concurrent claimForSync could land inside of. Returns whether the disable took effect; false
-   * means a sync is in flight and the caller should refuse the disconnect (409) rather than proceed.
+   * Route-side half of the disconnect/claimForSync race: atomically disables the connection and
+   * stamps `disconnectRequestedAt` (keeping an earlier stamp) only if it is not currently 'syncing',
+   * instead of a snapshot-read-then-unconditional-disable that a concurrent claimForSync could land
+   * inside of. Returns whether it took effect; false means a sync is in flight and the caller should
+   * refuse the disconnect (409) rather than proceed. The purge consumer re-runs it before each slice.
    * organizationId is REQUIRED, matching `updateCredential`/`release`, so this cannot disable a
    * connection outside the caller's own org even if a route ever forgot its own gate.
    */
-  disableIfNotSyncing(id: string, organizationId: string): Promise<boolean>;
+  markDisconnecting(id: string, organizationId: string): Promise<boolean>;
+
+  /**
+   * Undo markDisconnecting when the purge could not be enqueued: clears `disconnectRequestedAt` and
+   * restores `enabled` to what it was before the disconnect was attempted.
+   */
+  cancelDisconnect(id: string, organizationId: string, enabled: boolean): Promise<void>;
 
   /**
    * Continuation-only claim take-over: refreshes `syncClaimedAt` iff the connection is still 'syncing'
