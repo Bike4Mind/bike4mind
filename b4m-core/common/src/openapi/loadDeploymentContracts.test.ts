@@ -12,6 +12,11 @@ describe('loadDeploymentContracts', () => {
     expect(buildDeploymentOpenApiDocument('1.0.0', contracts)).toBeNull();
   });
 
+  it('throws when the list does not export a premiumContracts array', async () => {
+    const misnamed = fileURLToPath(new URL('./__fixtures__/misnamedExportContracts.cjs', import.meta.url));
+    await expect(loadDeploymentContracts(misnamed)).rejects.toThrow(/does not export a premiumContracts array/);
+  });
+
   it('makes contracts built on the CJS zod registrable', async () => {
     const contracts = await loadDeploymentContracts(fixturePath);
     expect(contracts).toHaveLength(1);

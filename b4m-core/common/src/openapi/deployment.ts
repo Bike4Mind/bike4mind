@@ -45,6 +45,10 @@ export async function loadDeploymentContracts(contractsPath: string): Promise<re
   // schemas come from zod's CJS build, a separate class hierarchy from the ESM one
   // registry.ts extends. Unextended, registering them fails on `.openapi()`.
   extendZodWithOpenApi(createRequire(contractsPath)('zod'));
-  const mod = (await import(pathToFileURL(contractsPath).href)) as { premiumContracts: readonly EndpointContract[] };
-  return mod.premiumContracts;
+  const mod = (await import(pathToFileURL(contractsPath).href)) as { premiumContracts?: unknown };
+  // Throw rather than fall back to []: an empty list silently serves the core-only spec.
+  if (!Array.isArray(mod.premiumContracts)) {
+    throw new Error(`[openapi] ${contractsPath} does not export a premiumContracts array`);
+  }
+  return mod.premiumContracts as readonly EndpointContract[];
 }

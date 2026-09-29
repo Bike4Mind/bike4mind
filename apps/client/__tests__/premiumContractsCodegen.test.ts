@@ -26,13 +26,13 @@ function runCodegen(): void {
   });
 }
 
-function addOverlay(b4mContributions: Record<string, unknown>): void {
-  const overlay = join(root, 'packages/premium/fixtureoverlay');
+function addOverlay(b4mContributions: Record<string, unknown>, dir = 'fixtureoverlay'): void {
+  const overlay = join(root, 'packages/premium', dir);
   mkdirSync(overlay, { recursive: true });
   writeFileSync(
     join(overlay, 'package.json'),
     JSON.stringify({
-      name: '@bike4mind/premium-fixtureoverlay',
+      name: `@bike4mind/premium-${dir}`,
       exports: { './contracts': './src/api/contracts.ts' },
       b4mContributions,
     }) + '\n'
@@ -69,6 +69,22 @@ describe('premium contracts codegen', () => {
     );
     expect(content).toContain('...contracts0');
     expect(content).not.toContain("from '@bike4mind/premium-fixtureoverlay");
+  });
+
+  it('gives each contributing overlay its own import and spread', () => {
+    addOverlay({ contractsExport: '@bike4mind/premium-fixtureoverlay/contracts' });
+    addOverlay({ contractsExport: '@bike4mind/premium-secondoverlay/contracts' }, 'secondoverlay');
+    runCodegen();
+    const content = read('premiumContracts.generated.ts');
+    // readdirSync order is unspecified, so assert membership, not which overlay gets which index.
+    const imports = [...content.matchAll(/^import \{ contracts as (contracts\d+) \} from '([^']+)';$/gm)];
+    expect(imports.map(m => m[1]).sort()).toEqual(['contracts0', 'contracts1']);
+    expect(imports.map(m => m[2]).sort()).toEqual([
+      '../../../../packages/premium/fixtureoverlay/src/api/contracts',
+      '../../../../packages/premium/secondoverlay/src/api/contracts',
+    ]);
+    expect(content).toContain('...contracts0');
+    expect(content).toContain('...contracts1');
   });
 
   it('resets the deployment spec module to null either way', () => {
