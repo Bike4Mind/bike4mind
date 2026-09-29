@@ -35,13 +35,14 @@ requested scopes differ, and returns the minted scopes in the response's `scope`
 
 The SST `production` and `dev` stages enforce grants automatically. Other stages
 use grace mode unless `OAUTH_AI_TOKEN_ENFORCE_GRANT=true`; in grace mode missing
-grants or AI consent produce warnings rather than rejection. The environment
-override cannot disable enforcement in `production` or `dev`.
+grants or scope gaps produce warnings rather than rejection. Setting
+`OAUTH_AI_TOKEN_ENFORCE_GRANT=false` (or any value other than `true`) overrides
+the stage default and disables enforcement, including on `production` and `dev`.
 
 In enforcement mode, relying-party clients need a durable OAuth grant for the
-user/client pair. Requests containing `ai:generate` additionally require that
-scope in the grant. A `me:read`-only request needs an existing grant but does not
-require `me:read` coverage. First-party clients are exempt from the grant check;
+user/client pair, and the grant must cover every scope the exchange mints. An
+identity-only grant (`openid/email/profile`) does not authorize any API-key scope.
+First-party clients are exempt from the grant check;
 client registration and policy acceptance checks still apply.
 
 Before deployment, verify existing client registrations contain their requested

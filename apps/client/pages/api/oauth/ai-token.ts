@@ -57,13 +57,6 @@ const AiTokenRequestSchema = z.object({
 const AiTokenScopesSchema = z.array(z.enum([ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ])).min(1);
 
 /**
- * Scopes that authorize provider spend. A durable OAuthGrant must cover these when grant
- * enforcement is active (step 5.5). Non-billable scopes (e.g. me:read) skip this sub-check
- * but still require client registration (allowedScopes) and a grant row (step 5.5 hole-a).
- */
-const BILLABLE_SCOPES = new Set<string>([ApiKeyScope.AI_GENERATE]);
-
-/**
  * Take the last hop from the X-Forwarded-For chain - the one CloudFront appends
  * and the client can't spoof, unlike earlier entries. `req.ip` on an unauth
  * endpoint behind a proxy is attacker-controllable and would poison audit logs.
@@ -116,7 +109,9 @@ const handler = baseApi({ auth: false })
       });
     }
 
-    const parsedScopes = AiTokenScopesSchema.safeParse((scope ?? ApiKeyScope.AI_GENERATE).split(' ').filter(Boolean));
+    const parsedScopes = AiTokenScopesSchema.safeParse([
+      ...new Set((scope ?? ApiKeyScope.AI_GENERATE).split(' ').filter(Boolean)),
+    ]);
     if (!parsedScopes.success) {
       return res.status(403).json({
         error: 'invalid_scope',
@@ -186,9 +181,9 @@ const handler = baseApi({ auth: false })
     //      the billable scope. Closes two holes:
     //        (a) a pool-signed token - including a forged identities[] entry from a compromised pool
     //            - for a user who never authorized this client. The pool cannot forge a B4M grant.
-    //        (b) an identity-only grant (openid/email/profile) being treated as spend authorization.
-    //            A client-identity grant is not permission to bill the user's credits, so minting a
-    //            billable ai:generate key requires the user to have explicitly approved that scope.
+    //        (b) a grant that covers only identity scopes (openid/email/profile) being treated as
+    //            authorization for any minted scope. The grant must cover every scope this exchange
+    //            mints - the user must have explicitly approved each one for this client.
     //      Reads the SAME OAuthGrant that token.ts enforces, per that model's contract.
     //
     //      Scoped to relying-party clients: a first-party / pre-existing federated client is trusted
@@ -217,13 +212,6 @@ const handler = baseApi({ auth: false })
         );
       }
 
-      // Billable scopes in this request that must be covered by the grant.
-      // Non-billable scopes (e.g. me:read) skip this sub-check but still require a grant row
-      // (hole-a: a pool token for a user who never authorized this client must be rejected).
-      const billableRequested = requestedScopes.filter(s => BILLABLE_SCOPES.has(s));
-      const grantCoversAllBillable =
-        billableRequested.length === 0 || (!!grant && billableRequested.every(s => (grant.scopes ?? []).includes(s)));
-
       if (enforce) {
         // Fail closed: an unreadable grant is UNKNOWN, not absent. Minting anyway would defeat the
         // gate on exactly the transient error an attacker could induce. 503 so the caller retries.
@@ -238,8 +226,10 @@ const handler = baseApi({ auth: false })
             .status(403)
             .json({ error: 'access_denied', error_description: 'User has not authorized this client' });
         }
-        if (!grantCoversAllBillable) {
-          const uncovered = billableRequested.filter(s => !(grant.scopes ?? []).includes(s));
+        // Every requested scope must be covered by the grant -- not just billable ones. Any scope
+        // this exchange mints should be one the user explicitly consented to for this client.
+        const uncovered = requestedScopes.filter(s => !(grant.scopes ?? []).includes(s));
+        if (uncovered.length > 0) {
           return res.status(403).json({
             error: 'access_denied',
             error_description: `User has not authorized the following scope(s) for this client: ${uncovered.join(' ')}`,
@@ -253,12 +243,14 @@ const handler = baseApi({ auth: false })
             `[OAUTH_AI_TOKEN] would-reject: no grant for user ${b4mUserId} via client ${client_id} ` +
               `(grace mode; set OAUTH_AI_TOKEN_ENFORCE_GRANT=true to enforce)`
           );
-        } else if (!grantCoversAllBillable) {
-          const uncovered = billableRequested.filter(s => !(grant.scopes ?? []).includes(s));
-          req.logger.warn(
-            `[OAUTH_AI_TOKEN] would-reject: grant for user ${b4mUserId} via client ${client_id} lacks ` +
-              `scope(s): ${uncovered.join(' ')} (grace mode; set OAUTH_AI_TOKEN_ENFORCE_GRANT=true to enforce)`
-          );
+        } else {
+          const uncovered = requestedScopes.filter(s => !(grant.scopes ?? []).includes(s));
+          if (uncovered.length > 0) {
+            req.logger.warn(
+              `[OAUTH_AI_TOKEN] would-reject: grant for user ${b4mUserId} via client ${client_id} lacks ` +
+                `scope(s): ${uncovered.join(' ')} (grace mode; set OAUTH_AI_TOKEN_ENFORCE_GRANT=true to enforce)`
+            );
+          }
         }
       }
     }

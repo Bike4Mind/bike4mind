@@ -453,6 +453,16 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     });
 
     it('accepts surrounding and repeated spaces in a supported scope set', async () => {
+      mockFindGrant.mockResolvedValue({
+        userId: 'b4m-user-1',
+        clientId: 'client-1',
+        scopes: ['openid', 'ai:generate', 'me:read'],
+      });
+      mockCreateUserApiKey.mockResolvedValue({
+        id: 'key-1',
+        key: 'b4m_live_deadbeef',
+        scopes: ['ai:generate', 'me:read'],
+      });
       const { req, res } = makeReq({ ...VALID_BODY, scope: '  ai:generate  me:read  ' });
       await handler(req as unknown as Parameters<typeof handler>[0], res as unknown as Parameters<typeof handler>[1]);
 
@@ -488,11 +498,9 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
       expect(params.scopes).toEqual(['ai:generate']);
     });
 
-    it('requesting only me:read (non-billable) does not require grant coverage of that scope', async () => {
-      // me:read is not in BILLABLE_SCOPES, so a grant that lacks it still lets the mint proceed
-      // (the grant gate only covers billable scopes per its comment in the handler).
+    it('me:read with a grant that covers it -> mints normally', async () => {
       process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
-      mockFindGrant.mockResolvedValue({ userId: 'b4m-user-1', clientId: 'client-1', scopes: ['openid'] });
+      mockFindGrant.mockResolvedValue({ userId: 'b4m-user-1', clientId: 'client-1', scopes: ['openid', 'me:read'] });
       mockCreateUserApiKey.mockResolvedValue({ id: 'key-3', key: 'b4m_live_abc123', scopes: ['me:read'] });
       const { req, res } = makeReq({ ...VALID_BODY, scope: 'me:read' });
       await handler(req as any, res as any);
@@ -501,6 +509,19 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
       expect(res._getJSONData().scope).toBe('me:read');
       const [, params] = mockCreateUserApiKey.mock.calls[0];
       expect(params.scopes).toEqual(['me:read']);
+    });
+
+    it('me:read with an identity-only grant (no me:read) -> 403 in enforce mode', async () => {
+      // The grant must cover every minted scope, not just billable ones.
+      process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
+      mockFindGrant.mockResolvedValue({ userId: 'b4m-user-1', clientId: 'client-1', scopes: ['openid'] });
+      const { req, res } = makeReq({ ...VALID_BODY, scope: 'me:read' });
+      await handler(req as any, res as any);
+
+      expect(res._getStatusCode()).toBe(403);
+      expect(res._getJSONData().error).toBe('access_denied');
+      expect(res._getJSONData().error_description).toContain('me:read');
+      expect(mockCreateUserApiKey).not.toHaveBeenCalled();
     });
 
     it('non-billable scope + enforce=true + NO grant -> 403 access_denied (hole-a still applies)', async () => {
