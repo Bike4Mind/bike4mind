@@ -224,7 +224,7 @@ const handler = nextRouteForContract(chatContract, {
       response: completedQuest.reply,
       responses: completedQuest.replies,
       // Terminal-failure classifier (see chatContract's 200 description). `type` is present
-      // unconditionally, matching the polled quest (GET /api/quests/{id}); `errorCode` stays
+      // unconditionally, matching the polled quest (GET /api/v1/quests/{id}); `errorCode` stays
       // conditional since only the billing failures set it.
       type: completedQuest.type,
       ...(completedQuest.type === 'error' && { errorCode: completedQuest.errorCode }),

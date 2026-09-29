@@ -247,7 +247,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     // ChatQuestPollResultSchema (b4m-core/common/src/schemas/chat.ts) is hand-maintained
     // against this handler's res.json shape rather than imported by it - nothing else
     // catches the two drifting apart, so parse the real response through it here.
-    it('parses against the published ChatQuestPollResultSchema', async () => {
+    it('parses against the published QuestPollResponseSchema', async () => {
       mockQuestFindById.mockResolvedValue({
         id: 'quest-1',
         sessionId: 'sess-1',
@@ -260,8 +260,8 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       validateWithScopes([ApiKeyScope.AI_CHAT]);
       const { req, res } = fire();
       await handler(req, res);
-      const { ChatQuestPollResultSchema } = await import('@bike4mind/common');
-      expect(() => ChatQuestPollResultSchema.parse(res._getJSONData())).not.toThrow();
+      const { QuestPollResponseSchema } = await import('@bike4mind/common');
+      expect(() => QuestPollResponseSchema.parse(res._getJSONData())).not.toThrow();
     });
 
     it('omits it on a successful turn', async () => {

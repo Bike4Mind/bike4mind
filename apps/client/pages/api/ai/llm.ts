@@ -22,7 +22,7 @@ import { Request } from 'express';
 // (ChatCompletionInvoke -> dispatchQuest), so a key minted without chat access must not be able
 // to spend here. `apiKeyScopes.ts` already advertises exactly this mapping in the New-Key modal,
 // so the gate was promised to users before it existed. An `ai:chat`-only key still drives the
-// whole flow - GET /api/quests/{id} accepts AI_CHAT too. Narrower than the [AI_CHAT, AI_GENERATE]
+// whole flow - GET /api/v1/quests/{id} accepts AI_CHAT too. Narrower than the [AI_CHAT, AI_GENERATE]
 // pair on the contract surfaces (chat.contract.ts, cli/auth.ts DEFAULT_COMPLETION_SCOPES), which
 // accept AI_GENERATE only to preserve legacy completions behavior; that rationale does not
 // extend here, since this route is in no contract. Scope checks apply only to API-key requests;
