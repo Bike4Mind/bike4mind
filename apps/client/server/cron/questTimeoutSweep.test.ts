@@ -43,7 +43,7 @@ vi.mock('@aws-sdk/client-cloudwatch', () => ({
 }));
 
 import { handler, runQuestTimeoutSweep } from './questTimeoutSweep';
-import { QUEST_TIMEOUT_THRESHOLD_MS } from '@server/chatCompletion/questTimeoutRecovery';
+import { QUEST_TIMEOUT_THRESHOLD_MS, UNFINISHED_REPLY_NOTICE } from '@server/chatCompletion/questTimeoutRecovery';
 
 const staleQuest = (overrides: Record<string, unknown> = {}) => ({
   id: 'q-1',
@@ -100,7 +100,7 @@ describe('questTimeoutSweep cron', () => {
     );
   });
 
-  it('recovers a stuck quest with content by flipping status only (no error clobber)', async () => {
+  it('recovers a stuck quest with content as unfinished, never as an error', async () => {
     mockFindStaleRunning.mockResolvedValue([
       staleQuest({ id: 'q-2', reply: 'partial answer', replies: ['partial answer'] }),
     ]);
@@ -108,7 +108,12 @@ describe('questTimeoutSweep cron', () => {
     const result = await handler();
 
     expect(result).toEqual({ status: 'OK', recovered: 1 });
-    expect(mockSettleIfUnfinished).toHaveBeenCalledWith('q-2', { status: 'done' });
+    expect(mockSettleIfUnfinished).toHaveBeenCalledWith('q-2', {
+      status: 'done',
+      finishReason: 'timeout',
+      replies: ['partial answer', `\n\n${UNFINISHED_REPLY_NOTICE}`],
+      reply: `partial answer\n\n${UNFINISHED_REPLY_NOTICE}`,
+    });
   });
 
   it.each([
@@ -122,7 +127,9 @@ describe('questTimeoutSweep cron', () => {
 
     // A tool-heavy run can produce a fully renderable answer with reply/replies/images empty;
     // grading that "nothing to show" writes an error next to output the user can see.
-    expect(mockSettleIfUnfinished).toHaveBeenCalledWith('q-1', { status: 'done' });
+    const [, patch] = mockSettleIfUnfinished.mock.calls[0];
+    expect(patch).toMatchObject({ status: 'done', finishReason: 'timeout' });
+    expect(patch.type).toBeUndefined();
   });
 
   it('recovers multiple stuck quests in one sweep', async () => {

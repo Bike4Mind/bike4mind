@@ -183,8 +183,16 @@ class DataLakeResearchRunRepository
     return result.matchedCount > 0;
   }
 
-  async recordProgress(id: string, spentMicroUsd: number, totals: ResearchRunTotals): Promise<void> {
-    await this.runModel.updateOne({ _id: id }, { $set: { spentMicroUsd, totals } });
+  async recordProgress(
+    id: string,
+    spentMicroUsd: number,
+    totals: ResearchRunTotals,
+    judgeModel?: string
+  ): Promise<void> {
+    await this.runModel.updateOne(
+      { _id: id },
+      { $set: { spentMicroUsd, totals, ...(judgeModel !== undefined ? { judgeModel } : {}) } }
+    );
   }
 
   async countStartedSince(dataLakeId: string, since: Date): Promise<number> {

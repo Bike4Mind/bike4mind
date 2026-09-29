@@ -1,13 +1,12 @@
 // @vitest-environment node
 /**
- * Integration test for POST /api/ai/edit-image scope enforcement.
+ * Integration test for POST /api/v1/image-edits (and its legacy alias /api/ai/edit-image).
  *
- * Mirrors generate-image.integration.test.ts: drives the real next-connect chain
- * `baseApi` assembles to prove the `baseApi({ requiredScopes: [AI_GENERATE] })`
- * wiring reaches `apiKeyAuth` - a key lacking `ai:generate` is rejected 403 before
- * the handler runs (and before any billable edit is enqueued); a key holding it,
- * and JWT callers, pass through. Guards a billable + access-control surface against
- * an accidental future removal of `requiredScopes`.
+ * Mirrors image-generations.integration.test.ts: drives the real next-connect chain
+ * `nextRouteForContract` assembles to prove `editImageContract` reaches `apiKeyAuth` and
+ * body validation - a key lacking `ai:generate` is rejected 403 and a malformed body 422,
+ * both before any billable edit is enqueued; a key holding the scope, and JWT callers,
+ * pass through.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
@@ -86,8 +85,9 @@ vi.mock('@server/auth/auth', async orig => {
   };
 });
 
-import handler from '../edit-image';
-import { ApiKeyScope, NotFoundError } from '@bike4mind/common';
+import handler from '../image-edits';
+import legacyHandler from '../../ai/edit-image';
+import { ApiKeyScope, ImageQuestSchema, NotFoundError } from '@bike4mind/common';
 
 const VALID_KEY = 'sk-test-valid-key';
 
@@ -98,8 +98,15 @@ function fire({
   const { req, res } = createMocks(
     {
       method: 'POST',
-      url: '/api/ai/edit-image',
-      body: { prompt: 'make the sky bluer', ...body },
+      url: '/api/v1/image-edits',
+      body: {
+        prompt: 'make the sky bluer',
+        model: 'gpt-image-1',
+        sessionId: 's1',
+        image: 'https://example.com/source.png',
+        fabFileIds: ['mask-1'],
+        ...body,
+      },
       headers: { ...(apiKey ? { 'x-api-key': apiKey } : {}) },
     },
     { eventEmitter: EventEmitter }
@@ -118,12 +125,12 @@ function validateWithScopes(scopes: ApiKeyScope[] | string[]) {
   });
 }
 
-describe('POST /api/ai/edit-image (integration - ai:generate scope enforcement)', () => {
+describe('POST /api/v1/image-edits (integration - contract auth + validation)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUserFindById.mockResolvedValue({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false });
     mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
-    mockInvoke.mockResolvedValue({ id: 'quest-1', status: 'pending' });
+    mockInvoke.mockResolvedValue({ id: 'quest-1', sessionId: 's1', type: 'message' });
     mockGetOrCreateSession.mockResolvedValue({ session: { id: 's1' }, sessionId: 's1', asyncPromises: [] });
     mockResolveBillingOrgId.mockImplementation(async (_req: unknown, id: string | null | undefined) => id ?? null);
   });
@@ -143,7 +150,22 @@ describe('POST /api/ai/edit-image (integration - ai:generate scope enforcement)'
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ id: 'quest-1' });
+    expect(ImageQuestSchema.safeParse(res._getJSONData()).success).toBe(true);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a body that fails the contract schema (422) before enqueuing the edit', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = fire({ body: { image: undefined } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData().error).toMatch(/image/);
+    expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it('serves the legacy /api/ai/edit-image path with the same handler', () => {
+    expect(legacyHandler).toBe(handler);
   });
 
   it('leaves JWT/browser callers unaffected (200, no api key)', async () => {

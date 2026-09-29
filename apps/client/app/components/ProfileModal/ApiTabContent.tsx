@@ -4,6 +4,7 @@ import { CreditHolderType } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import ApiKeysSection from '@client/app/components/ProfileModal/SettingsTabContent/ApiKeysSection';
 import UserApiKeysSection from '@client/app/components/ProfileModal/SettingsTabContent/UserApiKeysSection';
+import AgentConnectSection from '@client/app/components/ProfileModal/AgentConnectSection';
 
 // Owner-scoped spend breakdown (by key / feature / source), shared with the admin
 // and org surfaces; pinned to the current user (ownerType=User). Lives here because
@@ -24,6 +25,8 @@ const ApiTabContent = () => {
       <ApiKeysSection />
 
       <UserApiKeysSection />
+
+      <AgentConnectSection />
 
       {currentUser?.id && (
         <>

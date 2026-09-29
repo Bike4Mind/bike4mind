@@ -1,6 +1,6 @@
 import { questRepository } from '@bike4mind/database';
 import type { ILogger } from '@bike4mind/observability';
-import { ABANDONED_REPLY, terminalRecoveryFor } from '@server/chatCompletion/questTimeoutRecovery';
+import { ABANDONED_RUN, terminalRecoveryFor } from '@server/chatCompletion/questTimeoutRecovery';
 
 /**
  * Outcome of a settle pass. `failed: true` distinguishes a pass that could not
@@ -57,7 +57,7 @@ export async function settleStrandedQuests(
         // writes one quest per round trip: a natural completion can land
         // between the read above and this write, and an unconditional patch
         // would replace its real answer with the abandoned-run error.
-        const applied = await questRepository.settleIfUnfinished(quest.id, terminalRecoveryFor(quest, ABANDONED_REPLY));
+        const applied = await questRepository.settleIfUnfinished(quest.id, terminalRecoveryFor(quest, ABANDONED_RUN));
         if (applied) settled += 1;
       } catch (err) {
         // Counted, not just logged. The execution is already terminal, so no

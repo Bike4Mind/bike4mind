@@ -96,22 +96,24 @@ const SERPAPI_QDR: Record<NonNullable<ReturnType<typeof recencyBucket>>, string>
 
 // Matches serpApiSearch's DEFAULT_NUM_RESULTS and the web_search tool schema default.
 const DEFAULT_NUM_RESULTS = 3;
-// Request timeout for the image/places/SearXNG paths (single attempt, no retry). These already
-// fail soft to [] rather than surfacing an error to the user, so they keep the original 60s
-// budget unchanged. The primary organic search below no longer shares this constant - see
-// SERPAPI_ATTEMPT_TIMEOUT_MS, which is shorter and retried once.
-const SEARCH_TIMEOUT_MS = 60_000;
-// Per-attempt timeout for serpApiSearch's organic search, retried once (SERPAPI_MAX_ATTEMPTS) -
-// short enough that a stalled SerpAPI response no longer holds the web_search tool call for
-// anywhere near the old 60s.
-const SERPAPI_ATTEMPT_TIMEOUT_MS = 20_000;
+// Request timeout for the image/places/SearXNG paths (single attempt, no retry). The image/places
+// calls fail soft to [], so a slow one only drops pictures or pins from the reply.
+const SEARCH_TIMEOUT_MS = 10_000;
+// Per-attempt timeout for serpApiSearch's organic search, retried once (SERPAPI_MAX_ATTEMPTS).
+const SERPAPI_ATTEMPT_TIMEOUT_MS = 10_000;
 // serpApiSearch attempts: the original request plus exactly one retry.
 const SERPAPI_MAX_ATTEMPTS = 2;
-// Fixed delay before the retry. Worst case for the organic search alone is two full attempt
-// timeouts plus this delay (20s + 20s + 0.5s = 40.5s) - an improvement over the old flat 60s,
-// but not a bound on the whole tool call: index.ts runs the image/places searches AFTER the
-// organic search returns, each still on its own untouched 60s SEARCH_TIMEOUT_MS fail-soft budget.
+// Fixed delay before the retry.
 const SERPAPI_RETRY_DELAY_MS = 500;
+/**
+ * The longest one web_search call can hold a turn: the organic search's attempts and retry delay,
+ * then the image/places calls, which run in parallel AFTER it. An inline chat turn runs inside the
+ * 60s server Lambda (infra/web.ts) and has already spent part of that on retrieval and the first
+ * model call before the tool starts. If this is anywhere near 60s, a stalled provider never errors
+ * back to the model: the Lambda is hard-killed mid-call and the turn dies with a partial answer.
+ */
+export const WEB_SEARCH_WORST_CASE_MS =
+  SERPAPI_MAX_ATTEMPTS * SERPAPI_ATTEMPT_TIMEOUT_MS + SERPAPI_RETRY_DELAY_MS + SEARCH_TIMEOUT_MS;
 // Citables are persisted with the quest, so keep the per-hit image list bounded.
 const MAX_IMAGES_PER_RESULT = 4;
 // Enough to build a card row from without flooding the model's context with URLs.

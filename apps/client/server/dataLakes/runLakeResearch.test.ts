@@ -139,6 +139,40 @@ describe('runLakeResearch', () => {
     expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ judgeModel: 'default-judge-model' }));
   });
 
+  // The settle is too late for a run still in flight: its card names the judge from the progress
+  // write, so that write has to carry the resolved model.
+  describe('the mid-run progress write', () => {
+    const progressOnce = () =>
+      h.executeResearchRun.mockImplementation(
+        async (_l: unknown, _r: string, ports: { onProgress: (s: number, t: unknown) => Promise<void> }) => {
+          await ports.onProgress(10, { ...emptyResearchRunTotals(), searchHits: 2 });
+          return { totals: emptyResearchRunTotals(), spentMicroUsd: 10, stopReason: 'exhausted' };
+        }
+      );
+
+    it('stamps the resolved default judge model', async () => {
+      progressOnce();
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.recordProgress).toHaveBeenCalledWith(
+        'run-1',
+        10,
+        expect.objectContaining({ searchHits: 2 }),
+        'default-judge-model'
+      );
+    });
+
+    it('stamps the configured judge model when the deployment offers it', async () => {
+      h.claimForExecution.mockResolvedValue(claimedRun({ levers: levers({ model: 'gpt-4.1-mini' }) }));
+      progressOnce();
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.recordProgress).toHaveBeenCalledWith('run-1', 10, expect.anything(), 'gpt-4.1-mini');
+    });
+  });
+
   it('records the judge model on a run that dies mid-flight too', async () => {
     h.executeResearchRun.mockRejectedValue(new Error('boom'));
 

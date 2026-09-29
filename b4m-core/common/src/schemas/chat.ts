@@ -212,10 +212,12 @@ export type ChatAck = z.infer<typeof ChatAckSchema>;
  *
  * A failed turn is still `status: 'done'` with the failure text in `reply`, so
  * `reply` alone cannot tell an answer from a failure - `type` and `errorCode` are
- * what separate a CLASSIFIED failure. A run recovered from a timeout with partial
- * content is not one of those: `terminalRecoveryFor` (questTimeoutRecovery.ts)
- * flips only `status` to preserve the surviving content, so it polls back as
- * `type: 'message'` even though it never finished.
+ * what separate a CLASSIFIED failure. A run that died with partial content is not
+ * one of those: `terminalRecoveryFor` (questTimeoutRecovery.ts) keeps the surviving
+ * content, so it polls back as `type: 'message'`. What marks it unfinished is
+ * `promptMeta.finishReason` - RUN_TIMED_OUT_FINISH_REASON or
+ * RUN_ABANDONED_FINISH_REASON (utils/stopReasons.ts) - plus a notice appended to
+ * the reply.
  */
 export const ChatQuestPollResultSchema = z.object({
   id: z.string(),
