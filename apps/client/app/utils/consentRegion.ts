@@ -31,3 +31,32 @@ export function readSharedConsent(): 'granted' | 'denied' | null {
   const value = readCookie(DECISION_COOKIE);
   return value === 'granted' || value === 'denied' ? value : null;
 }
+
+/** Where this origin records the visitor's own decision. */
+export const CONSENT_KEY = 'cookie_consent';
+
+/** This origin's stored decision, or null if the visitor has not answered here. */
+export function readStoredConsent(): 'granted' | 'denied' | null {
+  try {
+    const raw = localStorage.getItem(CONSENT_KEY);
+    return raw === 'granted' || raw === 'denied' ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 'unset' means the visitor is in the opt-in region and has not answered yet, here or on
+ * the marketing site: nothing non-essential may run until they do. */
+export type ConsentState = 'granted' | 'denied' | 'unset';
+
+/**
+ * The consent state every non-essential feature should gate on, so none of them can drift
+ * from the banner's own reading. Precedence matches CookieConsentBanner exactly: this
+ * origin's decision, then one made on the marketing site, then the region - which is only a
+ * default for a visitor who has made no decision anywhere.
+ */
+export function resolveConsent(): ConsentState {
+  const decision = readStoredConsent() ?? readSharedConsent();
+  if (decision !== null) return decision;
+  return readConsentRegion() === 'row' ? 'granted' : 'unset';
+}

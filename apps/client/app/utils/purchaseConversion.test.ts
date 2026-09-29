@@ -39,10 +39,14 @@ describe('trackPurchaseConversion', () => {
     vi.stubGlobal('gtag', mockGtag);
     clearCookie('b4m-first-touch');
     clearCookie('b4m_utm');
+    clearCookie('b4m_app_first_touch');
+    clearCookie('b4m_last_touch');
+    localStorage.setItem('cookie_consent', 'granted');
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    localStorage.removeItem('cookie_consent');
   });
 
   it('fires GA4 purchase with the transaction id, value, currency and item', () => {
