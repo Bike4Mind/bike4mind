@@ -3,7 +3,7 @@ import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import { ApiKeyScope, redactPromptMetaForViewer, toToolPayloads } from '@bike4mind/common';
 import { toGeneratedFiles } from '@server/utils/generatedFiles';
-import { resolveQuestTimeoutRecovery } from '@server/chatCompletion/questTimeoutRecovery';
+import { applyRecoveryInMemory, resolveQuestTimeoutRecovery } from '@server/chatCompletion/questTimeoutRecovery';
 import { isSessionOwnedByUser } from '@server/utils/sessionOwnership';
 import type { Request } from 'express';
 
@@ -63,7 +63,8 @@ const handler = baseApi({
       if (applied) {
         // `updatedAt` is maintained by mongoose timestamps on that write, so report the write
         // rather than the stale value the read returned.
-        Object.assign(quest, recovery, { updatedAt: new Date() });
+        applyRecoveryInMemory(quest, recovery);
+        quest.updatedAt = new Date();
       }
     } catch (err) {
       req.logger.warn('Timeout recovery write failed; returning quest as-is', { questId: quest.id, err });
