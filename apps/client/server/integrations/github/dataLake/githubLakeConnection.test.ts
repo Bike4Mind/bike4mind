@@ -16,7 +16,10 @@ const h = vi.hoisted(() => ({
   ghConnFindByInstallationId: vi.fn(),
   ghConnCreate: vi.fn(),
   ghConnRelease: vi.fn(),
+  ghConnSetEnabledForLake: vi.fn(),
+  ghConnRecordLastError: vi.fn(),
   driveConnFindByDataLakeIdAny: vi.fn(),
+  sendToQueue: vi.fn(),
 }));
 
 vi.mock('./lakeAppClient', () => ({
@@ -28,6 +31,7 @@ vi.mock('./lakeAppClient', () => ({
   getGitHubLakeAppConfig: h.getGitHubLakeAppConfig,
 }));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
+vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/database', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/database')>();
   return {
@@ -39,6 +43,8 @@ vi.mock('@bike4mind/database', async importOriginal => {
       findByInstallationId: h.ghConnFindByInstallationId,
       create: h.ghConnCreate,
       release: h.ghConnRelease,
+      setEnabledForLake: h.ghConnSetEnabledForLake,
+      recordLastError: h.ghConnRecordLastError,
     },
     orgGoogleDriveConnectionRepository: {
       ...actual.orgGoogleDriveConnectionRepository,
@@ -54,11 +60,14 @@ import {
   buildGitHubLakeConnectUrls,
   releaseGitHubLakeConnection,
   releaseGitHubLakeConnectionForLake,
+  disableGitHubConnectionForLake,
+  enableGitHubConnectionForLake,
   GITHUB_LAKE_STATE_OPTIONS,
 } from './githubLakeConnection';
 import type { GitHubLakeAppConfig, GitHubLakeInstallation, GitHubLakeRepository } from './lakeAppClient';
 import type { IOrgGitHubLakeConnectionDocument } from '@bike4mind/common';
 
+const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), log: vi.fn() } as never;
 const USER = { id: 'user-1', isAdmin: false };
 const CONFIG: GitHubLakeAppConfig = {
   appId: 'app-1',
@@ -141,7 +150,14 @@ describe('resolveConnectableLake', () => {
 });
 
 describe('completeGitHubLakeConnection', () => {
-  const params = () => ({ config: CONFIG, user: USER, dataLakeId: 'lake1', installationId: 42, code: 'the-code' });
+  const params = () => ({
+    config: CONFIG,
+    user: USER,
+    dataLakeId: 'lake1',
+    installationId: 42,
+    code: 'the-code',
+    logger,
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -227,6 +243,60 @@ describe('completeGitHubLakeConnection', () => {
   it('reports a conflict when create races another connect (duplicate key)', async () => {
     h.ghConnCreate.mockRejectedValue(Object.assign(new Error('E11000 duplicate key error'), { code: 11000 }));
     await expect(completeGitHubLakeConnection(params())).rejects.toThrow(/just connected by another request/i);
+  });
+});
+
+describe('completeGitHubLakeConnection - first ingest', () => {
+  const params = () => ({
+    config: CONFIG,
+    user: USER,
+    dataLakeId: 'lake1',
+    installationId: 42,
+    code: 'the-code',
+    logger,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.dlFindById.mockResolvedValue(ACTIVE_LAKE);
+    h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
+    h.ghConnFindByDataLakeIdAny.mockResolvedValue(null);
+    h.driveConnFindByDataLakeIdAny.mockResolvedValue(null);
+    h.exchangeInstallerCode.mockResolvedValue('user-token');
+    h.listInstallerVisibleRepositories.mockResolvedValue([REPO]);
+    h.revokeInstallerToken.mockResolvedValue(undefined);
+    h.getInstallation.mockResolvedValue(INSTALLATION);
+    h.ghConnFindByInstallationId.mockResolvedValue([]);
+    h.ghConnCreate.mockResolvedValue({ id: 'conn1', repositoryId: REPO.id, repositoryFullName: REPO.fullName });
+    h.sendToQueue.mockResolvedValue(undefined);
+    h.ghConnRecordLastError.mockResolvedValue(true);
+  });
+
+  it('enqueues the first ingest right after binding', async () => {
+    await completeGitHubLakeConnection(params());
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeIngestQueue', { connectionId: 'conn1' });
+    expect(h.ghConnRecordLastError).not.toHaveBeenCalled();
+  });
+
+  it('still completes the connect when the enqueue fails, records lastError, and leaves a manual re-sync to run it', async () => {
+    h.sendToQueue.mockRejectedValue(new Error('sqs down'));
+    await expect(completeGitHubLakeConnection(params())).resolves.toMatchObject({ id: 'conn1' });
+    expect(h.ghConnRecordLastError).toHaveBeenCalledWith(
+      'conn1',
+      'Initial sync could not be queued. Re-sync to start.'
+    );
+  });
+
+  it('does not fail the connect when recording the enqueue failure also fails', async () => {
+    h.sendToQueue.mockRejectedValue(new Error('sqs down'));
+    h.ghConnRecordLastError.mockRejectedValue(new Error('db down'));
+    await expect(completeGitHubLakeConnection(params())).resolves.toMatchObject({ id: 'conn1' });
+  });
+
+  it('enqueues nothing when the binding loses its race', async () => {
+    h.ghConnCreate.mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
+    await expect(completeGitHubLakeConnection(params())).rejects.toThrow();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 });
 
@@ -358,5 +428,17 @@ describe('releaseGitHubLakeConnectionForLake', () => {
     await expect(releaseGitHubLakeConnectionForLake('lake1')).resolves.toEqual({ installationRetained: false });
     expect(h.deleteInstallation).toHaveBeenCalledWith(CONFIG, CONNECTION.installationId);
     expect(h.ghConnRelease).toHaveBeenCalledWith(CONNECTION.id, CONNECTION.organizationId);
+  });
+});
+
+describe('GitHub connection enable helpers', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('disables and re-enables the lake s binding', async () => {
+    h.ghConnSetEnabledForLake.mockResolvedValue(true);
+    await expect(disableGitHubConnectionForLake('lake1')).resolves.toBe(true);
+    expect(h.ghConnSetEnabledForLake).toHaveBeenLastCalledWith('lake1', false);
+    await expect(enableGitHubConnectionForLake('lake1')).resolves.toBe(true);
+    expect(h.ghConnSetEnabledForLake).toHaveBeenLastCalledWith('lake1', true);
   });
 });

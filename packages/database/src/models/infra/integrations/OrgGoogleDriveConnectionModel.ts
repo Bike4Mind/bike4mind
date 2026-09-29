@@ -38,7 +38,7 @@ const CHAINED_SYNC_CLAIM_STALE_MS = 60 * 60 * 1000; // 60 min, ~5 back-to-back 1
  * token fragments. Strip token-shaped runs and cap the length in this one writer so raw provider
  * output can't leak into an admin-visible field.
  */
-function redactLastError(message: string): string {
+export function redactLastError(message: string): string {
   const redacted = message.replace(/[A-Za-z0-9._~+/=-]{24,}/g, '[redacted]');
   return redacted.length > MAX_LAST_ERROR_LEN ? `${redacted.slice(0, MAX_LAST_ERROR_LEN)}...` : redacted;
 }

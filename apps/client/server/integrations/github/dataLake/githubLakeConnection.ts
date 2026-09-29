@@ -15,6 +15,7 @@ import { createStateToken, verifyStateToken, type BaseStatePayload } from '@serv
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { sendToQueue } from '@server/utils/sqs';
 import {
   BadRequestError,
   ConflictError,
@@ -23,6 +24,7 @@ import {
   NotFoundError,
   UnauthorizedError,
 } from '@server/utils/errors';
+import { Resource } from 'sst';
 import {
   deleteInstallation,
   exchangeInstallerCode,
@@ -187,8 +189,9 @@ export async function completeGitHubLakeConnection(params: {
   dataLakeId: string;
   installationId: number;
   code: string;
+  logger: Pick<Logger, 'warn'>;
 }): Promise<IOrgGitHubLakeConnectionDocument> {
-  const { config, user, dataLakeId, installationId, code } = params;
+  const { config, user, dataLakeId, installationId, code, logger } = params;
   const { lakeId, organizationId } = await resolveConnectableLake(user, dataLakeId);
 
   const visibleRepositories = await listReposVisibleToInstaller(config, code, installationId);
@@ -215,8 +218,9 @@ export async function completeGitHubLakeConnection(params: {
     );
   }
 
+  let connection: IOrgGitHubLakeConnectionDocument;
   try {
-    return await orgGitHubLakeConnectionRepository.create({
+    connection = await orgGitHubLakeConnectionRepository.create({
       organizationId,
       targetDataLakeId: lakeId,
       installationId,
@@ -233,6 +237,26 @@ export async function completeGitHubLakeConnection(params: {
     }
     throw error;
   }
+
+  // Best-effort: the binding is valid without it and a manual re-sync runs the same ingest. Inside the try
+  // because an unregistered Resource key throws on the property read, before sendToQueue is called.
+  try {
+    await sendToQueue(Resource.githubLakeIngestQueue.url, { connectionId: connection.id });
+  } catch (error) {
+    logger.warn('GitHub lake connect: could not queue the first ingest', { connectionId: connection.id, error });
+    // lastError makes the failure visible on the connection (status stays 'connected' so the sync
+    // route's isGitHubLakeSyncClaimLive check still accepts a manual re-sync); a later successful
+    // sync clears it via recordSynced. Best-effort like the enqueue itself - never fails the connect.
+    await orgGitHubLakeConnectionRepository
+      .recordLastError(connection.id, 'Initial sync could not be queued. Re-sync to start.')
+      .catch(e =>
+        logger.warn('GitHub lake connect: could not record the enqueue failure', {
+          connectionId: connection.id,
+          error: e,
+        })
+      );
+  }
+  return connection;
 }
 
 /**
@@ -265,4 +289,13 @@ export async function releaseGitHubLakeConnectionForLake(
   const connection = await orgGitHubLakeConnectionRepository.findByDataLakeIdAny(dataLakeId);
   if (!connection) return null;
   return releaseGitHubLakeConnection(connection, getGitHubLakeAppConfig());
+}
+
+/** Archive/delete pause: flips `enabled` only, unlike releaseGitHubLakeConnectionForLake's teardown. */
+export async function disableGitHubConnectionForLake(dataLakeId: string): Promise<boolean> {
+  return orgGitHubLakeConnectionRepository.setEnabledForLake(dataLakeId, false);
+}
+
+export async function enableGitHubConnectionForLake(dataLakeId: string): Promise<boolean> {
+  return orgGitHubLakeConnectionRepository.setEnabledForLake(dataLakeId, true);
 }

@@ -13,10 +13,10 @@ import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLa
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import {
-  bestEffortSetDriveConnectionEnabled,
+  bestEffortSetConnectionEnabled,
   bestEffortAdjustOwnerStorage,
   groupStorageDeltaByOwner,
-  type DriveConnectionEnablePort,
+  type ConnectionEnablePort,
 } from './ports';
 
 export interface UnarchiveResult {
@@ -51,7 +51,9 @@ interface UnarchiveDataLakeAdapters extends LakeConfigAuditAdapters {
     users: Pick<IUserRepository, 'incrementCurrentStorage'>;
   };
   /** Re-enable the lake's Drive connection, reversing archiveDataLake's disable. See ports.ts. */
-  enableDriveConnection?: DriveConnectionEnablePort;
+  enableDriveConnection?: ConnectionEnablePort;
+  /** Re-enable the lake's GitHub connection, reversing archiveDataLake's disable. See ports.ts. */
+  enableGitHubConnection?: ConnectionEnablePort;
 }
 
 /**
@@ -68,7 +70,7 @@ interface UnarchiveDataLakeAdapters extends LakeConfigAuditAdapters {
 export const unarchiveDataLake = async (
   actor: ManageActor,
   dataLakeId: string,
-  { db, enableDriveConnection, logger }: UnarchiveDataLakeAdapters
+  { db, enableDriveConnection, enableGitHubConnection, logger }: UnarchiveDataLakeAdapters
 ): Promise<UnarchiveResult> => {
   const existing = await db.dataLakes.findById(dataLakeId);
   if (!existing) {
@@ -197,7 +199,8 @@ export const unarchiveDataLake = async (
       { db, logger }
     );
     // Reverses archiveDataLake's disable - see ports.ts for why this is best-effort.
-    await bestEffortSetDriveConnectionEnabled(enableDriveConnection, dataLakeId, logger);
+    await bestEffortSetConnectionEnabled(enableDriveConnection, dataLakeId, 'Drive', logger);
+    await bestEffortSetConnectionEnabled(enableGitHubConnection, dataLakeId, 'GitHub', logger);
   }
   // Logger forwarded for parity with every other recompute call, not because an audit row is
   // expected here: this runs AFTER the status move, which puts the lake beyond activateIfDraft's

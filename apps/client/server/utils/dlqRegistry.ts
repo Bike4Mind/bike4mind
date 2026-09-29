@@ -228,6 +228,12 @@ const DLQ_REGISTRY = [
     application: 'DataLakeManagement',
     sourceQueue: 'driveDisconnectPurgeQueue',
   },
+  {
+    label: 'github-lake-ingest',
+    displayName: 'GitHub Lake Ingest',
+    application: 'DataLakeManagement',
+    sourceQueue: 'githubLakeIngestQueue',
+  },
 ] as const satisfies readonly DlqDescriptor[];
 
 /** Valid source queue names - derived from DLQ_REGISTRY so they stay in sync automatically. */

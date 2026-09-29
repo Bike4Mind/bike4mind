@@ -12,6 +12,8 @@ import { IMongoDocument } from './common';
  * installationId (two lakes fed by two repos of the same org). The binding is therefore
  * (installationId, repositoryId); the installation itself is only removed with its last binding.
  */
+export type GitHubLakeConnectionStatus = 'connected' | 'syncing' | 'error';
+
 export interface IOrgGitHubLakeConnection {
   organizationId: string;
   targetDataLakeId: string;
@@ -26,6 +28,20 @@ export interface IOrgGitHubLakeConnection {
   /** The Bike4Mind user who completed the connection. */
   connectedBy: string;
   connectedAt: Date;
+  /** Model default true; archiving or deleting the lake turns it off, unarchive/restore back on. */
+  enabled?: boolean;
+  /** Model default 'connected'. 'error' means the App lost the repository and the user must reconnect. */
+  status?: GitHubLakeConnectionStatus;
+  lastError?: string | null;
+  /** Re-read from GitHub on every sync; the branch can be renamed there. */
+  defaultBranch?: string;
+  /** The commit the last clean sync fully applied. A non-manual sync at the same HEAD is a no-op. */
+  lastSyncedCommitSha?: string;
+  lastSyncedAt?: Date;
+  // Claim fields, same contract as IOrgGoogleDriveConnection's.
+  syncClaimedAt?: Date;
+  activeIngestBatchId?: string;
+  ingestClaimToken?: string;
 }
 
 export interface IOrgGitHubLakeConnectionDocument extends IOrgGitHubLakeConnection, IMongoDocument {}
@@ -53,4 +69,25 @@ export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrg
 
   /** Hard-deletes the row so the unique repositoryId / targetDataLakeId claims are freed. */
   release(id: string, organizationId: string): Promise<boolean>;
+
+  // Sync claim, same compare-and-set contract as IOrgGoogleDriveConnectionRepository's methods of the same names.
+  claimForSync(id: string): Promise<string | null>;
+  adoptSyncClaim(id: string, activeIngestBatchId: string, claimToken: string): Promise<string | null>;
+  renewSyncClaim(id: string, activeIngestBatchId: string, expectedToken: string): Promise<string | null>;
+  releaseSyncClaim(
+    id: string,
+    expectedToken: string,
+    lastError: string | null,
+    status?: 'connected' | 'error'
+  ): Promise<IOrgGitHubLakeConnectionDocument | null>;
+  /** The clean-finish release: records the applied commit and clears lastError. */
+  recordSynced(
+    id: string,
+    expectedToken: string,
+    synced: { commitSha: string; defaultBranch: string }
+  ): Promise<IOrgGitHubLakeConnectionDocument | null>;
+  /** Flips `enabled` on the lake's binding (lifecycle archive pause); false when the lake has none. */
+  setEnabledForLake(targetDataLakeId: string, enabled: boolean): Promise<boolean>;
+  /** Best-effort visibility for a failure outside any sync claim (e.g. the connect-time enqueue). */
+  recordLastError(id: string, lastError: string): Promise<boolean>;
 }

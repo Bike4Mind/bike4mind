@@ -38,6 +38,7 @@ export enum FabFileSourceType {
   SLACK = 'slack',
   /** Admitted by a human approving an acquisition proposal (#1671), never by the producer itself. */
   PROPOSAL_APPROVAL = 'proposal_approval',
+  GITHUB = 'github',
 }
 
 /**
@@ -527,6 +528,14 @@ export interface IFabFile {
   sourceLakeId?: string;
   /** The OrgGoogleDriveConnection that ingested this file (provenance). */
   driveConnectionId?: string;
+
+  // GitHub repository ingest provenance. Populated when sourceType === GITHUB.
+  /** The OrgGitHubLakeConnection that ingested this file; the purge-by-source key. */
+  githubConnectionId?: string;
+  /** Repository-relative path at ingest: the re-sync identity key. */
+  githubPath?: string;
+  /** Git blob SHA at ingest: exact change detection on re-sync. */
+  githubBlobSha?: string;
 
   /**
    * Curator rulings that this file is an older generation of some sibling, one per lake.
@@ -1565,6 +1574,11 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * archived lake too.
    */
   countByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<number>;
+  /**
+   * Every live, uploaded file a GitHub connection has ingested into a lake (META-TAG ONLY, same filter as
+   * findByDriveConnectionIdInDataLake). The set a re-sync diffs the repository tree against.
+   */
+  findByGitHubConnectionIdInDataLake(githubConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]>;
   /**
    * The Drive file ids a given ingest batch has already UPLOADED a FabFile for. This is what a
    * resumed ingest slice subtracts from its fresh walk, so it must exclude a row whose bytes never
