@@ -42,6 +42,7 @@ describe('cloneSession - redaction at the copy boundary', () => {
         fabFiles: {
           shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue([]) },
           search: vi.fn().mockResolvedValue({ data: [] }),
+          findAccessibleInIds: vi.fn().mockResolvedValue([]),
         },
         chatHistories: {
           findAllBySessionId: vi.fn().mockResolvedValue([
@@ -422,5 +423,6 @@ describe('cloneSession - redaction at the copy boundary', () => {
     await expect(cloneSession('caller-1', { id: 'session-1' }, { db })).resolves.toBeDefined();
 
     expect(createdSessions[0].knowledgeIds).toEqual([GOOD]);
+    expect(db.fabFiles.findAccessibleInIds).not.toHaveBeenCalled();
   });
 });

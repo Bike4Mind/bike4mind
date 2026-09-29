@@ -40,7 +40,8 @@ export const filterAccessibleKnowledgeIds = async (
   if (unresolved.length === 0) return ids;
 
   // An outage cannot prove an id foreign, and dropping it would silently detach a lake file the
-  // caller just attached. Kept; notebook export re-checks access and omits it if it is foreign.
+  // caller just attached. Kept; readers of knowledgeIds (export, listBySession) re-check access
+  // and omit it if it is foreign.
   if (lakeAccess?.resolutionFailed) {
     logger.warn('filterAccessibleKnowledgeIds: keeping unresolved ids, lake access unavailable', {
       userId: user.id,
