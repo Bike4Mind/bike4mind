@@ -1,9 +1,10 @@
 import { ApiKeyScope } from '../types/entities/UserApiKeyTypes';
 
 /**
- * The API-key scope sets the data-lake doors accept (OR semantics). The single source for both the
+ * The read/write/query API-key scope sets the data-lake doors accept (OR semantics), shared by the
  * SPA routes (`apps/client/server/dataLakes/dataLakeScopes.ts` re-exports these) and the public
  * `/api/v1/data-lakes/*` contracts, so the two families cannot drift on which key opens which door.
+ * The share set stays in dataLakeScopes.ts: no public contract accepts `datalake:share`.
  *
  * Query implies read: a key minted with exactly `datalake:query` still has to reach the read-gated
  * routes the in-REPL RLM tools call back into (e.g. GET /api/data-lakes/articles, replayed with the

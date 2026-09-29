@@ -49,7 +49,11 @@ vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false })
 vi.mock('@server/dataLakes/requestMembership', () => ({ getRequestMembershipOrgIds: async () => [] }));
 vi.mock('@server/dataLakes/resolveAuditPrincipal', () => ({ resolveAuditPrincipal: () => ({}) }));
 
-import { runLakeSemanticSearch, type LakeSemanticSearchInput } from './runLakeSemanticSearch';
+import {
+  runLakeSemanticSearch,
+  resetSharedTokenizerForTests,
+  type LakeSemanticSearchInput,
+} from './runLakeSemanticSearch';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 const req = { user: { id: 'u1', groups: [] }, logger } as unknown as Request;
@@ -78,6 +82,7 @@ const SEARCH = { results: [], alternateModelsEmbedded: [] };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetSharedTokenizerForTests();
   mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'sk-test' });
   mockSemanticSearch.mockResolvedValue(SEARCH);
 });

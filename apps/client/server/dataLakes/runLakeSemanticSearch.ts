@@ -61,6 +61,11 @@ function getSharedTokenizer(logger: Logger): ITokenizer {
   return sharedTokenizer;
 }
 
+/** Test-only: drops the cached tokenizer so a test's `createTokenizer` mock takes effect. */
+export function resetSharedTokenizerForTests(): void {
+  sharedTokenizer = undefined;
+}
+
 /**
  * The scope this search resolves its budgets on (#2709).
  *

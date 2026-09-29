@@ -158,6 +158,10 @@ function carriesTypedStreamErrorFrame(schema: z.ZodTypeAny): boolean {
  * nullable, and the query must carry an optional-or-defaulted `limit` and an optional `cursor`.
  * The other half of the convention - that `limit` bounds the page and the cursor is opaque - lives
  * in the handler, and the server helper (`apps/client/server/utils/cursorPagination.ts`) keeps it.
+ *
+ * This inference is fail-closed on purpose: a GET that merely shapes its body as a nullable array
+ * is still caught here, rather than an opt-in marker someone could forget to set. A genuinely
+ * non-paginated array response is the `pagination` conventionExemption's job, not a looser inference.
  */
 function isListResponse(schema: z.ZodTypeAny | undefined): boolean {
   const data = schema ? shapeOf(schema)?.data : undefined;
@@ -198,9 +202,9 @@ function isJsonErrorResponse(status: number, spec: ResponseSpec): boolean {
 export function assertContractConventions(contracts: readonly EndpointContract[]): void {
   for (const contract of contracts) {
     const exemptions = contract.conventionExemptions;
-    // `scope-required` / `version-root` are contract-wide; `status-table` is keyed
+    // `scope-required` / `version-root` / `pagination` are contract-wide; `status-table` is keyed
     // by the individual status, so excusing 402 cannot also excuse an unrelated 418.
-    const exempt = (rule: 'scope-required' | 'version-root') => Boolean(exemptions?.[rule]);
+    const exempt = (rule: 'scope-required' | 'version-root' | 'pagination') => Boolean(exemptions?.[rule]);
     const statusExempt = (status: number) => Boolean(exemptions?.['status-table']?.[status]);
 
     if (!CAMEL_CASE.test(contract.operationId)) {
@@ -280,7 +284,8 @@ export function assertContractConventions(contracts: readonly EndpointContract[]
     if (
       contract.method === 'get' &&
       isListResponse(contract.responses[200]?.schema) &&
-      !carriesCursorPagination(contract)
+      !carriesCursorPagination(contract) &&
+      !exempt('pagination')
     ) {
       fail(
         contract,

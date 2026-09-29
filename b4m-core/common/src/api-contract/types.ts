@@ -124,6 +124,8 @@ export type ConventionExemptions = {
   'status-table'?: Readonly<Record<number, string>>;
   'scope-required'?: string;
   'version-root'?: string;
+  /** Why this GET's array `data` response is not cursor-paginated. */
+  pagination?: string;
 };
 
 export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {

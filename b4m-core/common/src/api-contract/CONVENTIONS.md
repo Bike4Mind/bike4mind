@@ -410,6 +410,10 @@ moved under it and skips or repeats rows, and a cursor does not.
 `next_cursor` as a present, nullable string and accept optional `limit` and `cursor` query params.
 A non-`GET` endpoint that happens to return `data` is not a list and is not gated.
 
+A `GET` that genuinely returns a `data` array but is not a list (nothing to page through) carries
+a `pagination` conventionExemption stating why, the same escape hatch `status-table` and
+`scope-required` use.
+
 ---
 
 ## What is not gated yet

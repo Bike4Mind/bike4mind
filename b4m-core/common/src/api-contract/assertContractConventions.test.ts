@@ -422,6 +422,27 @@ describe('assertContractConventions', () => {
       });
       expect(() => assertContractConventions([post])).not.toThrow();
     });
+
+    it('rejects a nullable-array data GET with no cursor pagination', () => {
+      const bare = list({
+        queryParams: undefined,
+        responses: {
+          200: { description: 'Items.', schema: z.object({ data: z.array(item).nullable() }) },
+        },
+      });
+      expect(() => assertContractConventions([bare])).toThrow(/\[pagination\]/);
+    });
+
+    it('accepts a nullable-array data GET with no cursor pagination when exempted', () => {
+      const bare = list({
+        queryParams: undefined,
+        responses: {
+          200: { description: 'Items.', schema: z.object({ data: z.array(item).nullable() }) },
+        },
+        conventionExemptions: { pagination: 'This list has no ordering to page through.' },
+      });
+      expect(() => assertContractConventions([bare])).not.toThrow();
+    });
   });
 
   it('names the offending contract and points at the conventions doc', () => {

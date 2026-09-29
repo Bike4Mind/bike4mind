@@ -2,6 +2,18 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'fs';
 import path from 'path';
+import {
+  DATA_LAKE_READ_API_KEY_SCOPES,
+  DATA_LAKE_WRITE_API_KEY_SCOPES,
+  DATA_LAKE_QUERY_API_KEY_SCOPES,
+  CONTRACTS,
+  listDataLakesContract,
+  getDataLakeContract,
+  getDataLakeFileContract,
+  addDataLakeFileContract,
+  removeDataLakeFileContract,
+  searchDataLakeContract,
+} from '@bike4mind/common';
 
 /**
  * `requiredScopes` is opt-in and defaults open, so a lake route that forgets it is
@@ -14,11 +26,17 @@ import path from 'path';
  * `assertDataLakeWriteScope`/`assertDataLakeShareScope` inside the write handler.
  * Without this check, adding a `.post` to an existing read route would silently hand
  * every mutating door to a `datalake:read` key.
+ *
+ * The public `/api/v1/data-lakes/*` family covers the same doors through a contract
+ * instead of `baseApi`, so it gets its own describe block below: it walks
+ * `pages/api/v1/data-lakes` and pins each contract's `scopes` to the constant it must
+ * carry.
  */
 
 // Scanned from outside pages/: an fs-walking test under pages/ is traced as a route
 // and pulls the project into the server Lambda (eslint no-restricted-syntax guards it).
 const ROUTES_DIR = path.join(__dirname, '..', '..', 'pages', 'api', 'data-lakes');
+const V1_ROUTES_DIR = path.join(__dirname, '..', '..', 'pages', 'api', 'v1', 'data-lakes');
 const MUTATING_METHODS = new Set(['post', 'put', 'patch', 'delete']);
 
 /**
@@ -85,6 +103,21 @@ function methodBlocks(source: string): Array<{ method: string; body: string }> {
 }
 
 const files = routeFiles(ROUTES_DIR);
+const v1Files = routeFiles(V1_ROUTES_DIR);
+
+/**
+ * The six contracts CONTRACTS carries for this family, keyed to the constant each one's
+ * `scopes` must be pinned to. `search` is pinned to the query-only set specifically at a
+ * reviewer's request: it spends an embedding call and must not open to a `datalake:read`-only key.
+ */
+const V1_EXPECTED_SCOPES = [
+  [listDataLakesContract, DATA_LAKE_READ_API_KEY_SCOPES] as const,
+  [getDataLakeContract, DATA_LAKE_READ_API_KEY_SCOPES] as const,
+  [getDataLakeFileContract, DATA_LAKE_READ_API_KEY_SCOPES] as const,
+  [addDataLakeFileContract, DATA_LAKE_WRITE_API_KEY_SCOPES] as const,
+  [removeDataLakeFileContract, DATA_LAKE_WRITE_API_KEY_SCOPES] as const,
+  [searchDataLakeContract, DATA_LAKE_QUERY_API_KEY_SCOPES] as const,
+];
 
 describe('data-lake routes declare an API-key scope gate', () => {
   it('finds the route files', () => {
@@ -134,6 +167,37 @@ describe('data-lake routes declare an API-key scope gate', () => {
       );
     }
   });
+});
+
+describe('public /api/v1/data-lakes routes gate scopes through their contract', () => {
+  it('finds the v1 route files', () => {
+    expect(v1Files.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it.each(v1Files.map(f => [path.relative(V1_ROUTES_DIR, f), f]))('%s', (rel, file) => {
+    const source = readFileSync(file, 'utf8');
+
+    // These routes gate through the contract's `scopes`, not `baseApi({ requiredScopes })` -
+    // a stray baseApi call would mean an ungated door alongside (or instead of) the contract one.
+    expect(source, `${rel} must not call baseApi(...)`).not.toContain('baseApi(');
+    expect(source, `${rel} must build every method router with nextRouteForContract(...)`).toContain(
+      'nextRouteForContract('
+    );
+    expect(source).not.toContain('ApiKeyScope.ADMIN');
+  });
+
+  it('lists exactly these six contracts under /api/v1/data-lakes', () => {
+    const v1Contracts = CONTRACTS.filter(c => c.path.startsWith('/api/v1/data-lakes'));
+    expect(v1Contracts).toEqual(expect.arrayContaining(V1_EXPECTED_SCOPES.map(([c]) => c)));
+    expect(v1Contracts).toHaveLength(V1_EXPECTED_SCOPES.length);
+  });
+
+  it.each(V1_EXPECTED_SCOPES.map(([c, scopes]) => [c.operationId, c, scopes] as const))(
+    '%s is pinned to its expected scope set',
+    (_operationId, c, expectedScopes) => {
+      expect(c.scopes).toBe(expectedScopes);
+    }
+  );
 });
 
 describe('methodBlocks splitter', () => {

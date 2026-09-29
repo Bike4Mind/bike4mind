@@ -242,6 +242,52 @@ describe('POST /api/v1/data-lakes/{id}/search', () => {
     expect(mockRunSearch).not.toHaveBeenCalled();
   });
 
+  it('ends the response without a body when the search core reports the caller aborted', async () => {
+    mockRunSearch.mockResolvedValue({ kind: 'aborted' });
+    const res = await run();
+    expect(res._isEndCalled()).toBe(true);
+    expect(res._isJSON()).toBe(false);
+    expect(res._getStatusCode()).toBeLessThan(500);
+  });
+
+  it('flips the isAborted flag passed to the core only on a close before the response ends', async () => {
+    let resolveSearch: (outcome: { kind: 'aborted' }) => void = () => {};
+    mockRunSearch.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          resolveSearch = resolve;
+        })
+    );
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'target' }, body: { query: 'refund policy' } });
+    Object.assign(req, { user: { id: 'u1' }, logger });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the contract router's param type carries prelude-only fields
+    const handlerPromise = (handler as any)(req, res);
+
+    await vi.waitFor(() => {
+      if (mockRunSearch.mock.calls.length === 0) throw new Error('runLakeSemanticSearch not called yet');
+    });
+    const isAborted = mockRunSearch.mock.calls[0][1].isAborted;
+
+    expect(isAborted()).toBe(false);
+    req.emit('close');
+    expect(isAborted()).toBe(true);
+
+    resolveSearch({ kind: 'aborted' });
+    await handlerPromise;
+  });
+
+  it('does not flip isAborted on a close that fires after the response has already ended', async () => {
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'target' }, body: { query: 'refund policy' } });
+    Object.assign(req, { user: { id: 'u1' }, logger });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the contract router's param type carries prelude-only fields
+    await (handler as any)(req, res);
+
+    const isAborted = mockRunSearch.mock.calls[0][1].isAborted;
+    expect(res.writableEnded).toBe(true);
+    req.emit('close');
+    expect(isAborted()).toBe(false);
+  });
+
   it('is published under the query-only scope', () => {
     expect(searchDataLakeContract.scopes).toEqual(['datalake:query']);
   });

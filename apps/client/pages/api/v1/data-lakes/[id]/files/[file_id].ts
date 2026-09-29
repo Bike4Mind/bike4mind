@@ -8,8 +8,8 @@
  * Public twins of GET /api/data-lakes/:id/articles (per-file) and POST/DELETE
  * /api/data-lakes/:id/files/:fabFileId, over the same services. Two things differ on purpose:
  * a caller who can read the lake but not manage it gets a 403 from an explicit manage pre-check
- * (the SPA door lets the service refuse it as a 400), and a malformed `file_id` is a 404 before
- * any query rather than a CastError.
+ * (the SPA door lets the service refuse it as a 400), and a malformed `file_id` is a 404 rather
+ * than a CastError. The lake gate runs first, so its 404/403 wins over a malformed `file_id`.
  *
  * Member-scoped (`toMemberAccessContext`) for the same reason as GET /api/v1/data-lakes/{id}: a
  * platform admin who is not a member of the lake reaches neither its files nor its membership
