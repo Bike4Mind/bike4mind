@@ -101,6 +101,15 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
         </Button>
         {confirmingDisconnect ? (
           <>
+            <Typography
+              level="body-xs"
+              color="danger"
+              data-testid="drive-disconnect-warning"
+              sx={{ flexBasis: '100%' }}
+            >
+              This will permanently delete {connection.fileCount} file{connection.fileCount === 1 ? '' : 's'} this
+              connection ingested into the data lake.
+            </Typography>
             <Button
               data-testid="drive-disconnect-confirm-btn"
               size="sm"
