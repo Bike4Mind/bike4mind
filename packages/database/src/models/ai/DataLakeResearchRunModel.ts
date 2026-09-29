@@ -175,7 +175,7 @@ class DataLakeResearchRunRepository
    * `queueResearchRun`'s enqueue-failure path, which wrote the row but never got a message
    * to the executor. Matches ONLY `status: 'queued'`: if the executor has already claimed the run
    * (flipped it to `running`) this is a no-op and returns false, so the caller knows the executor -
-   * not this route - now owns the run's outcome, rather than clobbering an in-flight claimed run
+   * not this caller - now owns the run's outcome, rather than clobbering an in-flight claimed run
    * with a `failed` settle the executor never asked for.
    */
   async settleQueuedRun(id: string, input: SettleResearchRunInput): Promise<boolean> {
