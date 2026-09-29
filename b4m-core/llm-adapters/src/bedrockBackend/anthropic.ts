@@ -934,13 +934,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
   }
 
   formatMessages(messages: IMessage[]): IMessage[] {
-    // Pure: never writes to its input. The tool loop in base.ts re-enters complete() with the SAME
-    // messages array every round and re-runs this over it, so the merges below push SHALLOW COPIES.
-    // Writing cache flags/content back onto the caller's messages made one more system message
-    // carry a cache breakpoint each round (getPayload turns each into a `cache_control` block, so
-    // the request climbed 1 -> 2 -> 3 ... past the 4-block ceiling) and re-appended already-merged
-    // text, duplicating the system prompt. Content arrays are replaced, never mutated in place, so
-    // a shallow copy is enough.
+    // Pure: base.ts re-runs this over the SAME messages array every tool round, so the merges
+    // below push shallow copies (content arrays are replaced, never mutated in place).
+    // Regression context: anthropic.cacheControlToolRounds.test.ts.
     const formattedMessages = messages.reduce((cur, value) => {
       const previousMessage = cur[cur.length - 1];
 

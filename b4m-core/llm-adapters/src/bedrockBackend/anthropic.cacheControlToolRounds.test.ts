@@ -133,6 +133,11 @@ function totalMarkers(body: string): number {
   return markedCount(system) + markedCount(tools) + messageCount;
 }
 
+function systemBlocks(body: string): SystemBlock[] {
+  const { system } = parse(body);
+  return Array.isArray(system) ? system : [];
+}
+
 function systemText(body: string): string {
   const { system } = parse(body);
   return Array.isArray(system) ? system.map(block => block.text).join('\n') : String(system);
@@ -155,18 +160,30 @@ async function runToolTurn(): Promise<RecordingBedrockBackend> {
     async () => {}
   );
 
+  // Every assertion below reads the round bodies, so a loop that stopped early would leave the
+  // ceiling and text tests passing vacuously. Pin the round count here, once.
+  expect(backend.sentBodies).toHaveLength(5);
+
   return backend;
 }
 
 describe('Bedrock Claude cache_control across a multi-round tool turn', () => {
-  it('sends the same number of system breakpoints on every round', async () => {
+  it('sends the same number of system breakpoints, in the same places, on every round', async () => {
     const backend = await runToolTurn();
 
-    expect(backend.sentBodies).toHaveLength(5);
     const counts = backend.sentBodies.map(systemMarkers);
     // Every round must describe the same breakpoint layout. Under the mutation this climbs 2 -> 3
     // -> 4 -> 4 -> 5 as each round marks one more system message.
     expect(counts).toEqual(Array(counts.length).fill(counts[0]));
+
+    // Counting alone would stay green if a regression moved the shared-prefix breakpoint the same
+    // way on every round, so pin the round-1 layout: the merged prefix block ends at the declared
+    // boundary and carries the breakpoint; the per-caller tail is its own unmarked block; the
+    // adapter's own breakpoint lands on the closing model-identity block.
+    const blocks = systemBlocks(backend.sentBodies[0]);
+    expect(blocks.map(block => !!block.cache_control)).toEqual([true, false, true]);
+    expect(blocks[0].text.endsWith('Session prompt shared across callers.')).toBe(true);
+    expect(blocks[1].text).toBe('Session prompt only this caller has.');
   });
 
   it('never exceeds the 4-block cache_control ceiling on any round', async () => {
