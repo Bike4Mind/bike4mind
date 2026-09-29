@@ -163,7 +163,21 @@ describe('/api/sessions/[id]/agents/[agentId]/config', () => {
       const { req, res } = invoke('PUT', 'owner', body);
       await mockRefs.putHandler!(req, res);
       expect(res._getStatusCode()).toBe(200);
-      expect(mockRefs.update).toHaveBeenCalledWith(expect.objectContaining({ userId: 'owner' }));
+      expect(mockRefs.update).toHaveBeenCalledWith(expect.objectContaining({ userId: 'owner' }), expect.anything());
+    });
+
+    it('writes leaf paths only, never the read-time lastProactiveMessageAt, and clears omitted optionals', async () => {
+      mockRefs.sessionFindById.mockResolvedValue(OWNED_SESSION);
+      const { req, res } = invoke('PUT', 'owner', body);
+      await mockRefs.putHandler!(req, res);
+      const [data, options] = mockRefs.update.mock.calls[0];
+      expect(data).toEqual({
+        id: expect.any(String),
+        userId: 'owner',
+        'proactiveMessaging.enabled': true,
+        'proactiveMessaging.activeHours': { startHour: 9, endHour: 17 },
+      });
+      expect(options).toEqual({ unset: ['proactiveMessaging.systemPrompt', 'proactiveMessaging.minIntervalHours'] });
     });
 
     it('allows an update-permission sharee and re-stamps userId to the sharee, not the original owner', async () => {
@@ -172,7 +186,7 @@ describe('/api/sessions/[id]/agents/[agentId]/config', () => {
       await mockRefs.putHandler!(req, res);
       expect(res._getStatusCode()).toBe(200);
       // existingConfig.userId is 'owner' (see beforeEach) - the update call must override it.
-      expect(mockRefs.update).toHaveBeenCalledWith(expect.objectContaining({ userId: 'editor' }));
+      expect(mockRefs.update).toHaveBeenCalledWith(expect.objectContaining({ userId: 'editor' }), expect.anything());
     });
 
     it('404s a read-only sharee', async () => {

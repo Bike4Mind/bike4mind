@@ -5,7 +5,7 @@ import {
   IUserDocument,
   IUserRepository,
 } from '@bike4mind/common';
-import { IRegInviteDocument, RegInviteStatusType } from '@bike4mind/common';
+import { IRegInviteDocument, RegInviteStatusType, RepositoryUpdateOptions } from '@bike4mind/common';
 import { ISubscriberRepository } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { BadRequestError } from '@bike4mind/utils';
@@ -56,7 +56,10 @@ interface RegisterUserAdapters {
     adminSettings: IAdminSettingsRepository;
     registrationInvites: {
       findByCode: (code: string) => Promise<IRegInviteDocument | null>;
-      update: (invite: Partial<IRegInviteDocument>, options?: { unset?: string[] }) => Promise<unknown>;
+      update: (
+        invite: Partial<IRegInviteDocument>,
+        options?: RepositoryUpdateOptions<IRegInviteDocument>
+      ) => Promise<unknown>;
     };
     subscribers?: ISubscriberRepository;
 

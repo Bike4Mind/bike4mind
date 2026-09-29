@@ -1,4 +1,4 @@
-import { ConcurrencyConflictError, IBaseRepository, IMongoDocument } from '@bike4mind/common';
+import { ConcurrencyConflictError, IBaseRepository, IMongoDocument, RepositoryUpdateOptions } from '@bike4mind/common';
 import mongoose from 'mongoose';
 import { convertId } from '../utils/mongo';
 
@@ -105,7 +105,7 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
    * `options` is forwarded to `findOneAndUpdate` except for the reserved `unset` key; see
    * UNSET_OPTION for why clearing a field needs it.
    */
-  async update(data: Partial<T>, options?: Record<string, unknown>): Promise<T | null> {
+  async update(data: Partial<T>, options?: RepositoryUpdateOptions<T>): Promise<T | null> {
     if (!data.id) {
       throw new Error('id is required');
     }
@@ -125,7 +125,7 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
    * refreshing it between calls makes the second call carry a stale `__v` and throw. Capture the
    * returned (version-bumped) doc between writes: `doc = await repo.updateGuarded(doc)`.
    */
-  async updateGuarded(data: Partial<T>, options?: Record<string, unknown>): Promise<T | null> {
+  async updateGuarded(data: Partial<T>, options?: RepositoryUpdateOptions<T>): Promise<T | null> {
     if (!data.id) {
       throw new Error('id is required');
     }

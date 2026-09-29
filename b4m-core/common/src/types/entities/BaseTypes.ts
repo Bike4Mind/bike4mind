@@ -1,3 +1,11 @@
+/**
+ * `update` options: Mongoose passthrough plus the reserved `unset` list (see IBaseRepository.update).
+ * Each entry is a top-level field or a dotted path under one, so a typo in the root fails to compile.
+ */
+export type RepositoryUpdateOptions<T> = {
+  unset?: ((keyof T & string) | `${keyof T & string}.${string}`)[];
+} & Record<string, unknown>;
+
 export interface IBaseRepository<T> {
   find: (filter: Record<string, unknown>) => Promise<T[]>;
   findOne: (filter: Record<string, unknown>) => Promise<T | null>;
@@ -12,13 +20,13 @@ export interface IBaseRepository<T> {
    * treats as an absence - the stored value survives the write. Clearing a field means naming it
    * here. See BaseModel's UNSET_OPTION for the full rationale and the `$set`/`$unset` split.
    */
-  update: (data: Partial<T>, options?: Record<string, unknown>) => Promise<T | null>;
+  update: (data: Partial<T>, options?: RepositoryUpdateOptions<T>) => Promise<T | null>;
   /**
    * Opt-in optimistic-concurrency variant of `update`; see BaseRepository.updateGuarded. Optional so
    * adding it stays additive: an external implementer of this interface is not broken by the new member.
    * Honours the same reserved `unset` option as `update`.
    */
-  updateGuarded?: (data: Partial<T>, options?: Record<string, unknown>) => Promise<T | null>;
+  updateGuarded?: (data: Partial<T>, options?: RepositoryUpdateOptions<T>) => Promise<T | null>;
   updateMany: (filter: Record<string, unknown>, data: Partial<T>) => Promise<unknown>;
   delete: (id: string) => Promise<unknown>;
   count: (filter: Record<string, unknown>) => Promise<number>;

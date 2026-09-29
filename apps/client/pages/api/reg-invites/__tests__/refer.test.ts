@@ -175,7 +175,6 @@ describe('/api/reg-invites/refer - duplicate addresses', () => {
     expect(res._getStatusCode()).toBe(201);
     // One credit for one distinct address, not one per submitted copy.
     expect(res._getJSONData().sent).toEqual(['friend@example.com']);
-    expect((req as any).user.numReferralsAvailable).toBe(2);
     expect(mockRecordReferrals).toHaveBeenCalledWith('user-1', 1, ['invite-1']);
   });
 });

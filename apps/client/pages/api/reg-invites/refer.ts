@@ -193,7 +193,6 @@ const handler = baseApi().post(
     const failedSet = new Set(failed);
     const accepted = friendEmail.filter(email => !failedSet.has(email));
 
-    user.numReferralsAvailable = Math.max(0, user.numReferralsAvailable - accepted.length);
     await userRepository.recordReferrals(user.id, accepted.length, newInviteIds);
     await logEvent(
       {

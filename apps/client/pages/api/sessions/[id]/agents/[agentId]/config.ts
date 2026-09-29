@@ -80,15 +80,22 @@ const handler = baseApi()
       // it must always be whoever last authored proactiveMessaging.systemPrompt, never whoever
       // happened to create the row first - otherwise a session write-sharee could rewrite the
       // prompt while leaving it to run under the original owner's identity, keys, and tools.
-      config = await sessionAgentConfigRepository.update({
-        id: existingConfig.id,
-        userId: req.user!.id,
-        proactiveMessaging: {
-          ...validatedData.proactiveMessaging,
-          // Preserve lastProactiveMessageAt if not being reset
-          lastProactiveMessageAt: existingConfig.proactiveMessaging.lastProactiveMessageAt,
-        },
-      });
+      // Leaf paths, so the worker's concurrent `proactiveMessaging.lastProactiveMessageAt` stamp is not
+      // rewound to the read-time value; omitted optionals are cleared, as a whole-object write would.
+      const proactive = validatedData.proactiveMessaging;
+      const leaves = Object.fromEntries(
+        Object.entries(proactive).map(([key, value]) => [`proactiveMessaging.${key}`, value])
+      );
+      config = await sessionAgentConfigRepository.update(
+        { id: existingConfig.id, userId: req.user!.id, ...leaves } as Parameters<
+          typeof sessionAgentConfigRepository.update
+        >[0],
+        {
+          unset: (['systemPrompt', 'minIntervalHours'] as const)
+            .filter(key => proactive[key] === undefined)
+            .map(key => `proactiveMessaging.${key}` as const),
+        }
+      );
     } else {
       // Create new config
       config = await sessionAgentConfigRepository.create({
