@@ -5,9 +5,10 @@ import Chip from '@mui/joy/Chip';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { useColorScheme, useTheme } from '@mui/joy/styles';
-import { ChevronIcon, ContrastIcon, GearIcon, ServerIcon } from './icons';
+import { ChevronIcon, ContrastIcon, GearIcon, ServerIcon, SparkIcon } from './icons';
 import { McpServersDialog } from './McpServersDialog';
 import { NavItem } from './SessionList';
+import { promptSuggestionsSummary, usePromptSuggestions } from './promptSuggestions';
 import { nextThemeMode, themeModeSummary, type ResolvedThemeMode, type ThemeMode } from './themeMode';
 import { useMcpServers, type McpServersController } from './useMcpServers';
 
@@ -79,6 +80,24 @@ function appearanceEntry(
   };
 }
 
+/**
+ * Whether the composer offers a guess at the next message - toggled in place, like Appearance.
+ *
+ * A dialog would be a whole window for one boolean. What it does need is a place to be turned
+ * OFF: it is on by default and it spends a model call per reply, so a user who does not want
+ * either has to be able to find the switch. There is deliberately no third state - nothing here
+ * makes a suggestion send itself.
+ */
+function suggestionsEntry(enabled: boolean, toggle: () => void): CustomizeEntry {
+  return {
+    id: 'prompt-suggestions',
+    icon: <SparkIcon />,
+    label: 'Suggested next prompt',
+    summary: promptSuggestionsSummary(enabled),
+    onOpen: toggle,
+  };
+}
+
 function EntryRow({ entry }: { entry: CustomizeEntry }) {
   return (
     <Button
@@ -127,9 +146,11 @@ export function CustomizePanel() {
   const mcp = useMcpServers();
   const { mode, setMode } = useColorScheme();
   const theme = useTheme();
+  const [suggestions, toggleSuggestions] = usePromptSuggestions();
 
   const entries: CustomizeEntry[] = [
     appearanceEntry(mode, setMode, theme.palette.mode),
+    suggestionsEntry(suggestions, toggleSuggestions),
     mcpEntry(mcp, () => setMcpOpen(true)),
   ];
   const attention = entries.find(entry => entry.attention)?.attention;

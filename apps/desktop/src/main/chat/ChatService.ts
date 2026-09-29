@@ -39,6 +39,7 @@ import { MediaApiClient } from './media/MediaApiClient';
 import type { MediaStore } from './media/MediaStore';
 import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
+import { pickSuggestionModel, sanitizeSuggestion, suggestionRequestMessages } from './nextPrompt';
 import type { SessionActivity } from './SessionActivity';
 import { isValidSessionId, type SessionStore } from './SessionStore';
 import type { McpManager } from './mcp/McpManager';
@@ -136,6 +137,15 @@ const MAX_CONCURRENT_SPAWNED = 3;
  */
 const MAX_SPAWN_DEPTH = 2;
 
+/**
+ * How long a next-prompt guess may take before it is dropped.
+ *
+ * Shorter than a title's, because the deadline is a real one: a hint that lands after the user
+ * has started typing is not shown, so a slow answer has already been paid for and wasted. Five
+ * seconds is about as long as an empty composer stays empty.
+ */
+const SUGGESTION_TIMEOUT_MS = 5_000;
+
 export interface ChatServiceLogger {
   debug(message: string): void;
   warn(message: string): void;
@@ -232,6 +242,15 @@ interface RawRound {
 export class ChatService {
   /** One in-flight reply per session; the value aborts it. */
   private readonly active = new Map<string, AbortController>();
+
+  /**
+   * One in-flight next-prompt guess per session; the value aborts it.
+   *
+   * Kept so a new turn can cancel one rather than race it: the guess is made from the exchange
+   * that just settled, and the moment the user sends something else that exchange is no longer
+   * the end of the conversation. An answer arriving after that describes a state that has gone.
+   */
+  private readonly suggesting = new Map<string, AbortController>();
 
   /**
    * Spawned sessions whose seeded run has not finished, and who to tell when it does.
@@ -561,6 +580,12 @@ export class ChatService {
     const prompt = text.trim();
     // An attachment is a message on its own: "look at this" with a screenshot needs no prose.
     if (!prompt && attachments.length === 0) return { ok: false, error: 'Type a message first.' };
+
+    // Before any of the refusals below, and deliberately not conditional on this send being
+    // accepted: the user has typed, so the composer is no longer empty and the guess in flight
+    // can no longer be drawn either way. Cancelled rather than left to time out, so the socket
+    // and the tokens both stop now.
+    this.cancelSuggestion(sessionId);
     if (attachments.length > MAX_ATTACHMENTS_PER_TURN) {
       return { ok: false, error: `Only ${MAX_ATTACHMENTS_PER_TURN} attachments fit in one message.` };
     }
@@ -1579,6 +1604,97 @@ export class ChatService {
 
   private pickModel(models: readonly ChatModelOption[]): string | null {
     return resolveDefaultModel(models, this.deps.preferredModel ?? '');
+  }
+
+  /**
+   * Guess the message the user is most likely to send next, for the composer to draw greyed
+   * out inside its empty input.
+   *
+   * Pulled by the renderer when a turn settles rather than pushed from the reply loop, and that
+   * is the load-bearing choice: the hint exists only for a window that has this conversation
+   * open with an empty composer, so a push would spend credits per turn on every window that
+   * has it closed, plus the ones with a draft half typed. The caller also owns the switch, so a
+   * user who turned the feature off makes no call at all and main never needs to read a
+   * renderer preference.
+   *
+   * Returns null for every failure, and for every reply that produced nothing worth offering.
+   * None of it reaches the conversation: a hint that could not be generated is cosmetic, and an
+   * error message about one would be noise in the one place the user is trying to type.
+   *
+   * What comes back is a DRAFT and nothing more. It is handed to the composer, which fills the
+   * input with it only when the user presses Tab; sending is still Enter, on whatever is
+   * actually in the box. There is no path from here to a sent message.
+   */
+  async suggestNextPrompt(sessionId: string): Promise<string | null> {
+    if (!isValidSessionId(sessionId)) return null;
+    // A turn is in flight, so the exchange this would be guessing from is not the last one yet.
+    // The renderer calls on 'done', but a queued message starts the next reply immediately.
+    if (this.active.has(sessionId)) return null;
+
+    this.cancelSuggestion(sessionId);
+
+    const api = this.deps.getApiClient();
+    if (!api) return null;
+
+    const controller = new AbortController();
+    this.suggesting.set(sessionId, controller);
+    let timer: NodeJS.Timeout | undefined;
+
+    try {
+      const session = await this.deps.store.get(sessionId);
+      if (!session) return null;
+
+      const reply = session.messages[session.messages.length - 1];
+      // Only ever guesses from a settled assistant turn that actually said something. A failed
+      // turn is excluded on purpose: what follows one is a retry the user words themselves.
+      if (!reply || reply.role !== 'assistant' || reply.error || !reply.content.trim()) return null;
+
+      // The prompt that reply answered. Read backwards from the reply rather than taken as
+      // `messages[length - 2]`, which is a spawned session's own report often enough to matter.
+      const prompt = [...session.messages]
+        .reverse()
+        .find(message => message.role === 'user' && !message.system && message.content.trim());
+      if (!prompt) return null;
+
+      const model = pickSuggestionModel(this.deps.models?.cached() ?? []);
+      if (!model) return null;
+
+      timer = setTimeout(() => controller.abort(), SUGGESTION_TIMEOUT_MS);
+
+      const { endpoint } = await this.resolveServerConfig(api);
+      let answer = '';
+      await streamCompletion(
+        api.getAxiosInstance(),
+        endpoint,
+        { model, messages: suggestionRequestMessages(prompt.content, reply.content), tools: [] },
+        event => {
+          if (event.type === 'content' || event.type === 'tool_use') answer += event.text ?? '';
+        },
+        controller.signal
+      );
+
+      // An abort is a normal outcome here - streamCompletion resolves on one - so the partial
+      // text has to be dropped explicitly rather than sanitized into a hint nobody wants.
+      if (controller.signal.aborted) return null;
+
+      return sanitizeSuggestion(answer);
+    } catch (err) {
+      this.deps.logger.debug(
+        `CHAT: no next-prompt guess for ${sessionId}: ${err instanceof Error ? err.message : 'unknown'}`
+      );
+      return null;
+    } finally {
+      clearTimeout(timer);
+      if (this.suggesting.get(sessionId) === controller) this.suggesting.delete(sessionId);
+    }
+  }
+
+  /** Drop any next-prompt guess in flight for this session. Safe to call when there is none. */
+  private cancelSuggestion(sessionId: string): void {
+    const controller = this.suggesting.get(sessionId);
+    if (!controller) return;
+    this.suggesting.delete(sessionId);
+    controller.abort();
   }
 
   /**

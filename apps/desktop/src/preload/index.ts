@@ -63,6 +63,7 @@ const api: DesktopApi = {
     sendMessage: (request: SendMessageRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatSendMessage, request),
     stopReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatStopReply, sessionId),
     continueReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatContinueReply, sessionId),
+    suggestNextPrompt: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatSuggestNextPrompt, sessionId),
     getQueuedMessages: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetQueued, sessionId),
     cancelQueuedMessage: (sessionId: string, queuedId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatCancelQueued, sessionId, queuedId),

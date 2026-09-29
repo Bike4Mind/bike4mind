@@ -29,6 +29,8 @@ export function Composer({
   onReturnedConsumed,
   footer,
   leading,
+  suggestion,
+  onSuggestionDismissed,
 }: {
   sessionId: string | null;
   disabled: boolean;
@@ -69,11 +71,32 @@ export function Composer({
    * permission they will forget they granted.
    */
   leading?: ReactNode;
+  /**
+   * A guess at the next message, drawn greyed out INSIDE the empty input - the one place a user
+   * looking at a finished reply is already looking. Tab takes it into the draft.
+   *
+   * It is a draft and never a turn. Tab fills the box and stops there; Enter still sends
+   * whatever is actually in the box, so taking a suggestion and sending it are two separate
+   * keystrokes with the user's own decision in between. Nothing here submits, and there is no
+   * setting that makes it - a hint that sent itself would let model output choose the next turn.
+   */
+  suggestion?: string | null;
+  /** The hint is gone - the user typed over it, or took it. Asks the owner to drop it. */
+  onSuggestionDismissed?: () => void;
 }) {
   const [text, setText] = useState('');
 
   const hasContent = text.trim().length > 0 || attachments.attachments.length > 0;
   const blocked = !!blockedReason || !!notReady;
+
+  /**
+   * Whether the hint is on screen. Keyed on the RAW text, not on `hasContent`: a draft of
+   * nothing but spaces is still something the user typed, and drawing a hint under it would
+   * read as the app having eaten it. `disabled` outranks it outright - "Pick a conversation to
+   * start typing" is the answer to a question the user is about to ask, and a hint about a
+   * conversation they cannot type in is not.
+   */
+  const shownSuggestion = suggestion && text.length === 0 && !disabled ? suggestion : null;
   // `streaming` is NOT here: a send during a live turn is queued, not dropped. It used to be
   // the first condition, which is why pressing Enter mid-reply did nothing at all.
   const canSubmit = hasContent && !disabled && !attachments.busy && !blocked;
@@ -97,10 +120,37 @@ export function Composer({
   }, [returned, onReturnedConsumed]);
 
   // Enter sends, Shift+Enter breaks the line - the convention every chat client here shares.
+  //
+  // Tab takes the hint, which is the convention for ghost text, and is a SEPARATE key from the
+  // one that sends on purpose: accepting fills the input and returns, so the user reads and
+  // edits what the model wrote before any of it goes anywhere. Enter is left alone entirely -
+  // on an empty box with a hint showing it still means "send what is in the box", which is
+  // nothing, so it does nothing.
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Tab' && shownSuggestion) {
+      // Only claimed while the hint is up. Tab is otherwise how the keyboard leaves the input,
+      // and a composer that traps it would be the app's worst accessibility bug.
+      event.preventDefault();
+      setText(shownSuggestion);
+      onSuggestionDismissed?.();
+      return;
+    }
     if (event.key !== 'Enter' || event.shiftKey) return;
     event.preventDefault();
     submit();
+  };
+
+  /**
+   * The user is composing their own message, so the hint stops being one.
+   *
+   * Dropped rather than hidden: it is thrown away on the first keystroke and the ordinary
+   * placeholder is what comes back if they delete it all again, because a hint that reappeared
+   * under a box the user has already emptied once would be offering the same guess about a
+   * conversation they have moved on from. Covers paste and drop too - both change the value.
+   */
+  const onTextChange = (next: string) => {
+    setText(next);
+    if (suggestion && next.length > 0) onSuggestionDismissed?.();
   };
 
   /**
@@ -164,9 +214,9 @@ export function Composer({
             of where the transcript ends while every other composer row reached it. */}
         <Textarea
           value={text}
-          onChange={event => setText(event.target.value)}
+          onChange={event => onTextChange(event.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={disabled ? 'Pick a conversation to start typing' : placeholder}
+          placeholder={disabled ? 'Pick a conversation to start typing' : (shownSuggestion ?? placeholder)}
           disabled={disabled}
           minRows={1}
           maxRows={8}
@@ -187,7 +237,15 @@ export function Composer({
           }
           // onPaste goes on the inner textarea, not Joy's root: the root is a div, and typing
           // the handler for it would lose the element the paste actually happened in.
-          slotProps={{ textarea: { 'data-testid': 'chat-composer-input', onPaste } }}
+          slotProps={{
+            textarea: {
+              'data-testid': 'chat-composer-input',
+              onPaste,
+              // So the hint is distinguishable from the ordinary placeholder without reading
+              // the text, and so a screen reader is told Tab does something here.
+              ...(shownSuggestion ? { 'data-suggested-prompt': shownSuggestion, 'aria-keyshortcuts': 'Tab' } : {}),
+            },
+          }}
         />
       </Box>
 

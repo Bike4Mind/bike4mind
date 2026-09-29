@@ -69,6 +69,7 @@ export const IPC_CHANNELS = {
   chatSendMessage: 'chat:send-message',
   chatStopReply: 'chat:stop-reply',
   chatContinueReply: 'chat:continue-reply',
+  chatSuggestNextPrompt: 'chat:suggest-next-prompt',
   chatGetQueued: 'chat:get-queued',
   chatCancelQueued: 'chat:cancel-queued',
   /** main -> renderer push; one session's queue of typed-ahead messages changed. */
@@ -180,6 +181,18 @@ export interface DesktopApi {
      * message, so the events are indistinguishable from the turn never having stopped.
      */
     continueReply(sessionId: string): Promise<SendMessageResult>;
+    /**
+     * Guess the message the user is most likely to send next, for the composer to draw greyed
+     * out in its empty input. Null when there is nothing worth offering, which includes every
+     * failure - this never reports one.
+     *
+     * Pulled per settled turn by the window that has the conversation open, so the cost falls
+     * only where the hint can actually be shown. Calling it is what turns the feature on;
+     * whether to call is the renderer's decision (see promptSuggestions.ts).
+     *
+     * The result is a DRAFT for the input box. Nothing on this channel can send a message.
+     */
+    suggestNextPrompt(sessionId: string): Promise<string | null>;
     /**
      * Messages typed ahead for this conversation, waiting for the live turn to finish. Read on
      * open for the same reason as getSessionStatuses: the pushes below carry only CHANGES, and
