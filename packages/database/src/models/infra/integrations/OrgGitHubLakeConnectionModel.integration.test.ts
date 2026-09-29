@@ -162,10 +162,10 @@ describe('OrgGitHubLakeConnectionModel - sync claim', () => {
     const claimed = await repo.claimForSync(id);
     const renewed = await repo.renewSyncClaim(id, 'batch-1', claimed!);
     const adopted = await repo.adoptSyncClaim(id, 'batch-1', renewed!);
-    expect(adopted).toBeTruthy();
+    expect(adopted).toEqual({ token: expect.any(String), enabled: true });
     expect(await repo.adoptSyncClaim(id, 'batch-1', renewed!)).toBeNull();
     expect(await repo.renewSyncClaim(id, 'batch-1', renewed!)).toBeNull();
-    expect(await repo.renewSyncClaim(id, 'batch-1', adopted!)).toBeTruthy();
+    expect(await repo.renewSyncClaim(id, 'batch-1', adopted!.token)).toBeTruthy();
   });
 
   it('release heals to connected, redacts lastError, and ends the chain', async () => {
@@ -213,6 +213,67 @@ describe('OrgGitHubLakeConnectionModel - sync claim', () => {
     });
     expect(after?.lastSyncedAt).toBeInstanceOf(Date);
     expect(after?.ingestClaimToken).toBeUndefined();
+  });
+});
+
+describe('OrgGitHubLakeConnectionModel - disconnect compare-and-set', () => {
+  it('disables an idle connection, after which claimForSync refuses it', async () => {
+    const { id } = await repo.create(base);
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toEqual({ wasEnabled: true });
+    expect(await repo.findById(id)).toMatchObject({ enabled: false });
+    expect(await repo.claimForSync(id)).toBeNull();
+  });
+
+  it('matches a retry on an already-disabled row and reports it was not enabled', async () => {
+    const { id } = await repo.create(base);
+    await repo.setEnabledForLake('lake-1', false);
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toEqual({ wasEnabled: false });
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toEqual({ wasEnabled: false });
+  });
+
+  it('disables an unchained claim once it passes the unchained staleness window', async () => {
+    const { id } = await repo.create(base);
+    await repo.claimForSync(id);
+    await ageClaim(id, 21);
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toEqual({ wasEnabled: true });
+  });
+
+  it('lets a continuation adopt a disabled chain only to end it: adopt reports disabled, renew refuses', async () => {
+    const { id } = await repo.create(base);
+    const claimed = await repo.claimForSync(id);
+    const renewed = await repo.renewSyncClaim(id, 'batch-1', claimed!);
+    await repo.setEnabledForLake('lake-1', false);
+    const adopted = await repo.adoptSyncClaim(id, 'batch-1', renewed!);
+    expect(adopted).toEqual({ token: expect.any(String), enabled: false });
+    expect(await repo.renewSyncClaim(id, 'batch-1', adopted!.token)).toBeNull();
+    // The adopted claim is live, so a disconnect waits for the continuation to release it.
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toBeNull();
+    expect(await repo.releaseSyncClaim(id, adopted!.token, null)).not.toBeNull();
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toEqual({ wasEnabled: false });
+  });
+
+  it('refuses while a claim is live and disables once it goes stale', async () => {
+    const { id } = await repo.create(base);
+    const token = await repo.claimForSync(id);
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toBeNull();
+    await repo.renewSyncClaim(id, 'batch-1', token!);
+    await ageClaim(id, 21);
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toBeNull();
+    await ageClaim(id, 61);
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toEqual({ wasEnabled: true });
+    expect(await repo.findById(id)).toMatchObject({ enabled: false });
+  });
+
+  it('lets exactly one of a racing claim and disable win', async () => {
+    const { id } = await repo.create(base);
+    const [token, disabled] = await Promise.all([repo.claimForSync(id), repo.disableIfNoLiveSyncClaim(id, 'org-1')]);
+    expect(Boolean(token) !== Boolean(disabled)).toBe(true);
+  });
+
+  it('is org-scoped', async () => {
+    const { id } = await repo.create(base);
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-2')).toBeNull();
+    expect(await repo.findById(id)).toMatchObject({ enabled: true });
   });
 });
 

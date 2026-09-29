@@ -18,6 +18,9 @@ const h = vi.hoisted(() => ({
   ghConnRelease: vi.fn(),
   ghConnSetEnabledForLake: vi.fn(),
   ghConnRecordLastError: vi.fn(),
+  ghConnDisableIfNoLiveSyncClaim: vi.fn(),
+  fabFilesFindByGitHubConnectionIdInDataLake: vi.fn(),
+  purgeConnectionIngestedFiles: vi.fn(),
   driveConnFindByDataLakeIdAny: vi.fn(),
   sendToQueue: vi.fn(),
 }));
@@ -32,6 +35,10 @@ vi.mock('./lakeAppClient', () => ({
 }));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+// The sweep itself is covered by purgeDataLakeConnectionFiles's unit tests and the GitHub ingest e2e.
+vi.mock('@server/dataLakes/purgeConnectionIngestedFiles', () => ({
+  purgeConnectionIngestedFiles: h.purgeConnectionIngestedFiles,
+}));
 vi.mock('@bike4mind/database', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/database')>();
   return {
@@ -45,6 +52,11 @@ vi.mock('@bike4mind/database', async importOriginal => {
       release: h.ghConnRelease,
       setEnabledForLake: h.ghConnSetEnabledForLake,
       recordLastError: h.ghConnRecordLastError,
+      disableIfNoLiveSyncClaim: h.ghConnDisableIfNoLiveSyncClaim,
+    },
+    fabFileRepository: {
+      ...actual.fabFileRepository,
+      findByGitHubConnectionIdInDataLake: h.fabFilesFindByGitHubConnectionIdInDataLake,
     },
     orgGoogleDriveConnectionRepository: {
       ...actual.orgGoogleDriveConnectionRepository,
@@ -60,6 +72,7 @@ import {
   buildGitHubLakeConnectUrls,
   releaseGitHubLakeConnection,
   releaseGitHubLakeConnectionForLake,
+  disconnectGitHubLakeConnection,
   disableGitHubConnectionForLake,
   enableGitHubConnectionForLake,
   GITHUB_LAKE_STATE_OPTIONS,
@@ -404,6 +417,68 @@ describe('releaseGitHubLakeConnection', () => {
     await expect(releaseGitHubLakeConnection(CONNECTION, null)).rejects.toThrow(/not configured/i);
     expect(h.deleteInstallation).not.toHaveBeenCalled();
     expect(h.ghConnRelease).not.toHaveBeenCalled();
+  });
+});
+
+describe('disconnectGitHubLakeConnection', () => {
+  const LAKE = { id: 'lake1', organizationId: 'orgA', datalakeTag: 'datalake:lake1' } as never;
+  const FILES = [{ id: 'f1' }];
+  let calls: string[];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    calls = [];
+    h.getGitHubLakeAppConfig.mockReturnValue(CONFIG);
+    h.ghConnFindByInstallationId.mockResolvedValue([CONNECTION]);
+    h.fabFilesFindByGitHubConnectionIdInDataLake.mockResolvedValue(FILES);
+    h.ghConnDisableIfNoLiveSyncClaim.mockImplementation(async () => (calls.push('disable'), { wasEnabled: true }));
+    h.purgeConnectionIngestedFiles.mockImplementation(async (_lake, findFiles: () => Promise<unknown>) => {
+      calls.push('purge');
+      await findFiles();
+    });
+    h.deleteInstallation.mockImplementation(async () => void calls.push('uninstall'));
+    h.ghConnRelease.mockImplementation(async () => (calls.push('release'), true));
+    h.ghConnSetEnabledForLake.mockImplementation(async () => (calls.push('enable'), true));
+  });
+
+  it('disables, purges the connection s files, then releases', async () => {
+    await expect(disconnectGitHubLakeConnection(LAKE, CONNECTION, logger)).resolves.toEqual({
+      installationRetained: false,
+    });
+    expect(calls).toEqual(['disable', 'purge', 'uninstall', 'release']);
+    expect(h.ghConnDisableIfNoLiveSyncClaim).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.fabFilesFindByGitHubConnectionIdInDataLake).toHaveBeenCalledWith('conn1', 'datalake:lake1', {
+      includeDeleted: true,
+    });
+    expect(h.purgeConnectionIngestedFiles).toHaveBeenCalledWith(
+      LAKE,
+      expect.any(Function),
+      expect.objectContaining({ connectionId: 'conn1', logger })
+    );
+  });
+
+  it('409s while a sync claim is live, touching nothing', async () => {
+    h.ghConnDisableIfNoLiveSyncClaim.mockResolvedValue(null);
+    await expect(disconnectGitHubLakeConnection(LAKE, CONNECTION, logger)).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    expect(h.purgeConnectionIngestedFiles).not.toHaveBeenCalled();
+    expect(h.ghConnRelease).not.toHaveBeenCalled();
+  });
+
+  it('keeps the row when the purge fails, and hands the purge a re-enable restore', async () => {
+    h.purgeConnectionIngestedFiles.mockRejectedValue(new Error('storage blip'));
+    await expect(disconnectGitHubLakeConnection(LAKE, CONNECTION, logger)).rejects.toThrow('storage blip');
+    expect(h.deleteInstallation).not.toHaveBeenCalled();
+    expect(h.ghConnRelease).not.toHaveBeenCalled();
+    await h.purgeConnectionIngestedFiles.mock.calls[0][2].restore();
+    expect(h.ghConnSetEnabledForLake).toHaveBeenCalledWith('lake1', true);
+  });
+
+  it('passes no restore for an already-disabled (archived) connection', async () => {
+    h.ghConnDisableIfNoLiveSyncClaim.mockResolvedValue({ wasEnabled: false });
+    await disconnectGitHubLakeConnection(LAKE, CONNECTION, logger);
+    expect(h.purgeConnectionIngestedFiles.mock.calls[0][2].restore).toBeUndefined();
   });
 });
 

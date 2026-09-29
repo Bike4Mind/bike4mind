@@ -1,12 +1,14 @@
 import type { Response } from 'express';
 import {
   dataLakeRepository,
+  fabFileRepository,
   orgGitHubLakeConnectionRepository,
   orgGoogleDriveConnectionRepository,
 } from '@bike4mind/database';
 import {
   acceptsConnectorContent,
   isLakeIngestable,
+  type IDataLakeDocument,
   type IOrgGitHubLakeConnectionDocument,
   type IOrgGitHubLakeConnectionResponse,
 } from '@bike4mind/common';
@@ -14,6 +16,10 @@ import { Logger } from '@bike4mind/observability';
 import { createStateToken, verifyStateToken, type BaseStatePayload } from '@server/auth/jwtStateStore';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
+import {
+  purgeConnectionIngestedFiles,
+  type PurgeConnectionLogger,
+} from '@server/dataLakes/purgeConnectionIngestedFiles';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { sendToQueue } from '@server/utils/sqs';
 import {
@@ -277,6 +283,41 @@ export async function releaseGitHubLakeConnection(
   }
   await orgGitHubLakeConnectionRepository.release(connection.id, connection.organizationId);
   return { installationRetained };
+}
+
+/**
+ * The disconnect door (DELETE github-connection): disable, purge what the connection ingested, then
+ * release. A reconnect mints a new connection id and a re-sync diffs only against its own id, so a
+ * file left behind here would be orphaned in the lake for good. Purge runs before release so a
+ * failed purge leaves the row for a retried DELETE, and the disable is healed on that failure so the
+ * connection is not left present but unable to sync. Mirrors drive-connection.ts's DELETE.
+ */
+export async function disconnectGitHubLakeConnection(
+  lake: IDataLakeDocument,
+  connection: IOrgGitHubLakeConnectionDocument,
+  logger: PurgeConnectionLogger
+): Promise<{ installationRetained: boolean }> {
+  // Paired with claimForSync's `enabled` guard: a live sync would keep minting files past the purge.
+  const disabled = await orgGitHubLakeConnectionRepository.disableIfNoLiveSyncClaim(
+    connection.id,
+    connection.organizationId
+  );
+  if (!disabled) {
+    throw new ConflictError('A sync is in progress for this repository. Try disconnecting again once it finishes.');
+  }
+  await purgeConnectionIngestedFiles(
+    lake,
+    () => fabFileRepository.findByGitHubConnectionIdInDataLake(connection.id, lake.datalakeTag, { includeDeleted: true }),
+    {
+      connectionId: connection.id,
+      label: 'GitHub lake disconnect',
+      logger,
+      // Restore, don't force: an archived lake's connection was already disabled and must stay so.
+      restore: disabled.wasEnabled ? () => enableGitHubConnectionForLake(lake.id) : undefined,
+    }
+  );
+  // The App config is only needed to uninstall; a retained installation releases without it.
+  return releaseGitHubLakeConnection(connection, getGitHubLakeAppConfig());
 }
 
 /**

@@ -23,6 +23,18 @@ export function isGitHubLakeSyncClaimLive(
   return nowMs - new Date(conn.syncClaimedAt).getTime() < staleMs;
 }
 
+// isGitHubLakeSyncClaimLive's staleness windows as Mongo clauses; the two must stay in sync.
+function staleSyncClaimClauses() {
+  const now = Date.now();
+  return [
+    { activeIngestBatchId: { $in: [null] }, syncClaimedAt: { $lt: new Date(now - SYNC_CLAIM_STALE_MS) } },
+    { activeIngestBatchId: { $ne: null }, syncClaimedAt: { $lt: new Date(now - CHAINED_SYNC_CLAIM_STALE_MS) } },
+  ];
+}
+
+// Once disableIfNoLiveSyncClaim wins, a queued message must not start or extend an ingest past the purge.
+const NOT_DISABLED = { enabled: { $ne: false } };
+
 /**
  * One GitHub repository -> one org data lake, through the read-only data-lake GitHub App. See
  * IOrgGitHubLakeConnection for why this is not OrgGitHubConnection and why installationId repeats.
@@ -96,17 +108,15 @@ class OrgGitHubLakeConnectionRepository
   }
 
   async claimForSync(id: string): Promise<string | null> {
-    const staleBefore = new Date(Date.now() - SYNC_CLAIM_STALE_MS);
-    const chainedStaleBefore = new Date(Date.now() - CHAINED_SYNC_CLAIM_STALE_MS);
     const claimToken = randomUUID();
     const claimed = await this.model.findOneAndUpdate(
       {
         _id: id,
+        ...NOT_DISABLED,
         $or: [
           // null matches a binding written before status existed; 'error' lets a manual re-sync retry a reconnect.
           { status: { $in: ['connected', 'error', null] } },
-          { status: 'syncing', activeIngestBatchId: { $in: [null] }, syncClaimedAt: { $lt: staleBefore } },
-          { status: 'syncing', activeIngestBatchId: { $ne: null }, syncClaimedAt: { $lt: chainedStaleBefore } },
+          ...staleSyncClaimClauses().map(clause => ({ status: 'syncing', ...clause })),
         ],
       },
       {
@@ -117,13 +127,31 @@ class OrgGitHubLakeConnectionRepository
     return claimed !== null ? claimToken : null;
   }
 
-  async adoptSyncClaim(id: string, activeIngestBatchId: string, claimToken: string): Promise<string | null> {
+  async disableIfNoLiveSyncClaim(id: string, organizationId: string): Promise<{ wasEnabled: boolean } | null> {
+    // The negation of isGitHubLakeSyncClaimLive, as one atomic match so a claimForSync cannot land in between.
+    const disabled = await this.model.findOneAndUpdate(
+      {
+        _id: id,
+        organizationId,
+        $or: [{ status: { $ne: 'syncing' } }, { syncClaimedAt: { $in: [null] } }, ...staleSyncClaimClauses()],
+      },
+      { $set: { enabled: false } }
+    );
+    return disabled ? { wasEnabled: disabled.enabled !== false } : null;
+  }
+
+  async adoptSyncClaim(
+    id: string,
+    activeIngestBatchId: string,
+    claimToken: string
+  ): Promise<{ token: string; enabled: boolean } | null> {
     const rotatedToken = randomUUID();
     const adopted = await this.model.findOneAndUpdate(
       { _id: id, status: 'syncing', activeIngestBatchId, ingestClaimToken: claimToken },
-      { $set: { syncClaimedAt: new Date(), ingestClaimToken: rotatedToken } }
+      { $set: { syncClaimedAt: new Date(), ingestClaimToken: rotatedToken } },
+      { new: true }
     );
-    return adopted !== null ? rotatedToken : null;
+    return adopted ? { token: rotatedToken, enabled: adopted.enabled !== false } : null;
   }
 
   async renewSyncClaim(id: string, activeIngestBatchId: string, expectedToken: string): Promise<string | null> {
@@ -131,6 +159,7 @@ class OrgGitHubLakeConnectionRepository
     const renewed = await this.model.findOneAndUpdate(
       {
         _id: id,
+        ...NOT_DISABLED,
         status: 'syncing',
         ingestClaimToken: expectedToken,
         $or: [{ activeIngestBatchId: { $in: [null] } }, { activeIngestBatchId }],

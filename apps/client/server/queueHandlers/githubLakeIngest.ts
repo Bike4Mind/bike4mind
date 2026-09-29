@@ -126,9 +126,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     const releaseUnchanged = () =>
       release(connection.lastError ?? null, connection.status === 'error' ? 'error' : 'connected');
 
+    // claimForSync only claims an enabled connection; adopt reports it so a disabled chain ends at the gate below.
+    let enabledAtClaim = true;
     if (resumeBatchId && payload.claimToken) {
-      claimToken =
-        (await orgGitHubLakeConnectionRepository.adoptSyncClaim(id, resumeBatchId, payload.claimToken)) ?? undefined;
+      const adopted = await orgGitHubLakeConnectionRepository.adoptSyncClaim(id, resumeBatchId, payload.claimToken);
+      claimToken = adopted?.token;
+      enabledAtClaim = adopted?.enabled ?? true;
     }
     // A pin is only trusted on an adopted claim: a fresh claim may follow a sync that recorded a newer commit,
     // and diffing at the stale pin would roll the lake back.
@@ -139,7 +142,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     }
     if (!claimToken) {
       const current = await orgGitHubLakeConnectionRepository.findById(id);
-      if (current?.status === 'syncing' && redriveCount < MAX_GITHUB_LAKE_REDRIVES) {
+      // claimForSync refuses a disabled connection (disconnect or archive), so waiting it out is pointless.
+      if (current?.status === 'syncing' && current.enabled !== false && redriveCount < MAX_GITHUB_LAKE_REDRIVES) {
         // The whole payload rides along: a continuation that came back without its commit or batch would restart the chain.
         await enqueue({ ...payload, chainStartedAt, redriveCount: redriveCount + 1 }, REDRIVE_DELAY_SECONDS);
         logger.info('[githubLakeIngest] another sync in flight; deferred', {
@@ -167,7 +171,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     const lake = await dataLakeRepository.findById(connection.targetDataLakeId);
     const dropReason = !featureOn
       ? 'feature_disabled'
-      : connection.enabled === false
+      : !enabledAtClaim
         ? 'connection_disabled'
         : !lake
           ? 'lake_not_found'

@@ -219,8 +219,9 @@ export type ConnectionEnablePort = (args: { dataLakeId: string }) => Promise<voi
  *   `enabled: true` (OrgGoogleDriveConnection.updateCredential), which is where a user goes when
  *   sync looks broken. The GET does report `enabled` truthfully, but no UI reads it - the connection
  *   chip renders from `status` alone - so this state is inspectable over the API, not in the
- *   product. Do not remove that re-stamp without making this direction fatal instead. GitHub's lost
- *   ENABLE is repaired the same way, by disconnect + reconnect.
+ *   product. Do not remove that re-stamp without making this direction fatal instead. GitHub has
+ *   no in-place reconnect, so its lost ENABLE is repaired by disconnect + reconnect, which
+ *   purges the connection's files and re-ingests the repository from scratch.
  */
 export async function bestEffortSetConnectionEnabled(
   port: ConnectionEnablePort | undefined,

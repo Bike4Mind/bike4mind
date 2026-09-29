@@ -10,6 +10,7 @@ import {
   FabFile,
   OrgGitHubLakeConnection,
   User,
+  dataLakeRepository,
   fabFileRepository,
   orgGitHubLakeConnectionRepository,
 } from '@bike4mind/database';
@@ -25,6 +26,7 @@ const h = vi.hoisted(() => ({
   upload: vi.fn(),
   storageDelete: vi.fn(),
   sendToQueue: vi.fn(),
+  deleteInstallation: vi.fn(),
 }));
 
 vi.mock('@server/queueHandlers/utils', () => ({
@@ -42,6 +44,7 @@ vi.mock('@server/integrations/github/dataLake/lakeAppClient', async importOrigin
   ...(await importOriginal<typeof import('@server/integrations/github/dataLake/lakeAppClient')>()),
   getGitHubLakeAppConfig: () => ({ appId: 'a', slug: 's', privateKey: 'k', clientId: 'c', clientSecret: 'x' }),
   getInstallationOctokit: async () => ({}),
+  deleteInstallation: h.deleteInstallation,
   getRepository: async () => ({ fullName: 'acme/docs', defaultBranch: 'main' }),
   getBranchHeadSha: async () => h.headSha.value,
   getRecursiveTree: h.getRecursiveTree,
@@ -53,6 +56,7 @@ vi.mock('@server/integrations/github/dataLake/lakeAppClient', async importOrigin
 }));
 
 import { dispatch } from './githubLakeIngest';
+import { disconnectGitHubLakeConnection } from '@server/integrations/github/dataLake/githubLakeConnection';
 
 let mongo: MongoMemoryReplSet;
 const logger = {
@@ -74,6 +78,18 @@ const setRepo = (entries: [string, string][]) => {
   for (const [path, content] of entries) h.files.set(path, content);
 };
 
+const connect = (lakeId: string, userId: string) =>
+  orgGitHubLakeConnectionRepository.create({
+    organizationId: 'org-gh-e2e',
+    targetDataLakeId: lakeId,
+    installationId: 111,
+    accountLogin: 'acme',
+    repositoryId: 222,
+    repositoryFullName: 'acme/docs',
+    connectedBy: userId,
+    connectedAt: new Date(),
+  });
+
 async function seed() {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const user = await User.create({ username: `gh-lake-e2e-${suffix}`, name: 'GitHub Lake E2E' });
@@ -87,16 +103,7 @@ async function seed() {
     origin: 'connector-fed',
     status: 'active',
   });
-  const connection = await orgGitHubLakeConnectionRepository.create({
-    organizationId: 'org-gh-e2e',
-    targetDataLakeId: lake.id,
-    installationId: 111,
-    accountLogin: 'acme',
-    repositoryId: 222,
-    repositoryFullName: 'acme/docs',
-    connectedBy: user.id,
-    connectedAt: new Date(),
-  });
+  const connection = await connect(lake.id, user.id);
   return {
     userId: user.id as string,
     lakeId: lake.id as string,
@@ -129,6 +136,7 @@ beforeEach(() => {
   h.upload.mockResolvedValue(undefined);
   h.storageDelete.mockResolvedValue(undefined);
   h.sendToQueue.mockResolvedValue(undefined);
+  h.deleteInstallation.mockResolvedValue(undefined);
 });
 afterEach(async () => {
   vi.clearAllMocks();
@@ -244,5 +252,34 @@ describe('githubLakeIngest end to end', () => {
     expect(readmes.map(f => f.id)).toEqual([duplicate.id]);
     const retired = await FabFile.findById(original.id).setOptions({ includeDeleted: true });
     expect(retired?.deletedAt).toBeTruthy();
+  });
+
+  it('disconnect purges the connection s files, so a reconnect re-sync leaves no orphaned copy', async () => {
+    const { userId, lakeId, datalakeTag, connectionId } = await seed();
+    setRepo([
+      ['README.md', '# Docs\n'],
+      ['src/index.ts', 'export const a = 1;\n'],
+    ]);
+    await run({ connectionId });
+    expect(await FabFile.countDocuments({ githubConnectionId: connectionId })).toBe(2);
+
+    const lake = await dataLakeRepository.findById(lakeId);
+    const connection = await orgGitHubLakeConnectionRepository.findById(connectionId);
+    await expect(disconnectGitHubLakeConnection(lake!, connection!, logger)).resolves.toEqual({
+      installationRetained: false,
+    });
+    expect(await orgGitHubLakeConnectionRepository.findById(connectionId)).toBeNull();
+    expect(
+      await FabFile.countDocuments({ githubConnectionId: connectionId }).setOptions({ includeDeleted: true })
+    ).toBe(0);
+
+    const { id: reconnectedId } = await connect(lakeId, userId);
+    await run({ connectionId: reconnectedId });
+    setRepo([['src/index.ts', 'export const a = 1;\n']]);
+    h.headSha.value = 'commit-2';
+    await run({ connectionId: reconnectedId, manual: true });
+
+    const live = await FabFile.find({ tags: { $elemMatch: { name: datalakeTag } }, archivedAt: null });
+    expect(live.map(f => [f.githubPath, f.githubConnectionId])).toEqual([['src/index.ts', reconnectedId]]);
   });
 });

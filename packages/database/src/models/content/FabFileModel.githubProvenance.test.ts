@@ -58,6 +58,18 @@ describe('FabFile GitHub provenance', () => {
     expect(found.map(f => f.id)).toEqual([live.id]);
   });
 
+  it('findByGitHubConnectionIdInDataLake({ includeDeleted: true }) also reaches archived and soft-deleted rows, but not pending ones', async () => {
+    const live = await FabFile.create(row());
+    const deleted = await FabFile.create(row({ deletedAt: new Date(), githubPath: 'deleted.md' }));
+    const archived = await FabFile.create(row({ archivedAt: new Date(), githubPath: 'archived.md' }));
+    await FabFile.create(row({ status: 'pending', githubPath: 'pending.md' }));
+    await FabFile.create(row({ githubConnectionId: 'other-conn', githubPath: 'other.md' }));
+    await FabFile.create(row({ tags: [{ name: 'datalake:other', strength: 1 }], githubPath: 'untagged.md' }));
+
+    const found = await fabFileRepository.findByGitHubConnectionIdInDataLake('gh-conn-1', TAG, { includeDeleted: true });
+    expect(found.map(f => f.id).sort()).toEqual([live.id, deleted.id, archived.id].sort());
+  });
+
   it('declares the { githubConnectionId, deletedAt, status } reconcile index', async () => {
     await FabFile.createIndexes();
     const indexes = await FabFile.collection.indexes();

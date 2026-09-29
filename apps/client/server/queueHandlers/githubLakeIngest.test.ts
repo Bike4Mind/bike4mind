@@ -95,7 +95,7 @@ beforeEach(() => {
   h.order.length = 0;
   h.connFindById.mockResolvedValue(CONNECTION);
   h.claimForSync.mockResolvedValue('tok-claim');
-  h.adoptSyncClaim.mockResolvedValue('tok-adopt');
+  h.adoptSyncClaim.mockResolvedValue({ token: 'tok-adopt', enabled: true });
   h.renewSyncClaim.mockImplementation(async () => {
     h.order.push('renew');
     return 'tok-renew';
@@ -149,6 +149,14 @@ describe('githubLakeIngest - claim', () => {
     expect(h.runGitHubLakeSlice).not.toHaveBeenCalled();
   });
 
+  it('drops instead of redriving when the refused claim is on a disabled connection', async () => {
+    h.claimForSync.mockResolvedValue(null);
+    h.connFindById.mockResolvedValue({ ...CONNECTION, status: 'syncing', enabled: false });
+    await run();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(h.runGitHubLakeSlice).not.toHaveBeenCalled();
+  });
+
   it('stops redriving at the cap', async () => {
     h.claimForSync.mockResolvedValue(null);
     h.connFindById.mockResolvedValue({ ...CONNECTION, status: 'syncing' });
@@ -158,15 +166,21 @@ describe('githubLakeIngest - claim', () => {
 });
 
 describe('githubLakeIngest - gates', () => {
-  it('drops a disabled connection after claiming, releasing it unchanged', async () => {
-    h.connFindById.mockResolvedValue({ ...CONNECTION, enabled: false });
-    await run();
+  it('ends a continuation that adopted a disabled chain: settles its batch and releases, writing nothing', async () => {
+    h.adoptSyncClaim.mockResolvedValue({ token: 'tok-adopt', enabled: false });
+    h.connFindById.mockResolvedValue({ ...CONNECTION, status: 'syncing', lastError: 'prior' });
+    await expect(run(continuation())).resolves.toBeUndefined();
+    expect(h.claimForSync).not.toHaveBeenCalled();
+    expect(h.settle).toHaveBeenCalledWith('batch1', logger);
+    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'tok-adopt', 'prior', 'connected');
     expect(h.runGitHubLakeSlice).not.toHaveBeenCalled();
-    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'tok-claim', null, 'connected');
+    expect(h.renewSyncClaim).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
   it('keeps an error state and its message when a drop releases', async () => {
-    h.connFindById.mockResolvedValue({ ...CONNECTION, enabled: false, status: 'error', lastError: 'reconnect' });
+    h.getSettingByName.mockResolvedValue(false);
+    h.connFindById.mockResolvedValue({ ...CONNECTION, status: 'error', lastError: 'reconnect' });
     await run();
     expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'tok-claim', 'reconnect', 'error');
   });

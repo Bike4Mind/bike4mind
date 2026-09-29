@@ -71,8 +71,14 @@ export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrg
   release(id: string, organizationId: string): Promise<boolean>;
 
   // Sync claim, same compare-and-set contract as IOrgGoogleDriveConnectionRepository's methods of the same names.
+  // Unlike Drive's, claim/renew also refuse a disabled connection: the other half of disableIfNoLiveSyncClaim's race.
+  // Adopt does not (it ingests nothing itself); it reports `enabled` so the continuation can wind the chain down.
   claimForSync(id: string): Promise<string | null>;
-  adoptSyncClaim(id: string, activeIngestBatchId: string, claimToken: string): Promise<string | null>;
+  adoptSyncClaim(
+    id: string,
+    activeIngestBatchId: string,
+    claimToken: string
+  ): Promise<{ token: string; enabled: boolean } | null>;
   renewSyncClaim(id: string, activeIngestBatchId: string, expectedToken: string): Promise<string | null>;
   releaseSyncClaim(
     id: string,
@@ -86,6 +92,13 @@ export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrg
     expectedToken: string,
     synced: { commitSha: string; defaultBranch: string }
   ): Promise<IOrgGitHubLakeConnectionDocument | null>;
+  /**
+   * Disconnect's compare-and-set: disables the connection only while no sync claim is live (the
+   * isGitHubLakeSyncClaimLive notion). Reports whether the row was enabled before this call, so a caller
+   * restores only what it disabled. Null means a sync is in flight (the disconnect must refuse) or no row
+   * matches id + organizationId.
+   */
+  disableIfNoLiveSyncClaim(id: string, organizationId: string): Promise<{ wasEnabled: boolean } | null>;
   /** Flips `enabled` on the lake's binding (lifecycle archive pause); false when the lake has none. */
   setEnabledForLake(targetDataLakeId: string, enabled: boolean): Promise<boolean>;
   /** Best-effort visibility for a failure outside any sync claim (e.g. the connect-time enqueue). */

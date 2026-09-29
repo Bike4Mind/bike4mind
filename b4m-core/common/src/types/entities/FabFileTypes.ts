@@ -1577,8 +1577,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   /**
    * Every live, uploaded file a GitHub connection has ingested into a lake (META-TAG ONLY, same filter as
    * findByDriveConnectionIdInDataLake). The set a re-sync diffs the repository tree against.
+   *
+   * `includeDeleted` mirrors findByDriveConnectionIdInDataLake's own option - the disconnect purge's
+   * finder, reaching an archived lake's members and soft-deleted rows.
    */
-  findByGitHubConnectionIdInDataLake(githubConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]>;
+  findByGitHubConnectionIdInDataLake(
+    githubConnectionId: string,
+    datalakeTag: string,
+    options?: { includeDeleted?: boolean }
+  ): Promise<IFabFileDocument[]>;
   /**
    * The Drive file ids a given ingest batch has already UPLOADED a FabFile for. This is what a
    * resumed ingest slice subtracts from its fresh walk, so it must exclude a row whose bytes never
