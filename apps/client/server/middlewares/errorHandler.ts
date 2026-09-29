@@ -24,6 +24,10 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
     // All measured in packages/database/src/__test__/mongooseCastErrorPath.integration.test.ts.
     if (errorObj.name === 'CastError') {
       if ((errorObj as { path?: string }).path === '_id') {
+        // Counts the remaps ahead of removing this rule: production hits under this marker are
+        // the casts still left to guard or fix. The original message names the model and the
+        // path the 404 below would hide; it stays server-side. Stays `warn` so it cannot alarm.
+        req.logger.warn(`[cast-id-remap] ${req.method} ${req.url}: ${errorObj.message ?? ''}`);
         errorObj = new NotFoundError('Resource not found');
       } else {
         // Mongoose's cast message names the model and the schema field (`... at path
