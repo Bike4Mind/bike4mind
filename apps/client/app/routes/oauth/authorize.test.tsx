@@ -229,6 +229,22 @@ describe('OAuthAuthorizePage scope label readability', () => {
     expect(contrastOnCard(mode, 'primary')).toBeGreaterThanOrEqual(WCAG_AA_NORMAL_TEXT);
   });
 
+  it('gives the authorization-failure message a readable colour too', async () => {
+    // Pre-existing, outside this PR's original diff, but the identical defect in the same file:
+    // an unreadable error is worse than an unreadable label, so it is fixed alongside.
+    global.fetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ error: 'invalid_client', error_description: 'Unknown client' }),
+    });
+
+    renderPage();
+
+    const message = await screen.findByTestId('oauth-error-message');
+    expect(message).toHaveTextContent('Unknown client');
+    expect(getComputedStyle(message).color).toContain('text-primary');
+  });
+
   it.each(MODES)('%s: the body-sm default it replaced would not have cleared AA', mode => {
     // Positive control. Without it the assertion above could pass against any token and prove
     // nothing. These reproduce the ratios measured on the preview: 2.23 light, 4.35 dark.

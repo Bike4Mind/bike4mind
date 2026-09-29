@@ -177,7 +177,11 @@ const OAuthAuthorizePage = () => {
         <Typography level="h4" color="danger">
           Authorization failed
         </Typography>
-        <Typography level="body-sm">{errorMsg}</Typography>
+        {/* Same reason as the scope label below: the body-sm default lands on text.tertiary,
+            which measures 2.27:1 here. An error the user cannot read is the worst one. */}
+        <Typography level="body-sm" textColor="text.primary" data-testid="oauth-error-message">
+          {errorMsg}
+        </Typography>
         <Button variant="outlined" onClick={() => window.history.back()}>
           Go back
         </Button>
