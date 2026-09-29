@@ -48,7 +48,7 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
     // 4xx = client error (expected in normal operation) -> warn
     // 5xx = server error (actual bug/outage) -> error (triggers LiveOps via CloudWatch filter)
     const message = `${req.method} ${req.url} → ${statusCode}: ${errorObj.message || 'No message available'}`;
-    if (statusCode >= 500) {
+    if (statusCode >= 500 && !(errorObj instanceof HTTPError && errorObj.expected)) {
       req.logger.error(message, error);
     } else {
       req.logger.warn(message);
