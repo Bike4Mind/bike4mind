@@ -80,7 +80,8 @@ const FeatureDetailView = ({
         >
           <ArrowBackIcon />
         </IconButton>
-        <Typography level="title-md" sx={{ fontSize: '18px', fontWeight: 500 }}>
+        {/* The card's own title size, so opening a card does not resize its name. */}
+        <Typography level="title-md" sx={{ fontSize: '16px', fontWeight: 500 }}>
           {item.title}
         </Typography>
         {aside && <Box sx={{ ml: 'auto', display: 'flex', flexShrink: 0 }}>{aside}</Box>}

@@ -1,6 +1,6 @@
 import { Box, Button, Card, Chip, chipClasses, Stack, TabList, TabPanel, Tabs, Tooltip, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
-import { cloneElement, useMemo, useState } from 'react';
+import { cloneElement, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import CheckIcon from '@mui/icons-material/Check';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
@@ -385,6 +385,40 @@ const GearsPage = () => {
   // phone - otherwise it would be in the DOM twice.
   useMobileHeader('Gears', isMobile ? helpCenter : undefined);
 
+  const tabsRef = useRef<HTMLDivElement>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
+  /**
+   * While the strip is stuck (a phone, scrolled past the header copy), bring the
+   * scroll back to where it sticks, so new content starts right under it rather
+   * than wherever the old content was scrolled to. The Tabs root stays at the
+   * strip's resting spot, so it sits above the strip only while the strip is stuck.
+   */
+  const keepTabsInView = () => {
+    const root = tabsRef.current;
+    const strip = stripRef.current;
+    if (root && strip && root.getBoundingClientRect().top < strip.getBoundingClientRect().top) {
+      root.scrollIntoView({ block: 'start' });
+    }
+  };
+  const openCard = (key: GearKey | null) => {
+    setOpenKey(key);
+    keepTabsInView();
+  };
+
+  // Back lands on the card that was opened, not the top of the list, so reading
+  // one write-up twenty cards down does not cost the scroll back to it.
+  const cardRefs = useRef(new Map<GearKey, HTMLDivElement>());
+  const returnTo = useRef<GearKey | null>(null);
+  const closeCard = () => {
+    returnTo.current = openKey;
+    setOpenKey(null);
+  };
+  useEffect(() => {
+    if (openKey !== null || !returnTo.current) return;
+    cardRefs.current.get(returnTo.current)?.scrollIntoView({ block: 'center' });
+    returnTo.current = null;
+  }, [openKey]);
+
   const { mutate: claimGear, isPending: claiming } = useClaimGear();
   const claim = (gear: GearStatus) => {
     if (claiming) return;
@@ -450,7 +484,7 @@ const GearsPage = () => {
   };
 
   const renderCards = (cards: GearStatus[], opensDetail: boolean) => {
-    const act = (gear: GearStatus) => (opensDetail ? setOpenKey(gear.key) : onCta(gear));
+    const act = (gear: GearStatus) => (opensDetail ? openCard(gear.key) : onCta(gear));
     return isPending ? (
       <Typography level="body-sm" sx={{ opacity: 0.7 }} data-testid="gears-loading">
         Checking the grid...
@@ -475,6 +509,10 @@ const GearsPage = () => {
             // equally urgent calls to action rather than a list to browse.
             <Card
               key={gear.key}
+              ref={el => {
+                if (el) cardRefs.current.set(gear.key, el);
+                else cardRefs.current.delete(gear.key);
+              }}
               variant="outlined"
               data-testid={`gear-card-${gear.key}`}
               role="button"
@@ -626,7 +664,7 @@ const GearsPage = () => {
     return (
       <FeatureDetailView
         item={open}
-        onBack={() => setOpenKey(null)}
+        onBack={closeCard}
         testIdPrefix="gear-detail"
         aside={<RewardChip gear={open} reward={rewardState(open)} onClaim={() => claim(open)} labeled />}
         cta={
@@ -696,71 +734,98 @@ const GearsPage = () => {
         {/* The tabs are static, so they render before the status lands - only the
             grid inside a panel waits. */}
         <Tabs
+          ref={tabsRef}
           value={tab}
           onChange={(_, value) => {
             setTab(value as GearsTabKey);
-            setOpenKey(null);
+            openCard(null);
           }}
-          sx={{ mt: '32px' }}
+          sx={{ mt: { xs: '16px', sm: '32px' } }}
           aria-label="Gear categories"
         >
-          <TabList data-testid="gears-tablist" sx={pageTabListSx}>
-            {TABS.map(({ key, label }) => {
-              const claimable = tabCards[key].filter(g => rewardState(g) === 'claimable').length;
-              return (
-                <PageTab key={key} value={key} data-testid={`gears-tab-${key}`}>
-                  {/* Colour set here, as on /profile: the opacity step in PageTab is what
-                      separates active from inactive, so the label itself stays primary ink. */}
-                  <Typography sx={{ color: 'text.primary' }}>{label}</Typography>
-                  {claimable > 0 && (
-                    // A Box, not Typography: PageTab fades every Typography on an
-                    // inactive tab, and this count is most useful on exactly those.
-                    // The claimed marker's circle in the claimable green, so the tab
-                    // points at the cards the sidenav's Claim N counted.
-                    <Box
-                      component="span"
-                      role="img"
-                      aria-label={`${claimable} to claim`}
-                      data-testid={`gears-tab-claimable-${key}`}
-                      sx={theme => ({
-                        ml: '8px',
-                        minWidth: '20px',
-                        height: '20px',
-                        px: '5px',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        borderRadius: '999px',
-                        // The credit chips' own size and weight.
-                        fontSize: '13px',
-                        fontWeight: 500,
-                        lineHeight: 1,
-                        color: rewardGreen(theme).ink,
-                        backgroundColor: rewardGreen(theme).fill,
-                        border: `1px solid ${rewardGreen(theme).stroke}`,
-                      })}
-                    >
-                      {claimable}
-                    </Box>
-                  )}
-                </PageTab>
-              );
+          {/* On a phone the header copy scrolls away and the strip stays, so the other
+              tabs are one tap away from anywhere in a long list. It pins to PageFrame's
+              scroller. The sticky part is this wrapper, not the TabList, so the 16px of
+              air above and below the strip does not pull the TabList's underline away
+              from the active tab's indicator. The bleed reaches over the frame's 20px
+              side padding so cards do not show beside it, and the fill is the frame's own.
+              The Tabs margin and the panel padding give back those 16px each, so the
+              strip rests where it did. */}
+          <Box
+            ref={stripRef}
+            sx={theme => ({
+              position: { xs: 'sticky', sm: 'static' },
+              top: 0,
+              zIndex: 1,
+              flexShrink: 0,
+              mx: { xs: '-20px', sm: 0 },
+              px: { xs: '20px', sm: 0 },
+              py: { xs: '16px', sm: 0 },
+              backgroundColor: {
+                xs:
+                  theme.palette.mode === 'dark' ? theme.palette.background.surface2 : theme.palette.background.surface,
+                sm: 'transparent',
+              },
             })}
-          </TabList>
+          >
+            <TabList data-testid="gears-tablist" sx={pageTabListSx}>
+              {TABS.map(({ key, label }) => {
+                const claimable = tabCards[key].filter(g => rewardState(g) === 'claimable').length;
+                return (
+                  <PageTab key={key} value={key} data-testid={`gears-tab-${key}`}>
+                    {/* Colour set here, as on /profile: the opacity step in PageTab is what
+                      separates active from inactive, so the label itself stays primary ink. */}
+                    <Typography sx={{ color: 'text.primary' }}>{label}</Typography>
+                    {claimable > 0 && (
+                      // A Box, not Typography: PageTab fades every Typography on an
+                      // inactive tab, and this count is most useful on exactly those.
+                      // The claimed marker's circle in the claimable green, so the tab
+                      // points at the cards the sidenav's Claim N counted.
+                      <Box
+                        component="span"
+                        role="img"
+                        aria-label={`${claimable} to claim`}
+                        data-testid={`gears-tab-claimable-${key}`}
+                        sx={theme => ({
+                          ml: '8px',
+                          minWidth: '20px',
+                          height: '20px',
+                          px: '5px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          borderRadius: '999px',
+                          // The credit chips' own size and weight.
+                          fontSize: '13px',
+                          fontWeight: 500,
+                          lineHeight: 1,
+                          color: rewardGreen(theme).ink,
+                          backgroundColor: rewardGreen(theme).fill,
+                          border: `1px solid ${rewardGreen(theme).stroke}`,
+                        })}
+                      >
+                        {claimable}
+                      </Box>
+                    )}
+                  </PageTab>
+                );
+              })}
+            </TabList>
+          </Box>
 
-          <TabPanel value="getting-started" sx={{ px: 0, pt: '24px', pb: 0 }}>
+          <TabPanel value="getting-started" sx={{ px: 0, pt: { xs: '8px', sm: '24px' }, pb: 0 }}>
             {renderPanel(tabCards['getting-started'], 'getting-started')}
           </TabPanel>
 
-          <TabPanel value="features" sx={{ px: 0, pt: '24px', pb: 0 }}>
+          <TabPanel value="features" sx={{ px: 0, pt: { xs: '8px', sm: '24px' }, pb: 0 }}>
             {renderPanel(tabCards.features, 'features')}
           </TabPanel>
 
-          <TabPanel value="generators" sx={{ px: 0, pt: '24px', pb: 0 }}>
+          <TabPanel value="generators" sx={{ px: 0, pt: { xs: '8px', sm: '24px' }, pb: 0 }}>
             {renderPanel(tabCards.generators, 'generators')}
           </TabPanel>
 
-          <TabPanel value="integrations" sx={{ px: 0, pt: '24px', pb: 0 }}>
+          <TabPanel value="integrations" sx={{ px: 0, pt: { xs: '8px', sm: '24px' }, pb: 0 }}>
             {renderPanel(tabCards.integrations, 'integrations')}
           </TabPanel>
         </Tabs>
