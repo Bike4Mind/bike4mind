@@ -23,6 +23,7 @@ import { describeActivity } from './statusLine';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
 import { useConversation, useModelCatalog, usePendingApprovals, useSessionStatuses, useSessions } from './useChat';
+import { usePromptSuggestion } from './usePromptSuggestion';
 import { useFileDrop } from './useFileDrop';
 import { useSkills } from './useSkills';
 
@@ -117,6 +118,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [showArtifacts, setShowArtifacts] = useState(false);
   const draft = useAttachmentDraft(activeId);
+  const nextPrompt = usePromptSuggestion(activeId);
 
   const onFilesDropped = useCallback(
     (files: File[]) => {
@@ -390,6 +392,8 @@ export function ChatShell({ account }: { account?: ReactNode }) {
             }
             onSend={text => void onSend(text)}
             onStop={conversation.stop}
+            suggestion={nextPrompt.suggestion}
+            onSuggestionDismissed={nextPrompt.dismiss}
             queued={conversation.queued}
             onCancelQueued={conversation.cancelQueued}
             returned={conversation.returned}

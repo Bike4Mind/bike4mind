@@ -130,6 +130,7 @@ describe('ChatService app-control tools', () => {
       'session_list',
       'session_read',
       'session_spawn',
+      'session_send',
       'session_archive',
       'session_delete',
     ]);

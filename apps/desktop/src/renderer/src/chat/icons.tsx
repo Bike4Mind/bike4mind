@@ -185,3 +185,23 @@ export function CheckIcon() {
     </Glyph>
   );
 }
+
+/** Appearance: one disc with half of it filled - the same glyph whichever scheme is in force. */
+export function ContrastIcon() {
+  return (
+    <Glyph>
+      <circle cx="8" cy="8" r="5.5" />
+      <path d="M8 2.5a5.5 5.5 0 0 1 0 11z" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+/** Suggested next prompt: a four-point spark, with a smaller one beside it. */
+export function SparkIcon() {
+  return (
+    <Glyph>
+      <path d="M6.5 2.5l1.1 2.9 2.9 1.1-2.9 1.1-1.1 2.9-1.1-2.9L2.5 6.5l2.9-1.1z" />
+      <path d="M11.5 9.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z" />
+    </Glyph>
+  );
+}

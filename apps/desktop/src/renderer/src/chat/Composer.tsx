@@ -8,6 +8,7 @@ import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
 import type { ChatQueuedMessage } from '@shared/chat';
 import { AttachmentRow } from './Attachments';
+import { composerKeyAction, composerPlaceholder, shownSuggestion } from './composerInput';
 import { contentColumnSx } from './layout';
 import { QueuedMessageList } from './QueuedMessageList';
 import { mergeIntoDraft } from './queuedMessages';
@@ -33,6 +34,8 @@ export function Composer({
   footer,
   leading,
   skills,
+  suggestion,
+  onSuggestionDismissed,
 }: {
   sessionId: string | null;
   disabled: boolean;
@@ -78,12 +81,27 @@ export function Composer({
    * simply leaves `/` an ordinary character.
    */
   skills?: SkillsController;
+  /**
+   * A guess at the next message, drawn greyed out INSIDE the empty input - the one place a user
+   * looking at a finished reply is already looking. Tab takes it into the draft.
+   *
+   * It is a draft and never a turn. Tab fills the box and stops there; Enter still sends
+   * whatever is actually in the box, so taking a suggestion and sending it are two separate
+   * keystrokes with the user's own decision in between. Nothing here submits, and there is no
+   * setting that makes it - a hint that sent itself would let model output choose the next turn.
+   */
+  suggestion?: string | null;
+  /** The hint is gone - the user typed over it, or took it. Asks the owner to drop it. */
+  onSuggestionDismissed?: () => void;
 }) {
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const hasContent = text.trim().length > 0 || attachments.attachments.length > 0;
   const blocked = !!blockedReason || !!notReady;
+
+  // See composerInput.ts for what wins here and why.
+  const shown = shownSuggestion({ disabled, text, suggestion });
   // `streaming` is NOT here: a send during a live turn is queued, not dropped. It used to be
   // the first condition, which is why pressing Enter mid-reply did nothing at all.
   const canSubmit = hasContent && !disabled && !attachments.busy && !blocked;
@@ -144,14 +162,21 @@ export function Composer({
   const pick = (name: string) => {
     // The trailing space is what closes the menu (the text is no longer a bare token) and what
     // leaves the user positioned to type arguments.
-    setText(`/${name} `);
+    onTextChange(`/${name} `);
     setDismissed(null);
     textareaRef.current?.focus();
   };
 
-  // Enter sends, Shift+Enter breaks the line - the convention every chat client here shares.
-  // While the skill menu is open the same keys drive it instead, because that is the list the
-  // user is looking at; everything else falls through to the textarea untouched.
+  /**
+   * Enter sends, Shift+Enter breaks the line, Tab takes the hint. Which is which lives in
+   * composerInput.ts, where the rule that accepting is not sending is stated and tested.
+   *
+   * The skill menu is asked FIRST, because while it is open it is the list the user is looking
+   * at and Enter/Tab belong to it. The two cannot both want a key in practice - a suggestion is
+   * only offered into an EMPTY input, and the menu only opens once a `/` has been typed - but
+   * the order is stated rather than left to that coincidence, so a later change to either
+   * condition cannot quietly make Tab do the wrong one.
+   */
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (pickerOpen) {
       if (event.key === 'Escape') {
@@ -178,9 +203,32 @@ export function Composer({
       }
     }
 
-    if (event.key !== 'Enter' || event.shiftKey) return;
+    const action = composerKeyAction(event.key, event.shiftKey, !!shown);
+    if (action === 'default') return;
     event.preventDefault();
-    submit();
+    if (action === 'submit') {
+      submit();
+      return;
+    }
+    // Fills the draft and stops. The user still has to press Enter, on text they can now read
+    // and edit - which is the whole reason this is a different key from the one that sends.
+    if (shown) {
+      setText(shown);
+      onSuggestionDismissed?.();
+    }
+  };
+
+  /**
+   * The user is composing their own message, so the hint stops being one.
+   *
+   * Dropped rather than hidden: it is thrown away on the first keystroke and the ordinary
+   * placeholder is what comes back if they delete it all again, because a hint that reappeared
+   * under a box the user has already emptied once would be offering the same guess about a
+   * conversation they have moved on from. Covers paste and drop too - both change the value.
+   */
+  const onTextChange = (next: string) => {
+    setText(next);
+    if (suggestion && next.length > 0) onSuggestionDismissed?.();
   };
 
   /**
@@ -250,36 +298,56 @@ export function Composer({
         />
       )}
 
-      <Stack direction="row" spacing={1} alignItems="flex-end" sx={{ ...contentColumnSx, pt: 1.5 }}>
+      <Box sx={{ ...contentColumnSx, pt: 1.5 }}>
+        {/* Send and Stop ride INSIDE the input rather than beside it. As siblings in a row they
+            took their own width out of the column, so the input's right edge stopped ~74px short
+            of where the transcript ends while every other composer row reached it. */}
         <Textarea
           value={text}
-          onChange={event => setText(event.target.value)}
+          onChange={event => onTextChange(event.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={disabled ? 'Pick a conversation to start typing' : placeholder}
+          placeholder={composerPlaceholder({ disabled, text, suggestion, placeholder })}
           disabled={disabled}
           minRows={1}
           maxRows={8}
-          sx={{ flex: 1 }}
+          endDecorator={
+            /* Both at once while a reply runs: stopping this turn and queueing the next one are
+               different intentions, and swapping one control for the other made the second
+               unreachable. Send is labelled for what the click actually does. */
+            <Stack direction="row" spacing={1} sx={{ ml: 'auto' }}>
+              {streaming && (
+                <Button size="sm" variant="soft" color="neutral" onClick={onStop} data-testid="chat-stop-btn">
+                  Stop
+                </Button>
+              )}
+              <Button size="sm" onClick={submit} disabled={!canSubmit} data-testid="chat-send-btn">
+                {streaming ? 'Queue' : 'Send'}
+              </Button>
+            </Stack>
+          }
           // onPaste goes on the inner textarea, not Joy's root: the root is a div, and typing
           // the handler for it would lose the element the paste actually happened in.
-          slotProps={{ textarea: { 'data-testid': 'chat-composer-input', onPaste, ref: textareaRef } }}
+          slotProps={{
+            textarea: {
+              'data-testid': 'chat-composer-input',
+              onPaste,
+              // Held so selecting a skill can put focus back where the arguments get typed.
+              ref: textareaRef,
+              // So the hint is distinguishable from the ordinary placeholder without reading
+              // the text, and so a screen reader is told Tab does something here.
+              ...(shown ? { 'data-suggested-prompt': shown, 'aria-keyshortcuts': 'Tab' } : {}),
+            },
+          }}
         />
-
-        {/* Both at once while a reply runs: stopping this turn and queueing the next one are
-            different intentions, and swapping one control for the other made the second
-            unreachable. Send is labelled for what the click actually does. */}
-        {streaming && (
-          <Button variant="soft" color="neutral" onClick={onStop} data-testid="chat-stop-btn">
-            Stop
-          </Button>
-        )}
-        <Button onClick={submit} disabled={!canSubmit} data-testid="chat-send-btn">
-          {streaming ? 'Queue' : 'Send'}
-        </Button>
-      </Stack>
+      </Box>
 
       {/* Attach on the left, what answers the turn on the right - the shape Claude Code uses. */}
-      <Stack direction="row" alignItems="center" spacing={1} sx={{ ...contentColumnSx, py: 1 }}>
+      {/* `gap` rather than Stack's `spacing`: spacing resets every child's margin from the row
+          itself, which outranks the attach button's own negative margin below. */}
+      <Stack direction="row" alignItems="center" sx={{ ...contentColumnSx, py: 1, gap: 1 }}>
+        {/* Pulled left by the inset its own 32px box puts around a centred glyph, so the '+' the
+            user sees starts on the column's left edge - the line the transcript and the input's
+            border already sit on. Without it the glyph alone hangs ~10px inside that line. */}
         <IconButton
           size="sm"
           variant="plain"
@@ -287,6 +355,7 @@ export function Composer({
           disabled={disabled || attachments.busy}
           onClick={() => void attachments.pick()}
           aria-label="Attach a file"
+          sx={{ ml: '-10px' }}
           data-testid="composer-attach-btn"
         >
           <Typography level="body-lg">+</Typography>

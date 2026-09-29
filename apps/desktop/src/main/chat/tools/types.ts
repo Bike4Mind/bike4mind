@@ -1,4 +1,4 @@
-import type { ChatDiff, ChatMedia, ChatSessionSummary, ChatToolNotice, SpawnRefusal } from '@shared/chat';
+import type { ChatDiff, ChatMedia, ChatSessionSummary, ChatToolNotice, RelayRefusal, SpawnRefusal } from '@shared/chat';
 
 import type { MediaApiClient } from '../media/MediaApiClient';
 import type { MediaStore } from '../media/MediaStore';
@@ -39,6 +39,8 @@ export interface ToolReporter {
   media(item: ChatMedia): void;
   /** Raise a cost or provider outcome to its own state; see ChatToolNotice. */
   notice(notice: ChatToolNotice): void;
+  /** Name this call's collapsed row, for a tool whose arguments do not read as one. */
+  label(text: string): void;
 }
 
 /**
@@ -103,6 +105,28 @@ export interface SpawnRejected {
 export type SpawnOutcome = { ok: true; session: ChatSessionSummary } | SpawnRejected;
 
 /**
+ * A delivered message, and whether the target took it up straight away.
+ *
+ * `title` is what the caller's transcript row names, resolved here because the model only ever
+ * had the id. `queued` is the honest half: the target was mid-reply, so the message is waiting
+ * behind that turn rather than running now.
+ */
+export interface RelayAccepted {
+  ok: true;
+  sessionId: string;
+  title: string;
+  queued: boolean;
+}
+
+export interface RelayRejected {
+  ok: false;
+  reason: RelayRefusal;
+  message: string;
+}
+
+export type RelayOutcome = RelayAccepted | RelayRejected;
+
+/**
  * The app itself, as a tool may drive it. Offered to Code sessions only.
  *
  * This is the third tool family, beside the local tools (filesystem risk) and the generation
@@ -132,6 +156,17 @@ export interface HostContext {
   deleteSession(sessionId: string): Promise<boolean>;
   /** How a session is described in an approval prompt, so the user reads a title not a uuid. */
   describeSession(sessionId: string): Promise<string | null>;
+  /**
+   * Deliver `message` to an existing session in this project and let it run as a turn there.
+   *
+   * Fire and forget, like `spawn`: it resolves once the message is accepted, never when the
+   * target has answered. Waiting would deadlock the moment the target parks at the approval
+   * gate, which is a state only the user can leave.
+   *
+   * Bounded by the hop count on the relay and by the sends this turn has already made; see
+   * ChatRelayOrigin. A refusal here is the bound working, not a transient failure.
+   */
+  sendTo(sessionId: string, message: string): Promise<RelayOutcome>;
 }
 
 /** What the user is asked to allow before a tool runs, for tools that declare `approval`. */
