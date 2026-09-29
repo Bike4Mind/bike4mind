@@ -493,3 +493,43 @@ describe('POST /api/user-api-keys - analytics is best effort', () => {
     expect(logEventSafe).toHaveBeenCalledWith(expect.anything(), expect.anything(), req.logger);
   });
 });
+
+// Wiring only: the containment rule itself is covered by the service's create.test.ts.
+describe('POST /api/user-api-keys - caller key scopes forwarded for containment', () => {
+  beforeEach(() => createUserApiKey.mockClear());
+
+  it('forwards callerScopes undefined for a browser/JWT caller', async () => {
+    const { req, res } = post({ name: 'k', scopes: ['files:write'] });
+    await mockRefs.postHandler!(req, res);
+
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ callerScopes: undefined })
+    );
+  });
+
+  it("forwards the authenticating key's scopes for an API-key caller", async () => {
+    const { req, res } = post({ name: 'k', scopes: ['files:write'] });
+    (req as any).apiKeyInfo = { scopes: ['ai:generate'] };
+    await mockRefs.postHandler!(req, res);
+
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ callerScopes: ['ai:generate'] })
+    );
+  });
+
+  it('forwards an empty array (deny) for an API-key caller whose key has no scopes', async () => {
+    const { req, res } = post({ name: 'k', scopes: ['files:write'] });
+    (req as any).apiKeyInfo = {};
+    await mockRefs.postHandler!(req, res);
+
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ callerScopes: [] })
+    );
+  });
+});

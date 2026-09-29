@@ -11,7 +11,7 @@ import {
   isAgentOwnedByEmbedKey,
   IUserApiKeyRepository,
 } from '@bike4mind/common';
-import { secureParameters, BadRequestError } from '@bike4mind/utils';
+import { secureParameters, BadRequestError, ForbiddenError } from '@bike4mind/utils';
 import { randomBytes } from 'crypto';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
@@ -83,6 +83,12 @@ interface CreateUserApiKeyAdapters {
     agents: Pick<IAgentRepository, 'findById'>;
   };
   systemUserId?: string;
+  /**
+   * Scopes of the API key making the request, when the caller authenticated with one.
+   * Undefined for a browser/JWT caller. Same no-escalation contract as rotate
+   * (see rotate.ts): a key may only mint scopes it literally holds.
+   */
+  callerScopes?: ApiKeyScope[];
 }
 
 export interface CreateUserApiKeyResult {
@@ -135,6 +141,17 @@ export const createUserApiKey = async (
 ): Promise<CreateUserApiKeyResult> => {
   const { db, systemUserId } = adapters;
   const params = secureParameters(parameters, createUserApiKeySchema);
+
+  // No escalation by minting: otherwise a leaked narrow key bootstraps a broad one for
+  // the same owner. Literal containment, mirroring rotate - `admin:*` is not a superset,
+  // and an empty `callerScopes` denies rather than meaning "unrestricted".
+  if (adapters.callerScopes) {
+    const callerScopes = adapters.callerScopes;
+    const escalating = params.scopes.filter(scope => !callerScopes.includes(scope));
+    if (escalating.length > 0) {
+      throw new ForbiddenError('Cannot create a key with scopes the calling key does not have');
+    }
+  }
 
   // OVERWATCH_INGEST_WRITE requires a productId
   if (params.scopes.includes(ApiKeyScope.OVERWATCH_INGEST_WRITE) && !params.productId) {

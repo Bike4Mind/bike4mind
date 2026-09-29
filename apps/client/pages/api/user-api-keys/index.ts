@@ -216,6 +216,7 @@ const handler = baseApi()
           userApiKeys: userApiKeyRepository,
           agents: agentRepository,
         },
+        callerScopes: req.apiKeyInfo ? (req.apiKeyInfo.scopes ?? []) : undefined,
       }
     );
 

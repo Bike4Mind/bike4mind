@@ -165,3 +165,54 @@ describe('userApiKeyService - createUserApiKey preauthorizedLakeIds', () => {
     expect(repo.create).not.toHaveBeenCalled();
   });
 });
+
+describe('userApiKeyService - createUserApiKey no escalation by minting', () => {
+  let repo: IUserApiKeyRepository;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    repo = makeRepo();
+  });
+
+  it('refuses an API-key caller minting a scope it does not hold', async () => {
+    await expect(
+      createUserApiKey(
+        'user1',
+        { ...baseParams, scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.WRITE_FILES] },
+        { db: { userApiKeys: repo }, callerScopes: [ApiKeyScope.AI_CHAT] }
+      )
+    ).rejects.toThrow(/scopes the calling key does not have/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('does not treat admin:* as a superset of other scopes', async () => {
+    await expect(
+      createUserApiKey('user1', baseParams, { db: { userApiKeys: repo }, callerScopes: [ApiKeyScope.ADMIN] })
+    ).rejects.toThrow(/scopes the calling key does not have/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('denies every mint for a caller key with no scopes', async () => {
+    await expect(
+      createUserApiKey('user1', baseParams, { db: { userApiKeys: repo }, callerScopes: [] })
+    ).rejects.toThrow(/scopes the calling key does not have/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('allows an API-key caller minting a subset of its own scopes', async () => {
+    await createUserApiKey('user1', baseParams, {
+      db: { userApiKeys: repo },
+      callerScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.WRITE_FILES],
+    });
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ scopes: [ApiKeyScope.AI_CHAT] }));
+  });
+
+  it('leaves a browser/JWT caller (no callerScopes) unrestricted', async () => {
+    await createUserApiKey(
+      'user1',
+      { ...baseParams, scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.WRITE_FILES] },
+      { db: { userApiKeys: repo } }
+    );
+    expect(repo.create).toHaveBeenCalled();
+  });
+});
