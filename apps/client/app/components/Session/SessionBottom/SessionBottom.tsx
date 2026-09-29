@@ -67,6 +67,7 @@ import { useModelInfo } from '../../../hooks/data/useModelInfo';
 import { useAccessibleModels } from '../../../hooks/useAccessibleModels';
 import { NoModelsWarning, CreditsWarning, LowCreditsWarning } from '../SessionWarnings';
 import { LOW_CREDITS_THRESHOLD } from '../CreditButton';
+import { getComposerCreditUi } from './composerCreditUi';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useMcpServerSync } from './useMcpServerSync';
 import { useMessageDraft } from './useMessageDraft';
@@ -249,13 +250,16 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const maxFileSize = Number(useGetSettingsValue('MaxFileSize')) || 30;
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
 
-  // Credit warning conditions - extracted for readability
-  const creditsExhausted = effectiveCredits <= 0 || creditsExhaustedByVoice;
-  const isLowCredits = effectiveCredits > 0 && effectiveCredits < LOW_CREDITS_THRESHOLD && !creditsExhaustedByVoice;
   // Out of credits replaces the message box outright (see CreditsWarning); only the
   // low-credits notice still overlays it, so only that one needs the box to hold its height.
-  const creditsBlocked = enforceCredits && creditsExhausted && hasModels;
-  const showCreditOverlay = enforceCredits && isLowCredits && !lowCreditsWarningDismissed;
+  const creditUi = getComposerCreditUi({
+    enforceCredits,
+    effectiveCredits,
+    exhaustedByVoice: creditsExhaustedByVoice,
+    hasModels,
+    lowWarningDismissed: lowCreditsWarningDismissed,
+    lowThreshold: LOW_CREDITS_THRESHOLD,
+  });
 
   // FilePond expects the max file size as an MB string, e.g. '100MB'
   const maxFileSizeForFilePond = `${maxFileSize}MB`;
@@ -625,7 +629,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                   turns={compactedTurns}
                   onDismiss={() => setCompactionNoteDismissed(true)}
                 />
-                {creditsBlocked ? (
+                {creditUi.replaceComposer ? (
                   <CreditsWarning show />
                 ) : (
                   <Stack
@@ -645,7 +649,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                         flex: 1,
                         overflow: 'visible',
                         position: 'relative',
-                        minHeight: showCreditOverlay ? '60px' : undefined,
+                        minHeight: creditUi.lowCreditsNotice ? '60px' : undefined,
                         transition: 'box-shadow 300ms, outline 300ms',
                         boxShadow: rephraseGlow
                           ? '0 0 0 2px rgba(59,130,246,0.3), 0 0 12px rgba(59,130,246,0.45)'
@@ -655,7 +659,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                       }}
                     >
                       <LowCreditsWarning
-                        show={isLowCredits && !lowCreditsWarningDismissed && enforceCredits && hasModels}
+                        show={creditUi.lowCreditsNotice}
                         currentCredits={effectiveCredits}
                         onDismiss={() => setLowCreditsWarningDismissed(true)}
                       />
@@ -839,7 +843,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           isModelsLoading={isModelsLoading}
           isVoiceSessionEnabled={isVoiceSessionEnabled}
           voiceEngine={voiceEngine}
-          creditsBlocked={creditsExhausted && enforceCredits}
+          creditsBlocked={creditUi.toolbarBlocked}
           setDebugDrawerOpen={setDebugDrawerOpen}
         />
       </Stack>
