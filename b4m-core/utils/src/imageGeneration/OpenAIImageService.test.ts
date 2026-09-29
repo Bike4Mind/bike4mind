@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import OpenAI from 'openai';
 import { Logger } from '@bike4mind/observability';
-import { ImageModels } from '@bike4mind/common';
+import { ImageModels, LEGACY_DALL_E_3_MODEL_ID } from '@bike4mind/common';
 
 // The service builds its OpenAI client inside each call, so there is no instance to
 // stub - the SDK module is mocked instead. The spies are only dereferenced when a
@@ -433,6 +433,26 @@ describe('OpenAIImageService.generate legacy dall-e sizing', () => {
       const params = await generateParams({ model: ImageModels.DALL_E_2, size });
 
       expect(params.size).toBe('1024x1024');
+    }
+  );
+
+  // OpenAIImageGenerationInput remaps 'dall-e-3' to gpt-image-2, so this is a caller that skips that schema.
+  it.each(['256x256', '512x512'])(
+    'coerces the dall-e-2 size %s to the dall-e-3 default for the legacy dall-e-3 model ID',
+    async size => {
+      const params = await generateParams({ model: LEGACY_DALL_E_3_MODEL_ID, size });
+
+      expect(params.model).toBe('dall-e-3');
+      expect(params.size).toBe('1024x1024');
+    }
+  );
+
+  it.each(['1024x1024', '1792x1024', '1024x1792'])(
+    'keeps the dall-e-3 size %s for the legacy dall-e-3 model ID',
+    async size => {
+      const params = await generateParams({ model: LEGACY_DALL_E_3_MODEL_ID, size });
+
+      expect(params.size).toBe(size);
     }
   );
 });

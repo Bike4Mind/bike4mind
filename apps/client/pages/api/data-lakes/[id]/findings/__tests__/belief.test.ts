@@ -62,13 +62,16 @@ const resolvedFinding = {
   resolution: 'different fiscal years',
 };
 
+// A fixed PAST instant, so a handler that re-stamps with `new Date()` cannot pass by coincidence.
+const receivedAt = new Date('2026-01-01T00:00:00.000Z');
+
 const invoke = (findingId = 'f1') => {
   const json = vi.fn();
   const res = { json, status: vi.fn(() => ({ json })) };
   return {
     json,
     done: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
-      { method: 'POST', query: { id: 'lake1', findingId }, body: {}, user: { id: 'curator-1' }, logger },
+      { method: 'POST', query: { id: 'lake1', findingId }, body: {}, user: { id: 'curator-1' }, logger, receivedAt },
       res
     ),
   };
@@ -161,19 +164,13 @@ describe('POST /api/data-lakes/[id]/findings/[findingId]/belief (#3049)', () => 
     expect(h.findById).toHaveBeenCalledWith('not-an-object-id');
   });
 
-  it('stamps the shred fence before its own I/O', async () => {
-    // The instant must predate the access gate, the finding read and the settings read inside the
-    // recorder - a purge landing in any of those windows has to refuse the write rather than lift
-    // its own tombstone. Bracketed rather than compared to a fixed value so the assertion says the
-    // thing that matters: taken on arrival, not on the way to the append.
-    const before = Date.now();
+  it("arms the shred fence with the request's arrival, not a handler-local stamp", async () => {
+    // The instant must predate baseApi's connectDB and auth as well as this handler's own I/O - a
+    // purge landing in any of those windows has to refuse the write rather than lift its own
+    // tombstone. baseApi.receivedAt.test.ts pins that the stamp is taken first.
     await invoke().done;
-    const after = Date.now();
 
-    const { startedAt } = h.recordFindingResolutionBelief.mock.calls[0][0];
-    expect(startedAt).toBeInstanceOf(Date);
-    expect(startedAt.getTime()).toBeGreaterThanOrEqual(before);
-    expect(startedAt.getTime()).toBeLessThanOrEqual(after);
+    expect(h.recordFindingResolutionBelief.mock.calls[0][0].startedAt).toBe(receivedAt);
   });
 
   it('PROPAGATES a recorder fault instead of swallowing it, unlike the resolve sibling', async () => {

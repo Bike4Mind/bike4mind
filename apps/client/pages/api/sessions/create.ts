@@ -171,6 +171,12 @@ const handler = baseApi().post(
       // route's static imports as they were.
       resolveLakeAccess: async () =>
         (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
+      // The attachment door's lake arms, so a supplied lake file passes the access check.
+      resolveAttachmentLakeAccess: async () =>
+        (await import('@server/queueHandlers/agentExecutor.attachmentLakeAccess')).createAttachmentLakeAccess(
+          req.user,
+          req.logger
+        )(),
     });
 
     // Separate, authorized write - never part of createSession's own params (see above). The

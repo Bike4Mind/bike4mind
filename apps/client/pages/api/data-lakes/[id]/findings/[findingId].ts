@@ -58,10 +58,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // it into a helper. That bluntness is what still fails when route 44 forgets. Sync and idempotent.
     assertDataLakeWriteScope(req);
 
-    // Before the first await: the crypto-shred fence refuses a write only when the purge lands at or
-    // after this instant, so stamping it later would let a purge that landed mid-request lift its own
-    // tombstone. See `recordFindingResolutionBelief`'s `startedAt`.
-    const startedAt = new Date();
+    // The request's arrival, stamped by baseApi ahead of connectDB and auth: the crypto-shred fence
+    // refuses a write only when the purge lands at or after this instant, so any later stamp would
+    // let a purge that landed mid-request lift its own tombstone. See `recordFindingResolutionBelief`.
+    const startedAt = req.receivedAt;
     const { id, findingId } = req.query as { id: string; findingId: string };
 
     // Lake-write access and belongs-to-lake, shared with the `/belief` sibling. The

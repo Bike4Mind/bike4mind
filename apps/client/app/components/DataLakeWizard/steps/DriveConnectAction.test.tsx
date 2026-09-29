@@ -37,6 +37,7 @@ const connected = (over: Partial<LakeDriveConnection> = {}): LakeDriveConnection
   lastError: null,
   lastUsedAt: null,
   connectedAt: null,
+  fileCount: 3,
   ...over,
 });
 
@@ -112,5 +113,21 @@ describe('DriveConnectAction', () => {
 
     fireEvent.click(screen.getByTestId('drive-disconnect-confirm-btn'));
     expect(h.disconnectMutate).toHaveBeenCalledWith('lake1', expect.any(Object));
+  });
+
+  it('warns how many files disconnecting will delete', () => {
+    h.connection.current = connected({ fileCount: 42 });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+
+    fireEvent.click(screen.getByTestId('drive-disconnect-btn'));
+    expect(screen.getByTestId('drive-disconnect-warning')).toHaveTextContent('42 files');
+  });
+
+  it('uses singular wording for exactly one file', () => {
+    h.connection.current = connected({ fileCount: 1 });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+
+    fireEvent.click(screen.getByTestId('drive-disconnect-btn'));
+    expect(screen.getByTestId('drive-disconnect-warning')).toHaveTextContent('1 file ');
   });
 });

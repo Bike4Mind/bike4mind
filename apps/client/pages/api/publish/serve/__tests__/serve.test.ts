@@ -42,7 +42,18 @@ vi.mock('@server/utils/storage', () => ({
   getPublishedArtifactsStorage: () => ({ download: mockDownload }),
 }));
 
+// The share-token helpers are stubbed rather than re-exported from the real module (importing it
+// for real drags in the whole model graph and breaks unrelated suites). shareTokenFilter returns a
+// SENTINEL, so the tests below assert the route delegates to it instead of hand-rolling a filter;
+// the filter's actual semantics are owned by PublishedArtifactModel.shareToken.test.ts, against
+// real Mongo. liveShareTokens mirrors the real fold (legacy scalar first, revoked entries out).
 vi.mock('@bike4mind/database', () => ({
+  shareTokenFilter: (token: string) => ({ __shareFilterFor: token }),
+  liveShareTokens: (a: { shareToken?: string | null; shareTokens?: { token?: string; revokedAt?: Date | null }[] }) => {
+    const live = (a.shareTokens ?? []).filter(e => !!e?.token && !e.revokedAt);
+    const legacy = a.shareToken;
+    return legacy && !live.some(e => e.token === legacy) ? [{ token: legacy, revokedAt: null }, ...live] : live;
+  },
   PublishedArtifact: {
     findOne: (...a: unknown[]) => ({ lean: () => Promise.resolve(mockArtifactFindOne(...a)) }),
     updateOne: (...a: unknown[]) => mockUpdateOne(...a),
@@ -2924,18 +2935,16 @@ describe('GET /api/publish/serve - per-entry share-link view counts (#3255)', ()
   const perLinkCall = () =>
     mockUpdateOne.mock.calls.find(call => !!(call[2] as { arrayFilters?: unknown })?.arrayFilters);
 
-  it('resolves through shareTokens[] as well as the legacy scalar, pinning revokedAt per entry', async () => {
+  it('resolves through the shared shareTokenFilter, not a hand-rolled query', async () => {
     mockArtifactFindOne.mockReturnValue(withEntry());
     mockDownload.mockResolvedValue(Buffer.from('<html><body>Hi</body></html>'));
 
     const { promise } = run(['a', 'tok123']);
     await promise;
 
-    const filter = mockArtifactFindOne.mock.calls[0][0] as { $or: unknown[] };
-    expect(filter.$or).toEqual([
-      { shareToken: 'tok123' },
-      { shareTokens: { $elemMatch: { token: 'tok123', revokedAt: null } } },
-    ]);
+    // Delegation, not a hand-rolled filter: the route must build its query from the shared
+    // helper, so the serve path and the gate handlers cannot drift apart on revocation semantics.
+    expect(mockArtifactFindOne.mock.calls[0][0]).toEqual({ deletedAt: null, __shareFilterFor: 'tok123' });
   });
 
   it('counts the matched entry: +1 viewCount and a lastViewedAt stamp, for an ANONYMOUS viewer', async () => {
@@ -2979,12 +2988,45 @@ describe('GET /api/publish/serve - per-entry share-link view counts (#3255)', ()
     expect(mockUpdateOne).toHaveBeenCalled();
   });
 
-  it('does not count a /p/* view, nor a framed sub-document of a share link', async () => {
+  it('does not count a /p/* view', async () => {
     mockArtifactFindOne.mockReturnValue(bundle({ shareTokens: [{ _id: 'entry1', token: 'tok123' }] }));
     mockDownload.mockResolvedValue(Buffer.from('<html><body>Hi</body></html>'));
 
     const { promise } = run(['u', 'scope123', 'my-slug']);
     await promise;
+    expect(perLinkCall()).toBeUndefined();
+  });
+
+  // The share page frames its artifact as `/a/<token>?a=0`. That sub-request is a sub-resource of
+  // the page the viewer already counted, so counting it too would double every framed view.
+  it('does not count the framed sub-document of a share link, only the page', async () => {
+    const reply = {
+      publicId: 'r-shared',
+      title: 'Shared reply',
+      visibility: 'public',
+      ownerId: 'owner1',
+      source: { kind: 'reply' },
+      renderedBody:
+        '<artifact identifier="tip" type="text/html" title="Tip">' +
+        '<!DOCTYPE html><html><body><script>window.ok=1</script></body></html>' +
+        '</artifact>',
+      storageKeyPrefix: '',
+      manifest: [],
+      tier: 'user',
+      scopeId: 's',
+      slug: 'r-shared',
+      shareTokens: [{ _id: 'entry1', token: 'tokshare', revokedAt: null }],
+    };
+    mockArtifactFindOne.mockReturnValue(reply);
+
+    const page = run(['a', 'tokshare']);
+    await page.promise;
+    expect(perLinkCall()).toBeDefined(); // the page itself counts, exactly once
+
+    mockUpdateOne.mockClear();
+    const sub = run(['a', 'tokshare'], { a: '0' });
+    await sub.promise;
+    expect(sub.res._getStatusCode()).toBe(200);
     expect(perLinkCall()).toBeUndefined();
   });
 });
