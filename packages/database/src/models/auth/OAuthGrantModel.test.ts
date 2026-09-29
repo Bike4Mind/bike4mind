@@ -70,4 +70,26 @@ describe('OAuthGrantModel repository', () => {
     await oauthGrantRepository.upsertGrant({ userId: 'u3', clientId: 'c3', scopes: ['openid'], source: 'authorize' });
     expect((await oauthGrantRepository.findGrant('u3', 'c3'))?.scopes).toEqual(['openid']);
   });
+
+  it('listActiveByUser returns only non-revoked grants for that user', async () => {
+    await oauthGrantRepository.upsertGrant({ userId: 'u6', clientId: 'c6a', scopes: ['openid'], source: 'authorize' });
+    await oauthGrantRepository.upsertGrant({ userId: 'u6', clientId: 'c6b', scopes: ['profile'], source: 'authorize' });
+    // Revoke one; only the active grant should be listed.
+    await oauthGrantRepository.revoke('u6', 'c6a');
+
+    const active = await oauthGrantRepository.listActiveByUser('u6');
+    expect(active).toHaveLength(1);
+    expect(active[0].clientId).toBe('c6b');
+  });
+
+  it('listActiveByUser returns an empty array when the user has no active grants', async () => {
+    const active = await oauthGrantRepository.listActiveByUser('u-nobody');
+    expect(active).toEqual([]);
+  });
+
+  it('listActiveByUser does not return grants belonging to a different user', async () => {
+    await oauthGrantRepository.upsertGrant({ userId: 'u7', clientId: 'c7', scopes: ['email'], source: 'authorize' });
+    const active = await oauthGrantRepository.listActiveByUser('u-other');
+    expect(active).toHaveLength(0);
+  });
 });

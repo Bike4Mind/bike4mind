@@ -263,6 +263,19 @@ const OAuthAuthorizePage = () => {
               Allow
             </Button>
           </Box>
+          <Typography level="body-xs" color="neutral" sx={{ mt: 1 }}>
+            You can revoke this access at any time from{' '}
+            <Typography
+              component="a"
+              href="/settings"
+              level="body-xs"
+              color="neutral"
+              sx={{ textDecoration: 'underline' }}
+            >
+              Settings &rsaquo; Security &rsaquo; Approved Apps
+            </Typography>
+            .
+          </Typography>
         </Sheet>
       </Box>
     );

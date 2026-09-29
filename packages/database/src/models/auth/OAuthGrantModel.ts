@@ -27,6 +27,8 @@ export interface IOAuthGrantDocument extends IMongoDocument {
 export interface IOAuthGrantRepository extends IBaseRepository<IOAuthGrantDocument> {
   /** The active (non-revoked) grant for this pair, or null. */
   findGrant(userId: string, clientId: string): Promise<IOAuthGrantDocument | null>;
+  /** All active (non-revoked) grants for this user, newest first. */
+  listActiveByUser(userId: string): Promise<IOAuthGrantDocument[]>;
   /** Create or widen the grant for this pair, clearing any prior revocation. */
   upsertGrant(params: {
     userId: string;
@@ -61,6 +63,10 @@ class OAuthGrantRepository extends BaseRepository<IOAuthGrantDocument> implement
 
   findGrant(userId: string, clientId: string) {
     return this.model.findOne({ userId, clientId, revokedAt: null }).exec();
+  }
+
+  listActiveByUser(userId: string) {
+    return this.model.find({ userId, revokedAt: null }).sort({ createdAt: -1 }).exec();
   }
 
   async upsertGrant(params: { userId: string; clientId: string; scopes: string[]; source: string }) {
