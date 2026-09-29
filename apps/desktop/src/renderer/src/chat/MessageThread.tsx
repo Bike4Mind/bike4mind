@@ -10,6 +10,7 @@ import { isTurnBudgetStop, type ChatMessage } from '@shared/chat';
 import { ArtifactList } from './ArtifactCard';
 import { AttachmentRow } from './Attachments';
 import { contentColumnSx } from './layout';
+import { ReplyMarkdown } from './markdown/ReplyMarkdown';
 import { callsIn, roundsOf } from './replyRounds';
 import { ToolCallList, type RespondToApproval } from './ToolCallList';
 
@@ -90,6 +91,10 @@ function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: str
             <AttachmentRow sessionId={sessionId} attachments={attachments} />
           </Box>
         )}
+        {/* Literal, where a reply is markdown: this is what the user typed, and rendering it
+            would change it. In a Code session they type paths and identifiers, and
+            some_file_name would come back as some<em>file</em>name with the underscores eaten.
+            A reply is a model writing markdown on purpose; this is not. */}
         {message.content && (
           <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
             {message.content}
@@ -134,13 +139,10 @@ function AssistantTurn({
         // The gap lives here rather than as a blank line inside the text, so a round that ran
         // tools and said nothing does not leave an empty paragraph behind.
         <Box key={index} sx={{ mt: index === 0 ? 0 : 1.5 }} data-testid="chat-message-round">
-          {/* pre-wrap, not a markdown renderer: the model emits newlines and indentation that
-              collapse to a single line without it. Rendering markdown is its own task. */}
-          {round.text.length > 0 && (
-            <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-              {round.text}
-            </Typography>
-          )}
+          {/* Per round rather than over the whole reply, which is also what keeps a code fence
+              from leaking: a block opened in one round cannot swallow the next round's prose,
+              because the next round is a parse of its own. */}
+          {round.text.length > 0 && <ReplyMarkdown text={round.text} />}
           <ToolCallList calls={callsIn(round, toolCalls)} onRespond={onRespond} />
         </Box>
       ))}

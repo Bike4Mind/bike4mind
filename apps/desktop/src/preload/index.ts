@@ -134,6 +134,9 @@ const api: DesktopApi = {
     grantAccess: () => ipcRenderer.invoke(IPC_CHANNELS.toolsGrantAccess),
     revokeAccess: (root: string) => ipcRenderer.invoke(IPC_CHANNELS.toolsRevokeAccess, root),
   },
+  shell: {
+    openExternal: (url: string) => ipcRenderer.invoke(IPC_CHANNELS.shellOpenExternal, url),
+  },
 };
 
 // Key must stay in sync with the Window declaration in src/preload/index.d.ts.
