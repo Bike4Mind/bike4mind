@@ -181,6 +181,16 @@ describe('MarkdownViewer cited-passage anchor (#3038)', () => {
     });
   });
 
+  it('keeps a literal math passage inside inline code anchored', () => {
+    const { container } = render(
+      <TestWrapper>
+        <MarkdownViewer content={'Write `rate $r = 1.5$ days` literally.'} citedPassage={'rate $r = 1.5$ days'} />
+      </TestWrapper>
+    );
+    expect(container.querySelectorAll('[data-cited]')).toHaveLength(1);
+    expect(screen.queryByTestId('markdown-cited-passage-fallback')).toBeNull();
+  });
+
   it('marks the right blocks in a document the LaTeX promotion rewrites', () => {
     // promoteInlineLatexDollars runs before parsing, so offsets are into the PROMOTED string. A
     // document containing $...$ is where locating the passage in `content` instead would shift
