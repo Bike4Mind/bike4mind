@@ -277,7 +277,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
   });
 
   doc.tags = [
-    { name: 'AI', description: 'Chat, completions, and server-side tool execution.' },
+    { name: 'AI', description: 'Chat, completions, embeddings, and server-side tool execution.' },
     { name: 'Sessions', description: 'Sessions (called "notebooks" in the product UI) and their attached knowledge.' },
     { name: 'Audio', description: 'Speech, music, and sound-effect generation.' },
     { name: 'Images', description: 'Image generation and editing, queued and polled as quests.' },

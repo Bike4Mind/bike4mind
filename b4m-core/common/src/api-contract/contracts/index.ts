@@ -10,6 +10,7 @@ import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
 import { generateImageContract } from './imageGeneration.contract';
 import { editImageContract } from './imageEdit.contract';
+import { createEmbeddingsContract } from './embeddings.contract';
 import { getQuestContract } from './quest.contract';
 import { createSessionContract } from './sessionCreate.contract';
 
@@ -32,6 +33,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getMeContract,
   generateImageContract,
   editImageContract,
+  createEmbeddingsContract,
   getQuestContract,
   createSessionContract,
 ];
