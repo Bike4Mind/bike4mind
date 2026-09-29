@@ -163,6 +163,8 @@ const RetrievalSummarySchema = subSchema({
   // Same shape and the same default:undefined reason as preauthorizedLakeIdsUsed above - its
   // per-arm sibling, which the two overlap by design (see both fields on the Zod side).
   grantedLakeIdsUsed: { type: [String], required: false, default: undefined },
+  // Same shape and default:undefined reason as its per-arm siblings above (see the Zod side).
+  readerOptInLakeIdsUsed: { type: [String], required: false, default: undefined },
   // default: undefined for the same auto-vivification reason as `injected` above - and here it
   // also preserves the presence contract that absence means NOT RECORDED, never "nothing excluded".
   excludedLakes: { type: ExcludedLakesSchema, required: false, default: undefined },

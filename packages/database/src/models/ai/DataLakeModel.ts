@@ -48,6 +48,8 @@ const DataLakeSchema = new mongoose.Schema(
     // IDataLake.systemPrompt for the full contract). Stored uncapped, matching the other
     // system-prompt fields.
     systemPrompt: { type: String },
+    // Reader opt-in for systemPrompt on explicitly scoped sessions (see IDataLake.injectPromptForReaders).
+    injectPromptForReaders: { type: Boolean, default: false },
     // Preferred registry system-prompt id for sessions created for this lake (see
     // IDataLake.preferredSystemPromptId). Validated against the session-activatable allowlist at
     // the write boundary; resolved to session.systemPromptId once at create time.
