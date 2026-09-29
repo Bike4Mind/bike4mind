@@ -1,23 +1,29 @@
 import {
-  ARTIFACT_ATTRS_PATTERN,
   ArtifactPayload,
   ArtifactOperation,
   ArtifactType,
   mapMimeTypeToArtifactType,
+  matchArtifactBlocks,
+  scanArtifactOpenTag,
 } from '@bike4mind/common';
 import { detectElidedContent } from '@bike4mind/utils/artifactElision';
 import {
   stripHtmlComments,
   hasFullHtmlDocument,
   hasCompleteSvg,
+  extractHTMLTitle,
   maskToolOutputRegions,
 } from '@bike4mind/utils/artifactParser';
 import { tryParseChartJSON } from './chartJsonParser';
 import { hasSingleLineImportFrom, scanImportStatements } from './importStatements';
+import {
+  ResultReplacer,
+  replaceDirectTypeObjects,
+  replaceEscapedResultObjects,
+  replaceLazyResultObjects,
+  replaceLogFormatResultObjects,
+} from './toolOutputResultScan';
 
-// Built from the shared ARTIFACT_ATTRS_PATTERN so the attribute sub-pattern
-// stays in sync with the core parser and PromptReplies truncation detector.
-const ARTIFACT_REGEX = new RegExp(`<artifact\\s+(${ARTIFACT_ATTRS_PATTERN})>([\\s\\S]*?)<\\/artifact>`, 'gi');
 // Value is anchored to its own quote kind so a double-quoted value can contain
 // apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
 // body, group 3 the single-quoted one; exactly one matches.
@@ -71,15 +77,10 @@ export function parseArtifacts(
 ): ArtifactParseResult {
   const artifacts: ParsedArtifact[] = [];
   let cleanedContent = content;
-  let match;
 
-  // Reset regex lastIndex to ensure we start from the beginning
-  ARTIFACT_REGEX.lastIndex = 0;
-
-  while ((match = ARTIFACT_REGEX.exec(content)) !== null) {
-    const [fullMatch, attributesString, artifactContent] = match;
-    const startIndex = match.index;
-    const endIndex = match.index + fullMatch.length;
+  for (const block of matchArtifactBlocks(content)) {
+    const { index: startIndex, fullMatch, attrs: attributesString, body: artifactContent } = block;
+    const endIndex = startIndex + fullMatch.length;
 
     // Parse attributes
     const attributes: Record<string, string> = {};
@@ -480,7 +481,7 @@ export function validateArtifactContent(
  * Sanitizes model-controlled text bound for a title="..." attribute in a tag this file
  * rebuilds. The artifact attribute parser (ATTRIBUTE_REGEX) has no escape mechanism, so a
  * " would truncate the attribute and leave the rest to be read as further attributes.
- * ARTIFACT_REGEX here is quote-aware, but the repo's other artifact matchers
+ * parseArtifacts here is quote-aware, but the repo's other artifact matchers
  * (sharedToolBuilder, notebookCurationService, openaiBackend) match attributes as [^>],
  * so a < or > reaching them closes the tag early; newlines break the single-line ones.
  * extractHTMLTitle applies the quote half of this rule to a <title> element.
@@ -500,7 +501,7 @@ function sanitizeToolOutputTitle(title: unknown): string {
 
 /**
  * Escapes the literal "</artifact>" sequence in a JSON artifact body so it cannot truncate
- * ARTIFACT_REGEX's non-greedy body match and leave a following "<artifact ...>" to be read
+ * parseArtifacts' non-greedy body match and leave a following "<artifact ...>" to be read
  * as a second, model-chosen artifact. JSON.parse reads "\/" as "/", so the consumer
  * restores the original losslessly. Twin of escapeArtifactBodyJson in b4m-core services
  * (llm/tools/utils/artifactEmission), which this package cannot import; keep in sync.
@@ -533,23 +534,25 @@ function convertToolOutputsToArtifacts(content: string, holds: (value: string) =
 
   // Try to find and extract JSON objects that contain our artifact types
   // We'll look for various patterns of escaping around the "result" field
-  const patterns = [
+  // Patterns 1, 3, 4 and 5 are linear scanners (./toolOutputResultScan) with the same results
+  // as the regexes they replaced, which were quadratic on repeated unclosed prefixes or braces.
+  const steps: Array<(text: string, replacer: ResultReplacer) => string> = [
     // Pattern 1: Standard result field with escaped JSON (most common from logs)
-    /"result":\s*"(\{\\?"[^"]*\\?":\s*\\?"[^"]*\\?"[^}]*\})"/g,
+    replaceEscapedResultObjects,
     // Pattern 2: Result field with simpler escaping
-    /"result":\s*"(\{[^"]*(?:\\"[^"]*)*\})"/g,
+    (text, replacer) => text.replace(/"result":\s*"(\{[^"]*(?:\\"[^"]*)*\})"/g, replacer),
     // Pattern 3: More permissive result field matching
-    /"result":\s*"(\{.*?\})"/g,
+    replaceLazyResultObjects,
     // Pattern 4: Direct JSON object (less common but possible)
-    /(\{[^{}]*"type"\s*:\s*"(?:rechart|recharts|mermaid)"[^{}]*\})/g,
+    replaceDirectTypeObjects,
     // Pattern 5: Very specific pattern for the exact log format
-    /"result":\s*"\{(\\\\"type\\\\":\\\\"(?:rechart|recharts|mermaid)\\\\"[^}]*)\}"/g,
+    replaceLogFormatResultObjects,
   ];
 
   let processedContent = content;
 
-  for (const pattern of patterns) {
-    processedContent = processedContent.replace(pattern, (match, captured) => {
+  for (const step of steps) {
+    processedContent = step(processedContent, (match, captured) => {
       if (holds(match)) return match;
       try {
         let jsonString = captured || match;
@@ -980,11 +983,6 @@ function extractComponentName(code: string): string | null {
   return null;
 }
 
-function extractHTMLTitle(code: string): string | null {
-  const titleMatch = code.match(/<title>(.*?)<\/title>/i);
-  return titleMatch ? titleMatch[1] : null;
-}
-
 // Strip <, >, and " before interpolating a document-controlled title into title="...".
 // Some artifact attribute parsers are not quote-aware, so any of these characters would
 // corrupt or prematurely close the tag. Falls back to `fallback` when stripping empties
@@ -1055,7 +1053,7 @@ export function generateCompleteArtifactId(type: string, identifier: string, tim
  * whether to best-effort close the tag or drop the partial.
  */
 export function hasCompleteOpeningTag(tail: string): boolean {
-  return new RegExp(`^<artifact\\s+${ARTIFACT_ATTRS_PATTERN}>`).test(tail);
+  return tail.startsWith('<artifact') && scanArtifactOpenTag(tail, 0, 'run') !== null;
 }
 
 /**

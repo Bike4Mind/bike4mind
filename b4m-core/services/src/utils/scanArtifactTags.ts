@@ -5,6 +5,8 @@ const GT = />/g;
 const GT_OR_LINE_TERMINATOR = /[>\n\r\u2028\u2029]/g;
 
 export interface ArtifactTagMatch {
+  index: number;
+  end: number;
   attrs: string;
   body: string;
 }
@@ -36,8 +38,25 @@ export function scanArtifactTags(text: string, attrsMayCrossLines: boolean): Art
     CLOSER.lastIndex = termAt + 1;
     const closer = CLOSER.exec(text);
     if (!closer) break;
-    out.push({ attrs: text.slice(attrsStart, termAt), body: text.slice(termAt + 1, closer.index) });
-    OPENER.lastIndex = closer.index + closer[0].length;
+    const end = closer.index + closer[0].length;
+    out.push({
+      index: opener.index,
+      end,
+      attrs: text.slice(attrsStart, termAt),
+      body: text.slice(termAt + 1, closer.index),
+    });
+    OPENER.lastIndex = end;
   }
   return out;
+}
+
+/** Same result as `text.replace(/<artifact\s+.*?>([\s\S]*?)<\/artifact>/gi, '')`, in linear time. */
+export function stripArtifactTags(text: string): string {
+  let kept = '';
+  let keptFrom = 0;
+  for (const tag of scanArtifactTags(text, false)) {
+    kept += text.slice(keptFrom, tag.index);
+    keptFrom = tag.end;
+  }
+  return kept + text.slice(keptFrom);
 }
