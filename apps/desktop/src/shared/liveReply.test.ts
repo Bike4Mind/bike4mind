@@ -60,4 +60,21 @@ describe('live reply', () => {
     const other: ChatMessage = { id: 'u', role: 'user', content: 'hi', createdAt: '2026-01-01T00:00:00.000Z' };
     expect(applyLiveEvent(other, { type: 'delta', ...ids, text: 'x' })).toBe(other);
   });
+
+  it('puts reasoning on the round it precedes, opening a new one after tools', () => {
+    const [reply] = fold([
+      { type: 'start', ...ids },
+      { type: 'reasoning', ...ids, text: 'plan' },
+      { type: 'delta', ...ids, text: 'Looking.' },
+      { type: 'tool-start', ...ids, call: call('done') },
+      { type: 'reasoning', ...ids, text: 'next' },
+      { type: 'delta', ...ids, text: 'Found it.' },
+    ]);
+
+    expect(reply.rounds).toEqual([
+      { text: 'Looking.', toolCallIds: ['c1'], reasoning: 'plan' },
+      { text: 'Found it.', toolCallIds: [], reasoning: 'next' },
+    ]);
+    expect(reply.content).toBe('Looking.Found it.');
+  });
 });

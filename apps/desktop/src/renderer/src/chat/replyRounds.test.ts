@@ -43,6 +43,22 @@ describe('roundsOf', () => {
     ]);
   });
 
+  it("carries a folded round's reasoning into the round it joins", () => {
+    const drawn = roundsOf(
+      message({
+        rounds: [
+          { text: 'Running the tests.', toolCallIds: ['a'], reasoning: 'check first' },
+          { text: '', toolCallIds: ['b'], reasoning: 'one more' },
+        ],
+        toolCalls: [call('a'), call('b')],
+      })
+    );
+
+    expect(drawn).toEqual([
+      { text: 'Running the tests.', toolCallIds: ['a', 'b'], reasoning: 'check first\n\none more' },
+    ]);
+  });
+
   it('keeps a leading wordless round rather than dropping its calls', () => {
     const drawn = roundsOf(
       message({

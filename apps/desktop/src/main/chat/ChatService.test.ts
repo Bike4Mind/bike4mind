@@ -114,7 +114,7 @@ describe('ChatService', () => {
   });
 
   // Opus 5 reasons on every turn, and the server inlines that into the text between markers.
-  it('keeps inline reasoning markers out of the thread and out of what is sent back', async () => {
+  it('shows reasoning on its own and keeps it out of the reply and what is sent back', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'first');
     await waitFor(events, 'start');
@@ -125,8 +125,14 @@ describe('ChatService', () => {
     stream.write(frame('[DONE]'));
     await waitFor(events, 'done');
 
+    expect(post.mock.calls[0][1].options.thinking).toEqual({ enabled: true });
+    expect(events.filter(event => event.type === 'reasoning').map(e => 'text' in e && e.text)).toEqual(['planning']);
     expect(events.filter(event => event.type === 'delta').map(e => 'text' in e && e.text)).toEqual(['reply one']);
-    expect((await service.getSession(id))?.messages.at(-1)?.content).toBe('reply one');
+    const stored = (await service.getSession(id))?.messages.at(-1);
+    expect(stored).toMatchObject({
+      content: 'reply one',
+      rounds: [{ text: 'reply one', toolCallIds: [], reasoning: 'planning' }],
+    });
 
     stream = new PassThrough();
     post.mockResolvedValue({ data: stream, status: 200 });

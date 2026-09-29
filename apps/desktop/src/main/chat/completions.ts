@@ -24,6 +24,11 @@ export interface CompletionRequest {
   tools?: { toolSchema: unknown }[];
   /** Output ceiling for the reply. Absent lets the server choose, which is 4096 for most models. */
   maxTokens?: number;
+  /**
+   * Ask for the model's reasoning as readable text. An adaptive model reasons either way; without
+   * this it comes back empty. A server that predates the option ignores it.
+   */
+  thinking?: boolean;
 }
 
 /**
@@ -55,7 +60,11 @@ export async function streamCompletion(
         ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
         // The tool loop on this endpoint belongs to the CALLER: the model emits tool_use and
         // this client executes it locally, then sends the result back as another turn.
-        options: { stream: true, tools: request.tools ?? [] },
+        options: {
+          stream: true,
+          tools: request.tools ?? [],
+          ...(request.thinking ? { thinking: { enabled: true } } : {}),
+        },
       },
       { responseType: 'stream', signal }
     );

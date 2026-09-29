@@ -43,7 +43,7 @@ import { MediaApiClient } from './media/MediaApiClient';
 import type { MediaStore } from './media/MediaStore';
 import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
-import { createThinkFilter } from './thinkFilter';
+import { createThinkFilter, type ThinkSplit } from './thinkFilter';
 import { pickTitleModel, sanitizeGeneratedTitle, titleRequestMessages } from './sessionTitle';
 import { pickSuggestionModel, sanitizeSuggestion, suggestionRequestMessages } from './nextPrompt';
 import type { SessionActivity } from './SessionActivity';
@@ -291,6 +291,7 @@ interface ResumedReply {
 interface RawRound {
   text: string;
   toolCallIds: string[];
+  reasoning: string;
 }
 
 /**
@@ -1121,8 +1122,13 @@ export class ChatService {
         let turnText = '';
         let turnThinking: unknown[] | undefined;
         let turnUsage: ChatUsage | undefined;
-        const hideThinking = createThinkFilter();
-        const appendVisible = (visible: string): void => {
+        let turnReasoning = '';
+        const splitThinking = createThinkFilter();
+        const append = ({ text: visible, reasoning }: ThinkSplit): void => {
+          if (reasoning) {
+            turnReasoning += reasoning;
+            this.emit({ type: 'reasoning', sessionId, messageId: replyId, text: reasoning });
+          }
           if (!visible) return;
           // Every round streams into the SAME message, so without a break here the last
           // sentence of one round runs into the first word of the next. On the emitted text
@@ -1136,11 +1142,11 @@ export class ChatService {
         const failure = await streamRound(
           api.getAxiosInstance(),
           serverConfig.endpoint,
-          { model: session.model, messages: wire, tools, ...(maxTokens ? { maxTokens } : {}) },
+          { model: session.model, messages: wire, tools, thinking: true, ...(maxTokens ? { maxTokens } : {}) },
           event => {
             // `error` never reaches here (the transport throws on it); `meta` carries no reply.
             if (event.type === 'error' || event.type === 'meta') return;
-            if (event.text) appendVisible(hideThinking.push(event.text));
+            if (event.text) append(splitThinking.push(event.text));
             if (event.type === 'tool_use') {
               if (event.tools) requested.push(...event.tools);
               if (event.thinking) turnThinking = event.thinking;
@@ -1150,12 +1156,12 @@ export class ChatService {
           },
           controller.signal
         );
-        appendVisible(hideThinking.flush());
+        append(splitThinking.flush());
 
         // Recorded before the exits below, so the round that ENDS a turn - the one carrying the
         // answer, which by definition runs no tools - is part of the structure rather than the
         // one piece of prose the thread has to guess a home for.
-        const round: RawRound = { text: turnText, toolCallIds: [] };
+        const round: RawRound = { text: turnText, toolCallIds: [], reasoning: turnReasoning };
         produced.push(round);
 
         // Within one request the server's counts are cumulative, so the last report wins; across
@@ -1259,9 +1265,15 @@ export class ChatService {
         ...parsed
           // Trimmed so the join below lands exactly one blank line between rounds, and so a
           // round does not draw a gap under itself where the model happened to end on newlines.
-          .map(entry => ({ text: entry.content.trim(), toolCallIds: entry.round.toolCallIds }))
-          .filter(round => round.text.length > 0 || round.toolCallIds.length > 0),
+          .map(entry => ({
+            text: entry.content.trim(),
+            toolCallIds: entry.round.toolCallIds,
+            ...(entry.round.reasoning.trim() ? { reasoning: entry.round.reasoning.trim() } : {}),
+          }))
+          .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning),
       ];
+      // A plain reply keeps no rounds, but one that reasoned needs them to carry the reasoning.
+      const keepRounds = toolCalls.length > 0 || rounds.some(round => round.reasoning);
       const finalContent = joinRounds(rounds.map(round => round.text));
 
       await this.settleReply(sessionId, !!resume, {
@@ -1271,7 +1283,7 @@ export class ChatService {
         createdAt: new Date().toISOString(),
         stopReason,
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
-        ...(toolCalls.length > 0 ? { rounds } : {}),
+        ...(keepRounds ? { rounds } : {}),
         ...(thinking ? { thinking } : {}),
         ...(artifacts.length > 0 ? { artifacts } : {}),
       });
@@ -1283,7 +1295,7 @@ export class ChatService {
         stopReason,
         usage,
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
-        ...(toolCalls.length > 0 ? { rounds } : {}),
+        ...(keepRounds ? { rounds } : {}),
         ...(artifacts.length > 0 ? { artifacts } : {}),
       });
       // A truncated reply ('max_tokens'), a budget stop and a context stop all count as

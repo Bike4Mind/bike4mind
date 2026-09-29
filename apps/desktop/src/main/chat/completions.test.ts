@@ -124,6 +124,7 @@ describe('streamCompletion', () => {
     expect(url).toBe('/c');
     expect(body).toMatchObject({ model: 'm', options: { stream: true, tools: [] } });
     expect(body).not.toHaveProperty('max_tokens');
+    expect(body.options).not.toHaveProperty('thinking');
     expect(config.responseType).toBe('stream');
   });
 
@@ -136,6 +137,17 @@ describe('streamCompletion', () => {
     await done;
 
     expect(post.mock.calls[0][1]).toMatchObject({ max_tokens: 16_384 });
+  });
+
+  it('asks for readable reasoning only when told to', async () => {
+    const stream = new PassThrough();
+    const { instance, post } = fakeAxios(stream);
+
+    const done = streamCompletion(instance, '/c', { ...REQUEST, thinking: true }, () => {});
+    stream.write(frame('[DONE]'));
+    await done;
+
+    expect(post.mock.calls[0][1].options.thinking).toEqual({ enabled: true });
   });
 
   it('forwards declared tools in the envelope the endpoint expects', async () => {

@@ -324,8 +324,8 @@ export interface ChatMessage {
    * the plain-text transcript and search all want. This is what the thread reads to draw a reply
    * in the order it happened rather than every tool row piled up after every word.
    *
-   * Absent on messages stored before rounds were recorded, and on a message that ran no tools at
-   * all. A reader that finds it missing has to fall back to `content` then `toolCalls`: the
+   * Absent on messages stored before rounds were recorded, and on a message that ran no tools and
+   * showed no reasoning. A reader that finds it missing has to fall back to `content` then `toolCalls`: the
    * ordering was never captured for those and cannot be recovered.
    */
   rounds?: ChatReplyRound[];
@@ -629,6 +629,8 @@ export type ChatStreamEvent =
   | { type: 'tool-start'; sessionId: string; messageId: string; call: ChatToolCall }
   | { type: 'tool-end'; sessionId: string; messageId: string; call: ChatToolCall }
   | { type: 'tool-progress'; sessionId: string; messageId: string; callId: string; text: string }
+  /** Readable reasoning, streamed ahead of the round's prose; see ChatReplyRound.reasoning. */
+  | { type: 'reasoning'; sessionId: string; messageId: string; text: string }
   /**
    * The turn's cost so far, emitted after each tool round trip completes and once more with
    * the reply. `usage` is the running total of what the server reported, so a consumer shows a
@@ -938,6 +940,11 @@ export interface ChatPendingApproval {
 export interface ChatReplyRound {
   text: string;
   toolCallIds: string[];
+  /**
+   * The model's readable reasoning before this round's prose, drawn collapsed above it. Display
+   * only: what is replayed to the provider is the message's opaque `thinking`, never this.
+   */
+  reasoning?: string;
 }
 
 /**

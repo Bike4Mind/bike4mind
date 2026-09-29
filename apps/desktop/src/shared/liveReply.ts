@@ -23,6 +23,10 @@ export function applyLiveEvent(message: ChatMessage, event: ChatStreamEvent): Ch
     return { ...message, content: message.content + event.text, rounds: appendText(message.rounds, event.text) };
   }
 
+  if (event.type === 'reasoning') {
+    return { ...message, rounds: appendReasoning(message.rounds, event.text) };
+  }
+
   if (event.type === 'tool-start' || event.type === 'tool-end') {
     const existing = message.toolCalls ?? [];
     const known = existing.some(call => call.id === event.call.id);
@@ -66,6 +70,15 @@ function appendText(rounds: ChatReplyRound[] | undefined, text: string): ChatRep
     return [...(rounds ?? []), { text: text.replace(/^\n+/, ''), toolCallIds: [] }];
   }
   return [...rounds.slice(0, -1), { ...open, text: open.text + text }];
+}
+
+/** Reasoning belongs to the round it precedes, so it opens one after tools exactly as text does. */
+function appendReasoning(rounds: ChatReplyRound[] | undefined, text: string): ChatReplyRound[] {
+  const open = rounds?.[rounds.length - 1];
+  if (!rounds || !open || open.toolCallIds.length > 0) {
+    return [...(rounds ?? []), { text: '', toolCallIds: [], reasoning: text }];
+  }
+  return [...rounds.slice(0, -1), { ...open, reasoning: (open.reasoning ?? '') + text }];
 }
 
 /** Put a call in the round that is open, starting one for a round that announced itself in silence. */

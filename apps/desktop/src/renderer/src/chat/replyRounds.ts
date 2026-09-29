@@ -20,8 +20,14 @@ export function roundsOf(message: ChatMessage): ChatReplyRound[] {
     // whose prose introduced them. Twelve wordless commands in twelve rounds are one "Ran 12
     // commands" here, as they already are while the turn streams - and drawing a round apiece
     // would break the run up and defeat that collapsing on every reload.
+    // Its reasoning goes with it, so the row collapses to one "Thought" as well.
     if (open !== undefined && round.text.length === 0) {
-      drawn[drawn.length - 1] = { ...open, toolCallIds: [...open.toolCallIds, ...round.toolCallIds] };
+      const reasoning = [open.reasoning, round.reasoning].filter(Boolean).join('\n\n');
+      drawn[drawn.length - 1] = {
+        ...open,
+        toolCallIds: [...open.toolCallIds, ...round.toolCallIds],
+        ...(reasoning ? { reasoning } : {}),
+      };
       continue;
     }
     drawn.push(round);

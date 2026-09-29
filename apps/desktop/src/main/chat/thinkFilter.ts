@@ -2,7 +2,7 @@ const OPEN = '<think>';
 const CLOSE = '</think>';
 
 /**
- * Drops `<think>...</think>` spans from reply text as it streams.
+ * Splits `<think>...</think>` spans out of reply text as it streams.
  *
  * The server inlines a model's reasoning into the text channel between these markers, and an
  * adaptive model (Opus 5) reasons on every turn whether or not thinking was asked for. The
@@ -15,12 +15,18 @@ const CLOSE = '</think>';
  * Markers can split across deltas, so a tail that could still become one is held back until
  * the next push (or `flush`) settles it.
  */
-export function createThinkFilter(): { push(text: string): string; flush(): string } {
+export interface ThinkSplit {
+  text: string;
+  reasoning: string;
+}
+
+export function createThinkFilter(): { push(text: string): ThinkSplit; flush(): ThinkSplit } {
   let depth = 0;
   let pending = '';
 
-  const drain = (final: boolean): string => {
+  const drain = (final: boolean): ThinkSplit => {
     let visible = '';
+    let reasoning = '';
     while (pending.length > 0) {
       const open = pending.indexOf(OPEN);
       const close = pending.indexOf(CLOSE);
@@ -29,11 +35,13 @@ export function createThinkFilter(): { push(text: string): string; flush(): stri
       if (next === undefined) {
         const keep = final ? 0 : partialMarkerLength(pending);
         if (depth === 0) visible += pending.slice(0, pending.length - keep);
+        else reasoning += pending.slice(0, pending.length - keep);
         pending = pending.slice(pending.length - keep);
         break;
       }
 
       if (depth === 0) visible += pending.slice(0, next);
+      else reasoning += pending.slice(0, next);
       if (next === open) {
         depth += 1;
         pending = pending.slice(next + OPEN.length);
@@ -43,7 +51,7 @@ export function createThinkFilter(): { push(text: string): string; flush(): stri
         pending = pending.slice(next + CLOSE.length);
       }
     }
-    return visible;
+    return { text: visible, reasoning };
   };
 
   return {

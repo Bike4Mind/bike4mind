@@ -15,6 +15,7 @@ import { contentColumnSx } from './layout';
 import { ReplyMarkdown } from './markdown/ReplyMarkdown';
 import { relaySummary } from './relayRows';
 import { callsIn, roundsOf } from './replyRounds';
+import { ThinkingBlock } from './ThinkingBlock';
 import { ToolCallList, type RespondToApproval } from './ToolCallList';
 
 /** What each budget the agent loop enforces is called in the thread. See isTurnBudgetStop. */
@@ -171,6 +172,9 @@ function AssistantTurn({
 }) {
   const toolCalls = message.toolCalls ?? [];
   const rounds = roundsOf(message);
+  // Still reasoning: the newest stored round has reasoning and nothing after it yet.
+  const newest = message.rounds?.at(-1);
+  const reasoningNow = live && !!newest?.reasoning && newest.text.length === 0 && newest.toolCallIds.length === 0;
 
   return (
     <Box sx={{ minWidth: 0 }} data-testid="chat-message-assistant">
@@ -186,6 +190,9 @@ function AssistantTurn({
             {/* Per round rather than over the whole reply, which is also what keeps a code fence
                 from leaking: a block opened in one round cannot swallow the next round's prose,
                 because the next round is a parse of its own. */}
+            {round.reasoning && (
+              <ThinkingBlock reasoning={round.reasoning} thinking={reasoningNow && index === rounds.length - 1} />
+            )}
             {presented.text.length > 0 && <ReplyMarkdown text={presented.text} />}
             {presented.unfinishedArtifact !== null && (
               <Typography level="body-sm" color="warning" sx={{ mt: 1 }} data-testid="chat-unfinished-artifact">
