@@ -7,6 +7,13 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 // anything outside the set is rejected (falls back to the unrewritten spec).
 const HOST_CHARSET = /^[A-Za-z0-9._\-:[\]]+$/;
 
+export type OpenApiSpecInput = { servers?: ReadonlyArray<{ url?: string }> };
+
+// The type of the generated deploymentOpenApi.generated.ts. Both of its emitters
+// (generate-premium-glue.mjs and common's generateDeployment.ts) import it by name
+// rather than spelling the shape out, so the three cannot drift.
+export type DeploymentOpenApiSpec = OpenApiSpecInput & Record<string, unknown>;
+
 function specForRequest(req: NextApiRequest, specJson: string, placeholderUrl: string): string {
   const host = req.headers.host;
   if (!host || !placeholderUrl) return specJson;
@@ -46,7 +53,7 @@ function setCorsHeaders(res: NextApiResponse): void {
  * CORS is fully permissive: a spec carries no secrets, so any browser tool or SDK
  * generator can fetch it cross-origin.
  */
-export function createOpenApiSpecHandler(spec: { servers?: ReadonlyArray<{ url?: string }> }) {
+export function createOpenApiSpecHandler(spec: OpenApiSpecInput) {
   // Serialized once; each request only swaps the placeholder host. The prod
   // server URL is also baked into the code samples and contact URL, so
   // replacing it everywhere is sufficient.

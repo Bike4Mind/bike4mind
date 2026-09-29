@@ -79,9 +79,14 @@ describe('premium contracts codegen', () => {
       'export const deploymentOpenApiSpec = { stale: true };\n'
     );
     runCodegen();
-    expect(read('deploymentOpenApi.generated.ts')).toContain(
-      'export const deploymentOpenApiSpec: Record<string, unknown> | null = null;'
-    );
+    const content = read('deploymentOpenApi.generated.ts');
+    expect(content).toContain("import type { DeploymentOpenApiSpec } from '../utils/openApiSpecHandler';");
+    expect(content).toContain('export const deploymentOpenApiSpec: DeploymentOpenApiSpec | null = null;');
+  });
+
+  it('rejects a relative contractsExport before resolving it', () => {
+    addOverlay({ contractsExport: '../fixtureoverlay/src/api/contracts' });
+    expect(runCodegen).toThrow(/relative-path segment/);
   });
 
   it('rejects a contractsExport its package.json exports map does not declare', () => {

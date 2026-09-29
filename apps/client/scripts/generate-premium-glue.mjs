@@ -767,7 +767,8 @@ function generateContracts(packages) {
   writeFile(
     join(CLIENT_ROOT, 'server/premium-generated/deploymentOpenApi.generated.ts'),
     `${GENERATED_BANNER}// Overwritten by: pnpm --filter @bike4mind/common openapi:generate:deployment\n\n` +
-      `export const deploymentOpenApiSpec: ({ servers?: ReadonlyArray<{ url?: string }> } & Record<string, unknown>) | null = null;\n`
+      `import type { DeploymentOpenApiSpec } from '../utils/openApiSpecHandler';\n\n` +
+      `export const deploymentOpenApiSpec: DeploymentOpenApiSpec | null = null;\n`
   );
 
   const contributors = packages.filter(p => p.contributions.contractsExport);
