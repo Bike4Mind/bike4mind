@@ -18,6 +18,18 @@ import {
   patchPendingMessageFileModerationStatus,
 } from '@client/app/hooks/useSessionLayout';
 import { GearsStatusResponse } from '@client/app/hooks/useGearsStatus';
+import { useUser } from '@client/app/contexts/UserContext';
+import { useFileBrowser } from '@client/app/components/Files/fileBrowserStore';
+import {
+  StorageLimitExceededError,
+  attachUploadBytes,
+  checkStorageForUpload,
+  checkStorageForUploadFresh,
+  getStorageQuota,
+  serverStorageLimitMessage,
+  storageNearLimitMessage,
+} from '@client/app/utils/storageQuota';
+import { toast } from 'sonner';
 import styles from '../FilePond.module.css';
 
 // any: FilePond types are not fully compatible with React 18 generics
@@ -60,6 +72,16 @@ export function SessionFilePond({
     void queryClient.invalidateQueries({ queryKey: ['gears', 'status'] });
   };
 
+  // FilePond itself is hidden behind the thumbnails, so its error() text never shows; a toast is
+  // the only place a storage refusal can be read. One id so a multi-file drop shows one toast.
+  const toastStorageLimit = (message: string) => {
+    toast.error(message, {
+      id: 'storage-limit-exceeded',
+      duration: 10000,
+      action: { label: 'Manage files', onClick: () => useFileBrowser.getState().setOpen(true) },
+    });
+  };
+
   return (
     <Box
       sx={{
@@ -100,6 +122,14 @@ export function SessionFilePond({
             progress: (computable: boolean, loaded: number, total: number) => void,
             abort: () => void
           ) => {
+            // Each file is judged alone; files of one drop that only overflow together are
+            // refused by the server, whose message the catch below surfaces.
+            const uploadBytes = attachUploadBytes(file);
+            const storageCheck = checkStorageForUpload(getStorageQuota(useUser.getState().currentUser), uploadBytes);
+            if (storageCheck.status === 'near') {
+              toast.warning(storageNearLimitMessage(storageCheck), { id: 'storage-near-limit' });
+            }
+
             // Create AbortController for this upload
             const abortController = new AbortController();
 
@@ -132,11 +162,14 @@ export function SessionFilePond({
 
             file
               .arrayBuffer()
-              .then(() => {
+              .then(async () => {
                 // Check if aborted during file read
                 if (abortController.signal.aborted) {
                   throw new DOMException('Upload cancelled', 'AbortError');
                 }
+
+                const freshCheck = await checkStorageForUploadFresh(uploadBytes);
+                if (freshCheck.status === 'exceeds') throw new StorageLimitExceededError(freshCheck);
 
                 // Determine proper MIME type for markdown files
                 let mimeType = file.type;
@@ -249,7 +282,10 @@ export function SessionFilePond({
                 setPendingMessageFiles(prev =>
                   prev.map(item => (item.fabFile.id === tempId ? { ...item, status: 'error' as const } : item))
                 );
-                error('Failed to upload file');
+                const storageMessage =
+                  err instanceof StorageLimitExceededError ? err.message : serverStorageLimitMessage(err);
+                if (storageMessage) toastStorageLimit(storageMessage);
+                error(storageMessage ?? 'Failed to upload file');
               });
 
             // CRITICAL: Return abort function to FilePond

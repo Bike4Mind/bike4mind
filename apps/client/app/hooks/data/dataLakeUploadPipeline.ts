@@ -21,6 +21,8 @@ import { slugifyDataLakeName } from '@client/app/hooks/data/dataLakeSlug';
 import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 import { api } from '@client/app/contexts/ApiContext';
 import { activeOrgId } from '@client/app/hooks/data/dataLakes';
+import { StorageLimitExceededError, checkStorageForUploadFresh } from '@client/app/utils/storageQuota';
+import type { WizardFile } from '@client/app/utils/folderTreeParser';
 import { toast } from 'sonner';
 import axios from 'axios';
 
@@ -76,6 +78,10 @@ export function classifyUploadError(
     (error instanceof Error && error.message === OFFLINE_MESSAGE);
   if (isNetworkError) {
     return { kind: 'network', message: OFFLINE_MESSAGE };
+  }
+
+  if (error instanceof StorageLimitExceededError) {
+    return { kind: 'validation', message: error.message };
   }
 
   // All uploads failed (thrown by the batch flow after the lake/batch were rolled back):
@@ -155,6 +161,20 @@ export function classifyUploadError(
   }
 
   return { kind: 'unknown', message: 'Batch upload failed. Please try again.' };
+}
+
+/**
+ * Bytes the commit will actually send: the same exclusion, file-type and skip-duplicate filters
+ * runBatchUpload applies, so the storage warning judges what the server will be asked to hold.
+ */
+export function plannedUploadBytes(
+  allFiles: WizardFile[],
+  conflictResolution: DataLakeFormValues['conflictResolution']
+): number {
+  return allFiles
+    .filter(f => !f.excluded && isSupportedFabFileMimeType(f.type))
+    .filter(f => conflictResolution !== 'skip' || !f.isDuplicate)
+    .reduce((sum, f) => sum + f.size, 0);
 }
 
 /**
@@ -475,6 +495,11 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
     if (included.length === 0) throw new Error('All files are duplicates (skipped)');
   }
   // 'update' and 'duplicate' both upload: 'update' will overwrite, 'duplicate' creates new
+
+  // Before the lake exists: the presign batch would refuse this anyway, but only after the lake
+  // had been created.
+  const storageCheck = await checkStorageForUploadFresh(included.reduce((sum, f) => sum + f.size, 0));
+  if (storageCheck.status === 'exceeds') throw new StorageLimitExceededError(storageCheck);
 
   // Exactly the value every client-side rule judged (see submittedTagPrefix), so what was
   // gated is what gets sent.
