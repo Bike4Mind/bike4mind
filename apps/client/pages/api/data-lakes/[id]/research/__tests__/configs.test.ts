@@ -35,6 +35,8 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/database', () => ({
   dataLakeResearchConfigRepository: {},
   dataLakeProposalRepository: { countPendingByLakes: h.countPendingByLakes },
+  lakeConfigChangeEventRepository: {},
+  adminSettingsRepository: {},
 }));
 vi.mock('@server/dataLakes/assertLakeResearchManage', () => ({
   assertLakeResearchManage: h.assertLakeResearchManage,
@@ -56,10 +58,13 @@ const call = (handler: unknown, r: unknown, res: unknown) =>
   (handler as (req: unknown, res: unknown) => Promise<void>)(r, res);
 
 const savedConfig = { id: 'config-1', name: 'Weekly sweep' };
+const LAKE = { id: 'lake-oid-1', name: 'Ops Lake' };
+const ACTOR = { userId: 'user-1', isAdmin: false, administeredOrgIds: [] };
+const GRANTS: unknown[] = [];
 
 beforeEach(() => {
   vi.clearAllMocks();
-  h.assertLakeResearchManage.mockResolvedValue({ id: 'lake-oid-1', name: 'Ops Lake' });
+  h.assertLakeResearchManage.mockResolvedValue({ lake: LAKE, actor: ACTOR, grants: GRANTS });
   h.listResearchConfigs.mockResolvedValue([savedConfig]);
   h.createResearchConfig.mockResolvedValue(savedConfig);
   h.updateResearchConfig.mockResolvedValue(savedConfig);
@@ -90,8 +95,8 @@ describe('/api/data-lakes/[id]/research/configs', () => {
     await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', ...schedule }), res);
     await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, schedule), res);
 
-    expect(h.createResearchConfig.mock.calls[0][2]).toMatchObject(schedule);
-    expect(h.updateResearchConfig.mock.calls[0][3]).toMatchObject(schedule);
+    expect(h.createResearchConfig.mock.calls[0][3]).toMatchObject(schedule);
+    expect(h.updateResearchConfig.mock.calls[0][4]).toMatchObject(schedule);
   });
 
   it('refuses a cadence the scheduler does not know', async () => {
@@ -108,8 +113,9 @@ describe('/api/data-lakes/[id]/research/configs', () => {
     await call(indexHandler, req('POST', { id: 'my-lake' }, { name: 'Weekly', query: 'erosion' }), res);
 
     expect(h.createResearchConfig).toHaveBeenCalledWith(
-      'lake-oid-1',
-      'user-1',
+      LAKE,
+      ACTOR,
+      GRANTS,
       expect.objectContaining({ name: 'Weekly', query: 'erosion' }),
       expect.anything()
     );
@@ -128,8 +134,9 @@ describe('/api/data-lakes/[id]/research/configs', () => {
 
     expect(h.updateResearchConfig).toHaveBeenCalledWith(
       'config-1',
-      'lake-oid-1',
-      'user-1',
+      LAKE,
+      ACTOR,
+      GRANTS,
       expect.objectContaining({ recencyDays: null }),
       expect.anything()
     );
@@ -144,8 +151,9 @@ describe('/api/data-lakes/[id]/research/configs', () => {
     await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', model: null }), res);
 
     expect(h.createResearchConfig).toHaveBeenCalledWith(
-      'lake-oid-1',
-      'user-1',
+      LAKE,
+      ACTOR,
+      GRANTS,
       expect.objectContaining({ model: null }),
       expect.anything()
     );
@@ -158,8 +166,9 @@ describe('/api/data-lakes/[id]/research/configs', () => {
 
     expect(h.updateResearchConfig).toHaveBeenCalledWith(
       'config-1',
-      'lake-oid-1',
-      'user-1',
+      LAKE,
+      ACTOR,
+      GRANTS,
       expect.objectContaining({ model: null }),
       expect.anything()
     );
@@ -171,8 +180,9 @@ describe('/api/data-lakes/[id]/research/configs', () => {
     await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', model: 'gpt-4.1-mini' }), res);
 
     expect(h.createResearchConfig).toHaveBeenCalledWith(
-      'lake-oid-1',
-      'user-1',
+      LAKE,
+      ACTOR,
+      GRANTS,
       expect.objectContaining({ model: 'gpt-4.1-mini' }),
       expect.anything()
     );
@@ -199,7 +209,7 @@ describe('/api/data-lakes/[id]/research/configs', () => {
 
     await call(byIdHandler, req('DELETE', { id: 'l', configId: 'config-1' }), res);
 
-    expect(h.deleteResearchConfig).toHaveBeenCalledWith('config-1', 'lake-oid-1', expect.anything());
+    expect(h.deleteResearchConfig).toHaveBeenCalledWith('config-1', LAKE, ACTOR, GRANTS, expect.anything());
     expect(res.status).toHaveBeenCalledWith(204);
   });
 

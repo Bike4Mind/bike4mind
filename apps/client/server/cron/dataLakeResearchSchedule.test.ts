@@ -14,6 +14,8 @@ const h = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', () => ({
   connectDB: vi.fn(),
   adminSettingsRepository: {},
+  lakeConfigChangeEventRepository: {},
+  dataLakeRepository: { name: 'dataLakes' },
   dataLakeProposalRepository: { name: 'proposals' },
   dataLakeResearchConfigRepository: { name: 'configs' },
   dataLakeResearchRunRepository: { name: 'runs' },
@@ -44,13 +46,17 @@ describe('runResearchScheduleTick', () => {
 
     const [adapters] = h.runDueResearchSchedules.mock.calls[0];
     expect(adapters.db).toEqual({
+      dataLakes: { name: 'dataLakes' },
       dataLakeResearchConfigs: { name: 'configs' },
       dataLakeResearchRuns: { name: 'runs' },
       dataLakeProposals: { name: 'proposals' },
+      lakeConfigChangeEvents: {},
+      adminSettings: {},
     });
     const run = { id: 'run-1' };
-    await adapters.enqueue(run);
-    expect(h.queueResearchRun).toHaveBeenCalledWith(run, 'https://sqs.example/research');
+    const lake = { id: 'lake-1' };
+    await adapters.enqueue(run, lake);
+    expect(h.queueResearchRun).toHaveBeenCalledWith(run, lake, 'https://sqs.example/research', logger);
   });
 
   // Claiming nothing is what lets the due configs fire as soon as the flag is back on.

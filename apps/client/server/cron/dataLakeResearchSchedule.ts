@@ -17,6 +17,7 @@ import {
   adminSettingsRepository,
   connectDB,
   dataLakeProposalRepository,
+  dataLakeRepository,
   dataLakeResearchConfigRepository,
   dataLakeResearchRunRepository,
 } from '@bike4mind/database';
@@ -24,6 +25,7 @@ import { Logger } from '@bike4mind/observability';
 import { dataLakeResearchService } from '@bike4mind/services';
 import { getSettingByName } from '@bike4mind/utils';
 import { Resource } from 'sst';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { queueResearchRun } from '@server/dataLakes/queueResearchRun';
 import { isSettingEnabled } from '@server/middlewares/featureFlag';
 import { Config } from '@server/utils/config';
@@ -50,11 +52,13 @@ export async function runResearchScheduleTick(
 
   return dataLakeResearchService.runDueResearchSchedules({
     db: {
+      dataLakes: dataLakeRepository,
       dataLakeResearchConfigs: dataLakeResearchConfigRepository,
       dataLakeResearchRuns: dataLakeResearchRunRepository,
       dataLakeProposals: dataLakeProposalRepository,
+      ...lakeConfigAuditDb,
     },
-    enqueue: run => queueResearchRun(run, queueUrl),
+    enqueue: (run, lake) => queueResearchRun(run, lake, queueUrl, runLogger),
     logger: runLogger,
   });
 }

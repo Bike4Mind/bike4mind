@@ -8,6 +8,7 @@ import { RESEARCH_RUN_TRIGGERS } from '@bike4mind/common';
 import { z } from 'zod';
 import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchManage';
 import { ResearchLeversInput, ResearchScheduleInput } from '@server/dataLakes/researchConfigInput';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 const CreateInput = ResearchLeversInput.merge(ResearchScheduleInput).extend({
   name: z.string(),
@@ -16,7 +17,7 @@ const CreateInput = ResearchLeversInput.merge(ResearchScheduleInput).extend({
   trigger: z.enum(RESEARCH_RUN_TRIGGERS).optional(),
 });
 
-const db = { dataLakeResearchConfigs: dataLakeResearchConfigRepository };
+const db = { dataLakeResearchConfigs: dataLakeResearchConfigRepository, ...lakeConfigAuditDb };
 
 /**
  * GET  /api/data-lakes/:id/research/configs - the lake's saved research configurations (#1682).
@@ -32,7 +33,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request, res) => {
     const { id } = req.query as { id: string };
-    const lake = await assertLakeResearchManage(req, id);
+    const { lake } = await assertLakeResearchManage(req, id);
     const [configs, pendingByLake] = await Promise.all([
       dataLakeResearchService.listResearchConfigs(lake.id, { db }),
       dataLakeProposalRepository.countPendingByLakes([lake.id]),
@@ -42,10 +43,13 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .post(async (req: Request, res) => {
     assertDataLakeWriteScope(req);
     const { id } = req.query as { id: string };
-    const lake = await assertLakeResearchManage(req, id);
+    const { lake, actor, grants } = await assertLakeResearchManage(req, id);
     const input = CreateInput.parse(req.body);
 
-    const config = await dataLakeResearchService.createResearchConfig(lake.id, req.user!.id, input, { db });
+    const config = await dataLakeResearchService.createResearchConfig(lake, actor, grants, input, {
+      db,
+      logger: req.logger,
+    });
     return res.status(201).json({ data: config });
   });
 

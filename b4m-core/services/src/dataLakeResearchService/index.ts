@@ -4,6 +4,7 @@
  * DataLakeResearchTypes.ts for how this relates to the older `researchTaskService`.
  */
 export * from './executeResearchRun';
+export * from './recordResearchRunOutcome';
 export * from './RelevanceJudgeService';
 export * from './researchConfigs';
 export * from './researchLevers';

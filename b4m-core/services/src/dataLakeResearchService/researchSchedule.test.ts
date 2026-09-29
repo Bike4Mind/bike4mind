@@ -34,9 +34,12 @@ const scheduledConfig = (overrides: Partial<IDataLakeResearchConfigDocument> = {
     ...overrides,
   }) as IDataLakeResearchConfigDocument;
 
+const lakeFor = (dataLakeId: string, status: string = 'active') => ({ id: dataLakeId, status });
+
 const makeAdapters = (
   overrides: {
     due?: IDataLakeResearchConfigDocument[];
+    lakes?: Record<string, ReturnType<typeof lakeFor>>;
     pending?: Record<string, number>;
     active?: number;
     enqueue?: ResearchScheduleAdapters['enqueue'];
@@ -44,6 +47,8 @@ const makeAdapters = (
   } = {}
 ) => {
   const due = overrides.due ?? [scheduledConfig()];
+  const lakes = overrides.lakes ?? Object.fromEntries(due.map(c => [c.dataLakeId, lakeFor(c.dataLakeId)]));
+  const dataLakes = { findById: vi.fn(async (id: string) => lakes[id] ?? null) };
   const configs = {
     claimDueConfigs: vi.fn(async () => due),
     recordScheduleOutcome: overrides.recordScheduleOutcome ?? vi.fn(async () => {}),
@@ -56,15 +61,22 @@ const makeAdapters = (
     countStartedSince: vi.fn(async () => 0),
   };
   const proposals = { countPendingByLakes: vi.fn(async () => overrides.pending ?? {}) };
+  const record = vi.fn(async () => undefined);
   const enqueue = vi.fn(overrides.enqueue ?? (async () => {}));
   const logger = { info: vi.fn(), error: vi.fn() };
   const adapters = {
-    db: { dataLakeResearchConfigs: configs, dataLakeResearchRuns: runs, dataLakeProposals: proposals },
+    db: {
+      dataLakes,
+      dataLakeResearchConfigs: configs,
+      dataLakeResearchRuns: runs,
+      dataLakeProposals: proposals,
+      lakeConfigChangeEvents: { record },
+    },
     enqueue,
     logger,
     now: () => NOW,
   } as unknown as ResearchScheduleAdapters;
-  return { adapters, configs, runs, proposals, enqueue, logger };
+  return { adapters, dataLakes, configs, runs, proposals, enqueue, logger, record };
 };
 
 describe('addCadence', () => {
@@ -110,7 +122,10 @@ describe('runDueResearchSchedules', () => {
     expect(runs.createRun).toHaveBeenCalledWith(
       expect.objectContaining({ trigger: 'periodic', startedByUserId: null })
     );
-    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ id: 'run-of-config-1' }));
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'run-of-config-1' }),
+      expect.objectContaining({ id: 'lake-1' })
+    );
     expect(configs.recordScheduleOutcome).toHaveBeenCalledWith(
       'config-1',
       'daily',
@@ -202,6 +217,26 @@ describe('runDueResearchSchedules', () => {
 
     expect(runs.createRun).toHaveBeenCalledWith(expect.objectContaining({ configId: 'healthy' }));
     expect(summary).toEqual({ claimed: 2, started: 1, skipped: 0, failed: 1 });
+  });
+
+  // claimDueConfigs filters only on cadence/nextRunAt, so an archived (or deleted) lake's config
+  // stays claimable until the lake's hard purge - the scheduler itself must not spend on it.
+  it('skips an archived lake, writing no run and spending nothing', async () => {
+    const { adapters, configs, runs, enqueue } = makeAdapters({
+      lakes: { 'lake-1': lakeFor('lake-1', 'archived') },
+    });
+
+    const summary = await runDueResearchSchedules(adapters);
+
+    expect(runs.createRun).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(configs.recordScheduleOutcome).toHaveBeenCalledWith(
+      'config-1',
+      'daily',
+      { outcome: 'skipped', at: NOW, reason: 'lake_inactive' },
+      new Date('2026-03-11T09:00:00.000Z')
+    );
+    expect(summary.skipped).toBe(1);
   });
 
   it('logs rather than throws when the outcome cannot be recorded', async () => {

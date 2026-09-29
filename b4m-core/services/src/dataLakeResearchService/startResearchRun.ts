@@ -5,6 +5,13 @@ import type {
   ResearchScheduleSkipReason,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { researchRunChange } from '../dataLakeService/diffLakeConfig';
+import type { LakeGrant, ManageActor } from '../dataLakeService/manageRule';
+import {
+  recordLakeConfigChange,
+  type LakeConfigAuditAdapters,
+  type LakeConfigAuditLakeRef,
+} from '../dataLakeService/recordLakeConfigChange';
 import { normalizeResearchLevers } from './researchLevers';
 
 /**
@@ -17,9 +24,10 @@ import { normalizeResearchLevers } from './researchLevers';
  */
 
 /** Who started the run: a person pressing Run, or the scheduler with nobody behind it. */
-export type ResearchRunStarter = { trigger: 'on_demand'; actorUserId: string } | { trigger: 'periodic' };
+export type ResearchRunStarter =
+  { trigger: 'on_demand'; actor: ManageActor; grants: readonly LakeGrant[] } | { trigger: 'periodic' };
 
-type ResearchRunRefusalReason = Exclude<ResearchScheduleSkipReason, 'review_backlog'>;
+type ResearchRunRefusalReason = Exclude<ResearchScheduleSkipReason, 'review_backlog' | 'lake_inactive'>;
 
 /**
  * A spend rail refused the start. Tagged so the scheduler can record WHICH rail as a skip reason
@@ -40,10 +48,12 @@ export function isResearchRunRefusal(error: unknown): error is ResearchRunRefuse
   return error instanceof BadRequestError && 'reason' in error && REFUSAL_REASONS.has(error.reason);
 }
 
-export interface StartResearchRunAdapters {
-  db: {
+export interface StartResearchRunAdapters extends LakeConfigAuditAdapters {
+  db: LakeConfigAuditAdapters['db'] & {
     dataLakeResearchConfigs: Pick<IDataLakeResearchConfigRepository, 'findByIdInLake' | 'recordRunStarted'>;
     dataLakeResearchRuns: Pick<IDataLakeResearchRunRepository, 'createRun' | 'countActiveByLake' | 'countStartedSince'>;
+    // REQUIRED - see the matching note on ResearchConfigAdapters.
+    lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
   };
   now?: () => Date;
 }
@@ -59,10 +69,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export async function startResearchRun(
   configId: string,
-  dataLakeId: string,
+  lake: LakeConfigAuditLakeRef,
   starter: ResearchRunStarter,
-  { db, now = () => new Date() }: StartResearchRunAdapters
+  { db, logger, now = () => new Date() }: StartResearchRunAdapters
 ): Promise<IDataLakeResearchRunDocument> {
+  const dataLakeId = lake.id;
   const config = await db.dataLakeResearchConfigs.findByIdInLake(configId, dataLakeId);
   if (!config) throw new NotFoundError('Research configuration not found');
 
@@ -100,7 +111,7 @@ export async function startResearchRun(
     levers: normalizeResearchLevers(config),
     // How THIS run started, not the config's trigger: Run now on a scheduled config is still on-demand.
     trigger: starter.trigger,
-    startedByUserId: starter.trigger === 'on_demand' ? starter.actorUserId : null,
+    startedByUserId: starter.trigger === 'on_demand' ? starter.actor.userId : null,
     startedAt: null,
     completedAt: null,
   });
@@ -108,6 +119,30 @@ export async function startResearchRun(
   // After the run row exists, so a failure here costs a stale "last run" timestamp rather than a
   // run the user started and cannot see. Best-effort inside the repository for the same reason.
   await db.dataLakeResearchConfigs.recordRunStarted(configId, startedAt);
+
+  // `grants` comes from the caller's own gate (assertLakeResearchManage), not re-fetched here -
+  // the gate and the recorded manage rung must agree on the same grant set, the same reasoning
+  // reviewDataLakeProposal's resolveReviewable applies to its own reused grants. A periodic start has
+  // no caller and no gate behind it, so it records under the `system` rung instead, the same as
+  // `recordResearchRunOutcome`'s own periodic-safe path.
+  await recordLakeConfigChange(
+    {
+      ...(starter.trigger === 'on_demand'
+        ? { actor: starter.actor, grants: starter.grants }
+        : { actor: { userId: '', isAdmin: false, administeredOrgIds: [] }, manageRung: 'system' as const }),
+      lake,
+      action: 'start-research-run',
+      // The QUERY, not the config's name: `recordResearchRunOutcome` (the matching outcome event,
+      // recorded later from the background executor) only has the run's own levers snapshot to work
+      // from, never the config document - using the same identifier here is what lets a reader match
+      // a `start-research-run` row to the `complete-research-run` row it belongs to. Read from
+      // `run.levers` (the normalized snapshot just created above), not `config.query` directly, so
+      // the two rows are guaranteed to agree even for a config saved before a normalization change.
+      // `run.id` disambiguates two runs of the same config with an unedited (so identical) query.
+      changes: [researchRunChange(run.levers.query, 'started', run.id)],
+    },
+    { db, logger }
+  );
 
   return run;
 }

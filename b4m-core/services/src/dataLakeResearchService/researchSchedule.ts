@@ -1,5 +1,6 @@
 import type {
   IDataLakeProposalRepository,
+  IDataLakeRepository,
   IDataLakeResearchConfigDocument,
   IDataLakeResearchConfigRepository,
   IDataLakeResearchRunDocument,
@@ -7,6 +8,7 @@ import type {
   ResearchScheduleOutcome,
 } from '@bike4mind/common';
 import { RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT, RESEARCH_REVIEW_BACKLOG_LIMIT_MAX } from '@bike4mind/common';
+import type { LakeConfigAuditLakeRef } from '../dataLakeService/recordLakeConfigChange';
 import { isResearchRunRefusal, startResearchRun, type StartResearchRunAdapters } from './startResearchRun';
 
 /**
@@ -85,20 +87,20 @@ export function normalizeReviewBacklogLimit(value: unknown): number {
 }
 
 export interface ResearchScheduleAdapters {
-  db: {
+  db: StartResearchRunAdapters['db'] & {
+    dataLakes: Pick<IDataLakeRepository, 'findById'>;
     dataLakeResearchConfigs: Pick<IDataLakeResearchConfigRepository, 'claimDueConfigs' | 'recordScheduleOutcome'> &
       StartResearchRunAdapters['db']['dataLakeResearchConfigs'];
-    dataLakeResearchRuns: StartResearchRunAdapters['db']['dataLakeResearchRuns'];
     dataLakeProposals: Pick<IDataLakeProposalRepository, 'countPendingByLakes'>;
   };
   /**
    * Hands a started run to its executor. On failure it must settle the run itself (a run left
    * `queued` holds the lake's one-at-a-time guard shut) and then throw.
    */
-  enqueue: (run: IDataLakeResearchRunDocument) => Promise<void>;
+  enqueue: (run: IDataLakeResearchRunDocument, lake: LakeConfigAuditLakeRef) => Promise<void>;
   logger: {
     info: (message: string) => void;
-    error: (message: string, error?: Error) => void;
+    error: (message: string, error?: Error | Record<string, unknown>) => void;
   };
   now?: () => Date;
 }
@@ -115,8 +117,16 @@ type ScheduledConfig = IDataLakeResearchConfigDocument & { cadence: Exclude<Rese
 async function fireScheduledConfig(
   config: ScheduledConfig,
   at: Date,
-  { db, enqueue }: ResearchScheduleAdapters
+  { db, logger, enqueue }: ResearchScheduleAdapters
 ): Promise<ResearchScheduleOutcome> {
+  const lake = await db.dataLakes.findById(config.dataLakeId);
+  // A lake that is archived, deleted, or gone since the config was created should not keep
+  // starting paid runs - `claimDueConfigs` only filters on cadence/nextRunAt, and the config
+  // otherwise survives until the lake's hard purge.
+  if (!lake || lake.status !== 'active') {
+    return { outcome: 'skipped', at, reason: 'lake_inactive' };
+  }
+
   // Checked before startResearchRun so a skipped tick writes no run row and spends nothing.
   const pendingByLake = await db.dataLakeProposals.countPendingByLakes([config.dataLakeId]);
   const pendingProposals = pendingByLake[config.dataLakeId] ?? 0;
@@ -127,20 +137,23 @@ async function fireScheduledConfig(
 
   let run: IDataLakeResearchRunDocument;
   try {
-    run = await startResearchRun(config.id, config.dataLakeId, { trigger: 'periodic' }, { db, now: () => at });
+    run = await startResearchRun(config.id, lake, { trigger: 'periodic' }, { db, logger, now: () => at });
   } catch (error) {
     if (isResearchRunRefusal(error)) return { outcome: 'skipped', at, reason: error.reason };
     throw error;
   }
 
-  await enqueue(run);
+  await enqueue(run, lake);
   return { outcome: 'started', at, runId: run.id };
 }
 
-/** The next due time for an outcome. Only a started run or a full queue waits a whole period. */
+/** The next due time for an outcome. Only a started run or a full queue (or an inactive lake) waits
+ * a whole period - the other skip reasons clear on their own soon, so retrying within the hour is
+ * cheap; an archived lake will not become active again within the hour. */
 function nextRunAtFor(config: ScheduledConfig, outcome: ResearchScheduleOutcome, at: Date): Date {
   const waitsFullPeriod =
-    outcome.outcome === 'started' || (outcome.outcome === 'skipped' && outcome.reason === 'review_backlog');
+    outcome.outcome === 'started' ||
+    (outcome.outcome === 'skipped' && (outcome.reason === 'review_backlog' || outcome.reason === 'lake_inactive'));
   if (!waitsFullPeriod) return new Date(at.getTime() + RESEARCH_SCHEDULE_RETRY_MS);
   // `nextRunAt` is only a fallback for a row written before the anchor existed: after a retry it
   // holds the retry time, which is exactly the drift the anchor prevents.
