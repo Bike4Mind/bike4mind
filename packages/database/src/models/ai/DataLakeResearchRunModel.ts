@@ -191,7 +191,7 @@ class DataLakeResearchRunRepository
   ): Promise<void> {
     await this.runModel.updateOne(
       { _id: id },
-      { $set: { spentMicroUsd, totals, ...(judgeModel ? { judgeModel } : {}) } }
+      { $set: { spentMicroUsd, totals, ...(judgeModel !== undefined ? { judgeModel } : {}) } }
     );
   }
 
