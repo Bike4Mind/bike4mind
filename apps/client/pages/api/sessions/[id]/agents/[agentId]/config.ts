@@ -83,19 +83,18 @@ const handler = baseApi()
       // Leaf paths, so the worker's concurrent `proactiveMessaging.lastProactiveMessageAt` stamp is not
       // rewound to the read-time value; omitted optionals are cleared, as a whole-object write would.
       const proactive = validatedData.proactiveMessaging;
-      const leaves = Object.fromEntries(
-        Object.entries(proactive).map(([key, value]) => [`proactiveMessaging.${key}`, value])
-      );
-      config = await sessionAgentConfigRepository.update(
-        { id: existingConfig.id, userId: req.user!.id, ...leaves } as Parameters<
-          typeof sessionAgentConfigRepository.update
-        >[0],
-        {
-          unset: (['systemPrompt', 'minIntervalHours'] as const)
-            .filter(key => proactive[key] === undefined)
-            .map(key => `proactiveMessaging.${key}` as const),
-        }
-      );
+      const patch: Parameters<typeof sessionAgentConfigRepository.update>[0] = {
+        id: existingConfig.id,
+        userId: req.user!.id,
+      };
+      for (const [key, value] of Object.entries(proactive)) {
+        patch[`proactiveMessaging.${key}`] = value;
+      }
+      config = await sessionAgentConfigRepository.update(patch, {
+        unset: (['systemPrompt', 'minIntervalHours'] as const)
+          .filter(key => proactive[key] === undefined)
+          .map(key => `proactiveMessaging.${key}` as const),
+      });
     } else {
       // Create new config
       config = await sessionAgentConfigRepository.create({

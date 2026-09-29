@@ -1,4 +1,10 @@
-import { ConcurrencyConflictError, IBaseRepository, IMongoDocument, RepositoryUpdateOptions } from '@bike4mind/common';
+import {
+  ConcurrencyConflictError,
+  IBaseRepository,
+  IMongoDocument,
+  RepositoryPatch,
+  RepositoryUpdateOptions,
+} from '@bike4mind/common';
 import mongoose from 'mongoose';
 import { convertId } from '../utils/mongo';
 
@@ -105,6 +111,8 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
    * `options` is forwarded to `findOneAndUpdate` except for the reserved `unset` key; see
    * UNSET_OPTION for why clearing a field needs it.
    */
+  update(data: Partial<T>, options?: RepositoryUpdateOptions<T>): Promise<T | null>;
+  update(data: RepositoryPatch<T>, options?: RepositoryUpdateOptions<T>): Promise<T | null>;
   async update(data: Partial<T>, options?: RepositoryUpdateOptions<T>): Promise<T | null> {
     if (!data.id) {
       throw new Error('id is required');
@@ -125,6 +133,8 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
    * refreshing it between calls makes the second call carry a stale `__v` and throw. Capture the
    * returned (version-bumped) doc between writes: `doc = await repo.updateGuarded(doc)`.
    */
+  updateGuarded(data: Partial<T>, options?: RepositoryUpdateOptions<T>): Promise<T | null>;
+  updateGuarded(data: RepositoryPatch<T>, options?: RepositoryUpdateOptions<T>): Promise<T | null>;
   async updateGuarded(data: Partial<T>, options?: RepositoryUpdateOptions<T>): Promise<T | null> {
     if (!data.id) {
       throw new Error('id is required');
@@ -207,10 +217,15 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
     }
     return null;
   }
-  async updateMany(filter: Record<string, unknown>, data: Partial<T>, options?: Record<string, unknown>) {
+  async updateMany(filter: Record<string, unknown>, data: Partial<T>, options?: RepositoryUpdateOptions<T>) {
     // Last-writer-wins, like `update`: a `$set` with no version precondition. There is no bulk
-    // guarded variant - `updateGuarded` is per-document by design.
-    const query = this.model.updateMany(filter, { $set: data }, options);
+    // guarded variant - `updateGuarded` is per-document by design. Honours the reserved `unset` option.
+    const { setData, unsetOperand, queryOptions } = splitUnsetOption(data as Record<string, unknown>, options);
+    const query = this.model.updateMany(
+      filter,
+      (unsetOperand ? { $set: setData, $unset: unsetOperand } : { $set: setData }) as mongoose.UpdateQuery<T>,
+      queryOptions
+    );
     // See `_plainUpdate` above: explicit `.session(null)` would defeat ALS propagation.
     if (this._txn) {
       query.session(this._txn);

@@ -48,7 +48,7 @@ export const update = async (
 
   researchTask.title = title;
   researchTask.description = description;
-  const base = { id: researchTask.id, title, description };
+  const base: Pick<IResearchTask, 'id' | 'title' | 'description'> = { id: researchTask.id, title, description };
   let changes: Partial<IResearchTask> = base;
 
   if (researchTask.type === ResearchTaskType.SCRAPE) {

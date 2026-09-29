@@ -1,6 +1,13 @@
 import mongoose from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
-import { IFileTag, IFileTagRepository, ITag, ITagRepository, TagType } from '@bike4mind/common';
+import {
+  IFileTag,
+  IFileTagRepository,
+  ITag,
+  ITagRepository,
+  RepositoryUpdateOptions,
+  TagType,
+} from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 
 const options = {
@@ -72,7 +79,7 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
 
   // Strips the `type` discriminator key. Last-writer-wins like BaseRepository.update. Returns the
   // post-update doc (`_plainUpdate` uses `new: true`); the sole caller (tagService/update) discards it.
-  async update({ type: _, ...data }: Partial<IFileTag>, options?: Record<string, unknown>) {
+  async update({ type: _, ...data }: Partial<IFileTag>, options?: RepositoryUpdateOptions<IFileTag>) {
     return this._plainUpdate<IFileTag>({ _id: data.id }, data as Record<string, unknown>, options);
   }
 

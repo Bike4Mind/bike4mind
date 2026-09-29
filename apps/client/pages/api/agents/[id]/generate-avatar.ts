@@ -470,7 +470,7 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
       id: agent.id,
       'visual.portraitUrl': updatedAgent.visual.portraitUrl,
       'visual.generationPrompt': updatedAgent.visual.generationPrompt,
-    } as Parameters<typeof agentRepository.update>[0]);
+    });
 
     if (updateResult) {
       imageLogger.info(`Agent update result:`, {
