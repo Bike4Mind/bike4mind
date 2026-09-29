@@ -6,7 +6,7 @@ import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
-import { User, Project, CreditTransaction, GearStamp, userRepository } from '@bike4mind/database';
+import { User, Project, CreditTransaction, userRepository } from '@bike4mind/database';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -17,10 +17,8 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 const mockRefs = vi.hoisted(() => ({ postHandler: null as null | Handler }));
 
-// claim.ts imports evaluateGears from the status route, which registers a GET at import.
 vi.mock('@server/middlewares/baseApi', () => {
   const chain = {
-    get: () => chain,
     post: (fn: Handler) => {
       mockRefs.postHandler = fn;
       return chain;
@@ -44,10 +42,10 @@ afterAll(async () => {
   await replSet?.stop();
 });
 
-// The unique indexes are what stop a second payout and a second announcement, and
-// dropDatabase removes them with the data - rebuild them for every test.
+// The ledger's unique transactionId index is what stops a second payout, and
+// dropDatabase removes it with the data - rebuild it for every test.
 beforeEach(async () => {
-  await Promise.all([CreditTransaction.createIndexes(), GearStamp.createIndexes()]);
+  await CreditTransaction.createIndexes();
 });
 
 afterEach(async () => {

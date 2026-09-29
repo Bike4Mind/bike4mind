@@ -96,6 +96,19 @@ describe('GearsPage reward markers', () => {
     );
   });
 
+  it('draws no marker for a reward set to zero, earned or not', () => {
+    state.gears = [
+      gear('models', 'skill', { unlocked: true, credits: 0 }),
+      gear('projects', 'destination', { credits: 0 }),
+    ];
+    renderPage();
+    for (const key of ['models', 'projects']) {
+      for (const marker of ['gear-unlocked', 'gear-reward', 'gear-pending', 'gear-claim']) {
+        expect(screen.queryByTestId(`${marker}-${key}`)).not.toBeInTheDocument();
+      }
+    }
+  });
+
   it('claims the gear its button belongs to, without acting as a click on the card', async () => {
     renderPage();
     await userEvent.click(screen.getByTestId('gear-claim-projects'));

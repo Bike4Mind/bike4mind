@@ -67,7 +67,7 @@ import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useMobileHeader } from '@client/app/hooks/useMobileHeader';
 
 /**
- * Gears - the earned-nav progression page.
+ * Gears - the feature tour, where each feature's one-time reward is claimed.
  *
  * Presentation (title/intro/CTA) is SERVER truth: the status endpoint
  * serves the code defaults merged with any Manage Gears admin overrides, so a
@@ -115,13 +115,16 @@ const GEAR_ICONS: Partial<Record<GearKey, React.ReactElement>> = {
 /** The reward as prose, for the tooltips: the chip shows the bare number. */
 const creditText = (gear: GearStatus) => `${gear.credits.toLocaleString()} credit${gear.credits === 1 ? '' : 's'}`;
 
-type RewardState = 'locked' | 'claimable' | 'pending' | 'claimed';
+type RewardState = 'locked' | 'claimable' | 'pending' | 'claimed' | 'none';
 
 const rewardState = (gear: GearStatus): RewardState => {
   // Checked before the unlock: a paid gear whose data was deleted is locked
   // again, but offering its reward a second time would be a promise the claim
   // endpoint refuses.
   if (gear.claimed) return 'claimed';
+  // Set to 0 in Manage Gears: nothing to earn, so no marker. The fallback below would
+  // otherwise show the grey check for a payout that never happened.
+  if (gear.credits <= 0) return 'none';
   if (!gear.unlocked) return 'locked';
   if (gear.claimable) return 'claimable';
   return gear.rewardPending ? 'pending' : 'claimed';

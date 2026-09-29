@@ -321,7 +321,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
         ]
       : []),
     {
-      // Permanent: the discovery surface for everything the rail hasn't earned yet.
+      // Permanent: the discovery surface for what the app can do, and where rewards are claimed.
       // Also the only nav-level way into the Help Center, which it links out to -
       // the rail no longer carries a row of its own.
       key: 'gears',
@@ -372,8 +372,8 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
 
   // Pinned vs scroll split for the unified-scroll sidebar: the first two items stay
   // pinned at the top. items[0] is always New Chat; items[1] is whichever conditional
-  // entry comes first for this user - OptiHashi, Bob, or the earned Files
-  // Manager - since each is elided when absent. The split is purely positional, so it
+  // entry comes first for this user - OptiHashi, Bob, or Files Manager - since each
+  // is elided when absent. The split is purely positional, so it
   // holds regardless of which entries are present.
   const shownItems = section === 'pinned' ? items.slice(0, 2) : section === 'scroll' ? items.slice(2) : items;
 

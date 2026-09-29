@@ -12,16 +12,14 @@ import { getThemeConfig } from '@client/app/utils/themes';
  * page, so its row could never appear on its own. Feature FLAGS still gate, and
  * still fail closed.
  */
-const { useFeatureEnabledMock, useGearUnlocksMock, useGearsNavSignalMock } = vi.hoisted(() => ({
+const { useFeatureEnabledMock, useGearsNavSignalMock } = vi.hoisted(() => ({
   useFeatureEnabledMock: vi.fn(),
-  useGearUnlocksMock: vi.fn(),
   useGearsNavSignalMock: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isFeatureEnabled: useFeatureEnabledMock }),
 }));
-vi.mock('@client/app/hooks/useGearsStatus', () => ({ useGearUnlocks: useGearUnlocksMock }));
 vi.mock('@client/app/hooks/useVisibleGears', () => ({ useGearsNavSignal: useGearsNavSignalMock }));
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
   useAdminSettingsCache: () => ({ isFeatureEnabled: () => false }),
@@ -72,35 +70,21 @@ function renderNav() {
 
 const hearthRow = () => screen.queryByTestId('sidenav-nav-hearth');
 
-/** Every gear state the status endpoint can produce, including its failure shapes. */
-const GEAR_STATES: [string, Record<string, boolean> | undefined][] = [
-  ['earned', { hearth: true, files: true, projects: true, published: true, agents: true }],
-  ['explicitly unearned', { hearth: false, files: false, projects: false, published: false, agents: false }],
-  ['still loading', undefined],
-  // An admin-disabled gear is omitted from the response entirely rather than
-  // returned as false, so "key absent" is a shape that really occurs.
-  ['admin-disabled (key absent)', { projects: true }],
-  ['errored (empty)', {}],
-];
-
 beforeEach(() => {
   vi.clearAllMocks();
   useFeatureEnabledMock.mockImplementation((key: string) => key === 'enableHearth');
-  useGearUnlocksMock.mockReturnValue({ hearth: true });
   useGearsNavSignalMock.mockReturnValue({ startHere: false, claimableCount: 0 });
 });
 
 describe('SidenavNav feature rows', () => {
-  describe.each(GEAR_STATES)('with gears %s', (_label, unlocks) => {
-    it('still shows every feature row', () => {
-      useFeatureEnabledMock.mockReturnValue(true);
-      useGearUnlocksMock.mockReturnValue(unlocks);
-      renderNav();
+  // SidenavNav reads no gear unlock state at all any more; only flags gate a row.
+  it('shows every feature row with its flag on', () => {
+    useFeatureEnabledMock.mockReturnValue(true);
+    renderNav();
 
-      for (const key of ['files', 'projects', 'published', 'agents', 'hearth']) {
-        expect(screen.getByTestId(`sidenav-nav-${key}`)).toBeInTheDocument();
-      }
-    });
+    for (const key of ['files', 'projects', 'published', 'agents', 'hearth']) {
+      expect(screen.getByTestId(`sidenav-nav-${key}`)).toBeInTheDocument();
+    }
   });
 });
 
@@ -114,14 +98,6 @@ describe('SidenavNav Hearth row', () => {
     useFeatureEnabledMock.mockReturnValue(false);
     renderNav();
     expect(hearthRow()).not.toBeInTheDocument();
-  });
-
-  // The flag is the only gate left, so an unearned gear must NOT remove the row -
-  // this is the case that inverted, and the reason the change exists.
-  it('shows with the flag on even though the gear is unearned', () => {
-    useGearUnlocksMock.mockReturnValue({ hearth: false });
-    renderNav();
-    expect(hearthRow()).toBeInTheDocument();
   });
 });
 

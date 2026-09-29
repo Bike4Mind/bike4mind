@@ -3,8 +3,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { z } from 'zod';
 import { CreditHolderType } from '@bike4mind/common';
 import { creditService } from '@bike4mind/services';
-import { creditTransactionRepository, gearStampRepository, userRepository, withTransaction } from '@bike4mind/database';
-import { GEAR_DEFAULTS, evaluateGears, gearTxId, type GearKey } from './status';
+import { creditTransactionRepository, userRepository, withTransaction } from '@bike4mind/database';
+import { GEAR_DEFAULTS, evaluateGears, gearTxId, type GearKey } from '@server/services/gears/catalog';
 
 /**
  * POST /api/gears/claim - pay out one gear's reward, at the user's request.
@@ -75,12 +75,9 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       if (after?.alreadyRewarded) return res.status(200).json({ key, alreadyClaimed: true });
       throw err;
     }
-    if (!paid) return res.status(200).json({ key, alreadyClaimed: true });
-
-    // claimOnce is a race-safe (userId, key) upsert that de-dups the announcement; the
-    // transaction above already decides which request paid.
-    const won = await gearStampRepository.claimOnce(String(userId), `reward:${key}`);
-    return won
+    // The transaction decides which request paid: only the one that wrote the ledger row
+    // reports the payout, so two quick clicks do not each announce it.
+    return paid
       ? res.status(200).json({ key, creditsAwarded: gear.credits })
       : res.status(200).json({ key, alreadyClaimed: true });
   })

@@ -1,51 +1,14 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
+import type { GearKey, GearKind } from '@client/lib/gears/keys';
 
 /**
- * Gears - the earned-nav progression state (see pages/api/gears/status.ts).
+ * Gears - each gear's unlock and reward state (see pages/api/gears/status.ts and server/services/gears/catalog.ts).
  * Unlocks are derived server-side from data existence; this hook is the single
- * client source of truth for both the Gears page and the sidenav's earned rows.
+ * client source of truth for the Gears page and the sidenav's Gears tag.
  */
 
-export type GearKind = 'destination' | 'skill';
-
-export type GearKey =
-  // destinations (earn a sidenav slot)
-  | 'projects'
-  | 'agents'
-  | 'datalakes'
-  | 'files'
-  | 'published'
-  | 'hearth'
-  // skills (achievements - no nav effect)
-  | 'apikey'
-  | 'apicall'
-  | 'image'
-  | 'voice'
-  | 'models'
-  | 'react'
-  | 'python'
-  | 'shareproject'
-  | 'questmaster'
-  | 'mementos'
-  | 'video'
-  | 'music'
-  | 'sound'
-  | 'mcp'
-  | 'mfa'
-  | 'slack'
-  | 'importopenai'
-  | 'importclaude'
-  | 'research'
-  | 'rapidreply'
-  | 'shareagent'
-  | 'downloadnotebook'
-  | 'forknotebook'
-  | 'websearch'
-  | 'webfetch'
-  | 'wolfram'
-  | 'matheval'
-  | 'clidocs';
+export type { GearKey, GearKind };
 
 export interface GearStatus {
   key: GearKey;
@@ -109,8 +72,8 @@ export function useClaimGear() {
 /**
  * Invalidate the gears/status query after a creation, but only while at least one
  * of the given destination gears is still locked in the cache. A creation unlocks
- * its gear server-side, yet the 5-minute staleTime would otherwise keep the newly
- * earned nav slot (and Gears CTA) hidden until a reload. Skipping the refetch once
+ * its gear server-side, yet the 5-minute staleTime would otherwise keep the new
+ * reward (and the sidenav's Claim tag) hidden until a reload. Skipping the refetch once
  * the gear is already unlocked keeps routine creates from refetching every time.
  * No cached status means no observers to update, so there is nothing to invalidate.
  * Mirrors the inline pattern in SessionFilePond for the 'files' gear.
@@ -123,11 +86,4 @@ export function invalidateGearsStatusWhileLocked(queryClient: QueryClient, keys:
     return gear && !gear.unlocked;
   });
   if (anyStillLocked) void queryClient.invalidateQueries({ queryKey: ['gears', 'status'] });
-}
-
-/** Convenience map: key -> unlocked. `undefined` while loading (callers choose their fallback). */
-export function useGearUnlocks(): Partial<Record<GearKey, boolean>> | undefined {
-  const { data } = useGearsStatus();
-  if (!data) return undefined;
-  return Object.fromEntries(data.gears.map(g => [g.key, g.unlocked])) as Partial<Record<GearKey, boolean>>;
 }

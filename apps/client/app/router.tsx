@@ -327,7 +327,7 @@ const notebookRoute = createRoute({
   },
 });
 
-// Gears - the earned-nav progression page (one card per major feature).
+// Gears - the feature tour, where each feature's one-time reward is claimed (one card per feature).
 const gearsRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/gears',

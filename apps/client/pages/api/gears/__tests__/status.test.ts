@@ -18,7 +18,6 @@ const { mocks } = vi.hoisted(() => ({
     miscFindOne: vi.fn(),
     importFindOne: vi.fn(),
     overridesByKey: vi.fn(),
-    claimOnce: vi.fn(),
     hearthHasAnyChannel: vi.fn(),
   },
 }));
@@ -59,7 +58,6 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: { find: (...a: unknown[]) => mocks.txFind(...a) },
   gearStampRepository: {
     stampedKeys: (...a: unknown[]) => mocks.stampedKeys(...a),
-    claimOnce: (...a: unknown[]) => mocks.claimOnce(...a),
   },
   gearOverrideRepository: { byKey: (...a: unknown[]) => mocks.overridesByKey(...a) },
   hearthRepository: { hasAnyChannelForUser: (...a: unknown[]) => mocks.hearthHasAnyChannel(...a) },
@@ -75,7 +73,9 @@ vi.mock('@bike4mind/common', () => ({
   CreditHolderType: { User: 'User' },
 }));
 
-import handler, { GEAR_DEFAULTS } from '../status';
+import handler from '../status';
+import { GEAR_DEFAULTS, GEAR_KEYS } from '@server/services/gears/catalog';
+import { GEAR_PRESENTATION } from '@client/lib/gears/presentation';
 import { groupGearsByTab } from '@client/lib/gears/tabs';
 
 const run = (user?: { id: string }) => {
@@ -101,7 +101,6 @@ const lockEverything = () => {
   mocks.miscFindOne.mockResolvedValue(null);
   mocks.importFindOne.mockResolvedValue(null);
   mocks.overridesByKey.mockResolvedValue(new Map());
-  mocks.claimOnce.mockResolvedValue(true);
   mocks.hearthHasAnyChannel.mockResolvedValue(false);
   mocks.txFind.mockResolvedValue([]);
 };
@@ -143,7 +142,6 @@ describe('GET /api/gears/status', () => {
     expect(projects.claimable).toBe(true);
     // Read-only: the payout is POST /api/gears/claim's job.
     expect(mocks.addCredits).not.toHaveBeenCalled();
-    expect(mocks.claimOnce).not.toHaveBeenCalled();
   });
 
   it('a gear already in the ledger is not claimable', async () => {
@@ -277,7 +275,7 @@ describe('GET /api/gears/status - reward schedule', () => {
 });
 
 describe('GET /api/gears/status - published reward waits for a non-owner view', () => {
-  it('publishing unlocks the gear (nav slot) but the payout stays pending until an external view', async () => {
+  it('publishing unlocks the gear but the payout stays pending until an external view', async () => {
     mocks.publishedExists.mockImplementation((q: { externalViewCount?: unknown }) =>
       Promise.resolve(q.externalViewCount ? null : { _id: 'a1' })
     );
@@ -371,5 +369,19 @@ describe('Gears page placement of the real catalog', () => {
       .map(g => g.key)
       .sort();
     expect(placed).toEqual(GEAR_DEFAULTS.map(g => g.key).sort());
+  });
+});
+
+describe('gear catalog parity', () => {
+  // GEAR_PRESENTATION is typed by GearKey, so missing copy fails to compile; this pins the
+  // catalog itself to the key list, both ways, so neither can grow alone.
+  it('defines every gear key exactly once, and nothing else', () => {
+    const catalog = GEAR_DEFAULTS.map(g => g.key);
+    expect(new Set(catalog).size).toBe(catalog.length);
+    expect([...catalog].sort()).toEqual([...GEAR_KEYS].sort());
+  });
+
+  it('has presentation copy for exactly the catalog', () => {
+    expect(Object.keys(GEAR_PRESENTATION).sort()).toEqual(GEAR_DEFAULTS.map(g => g.key).sort());
   });
 });

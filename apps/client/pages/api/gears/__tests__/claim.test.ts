@@ -19,7 +19,6 @@ const { mocks } = vi.hoisted(() => ({
     miscFindOne: vi.fn(),
     importFindOne: vi.fn(),
     overridesByKey: vi.fn(),
-    claimOnce: vi.fn(),
     hearthHasAnyChannel: vi.fn(),
     withTransaction: vi.fn(),
   },
@@ -65,7 +64,6 @@ vi.mock('@bike4mind/database', () => ({
   },
   gearStampRepository: {
     stampedKeys: (...a: unknown[]) => mocks.stampedKeys(...a),
-    claimOnce: (...a: unknown[]) => mocks.claimOnce(...a),
   },
   gearOverrideRepository: { byKey: (...a: unknown[]) => mocks.overridesByKey(...a) },
   hearthRepository: { hasAnyChannelForUser: (...a: unknown[]) => mocks.hearthHasAnyChannel(...a) },
@@ -110,7 +108,6 @@ const lockEverything = () => {
   mocks.miscFindOne.mockResolvedValue(null);
   mocks.importFindOne.mockResolvedValue(null);
   mocks.overridesByKey.mockResolvedValue(new Map());
-  mocks.claimOnce.mockResolvedValue(true);
   mocks.hearthHasAnyChannel.mockResolvedValue(false);
   mocks.txFind.mockResolvedValue([]);
   mocks.txFindOne.mockResolvedValue(null);
@@ -169,7 +166,6 @@ describe('POST /api/gears/claim', () => {
     await promise;
     expect(res._getJSONData()).toEqual({ key: 'projects', alreadyClaimed: true });
     expect(mocks.addCredits).not.toHaveBeenCalled();
-    expect(mocks.claimOnce).not.toHaveBeenCalled();
   });
 
   it('does not answer alreadyClaimed when the payout failed and rolled back', async () => {
@@ -180,7 +176,6 @@ describe('POST /api/gears/claim', () => {
     const { res, promise } = claim({ key: 'projects' });
     await expect(promise).rejects.toThrow('balance write failed');
     expect(res._isEndCalled()).toBe(false);
-    expect(mocks.claimOnce).not.toHaveBeenCalled();
   });
 
   it('answers alreadyClaimed when the transaction lost a race to a claim that committed first', async () => {
@@ -192,7 +187,6 @@ describe('POST /api/gears/claim', () => {
     await promise;
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ key: 'projects', alreadyClaimed: true });
-    expect(mocks.claimOnce).not.toHaveBeenCalled();
   });
 
   it('refuses a locked gear - the client cannot claim what the server has not seen', async () => {
@@ -222,16 +216,6 @@ describe('POST /api/gears/claim', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ key: 'projects', alreadyClaimed: true });
     expect(mocks.addCredits).not.toHaveBeenCalled();
-  });
-
-  it('the loser of a concurrent claim does not announce a payout', async () => {
-    unlockProjects();
-    mocks.claimOnce.mockResolvedValue(false);
-    const { res, promise } = claim({ key: 'projects' });
-    await promise;
-    // The ledger swallows the duplicate; this response just must not report it as paid.
-    expect(mocks.addCredits).toHaveBeenCalled();
-    expect(res._getJSONData()).toEqual({ key: 'projects', alreadyClaimed: true });
   });
 
   it('pays the admin override amount, unscaled', async () => {

@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { GEAR_PRESENTATION } from '@client/lib/gears/presentation';
+import type { GearKey } from '@client/lib/gears/keys';
 import { gearDetailFor } from './detail';
 
-const itemFor = (key: string) => ({ key, intro: GEAR_PRESENTATION[key].intro });
+const itemFor = (key: GearKey) => ({ key, intro: GEAR_PRESENTATION[key].intro });
 
 describe('gearDetailFor', () => {
   it('gives a feature with no copy yet its intro and nothing invented', () => {

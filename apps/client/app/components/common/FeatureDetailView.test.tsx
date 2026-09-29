@@ -4,13 +4,14 @@ import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { GEAR_PRESENTATION } from '@client/lib/gears/presentation';
+import type { GearKey } from '@client/lib/gears/keys';
 import FeatureDetailView from './FeatureDetailView';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
-const itemFor = (key: string) => ({ key, ...GEAR_PRESENTATION[key] });
+const itemFor = (key: GearKey) => ({ key, ...GEAR_PRESENTATION[key] });
 
-const renderDetail = (key: string, onBack = vi.fn()) => {
+const renderDetail = (key: GearKey, onBack = vi.fn()) => {
   const item = itemFor(key);
   render(
     <CssVarsProvider theme={appTheme}>

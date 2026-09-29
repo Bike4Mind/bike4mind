@@ -4,6 +4,8 @@ import { create } from 'zustand';
 interface MobileHeaderState {
   title: string | null;
   action: ReactNode;
+  /** Identity of the useMobileHeader call that set the slot, so only it can clear it. */
+  owner: symbol | null;
 }
 
 /**
@@ -11,7 +13,7 @@ interface MobileHeaderState {
  * menu button. The header is shared by every page and the page is rendered in a
  * different tree, so a page hands its title across through this store.
  */
-export const useMobileHeaderStore = create<MobileHeaderState>(() => ({ title: null, action: null }));
+export const useMobileHeaderStore = create<MobileHeaderState>(() => ({ title: null, action: null, owner: null }));
 
 /**
  * Name the current page in the phone header, with an optional action on the
@@ -20,7 +22,14 @@ export const useMobileHeaderStore = create<MobileHeaderState>(() => ({ title: nu
  */
 export function useMobileHeader(title: string, action?: ReactNode) {
   useEffect(() => {
-    useMobileHeaderStore.setState({ title, action: action ?? null });
-    return () => useMobileHeaderStore.setState({ title: null, action: null });
+    const owner = Symbol('mobileHeader');
+    useMobileHeaderStore.setState({ title, action: action ?? null, owner });
+    // Clear only our own entry: in a route change the next page's effect can run
+    // before this cleanup, and an unconditional clear would wipe its title.
+    return () => {
+      if (useMobileHeaderStore.getState().owner === owner) {
+        useMobileHeaderStore.setState({ title: null, action: null, owner: null });
+      }
+    };
   }, [title, action]);
 }

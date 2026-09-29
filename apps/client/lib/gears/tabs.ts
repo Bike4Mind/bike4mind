@@ -21,13 +21,13 @@ export const TABS_WITH_DETAIL: readonly GearsTabKey[] = ['features', 'generators
 /**
  * Leads the Getting Started tab despite being a skill: running one question past
  * many models is the story the product turns on. Placement only - the endpoint
- * still calls it a skill, because it earns no sidenav row.
+ * still calls it a skill, because it has no sidenav row of its own.
  */
 export const GETTING_STARTED_LEAD = 'models';
 
 /** Skills that turn a prompt into a media file. Grouped here rather than by
- *  `kind`, which the endpoint owns and which only separates the gears that earn
- *  a sidenav row from everything else. */
+ *  `kind`, which the endpoint owns and which only separates the features with a
+ *  sidenav row of their own from everything else. */
 export const GENERATOR_KEYS: readonly string[] = ['image', 'video', 'music', 'sound'];
 
 /** Skills that connect Bike4Mind to something outside it. Slack is the only

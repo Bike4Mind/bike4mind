@@ -1,3 +1,5 @@
+import type { GearKey } from './keys';
+
 /**
  * Gears - code-defined presentation defaults, shared by the Gears page, the
  * status endpoint (admin-override-merged), and the Manage Gears dashboard.
@@ -16,7 +18,7 @@ export interface GearPresentation {
   ctaAction: string;
 }
 
-export const GEAR_PRESENTATION: Record<string, GearPresentation> = {
+export const GEAR_PRESENTATION: Record<GearKey, GearPresentation> = {
   // --- Destinations ---
   projects: {
     title: 'Projects',
