@@ -16,6 +16,7 @@ import type {
   UpdateProjectRequest,
 } from '@shared/chat';
 import { describeReturn } from './queuedMessages';
+import { applyReplyDone } from './replyDone';
 import { applyStatusEvents } from './sessionStatus';
 import { totalTokens, type TurnProgress } from './statusLine';
 
@@ -527,27 +528,7 @@ export function useConversation(
       setMessages(current =>
         current.map(message => {
           if (message.id !== event.messageId) return message;
-          return event.type === 'done'
-            ? {
-                ...message,
-                // `content` REPLACES the streamed text rather than extending it: main strips
-                // the artifact markup out of the reply, so the deltas that carried it are
-                // exactly what has to be dropped here.
-                content: event.content,
-                // And `rounds` for the same reason, since that is what the thread actually
-                // draws. Taking `content` alone left the stripped text in the field nothing
-                // reads and the raw markup in the field everything reads, so a reply that
-                // emitted an artifact went on showing its <artifact> tag until a reload.
-                // Assigned rather than defaulted: 'done' omits `rounds` when no tool ever ran,
-                // and dropping the streamed ones is what makes roundsOf rebuild the single
-                // round from `content` above - which is the stripped text. Keeping them would
-                // put the raw markup straight back.
-                rounds: event.rounds,
-                stopReason: event.stopReason,
-                toolCalls: event.toolCalls ?? message.toolCalls,
-                artifacts: event.artifacts ?? message.artifacts,
-              }
-            : { ...message, error: event.message };
+          return event.type === 'done' ? applyReplyDone(message, event) : { ...message, error: event.message };
         })
       );
     });
