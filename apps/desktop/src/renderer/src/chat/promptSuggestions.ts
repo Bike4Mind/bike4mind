@@ -4,7 +4,7 @@ import { useCallback, useSyncExternalStore } from 'react';
  * The switch for the composer's next-prompt hint, and the only thing that decides whether the
  * model call behind it is ever made.
  *
- * Per-machine UI state, so localStorage - the same place SidebarCard keeps its dismissal. It is
+ * Per-machine UI state, so localStorage. It is
  * NOT stored per conversation and not sent to main: main generates a hint when it is asked for
  * one, so a renderer that never asks costs nothing, and there is no second copy of the setting
  * for the two to disagree about.

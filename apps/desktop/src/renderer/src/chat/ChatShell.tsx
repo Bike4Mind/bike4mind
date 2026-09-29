@@ -17,7 +17,6 @@ import { contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
 import { SessionChips } from './SessionChips';
 import { SessionList } from './SessionList';
-import { SidebarCard } from './SidebarCard';
 import { TurnStatus } from './TurnStatus';
 import { presentReply } from './codeStream';
 import { roundsOf } from './replyRounds';
@@ -302,7 +301,6 @@ export function ChatShell({ account }: { account?: ReactNode }) {
         onTogglePin={session => void togglePin(session)}
         onToggleArchived={session => void toggleArchived(session)}
         customize={<CustomizePanel />}
-        card={<SidebarCard />}
         footer={account}
       />
 

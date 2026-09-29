@@ -236,7 +236,6 @@ export function SessionList({
   onTogglePin,
   onToggleArchived,
   customize,
-  card,
   footer,
 }: {
   sessions: ChatSessionSummary[];
@@ -257,8 +256,6 @@ export function SessionList({
   onToggleArchived: (session: ChatSessionSummary) => void;
   /** The app-settings slot under the nav entries, which owns its own expanded state. */
   customize?: ReactNode;
-  /** The dismissible card slot above the account strip. */
-  card?: ReactNode;
   footer?: ReactNode;
 }) {
   const [query, setQuery] = useState('');
@@ -477,7 +474,6 @@ export function SessionList({
         )}
       </Box>
 
-      {card}
       {footer}
     </Stack>
   );
