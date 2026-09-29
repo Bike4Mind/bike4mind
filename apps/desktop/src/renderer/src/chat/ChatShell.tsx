@@ -152,10 +152,9 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   /**
    * Whether this conversation has a turn open, for the composer's controls.
    *
-   * `conversation.streaming` alone is what THIS window witnessed, and it is deliberately false
-   * after a reload or a session switch (see useConversation) - so the composer would offer Send
-   * and hide Stop while main was still replying. The sidebar's status is main's own answer for
-   * every session at once, so it covers exactly that gap. 'needs-action' counts: a turn parked
+   * `conversation.streaming` is what THIS window knows of, from the stream or from main's live
+   * copy when the conversation was opened, and it can lag main by one round trip either way.
+   * The sidebar's status is main's own answer for every session at once, so it covers that gap. 'needs-action' counts: a turn parked
    * at the approval gate is still a turn, and the next message still queues behind it.
    */
   const sessionStatus = activeId ? statuses.get(activeId) : undefined;

@@ -314,6 +314,8 @@ describe('ChatService queued messages', () => {
       ['assistant', false, 'reply'],
       ['user', true, 'a spawned session finished'],
       ['user', false, 'typed ahead'],
+      // The queued turn's own reply, still streaming.
+      ['assistant', false, ''],
     ]);
   });
 

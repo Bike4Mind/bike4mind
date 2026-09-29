@@ -29,6 +29,7 @@ import type {
   UpdateProjectResult,
 } from '@shared/chat';
 import { isTurnBudgetStop } from '@shared/chat';
+import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
@@ -42,6 +43,7 @@ import { MediaApiClient } from './media/MediaApiClient';
 import type { MediaStore } from './media/MediaStore';
 import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
+import { createThinkFilter } from './thinkFilter';
 import { pickTitleModel, sanitizeGeneratedTitle, titleRequestMessages } from './sessionTitle';
 import { pickSuggestionModel, sanitizeSuggestion, suggestionRequestMessages } from './nextPrompt';
 import type { SessionActivity } from './SessionActivity';
@@ -299,6 +301,9 @@ interface RawRound {
  * same reason plus a second one - they touch the filesystem, which a sandboxed renderer cannot.
  */
 export class ChatService {
+  /** The events of each reply in flight since its 'start'; see getSession. */
+  private readonly live = new Map<string, { messageId: string; startedAt: number; events: ChatStreamEvent[] }>();
+
   /** One in-flight reply per session; the value aborts it. */
   private readonly active = new Map<string, AbortController>();
 
@@ -607,8 +612,57 @@ export class ChatService {
     return this.deps.skills.state(root);
   }
 
-  getSession(sessionId: string): Promise<ChatSession | null> {
-    return this.deps.store.get(sessionId);
+  /**
+   * The session as stored, plus the reply still streaming into it. Replies are only written
+   * when they settle, so without the live part a window opening mid-turn has nothing for the
+   * next event to extend, and shows the prompt alone until the turn ends.
+   */
+  async getSession(sessionId: string): Promise<ChatSession | null> {
+    const session = await this.deps.store.get(sessionId);
+    const live = this.live.get(sessionId);
+    if (!session || !live) return session;
+    let messages = session.messages;
+    for (const event of live.events) {
+      messages =
+        event.type === 'start'
+          ? startReply(messages, event.messageId)
+          : messages.map(message => applyLiveEvent(message, event));
+    }
+    return { ...session, messages, replyInFlight: { messageId: live.messageId, startedAt: live.startedAt } };
+  }
+
+  private emit(event: ChatStreamEvent): void {
+    this.trackLive(event);
+    this.deps.emit(event);
+  }
+
+  private trackLive(event: ChatStreamEvent): void {
+    if (event.type === 'start') {
+      this.live.set(event.sessionId, { messageId: event.messageId, startedAt: Date.now(), events: [event] });
+      return;
+    }
+    const events = this.live.get(event.sessionId)?.events;
+    if (!events) return;
+    if (event.type === 'done' || event.type === 'error') {
+      this.live.delete(event.sessionId);
+      return;
+    }
+    if (event.type === 'delta') {
+      // Merged, so a long reply is a handful of entries rather than one per token.
+      const last = events[events.length - 1];
+      if (last?.type === 'delta' && last.messageId === event.messageId) {
+        events[events.length - 1] = { ...last, text: last.text + event.text };
+        return;
+      }
+    }
+    if (
+      event.type === 'delta' ||
+      event.type === 'tool-start' ||
+      event.type === 'tool-end' ||
+      event.type === 'tool-progress'
+    ) {
+      events.push(event);
+    }
   }
 
   renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null> {
@@ -1022,7 +1076,7 @@ export class ChatService {
     const sessionId = session.id;
     const limits = { ...TURN_LIMITS, ...this.deps.turnLimits };
     const deadline = Date.now() + limits.wallClockMs;
-    this.deps.emit({ type: 'start', sessionId, messageId: replyId });
+    this.emit({ type: 'start', sessionId, messageId: replyId });
 
     // Seeded from the interrupted run on a resume, so `done` carries the whole reply: the
     // renderer replaces the message's text with it rather than extending what it already shows.
@@ -1067,6 +1121,17 @@ export class ChatService {
         let turnText = '';
         let turnThinking: unknown[] | undefined;
         let turnUsage: ChatUsage | undefined;
+        const hideThinking = createThinkFilter();
+        const appendVisible = (visible: string): void => {
+          if (!visible) return;
+          // Every round streams into the SAME message, so without a break here the last
+          // sentence of one round runs into the first word of the next. On the emitted text
+          // only: the wire keeps its own round structure and needs no filler.
+          const text = turnText.length === 0 ? paragraphBreak(content) + visible : visible;
+          content += text;
+          turnText += visible;
+          this.emit({ type: 'delta', sessionId, messageId: replyId, text });
+        };
 
         const failure = await streamRound(
           api.getAxiosInstance(),
@@ -1075,15 +1140,7 @@ export class ChatService {
           event => {
             // `error` never reaches here (the transport throws on it); `meta` carries no reply.
             if (event.type === 'error' || event.type === 'meta') return;
-            if (event.text) {
-              // Every round streams into the SAME message, so without a break here the last
-              // sentence of one round runs into the first word of the next. On the emitted
-              // text only: the wire keeps its own round structure and needs no filler.
-              const text = turnText.length === 0 ? paragraphBreak(content) + event.text : event.text;
-              content += text;
-              turnText += event.text;
-              this.deps.emit({ type: 'delta', sessionId, messageId: replyId, text });
-            }
+            if (event.text) appendVisible(hideThinking.push(event.text));
             if (event.type === 'tool_use') {
               if (event.tools) requested.push(...event.tools);
               if (event.thinking) turnThinking = event.thinking;
@@ -1093,6 +1150,7 @@ export class ChatService {
           },
           controller.signal
         );
+        appendVisible(hideThinking.flush());
 
         // Recorded before the exits below, so the round that ENDS a turn - the one carrying the
         // answer, which by definition runs no tools - is part of the structure rather than the
@@ -1106,7 +1164,7 @@ export class ChatService {
         // from the first round trip on - the alternative is a field that stays blank for a
         // minute, or one filled in with a guess.
         usage = addUsage(usage, turnUsage);
-        if (usage) this.deps.emit({ type: 'usage', sessionId, messageId: replyId, usage });
+        if (usage) this.emit({ type: 'usage', sessionId, messageId: replyId, usage });
 
         // A turn whose context has run out is not a failed request to report: the rounds before
         // it did real work, and the same request cannot be made to succeed by trying again. It
@@ -1217,7 +1275,7 @@ export class ChatService {
         ...(thinking ? { thinking } : {}),
         ...(artifacts.length > 0 ? { artifacts } : {}),
       });
-      this.deps.emit({
+      this.emit({
         type: 'done',
         sessionId,
         messageId: replyId,
@@ -1252,7 +1310,7 @@ export class ChatService {
         error: message,
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
       });
-      this.deps.emit({ type: 'error', sessionId, messageId: replyId, message });
+      this.emit({ type: 'error', sessionId, messageId: replyId, message });
       return 'failed';
     }
   }
@@ -1267,6 +1325,10 @@ export class ChatService {
    * the model did.
    */
   private async settleReply(sessionId: string, resumed: boolean, message: ChatMessage): Promise<void> {
+    // Dropped before the write, never after: a read that saw both the stored reply and the live
+    // one would fold the stream onto the finished text twice. A read in the gap sees neither,
+    // and the 'done' that follows hands the reply over whole.
+    this.live.delete(sessionId);
     if (!resumed) {
       await this.deps.store.appendMessage(sessionId, message);
       return;
@@ -1365,8 +1427,8 @@ export class ChatService {
         const tool = findTool(request.name) ?? this.deps.mcp?.findTool(request.name);
         if (!tool) {
           const unknown: ChatToolCall = { ...call, status: 'error', error: `Unknown tool: ${request.name}` };
-          this.deps.emit({ type: 'tool-start', sessionId, messageId, call });
-          this.deps.emit({ type: 'tool-end', sessionId, messageId, call: unknown });
+          this.emit({ type: 'tool-start', sessionId, messageId, call });
+          this.emit({ type: 'tool-end', sessionId, messageId, call: unknown });
           return unknown;
         }
 
@@ -1378,7 +1440,7 @@ export class ChatService {
         let label: string | undefined;
         let diff: ChatDiff | undefined;
         const report: ToolReporter = {
-          progress: text => this.deps.emit({ type: 'tool-progress', sessionId, messageId, callId: call.id, text }),
+          progress: text => this.emit({ type: 'tool-progress', sessionId, messageId, callId: call.id, text }),
           media: item => attachments.push(item),
           notice: value => {
             notice = value;
@@ -1420,7 +1482,7 @@ export class ChatService {
         const denial = await this.awaitApproval(tool, call, context, sessionId, scope.title, messageId, signal);
         if (denial) return denial;
 
-        this.deps.emit({ type: 'tool-start', sessionId, messageId, call });
+        this.emit({ type: 'tool-start', sessionId, messageId, call });
 
         let settled: ChatToolCall;
         try {
@@ -1437,7 +1499,7 @@ export class ChatService {
           });
         }
 
-        this.deps.emit({ type: 'tool-end', sessionId, messageId, call: settled });
+        this.emit({ type: 'tool-end', sessionId, messageId, call: settled });
         return settled;
       })
     );
@@ -1612,7 +1674,7 @@ export class ChatService {
         this.deps.logger.debug(`CHAT: dropped a relayed message for ${sessionId}, which is gone`);
         return;
       }
-      this.deps.emit({ type: 'message', sessionId, message });
+      this.emit({ type: 'message', sessionId, message });
     }
   }
 
@@ -1776,7 +1838,7 @@ export class ChatService {
         this.deps.logger.debug(`CHAT: dropped a spawned-session report for ${sessionId}, which is gone`);
         return;
       }
-      this.deps.emit({ type: 'message', sessionId, message });
+      this.emit({ type: 'message', sessionId, message });
     }
   }
 
@@ -1843,8 +1905,8 @@ export class ChatService {
         status: err instanceof Error && err.name === 'PathAccessDenied' ? 'denied' : 'error',
         error: message,
       };
-      this.deps.emit({ type: 'tool-start', sessionId, messageId, call });
-      this.deps.emit({ type: 'tool-end', sessionId, messageId, call: refused });
+      this.emit({ type: 'tool-start', sessionId, messageId, call });
+      this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
       return refused;
     }
 
@@ -1869,7 +1931,7 @@ export class ChatService {
         ...(prompt.irreversible ? { irreversible: true } : {}),
       },
       approvalId => {
-        this.deps.emit({
+        this.emit({
           type: 'tool-start',
           sessionId,
           messageId,
@@ -1893,7 +1955,7 @@ export class ChatService {
       status: 'denied',
       error: 'The user declined to run this. Do not try to run it again; ask them what to do instead.',
     };
-    this.deps.emit({ type: 'tool-end', sessionId, messageId, call: denied });
+    this.emit({ type: 'tool-end', sessionId, messageId, call: denied });
     return denied;
   }
 

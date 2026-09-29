@@ -74,6 +74,67 @@ describe('ChatService', () => {
     expect(session?.title).toBe('hello');
   });
 
+  // A window opening a conversation mid-turn has only getSession to go on: replies are stored
+  // when they settle, so without the live copy it showed the prompt alone until the end.
+  it('includes the reply still streaming when a conversation is opened mid-turn', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'hello');
+    await waitFor(events, 'start');
+
+    stream.write(frame({ type: 'content', text: 'Hi ' }));
+    stream.write(frame({ type: 'content', text: 'the' }));
+    await vi.waitUntil(() => events.filter(event => event.type === 'delta').length === 2, {
+      timeout: 2000,
+      interval: 5,
+    });
+
+    const midTurn = await service.getSession(id);
+    expect(midTurn?.messages.map(message => [message.role, message.content])).toEqual([
+      ['user', 'hello'],
+      ['assistant', 'Hi the'],
+    ]);
+    // With its turn's start, so the status line can show a true elapsed time.
+    const start = events.find(event => event.type === 'start');
+    expect(midTurn?.replyInFlight).toEqual({
+      messageId: start && 'messageId' in start && start.messageId,
+      startedAt: expect.any(Number),
+    });
+
+    stream.write(frame({ type: 'content', text: 're', stopReason: 'end_turn' }));
+    stream.write(frame('[DONE]'));
+    await waitFor(events, 'done');
+
+    // Stored once and not folded again on top of the stored copy.
+    const settled = await service.getSession(id);
+    expect(settled?.replyInFlight).toBeUndefined();
+    expect(settled?.messages.map(message => [message.role, message.content])).toEqual([
+      ['user', 'hello'],
+      ['assistant', 'Hi there'],
+    ]);
+  });
+
+  // Opus 5 reasons on every turn, and the server inlines that into the text between markers.
+  it('keeps inline reasoning markers out of the thread and out of what is sent back', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'first');
+    await waitFor(events, 'start');
+    stream.write(frame({ type: 'content', text: '<think>' }));
+    stream.write(frame({ type: 'content', text: 'planning' }));
+    stream.write(frame({ type: 'content', text: '</think>' }));
+    stream.write(frame({ type: 'content', text: 'reply one' }));
+    stream.write(frame('[DONE]'));
+    await waitFor(events, 'done');
+
+    expect(events.filter(event => event.type === 'delta').map(e => 'text' in e && e.text)).toEqual(['reply one']);
+    expect((await service.getSession(id))?.messages.at(-1)?.content).toBe('reply one');
+
+    stream = new PassThrough();
+    post.mockResolvedValue({ data: stream, status: 200 });
+    await service.send(id, 'second');
+    await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 2000, interval: 5 });
+    expect(post.mock.calls[1][1].messages).toContainEqual({ role: 'assistant', content: 'reply one' });
+  });
+
   it('resends the whole thread, because the endpoint keeps no conversation of its own', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'first');
