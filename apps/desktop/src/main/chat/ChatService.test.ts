@@ -113,6 +113,28 @@ describe('ChatService', () => {
     ]);
   });
 
+  // Opus 5 reasons on every turn, and the server inlines that into the text between markers.
+  it('keeps inline reasoning markers out of the thread and out of what is sent back', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'first');
+    await waitFor(events, 'start');
+    stream.write(frame({ type: 'content', text: '<think>' }));
+    stream.write(frame({ type: 'content', text: 'planning' }));
+    stream.write(frame({ type: 'content', text: '</think>' }));
+    stream.write(frame({ type: 'content', text: 'reply one' }));
+    stream.write(frame('[DONE]'));
+    await waitFor(events, 'done');
+
+    expect(events.filter(event => event.type === 'delta').map(e => 'text' in e && e.text)).toEqual(['reply one']);
+    expect((await service.getSession(id))?.messages.at(-1)?.content).toBe('reply one');
+
+    stream = new PassThrough();
+    post.mockResolvedValue({ data: stream, status: 200 });
+    await service.send(id, 'second');
+    await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 2000, interval: 5 });
+    expect(post.mock.calls[1][1].messages).toContainEqual({ role: 'assistant', content: 'reply one' });
+  });
+
   it('resends the whole thread, because the endpoint keeps no conversation of its own', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'first');

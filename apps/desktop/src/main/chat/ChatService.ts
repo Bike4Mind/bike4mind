@@ -43,6 +43,7 @@ import { MediaApiClient } from './media/MediaApiClient';
 import type { MediaStore } from './media/MediaStore';
 import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
+import { createThinkFilter } from './thinkFilter';
 import { pickTitleModel, sanitizeGeneratedTitle, titleRequestMessages } from './sessionTitle';
 import { pickSuggestionModel, sanitizeSuggestion, suggestionRequestMessages } from './nextPrompt';
 import type { SessionActivity } from './SessionActivity';
@@ -1120,6 +1121,17 @@ export class ChatService {
         let turnText = '';
         let turnThinking: unknown[] | undefined;
         let turnUsage: ChatUsage | undefined;
+        const hideThinking = createThinkFilter();
+        const appendVisible = (visible: string): void => {
+          if (!visible) return;
+          // Every round streams into the SAME message, so without a break here the last
+          // sentence of one round runs into the first word of the next. On the emitted text
+          // only: the wire keeps its own round structure and needs no filler.
+          const text = turnText.length === 0 ? paragraphBreak(content) + visible : visible;
+          content += text;
+          turnText += visible;
+          this.emit({ type: 'delta', sessionId, messageId: replyId, text });
+        };
 
         const failure = await streamRound(
           api.getAxiosInstance(),
@@ -1128,15 +1140,7 @@ export class ChatService {
           event => {
             // `error` never reaches here (the transport throws on it); `meta` carries no reply.
             if (event.type === 'error' || event.type === 'meta') return;
-            if (event.text) {
-              // Every round streams into the SAME message, so without a break here the last
-              // sentence of one round runs into the first word of the next. On the emitted
-              // text only: the wire keeps its own round structure and needs no filler.
-              const text = turnText.length === 0 ? paragraphBreak(content) + event.text : event.text;
-              content += text;
-              turnText += event.text;
-              this.emit({ type: 'delta', sessionId, messageId: replyId, text });
-            }
+            if (event.text) appendVisible(hideThinking.push(event.text));
             if (event.type === 'tool_use') {
               if (event.tools) requested.push(...event.tools);
               if (event.thinking) turnThinking = event.thinking;
@@ -1146,6 +1150,7 @@ export class ChatService {
           },
           controller.signal
         );
+        appendVisible(hideThinking.flush());
 
         // Recorded before the exits below, so the round that ENDS a turn - the one carrying the
         // answer, which by definition runs no tools - is part of the structure rather than the
