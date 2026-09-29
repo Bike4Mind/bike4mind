@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../../packages/database/src/__test__/createMongoServer';
 import { Permission, KnowledgeType } from '@bike4mind/common';
@@ -46,8 +47,10 @@ let deleteHandler: Handler;
 
 beforeAll(async () => {
   replSet = await createMongoReplSet();
-  await mongoose.connect(replSet.getUri());
+  // Nothing here depends on an index, so skip the build storm rather than wait it out.
+  await mongoose.connect(replSet.getUri(), { autoIndex: false });
   await import('../members');
+  await settleAutoIndexBuilds(mongoose);
   deleteHandler = mockRefs.deleteHandler!;
 });
 
