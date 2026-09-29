@@ -14,8 +14,10 @@ const DISMISSED_KEY = 'b4m.sidebar.folderCard.dismissed';
  *
  * The reference fills this slot with a "get the app" promo, which has no counterpart here. It
  * holds the one thing a new install genuinely needs to be told instead: until a folder is
- * shared, every file and shell tool refuses, and nothing else in the UI says so until the
- * model tries one and fails.
+ * shared, every file and shell tool refuses in a Chat conversation, and nothing else in the UI
+ * says so until the model tries one and fails. A Code session is not what this unblocks - it
+ * takes its roots from the project folder chip, and these are added on top (ChatService
+ * resolveToolScope).
  *
  * It takes itself away on either of the two things that make it pointless - the folder being
  * granted, or the user saying no - and the dismissal is per-machine UI state, which is what
@@ -63,7 +65,7 @@ export function SidebarCard() {
             Share a folder
           </Typography>
           <Typography level="body-xs" textColor="text.tertiary">
-            Code sessions cannot read files or run commands until you pick one.
+            Chat conversations cannot read files or run commands until you pick one.
           </Typography>
           <Button
             size="sm"
