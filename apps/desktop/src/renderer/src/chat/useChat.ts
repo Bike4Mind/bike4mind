@@ -54,6 +54,16 @@ export function useSessions(): SessionsController {
     void reload();
   }, [reload]);
 
+  // Patched in place rather than moved to the front, the way pinning is: a generated title does
+  // not touch `updatedAt`, so reordering here would disagree with the next reload. An id this
+  // window does not hold is ignored - the push reaches every window, including ones that have
+  // not listed that session yet.
+  useEffect(() => {
+    return window.b4m.chat.onSessionSummary(summary => {
+      setSessions(current => current.map(entry => (entry.id === summary.id ? summary : entry)));
+    });
+  }, []);
+
   const create = useCallback(async () => {
     const created = await window.b4m.chat.createSession();
     setSessions(current => [created, ...current]);
@@ -418,6 +428,15 @@ export function useConversation(
       current = false;
     };
   }, [sessionId]);
+
+  // The header reads the open conversation's own copy of the title, so the sidebar's patch is
+  // not enough: without this, the row renames itself and the heading above the thread does not.
+  useEffect(() => {
+    return window.b4m.chat.onSessionSummary(summary => {
+      if (summary.id !== activeSessionId.current) return;
+      setSession(current => (current ? { ...current, title: summary.title } : current));
+    });
+  }, []);
 
   useEffect(() => {
     return window.b4m.chat.onQueueChanged(event => {

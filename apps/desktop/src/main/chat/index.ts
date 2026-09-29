@@ -8,6 +8,7 @@ import type {
   ChatAttachmentInput,
   ChatQueueEvent,
   ChatSessionStatusEvent,
+  ChatSessionSummary,
   ChatStreamEvent,
   CreateCodeSessionRequest,
   ProjectInspection,
@@ -203,6 +204,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     getApiClient: () => auth.getApiClient(),
     getEnvironmentUrl: () => auth.getState().environment.url,
     emit: broadcast,
+    summaryChanged: (summary: ChatSessionSummary) => send(IPC_CHANNELS.chatSessionSummary, summary),
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
