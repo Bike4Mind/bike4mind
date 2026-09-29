@@ -95,6 +95,20 @@ The History tab records a research-configuration edit only when a setting meanin
 Saving the same values again, or reordering the same entries in **Only these sites**, **Never these
 sites** or **Tags to propose**, does not add a row.
 
+**Who can connect a Google Drive folder to a Data Lake?**
+An organization owner or manager, on an organization Data Lake whose origin is connector-fed.
+Personal Data Lakes and curated Data Lakes cannot be connected to Drive.
+
+**What happens when I disconnect a Google Drive folder?**
+Every file that connection brought into the Data Lake is permanently deleted, along with its
+extracted text and search entries, and it is removed from any chat it was attached to. This cannot
+be undone. The confirmation dialog shows how many files will be deleted before you confirm. Files
+you uploaded by hand, and files from any other Drive connection on the same Data Lake, are kept.
+
+The files are removed in the background, so a large folder can take a few minutes. Until it
+finishes, the connection shows **Disconnecting** and cannot be synced. If it stays stuck, a
+**Retry disconnect** button appears.
+
 ## Related
 
 - [Knowledge Management](./knowledge-management.md) -- uploading and managing files
