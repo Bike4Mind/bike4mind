@@ -934,6 +934,13 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
   }
 
   formatMessages(messages: IMessage[]): IMessage[] {
+    // Pure: never writes to its input. The tool loop in base.ts re-enters complete() with the SAME
+    // messages array every round and re-runs this over it, so the merges below push SHALLOW COPIES.
+    // Writing cache flags/content back onto the caller's messages made one more system message
+    // carry a cache breakpoint each round (getPayload turns each into a `cache_control` block, so
+    // the request climbed 1 -> 2 -> 3 ... past the 4-block ceiling) and re-appended already-merged
+    // text, duplicating the system prompt. Content arrays are replaced, never mutated in place, so
+    // a shallow copy is enough.
     const formattedMessages = messages.reduce((cur, value) => {
       const previousMessage = cur[cur.length - 1];
 
@@ -958,7 +965,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
           // Only merge if current value.content is also a string (not an array with images)
           if (typeof value.content !== 'string') {
-            cur.push(value);
+            cur.push({ ...value });
             return cur;
           }
 
@@ -981,7 +988,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         } else {
           // Only merge if current value.content is a string (not an array with images)
           if (typeof value.content !== 'string') {
-            cur.push(value);
+            cur.push({ ...value });
             return cur;
           }
 
@@ -1007,7 +1014,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       }
 
       // Push the message if the role is different
-      cur.push(value);
+      cur.push({ ...value });
 
       return cur;
     }, [] as IMessage[]);
