@@ -65,6 +65,27 @@ describe('useLakeDriveConnection', () => {
 
     await waitFor(() => expect(result.current.isError).toBe(true));
   });
+
+  it('refreshes the lake file queries once the background disconnect purge releases the connection', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    get.mockResolvedValueOnce({ data: { connection: { id: 'c1', disconnecting: true, fileCount: 3 } } });
+    const { result } = renderHook(() => useLakeDriveConnection('lake_1'), { wrapper });
+    await waitFor(() => expect(result.current.data).toMatchObject({ disconnecting: true }));
+    expect(invalidateSpy).not.toHaveBeenCalled();
+
+    get.mockResolvedValueOnce({ data: { connection: null } });
+    await act(async () => {
+      await result.current.refetch();
+    });
+
+    const invalidatedKeys = invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
+    expect(invalidatedKeys).toContainEqual(dataLakeKeys.filesOf('lake_1'));
+    expect(invalidatedKeys).toContainEqual(dataLakeKeys.tagCountsRoot);
+  });
 });
 
 // The DELETE route purges every FabFile the connection ingested (see drive-connection.ts) - a
@@ -105,6 +126,7 @@ describe('driveConnectionPollInterval', () => {
     lastUsedAt: null,
     connectedAt: null,
     fileCount: 0,
+    disconnecting: false,
     ...overrides,
   });
 
@@ -115,6 +137,10 @@ describe('driveConnectionPollInterval', () => {
 
   it('polls fast while a sync is actively in flight', () => {
     expect(driveConnectionPollInterval(connection({ status: 'syncing' }))).toBe(DRIVE_CONNECTION_ACTIVE_POLL_MS);
+  });
+
+  it('polls fast while a queued disconnect purge is running, so the connection clears promptly', () => {
+    expect(driveConnectionPollInterval(connection({ disconnecting: true }))).toBe(DRIVE_CONNECTION_ACTIVE_POLL_MS);
   });
 
   it('keeps polling at an idle cadence once connected, so a pre-claim fileCount eventually settles', () => {

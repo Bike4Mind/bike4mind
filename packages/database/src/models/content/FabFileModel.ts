@@ -1816,12 +1816,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async findByDriveConnectionIdInDataLake(
     driveConnectionId: string,
     datalakeTag: string,
-    options?: { includeDeleted?: boolean }
+    options?: { includeDeleted?: boolean; limit?: number }
   ): Promise<IFabFileDocument[]> {
     const filter = this.driveConnectionInDataLakeFilter(driveConnectionId, datalakeTag);
-    const docs = options?.includeDeleted
-      ? await this.fabFileModel.find(filter).setOptions({ includeDeleted: true })
-      : await this.fabFileModel.find({ ...filter, deletedAt: null, archivedAt: null });
+    const query = options?.includeDeleted
+      ? this.fabFileModel.find(filter).setOptions({ includeDeleted: true })
+      : this.fabFileModel.find({ ...filter, deletedAt: null, archivedAt: null });
+    if (options?.limit !== undefined) query.limit(options.limit);
+    const docs = await query;
     return docs.map(d => d.toJSON());
   }
 
