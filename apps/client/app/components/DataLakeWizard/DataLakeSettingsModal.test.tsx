@@ -1259,7 +1259,7 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
   });
 
   // Same shape as the Research draft: the half-typed reason is this panel's own state, so an
-  // unmount loses it. Unlike Research it reports no dirty state, so nothing would warn either.
+  // unmount loses it.
   it('keeps a half-typed decline reason while the curator visits another tab', async () => {
     withQueue([queued()]);
     const user = userEvent.setup();
