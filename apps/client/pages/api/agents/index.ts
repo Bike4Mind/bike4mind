@@ -152,7 +152,10 @@ const handler = baseApi()
 
           // Deduct credits from user
           const updatedUser = await userRepository.incrementCredits(user.id, -agentData.currentCredits);
-          updatedUserCredits = updatedUser?.currentCredits ?? updatedUserCredits - agentData.currentCredits;
+          if (!updatedUser) {
+            throw new BadRequestError('User not found');
+          }
+          updatedUserCredits = updatedUser.currentCredits ?? 0;
 
           console.log(
             `Deducted ${agentData.currentCredits} credits from user ${userId}. New balance: ${updatedUserCredits}`

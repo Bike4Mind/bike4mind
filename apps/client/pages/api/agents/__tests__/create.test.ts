@@ -54,4 +54,15 @@ describe('POST /api/agents - credit allocation', () => {
     expect(status).toHaveBeenCalledWith(201);
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ userCredits: 50 }));
   });
+
+  it('refuses, without creating the agent, when the user vanished before the deduction', async () => {
+    h.incrementCredits.mockResolvedValue(null);
+    const { res, json, status } = makeRes();
+
+    await h.handler!({ user: { id: 'user-1' }, body: { name: 'Agent', useOwnCredits: true, currentCredits: 30 } }, res);
+
+    expect(status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith({ error: 'User not found' });
+    expect(h.agentCreate).not.toHaveBeenCalled();
+  });
 });

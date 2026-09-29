@@ -51,6 +51,7 @@ describe('POST /api/admin/users/[userId]/unverify-email', () => {
 
     await h.handler!(makeReq(), { json });
 
+    expect(h.update).toHaveBeenCalledTimes(1);
     expect(h.update).toHaveBeenCalledWith({ id: 'user-1', emailVerified: false, emailVerifiedAt: null });
     expect(json).toHaveBeenCalledWith({ message: 'Email unverified successfully' });
   });

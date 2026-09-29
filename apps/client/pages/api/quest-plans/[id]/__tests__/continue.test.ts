@@ -52,8 +52,8 @@ describe('POST /api/quest-plans/[id]/continue', () => {
   });
 
   it('resumes a paused plan by writing only its state, never the read-time notebookId', async () => {
-    // The stored notebookId differs from the session being continued in; a whole-doc write would
-    // put the stale one back after continueInSession moves it.
+    // A whole-doc write would put back every read-time field, e.g. a notebookId a concurrent
+    // request had already swapped via atomicUpdateNotebookId.
     h.planFindById.mockResolvedValue({
       id: PLAN_ID,
       goal: 'Goal',

@@ -45,6 +45,7 @@ describe('POST /api/admin/users/[userId]/verify-email', () => {
 
     await h.handler!(makeReq(), { json });
 
+    expect(h.update).toHaveBeenCalledTimes(1);
     expect(h.update).toHaveBeenCalledWith({
       id: 'user-1',
       emailVerified: true,

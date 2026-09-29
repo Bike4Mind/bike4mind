@@ -75,7 +75,7 @@ const SITE_COUNT = new Map<string, number>([
   ['b4m-core/services/src/latticeService/latticeModelService.ts::updatedModel', 3],
 ]);
 
-const RECEIVER = /(?:^|[^\w$.])((?:[\w$]+[?!]?\.)*[\w$]+)[?!]?\s*\.update(?:<[^>()]*>)?\(/g;
+const RECEIVER = /(?:^|[^\w$.])((?:[\w$]+[?!]?\.)*[\w$]+)[?!]?\s*\.update(?:<(?:[^<>()]|<[^<>()]*>)*>)?\(/g;
 const isRepositoryReceiver = (r: string) => /Repository$/.test(r) || /(?:^|\.)db\.[\w$]+$/.test(r);
 
 /** Returns the first-argument text of the call whose `(` is at `open`, or null when unbalanced. */
@@ -232,5 +232,11 @@ describe('repository whole-document update guard', () => {
     expect(isWholeDoc('{ ...user.toObject(), name }')).toBe(true);
     expect(isWholeDoc('{ ...(user as IUser) }')).toBe(true);
     expect(isWholeDoc('{ id, ...changes } as Partial<IUser>')).toBe(false);
+  });
+
+  it('matches generic receivers, one level of nesting deep', () => {
+    const receivers = (src: string) => [...src.matchAll(RECEIVER)].map(m => m[1]);
+    expect(receivers('userRepository.update<IUser>(user)')).toEqual(['userRepository']);
+    expect(receivers('userRepository.update<Partial<IUser>>(user)')).toEqual(['userRepository']);
   });
 });
