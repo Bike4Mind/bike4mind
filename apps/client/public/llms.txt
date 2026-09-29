@@ -16,6 +16,17 @@ self-hosted deployment.
   an `available` step has an `endpoint` to call. Also served over MCP as
   `b4m://agent-quest`.
 
+## Authentication
+
+- Send an API key in the `X-API-Key` header. Keys look like `b4m_live_...`;
+  `Authorization: Bearer <key>` is accepted too.
+- Read the key from the `B4M_API_KEY` environment variable. The MCP server reads
+  the same variable, plus `B4M_API_URL` for the deployment's origin.
+- A person creates a key in the web app under Profile > API. Ask for the
+  narrowest scopes the task needs.
+- Never ask a person to paste a key into a chat, and never print, log or commit
+  one. If `B4M_API_KEY` is unset, tell the person where to create a key and stop.
+
 ## API
 
 - [OpenAPI contract](/api/v1/openapi.json): the machine-readable HTTP API. Served
@@ -28,7 +39,7 @@ self-hosted deployment.
 Bike4Mind ships its own MCP server over stdio or loopback HTTP:
 
 ```
-npx @bike4mind/cli mcp serve
+npx -y @bike4mind/cli@latest mcp serve
 ```
 
 It exposes the Bike4Mind tools plus the resources `b4m://notebook/{id}`,
