@@ -600,6 +600,75 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  // vetReaderConsentDatalakeTags' contract (same owner gate as vetPreauthorizedLakeIds above),
+  // pinned at BOTH doors it feeds - reverting either call site to raw `session.retrievalTags`
+  // must fail a test, not just the isolated helper unit test.
+  describe('reader-consent vetting at both injection doors', () => {
+    it('forced-retrieval door: forwards retrievalTags only when the acting user owns the session', async () => {
+      mockSession.userId = 'user1';
+      mockSession.retrievalTags = ['datalake:x'];
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      const call = (service as any).buildOptimizedFeatures.mock.calls[0];
+      expect(call[call.length - 1]).toEqual(['datalake:x']);
+    });
+
+    it('forced-retrieval door: withholds retrievalTags when the acting user is not the session owner', async () => {
+      mockSession.userId = 'someone-else';
+      mockSession.retrievalTags = ['datalake:x'];
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      const call = (service as any).buildOptimizedFeatures.mock.calls[0];
+      expect(call[call.length - 1]).toBeUndefined();
+    });
+
+    it('tool door: forwards sessionReaderConsentDatalakeTags only when the acting user owns the session', async () => {
+      const originalBuildMcpTools = ToolBuilder.prototype.buildMcpTools;
+      let capturedDeps: any;
+      const buildMcpToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildMcpTools').mockImplementation(function (
+        this: any,
+        args: any
+      ) {
+        capturedDeps = this.deps;
+        return originalBuildMcpTools.call(this, args);
+      });
+
+      mockSession.userId = 'user1';
+      mockSession.retrievalTags = ['datalake:x'];
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(capturedDeps.sessionReaderConsentDatalakeTags).toEqual(['datalake:x']);
+      buildMcpToolsSpy.mockRestore();
+    });
+
+    it('tool door: withholds sessionReaderConsentDatalakeTags when the acting user is not the session owner', async () => {
+      const originalBuildMcpTools = ToolBuilder.prototype.buildMcpTools;
+      let capturedDeps: any;
+      const buildMcpToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildMcpTools').mockImplementation(function (
+        this: any,
+        args: any
+      ) {
+        capturedDeps = this.deps;
+        return originalBuildMcpTools.call(this, args);
+      });
+
+      mockSession.userId = 'someone-else';
+      mockSession.retrievalTags = ['datalake:x'];
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(capturedDeps.sessionReaderConsentDatalakeTags).toBeUndefined();
+      buildMcpToolsSpy.mockRestore();
+    });
+  });
+
   describe('a user stop', () => {
     it('landing before processing starts is honoured instead of saving running over it', async () => {
       mockSession.userId = 'user1';

@@ -112,7 +112,7 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
 
   // Status-filtered in the same write, not checked on a prior read, so a re-revoke or a revoke
   // racing deactivateAllByUserId keeps the first audit stamp instead of overwriting it.
-  async revokeIfActive(id: string, revokedBy: string, revokedReason?: string) {
+  async revokeIfNotDisabled(id: string, revokedBy: string, revokedReason?: string) {
     await this.model.updateOne(
       { _id: id, status: { $ne: ApiKeyStatus.DISABLED } },
       {
@@ -243,7 +243,7 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     agentId: { type: String },
     allowedOrigins: { type: [String], default: undefined },
     // Lake ids this key is bound to for the manage-but-not-member session admission (see
-    // pages/api/sessions/create.ts's preauthorizedLakeIds containment check). Admin-minted only.
+    // pages/api/v1/sessions/index.ts's preauthorizedLakeIds containment check). Admin-minted only.
     // No index: the only read is by the key's own id (already indexed), never a bulk lookup by
     // lake. `default: undefined` so an ordinary key does not materialize an empty array.
     preauthorizedLakeIds: { type: [String], default: undefined },

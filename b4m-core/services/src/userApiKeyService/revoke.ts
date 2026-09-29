@@ -12,7 +12,7 @@ export type RevokeUserApiKeyParameters = z.infer<typeof revokeUserApiKeySchema>;
 
 interface RevokeUserApiKeyAdapters {
   db: {
-    userApiKeys: IUserApiKeyRepository;
+    userApiKeys: IUserApiKeyRepository & Pick<Required<IUserApiKeyRepository>, 'revokeIfNotDisabled'>;
     organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
   };
 }
@@ -41,7 +41,7 @@ export const revokeUserApiKey = async (
     throw new NotFoundError('API key not found');
   }
 
-  await db.userApiKeys.revokeIfActive(apiKey.id, userId, params.reason);
+  await db.userApiKeys.revokeIfNotDisabled(apiKey.id, userId, params.reason);
 
   return { name: apiKey.name };
 };

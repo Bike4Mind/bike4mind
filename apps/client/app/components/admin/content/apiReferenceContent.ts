@@ -127,35 +127,18 @@ POST /api/chat
 #### Poll Quest Status
 
 \`\`\`
-GET /api/quests/[id]
+GET /api/v1/quests/{id}
 \`\`\`
 
-**Required API-key scope:** \`notebooks:read\`, \`ai:chat\`, or \`ai:generate\` (any one grants access — an AI scope works so the chat→poll flow needs a single key).
+> **This endpoint is now generated from its contract.** The full request/response
+> reference - every field, its type, and the error responses - lives in the
+> [generated API docs](/api/v1/docs) under \`getQuest\`, derived from the same
+> object the handler validates with. The legacy path \`GET /api/quests/[id]\` serves
+> the same handler.
+
+**Required API-key scope:** \`notebooks:read\`, \`ai:chat\`, or \`ai:generate\` (any one grants access - an AI scope works so the chat-to-poll flow needs a single key).
 
 Not a pure read: polling a quest whose run died without writing a terminal status settles it, so the poll that crosses the liveness threshold returns \`status: "done"\` instead of spinning on \`running\` forever. Whatever the run produced is preserved; \`type: "error"\` marks the case where it produced nothing, which is how a client machine-distinguishes a timeout from a genuine answer. Only the session owner's poll can settle a quest - a shared-session viewer reads it as-is, and a background sweep settles it instead.
-
-**Response:**
-
-\`\`\`json
-{
-  "id": "quest_abc123",
-  "status": "completed",
-  "type": "message",
-  "reply": {
-    "content": "Here is the AI response...",
-    "model": "gpt-4o",
-    "tokensUsed": { "input": 150, "output": 320 },
-    "sources": [],
-    "artifacts": []
-  },
-  "images": ["a1b2c3.png"],
-  "files": [
-    { "name": "a1b2c3.png", "url": "https://cdn.example.com/generated/a1b2c3.png", "isImage": true }
-  ],
-  "createdAt": "2025-01-15T10:30:00Z",
-  "completedAt": "2025-01-15T10:30:05Z"
-}
-\`\`\`
 
 For file-generating quests (image generation, editing, etc.), \`images\` lists the raw generated
 file basenames and \`files\` lists each as a descriptor with a ready-to-use CDN \`url\` and an
@@ -186,7 +169,7 @@ Cancels an in-progress streaming response.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | /api/chat | Send a message to the AI |
-| GET | /api/quests/[id] | Get quest status and reply |
+| GET | /api/v1/quests/{id} | Get quest status and reply |
 | GET | /api/quests/[id]/files | Get files from a quest |
 | GET | /api/quests/[id]/check-timeout | Check if quest has timed out |
 | POST | /api/quests/[id]/client-timing | Report client-side timing data |
@@ -415,7 +398,7 @@ PUT /api/sessions/[id]
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | /api/sessions | List sessions |
-| POST | /api/sessions/create | Create a new session |
+| POST | /api/v1/sessions | Create a new session (legacy path: /api/sessions/create) |
 | GET | /api/sessions/[id] | Get session details |
 | PUT | /api/sessions/[id] | Update session |
 | DELETE | /api/sessions/[id] | Delete session |
@@ -694,7 +677,7 @@ POST /api/v1/image-edits
 > validate with.
 >
 > Both are asynchronous: the call queues the render and returns a quest with no image yet,
-> so it never blocks on generation. Poll \`GET /api/quests/{id}\` until \`status\` is \`done\`
+> so it never blocks on generation. Poll \`GET /api/v1/quests/{id}\` until \`status\` is \`done\`
 > (see [Poll Quest Status](#poll-quest-status)); a render that failed arrives there as
 > \`type: "error"\`, not as a 4xx. \`POST /api/ai/generate-image\` and \`POST /api/ai/edit-image\`
 > are legacy aliases of the same handlers and keep working.
@@ -1480,7 +1463,7 @@ Real-time updates are delivered via WebSocket. Connect to the WebSocket endpoint
 
 1. **Always use the authenticated client.** In the B4M frontend, import \`api\` from \`@client/app/contexts/ApiContext\` rather than using \`fetch()\`. The \`api\` instance handles token refresh, request IDs, and error interceptors automatically.
 
-2. **Poll quests, don&apos;t block on chat.** The \`POST /api/chat\` endpoint returns immediately with a \`questId\`. Poll \`GET /api/quests/[id]\` or listen on WebSocket for \`quest:completed\` to get the response.
+2. **Poll quests, don&apos;t block on chat.** The \`POST /api/chat\` endpoint returns immediately with a \`questId\`. Poll \`GET /api/v1/quests/{id}\` or listen on WebSocket for \`quest:completed\` to get the response.
 
 3. **Use streaming for better UX.** Pass \`stream: true\` in chat requests and listen for \`quest:chunk\` WebSocket events to display tokens as they arrive.
 

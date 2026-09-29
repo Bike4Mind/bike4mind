@@ -28,10 +28,12 @@ describe('QuestMasterPlan legacy sub-quest status on disk', () => {
     return db.collection('questmasterplans');
   };
 
+  const OWNER = new mongoose.Types.ObjectId().toString();
+
   const seedLegacyPlan = async () => {
     const plan = await QuestMasterPlan.create({
       notebookId: 'session1',
-      userId: new mongoose.Types.ObjectId().toString(),
+      userId: OWNER,
       goal: 'Ship the thing',
       state: 'active',
       quests: [
@@ -108,7 +110,7 @@ describe('QuestMasterPlan legacy sub-quest status on disk', () => {
     const planId = await seedLegacyPlan();
 
     await expect(
-      questMasterPlanRepository.updateQuestProgress(planId, 'q1', 'sq1', {
+      questMasterPlanRepository.updateQuestProgress(planId, OWNER, 'q1', 'sq1', {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- forcing the runtime guard past the compile-time type is the point
         status: 'in-progress' as any,
       })
@@ -123,7 +125,7 @@ describe('QuestMasterPlan legacy sub-quest status on disk', () => {
     // green again if someone removed that option.
     await expect(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- forcing past the compile-time type is the point
-      questMasterPlanRepository.updateTaskStatus(planId, 'q1', 'sq1', 'in-progress' as any)
+      questMasterPlanRepository.updateTaskStatus(planId, OWNER, 'q1', 'sq1', 'in-progress' as any)
     ).rejects.toThrow(/not a valid enum value/);
 
     // And the rejected write left the stored value alone rather than half-applying.
@@ -136,7 +138,7 @@ describe('QuestMasterPlan legacy sub-quest status on disk', () => {
 
     await expect(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- forcing past the compile-time type is the point
-      questMasterPlanRepository.updateReviewGate(planId, 'q1', 'sq1', 'not-a-review-status' as any)
+      questMasterPlanRepository.updateReviewGate(planId, OWNER, 'q1', 'sq1', 'not-a-review-status' as any)
     ).rejects.toThrow(/not a valid enum value/);
 
     // Rejected AND not half-applied - the same second half its status sibling above asserts.
@@ -147,7 +149,14 @@ describe('QuestMasterPlan legacy sub-quest status on disk', () => {
   it('still accepts a valid review-gate status', async () => {
     const planId = await seedLegacyPlan();
 
-    const updated = await questMasterPlanRepository.updateReviewGate(planId, 'q1', 'sq1', 'approved', 'looks good');
+    const updated = await questMasterPlanRepository.updateReviewGate(
+      planId,
+      OWNER,
+      'q1',
+      'sq1',
+      'approved',
+      'looks good'
+    );
 
     expect(updated!.quests[0].subQuests[0].reviewStatus).toBe('approved');
     expect(updated!.quests[0].subQuests[0].reviewNote).toBe('looks good');
@@ -158,7 +167,7 @@ describe('QuestMasterPlan legacy sub-quest status on disk', () => {
 
     // The repair path a user exercises by clicking the sub-quest: a legacy row is not stuck,
     // because the write validator gates the incoming value, not the stored one.
-    const updated = await questMasterPlanRepository.updateQuestProgress(planId, 'q1', 'sq2', {
+    const updated = await questMasterPlanRepository.updateQuestProgress(planId, OWNER, 'q1', 'sq2', {
       status: 'in_progress',
     });
 

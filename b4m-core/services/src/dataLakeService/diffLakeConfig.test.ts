@@ -50,11 +50,19 @@ describe('diffLakeConfig', () => {
   it('treats an unset boolean as false, so writing false onto a never-set field is no change', () => {
     expect(diffLakeConfig(lake(), lake({ isPublic: false }))).toEqual([]);
     expect(diffLakeConfig(lake(), lake({ auditQueryTextEnabled: false }))).toEqual([]);
+    expect(diffLakeConfig(lake(), lake({ injectPromptForReaders: false }))).toEqual([]);
   });
 
   it('catches the audit control being flipped off - the sharpest case in the issue', () => {
     const changes = diffLakeConfig(lake({ auditQueryTextEnabled: true }), lake({ auditQueryTextEnabled: false }));
     expect(changes).toEqual([{ field: 'auditQueryTextEnabled', kind: 'literal', before: true, after: false }]);
+  });
+
+  it('records the reader opt-in flag (injectPromptForReaders) being turned on', () => {
+    // Unlike a string field, a boolean's "unset" side normalizes to a concrete `false` (see
+    // normalizeValue), so `before` is present here too - matching auditQueryTextEnabled above.
+    const changes = diffLakeConfig(lake(), lake({ injectPromptForReaders: true }));
+    expect(changes).toEqual([{ field: 'injectPromptForReaders', kind: 'literal', before: false, after: true }]);
   });
 
   it('records numeric and org-scope moves, including their explicit clear sentinels', () => {

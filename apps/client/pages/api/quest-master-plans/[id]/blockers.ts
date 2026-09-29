@@ -1,5 +1,5 @@
 import { questMasterPlanRepository } from '@bike4mind/database';
-import { QuestBlocker } from '@bike4mind/common';
+import { NotFoundError, QuestBlocker } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -31,7 +31,9 @@ const handler = baseApi()
       createdAt: new Date(),
     };
 
-    const updatedPlan = await questMasterPlanRepository.addBlocker(planId, blocker);
+    const updatedPlan = await questMasterPlanRepository.addBlocker(planId, req.user!.id, blocker);
+
+    if (!updatedPlan) throw new NotFoundError('Quest plan not found');
 
     res.json({ success: true, plan: updatedPlan, blockerId: blocker.id });
   });

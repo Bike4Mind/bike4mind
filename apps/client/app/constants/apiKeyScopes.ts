@@ -27,13 +27,13 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.READ_NOTEBOOKS,
     label: 'Read Notebooks',
     description: 'View notebooks and sessions',
-    endpoints: ['GET /api/sessions', 'GET /api/sessions/:id'],
+    endpoints: ['GET /api/sessions', 'GET /api/sessions/:id', 'GET /api/v1/quests/:id'],
   },
   {
     value: ApiKeyScope.WRITE_NOTEBOOKS,
     label: 'Write Notebooks',
     description: 'Create and modify notebooks',
-    endpoints: ['POST /api/sessions/create', 'PUT /api/sessions/:id'],
+    endpoints: ['POST /api/v1/sessions', 'PUT /api/sessions/:id'],
   },
   {
     value: ApiKeyScope.READ_FILES,
@@ -51,13 +51,18 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.AI_GENERATE,
     label: 'AI Generate',
     description: 'Use AI generation features',
-    endpoints: ['POST /api/v1/image-generations', 'POST /api/v1/image-edits', 'POST /api/v1/embeddings'],
+    endpoints: [
+      'POST /api/v1/image-generations',
+      'POST /api/v1/image-edits',
+      'POST /api/v1/embeddings',
+      'GET /api/v1/quests/:id',
+    ],
   },
   {
     value: ApiKeyScope.AI_CHAT,
     label: 'AI Chat',
     description: 'Use AI chat features',
-    endpoints: ['POST /api/ai/llm'],
+    endpoints: ['POST /api/ai/llm', 'GET /api/v1/quests/:id'],
   },
   {
     value: ApiKeyScope.READ_PROJECTS,

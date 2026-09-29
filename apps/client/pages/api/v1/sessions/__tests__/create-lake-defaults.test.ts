@@ -15,17 +15,24 @@ const h = vi.hoisted(() => ({
   createAttachmentLakeAccess: vi.fn(),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+// Runs the contract's real request parse, as nextRouteForContract does, ahead of the handler.
+vi.mock('@server/middlewares/defineNextRoute', () => ({
+  nextRouteForContract: (contract: { request: { parse: (b: unknown) => unknown } }) => {
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign((req: { method?: string }, res: unknown) => routes[req.method ?? 'POST']?.(req, res), {
       use: () => chain,
-      post: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((routes.POST = fns[fns.length - 1]), chain),
+      post: (fn: (req: { body: unknown; validated?: unknown }, res: unknown) => unknown) => (
+        (routes.POST = (req, res) => {
+          const r = req as { body: unknown; validated?: unknown };
+          r.validated = contract.request.parse(r.body);
+          return fn(r, res);
+        }),
+        chain
+      ),
     });
     return chain;
   },
 }));
-vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {
@@ -65,7 +72,7 @@ vi.mock('@bike4mind/services', async () => {
   };
 });
 
-import handler from '../create';
+import handler from '../index';
 
 const makeRes = () => {
   const json = vi.fn();

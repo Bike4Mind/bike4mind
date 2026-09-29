@@ -107,6 +107,7 @@ import {
   getAccessibleDataLakePrompts,
   datalakeTagsFrom,
   grantedLakeIdsUsedFor,
+  readerOptInLakeIdsUsedFrom,
 } from '../dataLakeService/getDataLakePrompts';
 import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
 import { membershipOrgIdsForTurn } from '../dataLakeService/membershipOrgIdsForTurn';
@@ -1203,7 +1204,12 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     const session = isObjectIdShaped(plan.notebookId)
       ? await this.chatCompletion.db.sessions.findById(plan.notebookId)
       : null;
-    return session?.userId === userId;
+    if (session?.userId !== userId) return false;
+    // Backfill like the HTTP side does, so the owner arm of the plan's write filter (writableBy in
+    // QuestMasterPlanModel.ts) matches the write that follows.
+    await this.chatCompletion.db.questMasterPlans.update({ id: plan.id, userId });
+    plan.userId = userId;
+    return true;
   }
 
   async onComplete({
@@ -1238,6 +1244,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
 
     await this.chatCompletion.db.questMasterPlans.updateTaskStatus(
       questMaster.questMasterPlanId,
+      this.user.id,
       questMaster.questId,
       questMaster.subQuestId,
       'completed'
@@ -1298,6 +1305,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
 
     await this.chatCompletion.db.questMasterPlans.updateTaskStatus(
       questMaster.questMasterPlanId,
+      this.user.id,
       questMaster.questId,
       questMaster.subQuestId,
       'in_progress'
@@ -1985,6 +1993,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   private preauthorizedLakeIds: string[];
   /** `session.lakeScopeExplicit` - see sessionGroundsOnNoLake for why an empty scope needs it. */
   private lakeScopeExplicit: boolean | undefined;
+  /**
+   * Owner-vetted copy of `retrievalTags` - the reader's consent for the lake-prompt READER
+   * OPT-IN arm. Kept separate from `retrievalTags`, which stays populated for a non-owner turn so
+   * retrieval scoping keeps working; see ToolContext.sessionReaderConsentDatalakeTags.
+   */
+  private readerConsentTags: string[];
 
   constructor(
     chatCompletion: ChatCompletionContext,
@@ -1992,7 +2006,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     citationStyle?: 'named' | 'indexed',
     retrievalFilter?: RetrievalExclusionOptions,
     preauthorizedLakeIds?: string[],
-    lakeScopeExplicit?: boolean
+    lakeScopeExplicit?: boolean,
+    readerConsentDatalakeTags?: string[]
   ) {
     this.chatCompletion = chatCompletion;
     this.logger = chatCompletion.logger;
@@ -2001,6 +2016,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     this.retrievalFilter = retrievalFilter ?? {};
     this.preauthorizedLakeIds = Array.isArray(preauthorizedLakeIds) ? preauthorizedLakeIds : [];
     this.lakeScopeExplicit = lakeScopeExplicit;
+    this.readerConsentTags = Array.isArray(readerConsentDatalakeTags) ? readerConsentDatalakeTags : [];
   }
 
   async beforeDataGathering(): Promise<{ shouldContinue: boolean }> {
@@ -2168,7 +2184,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     try {
       const tagNames = sourceFileIds.flatMap(fid => (fileById.get(fid)?.tags ?? []).map(t => t.name));
       const datalakeTags = datalakeTagsFrom(tagNames);
-      if (datalakeTags.length === 0) return null;
+      // Still recorded, as present-and-empty: "the site ran and grounded on no lake file" must stay
+      // distinguishable from "the site never ran" (absent).
+      if (datalakeTags.length === 0) {
+        this.recordLakePromptInjection(quest, { injectedLakePromptIds: [] });
+        return null;
+      }
 
       const { db, user } = this.chatCompletion;
       const { keys: entitlementKeys, resolved: entitlementKeysResolved } =
@@ -2180,24 +2201,20 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const prompts = await getAccessibleDataLakePrompts(lakeAccessContext, {
         restrictToDatalakeTags: datalakeTags,
         preauthorizedLakeIds: this.preauthorizedLakeIds,
+        readerConsentDatalakeTags: this.readerConsentTags,
       });
       const injectedLakePromptIds = prompts.map(p => p.id);
       const preauthorizedSet = new Set(this.preauthorizedLakeIds);
       const preauthorizedLakeIdsUsed = injectedLakePromptIds.filter(id => preauthorizedSet.has(id));
       const grantedLakeIdsUsed = await grantedLakeIdsUsedFor(lakeAccessContext, injectedLakePromptIds);
+      const readerOptInLakeIdsUsed = readerOptInLakeIdsUsedFrom(prompts);
       // Recorded whenever this injection site ran, even if nothing qualified (present-and-empty
       // is distinct from absent - see the field's own comment in promptMeta.ts).
-      quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
-        sessionId: quest.sessionId,
-        userId: user.id,
-      });
-      quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
-        attempted: true,
-        surfaces: [],
-        dataLakeTags: [],
+      this.recordLakePromptInjection(quest, {
         injectedLakePromptIds,
         ...(preauthorizedLakeIdsUsed.length ? { preauthorizedLakeIdsUsed } : {}),
         ...(grantedLakeIdsUsed.length ? { grantedLakeIdsUsed } : {}),
+        ...(readerOptInLakeIdsUsed.length ? { readerOptInLakeIdsUsed } : {}),
       });
       const section = renderDataLakePromptSection(prompts);
       if (!section) return null;
@@ -2210,6 +2227,26 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       this.logger.warn('📋 Forced retrieval: lake-prompt resolution failed; injecting no lake prompt', err);
       return null;
     }
+  }
+
+  /** Merge this site's lake-prompt telemetry onto the quest's retrieval summary. */
+  private recordLakePromptInjection(
+    quest: IChatHistoryItemDocument,
+    lakePromptIds: Pick<
+      RetrievalSummary,
+      'injectedLakePromptIds' | 'preauthorizedLakeIdsUsed' | 'grantedLakeIdsUsed' | 'readerOptInLakeIdsUsed'
+    >
+  ): void {
+    quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+      sessionId: quest.sessionId,
+      userId: this.chatCompletion.user.id,
+    });
+    quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
+      attempted: true,
+      surfaces: [],
+      dataLakeTags: [],
+      ...lakePromptIds,
+    });
   }
 
   /**

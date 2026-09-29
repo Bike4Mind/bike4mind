@@ -146,5 +146,17 @@ describe('session operational credit pre-flight wiring', () => {
         mockPublishSummarize.mock.invocationCallOrder[0]
       );
     });
+
+    it('names the requester on the queued job so the write re-checks their access', async () => {
+      await run(summaryHandler);
+
+      expect(mockPublishSummarize).toHaveBeenCalledWith(expect.objectContaining({ requesterId: REQUESTER_ID }));
+    });
+
+    it('names no requester for an admin, so the job re-checks as the owner', async () => {
+      await run(summaryHandler, { id: REQUESTER_ID, isAdmin: true });
+
+      expect(mockPublishSummarize).toHaveBeenCalledWith(expect.objectContaining({ requesterId: undefined }));
+    });
   });
 });

@@ -29,7 +29,7 @@ export interface ManageRecheckAdapter {
  * admission is authorized once and never revalidated: every other lake-read path in this codebase
  * re-derives access per turn, and this one would be the standing exception.
  *
- * MUST mirror pages/api/sessions/create.ts's `manageActor`: `isAdmin: false` (so "any platform
+ * MUST mirror pages/api/v1/sessions/index.ts's `manageActor`: `isAdmin: false` (so "any platform
  * admin" is not a rung - the caller has to actually manage THIS lake) and `administeredOrgIds`
  * re-resolved from `findIdsWithAdminRights` rather than read off an AccessContext, which zeroes
  * that field for admin actors. A drift between the two gates would either admit someone the route

@@ -1534,6 +1534,7 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
         'fileCount',
         'fileTagPrefix',
         'id',
+        'injectPromptForReaders',
         'isPublic',
         'lakeMemoryEnabled',
         'lastSyncAt',
@@ -2188,6 +2189,27 @@ describe('updateDataLake - per-lake systemPrompt (#843)', () => {
     await expect(
       updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { systemPrompt: '' }, { db })
     ).resolves.toMatchObject({ systemPrompt: '' });
+  });
+});
+
+describe('updateDataLake - reader opt-in flag (injectPromptForReaders)', () => {
+  it('persists injectPromptForReaders set by the lake creator', async () => {
+    const l = lake({ createdByUserId: 'owner', injectPromptForReaders: false });
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { injectPromptForReaders: true }, { db })
+    ).resolves.toMatchObject({ injectPromptForReaders: true });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ injectPromptForReaders: true }));
+  });
+
+  it('persists turning injectPromptForReaders back off', async () => {
+    const l = lake({ createdByUserId: 'owner', injectPromptForReaders: true });
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { injectPromptForReaders: false }, { db })
+    ).resolves.toMatchObject({ injectPromptForReaders: false });
   });
 });
 

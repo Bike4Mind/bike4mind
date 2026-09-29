@@ -34,7 +34,8 @@ const mockRefs = vi.hoisted(() => ({
   agentFindAccessibleById: vi.fn(),
   getAttachedAgents: vi.fn(),
   findBySessionAndAgent: vi.fn(),
-  update: vi.fn(),
+  updateBySessionAndAgent: vi.fn(),
+  sessionFindUpdateAccessById: vi.fn(),
   create: vi.fn(),
   deleteBySessionAndAgent: vi.fn(),
 }));
@@ -61,13 +62,16 @@ vi.mock('@bike4mind/database', () => ({
   sessionRepository: {
     findById: (...args: unknown[]) => mockRefs.sessionFindById(...args),
     getAttachedAgents: (...args: unknown[]) => mockRefs.getAttachedAgents(...args),
+    shareable: {
+      findUpdateAccessById: (...args: unknown[]) => mockRefs.sessionFindUpdateAccessById(...args),
+    },
   },
   agentRepository: {
     shareable: { findAccessibleById: (...args: unknown[]) => mockRefs.agentFindAccessibleById(...args) },
   },
   sessionAgentConfigRepository: {
     findBySessionAndAgent: (...args: unknown[]) => mockRefs.findBySessionAndAgent(...args),
-    update: (...args: unknown[]) => mockRefs.update(...args),
+    updateBySessionAndAgent: (...args: unknown[]) => mockRefs.updateBySessionAndAgent(...args),
     create: (...args: unknown[]) => mockRefs.create(...args),
     deleteBySessionAndAgent: (...args: unknown[]) => mockRefs.deleteBySessionAndAgent(...args),
   },
@@ -109,7 +113,9 @@ describe('/api/sessions/[id]/agents/[agentId]/config', () => {
     mockRefs.agentFindAccessibleById.mockResolvedValue(ACCESSIBLE_AGENT);
     mockRefs.getAttachedAgents.mockResolvedValue(['agent-1']);
     mockRefs.findBySessionAndAgent.mockResolvedValue({ id: 'config-1', userId: 'owner', proactiveMessaging: {} });
-    mockRefs.update.mockResolvedValue({ id: 'config-1', userId: 'owner', proactiveMessaging: {} });
+    mockRefs.updateBySessionAndAgent.mockResolvedValue({ id: 'config-1', userId: 'owner', proactiveMessaging: {} });
+    // The pre-write re-check passes unless a test revokes access after the gate.
+    mockRefs.sessionFindUpdateAccessById.mockResolvedValue({ id: 'aaaaaaaaaaaaaaaaaaaaaaaa' });
   });
 
   describe('GET (read-level)', () => {
@@ -163,7 +169,11 @@ describe('/api/sessions/[id]/agents/[agentId]/config', () => {
       const { req, res } = invoke('PUT', 'owner', body);
       await mockRefs.putHandler!(req, res);
       expect(res._getStatusCode()).toBe(200);
-      expect(mockRefs.update).toHaveBeenCalledWith(expect.objectContaining({ userId: 'owner' }));
+      expect(mockRefs.updateBySessionAndAgent).toHaveBeenCalledWith(
+        'aaaaaaaaaaaaaaaaaaaaaaaa',
+        'agent-1',
+        expect.objectContaining({ userId: 'owner' })
+      );
     });
 
     it('allows an update-permission sharee and re-stamps userId to the sharee, not the original owner', async () => {
@@ -172,7 +182,11 @@ describe('/api/sessions/[id]/agents/[agentId]/config', () => {
       await mockRefs.putHandler!(req, res);
       expect(res._getStatusCode()).toBe(200);
       // existingConfig.userId is 'owner' (see beforeEach) - the update call must override it.
-      expect(mockRefs.update).toHaveBeenCalledWith(expect.objectContaining({ userId: 'editor' }));
+      expect(mockRefs.updateBySessionAndAgent).toHaveBeenCalledWith(
+        'aaaaaaaaaaaaaaaaaaaaaaaa',
+        'agent-1',
+        expect.objectContaining({ userId: 'editor' })
+      );
     });
 
     it('404s a read-only sharee', async () => {
@@ -187,7 +201,7 @@ describe('/api/sessions/[id]/agents/[agentId]/config', () => {
       mockRefs.agentFindAccessibleById.mockResolvedValue(null);
       const { req, res } = invoke('PUT', 'editor', body);
       await expect(mockRefs.putHandler!(req, res)).rejects.toThrow(NotFoundError);
-      expect(mockRefs.update).not.toHaveBeenCalled();
+      expect(mockRefs.updateBySessionAndAgent).not.toHaveBeenCalled();
     });
 
     it('400s (not 404s) when the agent is accessible but not attached to this session', async () => {
@@ -195,7 +209,7 @@ describe('/api/sessions/[id]/agents/[agentId]/config', () => {
       mockRefs.getAttachedAgents.mockResolvedValue([]);
       const { req, res } = invoke('PUT', 'owner', body);
       await expect(mockRefs.putHandler!(req, res)).rejects.toThrow(BadRequestError);
-      expect(mockRefs.update).not.toHaveBeenCalled();
+      expect(mockRefs.updateBySessionAndAgent).not.toHaveBeenCalled();
     });
 
     it('allows an update-permission sharee to create a new config, stamped with their own userId', async () => {
@@ -207,6 +221,33 @@ describe('/api/sessions/[id]/agents/[agentId]/config', () => {
       expect(res._getStatusCode()).toBe(200);
       expect(mockRefs.create).toHaveBeenCalledWith(expect.objectContaining({ userId: 'editor' }));
     });
+  });
+
+  describe('write-time re-check', () => {
+    it.each(['PUT', 'DELETE'] as const)(
+      '%s 404s and writes nothing when access is revoked after the gate',
+      async method => {
+        mockRefs.sessionFindById.mockResolvedValue(UPDATE_SHARED_SESSION);
+        mockRefs.sessionFindUpdateAccessById.mockResolvedValue(null);
+        const { req, res } = invoke(
+          method,
+          'editor',
+          method === 'PUT'
+            ? { proactiveMessaging: { enabled: true, activeHours: { startHour: 9, endHour: 17 } } }
+            : undefined
+        );
+        const run = method === 'PUT' ? mockRefs.putHandler! : mockRefs.deleteHandler!;
+        await expect(run(req, res)).rejects.toThrow(NotFoundError);
+        expect(mockRefs.sessionFindUpdateAccessById).toHaveBeenCalledWith(
+          expect.objectContaining({ id: 'editor' }),
+          'aaaaaaaaaaaaaaaaaaaaaaaa',
+          { includeGlobalWrite: true }
+        );
+        expect(mockRefs.updateBySessionAndAgent).not.toHaveBeenCalled();
+        expect(mockRefs.create).not.toHaveBeenCalled();
+        expect(mockRefs.deleteBySessionAndAgent).not.toHaveBeenCalled();
+      }
+    );
   });
 
   describe('DELETE (write-level)', () => {
