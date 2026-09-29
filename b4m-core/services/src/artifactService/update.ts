@@ -115,8 +115,18 @@ export const update = async (
     };
   }
 
+  // Gated claim before any version or content row is written: a writer revoked (or an artifact
+  // deleted) since the check above is refused here and leaves nothing behind.
+  const claimed = await db.artifacts.updateWithWriteAccess(userId, updateData);
+  if (!claimed) {
+    throw new UnauthorizedError('Write access denied');
+  }
+
   let newVersion = null;
   let newContent = null;
+  let deactivatedVersionId: string | null = null;
+  // Written only after the version and content rows exist, through the same gate.
+  const pointer: Record<string, unknown> = {};
 
   // Handle content update (creates new version)
   if (content !== undefined) {
@@ -159,6 +169,7 @@ export const update = async (
             id: currentVersionDoc._id,
             isActive: false,
           } as any);
+          deactivatedVersionId = currentVersionDoc._id;
         }
       }
 
@@ -175,10 +186,10 @@ export const update = async (
       });
 
       // Update artifact with new version info
-      updateData.version = newVersionNumber;
-      updateData.currentVersionId = newVersion._id;
-      updateData.contentHash = contentHash;
-      updateData.contentSize = contentSize;
+      pointer.version = newVersionNumber;
+      pointer.currentVersionId = newVersion._id;
+      pointer.contentHash = contentHash;
+      pointer.contentSize = contentSize;
     }
   } else if (createNewVersion) {
     // Handle case where we want to create a new version without content changes
@@ -220,6 +231,7 @@ export const update = async (
             id: currentVersionDoc._id,
             isActive: false,
           } as any);
+          deactivatedVersionId = currentVersionDoc._id;
         }
       }
 
@@ -236,13 +248,27 @@ export const update = async (
       });
 
       // Update artifact with new version info
-      updateData.version = newVersionNumber;
-      updateData.currentVersionId = newVersion._id;
+      pointer.version = newVersionNumber;
+      pointer.currentVersionId = newVersion._id;
     }
   }
 
-  // Update the artifact
-  const updatedArtifact = await db.artifacts.update(updateData);
+  let updatedArtifact = claimed;
+  if (newVersion) {
+    const pointed = await db.artifacts.updateWithWriteAccess(userId, { id: artifact.id, ...pointer });
+    if (!pointed) {
+      // Revoked in the few ms since the claim. Undo this save's rows: left in place, the new version
+      // would be served by the versions routes and returned as the active one while the artifact
+      // still points at the previous. Best-effort, not transactional.
+      await db.artifactVersions.delete(String(newVersion._id));
+      if (newContent) await db.artifactContents.delete(String(newContent._id));
+      if (deactivatedVersionId) {
+        await db.artifactVersions.update({ id: deactivatedVersionId, isActive: true } as any);
+      }
+      throw new UnauthorizedError('Write access denied');
+    }
+    updatedArtifact = pointed;
+  }
 
   const result: any = {
     artifact: updatedArtifact,
@@ -255,7 +281,7 @@ export const update = async (
 };
 
 /**
- * Check if user can write to artifact
+ * Check if user can write to artifact. Must stay in sync with ArtifactRepository.updateWithWriteAccess.
  */
 function canUserWriteArtifact(userId: string, artifact: any): boolean {
   // Owner always has write access
