@@ -44,13 +44,14 @@ export const editImageContract = defineEndpoint({
       pollResult: imageQuestPollResult,
     },
     400: {
-      description: '`fabFileIds` is empty, or `organizationId` is not a valid organization id.',
+      description: '`fabFileIds` is empty.',
       schema: ApiErrorSchema,
     },
     404: {
       description:
-        'The session, the quest being retried, or the billing organization does not exist or is not ' +
-        'accessible to the caller.',
+        'The session, or the quest being retried, does not exist or is not accessible to the caller. A ' +
+        'nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an ' +
+        'invalid or inaccessible `organizationId` is `403` instead.',
       schema: ApiErrorSchema,
     },
   },
