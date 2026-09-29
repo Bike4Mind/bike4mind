@@ -20,14 +20,6 @@ const updateConfigSchema = z.object({
 });
 
 /**
- * Agent-level authz + attachment check, shared by all three verbs below: does the caller have
- * access to the agent itself (owner, user-share, or group-share - the same object-level
- * predicate agents.ts's POST agent-attach handler uses), and is that agent actually attached to
- * this session. Independent
- * of the session-level assertSessionAccess call above each one - that only proves the caller
- * belongs to THIS session, not that they may reach THIS agent's config.
- */
-/**
  * Re-check session write access right before a config write. The grant lives on the session and
  * the write is to the config, so it cannot share one filter; this narrows the window since
  * assertSessionAccess to the gap before the write, which is left open (not worth a transaction).
@@ -42,6 +34,14 @@ async function assertStillWritable(
   }
 }
 
+/**
+ * Agent-level authz + attachment check, shared by all three verbs below: does the caller have
+ * access to the agent itself (owner, user-share, or group-share - the same object-level
+ * predicate agents.ts's POST agent-attach handler uses), and is that agent actually attached to
+ * this session. Independent
+ * of the session-level assertSessionAccess call above each one - that only proves the caller
+ * belongs to THIS session, not that they may reach THIS agent's config.
+ */
 async function assertAgentAttached(
   user: Parameters<typeof agentRepository.shareable.findAccessibleById>[0],
   sessionId: string,

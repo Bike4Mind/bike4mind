@@ -111,7 +111,7 @@ const handler = baseApi()
       });
 
       // Only reachable if the quest was deleted between the findBySessionIdAndId check above and
-      // this update (or update() encounters some other unmatched-document case) - report it as a
+      // this update (or updateInSession() encounters some other unmatched-document case) - report it as a
       // real failure rather than a 200 whose data.promptMeta is silently undefined.
       if (!updatedMessage) {
         return res.status(404).json({ error: 'Message not found' });

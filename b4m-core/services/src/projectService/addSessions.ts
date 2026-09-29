@@ -43,8 +43,8 @@ export const addSessions = async (
   // Update-level, not read-level: adding sessions mutates the project and pushes share grants
   // onto the attached sessions/files, so a read grant must not reach it. Normalized to a plain
   // object because this predicate returns a hydrated document where findAccessibleById did not.
-  // Resolved before the session guards so a
-  // bad projectId answers 404 'Project not found' rather than reporting the sessions as inaccessible.
+  // Resolved before the session guards so a bad projectId answers 404 'Project not found' rather
+  // than reporting the sessions as inaccessible.
   const found = await db.projects.shareable.findUpdateAccessById(user, projectId);
   // NotFoundError, not a bare Error: this refusal is routine and user-triggerable - a read-only
   // sharee clicking the button reaches it - and a bare Error is a 500 that pages LiveOps. 404
