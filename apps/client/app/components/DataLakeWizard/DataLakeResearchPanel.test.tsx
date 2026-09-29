@@ -480,6 +480,15 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.getByText(/judged by gpt-4\.1-mini/)).toBeTruthy();
     });
 
+    // The server stamps judgeModel on the first progress write, so the label must not wait for a
+    // terminal status.
+    it('names the judge on a run still in flight', () => {
+      renderPanel({
+        runs: [run({ status: 'running', startedAt: new Date(), completedAt: null, judgeModel: 'gpt-4.1-mini' })],
+      });
+      expect(screen.getByText(/judged by gpt-4\.1-mini/)).toBeTruthy();
+    });
+
     it('shows what a run spent, at a resolution a fraction of a cent survives', () => {
       renderPanel({ runs: [run({ spentMicroUsd: 300 })] });
       expect(screen.getByTestId('datalake-research-run-row').textContent).toMatch(/\$0\.0003/);

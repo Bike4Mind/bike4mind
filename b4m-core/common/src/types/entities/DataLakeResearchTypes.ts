@@ -453,8 +453,11 @@ export interface IDataLakeResearchRunRepository extends IBaseRepository<IDataLak
    * the row was not queued (the executor now owns it), true when it settled.
    */
   settleQueuedRun(id: string, input: SettleResearchRunInput): Promise<boolean>;
-  /** Live progress while the loop runs, so the panel is not blank for a minute. */
-  recordProgress(id: string, spentMicroUsd: number, totals: ResearchRunTotals): Promise<void>;
+  /**
+   * Live progress while the loop runs, so the panel is not blank for a minute. Also stamps the
+   * resolved judge model, so an in-flight run's card can name its judge before the run settles.
+   */
+  recordProgress(id: string, spentMicroUsd: number, totals: ResearchRunTotals, judgeModel: string): Promise<void>;
   /** How many runs a lake started since `since`. Backs the per-lake daily spend cap. */
   countStartedSince(dataLakeId: string, since: Date): Promise<number>;
   /**

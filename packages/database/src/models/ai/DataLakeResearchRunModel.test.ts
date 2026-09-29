@@ -285,10 +285,11 @@ describe('DataLakeResearchRunRepository', () => {
     const created = await repo.createRun(input());
     await repo.claimForExecution(created.id, new Date());
 
-    await repo.recordProgress(created.id, 500, { ...emptyResearchRunTotals(), proposed: 1 });
+    await repo.recordProgress(created.id, 500, { ...emptyResearchRunTotals(), proposed: 1 }, 'gpt-4.1-mini');
 
     const mid = await repo.findByIdInLake(created.id, LAKE);
-    expect(mid).toMatchObject({ status: 'running', spentMicroUsd: 500 });
+    // judgeModel read back from the row: the in-flight card names its judge from this write.
+    expect(mid).toMatchObject({ status: 'running', spentMicroUsd: 500, judgeModel: 'gpt-4.1-mini' });
     expect(mid?.totals.proposed).toBe(1);
   });
 
