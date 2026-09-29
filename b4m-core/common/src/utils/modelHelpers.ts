@@ -41,6 +41,25 @@ export function isBflImageModel(model?: string | null): boolean {
 }
 
 /**
+ * Flux Ultra is the only BFL generation model driven by `aspect_ratio`; the Pro family takes
+ * discrete `width`/`height` and ignores aspect_ratio outright. Must stay in sync with the branch
+ * in `BFLImageService.generate`, which is what actually builds the request body.
+ */
+export function isBflUltraImageModel(model?: string | null): boolean {
+  return model === ImageModels.FLUX_PRO_ULTRA;
+}
+
+/**
+ * Image models sized by discrete `width`/`height` rather than a size string or an aspect ratio.
+ * Deliberately just the Flux Pro generation pair: Ultra takes an aspect ratio, and Fill and
+ * Kontext are dispatched through the edit path, which reads neither. The settings UI and the
+ * generation dispatch both key off this, so they cannot disagree about which controls matter.
+ */
+export function usesDiscreteImageDimensions(model?: string | null): boolean {
+  return model === ImageModels.FLUX_PRO || model === ImageModels.FLUX_PRO_1_1;
+}
+
+/**
  * Image models offering a prompt-enhancement toggle in the UI, where the provider is meant to
  * rewrite and expand the prompt before generating. BFL takes it as `prompt_upsampling` and honors
  * it. Gemini models are still included here for historical/UI-grouping reasons, but
@@ -174,3 +193,14 @@ export function supportsImageEdit(model?: string | null): boolean {
  * billing more than one image before the response can carry more re-opens the overcharge.
  */
 export const IMAGES_PER_EDIT_REQUEST = 1;
+
+/**
+ * Reference ("style anchor") images a single gpt-image request may carry, on top of the
+ * primary input image. OpenAI's images.edit accepts up to 16 for the gpt-image family, but
+ * the cap here is deliberately lower: OpenAIImageCostCalculator prices output only (tier x
+ * size) and image credits are never reconciled after the call, so every input image OpenAI
+ * bills as input tokens is unbilled margin. At 4 that leak is a rounding error; at 16 it is
+ * roughly a free high-tier render per request. Raise it only together with an input-image
+ * term in OpenAIImageCostCalculator.
+ */
+export const MAX_REFERENCE_IMAGES = 4;

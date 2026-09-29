@@ -1,5 +1,6 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { ProxyManager } from './ProxyManager.js';
+import { HttpConnectProxy } from './HttpConnectProxy.js';
 import type { NetworkConfig } from '../types.js';
 
 function enabledConfig(overrides?: Partial<NetworkConfig>): NetworkConfig {
@@ -50,9 +51,87 @@ describe('ProxyManager', () => {
       expect(manager.getPort()).toBe(port);
     });
 
+    it('concurrent starts share one in-flight promise (no orphaned second proxy)', async () => {
+      manager = new ProxyManager(enabledConfig());
+      // Overlapping starts must dedupe on the in-flight promise, not just isRunning():
+      // both would otherwise see isRunning() false and each bind a server, leaking one.
+      const p1 = manager.start();
+      const p2 = manager.start();
+      const p3 = manager.start();
+      expect(p2).toBe(p1);
+      expect(p3).toBe(p1);
+      await Promise.all([p1, p2, p3]);
+      expect(manager.isRunning()).toBe(true);
+      expect(manager.getPort()).toBeGreaterThan(0);
+    });
+
     it('stop when not started is safe', async () => {
       manager = new ProxyManager(enabledConfig());
       await manager.stop(); // should not throw
+    });
+
+    it('stop() waits for an in-flight start() to finish before tearing down', async () => {
+      // Pins the join added for the orphaned-listener leak: stop() must not proceed
+      // while start() is still binding. Gate start() on a manual promise; stop() must
+      // stay pending until it resolves. Without the join, stop() settles immediately.
+      let resolveStart!: (port: number) => void;
+      const gate = new Promise<number>(r => {
+        resolveStart = r;
+      });
+      const startSpy = vi.spyOn(HttpConnectProxy.prototype, 'start').mockReturnValueOnce(gate);
+      const stopSpy = vi.spyOn(HttpConnectProxy.prototype, 'stop').mockResolvedValue(undefined);
+      manager = new ProxyManager(enabledConfig());
+
+      const startP = manager.start();
+      let stopSettled = false;
+      const stopP = manager.stop().then(() => {
+        stopSettled = true;
+      });
+
+      await new Promise(r => setTimeout(r, 10));
+      expect(stopSettled).toBe(false); // still joined to the in-flight start
+
+      resolveStart(0);
+      await Promise.all([startP, stopP]);
+      expect(stopSettled).toBe(true);
+      expect(stopSpy).toHaveBeenCalled();
+      expect(manager.isRunning()).toBe(false);
+
+      startSpy.mockRestore();
+      stopSpy.mockRestore();
+    });
+
+    it('stop() resolves and clears the proxy even when the in-flight start() rejects', async () => {
+      const startSpy = vi.spyOn(HttpConnectProxy.prototype, 'start').mockRejectedValueOnce(new Error('bind failed'));
+      const stopSpy = vi.spyOn(HttpConnectProxy.prototype, 'stop').mockResolvedValue(undefined);
+      manager = new ProxyManager(enabledConfig());
+
+      const startP = manager.start().catch(() => {}); // start rejects; caller swallows
+      await expect(manager.stop()).resolves.toBeUndefined(); // join swallows the rejection
+      await startP;
+
+      expect(manager.isRunning()).toBe(false);
+      expect(manager.getPort()).toBeNull();
+
+      startSpy.mockRestore();
+      stopSpy.mockRestore();
+    });
+
+    it('setEnabled flips the live flag start() honors (real class, happy path)', async () => {
+      // Constructed disabled: start() must no-op until setEnabled(true) flips the
+      // live flag the runtime toggle depends on; observable via isRunning().
+      manager = new ProxyManager({ enabled: false, allowedDomains: ['example.com'] });
+      await manager.start();
+      expect(manager.isRunning()).toBe(false);
+
+      manager.setEnabled(true);
+      await manager.start();
+      expect(manager.isRunning()).toBe(true);
+
+      manager.setEnabled(false);
+      await manager.stop();
+      await manager.start();
+      expect(manager.isRunning()).toBe(false);
     });
   });
 

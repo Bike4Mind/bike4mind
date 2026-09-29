@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -20,6 +20,9 @@ import type {
   IDataLakeResearchConfigDocument,
   IDataLakeResearchRunDocument,
   ResearchRunTotals,
+  ResearchScheduleCadence,
+  ResearchScheduleOutcome,
+  ResearchScheduleSkipReason,
 } from '@bike4mind/common';
 import {
   isResearchRunInFlight,
@@ -33,30 +36,37 @@ import {
   RESEARCH_MAX_RESULTS_LIMIT,
   RESEARCH_MIN_RELEVANCE_DEFAULT,
   RESEARCH_RECENCY_DAYS_LIMIT,
+  RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
+  RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
+  RESEARCH_SCHEDULE_CADENCES,
 } from '@bike4mind/common';
 import type { ResearchConfigInput } from '@client/app/hooks/data/dataLakes';
-
-/** One selectable relevance-judge model, projected from the model catalog by the caller. */
-export interface ResearchModelOption {
-  id: string;
-  name: string;
-}
+import type { ResearchModelOption } from '@client/app/utils/researchJudgeModels';
 
 export interface DataLakeResearchPanelProps {
   configs: IDataLakeResearchConfigDocument[] | undefined;
   runs: IDataLakeResearchRunDocument[] | undefined;
   isLoading: boolean;
   error: unknown;
+  /** The lake's live pending-proposal count - the same number the scheduler compares against each
+   *  config's `reviewBacklogLimit`. Undefined while it has not loaded yet. */
+  pendingProposals?: number;
+  /** Relevance-judge models, already ordered and labelled by `researchJudgeModelOptions`. */
   modelOptions: ResearchModelOption[];
+  /** The "no model chosen" option's label, naming what the run falls back to. */
+  defaultModelLabel?: string;
   isCreating?: boolean;
   /** The config a save, delete or start is in flight for, so only its own row shows busy. */
   savingConfigId?: string | null;
   deletingConfigId?: string | null;
   startingConfigId?: string | null;
-  onCreate: (input: ResearchConfigInput) => void;
-  onUpdate: (configId: string, input: ResearchConfigInput) => void;
+  /** Settles when the save does: the form closes on resolve and keeps the draft on reject. */
+  onCreate: (input: ResearchConfigInput) => Promise<unknown>;
+  onUpdate: (configId: string, input: ResearchConfigInput) => Promise<unknown>;
   onDelete: (configId: string) => void;
   onStartRun: (configId: string) => void;
+  /** Whether the open create/edit form holds edits not yet saved, so the host can confirm before closing. */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 /** Every field a string, because that is what a form holds; conversion happens once, at submit. */
@@ -72,12 +82,33 @@ interface ConfigDraft {
   allowedDomains: string;
   blockedDomains: string;
   proposedTags: string;
+  cadence: ResearchScheduleCadence;
+  reviewBacklogLimit: string;
 }
 
 const microUsdToUsdInput = (micro: number): string => (micro / 1_000_000).toFixed(2);
 
+/**
+ * Full precision, unlike `microUsdToUsdInput`: a saved ceiling can be sub-cent (e.g. $0.004), and
+ * `toFixed(2)` would seed the field with "0.00", which then fails the "above $0" range check and
+ * blocks Save, or rounds up and saves a different ceiling than the one on screen. Micro-USD is an
+ * integer, so `String` on the quotient is exact - JS renders the shortest round-tripping decimal.
+ */
+const microUsdToUsdDraftInput = (micro: number): string => String(micro / 1_000_000);
+
 /** Spend is routinely a fraction of a cent, so two decimals would render every run as $0.00. */
 const formatSpend = (micro: number): string => `$${(micro / 1_000_000).toFixed(4)}`;
+
+const MICRO_USD_PER_CENT = 10_000;
+
+/** A ceiling is a setting, not a tally: whole cents read as money, a sub-cent one keeps its precision. */
+const formatCeiling = (micro: number): string =>
+  micro >= MICRO_USD_PER_CENT && micro % MICRO_USD_PER_CENT === 0
+    ? `$${microUsdToUsdInput(micro)}`
+    : formatSpend(micro);
+
+const pluralize = (count: number, singular: string, plural = `${singular}s`): string =>
+  `${count} ${count === 1 ? singular : plural}`;
 
 const emptyDraft = (): ConfigDraft => ({
   name: '',
@@ -93,6 +124,8 @@ const emptyDraft = (): ConfigDraft => ({
   allowedDomains: '',
   blockedDomains: '',
   proposedTags: '',
+  cadence: 'off',
+  reviewBacklogLimit: String(RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
 });
 
 const draftFromConfig = (config: IDataLakeResearchConfigDocument): ConfigDraft => ({
@@ -103,10 +136,14 @@ const draftFromConfig = (config: IDataLakeResearchConfigDocument): ConfigDraft =
   maxProposals: String(config.maxProposals),
   recencyDays: config.recencyDays == null ? '' : String(config.recencyDays),
   minRelevance: String(config.minRelevance),
-  costCeilingUsd: microUsdToUsdInput(config.costCeilingMicroUsd),
+  costCeilingUsd: microUsdToUsdDraftInput(config.costCeilingMicroUsd),
   allowedDomains: config.allowedDomains.join('\n'),
   blockedDomains: config.blockedDomains.join('\n'),
   proposedTags: config.proposedTags.join(', '),
+  // A config saved before this feature carries neither field on the wire - read that as off/default
+  // rather than leaving the form blank.
+  cadence: config.cadence ?? 'off',
+  reviewBacklogLimit: String(config.reviewBacklogLimit ?? RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
 });
 
 const parseList = (value: string): string[] =>
@@ -137,6 +174,70 @@ const parseNumber = (value: string, fallback: number): number => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
+type DraftErrors = Partial<Record<keyof ConfigDraft, string>>;
+
+/**
+ * The server clamps an out-of-range lever rather than refusing it, so without this check a typo
+ * saves a different config than the one on screen (a $99 ceiling stored as $5.00, -7 days stored as
+ * "no limit"). Blank is valid wherever `draftToInput` gives blank a meaning.
+ */
+const rangeError = (
+  value: string,
+  { min, max, integer, message }: { min: number; max: number; integer: boolean; message: string }
+): string | undefined => {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) return message;
+  if (integer && !Number.isInteger(parsed)) return message;
+  return undefined;
+};
+
+const costCeilingLimitUsd = RESEARCH_COST_CEILING_MICRO_USD_LIMIT / 1_000_000;
+
+const validateDraft = (draft: ConfigDraft): DraftErrors => {
+  const errors: DraftErrors = {
+    maxResults: rangeError(draft.maxResults, {
+      min: 1,
+      max: RESEARCH_MAX_RESULTS_LIMIT,
+      integer: true,
+      message: `Enter a whole number from 1 to ${RESEARCH_MAX_RESULTS_LIMIT}.`,
+    }),
+    maxProposals: rangeError(draft.maxProposals, {
+      min: 1,
+      max: RESEARCH_MAX_PROPOSALS_LIMIT,
+      integer: true,
+      message: `Enter a whole number from 1 to ${RESEARCH_MAX_PROPOSALS_LIMIT}.`,
+    }),
+    recencyDays: rangeError(draft.recencyDays, {
+      min: 1,
+      max: RESEARCH_RECENCY_DAYS_LIMIT,
+      integer: true,
+      message: `Enter a whole number of days from 1 to ${RESEARCH_RECENCY_DAYS_LIMIT}, or leave blank.`,
+    }),
+    minRelevance: rangeError(draft.minRelevance, {
+      min: 0,
+      max: 1,
+      integer: false,
+      message: 'Enter a number from 0 to 1.',
+    }),
+    costCeilingUsd: rangeError(draft.costCeilingUsd, {
+      // The server floors the ceiling at 1 micro-USD; anything that rounds below it is not a ceiling.
+      min: 0.000001,
+      max: costCeilingLimitUsd,
+      integer: false,
+      message: `Enter an amount above $0 and up to $${microUsdToUsdInput(RESEARCH_COST_CEILING_MICRO_USD_LIMIT)}.`,
+    }),
+    reviewBacklogLimit: rangeError(draft.reviewBacklogLimit, {
+      min: 1,
+      max: RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
+      integer: true,
+      message: `Enter a whole number from 1 to ${RESEARCH_REVIEW_BACKLOG_LIMIT_MAX}.`,
+    }),
+  };
+  return Object.fromEntries(Object.entries(errors).filter(([, message]) => message)) as DraftErrors;
+};
+
 const draftToInput = (draft: ConfigDraft): ResearchConfigInput => ({
   name: draft.name.trim(),
   query: draft.query.trim(),
@@ -151,6 +252,8 @@ const draftToInput = (draft: ConfigDraft): ResearchConfigInput => ({
   allowedDomains: parseList(draft.allowedDomains),
   blockedDomains: parseList(draft.blockedDomains),
   proposedTags: parseList(draft.proposedTags),
+  cadence: draft.cadence,
+  reviewBacklogLimit: parseNumber(draft.reviewBacklogLimit, RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
 });
 
 const RUN_STATUS_COLOR = {
@@ -173,10 +276,78 @@ const STOP_REASON_LABEL = {
   time_budget: 'Stopped at the time budget',
 } as const;
 
+/** When a run actually began, falling back to when it was queued - the time its history row shows. */
+const runStartedAt = (run: IDataLakeResearchRunDocument): Date | string => run.startedAt ?? run.createdAt;
+
 const formatWhen = (value: Date | string | null | undefined): string => {
   if (!value) return 'not yet';
   const date = value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime()) ? 'unknown' : date.toLocaleString();
+};
+
+/** The Schedule select's own copy - what a manager picks, not what the card later reports. */
+const CADENCE_OPTION_LABEL: Record<ResearchScheduleCadence, string> = {
+  off: 'Off (Run now only)',
+  daily: 'Daily',
+  weekly: 'Weekly',
+  monthly: 'Monthly',
+};
+
+/** How the schedule line on a config card names its own cadence. No entry for `off` - that line
+ *  never renders for an off config. */
+const SCHEDULE_CADENCE_LABEL: Record<Exclude<ResearchScheduleCadence, 'off'>, string> = {
+  daily: 'daily',
+  weekly: 'weekly',
+  monthly: 'monthly',
+};
+
+/** A config saved before this feature carries neither field on the wire. */
+const configCadence = (config: IDataLakeResearchConfigDocument): ResearchScheduleCadence => config.cadence ?? 'off';
+const configReviewBacklogLimit = (config: IDataLakeResearchConfigDocument): number =>
+  config.reviewBacklogLimit ?? RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT;
+
+/** Why the scheduler skipped a tick, in the manager's terms. No entry for `review_backlog` - the
+ *  paused line above already covers that reason, and repeating it here would say the same thing twice. */
+const SCHEDULE_SKIP_LABEL: Partial<Record<ResearchScheduleSkipReason, string>> = {
+  run_in_progress: 'another run was in progress',
+  daily_cap: 'the lake reached its daily run limit',
+  lake_inactive: 'the data lake is not active',
+};
+
+/**
+ * The one line a config card shows for what the scheduler did the last time this config came due.
+ * Null when there is nothing worth a separate line: a `started` tick needs no comment, and a
+ * `review_backlog` skip is already the paused line above.
+ */
+const scheduleOutcomeMessage = (
+  outcome: ResearchScheduleOutcome | null | undefined
+): { text: string; color: 'danger' | 'neutral' } | null => {
+  if (!outcome) return null;
+  if (outcome.outcome === 'failed') return { text: outcome.error, color: 'danger' };
+  if (outcome.outcome === 'skipped' && outcome.reason !== 'review_backlog') {
+    return {
+      text: `Last scheduled run was skipped: ${SCHEDULE_SKIP_LABEL[outcome.reason]}. It will be retried in about an hour.`,
+      color: 'neutral',
+    };
+  }
+  return null;
+};
+
+/**
+ * How many of this config's most recent PERIODIC runs failed in a row, counting from the newest.
+ * Stops at the first non-failure, so one bad run sandwiched between two good ones reads as zero -
+ * this is a "something is still broken" signal, not a lifetime failure tally.
+ */
+const trailingScheduledFailureCount = (configId: string, runs: IDataLakeResearchRunDocument[] | undefined): number => {
+  const periodic = (runs ?? [])
+    .filter(run => run.configId === configId && run.trigger === 'periodic')
+    .sort((a, b) => new Date(runStartedAt(b)).getTime() - new Date(runStartedAt(a)).getTime());
+  let count = 0;
+  for (const run of periodic) {
+    if (run.status !== 'failed') break;
+    count++;
+  }
+  return count;
 };
 
 /**
@@ -196,7 +367,7 @@ const runStateLabel = (run: IDataLakeResearchRunDocument): keyof typeof RUN_STAT
 const DROP_REASON_LABEL: Record<Exclude<keyof ResearchRunTotals, 'searchHits' | 'proposed'>, string> = {
   filteredBySource: 'blocked by source rules',
   belowRelevance: 'below the relevance floor',
-  judgeFailed: 'could not be judged (the model was unreachable)',
+  judgeFailed: 'could not be judged (the model call failed)',
   alreadyInLake: 'already in the lake',
   duplicatePending: 'already awaiting review',
   suppressedByTombstone: 'previously declined',
@@ -245,7 +416,9 @@ export function DataLakeResearchPanel({
   runs,
   isLoading,
   error,
+  pendingProposals,
   modelOptions,
+  defaultModelLabel = 'Default',
   isCreating,
   savingConfigId,
   deletingConfigId,
@@ -254,34 +427,71 @@ export function DataLakeResearchPanel({
   onUpdate,
   onDelete,
   onStartRun,
+  onDirtyChange,
 }: DataLakeResearchPanelProps) {
   // null = the form is closed; '' = creating; an id = editing that config.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<ConfigDraft>(emptyDraft);
+  const [draftBaseline, setDraftBaseline] = useState<ConfigDraft>(emptyDraft);
+  // Bumped each time the form opens, so a save settling late can tell whether its own session is still
+  // the one on screen. `editingId` cannot: every create is '', and re-editing a row reuses its id.
+  const formSession = useRef(0);
+  const isDirty =
+    editingId !== null && (Object.keys(draft) as (keyof ConfigDraft)[]).some(key => draft[key] !== draftBaseline[key]);
+  // Cleanup reports clean so a dismissed panel cannot leave the host confirming edits that no
+  // longer exist. Must stay in sync with DataLakeSettingsModal: it passes `keepMounted` on this
+  // panel's TabPanel, because an unmount takes the draft with it.
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+    return () => onDirtyChange?.(false);
+  }, [isDirty, onDirtyChange]);
 
   // Age-bounded on purpose: this mirrors the server's own active-run count, so the button unlocks
   // for exactly the lakes a POST would be accepted for rather than staying dead on an abandoned row.
   const runInFlight = useMemo(() => (runs ?? []).some(run => isResearchRunInFlight(run)), [runs]);
   const configById = useMemo(() => new Map((configs ?? []).map(config => [config.id, config])), [configs]);
+  const modelLabelById = useMemo(() => new Map(modelOptions.map(option => [option.id, option.label])), [modelOptions]);
+  // The config's own `lastRunAt` is stamped when the run is queued; the newest run row, when this
+  // page has it, carries the time the run began, which is what the history below shows.
+  const lastRunAtByConfig = useMemo(() => {
+    const latest = new Map<string, Date | string>();
+    for (const run of runs ?? []) {
+      const at = runStartedAt(run);
+      const current = latest.get(run.configId);
+      if (!current || new Date(at).getTime() > new Date(current).getTime()) latest.set(run.configId, at);
+    }
+    return latest;
+  }, [runs]);
   const setField = (field: keyof ConfigDraft) => (value: string) => setDraft(prev => ({ ...prev, [field]: value }));
 
   const openCreate = () => {
     setDraft(emptyDraft());
+    setDraftBaseline(emptyDraft());
     setEditingId('');
+    formSession.current += 1;
   };
   const openEdit = (config: IDataLakeResearchConfigDocument) => {
     setDraft(draftFromConfig(config));
+    setDraftBaseline(draftFromConfig(config));
     setEditingId(config.id);
+    formSession.current += 1;
   };
   const closeForm = () => setEditingId(null);
 
-  const submit = () => {
+  const submit = async () => {
+    const submittedId = editingId;
+    if (submittedId === null) return;
+    const session = formSession.current;
     const input = draftToInput(draft);
-    if (editingId) onUpdate(editingId, input);
-    else onCreate(input);
-    // Closed optimistically: the mutation toasts its own refusal, and leaving the form open on
-    // success would look like the save had not registered.
-    closeForm();
+    try {
+      if (submittedId) await onUpdate(submittedId, input);
+      else await onCreate(input);
+    } catch {
+      // The mutation toasts its own refusal; staying open keeps the draft for a retry.
+      return;
+    }
+    // Only close the form this save came from: it may have been cancelled, or another opened, meanwhile.
+    if (formSession.current === session) closeForm();
   };
 
   if (isLoading) {
@@ -302,6 +512,15 @@ export function DataLakeResearchPanel({
 
   const formOpen = editingId !== null;
   const saveBusy = editingId ? savingConfigId === editingId : !!isCreating;
+  const errors = validateDraft(draft);
+  const missingRequired = !draft.name.trim() || !draft.query.trim();
+  const canSave = !missingRequired && Object.keys(errors).length === 0;
+  const editedConfig = editingId ? configById.get(editingId) : undefined;
+  // A run reads the SAVED config, so running mid-edit would run something other than what is on screen.
+  const hasUnsavedEdits = !!editedConfig && JSON.stringify(draft) !== JSON.stringify(draftFromConfig(editedConfig));
+  // A saved model this picker no longer lists (retired, disabled, filtered) must still render as
+  // selected, or the Select shows blank and a save silently keeps a model nobody can see.
+  const orphanModelId = draft.model && !modelLabelById.has(draft.model) ? draft.model : null;
 
   return (
     <Stack spacing={2} data-testid="datalake-research-panel">
@@ -321,6 +540,13 @@ export function DataLakeResearchPanel({
 
       {configs?.map(config => {
         const busy = savingConfigId === config.id || deletingConfigId === config.id;
+        const unsaved = editingId === config.id && hasUnsavedEdits;
+        const cadence = configCadence(config);
+        const reviewBacklogLimit = configReviewBacklogLimit(config);
+        // Same comparison the scheduler makes, so "paused" here always means the scheduler agrees.
+        const atOrOverBacklogLimit = pendingProposals !== undefined && pendingProposals >= reviewBacklogLimit;
+        const scheduleOutcome = scheduleOutcomeMessage(config.lastScheduledOutcome);
+        const trailingFailures = trailingScheduledFailureCount(config.id, runs);
         return (
           <Box
             key={config.id}
@@ -333,15 +559,61 @@ export function DataLakeResearchPanel({
                   {config.name}
                 </Typography>
                 <Chip size="sm" variant="soft" data-testid="datalake-research-config-limits">
-                  {`Up to ${config.maxProposals} proposals \u00b7 ${formatSpend(config.costCeilingMicroUsd)} ceiling`}
+                  {`Up to ${pluralize(config.maxProposals, 'proposal')} \u00b7 ${formatCeiling(config.costCeilingMicroUsd)} ceiling`}
                 </Chip>
               </Stack>
               <Typography level="body-xs" sx={{ whiteSpace: 'pre-wrap' }} data-testid="datalake-research-config-query">
                 {config.query}
               </Typography>
-              <Typography level="body-xs" textColor="text.tertiary">
-                {`Last run ${formatWhen(config.lastRunAt)}`}
+              <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-config-model">
+                {`Model: ${config.model ? (modelLabelById.get(config.model) ?? config.model) : defaultModelLabel}`}
               </Typography>
+              {config.proposedTags.length > 0 && (
+                <Stack
+                  direction="row"
+                  spacing={0.5}
+                  sx={{ flexWrap: 'wrap', rowGap: 0.5 }}
+                  data-testid="datalake-research-config-tags"
+                >
+                  {config.proposedTags.map(tag => (
+                    <Chip key={tag} size="sm" variant="outlined">
+                      {tag}
+                    </Chip>
+                  ))}
+                </Stack>
+              )}
+              <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-config-last-run">
+                {`Last run ${formatWhen(lastRunAtByConfig.get(config.id) ?? config.lastRunAt)}`}
+              </Typography>
+              {cadence !== 'off' && (
+                <>
+                  <Typography level="body-xs" textColor="text.tertiary" data-testid="research-config-schedule">
+                    {`Runs ${SCHEDULE_CADENCE_LABEL[cadence]} \u00b7 next ${formatWhen(config.nextRunAt)}`}
+                  </Typography>
+                  {atOrOverBacklogLimit && (
+                    <Typography level="body-xs" color="warning" data-testid="research-config-schedule-paused">
+                      {`Scheduled runs are paused: ${pendingProposals} of ${reviewBacklogLimit} pending proposals are ` +
+                        `waiting for review. They resume once the queue is below ${reviewBacklogLimit}.`}
+                    </Typography>
+                  )}
+                  {scheduleOutcome && (
+                    <Typography
+                      level="body-xs"
+                      color={scheduleOutcome.color}
+                      data-testid="research-config-schedule-outcome"
+                    >
+                      {scheduleOutcome.text}
+                    </Typography>
+                  )}
+                  {trailingFailures > 0 && (
+                    <Typography level="body-xs" color="danger" data-testid="research-config-schedule-failures">
+                      {trailingFailures === 1
+                        ? 'Last scheduled run failed'
+                        : `Last ${trailingFailures} scheduled runs failed`}
+                    </Typography>
+                  )}
+                </>
+              )}
               <Stack direction="row" spacing={1}>
                 <Button
                   size="sm"
@@ -349,11 +621,11 @@ export function DataLakeResearchPanel({
                   loading={startingConfigId === config.id}
                   // A lake runs one at a time - the server refuses a second, so the button says so
                   // rather than letting a click earn a refusal toast.
-                  disabled={busy || runInFlight}
+                  disabled={busy || runInFlight || unsaved}
                   onClick={() => onStartRun(config.id)}
                   data-testid="datalake-research-run-btn"
                 >
-                  {runInFlight ? 'Run in progress' : 'Run now'}
+                  {runInFlight ? 'Run in progress' : unsaved ? 'Save changes to run' : 'Run now'}
                 </Button>
                 <Button
                   size="sm"
@@ -376,6 +648,14 @@ export function DataLakeResearchPanel({
                   Delete
                 </Button>
               </Stack>
+              {atOrOverBacklogLimit && (
+                // Shown for every config regardless of cadence: Run now still starts a run, and a
+                // person pressing it has decided to spend - this only makes sure they know the queue
+                // is already behind, never disables the button over it.
+                <Typography level="body-xs" color="warning" data-testid="research-config-run-backlog-warning">
+                  {`${pendingProposals} proposals are already waiting for review; this run will add more.`}
+                </Typography>
+              )}
             </Stack>
           </Box>
         );
@@ -387,7 +667,7 @@ export function DataLakeResearchPanel({
           sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'sm', p: 1.5 }}
         >
           <Stack spacing={1.5}>
-            <FormControl size="sm">
+            <FormControl size="sm" required>
               <FormLabel>Name</FormLabel>
               <Input
                 value={draft.name}
@@ -396,9 +676,12 @@ export function DataLakeResearchPanel({
                   input: { 'data-testid': 'datalake-research-name-input', maxLength: RESEARCH_CONFIG_NAME_MAX_CHARS },
                 }}
               />
+              <FormHelperText data-testid="datalake-research-name-count">
+                {`${draft.name.length}/${RESEARCH_CONFIG_NAME_MAX_CHARS}`}
+              </FormHelperText>
             </FormControl>
 
-            <FormControl size="sm">
+            <FormControl size="sm" required>
               <FormLabel>What to look for</FormLabel>
               <Textarea
                 minRows={2}
@@ -411,8 +694,8 @@ export function DataLakeResearchPanel({
                   },
                 }}
               />
-              <FormHelperText>
-                Used both as the web search and as the question each result is judged against.
+              <FormHelperText data-testid="datalake-research-query-count">
+                {`Used both as the web search and as the question each result is judged against. ${draft.query.length}/${RESEARCH_CONFIG_QUERY_MAX_CHARS}`}
               </FormHelperText>
             </FormControl>
 
@@ -423,10 +706,15 @@ export function DataLakeResearchPanel({
                 onChange={(_e, value) => setField('model')(value ?? '')}
                 slotProps={{ button: { 'data-testid': 'datalake-research-model-select' } }}
               >
-                <Option value="">Default</Option>
+                <Option value="">{defaultModelLabel}</Option>
+                {orphanModelId && (
+                  <Option value={orphanModelId} disabled>
+                    {`${orphanModelId} (not offered for research)`}
+                  </Option>
+                )}
                 {modelOptions.map(option => (
                   <Option key={option.id} value={option.id}>
-                    {option.name}
+                    {option.label}
                   </Option>
                 ))}
               </Select>
@@ -436,6 +724,51 @@ export function DataLakeResearchPanel({
               </FormHelperText>
             </FormControl>
 
+            <FormControl size="sm">
+              <FormLabel>Schedule</FormLabel>
+              <Select
+                value={draft.cadence}
+                onChange={(_e, value) => setDraft(prev => ({ ...prev, cadence: value ?? 'off' }))}
+                slotProps={{ button: { 'data-testid': 'datalake-research-cadence-select' } }}
+              >
+                {RESEARCH_SCHEDULE_CADENCES.map(cadence => (
+                  <Option key={cadence} value={cadence}>
+                    {CADENCE_OPTION_LABEL[cadence]}
+                  </Option>
+                ))}
+              </Select>
+              <FormHelperText>
+                {draft.cadence === 'off'
+                  ? 'Only runs when you press Run now.'
+                  : `Also runs automatically, ${SCHEDULE_CADENCE_LABEL[draft.cadence]}.`}
+              </FormHelperText>
+            </FormControl>
+
+            {draft.cadence !== 'off' && (
+              <FormControl size="sm">
+                <FormLabel>Pause scheduled runs at</FormLabel>
+                <Input
+                  type="number"
+                  value={draft.reviewBacklogLimit}
+                  onChange={e => setField('reviewBacklogLimit')(e.target.value)}
+                  error={!!errors.reviewBacklogLimit}
+                  endDecorator="pending proposals"
+                  slotProps={{
+                    input: {
+                      'data-testid': 'datalake-research-review-backlog-input',
+                      min: 1,
+                      max: RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
+                    },
+                  }}
+                />
+                <FormHelperText>
+                  {errors.reviewBacklogLimit ??
+                    `Scheduled runs skip while the review queue is at or above this many pending proposals. ` +
+                      `1 to ${RESEARCH_REVIEW_BACKLOG_LIMIT_MAX}. Run now is never blocked by this.`}
+                </FormHelperText>
+              </FormControl>
+            )}
+
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
               <FormControl size="sm" sx={{ flex: 1 }}>
                 <FormLabel>Search results</FormLabel>
@@ -443,6 +776,7 @@ export function DataLakeResearchPanel({
                   type="number"
                   value={draft.maxResults}
                   onChange={e => setField('maxResults')(e.target.value)}
+                  error={!!errors.maxResults}
                   slotProps={{
                     input: {
                       'data-testid': 'datalake-research-max-results-input',
@@ -451,7 +785,7 @@ export function DataLakeResearchPanel({
                     },
                   }}
                 />
-                <FormHelperText>{`Up to ${RESEARCH_MAX_RESULTS_LIMIT}`}</FormHelperText>
+                <FormHelperText>{errors.maxResults ?? `Up to ${RESEARCH_MAX_RESULTS_LIMIT}`}</FormHelperText>
               </FormControl>
 
               <FormControl size="sm" sx={{ flex: 1 }}>
@@ -460,6 +794,7 @@ export function DataLakeResearchPanel({
                   type="number"
                   value={draft.maxProposals}
                   onChange={e => setField('maxProposals')(e.target.value)}
+                  error={!!errors.maxProposals}
                   slotProps={{
                     input: {
                       'data-testid': 'datalake-research-max-proposals-input',
@@ -468,7 +803,7 @@ export function DataLakeResearchPanel({
                     },
                   }}
                 />
-                <FormHelperText>{`Up to ${RESEARCH_MAX_PROPOSALS_LIMIT}`}</FormHelperText>
+                <FormHelperText>{errors.maxProposals ?? `Up to ${RESEARCH_MAX_PROPOSALS_LIMIT}`}</FormHelperText>
               </FormControl>
             </Stack>
 
@@ -480,6 +815,7 @@ export function DataLakeResearchPanel({
                   placeholder="Any age"
                   value={draft.recencyDays}
                   onChange={e => setField('recencyDays')(e.target.value)}
+                  error={!!errors.recencyDays}
                   endDecorator="days"
                   slotProps={{
                     input: {
@@ -489,7 +825,7 @@ export function DataLakeResearchPanel({
                     },
                   }}
                 />
-                <FormHelperText>Leave blank for no recency limit.</FormHelperText>
+                <FormHelperText>{errors.recencyDays ?? 'Leave blank for no recency limit.'}</FormHelperText>
               </FormControl>
 
               <FormControl size="sm" sx={{ flex: 1 }}>
@@ -498,11 +834,14 @@ export function DataLakeResearchPanel({
                   type="number"
                   value={draft.minRelevance}
                   onChange={e => setField('minRelevance')(e.target.value)}
+                  error={!!errors.minRelevance}
                   slotProps={{
                     input: { 'data-testid': 'datalake-research-min-relevance-input', min: 0, max: 1, step: 0.05 },
                   }}
                 />
-                <FormHelperText>0 to 1. Below this, a result is never fetched or proposed.</FormHelperText>
+                <FormHelperText>
+                  {errors.minRelevance ?? '0 to 1. Below this, a result is never fetched or proposed.'}
+                </FormHelperText>
               </FormControl>
             </Stack>
 
@@ -512,20 +851,22 @@ export function DataLakeResearchPanel({
                 type="number"
                 value={draft.costCeilingUsd}
                 onChange={e => setField('costCeilingUsd')(e.target.value)}
+                error={!!errors.costCeilingUsd}
                 startDecorator="$"
                 slotProps={{
                   input: {
                     'data-testid': 'datalake-research-cost-ceiling-input',
                     min: 0,
-                    max: RESEARCH_COST_CEILING_MICRO_USD_LIMIT / 1_000_000,
+                    max: costCeilingLimitUsd,
                     step: 0.01,
                   },
                 }}
               />
               <FormHelperText>
-                {`Judgement spend for one run. The run stops when it would exceed this. Maximum $${microUsdToUsdInput(
-                  RESEARCH_COST_CEILING_MICRO_USD_LIMIT
-                )}.`}
+                {errors.costCeilingUsd ??
+                  `Judgement spend for one run. The run stops when it would exceed this. Maximum $${microUsdToUsdInput(
+                    RESEARCH_COST_CEILING_MICRO_USD_LIMIT
+                  )}.`}
               </FormHelperText>
             </FormControl>
 
@@ -539,7 +880,7 @@ export function DataLakeResearchPanel({
                   onChange={e => setField('allowedDomains')(e.target.value)}
                   slotProps={{ textarea: { 'data-testid': 'datalake-research-allowed-input' } }}
                 />
-                <FormHelperText>One per line. Leave blank to allow any site.</FormHelperText>
+                <FormHelperText>One per line, subdomains included. Leave blank to allow any site.</FormHelperText>
               </FormControl>
 
               <FormControl size="sm" sx={{ flex: 1 }}>
@@ -551,7 +892,7 @@ export function DataLakeResearchPanel({
                   onChange={e => setField('blockedDomains')(e.target.value)}
                   slotProps={{ textarea: { 'data-testid': 'datalake-research-blocked-input' } }}
                 />
-                <FormHelperText>Applied after the allow list, and wins over it.</FormHelperText>
+                <FormHelperText>One per line, subdomains included. Wins over the allow list.</FormHelperText>
               </FormControl>
             </Stack>
 
@@ -563,15 +904,17 @@ export function DataLakeResearchPanel({
                 onChange={e => setField('proposedTags')(e.target.value)}
                 slotProps={{ input: { 'data-testid': 'datalake-research-tags-input' } }}
               />
-              <FormHelperText>Suggested on each proposal. You can still change them when you approve.</FormHelperText>
+              <FormHelperText>
+                Shown on each proposal as suggestions only. Approving applies the lake tag, not these.
+              </FormHelperText>
             </FormControl>
 
-            <Stack direction="row" spacing={1}>
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
               <Button
                 size="sm"
                 color="primary"
                 loading={saveBusy}
-                disabled={!draft.name.trim() || !draft.query.trim()}
+                disabled={!canSave}
                 onClick={submit}
                 data-testid="datalake-research-save-btn"
               >
@@ -586,6 +929,11 @@ export function DataLakeResearchPanel({
               >
                 Cancel
               </Button>
+              {!canSave && (
+                <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-save-hint">
+                  {missingRequired ? 'Add a name and what to look for to save.' : 'Fix the highlighted fields to save.'}
+                </Typography>
+              )}
             </Stack>
           </Stack>
         </Box>
@@ -617,15 +965,25 @@ export function DataLakeResearchPanel({
                   >
                     {runStateLabel(run)}
                   </Chip>
+                  {run.trigger === 'periodic' && (
+                    <Chip size="sm" variant="soft" color="neutral" data-testid="research-run-trigger-scheduled">
+                      Scheduled
+                    </Chip>
+                  )}
                   <Typography level="body-xs" data-testid="datalake-research-run-config">
                     {runConfigLabel(run, configById)}
                   </Typography>
                   <Typography level="body-xs" textColor="text.tertiary">
-                    {`${formatWhen(run.startedAt ?? run.createdAt)} \u00b7 ${formatSpend(run.spentMicroUsd)}`}
+                    {`${formatWhen(runStartedAt(run))} \u00b7 ${formatSpend(run.spentMicroUsd)}`}
+                    {run.judgeModel && ` \u00b7 judged by ${run.judgeModel}`}
                   </Typography>
                 </Stack>
-                {run.status === 'failed' && run.error && (
-                  <Typography level="body-xs" color="danger" data-testid="datalake-research-run-error">
+                {run.error && (
+                  <Typography
+                    level="body-xs"
+                    color={run.status === 'failed' ? 'danger' : 'warning'}
+                    data-testid="datalake-research-run-error"
+                  >
                     {run.error}
                   </Typography>
                 )}

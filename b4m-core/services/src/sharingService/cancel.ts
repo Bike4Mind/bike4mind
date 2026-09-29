@@ -7,8 +7,10 @@ import {
   IProjectRepository,
   ISessionDocument,
   IUserDocument,
+  isOrgMember,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters, UnprocessableEntityError } from '@bike4mind/utils';
+import { assertCanManageOrgGroups } from '../organizationService/groupMembership';
 import { z } from 'zod';
 
 const cancelInviteSchema = z.object({
@@ -62,16 +64,19 @@ export const cancelInvite = async (
     const session = await db.sessions.findByIdAndUserId(id, user.id);
     if (!session) throw new NotFoundError('Session not found');
   } else if (type === InviteType.Organization) {
-    const organizationa = user.isAdmin
-      ? await db.organizations.findById(id)
-      : await db.organizations.shareable.findShareAccessById(user, id);
-    if (!organizationa) throw new NotFoundError('Organization not found');
+    const org = await db.organizations.findById(id);
+    if (!org) throw new NotFoundError('Organization not found');
+    if (!isOrgMember(user, org)) throw new NotFoundError('Organization not found');
+    // Authority gate: only billing owner, appointed org admin, or platform admin may cancel org invites.
+    assertCanManageOrgGroups(user, org);
   } else if (type === InviteType.Group) {
     const group = await db.groups.findById(id);
     if (!group) throw new NotFoundError('Group not found');
-
-    const organization = await db.organizations.shareable.findShareAccessById(user, group.organizationId);
-    if (!organization) throw new NotFoundError('Group not found');
+    const org = await db.organizations.findById(group.organizationId);
+    if (!org) throw new NotFoundError('Group not found');
+    if (!isOrgMember(user, org)) throw new NotFoundError('Group not found');
+    // Authority gate: only billing owner, appointed org admin, or platform admin may cancel group invites.
+    assertCanManageOrgGroups(user, org);
   } else if (type === InviteType.Project) {
     // Same share-access predicate the create and list paths use for Project
     // (sharingService/create.ts, authorizeByInviteType.ts).

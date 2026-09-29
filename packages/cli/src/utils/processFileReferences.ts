@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { isPathAllowed } from '@bike4mind/services/llm/tools/cliTools';
 import { isPathWithinCwd, isBinaryFile, MAX_FILE_SIZE, formatFileSize } from './fileSearch.js';
 import { isNameSuffix } from './constants.js';
 
@@ -68,9 +69,19 @@ export function extractFileReferences(message: string): string[] {
 }
 
 /**
- * Read file contents safely
+ * Read file contents safely.
+ *
+ * When `confineTo` is provided (agent-driven references, e.g. the skill tool
+ * expanding `@file` in a model- or repo-authored body), every path - absolute
+ * included - is confined through the shared realpath validator against the
+ * working directory plus those extra allowed dirs, so `@/etc/passwd` is denied.
+ * When it is omitted (a human typing `@path` in the prompt), the legacy
+ * cwd-relative check applies and absolute paths the user typed are honored.
  */
-function readFileContents(filePath: string): { content: string; size: number } | { error: string } {
+function readFileContents(
+  filePath: string,
+  confineTo?: string[]
+): { content: string; size: number } | { error: string } {
   const cwd = process.cwd();
   const isAbsolutePath = path.isAbsolute(filePath);
 
@@ -80,12 +91,17 @@ function readFileContents(filePath: string): { content: string; size: number } |
     return { error: `Security: Path traversal detected in "${filePath}"` };
   }
 
+  // Agent-driven references: confine every path (absolute too) to the allow-list.
+  if (confineTo !== undefined && !isPathAllowed(filePath, confineTo).allowed) {
+    return { error: `Access denied: Cannot read files outside allowed directories: "${filePath}"` };
+  }
+
   // Determine absolute path based on whether input is absolute or relative
   const absolutePath = isAbsolutePath ? path.normalize(filePath) : path.resolve(cwd, filePath);
 
   // For relative paths, additionally verify they resolve within cwd
   // (absolute paths are trusted if they don't contain .. traversal)
-  if (!isAbsolutePath && !isPathWithinCwd(filePath)) {
+  if (confineTo === undefined && !isAbsolutePath && !isPathWithinCwd(filePath)) {
     return { error: `Security: Relative path "${filePath}" escapes the current working directory` };
   }
 
@@ -153,14 +169,14 @@ ${content}
  * Process file references in a message
  * Extracts @path references and injects file contents
  */
-export async function processFileReferences(message: string): Promise<ProcessedMessage> {
+export async function processFileReferences(message: string, confineTo?: string[]): Promise<ProcessedMessage> {
   const references = extractFileReferences(message);
   const errors: string[] = [];
   const fileBlocks: string[] = [];
 
   // Process each reference
   for (const ref of references) {
-    const result = readFileContents(ref);
+    const result = readFileContents(ref, confineTo);
 
     if ('error' in result) {
       errors.push(result.error);

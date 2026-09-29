@@ -1,5 +1,7 @@
 import type {
   IDataLakeAccessGrantRepository,
+  IDataLakeCorpusActionRepository,
+  IDataLakeFindingRepository,
   IDataLakeProposalRepository,
   IDataLakeResearchConfigRepository,
   IDataLakeResearchRunRepository,
@@ -37,11 +39,27 @@ interface CleanupDeletedDataLakeAdapters {
      */
     dataLakeResearchConfigs?: Pick<IDataLakeResearchConfigRepository, 'deleteForLake'>;
     dataLakeResearchRuns?: Pick<IDataLakeResearchRunRepository, 'deleteForLake'>;
+    /**
+     * Optional for the same reason again: the detected-findings rows (#3039) exist only where
+     * detection has run. BOTH sweeps are needed and they are not the same sweep: `deleteForLake`
+     * drops this lake's own rows, while `deleteForPurgedDocuments` drops every OTHER lake's rows
+     * that quote a document step 2 destroys globally (a file can carry two lakes' meta-tags).
+     * The batched form, not the single-id one: this door sweeps a whole lake, inside a fan-out
+     * already chunked for the Lambda budget.
+     */
+    dataLakeFindings?: Pick<IDataLakeFindingRepository, 'deleteForLake' | 'deleteForPurgedDocuments'>;
+    /**
+     * The curator corpus-action trail (#3046). ONE sweep, not two: unlike the findings above, a
+     * row here quotes no prose, so a purged document creates no retention obligation and the
+     * record of what a human did survives its subject. See the repository interface.
+     */
+    dataLakeCorpusActions?: Pick<IDataLakeCorpusActionRepository, 'deleteForLake'>;
     batches: Pick<IDataLakeBatchRepository, 'find' | 'delete'>;
     fabFiles: Pick<
       IFabFileRepository,
       'findIdsByDataLakeTag' | 'hardDeleteOneById' | 'findById' | 'pullTagsByFabFileId'
-    >;
+    > &
+      Required<Pick<IFabFileRepository, 'findStorageKeysByIds'>>;
     fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'clearRetrievalIndexConfirmedByFabFileIds'>;
   };
   retrievalIndex?: RetrievalIndexPort;
@@ -62,18 +80,45 @@ interface CleanupDeletedDataLakeAdapters {
    * is gone, no product surface can reach the connection to release it.
    */
   releaseDriveConnection?: (args: { dataLakeId: string }) => Promise<void>;
+  /**
+   * Release the GitHub repository connection feeding this lake (uninstall the App when it was the
+   * installation's last binding, hard-delete the row). Same reason as releaseDriveConnection: the
+   * row's repositoryId is globally unique and unreachable once the lake is gone. See
+   * releaseGitHubLakeConnectionForLake.
+   */
+  releaseGitHubConnection?: (args: { dataLakeId: string }) => Promise<void>;
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
   /** Bounds peak concurrency of the per-file/per-batch deletes (background consumer sets this). */
   chunkSize?: number;
+  /**
+   * The object store holding each purged file's bytes. Optional for the same reason as the other
+   * cascades above (dataLakeProposals, dataLakeFindings, ...): a host that never wires it is
+   * unaffected structurally, but see the unwired warning below - unlike those cascades, an unwired
+   * store here leaves every purged file's bytes orphaned and still billed, not merely untidy.
+   */
+  storage?: { delete: (path: string) => Promise<unknown> };
 }
 
 /** Default fan-out chunk size - bounds peak Mongo concurrency for a large lake's sweep. */
 const DEFAULT_CLEANUP_CHUNK_SIZE = 100;
 
-/** Run `fn` over `items` in sequential slices of `size`, so peak concurrency stays bounded. */
-async function inChunks<T>(items: T[], size: number, fn: (item: T) => Promise<unknown>): Promise<void> {
+/**
+ * Run `fn` over `items` in sequential slices of `size`, so peak concurrency stays bounded.
+ *
+ * `beforeSlice` runs once per slice, before any of its items, and a rejection aborts with that
+ * whole slice untouched. It exists for work that is naturally batched (one `$in` instead of N
+ * point writes) but must still HAPPEN BEFORE the per-item work it guards.
+ */
+async function inChunks<T>(
+  items: T[],
+  size: number,
+  fn: (item: T) => Promise<unknown>,
+  beforeSlice?: (slice: T[]) => Promise<unknown>
+): Promise<void> {
   for (let i = 0; i < items.length; i += size) {
-    await Promise.all(items.slice(i, i + size).map(fn));
+    const slice = items.slice(i, i + size);
+    if (beforeSlice) await beforeSlice(slice);
+    await Promise.all(slice.map(fn));
   }
 }
 
@@ -85,8 +130,20 @@ async function inChunks<T>(items: T[], size: number, fn: (item: T) => Promise<un
  * deleteMany are no-ops on already-purged data). Fan-outs are chunked (chunkSize) so a large lake
  * stays inside the Lambda timeout. Owner or admin only.
  *
- * Retrieval-index removal is the one step deliberately allowed to abort the sweep, which is why it
- * runs first. See `strictIndexRemove` in ports.ts for that posture and what it does not cover.
+ * Retrieval-index removal runs first and strictly, so a throw there costs no progress. See
+ * `strictIndexRemove` in ports.ts for that posture and what it does not cover. The per-file storage
+ * delete can abort the sweep too, but not at zero cost: other files in the same slice may already be
+ * gone. What it guarantees is narrower - a file whose object was not removed keeps its row.
+ *
+ * Deliberately touches no owner's storage QUOTA: every file this sweep hard-deletes was already
+ * soft-deleted by `deleteDataLake`, which debits each owner's `currentStorageSize` at that point.
+ * `deleteDataLake`'s terminal settle is the only write that puts a lake INTO 'deleted' (a purge
+ * accepted from there can bounce it back via `releasePurgingToDeleted` if the enqueue fails, but
+ * that never re-touches file state or storage, so the debit this sweep relies on already happened
+ * whichever door it re-enters through). Debiting again here would double-count. This is a
+ * different question from whether the underlying storage OBJECTS get deleted, which is what the
+ * optional `storage` adapter below is for - the quota accounting and the bytes it accounts for are
+ * settled by two different steps, at two different times.
  */
 export const cleanupDeletedDataLake = async (
   actor: ManageActor,
@@ -96,8 +153,10 @@ export const cleanupDeletedDataLake = async (
     retrievalIndex,
     shredMemory,
     releaseDriveConnection,
+    releaseGitHubConnection,
     logger,
     chunkSize = DEFAULT_CLEANUP_CHUNK_SIZE,
+    storage,
   }: CleanupDeletedDataLakeAdapters
 ): Promise<void> => {
   const existing = await db.dataLakes.findById(dataLakeId);
@@ -147,6 +206,10 @@ export const cleanupDeletedDataLake = async (
   if (releaseDriveConnection) {
     await releaseDriveConnection({ dataLakeId });
   }
+  // The GitHub repository claim, for the same reason (see 1c).
+  if (releaseGitHubConnection) {
+    await releaseGitHubConnection({ dataLakeId });
+  }
 
   // 2. Hard-delete exactly the ids resolved above, NOT by re-running the membership predicate.
   // Re-resolving would also destroy anything that became a member since - a file the creator
@@ -172,10 +235,85 @@ export const cleanupDeletedDataLake = async (
   // Chunked so a large lake doesn't fan out unbounded (Lambda timeout/memory); both writes are
   // no-ops on already-purged data, so a replay over a partially-swept lake is harmless. Chunk
   // deletion covers soft-deleted files too, since the id list is resolved before any hard delete.
-  await inChunks(fileIds, chunkSize, async id => {
-    await db.fabFiles.hardDeleteOneById(id);
-    await db.fabFileChunks.deleteManyByFabFileId(id);
-  });
+  //
+  // The findings sweep is GLOBAL (`deleteForPurgedDocuments`), not lake-scoped. These rows are
+  // about to be destroyed everywhere, but a file can carry two lakes' meta-tags - there is no
+  // exclusivity check on `addFileToLake`, and the membership filter's arms have no "no other
+  // lake's tag" conjunct - so a sibling lake's finding would otherwise be left quoting a 240-char
+  // excerpt of a document that no longer exists, unresolvable and never re-detectable. Step 4f's
+  // `deleteForLake` cannot reach it: that row belongs to the lake that is NOT being deleted.
+  //
+  // BEFORE the slice's rows go, which is the whole ordering contract. The reverse order strands
+  // findings permanently on an interruption - once a row is gone its id is no longer resolvable by
+  // `findIdsByDataLakeTag`, so a DLQ retry can never name it again. This way an interruption only
+  // costs findings that are still re-detectable from documents that still exist.
+  //
+  // Batched per slice rather than per id - unlike the row/chunk pairing below, which must stay
+  // per id (#2583). One `$in` on the same multikey index replaces `chunkSize` point deletes inside
+  // a fan-out that is chunked for the Lambda budget in the first place. It is equally replay-safe
+  // (the sweep is idempotent and independent of row existence) and marginally MORE atomic: a
+  // rejected batch leaves its whole slice's rows present, so the replay re-resolves every one of
+  // them, where the per-id form could die with half the slice already destroyed.
+  //
+  // The port is optional (a host that never ran detection has no rows), and `?.` means an unwired
+  // host destroys documents with no sweep, no error and no symptom - indistinguishable from a lake
+  // that genuinely had no findings. Say so ONCE per teardown rather than per file: a large lake
+  // would otherwise emit one line per document for a single wiring fact.
+  if (!db.dataLakeFindings && fileIds.length > 0) {
+    logger?.warn('[dataLake] lake teardown is destroying documents with no findings repo wired', {
+      dataLakeId,
+      fileCount: fileIds.length,
+    });
+  }
+  // Same unwired-port shape as the findings warning above, but this gap is a cost leak, not
+  // tidiness: every object below survives, orphaned and still billed, with nothing left afterwards
+  // that names it (the row about to be hard-deleted was the only pointer to it).
+  if (!storage && fileIds.length > 0) {
+    logger?.warn(
+      '[dataLake] lake teardown is destroying documents with no storage adapter wired - their stored objects will be orphaned',
+      {
+        dataLakeId,
+        fileCount: fileIds.length,
+      }
+    );
+  }
+  const isStorageKey = (path: unknown): path is string => typeof path === 'string' && path.length > 0;
+  // Keyed per slice, loaded in `beforeSlice`. Not `findById`: every id here is a soft-deleted row,
+  // which the soft-delete plugin hides from it, so it would return null and delete nothing.
+  let storageKeysById = new Map<string, { filePath?: string; versions?: { filePath?: string }[] }>();
+  await inChunks(
+    fileIds,
+    chunkSize,
+    async id => {
+      // EVERY stored key, not just the current one - an AI-edited file's earlier revisions each sit
+      // under their own object key (see purgeDataLakeDocument.ts, the single-document sibling this
+      // mirrors). Deliberately UNCAUGHT: a throw here aborts the sweep before this row goes, so the
+      // id stays resolvable by findIdsByDataLakeTag on a DLQ retry instead of the row being
+      // hard-deleted over an object that was never removed.
+      if (storage) {
+        const file = storageKeysById.get(id);
+        const currentKey = isStorageKey(file?.filePath) ? file.filePath : null;
+        const versionKeys = Array.from(
+          new Set((file?.versions ?? []).map(version => version?.filePath).filter(isStorageKey))
+        ).filter(path => path !== currentKey);
+        for (const path of versionKeys) {
+          await storage.delete(path);
+        }
+        if (currentKey) {
+          await storage.delete(currentKey);
+        }
+      }
+      await db.fabFiles.hardDeleteOneById(id);
+      await db.fabFileChunks.deleteManyByFabFileId(id);
+    },
+    async slice => {
+      if (storage) {
+        const rows = await db.fabFiles.findStorageKeysByIds(slice);
+        storageKeysById = new Map(rows.map(row => [row.id, row]));
+      }
+      await db.dataLakeFindings?.deleteForPurgedDocuments(slice);
+    }
+  );
 
   // 2b. Whatever the predicate STILL names is exactly that spared mid-sweep joiner, and sparing it
   // is only half a decision: step 5 deletes the lake, so its prefix tag would outlive the lake it
@@ -220,6 +358,17 @@ export const cleanupDeletedDataLake = async (
   // those went with 4c. Idempotent.
   await db.dataLakeResearchConfigs?.deleteForLake(dataLakeId);
   await db.dataLakeResearchRuns?.deleteForLake(dataLakeId);
+
+  // 4f. And the detected findings (#3039). A finding names documents that 4a already hard-deleted,
+  // so nobody could act on it, and its excerpts would outlive the corpus they were quoted from -
+  // the one consequence here that is a data-retention question rather than a tidiness one.
+  // Idempotent.
+  await db.dataLakeFindings?.deleteForLake(dataLakeId);
+
+  // 4g. And this lake's curator corpus-action trail (#3046). Scoped to the lake, with no
+  // per-document sweep: the rows carry ids, a file name and a curator's note rather than document
+  // prose, so unlike 4f this is tidiness, not retention. Idempotent.
+  await db.dataLakeCorpusActions?.deleteForLake(dataLakeId);
 
   // 5. Delete the lake record last, so a mid-sweep failure leaves it recoverable/re-runnable.
   await db.dataLakes.delete(dataLakeId);

@@ -1,6 +1,8 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import { htmlBodyInner, htmlErrorTitle, htmlFirstH1, replaceHtmlTags } from './htmlErrorTitle.js';
+import { isValidSessionId, SESSION_ID_PATTERN } from './validateSessionId.js';
 
 export class Logger {
   private static instance: Logger | null = null;
@@ -22,6 +24,11 @@ export class Logger {
    * Initialize the logger with a session ID
    */
   async initialize(sessionId: string): Promise<void> {
+    // The id becomes a filename below, so validate at this sink too - not only at
+    // the CLI entrypoint - so no caller path reaches it with a traversing value.
+    if (!isValidSessionId(sessionId)) {
+      throw new Error(`Invalid session id "${sessionId}": must match ${SESSION_ID_PATTERN.source}`);
+    }
     this.sessionId = sessionId;
     const debugDir = path.join(os.homedir(), '.bike4mind', 'debug');
 
@@ -259,24 +266,21 @@ export class Logger {
    */
   private parseHtmlError(html: string): string | null {
     // Try to extract error from common patterns
-    const titleMatch = html.match(/<title>(.*?)<\/title>/i);
-    const h1Match = html.match(/<h1>(.*?)<\/h1>/i);
-    const bodyMatch = html.match(/<body[^>]*>(.*?)<\/body>/is);
+    const title = htmlErrorTitle(html);
+    const h1 = htmlFirstH1(html);
+    const body = htmlBodyInner(html);
 
-    if (titleMatch && titleMatch[1] !== 'Error') {
-      return titleMatch[1].trim();
+    if (title !== null) {
+      return title;
     }
 
-    if (h1Match) {
-      return h1Match[1].trim();
+    if (h1 !== null) {
+      return h1.trim();
     }
 
-    if (bodyMatch) {
+    if (body !== null) {
       // Strip HTML tags and get first meaningful line
-      const text = bodyMatch[1]
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
+      const text = replaceHtmlTags(body).replace(/\s+/g, ' ').trim();
       return text.substring(0, 200);
     }
 

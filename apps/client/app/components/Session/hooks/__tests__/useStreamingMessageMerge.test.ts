@@ -336,4 +336,51 @@ describe('useStreamingMessageMerge', () => {
     expect(setChatCompletion).not.toHaveBeenCalled();
     expect(resetStreaming).not.toHaveBeenCalled();
   });
+
+  describe('reconciling a held quest the cache already shows ended', () => {
+    const applyUpdater = (): IChatCompletion => {
+      const updater = setChatCompletion.mock.calls.at(-1)?.[0] as (prev: IChatCompletion) => IChatCompletion;
+      return updater(makeChatCompletion({ quest: makeStreamQuest(), statusMessage: 'Running...' }));
+    };
+
+    it('completes the turn when the refetched cache reads the held quest terminal', () => {
+      renderHook(() =>
+        useStreamingMessageMerge(
+          baseParams({
+            chatCompletion: makeChatCompletion({ quest: makeStreamQuest(), statusMessage: 'Running...' }),
+            flattenQuests: [makeQuest({ status: 'stopped' })],
+          })
+        )
+      );
+
+      const next = applyUpdater();
+      expect(next.completed).toBe(true);
+      expect(next.statusMessage).toBeUndefined();
+      expect(next.quest?.status).toBe('stopped');
+    });
+
+    it('leaves a held quest alone while the cache still reads it running', () => {
+      renderHook(() =>
+        useStreamingMessageMerge(
+          baseParams({
+            chatCompletion: makeChatCompletion({ quest: makeStreamQuest() }),
+            flattenQuests: [makeQuest({ status: 'running' })],
+          })
+        )
+      );
+      expect(setChatCompletion).not.toHaveBeenCalled();
+    });
+
+    it('does nothing once the turn is already complete', () => {
+      renderHook(() =>
+        useStreamingMessageMerge(
+          baseParams({
+            chatCompletion: makeChatCompletion({ completed: true, quest: makeStreamQuest() }),
+            flattenQuests: [makeQuest({ status: 'done' })],
+          })
+        )
+      );
+      expect(setChatCompletion).not.toHaveBeenCalled();
+    });
+  });
 });

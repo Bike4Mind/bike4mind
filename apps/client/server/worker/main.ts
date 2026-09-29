@@ -17,7 +17,10 @@ import { dispatch as imageEditDispatch } from '@server/queueHandlers/imageEdit';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
 import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
+import { runResearchScheduleTick } from '@server/cron/dataLakeResearchSchedule';
 import { SelfHostWorker } from './selfHostWorker';
+import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
+import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { runChunkRescueSweep, runStrandedVectorizeRescue } from './chunkRescueSweep';
 import { runModerationRescueSweep } from '@server/s3/moderationRescueSweep';
@@ -52,10 +55,10 @@ const FAB_FILE_VISIBILITY_TIMEOUT_SEC = 300;
 const IMAGE_VISIBILITY_TIMEOUT_SEC = 660;
 /** Scheduler cadence (hosted cron runs on a schedule; self-host polls the schedule table). */
 const SCHEDULER_INTERVAL_MS = 5 * 60_000;
+/** Research schedule tick, matching the hosted dataLakeResearchScheduleCron's rate. */
+const RESEARCH_SCHEDULE_INTERVAL_MS = 15 * 60_000;
 /** Safety-net scan cadence: catches uploads whose MinIO webhook never arrived. */
 const CHUNK_SCAN_INTERVAL_MS = 60_000;
-/** Matches hosted's daily dataLakeBatchReconcile cron cadence (infra/cron.ts). */
-const DATA_LAKE_BATCH_RECONCILE_INTERVAL_MS = 24 * 60 * 60_000;
 /** Grace period on SIGTERM/SIGINT for in-flight message handling to finish before exit. */
 const DRAIN_GRACE_MS = 20_000;
 
@@ -71,6 +74,8 @@ async function main() {
   bootLogger.info('MongoDB connected');
 
   const worker = new SelfHostWorker(bootLogger);
+  registerAbandonedExecutionSweep(worker);
+  registerQuestTimeoutSweep(worker);
 
   worker.registerQueueHandler('researchEngineQueue', Resource.researchEngineQueue.url, researchEngineDispatch, {
     visibilityTimeoutSec: RESEARCH_VISIBILITY_TIMEOUT_SEC,
@@ -223,8 +228,18 @@ async function main() {
   // Self-host counterpart of the hosted daily dataLakeBatchReconcile cron (infra/cron.ts):
   // without this, a self-host batch that nobody's list-view revisits stays stuck indefinitely
   // now that the timeout is 3 hours instead of 30 minutes. Same shared sweep, same timeout.
-  worker.registerScheduledTask('dataLakeBatchReconcile', DATA_LAKE_BATCH_RECONCILE_INTERVAL_MS, async () => {
-    await runStuckBatchSweep(bootLogger);
+  worker.registerDailyUtcTask(
+    'dataLakeBatchReconcile',
+    5,
+    async () => {
+      await runStuckBatchSweep(bootLogger);
+    },
+    { runOnStartup: true }
+  );
+
+  // Self-host counterpart of the hosted dataLakeResearchScheduleCron (infra/cron.ts), same tick.
+  worker.registerScheduledTask('dataLakeResearchSchedule', RESEARCH_SCHEDULE_INTERVAL_MS, async () => {
+    await runResearchScheduleTick(bootLogger);
   });
 
   // Remote-provider catalog freshness (sec 6.2). The enableModelDiscovery gate,
@@ -249,15 +264,6 @@ async function main() {
   // Held (not fire-and-forget) so shutdown can wait for it: a run abandoned
   // mid-flight strands its Mongo lease until the TTL expires.
   const startupLeg = startDiscoveryOnStartup({ logger: bootLogger, host: 'selfhost' });
-
-  // Same "don't wait a full interval" reasoning as the discovery startup leg above, but not
-  // held for shutdown: each batch transition is an atomic guarded single-document update
-  // (markTerminalIfActive), so an abandoned run leaves no lease behind to strand.
-  runStuckBatchSweep(bootLogger).catch(err => {
-    bootLogger.error('[dataLakeBatchReconcile] startup sweep failed', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-  });
 
   const shutdown = async (signal: string) => {
     bootLogger.info(`${signal} received - draining selfHostWorker (up to ${DRAIN_GRACE_MS}ms)`);

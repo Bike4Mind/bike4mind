@@ -20,8 +20,8 @@ const pickerProps = {
   isLoading: false,
   isError: false,
   onRetry: vi.fn(),
-  selectedLakeId: null,
-  onSelect: vi.fn(),
+  selectedLakeIds: [],
+  onChange: vi.fn(),
   lakeFileCounts: undefined,
   totalFileCount: 0,
 };

@@ -6,16 +6,26 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { CHUNK_STALL_NOTICES, NO_EXTRACTABLE_TEXT_NOTICE, type IFabFileDocument } from '@bike4mind/common';
 import DataLakeArticlePanel from './DataLakeArticlePanel';
 
-const { removeFileMutate, currentUserId } = vi.hoisted(() => ({
+const { removeFileMutate, reprocessMutate, reprocessLakeId, currentUserId, citedAnchor } = vi.hoisted(() => ({
   removeFileMutate: vi.fn(),
+  reprocessMutate: vi.fn(),
+  // Which lake's authority the reprocess hook was armed with - the server authorizes this route on
+  // manage/rebuild rights over THIS id, so a button that fires with the wrong one (or none) is a
+  // 404 the UI cannot explain.
+  reprocessLakeId: { value: null as string | null },
   currentUserId: { value: 'owner-1' },
+  citedAnchor: { value: null as null | { fileId: string; chunkId: string; passage: string } },
 }));
 
 vi.mock('@client/app/hooks/data/fabFiles', () => ({
   useGetFabFileContent: () => ({ data: 'content', isLoading: false }),
+  useGetFabFile: () => ({ data: undefined }),
 }));
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
-  useReprocessFabFile: () => ({ mutate: vi.fn(), isPending: false }),
+  useReprocessFabFile: (dataLakeId: string | null) => {
+    reprocessLakeId.value = dataLakeId;
+    return { mutate: reprocessMutate, isPending: false };
+  },
   useRemoveFileFromDataLake: () => ({ mutate: removeFileMutate, isPending: false }),
   usePurgeDataLakeDocument: () => ({ mutate: vi.fn(), isPending: false }),
 }));
@@ -24,8 +34,22 @@ vi.mock('@client/app/contexts/UserContext', () => ({
     selector ? selector({ currentUser: { id: currentUserId.value } }) : { currentUser: { id: currentUserId.value } },
 }));
 
+// Renders citedPassage as well as content: a mock that drops the prop cannot tell a working
+// passthrough from a panel that never forwards the anchor at all.
 vi.mock('@client/app/components/Knowledge/MarkdownViewer', () => ({
-  default: ({ content }: { content?: string }) => <div data-testid="mock-markdown">{content}</div>,
+  default: ({ content, citedPassage }: { content?: string; citedPassage?: string }) => (
+    <div data-testid="mock-markdown" data-cited-passage={citedPassage ?? ''}>
+      {content}
+    </div>
+  ),
+  UnmarkedCitedPassage: ({ passage }: { passage: string }) => (
+    <div data-testid="markdown-cited-passage-fallback">{passage}</div>
+  ),
+}));
+
+vi.mock('@client/app/hooks/useSessionLayout', () => ({
+  default: (selector?: (s: { citedPassage: unknown }) => unknown) =>
+    selector ? selector({ citedPassage: citedAnchor.value }) : { citedPassage: citedAnchor.value },
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -154,6 +178,9 @@ describe('DataLakeArticlePanel - remove-from-lake copy', () => {
     );
 
     expect(screen.queryByTestId('datalake-removefile-btn-f1')).not.toBeInTheDocument();
+    // Neither flag passed, so the wider gate is absent rather than false - the coercion has to read
+    // that as hidden, not as "enabled by default".
+    expect(screen.queryByTestId('datalake-reprocess-btn-f1')).not.toBeInTheDocument();
   });
 
   it('renders the permanent-deletion door only for a caller who may use it', () => {
@@ -173,5 +200,120 @@ describe('DataLakeArticlePanel - remove-from-lake copy', () => {
       </TestWrapper>
     );
     expect(screen.getByTestId('datalake-purgefile-btn-f1')).toBeInTheDocument();
+  });
+});
+
+/**
+ * The per-file Re-process gate. Its whole reason to exist is the FALLBACK (built-in registry) lake,
+ * where `canManage` is hard-coded false while `canRebuild` is the platform admin - see
+ * `toFallbackConfig`. Every other lake has the two flags equal, so only this shape can tell the
+ * gates apart.
+ */
+describe('DataLakeArticlePanel re-process gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    reprocessLakeId.value = null;
+  });
+
+  it('offers re-process but no membership or deletion action on a fallback lake', () => {
+    // An admin viewing a built-in lake: the server grants reprocess (assertLakeRebuildAccess) and
+    // refuses remove/purge (assertLakeWritable), so the pane must split the same way.
+    render(
+      <TestWrapper>
+        <DataLakeArticlePanel
+          file={file()}
+          dataLakeId="premium-lake"
+          lakeName="Built-in"
+          canManage={false}
+          canRebuild
+          // True for this caller already - it ORs in isAdmin - which is exactly why it must stay
+          // behind canManage. A purge door here would 400 only after the confirmation.
+          canPurge
+        />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('datalake-reprocess-btn-f1')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-removefile-btn-f1')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-purgefile-btn-f1')).not.toBeInTheDocument();
+  });
+
+  it('fires re-process under the authority of the lake being viewed', () => {
+    render(
+      <TestWrapper>
+        <DataLakeArticlePanel file={file()} dataLakeId="premium-lake" lakeName="Built-in" canRebuild />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('datalake-reprocess-btn-f1'));
+
+    expect(reprocessMutate).toHaveBeenCalledWith('f1');
+    expect(reprocessLakeId.value).toBe('premium-lake');
+  });
+
+  it('hides re-process when the caller may manage the lake but not rebuild it', () => {
+    // Guards the coercion, not just the gate: `canRebuild` is absent here rather than false, which
+    // is what a rolling deploy against a server predating the flag actually sends. Fail closed.
+    render(
+      <TestWrapper>
+        <DataLakeArticlePanel file={file()} dataLakeId="lake1" lakeName="Lake" canManage />
+      </TestWrapper>
+    );
+
+    expect(screen.queryByTestId('datalake-reprocess-btn-f1')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-removefile-btn-f1')).toBeInTheDocument();
+  });
+
+  it('offers every action on an ordinary lake, where the two flags agree', () => {
+    render(
+      <TestWrapper>
+        <DataLakeArticlePanel file={file()} dataLakeId="lake1" lakeName="Lake" canManage canRebuild canPurge />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('datalake-reprocess-btn-f1')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-removefile-btn-f1')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-purgefile-btn-f1')).toBeInTheDocument();
+  });
+});
+
+describe('DataLakeArticlePanel cited passage passthrough', () => {
+  beforeEach(() => {
+    citedAnchor.value = null;
+  });
+
+  const anchor = { fileId: 'f1', chunkId: 'chunk-1', passage: 'Holidays accrue monthly.' };
+
+  it('forwards the passage to MarkdownViewer when the anchor is for the open file', () => {
+    citedAnchor.value = anchor;
+
+    render(
+      <TestWrapper>
+        <DataLakeArticlePanel file={file()} dataLakeId="lake1" lakeName="Lake" canManage />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('mock-markdown')).toHaveAttribute('data-cited-passage', 'Holidays accrue monthly.');
+  });
+
+  it('forwards nothing when the anchor points at a DIFFERENT file', () => {
+    citedAnchor.value = { ...anchor, fileId: 'some-other-file' };
+
+    render(
+      <TestWrapper>
+        <DataLakeArticlePanel file={file()} dataLakeId="lake1" lakeName="Lake" canManage />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('mock-markdown')).toHaveAttribute('data-cited-passage', '');
+  });
+
+  it('forwards nothing when no citation anchor is set', () => {
+    render(
+      <TestWrapper>
+        <DataLakeArticlePanel file={file()} dataLakeId="lake1" lakeName="Lake" canManage />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('mock-markdown')).toHaveAttribute('data-cited-passage', '');
   });
 });

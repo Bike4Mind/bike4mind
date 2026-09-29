@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { CreateDataLakeResearchConfigInput } from '@bike4mind/common';
-import { dataLakeResearchConfigRepository as repo } from './DataLakeResearchConfigModel';
+import { RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT } from '@bike4mind/common';
+import { DataLakeResearchConfigModel, dataLakeResearchConfigRepository as repo } from './DataLakeResearchConfigModel';
 import { setupMongoTest } from '../../__test__/utils';
 
 const LAKE = 'lake-1';
@@ -9,6 +10,9 @@ const input = (overrides: Partial<CreateDataLakeResearchConfigInput> = {}): Crea
   dataLakeId: LAKE,
   name: 'Weekly sweep',
   trigger: 'on_demand',
+  cadence: 'off',
+  reviewBacklogLimit: 25,
+  nextRunAt: null,
   createdByUserId: 'user-1',
   query: 'coastal erosion',
   maxResults: 10,
@@ -127,5 +131,83 @@ describe('DataLakeResearchConfigRepository', () => {
     expect(await repo.deleteForLake(LAKE)).toBe(2);
     expect(await repo.listByLake(LAKE)).toHaveLength(0);
     expect(await repo.listByLake('lake-2')).toHaveLength(1);
+  });
+
+  describe('scheduling', () => {
+    const NOW = new Date('2026-03-10T09:05:00.000Z');
+    const LEASE = new Date('2026-03-10T09:20:00.000Z');
+    const scheduled = (nextRunAt: Date, overrides: Partial<CreateDataLakeResearchConfigInput> = {}) =>
+      repo.createConfig(input({ trigger: 'periodic', cadence: 'daily', nextRunAt, ...overrides }));
+
+    // A config saved before scheduling existed has neither field on disk.
+    it('reads a pre-scheduling config as unscheduled with the default review limit', async () => {
+      const { cadence: _cadence, reviewBacklogLimit: _limit, nextRunAt: _next, ...legacyFields } = input();
+      const { insertedId } = await DataLakeResearchConfigModel.collection.insertOne(legacyFields);
+      const legacy = await repo.findByIdInLake(String(insertedId), LAKE);
+      expect(legacy).toMatchObject({ cadence: 'off', reviewBacklogLimit: RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT });
+    });
+
+    it('claims only due, scheduled configs, returning each as it was before the claim', async () => {
+      const due = await scheduled(new Date('2026-03-10T09:00:00.000Z'));
+      await scheduled(new Date('2026-03-10T10:00:00.000Z'));
+      // `off` with a stray nextRunAt must never fire.
+      await scheduled(new Date('2026-03-10T08:00:00.000Z'), { cadence: 'off', trigger: 'on_demand' });
+
+      const claimed = await repo.claimDueConfigs(NOW, LEASE, 10);
+
+      expect(claimed.map(c => c.id)).toEqual([due.id]);
+      expect(claimed[0].nextRunAt).toEqual(new Date('2026-03-10T09:00:00.000Z'));
+      expect((await repo.findByIdInLake(due.id, LAKE))?.nextRunAt).toEqual(LEASE);
+    });
+
+    // The lease is what stops two overlapping ticks from both starting the same config.
+    it('does not hand a claimed config to a second tick while its lease holds', async () => {
+      await scheduled(new Date('2026-03-10T09:00:00.000Z'));
+
+      expect(await repo.claimDueConfigs(NOW, LEASE, 10)).toHaveLength(1);
+      expect(await repo.claimDueConfigs(NOW, LEASE, 10)).toHaveLength(0);
+    });
+
+    it('claims at most the limit, earliest due first', async () => {
+      await scheduled(new Date('2026-03-10T08:30:00.000Z'), { name: 'second' });
+      await scheduled(new Date('2026-03-10T08:00:00.000Z'), { name: 'first' });
+
+      const claimed = await repo.claimDueConfigs(NOW, LEASE, 1);
+
+      expect(claimed.map(c => c.name)).toEqual(['first']);
+    });
+
+    it('records the outcome and next slot', async () => {
+      const config = await scheduled(new Date('2026-03-10T09:00:00.000Z'));
+      const next = new Date('2026-03-11T09:00:00.000Z');
+
+      await repo.recordScheduleOutcome(config.id, 'daily', { outcome: 'started', at: NOW, runId: 'run-1' }, next);
+
+      const stored = await repo.findByIdInLake(config.id, LAKE);
+      expect(stored?.nextRunAt).toEqual(next);
+      expect(stored?.lastScheduledOutcome).toMatchObject({ outcome: 'started', runId: 'run-1' });
+    });
+
+    // A user who switched scheduling off mid-tick must not see it come back on.
+    it('leaves a config alone whose cadence changed since the claim', async () => {
+      const config = await scheduled(new Date('2026-03-10T09:00:00.000Z'));
+      await repo.updateConfig(config.id, LAKE, {
+        cadence: 'off',
+        trigger: 'on_demand',
+        nextRunAt: null,
+        lastUpdatedByUserId: 'user-1',
+      });
+
+      await repo.recordScheduleOutcome(
+        config.id,
+        'daily',
+        { outcome: 'started', at: NOW, runId: 'run-1' },
+        new Date('2026-03-11T09:00:00.000Z')
+      );
+
+      const stored = await repo.findByIdInLake(config.id, LAKE);
+      expect(stored?.nextRunAt).toBeNull();
+      expect(stored?.lastScheduledOutcome).toBeNull();
+    });
   });
 });

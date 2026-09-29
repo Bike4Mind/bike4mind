@@ -3,9 +3,30 @@ import { Box, Text, useInput } from 'ink';
 
 export type PermissionResponse = 'allow-once' | 'allow-session' | 'allow-always' | 'deny';
 
+/**
+ * Escape characters that let model-authored text render differently from what
+ * actually runs, into a visible escape form. The preview and arguments are
+ * model-authored, so the approved text could otherwise differ from what runs.
+ * Two ranges are covered, deliberately and no wider:
+ *   - C0 controls (minus tab/newline) and DEL -> `\xHH`: a raw `\r` or ESC
+ *     sequence could rewrite the line the user is approving.
+ *   - Unicode bidi overrides U+202A..U+202E and isolates U+2066..U+2069
+ *     -> `\uXXXX`: these reorder displayed glyphs without changing the
+ *     underlying code points, spoofing the same way.
+ * Tab and newline are left intact (newline is already the line delimiter).
+ * Widen the scope here, so both call sites gain it at once.
+ */
+export function escapeTerminalControlChars(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\x00-\x08\x0b-\x1f\x7f\u202a-\u202e\u2066-\u2069]/g, ch => {
+    const code = ch.charCodeAt(0);
+    return code > 0xff ? `\\u${code.toString(16).padStart(4, '0')}` : `\\x${code.toString(16).padStart(2, '0')}`;
+  });
+}
+
 /** Render a diff/preview string, color-coding each line by its prefix (see per-branch comments below). */
 function renderDiffPreview(preview: string): React.ReactNode {
-  const lines = preview.split('\n');
+  const lines = escapeTerminalControlChars(preview).split('\n');
 
   return lines.map((line, index) => {
     // Sandbox block header
@@ -196,7 +217,10 @@ export function PermissionPrompt({
         <Box marginTop={1} flexDirection="column">
           <Text bold>Arguments:</Text>
           <Box paddingLeft={2} flexDirection="column">
-            <Text dimColor>{argsString}</Text>
+            {/* Escape at render, after truncation on purpose: escaping first could slice a
+                \xHH sequence in half, and the "N more chars" count would then reflect
+                escaped length, not the real arg length. */}
+            <Text dimColor>{escapeTerminalControlChars(argsString)}</Text>
           </Box>
         </Box>
       )}

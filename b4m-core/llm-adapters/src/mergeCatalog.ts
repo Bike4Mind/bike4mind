@@ -43,10 +43,18 @@ export const DISPATCHABLE_ADAPTER_FAMILIES: readonly string[] = [
   'aws',
 ];
 
-/** operator > discovery > seed, per field group. An unrecognized source ranks
+/** operator > discovery > seed, per field group (presentation is operator > seed >
+ * discovery; see PRESENTATION_PRECEDENCE). An unrecognized source ranks
  * below all three: it still contributes where nothing else does (the lenient
  * read never discards data) but can never outrank a source this build knows. */
 const SOURCE_PRECEDENCE: Record<string, number> = { operator: 3, discovery: 2, seed: 1 };
+
+/**
+ * `presentation` is editorial, so seed copy outranks discovery there: a discovery
+ * row only gap-fills it (releaseDate; see FEED_CLAIMABLE_FIELDS in the discovery
+ * service's catalogWrite.ts) and must not shadow a seed row that lands later.
+ */
+const PRESENTATION_PRECEDENCE: Record<string, number> = { operator: 3, seed: 2, discovery: 1 };
 
 const MODEL_BACKENDS: readonly string[] = Object.values(ModelBackend);
 
@@ -235,9 +243,10 @@ export function resolveCatalogRecords(rows: IModelCatalogRow[]): Map<string, Res
   return resolved;
 }
 
-function outranks(candidate: IModelCatalogRow, incumbent: IModelCatalogRow): boolean {
-  const candidateRank = SOURCE_PRECEDENCE[candidate.source] ?? 0;
-  const incumbentRank = SOURCE_PRECEDENCE[incumbent.source] ?? 0;
+function outranks(candidate: IModelCatalogRow, incumbent: IModelCatalogRow, group: FieldGroup): boolean {
+  const precedence = group === 'presentation' ? PRESENTATION_PRECEDENCE : SOURCE_PRECEDENCE;
+  const candidateRank = precedence[candidate.source] ?? 0;
+  const incumbentRank = precedence[incumbent.source] ?? 0;
   if (candidateRank !== incumbentRank) return candidateRank > incumbentRank;
   return candidate.effectiveFrom.getTime() > incumbent.effectiveFrom.getTime();
 }
@@ -257,7 +266,7 @@ function mergeRows(
       // A group name from a newer schema version claims nothing here.
       if (!isFieldGroup(group)) continue;
       const incumbent = winners.get(group);
-      if (!incumbent || outranks(row, incumbent)) winners.set(group, row);
+      if (!incumbent || outranks(row, incumbent, group)) winners.set(group, row);
     }
   }
 

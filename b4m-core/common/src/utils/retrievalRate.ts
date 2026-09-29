@@ -167,7 +167,7 @@ const emptyRate = (cutoff: number): OptionalPathRetrievalRate => ({
     turns: 0,
     retrievedTurns: 0,
     rate: null,
-    byReason: { attached_files: 0, personal_corpus: 0 },
+    byReason: { attached_files: 0, personal_corpus: 0, no_lake_scope: 0 },
   },
   forcedTurns: 0,
   unclassifiedTurns: 0,

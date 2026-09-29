@@ -164,6 +164,34 @@ describe('GET /api/files/byIds', () => {
     expect((getJson() as Array<{ id: string }>).map(f => f.id)).toEqual([OWNED_ID]);
   });
 
+  describe('ids query shapes', () => {
+    const idsPassedToAcl = () => (listFabFiles.mock.calls[0][1] as { ids: string[] }).ids;
+
+    it('treats a lone ?ids=<id> as a one-element list, not one id per character', async () => {
+      const { res, getJson } = makeRes();
+      await handler({ ...makeReq([]), query: { ids: OWNED_ID } }, res);
+
+      expect(idsPassedToAcl()).toEqual([OWNED_ID]);
+      expect((getJson() as Array<{ id: string }>).map(f => f.id)).toEqual([OWNED_ID]);
+    });
+
+    it.each([
+      ['ids[]', { 'ids[]': [OWNED_ID, LAKE_ID] }],
+      ['ids[0]', { 'ids[0]': OWNED_ID, 'ids[1]': LAKE_ID }],
+      ['repeated ids', { ids: [OWNED_ID, LAKE_ID] }],
+    ])('normalizes the %s form to the same list', async (_label, query) => {
+      await handler({ ...makeReq([]), query }, makeRes().res);
+
+      expect(idsPassedToAcl()).toEqual([OWNED_ID, LAKE_ID]);
+    });
+
+    it('treats a missing ids param as an empty list', async () => {
+      await handler({ ...makeReq([]), query: {} }, makeRes().res);
+
+      expect(idsPassedToAcl()).toEqual([]);
+    });
+  });
+
   it('rejects an id list over the cap before doing any work', async () => {
     const ids = Array.from({ length: 501 }, (_, i) => hexId(String(i % 10)));
     const { res } = makeRes();

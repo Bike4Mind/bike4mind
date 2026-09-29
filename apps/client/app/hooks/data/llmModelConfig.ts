@@ -66,9 +66,11 @@ export function useSaveLLMModelConfigurations(onSuccessCallback?: () => void) {
 }
 
 /**
- * Hook that combines fetching current configurations with model info to create initial configs
+ * Hook that combines fetching current configurations with model info to create initial configs.
+ * `modelInfosPending` should come from the model-info query's own status: inferring it from
+ * missing data reports a failed fetch as loading forever, hiding the no-models warning.
  */
-export function useLLMModelConfigurationsWithDefaults(modelInfos?: ModelInfo[]) {
+export function useLLMModelConfigurationsWithDefaults(modelInfos?: ModelInfo[], modelInfosPending = !modelInfos) {
   const { data: savedConfigurations, isLoading } = useLLMModelConfigurations();
 
   const configurations = useMemo(() => {
@@ -92,7 +94,7 @@ export function useLLMModelConfigurationsWithDefaults(modelInfos?: ModelInfo[]) 
     });
   }, [modelInfos, savedConfigurations, isLoading]);
 
-  return { data: configurations, isLoading: !modelInfos || isLoading };
+  return { data: configurations, isLoading: modelInfosPending || isLoading };
 }
 
 // Default model configuration logic

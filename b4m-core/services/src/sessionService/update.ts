@@ -12,7 +12,12 @@ import {
   SessionUpdateRequestSchema,
 } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
+import { sessionGroundsOnNoLake } from '../dataLakeService/narrowLakeAccessToSession';
 import { deriveRetrievalTagsFromFiles, type DeriveRetrievalTagsAdapters } from './deriveRetrievalTags';
+import {
+  filterAccessibleKnowledgeIds,
+  type FilterAccessibleKnowledgeIdsAdapters,
+} from './filterAccessibleKnowledgeIds';
 import { secureParameters } from '@bike4mind/utils';
 import { BaseStorage, getCachedSignedUrl } from '@bike4mind/utils';
 import uniq from 'lodash/uniq.js';
@@ -53,6 +58,8 @@ interface UpdateSessionAdapters {
   logger?: Logger;
   /** Lets the lake-tag derivation see lake-membership files - see DeriveRetrievalTagsAdapters. */
   resolveLakeAccess?: DeriveRetrievalTagsAdapters['resolveLakeAccess'];
+  /** Lets an added lake-only file pass the access check - see filterAccessibleKnowledgeIds. */
+  resolveAttachmentLakeAccess?: FilterAccessibleKnowledgeIdsAdapters['resolveAttachmentLakeAccess'];
 }
 
 export const updateSession = async (
@@ -62,7 +69,7 @@ export const updateSession = async (
 ) => {
   const { db } = adapters;
   const {
-    knowledgeIds: rawIds,
+    knowledgeIds: requestedIds,
     artifactIds,
     name,
     id,
@@ -70,10 +77,16 @@ export const updateSession = async (
     lastUsedModel,
     forceKnowledgeRetrieval,
     propagateToProjects,
+    lakeScope,
   } = secureParameters(parameters, updateSessionParamtersSchema);
 
+  // Whether this request SPEAKS about the lake scope at all - `[]` and `null` are both statements,
+  // so presence has to be tested rather than truthiness.
+  const lakeScopeRequested = lakeScope !== undefined;
+
   // Dropped, not rejected - a rename PUTs the whole session, so see usableSessionIds.
-  const knowledgeIds = rawIds && usableSessionIds(rawIds, 'knowledge', adapters.logger ?? Logger.globalInstance);
+  const usableIds =
+    requestedIds && usableSessionIds(requestedIds, 'knowledge', adapters.logger ?? Logger.globalInstance);
 
   const session = await db.sessions.shareable.findUpdateAccessById(user, id);
 
@@ -93,7 +106,11 @@ export const updateSession = async (
   // the whole stored list back, and dropping an unusable id from it makes the incoming list differ
   // from the stored one on EVERY such write. A changed-list test would then fire on a rename.
   const alreadyKnown = new Set(session.knowledgeIds ?? []);
-  const addedFileIds = knowledgeIds?.filter(id => !alreadyKnown.has(id)) ?? [];
+  const requestedAdded = usableIds?.filter(id => !alreadyKnown.has(id)) ?? [];
+  // Only the added ids are access-checked, so a rename can never drop a stored file.
+  const addedFileIds = await filterAccessibleKnowledgeIds(user, requestedAdded, adapters);
+  const refused = new Set(requestedAdded.filter(id => !addedFileIds.includes(id)));
+  const knowledgeIds = usableIds?.filter(id => !refused.has(id));
 
   if (addedFileIds.length > 0 && propagateToProjects !== false) {
     await addFilesToProjects(user, { session, fileIds: addedFileIds }, adapters);
@@ -118,8 +135,17 @@ export const updateSession = async (
   // Derives from the whole surviving list, since the scope describes the attached set, not the
   // delta.
   // An explicit lake scope blocks derivation even when it selected NO lake - otherwise attaching a
-  // lake file would hand a scope back to a user who had deliberately cleared it.
-  if (knowledgeIds && addedFileIds.length > 0 && !session.retrievalTags?.length && !session.lakeScopeExplicit) {
+  // lake file would hand a scope back to a user who had deliberately cleared it. That holds for a
+  // scope set by THIS request too, not only a stored one: the picker persists its selection and
+  // the workbench persists its files through the same PUT, so a single write can carry both and
+  // the derived scope would silently overwrite the one the user just chose.
+  if (
+    knowledgeIds &&
+    addedFileIds.length > 0 &&
+    !lakeScopeRequested &&
+    !session.retrievalTags?.length &&
+    !sessionGroundsOnNoLake(session.retrievalTags, session.lakeScopeExplicit)
+  ) {
     const derived = await deriveRetrievalTagsFromFiles(user, knowledgeIds, {
       db: { fabFiles: db.fabFiles },
       logger: adapters.logger,
@@ -136,11 +162,24 @@ export const updateSession = async (
   if (forceKnowledgeRetrieval !== undefined) {
     update.forceKnowledgeRetrieval = forceKnowledgeRetrieval;
   }
+  // The stored pair is always written together, never one half: `lakeScopeExplicit` is the only
+  // thing separating "grounds on no lake" from "never chose", and leaving a stale flag beside a
+  // fresh list inverts the meaning of an empty one. `null` is the caller's way to spell the
+  // second state, since `[]` is already spoken for by the first (see SessionUpdateRequestSchema).
+  if (lakeScopeRequested) {
+    update.retrievalTags = lakeScope ?? [];
+    update.lakeScopeExplicit = lakeScope !== null;
+  }
   update.lastUpdated = new Date();
 
-  const updated = await db.sessions.update(update);
+  // The read above authorizes; the write re-checks, since a share revocation or soft-delete can land
+  // during addFilesToProjects or lake derivation. Same arms as findUpdateAccessById (global write off).
+  const updated = await db.sessions.updateWithUpdateAccess(user, update);
+  if (!updated) {
+    throw new NotFoundError('Session not found');
+  }
 
-  return updated ?? session;
+  return updated;
 };
 
 const addFilesToProjects = async (

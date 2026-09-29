@@ -42,6 +42,7 @@ describe('cloneSession - redaction at the copy boundary', () => {
         fabFiles: {
           shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue([]) },
           search: vi.fn().mockResolvedValue({ data: [] }),
+          findAccessibleInIds: vi.fn().mockResolvedValue([]),
         },
         chatHistories: {
           findAllBySessionId: vi.fn().mockResolvedValue([
@@ -160,6 +161,98 @@ describe('cloneSession - redaction at the copy boundary', () => {
 
     // The copy passes the field through explicitly, so the key is present holding undefined.
     expect(db.sessions.create.mock.calls[0][0].taggedAt).toBeUndefined();
+  });
+
+  /**
+   * `summaryTrigger` is the WHY beside `summaryAt`'s WHEN. A clone already inherits the summary text
+   * and its timestamp - both claims about a run on the SOURCE - so dropping the trigger leaves the
+   * copy claiming a summary with no provenance, the exact state the admin summarization-spend view
+   * exists to read.
+   */
+  it('carries the source session summaryTrigger onto the clone', async () => {
+    const { db } = makeAdapters('caller-1');
+    const summaryAt = new Date('2026-01-01T00:00:00.000Z');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'caller-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      summary: 'the gist',
+      summaryAt,
+      summaryTrigger: 'manual',
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: 'the gist', summaryAt, summaryTrigger: 'manual' })
+    );
+  });
+
+  /**
+   * Like `taggedAt` and unlike the lake scope, the trigger sits OUTSIDE the isOwner gate: it says
+   * how the summary the share holder's copy already carries came to be, and no reachability
+   * question rides on it. Pins that against an edit that reflexively folds it into that gate.
+   */
+  it('carries summaryTrigger even when the caller only holds a share', async () => {
+    const { db } = makeAdapters('owner-1');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'owner-1', // caller-1 holds only a share
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      summary: 'the gist',
+      summaryTrigger: 'project',
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ summaryTrigger: 'project' }));
+  });
+
+  // A source summarized before the field existed must not come out of the copy carrying an invented
+  // provenance; the copy passes the field through explicitly, so the key is present holding undefined.
+
+  /**
+   * A decision-only trigger can no longer be published or stored, but a copy path must not be the
+   * thing that discovers a document holding one: rejecting it in createSessionParametersSchema
+   * would turn a stale row into a 422 that makes the notebook uncopyable. Drop the provenance,
+   * keep the copy.
+   */
+  it('drops a decision-only summaryTrigger instead of failing the clone', async () => {
+    const { db } = makeAdapters('caller-1');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'caller-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      summary: 'the gist',
+      summaryTrigger: 'throttling',
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create.mock.calls[0][0].summaryTrigger).toBeUndefined();
+    expect(db.sessions.create.mock.calls[0][0].summary).toBe('the gist');
+  });
+
+  it('does not fabricate a summaryTrigger when the source has none', async () => {
+    const { db } = makeAdapters('caller-1');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'caller-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      summary: 'the gist',
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create.mock.calls[0][0].summaryTrigger).toBeUndefined();
   });
 
   /**
@@ -330,5 +423,6 @@ describe('cloneSession - redaction at the copy boundary', () => {
     await expect(cloneSession('caller-1', { id: 'session-1' }, { db })).resolves.toBeDefined();
 
     expect(createdSessions[0].knowledgeIds).toEqual([GOOD]);
+    expect(db.fabFiles.findAccessibleInIds).not.toHaveBeenCalled();
   });
 });

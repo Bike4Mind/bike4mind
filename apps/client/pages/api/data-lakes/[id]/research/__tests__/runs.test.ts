@@ -4,8 +4,7 @@ const h = vi.hoisted(() => ({
   assertLakeResearchManage: vi.fn(),
   startResearchRun: vi.fn(),
   listByLake: vi.fn(),
-  settleRun: vi.fn(),
-  sendToQueue: vi.fn(),
+  queueResearchRun: vi.fn(),
   queueUrl: undefined as string | undefined,
 }));
 
@@ -26,12 +25,14 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeResearchConfigRepository: {},
-  dataLakeResearchRunRepository: { listByLake: h.listByLake, settleRun: h.settleRun },
+  dataLakeResearchRunRepository: { listByLake: h.listByLake },
+  lakeConfigChangeEventRepository: {},
+  adminSettingsRepository: {},
 }));
 vi.mock('@server/dataLakes/assertLakeResearchManage', () => ({
   assertLakeResearchManage: h.assertLakeResearchManage,
 }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@server/dataLakes/queueResearchRun', () => ({ queueResearchRun: h.queueResearchRun }));
 vi.mock('sst', () => ({
   Resource: {
     get dataLakeResearchQueue() {
@@ -48,20 +49,22 @@ const makeRes = () => {
 };
 
 const req = (method: string, query: Record<string, string>, body?: unknown) =>
-  ({ method, query, body, user: { id: 'user-1' } }) as never;
+  ({ method, query, body, user: { id: 'user-1' }, logger: { warn: vi.fn(), error: vi.fn() } }) as never;
 
 const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(r, res);
 
-const queuedRun = { id: 'run-1', status: 'queued', totals: { searchHits: 0 } };
+const queuedRun = { id: 'run-1', dataLakeId: 'lake-oid-1', status: 'queued', totals: { searchHits: 0 } };
+const LAKE = { id: 'lake-oid-1', name: 'Ops Lake' };
+const ACTOR = { userId: 'user-1', isAdmin: false, administeredOrgIds: [] };
+const GRANTS: unknown[] = [];
 
 beforeEach(() => {
   vi.clearAllMocks();
   h.queueUrl = 'https://sqs.example/research';
-  h.assertLakeResearchManage.mockResolvedValue({ id: 'lake-oid-1', name: 'Ops Lake' });
+  h.assertLakeResearchManage.mockResolvedValue({ lake: LAKE, actor: ACTOR, grants: GRANTS });
   h.listByLake.mockResolvedValue([queuedRun]);
   h.startResearchRun.mockResolvedValue(queuedRun);
-  h.sendToQueue.mockResolvedValue(undefined);
-  h.settleRun.mockResolvedValue(undefined);
+  h.queueResearchRun.mockResolvedValue(undefined);
 });
 
 describe('GET /api/data-lakes/[id]/research/runs', () => {
@@ -92,11 +95,13 @@ describe('POST /api/data-lakes/[id]/research/runs', () => {
 
     await call(req('POST', { id: 'my-lake' }, { configId: 'config-1' }), res);
 
-    expect(h.startResearchRun).toHaveBeenCalledWith('config-1', 'lake-oid-1', 'user-1', expect.anything());
-    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example/research', {
-      runId: 'run-1',
-      dataLakeId: 'lake-oid-1',
-    });
+    expect(h.startResearchRun).toHaveBeenCalledWith(
+      'config-1',
+      LAKE,
+      { trigger: 'on_demand', actor: ACTOR, grants: GRANTS },
+      expect.anything()
+    );
+    expect(h.queueResearchRun).toHaveBeenCalledWith(queuedRun, LAKE, 'https://sqs.example/research', expect.anything());
     expect(res.status).toHaveBeenCalledWith(202);
     expect(json).toHaveBeenCalledWith({ data: queuedRun });
   });
@@ -111,20 +116,11 @@ describe('POST /api/data-lakes/[id]/research/runs', () => {
     expect(h.startResearchRun).not.toHaveBeenCalled();
   });
 
-  it('settles the row failed when the enqueue itself fails, so it does not hold the guard', async () => {
-    h.sendToQueue.mockRejectedValue(new Error('sqs is down'));
+  it('propagates an enqueue failure rather than answering 202', async () => {
+    h.queueResearchRun.mockRejectedValue(new Error('sqs is down'));
     const { res } = makeRes();
 
     await expect(call(req('POST', { id: 'l' }, { configId: 'config-1' }), res)).rejects.toThrow(/sqs is down/);
-
-    expect(h.settleRun).toHaveBeenCalledWith(
-      'run-1',
-      expect.objectContaining({
-        status: 'failed',
-        spentMicroUsd: 0,
-        error: expect.stringMatching(/could not be queued/i),
-      })
-    );
   });
 
   it('requires a configId', async () => {
@@ -143,6 +139,6 @@ describe('POST /api/data-lakes/[id]/research/runs', () => {
 
     expect(h.listByLake).not.toHaveBeenCalled();
     expect(h.startResearchRun).not.toHaveBeenCalled();
-    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(h.queueResearchRun).not.toHaveBeenCalled();
   });
 });

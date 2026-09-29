@@ -46,6 +46,16 @@ async function findFiles(params: GlobFilesParams, allowedDirectories?: string[])
     throw new Error(`Access denied: Cannot search outside allowed directories. ${dirsMsg}`);
   }
 
+  // Confine the pattern to targetDir: `glob`'s `cwd` does NOT constrain an
+  // absolute pattern or one that climbs out with `..`, so such a pattern would
+  // enumerate the filesystem outside the validated directory. Relative patterns
+  // like `src/**/*.ts` are unaffected.
+  if (path.isAbsolute(pattern) || pattern.split('/').includes('..')) {
+    throw new Error(
+      'Access denied: Cannot search outside allowed directories. The pattern must be relative to the search directory.'
+    );
+  }
+
   const ignorePatterns = respect_git_ignore ? DEFAULT_IGNORE_PATTERNS : [];
 
   const matches = await glob(pattern, {

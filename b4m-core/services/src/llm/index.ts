@@ -41,6 +41,7 @@ export type {
 } from './agents/ServerSubagentOrchestrator';
 export * from './MementoEvaluationService';
 export * from './LakeMemoryExtractionService';
+export * from './LakeContradictionReadingService';
 export * from './SmallLLMService';
 export * from './smallLLMHelpers';
 export * from './reranker';
@@ -58,3 +59,4 @@ export type {
   DagHandoffSignal,
   DagNodeHandle,
 } from './tools/implementation/coordinateTask';
+export * from './toolEchoSources';

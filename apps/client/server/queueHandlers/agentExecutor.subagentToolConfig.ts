@@ -38,6 +38,13 @@ export interface BuildSubagentToolConfigInput {
    * touched the Audio tab; the tool then uses its defaults.
    */
   audioConfig?: Partial<AudioGenerationToolCall>;
+  /**
+   * Signs web_search image URLs for this subagent - see WebSearchToolConfig.imageUrlSigningSecret.
+   * Omit only when the caller genuinely has no secret (performWebSearch then degrades to plain
+   * prose - no image search, no cards prompt - rather than paying for images it can't verify),
+   * never to save a line - see performWebSearch/ChatCompletionProcess.
+   */
+  imageUrlSigningSecret?: string;
 }
 
 export function buildSubagentToolConfig({
@@ -45,12 +52,14 @@ export function buildSubagentToolConfig({
   apiKeyTable,
   imageConfig,
   audioConfig,
+  imageUrlSigningSecret,
 }: BuildSubagentToolConfigInput): NonNullable<BuildSharedToolsOptions['config']> {
   return {
     deep_research: {
       model,
       apiKeys: apiKeyTable,
     },
+    web_search: { imageUrlSigningSecret },
     // Mirror the classic chat path (ChatCompletionProcess.buildTools), which
     // passes `image_generation` + `edit_image` so the tools have a model to
     // run with. Only set when imageConfig is present so a text-only run

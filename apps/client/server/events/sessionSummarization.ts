@@ -15,6 +15,7 @@ import {
 import { OperationsModelService } from '@client/services/operationsModelService';
 import { AiEvents, ChatModelName, IMessage, KnowledgeType, SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
+import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -91,7 +92,10 @@ export const handler = withEventContext(async (event, logger) => {
 
   const content = quests
     .map(quest =>
-      [`Question: ${quest.prompt}`, `Answer: ${quest.reply || quest.replies?.join('\n') || 'No reply'}`].join('\n')
+      [
+        `Question: ${quest.prompt}`,
+        `Answer: ${stripToolOutputMarker(quest.reply || quest.replies?.join('\n') || 'No reply')}`,
+      ].join('\n')
     )
     .join('\n');
 
@@ -187,6 +191,10 @@ export const handler = withEventContext(async (event, logger) => {
     summary: session.summary,
     summaryAt: session.summaryAt,
     summaryModelId: session.summaryModelId,
+    // Provenance for the summary, read back by pages/api/admin/sessions/[id]. There is no
+    // `.save()` on this path, so the assignment above only reaches the database by being named
+    // here - omitting it leaves the field undefined on every document.
+    summaryTrigger: session.summaryTrigger,
   });
 
   // Attempt to create/update the FabFile for RAG indexing.

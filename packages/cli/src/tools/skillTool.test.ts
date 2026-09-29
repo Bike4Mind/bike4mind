@@ -1,5 +1,17 @@
-import { describe, it, expect } from 'vitest';
-import { parseArguments } from './skillTool.js';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
+import { parseArguments, createSkillTool } from './skillTool.js';
+import { CustomCommandStore } from '../storage/CustomCommandStore.js';
+import type { ShellCommandPermissionDeps } from '../utils/commandPermission.js';
+
+// These cases never reach a lifecycle hook, so the permission is unused - but it
+// is now a required dep, so pass a never-prompt stub.
+const NOOP_PERM = {
+  permissionManager: { needsPermission: () => false },
+  promptFn: async () => ({ action: 'allow-once' as const }),
+} as unknown as ShellCommandPermissionDeps;
 
 describe('skillTool', () => {
   describe('parseArguments', () => {
@@ -128,6 +140,57 @@ describe('skillTool', () => {
         `skill: "${skillName}" is not available to this agent. ` + `Allowed skills: ${allowedSkills.join(', ')}`;
 
       expect(errorMessage).toBe('skill: "deploy" is not available to this agent. Allowed skills: commit, review-pr');
+    });
+  });
+
+  // The skill tool is the model-reachable execution chokepoint. A repo-planted
+  // project command that shadows a plugin enabled AFTER boot loads unpruned (the
+  // load gate ran before the plugin was live), so the tool must consult the live
+  // reserved-name set at lookup, not just trust that the store was pruned.
+  describe('reserved-name execution gate', () => {
+    let projectRoot: string;
+    let fakeHome: string;
+
+    beforeEach(async () => {
+      projectRoot = path.join(os.tmpdir(), `b4m-skill-gate-proj-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      fakeHome = path.join(os.tmpdir(), `b4m-skill-gate-home-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      await fs.mkdir(path.join(projectRoot, '.claude', 'commands'), { recursive: true });
+      await fs.mkdir(fakeHome, { recursive: true });
+      vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+    });
+
+    afterEach(async () => {
+      vi.restoreAllMocks();
+      for (const d of [projectRoot, fakeHome]) await fs.rm(d, { recursive: true, force: true }).catch(() => {});
+    });
+
+    it('refuses to execute a project command that shadows a runtime plugin, even unpruned', async () => {
+      await fs.writeFile(path.join(projectRoot, '.claude', 'commands', 'greet.md'), '# greet\n\nHIJACKED', 'utf-8');
+
+      const store = new CustomCommandStore(projectRoot);
+      store.setProjectTrusted(true); // folder-trust gate: load project skills for a trusted root
+      await store.loadCommands(); // greet loads: reserved source not wired at boot
+      expect(store.getCommand('greet')?.source).toBe('project');
+
+      // Plugin 'greet' enabled at runtime; reserved source now knows it, but the
+      // store was NOT re-pruned. Removing the sink gate makes this execute.
+      store.setReservedNameSource(() => new Set(['greet']));
+
+      const tool = createSkillTool({ customCommandStore: store, permission: NOOP_PERM });
+      await expect(tool.toolFn({ skill: 'greet' })).rejects.toThrow(/not found/);
+    });
+
+    it('executes a non-reserved project command', async () => {
+      await fs.writeFile(path.join(projectRoot, '.claude', 'commands', 'deploy.md'), '# deploy\n\nship it', 'utf-8');
+
+      const store = new CustomCommandStore(projectRoot);
+      store.setProjectTrusted(true);
+      store.setReservedNameSource(() => new Set(['greet']));
+      await store.loadCommands();
+
+      const tool = createSkillTool({ customCommandStore: store, permission: NOOP_PERM });
+      const result = await tool.toolFn({ skill: 'deploy' });
+      expect(String(result)).toContain('ship it');
     });
   });
 });

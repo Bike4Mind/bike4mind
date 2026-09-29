@@ -15,6 +15,11 @@ import { auditMongoTestBudget } from '../../../packages/database/src/__test__/au
  * Auditing that by hand only holds until the next suite is added, so the audit lives here: every
  * real-Mongo suite in this shard must declare the shared budget for its tests AND its hooks, and
  * none may pin itself back with a literal.
+ *
+ * The same audit decides the suite's lane. `LANE_INCLUDE` in ../vitest.config.mts routes
+ * `*.e2e.test.ts` to the integration lane and excludes exactly that glob from the unit lane, so a
+ * real-Mongo suite that is not e2e-named runs inline with the unit suite and its mongod cold start
+ * lands on the CI critical path.
  */
 
 const CLIENT_ROOT = path.resolve(__dirname, '..');
@@ -32,6 +37,12 @@ describe('real-Mongo suites in the client shard declare the shared 60s budget', 
     // non-empty and pin the suite the budget was first raised for.
     expect(audit.suites.length).toBeGreaterThan(10);
     expect(audit.suites).toContain('server/services/deleteOrganizationTransaction.e2e.test.ts');
+  });
+
+  it('names every real-Mongo suite *.e2e.test.ts so LANE_INCLUDE routes it to the integration lane', () => {
+    // Membership is by filename only (see LANE_INCLUDE in ../vitest.config.mts): any real-Mongo
+    // suite named otherwise runs in the uncapped unit lane.
+    expect(audit.suites.filter(relativePath => !relativePath.endsWith('.e2e.test.ts'))).toEqual([]);
   });
 
   it('imports MONGO_TEST_TIMEOUT_MS rather than inventing a budget', () => {

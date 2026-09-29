@@ -134,6 +134,7 @@ services:
     image: softwaremill/elasticmq-native
     volumes:
       - ./elasticmq.conf:/opt/elasticmq.conf:ro
+      - sqs-data:/data
     # Loopback-only — ElasticMQ has no auth; never expose it off-host.
     # Override SQS_HOST_PORT / SQS_UI_HOST_PORT if those ports are taken.
     ports:
@@ -175,6 +176,11 @@ services:
       # not on `app` (and it deliberately does NOT depend on `ws`, which depends on `app`).
       chatcompletion:
         condition: service_healthy
+      # No depends_on on `agentexecutor`: it's behind the `agent-executor` profile below, and
+      # depending on a profile-gated service here would force it to always start, defeating the
+      # gate (same reasoning as `opensearch` further down). dispatchAgentExecution.ts already
+      # treats an absent AGENT_EXECUTOR_SERVICE as "agent execution unavailable" at call time, so
+      # app boots normally either way.
     # Override APP_HOST_PORT to serve the app on a different host port.
     ports:
       - '${APP_HOST_PORT:-3000}:3000'
@@ -187,6 +193,44 @@ services:
     # WEBSOCKET_URL / WEBSOCKET_MANAGEMENT_ENDPOINT (.env.selfhost, -> the `ws`
     # gateway below) and uses INTERNAL_WS_SECRET to authenticate the gateway's
     # internal handler calls. Both come from the env file.
+
+  # Container agent execution transport (optional). Runs long-lived agent starts/resumes
+  # dispatched over HTTP by dispatchAgentExecution.ts instead of the hosted Lambda path, which
+  # self-host has no equivalent of. Behind the `agent-executor` profile so an upgrade that
+  # doesn't set AGENT_EXECUTOR_SERVICE never creates this container - agent execution is then
+  # just unavailable and the rest of the app is unaffected. Opt in with:
+  #   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile agent-executor up -d
+  # See "Agent execution service" in SELF_HOST.md.
+  agentexecutor:
+    profiles: ['agent-executor']
+    build:
+      context: .
+      dockerfile: apps/client/Dockerfile.agentexecutor.selfhost
+    env_file:
+      - .env.selfhost
+    environment:
+      PORT: '8080'
+    depends_on:
+      mongo:
+        condition: service_healthy
+      sqs:
+        condition: service_started
+      minio:
+        condition: service_healthy
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "fetch(\"http://localhost:8080/health\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    stop_grace_period: 14m
+    restart: unless-stopped
 
   # Always-on chatCompletion HTTP worker — the self-host equivalent of the hosted Fargate
   # ChatCompletion. The `app` container POSTs created quests to `/process` here
@@ -551,6 +595,7 @@ services:
       start_period: 20s
 
 volumes:
+  sqs-data:
   mongo-data:
   minio-data:
   ollama-data:

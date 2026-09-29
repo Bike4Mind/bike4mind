@@ -10,6 +10,9 @@ import type { CreateSessionAdapters } from './create';
 import type { IUserDocument } from '@bike4mind/common';
 import { UnprocessableEntityError } from '@bike4mind/utils';
 
+/** Every id is readable: these suites are not about the added-id access filter. */
+const allowAllFiles = vi.fn(async (ids: string[]) => ids.map(id => ({ id })));
+
 describe('createSession - agent object-level authz', () => {
   const user = { id: 'attacker' } as IUserDocument;
 
@@ -30,7 +33,7 @@ describe('createSession - agent object-level authz', () => {
         db: {
           sessions: { create },
           projects: {},
-          fabFiles: {},
+          fabFiles: { findAccessibleInIds: allowAllFiles },
           agents: { shareable: { findAllAccessibleByIds } },
           // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape for this unit test
         } as any,
@@ -92,7 +95,7 @@ describe('createSession lake-scope derivation', () => {
         db: {
           sessions: { create: vi.fn(async (d: unknown) => ({ id: 's1', ...(d as object) })) },
           projects: {} as never,
-          fabFiles: { shareable: { findAllAccessibleByIds } } as never,
+          fabFiles: { findAccessibleInIds: allowAllFiles, shareable: { findAllAccessibleByIds } } as never,
           agents: { shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue([]) } } as never,
         },
       },
@@ -177,7 +180,10 @@ function makeAdapters() {
         }),
       },
       projects: {},
-      fabFiles: { shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue([]) } },
+      fabFiles: {
+        findAccessibleInIds: allowAllFiles,
+        shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue([]) },
+      },
       // Authz pass-through: this suite isolates the usableSessionIds drop, so treat every
       // surviving agentId as accessible.
       agents: {
@@ -202,6 +208,28 @@ describe('createSession knowledgeIds validation', () => {
    * Dropped, not rejected: /api/ai/llm forwards client-supplied fabFileIds straight into session
    * creation, so throwing here would fail the whole chat request over one unusable id.
    */
+  it('drops a supplied knowledgeId the caller cannot access', async () => {
+    const FOREIGN = '507f1f77bcf86cd799439012';
+    const { adapters, created } = makeAdapters();
+    adapters.db.fabFiles.findAccessibleInIds = vi.fn(async (ids: string[]) =>
+      ids.filter(id => id === GOOD).map(id => ({ id }))
+    ) as never;
+    await createSession(user, { name: 'ok', knowledgeIds: [FOREIGN, GOOD] }, adapters);
+    expect(created[0].knowledgeIds).toEqual([GOOD]);
+  });
+
+  it('does not re-check ids a copy path carries from its source session', async () => {
+    const FOREIGN = '507f1f77bcf86cd799439012';
+    const { adapters, created } = makeAdapters();
+    const findAccessibleInIds = vi.fn().mockResolvedValue([]);
+    adapters.db.fabFiles.findAccessibleInIds = findAccessibleInIds;
+    await createSession(user, { name: 'copy', knowledgeIds: [FOREIGN] }, adapters, {
+      knowledgeIdsFromSourceSession: true,
+    });
+    expect(created[0].knowledgeIds).toEqual([FOREIGN]);
+    expect(findAccessibleInIds).not.toHaveBeenCalled();
+  });
+
   it('drops an unusable knowledgeId and still creates', async () => {
     const { adapters, created } = makeAdapters();
     await createSession(user, { name: 'ok', knowledgeIds: ['legacy-uuid-not-an-objectid', GOOD] }, adapters);
@@ -259,7 +287,7 @@ describe('createSession forced retrieval from an explicit lake scope', () => {
         db: {
           sessions: { create: vi.fn(async (d: unknown) => ({ id: 's1', ...(d as object) })) },
           projects: {} as never,
-          fabFiles: { shareable: { findAllAccessibleByIds } } as never,
+          fabFiles: { findAccessibleInIds: allowAllFiles, shareable: { findAllAccessibleByIds } } as never,
           agents: { shareable: { findAllAccessibleByIds } } as never,
         },
       },
@@ -336,5 +364,58 @@ describe('createSession taggedAt validation', () => {
     await createSession(user, { name: 'no-tags', taggedAt }, adapters);
     expect(created[0].taggedAt).toBeUndefined();
     expect(created[1].taggedAt).toBeUndefined();
+  });
+});
+
+/**
+ * `summaryTrigger` is the provenance half of the summary trio (`summary`/`summaryAt`/trigger) that
+ * clone/fork/snip carry. Pins both halves of the guarantee create.ts documents on it: kept by
+ * secureParameters, and an out-of-enum value rejected rather than silently dropped - the Mongoose
+ * write runs no validators, so this schema is the only thing standing between a bad trigger and a
+ * stored document.
+ */
+describe('createSession summaryTrigger validation', () => {
+  const user = { id: '67cbd75e2415ca84138fada7' } as IUserDocument;
+
+  it('carries a summaryTrigger onto the persisted payload alongside its summary', async () => {
+    const { adapters, created } = makeAdapters();
+    const summaryAt = new Date('2026-05-01T00:00:00.000Z');
+    await createSession(user, { name: 'ok', summary: 'the gist', summaryAt, summaryTrigger: 'manual' }, adapters);
+    expect(created[0].summary).toBe('the gist');
+    expect(created[0].summaryAt).toEqual(summaryAt);
+    expect(created[0].summaryTrigger).toBe('manual');
+  });
+
+  it('rejects an out-of-enum summaryTrigger instead of silently dropping it', async () => {
+    const { adapters } = makeAdapters();
+    await expect(
+      createSession(
+        user,
+        { name: 'ok', summaryTrigger: 'milestone' } as unknown as Parameters<typeof createSession>[1],
+        adapters
+      )
+    ).rejects.toThrow(UnprocessableEntityError);
+  });
+
+  /**
+   * 'throttling' is in the enum but is the one member no document may carry: shouldSummarizeSession
+   * returns it as the reason it DECLINED to summarize. It stays assignable here because
+   * ISessionDocument types the field with it, so only a runtime check can keep it off a write.
+   */
+  it('rejects the throttling trigger, which names a summarization that never happened', async () => {
+    const { adapters } = makeAdapters();
+    await expect(
+      createSession(user, { name: 'ok', summary: 'the gist', summaryTrigger: 'throttling' }, adapters)
+    ).rejects.toThrow(UnprocessableEntityError);
+  });
+
+  /**
+   * Unlike `taggedAt`, an unpaired trigger is deliberately NOT scrubbed: `summaryAt` has no such
+   * guard either, and a guard on one member of the trio alone would make the three inconsistent.
+   */
+  it('does not fabricate a summaryTrigger when the caller passes none', async () => {
+    const { adapters, created } = makeAdapters();
+    await createSession(user, { name: 'no-trigger', summary: 'the gist' }, adapters);
+    expect(created[0].summaryTrigger).toBeUndefined();
   });
 });

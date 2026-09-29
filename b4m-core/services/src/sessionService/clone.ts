@@ -6,6 +6,7 @@ import {
   PromptMeta,
   rebindPromptMetaSession,
   redactPromptMetaForViewer,
+  toPersistedSummaryTrigger,
 } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
@@ -56,6 +57,7 @@ export const cloneSession = async (
     tags: session.tags ?? [],
     summary: session.summary,
     summaryAt: session.summaryAt,
+    summaryTrigger: toPersistedSummaryTrigger(session.summaryTrigger),
     taggedAt: session.taggedAt,
     clonedSourceId: session.id,
     // Carried from the source, not re-derived: the owner's scope is already correct and explicit,
@@ -96,7 +98,9 @@ export const cloneSession = async (
   // CreateSessionAdapters and clone previously dropped them here, so a non-owner's derivation ran
   // with no lake arm and - crucially - no intersection, persisting a tag for a lake they may not
   // reach. fork/snip already forwarded; this brings clone in line.
-  const clonedSession = await createSession(user, buildCloneSession, adapters);
+  const clonedSession = await createSession(user, buildCloneSession, adapters, {
+    knowledgeIdsFromSourceSession: true,
+  });
 
   const messagesToClone = await db.chatHistories.findAllBySessionId(id);
 

@@ -1,3 +1,5 @@
+import { LOCATION_MAP_LANGUAGE, SEARCH_RESULT_CARDS_LANGUAGE } from '@bike4mind/common';
+
 /**
  * Anti-fabrication clause for the grounded/data-lake retrieval path, shared byte-identically by the
  * surfaces that put retrieved knowledge-base content in front of the model:
@@ -136,3 +138,60 @@ ${tools.map(t => `\`${t}\``).join(', ')}
 3. DO NOT show the \`_confirmToken\` value — it is internal only.
 The system will automatically add Confirm/Cancel buttons and format the preview.`;
 }
+
+/**
+ * Teaches the `b4m_cards` fence, appended to a web_search result ONLY when that search actually
+ * returned images (see shouldIncludeImages). Delivering it with the results rather than in the system
+ * prompt costs nothing on the turns that will never use it, and arrives exactly when it is actionable.
+ *
+ * The field names must stay in sync with the parser in
+ * apps/client/app/components/Session/parseSearchResultCards.ts; the fence language is shared.
+ */
+export const WEB_SEARCH_CARDS_PROMPT = [
+  'The results above include images, so illustrate your answer - do not wait to be asked. When you name specific',
+  `things the user would want to SEE, emit a \`\`\`${SEARCH_RESULT_CARDS_LANGUAGE} fenced block inline in your reply, placed`,
+  'exactly where the pictures belong - right after the sentence that introduces them, not at the end.',
+  'The block is a single JSON object:',
+  '',
+  `\`\`\`${SEARCH_RESULT_CARDS_LANGUAGE}`,
+  '{"cards":[{"name":"Orient Bambino","note":"Your own description of this thing, in your voice.",',
+  '"meta":"~$200","url":"https://orientwatch.co/bambino","images":[',
+  '{"url":"https://example.com/a.jpg","source":"orientwatch.co"},',
+  '{"url":"https://example.com/b.jpg","source":"jomashop"}]}]}',
+  '```',
+  '',
+  'Rules: `name` and at least one `images` entry are required. Every image `url` must be copied verbatim',
+  "from an `image:` or Images line above, never invented or guessed, and `source` is that entry's own",
+  '`source`/hostname, so each picture is attributed. Prefer the "Images found for this search" pool:',
+  'those carry their own page and publisher. `note` is YOUR prose about the thing, not the',
+  'search snippet. `meta` is a short footer such as a price or key spec. `url` is where the card links.',
+  'Two to six cards is the useful range. Keep writing normally around the block - it replaces neither',
+  'your explanation nor your citations. Omit the block only if the results genuinely have no images',
+  'worth showing; never tell the user you could show pictures if they asked - just show them.',
+].join('\n');
+
+/**
+ * Teaches the `b4m_map` fence, appended to a web_search result ONLY when that search returned places
+ * with provider coordinates (see shouldIncludePlaces). The fence names places by id alone, so the
+ * model never writes a coordinate - the client resolves each id against the stored place citables.
+ *
+ * The field names must stay in sync with parseLocationMapFence in
+ * b4m-core/common/src/constants/locationMap.ts.
+ */
+export const WEB_SEARCH_MAP_PROMPT = [
+  'The results above include places with map locations, so show them on a map - do not wait to be asked.',
+  `Emit one \`\`\`${LOCATION_MAP_LANGUAGE} fenced block inline in your reply, placed where the map belongs - right`,
+  'after the sentence that introduces the places. The block is a single JSON object:',
+  '',
+  `\`\`\`${LOCATION_MAP_LANGUAGE}`,
+  '{"anchor":{"id":"<anchor id>","name":"citizenM Copenhagen","label":"Your hotel"},',
+  '"places":[{"id":"<place id>","name":"Barr","note":"Your own one-line take on this place."}]}',
+  '```',
+  '',
+  'Rules: every `id` must be copied verbatim from an `id:` line above - never invent one, and never write',
+  'coordinates; the map locates each place from its id. `name` is the place name as listed. `note` is',
+  'YOUR short line about why it fits the request. Include `anchor` only when an "Anchor location" is listed',
+  'above, with a short `label` for what it is to the user ("Your hotel", "Your office"). List the places',
+  'worth recommending, three to ten. Keep writing normally around the block - it does not replace your',
+  'explanation or citations. Omit it only if none of the places actually answer the question.',
+].join('\n');

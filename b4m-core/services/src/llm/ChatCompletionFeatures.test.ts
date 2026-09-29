@@ -414,19 +414,32 @@ describe('shouldSummarizeSession', () => {
 describe('KnowledgeRetrievalFeature citation styles', () => {
   // Two source documents; file A contributes two chunks (both ranked above file B's)
   // so the indexed style must give both A-sections the SAME number and B the next.
-  const makeRetrievalContext = () => {
-    // fileA carries a date and fileB deliberately does not, so the passage-date test (#2236) covers
-    // both the present and the absent case on one run.
-    const files = [
+  const makeRetrievalContext = (
+    overrides: {
+      chunkText?: Record<string, string>;
+      charBudget?: number;
+      /** Per-file `documentDate` (#3048) override, keyed by file id - absent files stay undated. */
+      documentDates?: Record<string, Date | null>;
+    } = {}
+  ) => {
+    // fileA deliberately carries a `createdAt` (its upload time) and fileB does not, so the
+    // undated-heading test below proves the heading ignores it rather than merely lacking one.
+    const baseFiles = [
       { id: 'fileA', fileName: 'NCCN NSCLC v3.2026.pdf', tags: [], createdAt: new Date('2026-08-14T09:30:00.000Z') },
       { id: 'fileB', fileName: 'Cortes NEJM 2024.pdf', tags: [] },
     ];
+    const files = baseFiles.map(file =>
+      overrides.documentDates && file.id in overrides.documentDates
+        ? { ...file, documentDate: overrides.documentDates[file.id] }
+        : file
+    );
+    const textOf = (chunkId: string, fallback: string) => overrides.chunkText?.[chunkId] ?? fallback;
     const chunksByFile: Record<string, unknown[]> = {
       fileA: [
-        { id: 'chA1', fabFileId: 'fileA', text: 'chunk A1', vector: [1, 0] },
-        { id: 'chA2', fabFileId: 'fileA', text: 'chunk A2', vector: [0.95, 0.05] },
+        { id: 'chA1', fabFileId: 'fileA', text: textOf('chA1', 'chunk A1'), vector: [1, 0] },
+        { id: 'chA2', fabFileId: 'fileA', text: textOf('chA2', 'chunk A2'), vector: [0.95, 0.05] },
       ],
-      fileB: [{ id: 'chB1', fabFileId: 'fileB', text: 'chunk B1', vector: [0.9, 0.1] }],
+      fileB: [{ id: 'chB1', fabFileId: 'fileB', text: textOf('chB1', 'chunk B1'), vector: [0.9, 0.1] }],
     };
     return {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
@@ -438,10 +451,14 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
           findByFabFileId: vi.fn(),
           findVectorsByFabFileIds: vi.fn((ids: string[]) => Promise.resolve(ids.flatMap(id => chunksByFile[id] ?? []))),
         },
-        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
+        adminSettings: {
+          getSettingsValue: vi.fn((setting: string) =>
+            Promise.resolve(setting === 'forcedRetrievalCharBudget' ? overrides.charBudget : undefined)
+          ),
+        },
       },
       // Resolver injected by ChatCompletionProcess; no entitlements in these citation tests.
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -451,8 +468,11 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
   };
 
-  const runRetrieval = async (citationStyle?: 'named' | 'indexed') => {
-    const ctx = makeRetrievalContext();
+  const runRetrieval = async (
+    citationStyle?: 'named' | 'indexed',
+    contextOverrides?: Parameters<typeof makeRetrievalContext>[0]
+  ) => {
+    const ctx = makeRetrievalContext(contextOverrides);
     const feature = new KnowledgeRetrievalFeature(
       ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
       undefined,
@@ -476,29 +496,45 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
   });
 
   /**
-   * #2236. Without a date in the heading a model asked to prefer the newer of two conflicting
-   * passages has nothing to prefer on. Asserted on the forced arm specifically because it is the
-   * always-on injection site - a `forceKnowledgeRetrieval` session uses this one every turn.
+   * `fileA` carries a `createdAt`, which is the upload time and NOT when the guideline it holds was
+   * published. Asserted on the forced arm specifically because it is the always-on injection site -
+   * a `forceKnowledgeRetrieval` session uses this one every turn, so a date reinstated here reaches
+   * the model on every grounded turn. The `\n` pins the end of the heading, so a clause appended
+   * after the parenthetical fails this rather than slipping past a bare substring match.
    */
-  it('heads a dated document with its date, and omits the clause entirely when there is none', async () => {
+  it('heads a document undated even when the file carries an upload timestamp', async () => {
     const { content } = await runRetrieval('indexed');
-    expect(content).toContain('### [1] NCCN NSCLC v3.2026.pdf (ID: fileA) - dated 2026-08-14');
-    // fileB has no createdAt: no empty clause, no "dated undefined", no trailing separator.
+    expect(content).toContain('### [1] NCCN NSCLC v3.2026.pdf (ID: fileA)\n');
     expect(content).toContain('### [2] Cortes NEJM 2024.pdf (ID: fileB)\n');
-    expect(content).not.toContain('dated undefined');
-    expect(content).not.toContain('dated null');
+    expect(content).not.toMatch(/dated|2026-08-14/);
   });
 
-  it('carries the date on the named style too, so the two citation styles cannot drift', async () => {
+  it('heads the named style undated too, so the two citation styles cannot drift', async () => {
     const { content } = await runRetrieval();
-    expect(content).toContain('### NCCN NSCLC v3.2026.pdf (ID: fileA) - dated 2026-08-14');
+    expect(content).toContain('### NCCN NSCLC v3.2026.pdf (ID: fileA)\n');
+    expect(content).not.toMatch(/dated|2026-08-14/);
   });
 
-  it('leaves the date outside toContentLabel, which would be a no-op on it anyway', async () => {
-    const { content } = await runRetrieval('indexed');
-    // The date is digits and separators only, so it survives verbatim - and the `[N]` the indexed
-    // citation contract depends on is still intact beside it.
-    expect(content).toMatch(/### \[1\] .*\(ID: fileA\) - dated \d{4}-\d{2}-\d{2}/);
+  /**
+   * Regression guard for #3047/#3113: a previous attempt at dated headers silently dropped the
+   * date on this exact (always-on) surface. `documentDate` (#3048) is the document's own authored
+   * vintage, not `createdAt` above - both citation styles must carry it identically.
+   */
+  it('appends the document date clause to both citation styles when the file carries a documentDate (#3048)', async () => {
+    const documentDates = { fileA: new Date('2019-03-04T00:00:00.000Z') };
+    const indexed = await runRetrieval('indexed', { documentDates });
+    expect(indexed.content).toContain('### [1] NCCN NSCLC v3.2026.pdf (ID: fileA) - dated 2019-03-04\n');
+    // fileB carries no override, so it stays undated - the clause is per-file, not per-turn.
+    expect(indexed.content).toContain('### [2] Cortes NEJM 2024.pdf (ID: fileB)\n');
+
+    const named = await runRetrieval('named', { documentDates });
+    expect(named.content).toContain('### NCCN NSCLC v3.2026.pdf (ID: fileA) - dated 2019-03-04\n');
+  });
+
+  it('omits the date clause when documentDate is explicitly null', async () => {
+    const { content } = await runRetrieval('indexed', { documentDates: { fileA: null } });
+    expect(content).toContain('### [1] NCCN NSCLC v3.2026.pdf (ID: fileA)\n');
+    expect(content).not.toContain('dated');
   });
 
   it('both styles carry the anti-invention rule so a grounded turn cannot volunteer an unsourced customer/deal/figure', async () => {
@@ -524,6 +560,46 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     // Citables order IS the index order: [N] maps to citables[N-1].
     const citables = (quest.promptMeta as { citables?: Array<{ id: string }> }).citables ?? [];
     expect(citables.map(c => c.id)).toEqual(['fileA', 'fileB']);
+  });
+
+  it("anchors each citable at its file's best chunk, with the injected passage text (#3038)", async () => {
+    const { quest } = await runRetrieval('indexed');
+    const citables =
+      (quest.promptMeta as { citables?: Array<{ id: string; metadata?: Record<string, unknown> }> }).citables ?? [];
+    // fileA contributes chA1 and chA2, both ranked above fileB's. The file-level dedup keeps the
+    // FIRST appearance, and the walk is score-descending, so chA1 is the cited passage - asserting
+    // the text as well as the id, because an id-only assertion would pass on either chunk if the
+    // dedup ever kept the last one instead.
+    expect(citables.map(c => c.metadata?.chunkId)).toEqual(['chA1', 'chB1']);
+    expect(citables.map(c => c.metadata?.fullContext)).toEqual(['chunk A1', 'chunk B1']);
+  });
+
+  it('clips the stored passage on a code-point boundary, not mid-surrogate-pair (#3038)', async () => {
+    // Asserted HERE and not only at clipToCodePointBoundary's own test: the shared fixture text is
+    // ASCII, so reverting this call site to `.slice(0, remaining)` would still pass every other
+    // case in this file. A lone surrogate would break the viewer's match against the document as
+    // well as the injected prompt, since neither half is a character the source contains.
+    const budget = 10;
+    const ctx = makeRetrievalContext({ chunkText: { chA1: 'abcdefghi\u{1F600}' }, charBudget: budget });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'indexed'
+    );
+    const quest = makeQuest();
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'stage III NSCLC treatment'
+    );
+
+    const citables =
+      (quest.promptMeta as { citables?: Array<{ id: string; metadata?: Record<string, unknown> }> }).citables ?? [];
+    const passage = citables[0]?.metadata?.fullContext as string;
+    // The emoji is 2 UTF-16 units, so a raw slice at 10 keeps its HIGH half and drops the low one.
+    expect(passage).toBe('abcdefghi');
+    expect(passage.length).toBeLessThanOrEqual(budget);
+    expect([...passage].every(char => !/[\uD800-\uDFFF]/.test(char))).toBe(true);
   });
 
   it('indexed: fresh quest keeps forced-retrieval citables as the index-aligned array prefix (no warn)', async () => {
@@ -616,7 +692,7 @@ describe('KnowledgeRetrievalFeature retrieval exclusion (4th ctor arg)', () => {
         },
         adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -700,10 +776,13 @@ describe('KnowledgeRetrievalFeature preauthorizedLakeIds (5th ctor arg)', () => 
       dataLakes: {
         findActiveByUserTags: vi.fn().mockResolvedValue([]),
         findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+        // Also required rather than decorative: this site vouches for its entitlement keys, so the
+        // exclusion count actually runs and an absent method would throw into its swallowing catch.
+        countGateExcludedLakes: vi.fn().mockResolvedValue(0),
         findById,
       },
     },
-    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
   });
 
   /**
@@ -735,6 +814,48 @@ describe('KnowledgeRetrievalFeature preauthorizedLakeIds (5th ctor arg)', () => 
       expect.stringContaining('access-grant lookup failed'),
       expect.any(Error)
     );
+  });
+
+  /**
+   * A degraded key list can drop an entitlement-gated lake out of the resolved set, so a thrown
+   * entitlement lookup has to travel with the keys and land as `lakeViewComplete: false`. Without
+   * this the signal could be dropped at this call site and the suite would stay green.
+   */
+  it('reports an incomplete lake view when the entitlement lookup degraded the keys', async () => {
+    const ctx = makeCtx(vi.fn().mockResolvedValue(MANAGED_LAKE));
+    ctx.resolveEntitlementKeys = vi.fn().mockResolvedValue({ keys: [], resolved: false });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named'
+    );
+
+    const access = await (
+      feature as unknown as {
+        resolveDataLakeAccess: () => Promise<{ lakeViewComplete?: boolean }>;
+      }
+    ).resolveDataLakeAccess();
+
+    expect(access.lakeViewComplete).toBe(false);
+  });
+
+  it('leaves the lake view complete when the entitlement lookup succeeded', async () => {
+    const ctx = makeCtx(vi.fn().mockResolvedValue(MANAGED_LAKE));
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named'
+    );
+
+    const access = await (
+      feature as unknown as {
+        resolveDataLakeAccess: () => Promise<{ lakeViewComplete?: boolean }>;
+      }
+    ).resolveDataLakeAccess();
+
+    // toBe(true), not `.not.toBe(false)`: the looser form also passes when the field is dropped
+    // entirely, which is the exact mistake this pair of cases exists to catch.
+    expect(access.lakeViewComplete).toBe(true);
   });
 
   const MANAGED_LAKE = {
@@ -868,7 +989,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
           ),
         },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
       embeddingBinding: opts.embeddingBinding,
     };
@@ -1461,7 +1582,7 @@ describe('KnowledgeRetrievalFeature abstention when nothing is retrieved', () =>
       fabfilechunks: { findByFabFileId: vi.fn(), findVectorsByFabFileIds: vi.fn().mockResolvedValue([]) },
       adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
     },
-    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
     sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
   });
 
@@ -1571,7 +1692,7 @@ describe('KnowledgeRetrievalFeature same-width model mismatch', () => {
       },
       adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
     },
-    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
     sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
   });
 
@@ -1696,7 +1817,7 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
           ),
         },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -1762,7 +1883,7 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
     const { quest } = await run(makeCtx(twoGenerations, true));
     const reasons =
       (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
-    const line = reasons.find(r => r.includes('older document version'));
+    const line = reasons.find(r => r.includes('were not ranked because this lake holds a version'));
     expect(line).toBeDefined();
     expect(line).toContain('old');
     expect(line).toContain('new');
@@ -1794,7 +1915,7 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
     const reasons =
       (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
     expect(reasons.some(r => r.includes('re-indexed right now'))).toBe(true);
-    expect(reasons.some(r => r.includes('older document version'))).toBe(false);
+    expect(reasons.some(r => r.includes('were not ranked because this lake holds a version'))).toBe(false);
   });
 
   it('collapses AFTER the embedding-model partition: a foreign-model newest generation cannot suppress the older one', async () => {
@@ -1813,7 +1934,7 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
     const reasons =
       (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
     expect(reasons.some(r => r.includes('embedded with a different model'))).toBe(true);
-    expect(reasons.some(r => r.includes('older document version'))).toBe(false);
+    expect(reasons.some(r => r.includes('were not ranked because this lake holds a version'))).toBe(false);
   });
 });
 
@@ -1899,7 +2020,7 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
             }
           : {}),
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -1961,7 +2082,10 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
     // that resolver instead: resolveEntitlementKeys resolves once (for retrieval) then rejects (for
     // the injection call), so only the wrapper's catch can save the turn.
     const ctx = makeCtx([lakeFile('fA', 'datalake:x')], [makeLake()]);
-    ctx.resolveEntitlementKeys = vi.fn().mockResolvedValueOnce([]).mockRejectedValue(new Error('boom'));
+    ctx.resolveEntitlementKeys = vi
+      .fn()
+      .mockResolvedValueOnce({ keys: [], resolved: true })
+      .mockRejectedValue(new Error('boom'));
     const contents = await run(ctx);
     expect(contents).toHaveLength(1);
     expect(contents[0]).toContain('[Knowledge Base');
@@ -2205,7 +2329,7 @@ describe('KnowledgeRetrievalFeature untrusted-content delimiter (#1659)', () => 
         },
         adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -2371,7 +2495,7 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
         },
         ...(opts.scoped ? { scopedSettings } : {}),
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -2566,7 +2690,7 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
         },
         ...(opts.withScopedOverlay === false ? {} : { scopedSettings: makeScopedSettings(opts.orgOverride) }),
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -2905,7 +3029,7 @@ describe('KnowledgeRetrievalFeature access-event audit', () => {
         organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
         lakeAccessEvents: { record },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -3115,7 +3239,7 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
         },
         lakeAccessEvents: { record },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -3159,6 +3283,45 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
 
   it('records 0, not absence, when the collapse ran over a corpus with nothing to suppress', async () => {
     await run(makeCtx({ files: [generation('only', '2025-01-01')], collapseEnabled: true }));
+    expect(recordedInput()?.filesSupersededCollapsed).toBe(0);
+  });
+
+  it('applies a curator ruling with the derived collapse switched off, and leaves the count absent', async () => {
+    // Two facts at once, and they are deliberately different facts (#3046). The ruling is honored
+    // whatever the admin setting says - a human read both documents, which is not what that
+    // setting exists to be cautious about - so `old` leaves the ranking. But the DERIVED collapse
+    // still did not run, so `filesSupersededCollapsed` must stay absent rather than report 1: the
+    // field's contract is about older GENERATIONS this pass looked for, and it looked for none.
+    // The curator half is recorded by DataLakeCorpusActionModel instead.
+    const ruled = {
+      ...generation('old', '2024-01-01'),
+      supersededInLakes: [
+        { dataLakeId: 'lakeZ', supersededByFabFileId: 'new', decidedByUserId: 'curator-1', decidedAt: new Date() },
+      ],
+    };
+    await run(makeCtx({ files: [ruled, generation('new', '2025-01-01')], collapseEnabled: false }));
+
+    expect(recordedInput()?.fileIds).toEqual(['new']);
+    expect(recordedInput()?.filesSupersededCollapsed).toBeUndefined();
+  });
+
+  it('excludes a curator suppression from the DERIVED count even while the collapse is running', async () => {
+    // The one combination the test above cannot show: with the setting ON, `collapseRan` is true
+    // and `auditSupersededCollapsed` is a NUMBER rather than `undefined` - so this is the only case
+    // that can catch the filter silently dropping (`e.tier !== CURATOR_SUPERSESSION_TIER` deleted
+    // would make this suite pass under `collapseEnabled: false` alone, since that path never
+    // evaluates the filter at all).
+    const ruled = {
+      ...generation('old', '2024-01-01'),
+      supersededInLakes: [
+        { dataLakeId: 'lakeZ', supersededByFabFileId: 'new', decidedByUserId: 'curator-1', decidedAt: new Date() },
+      ],
+    };
+    await run(makeCtx({ files: [ruled, generation('new', '2025-01-01')], collapseEnabled: true }));
+
+    expect(recordedInput()?.fileIds).toEqual(['new']);
+    // 0, not 1: the collapse ran and found nothing of its OWN (a curator ruling is not a derived
+    // generation match), so the field reports what it actually looked for and found.
     expect(recordedInput()?.filesSupersededCollapsed).toBe(0);
   });
 
@@ -3226,7 +3389,7 @@ describe('KnowledgeRetrievalFeature personal-corpus skip', () => {
     personalCorpusOnly,
     // Present so a NON-skipping run gets far enough to prove it did not return early.
     db: { fabfiles: undefined, fabfilechunks: undefined },
-    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
     sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
   });
 
@@ -3306,7 +3469,7 @@ describe('KnowledgeRetrievalFeature lake-scoped forced retrieval (#2243)', () =>
         },
         adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -3447,7 +3610,7 @@ describe('LakeMemoryFeature personal-corpus skip', () => {
       user: { id: 'u1', tags: [], groups: [] },
       personalCorpusOnly: true,
       db: {},
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
       recallLakeMemory: vi.fn(),
     };
@@ -3493,7 +3656,7 @@ describe('LakeMemoryFeature belief budget (lakeMemoryRecallK)', () => {
         ),
       },
     },
-    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
     sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     recallLakeMemory: vi.fn().mockResolvedValue([{ fact: 'Acme ships on Fridays', relevance: 0.9, sources: ['f1'] }]),
   });
@@ -3721,7 +3884,7 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
             }
           : {}),
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -3942,6 +4105,52 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
       });
     });
 
+    // Not a variant of the personal-corpus case above: that one keys on what the session's
+    // ATTACHMENTS are, this one on what its scope SAYS. The fixture is the discriminating pair -
+    // identical empty `retrievalTags`, differing only by the sidecar - because without the sidecar
+    // an empty scope reads as "no opinion" and forced retrieval ran against every entitled lake.
+    it('records the no-lake-scope skip without claiming retrieval ran', async () => {
+      const scopedFeature = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        [],
+        undefined,
+        undefined,
+        undefined,
+        true
+      );
+      const noLake = makeQuest();
+      await scopedFeature.getContextMessages(
+        noLake,
+        embeddingFactory as unknown as Parameters<typeof scopedFeature.getContextMessages>[1],
+        'what do the docs say'
+      );
+      expect(retrievalOf(noLake)).toEqual({
+        attempted: false,
+        mode: 'forced',
+        forcedSkipReason: 'no_lake_scope',
+        surfaces: [],
+        dataLakeTags: [],
+      });
+    });
+
+    it('keeps grounding when an empty scope carries no explicit marker', async () => {
+      const unmarked = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined
+      );
+      const quest = makeQuest();
+      await unmarked.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof unmarked.getContextMessages>[1],
+        'what do the docs say'
+      );
+      expect(retrievalOf(quest)?.forcedSkipReason).toBeUndefined();
+    });
+
     it('does not let the skip record mask a tool retrieval later in the same turn', async () => {
       // The whole point of the measurement: the model fell back to search_knowledge_base and it
       // worked. The turn must read as attempted AND still say forced retrieval was suppressed.
@@ -4022,7 +4231,7 @@ describe('KnowledgeRetrievalFeature chunk-cursor stall coverage', () => {
         fabfilechunks: { findByFabFileId: vi.fn(), findVectorsByFabFileIds },
         adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
 
@@ -4073,7 +4282,7 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
         },
         adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -4082,18 +4291,50 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
     getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
   };
 
-  const run = async (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) => {
+  const runWithQuest = async (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) => {
     const ctx = makeCtx(chunks, hasMore);
     const feature = new KnowledgeRetrievalFeature(
       ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
     );
+    // Held rather than inlined: the citation chips this arm writes land on the quest, so the
+    // reader's half of the conflict signal is only observable through it.
+    const quest = makeQuest();
     const messages = await feature.getContextMessages(
-      makeQuest(),
+      quest,
       embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
       'uptime'
     );
-    return messages[0]?.content ?? '';
+    return { content: messages[0]?.content ?? '', quest };
   };
+
+  const run = async (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) =>
+    (await runWithQuest(chunks, hasMore)).content;
+
+  // The note warns the MODEL; these pin that the same turn marks the chips the READER sees, so a
+  // change that keeps one channel and drops the other fails here rather than shipping silently.
+  it('marks both conflicting documents on the citation chips (#3041)', async () => {
+    const { quest } = await runWithQuest([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 95%.' },
+    ]);
+
+    const citables = quest.promptMeta?.citables ?? [];
+    expect(citables.map(c => c.id)).toEqual(['fileA', 'fileB']);
+    expect(citables.find(c => c.id === 'fileA')?.metadata?.conflictsWith).toEqual(['fileB']);
+    expect(citables.find(c => c.id === 'fileB')?.metadata?.conflictsWith).toEqual(['fileA']);
+  });
+
+  it('leaves the chips unmarked when the documents agree', async () => {
+    const { quest } = await runWithQuest([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 99.9%.' },
+    ]);
+
+    // Absent, not an empty array: a chip carrying `conflictsWith: []` would badge with no partner.
+    for (const citable of quest.promptMeta?.citables ?? []) {
+      expect(citable.metadata?.conflictsWith).toBeUndefined();
+    }
+  });
 
   it('keeps the note at column 0, outside the untrusted block', async () => {
     const content = await run([

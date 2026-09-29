@@ -18,6 +18,11 @@ export const DEFAULT_MANIFEST = {
   GEMINI_API_KEY: { kind: 'secret', optional: true },
   GITHUB_CLIENT_ID: { kind: 'secret', optional: true },
   GITHUB_CLIENT_SECRET: { kind: 'secret', optional: true },
+  GITHUB_LAKE_APP_CLIENT_ID: { kind: 'secret', optional: true },
+  GITHUB_LAKE_APP_CLIENT_SECRET: { kind: 'secret', optional: true },
+  GITHUB_LAKE_APP_ID: { kind: 'secret', optional: true },
+  GITHUB_LAKE_APP_PRIVATE_KEY: { kind: 'secret', optional: true },
+  GITHUB_LAKE_APP_SLUG: { kind: 'secret', optional: true },
   GITHUB_ZAP_REF: { kind: 'secret', optional: true },
   GOOGLE_CLIENT_ID: { kind: 'secret', optional: true },
   GOOGLE_CLIENT_SECRET: { kind: 'secret', optional: true },
@@ -38,6 +43,7 @@ export const DEFAULT_MANIFEST = {
   OVERWATCH_INGEST_ENABLED: { kind: 'secret', optional: true }, // transient: removed after product extraction
   OVERWATCH_INGEST_KEY: { kind: 'secret', optional: true }, // transient: removed after product extraction
   OVERWATCH_INGEST_URL: { kind: 'secret', optional: true }, // transient: removed after product extraction
+  OVERWATCH_PRODUCT_INGEST_KEYS: { kind: 'secret', optional: true }, // transient: removed after product extraction
   OVERWATCH_PSEUDONYM_SALT: { kind: 'secret', optional: true }, // transient: removed after product extraction
   OPTIHASHI_API_TOKEN: { kind: 'secret', optional: true },
   OPTIHASHI_API_URL: { kind: 'secret', optional: true },
@@ -111,6 +117,11 @@ export const DEFAULT_MANIFEST = {
   // an operator needs - with no URL configured the enqueue still fails into those catches and
   // says so, rather than accepting a message into a queue nothing is consuming yet.
   lakeMemoryQueue: { kind: 'queue', optional: true },
+  // Reached from POST /api/data-lakes/:id/inconsistencies?detector=model. `optional` for the same
+  // reason as lakeMemoryQueue above: it sits behind an off-by-default admin flag
+  // (`EnableLakeModelInconsistencyDetection`), so a basic install never sets it, and with no URL
+  // configured the route refuses the run outright rather than accepting work nothing will consume.
+  lakeInconsistencyModelQueue: { kind: 'queue', optional: true },
   liveOpsTriageQueue: { kind: 'queue' },
   notebookCurationQueue: { kind: 'queue', optional: true },
   researchEngineQueue: { kind: 'queue' },

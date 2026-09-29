@@ -81,6 +81,30 @@ describe('ChatCompletionInvoke retry path session binding', () => {
 
     expect(result).toBeDefined();
     // guard let it through: the retry overwrite ran (status flipped to running)
-    expect(questsUpdate).toHaveBeenCalledWith(expect.objectContaining({ status: 'running' }));
+    expect(questsUpdate).toHaveBeenCalledWith(expect.objectContaining({ status: 'running' }), expect.anything());
+  });
+
+  it('clears a stale errorCode from a prior failed attempt on retry', async () => {
+    const { invoke, questsUpdate } = makeHarness({
+      id: 'quest-1',
+      sessionId: SESSION,
+      type: 'error',
+      errorCode: 'insufficient_credits',
+    });
+
+    await invoke.invoke({ body: body as never, userId: 'user-A' });
+
+    // Without this, a retry that succeeds (or fails for an unrelated, uncoded reason) would
+    // still report the credit-exhaustion code from the attempt being retried.
+    //
+    // Both halves are asserted because they clear different copies and neither implies the other:
+    // the in-memory assignment is what the returned quest carries, and the `unset` option is what
+    // reaches the database - a plain object's `errorCode: undefined` lands in the `$set` as an
+    // absence and leaves the stored value intact. This mock cannot see that second half actually
+    // work; apps/client/server/chatCompletion/questRetryErrorCodeClear.e2e.test.ts re-reads a real
+    // document to prove it.
+    expect(questsUpdate).toHaveBeenCalledWith(expect.objectContaining({ errorCode: undefined }), {
+      unset: ['errorCode'],
+    });
   });
 });

@@ -36,6 +36,7 @@ describe.skipIf(process.platform !== 'darwin')('SeatbeltRuntime integration', ()
         allowedReadPaths: [],
         deniedPaths: [],
       },
+      networkEnabled: false,
     });
 
     try {
@@ -56,6 +57,7 @@ describe.skipIf(process.platform !== 'darwin')('SeatbeltRuntime integration', ()
         allowedReadPaths: [],
         deniedPaths: [],
       },
+      networkEnabled: false,
     });
 
     try {
@@ -81,6 +83,7 @@ describe.skipIf(process.platform !== 'darwin')('SeatbeltRuntime integration', ()
         allowedReadPaths: [],
         deniedPaths: [],
       },
+      networkEnabled: false,
     });
 
     try {
@@ -115,6 +118,7 @@ describe.skipIf(process.platform !== 'darwin')('SeatbeltRuntime integration', ()
         allowedReadPaths: [],
         deniedPaths: [path.join(os.homedir(), '.ssh')],
       },
+      networkEnabled: false,
     });
 
     try {

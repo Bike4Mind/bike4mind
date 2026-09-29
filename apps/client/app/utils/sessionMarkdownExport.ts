@@ -1,4 +1,5 @@
-import type { IChatHistoryItemDocument } from '@bike4mind/common';
+import { stripSearchResultCardFences, type IChatHistoryItemDocument } from '@bike4mind/common';
+import { visibleReplyForExport } from '@client/app/utils/replyUtils';
 
 /**
  * Converts an array of chat history items (quests) into a markdown string.
@@ -12,12 +13,10 @@ export function convertSessionToMarkdown(quests: IChatHistoryItemDocument[]): st
       lines.push(`**User:** ${quest.prompt}`);
       lines.push('');
     }
-    const replies = quest.replies?.length ? quest.replies : quest.reply ? [quest.reply] : [];
-    for (const reply of replies) {
-      if (reply) {
-        lines.push(`**AI:** ${reply}`);
-        lines.push('');
-      }
+    const reply = visibleReplyForExport(quest);
+    if (reply) {
+      lines.push(`**AI:** ${stripSearchResultCardFences(reply, quest.promptMeta?.citables)}`);
+      lines.push('');
     }
     lines.push('---');
     lines.push('');

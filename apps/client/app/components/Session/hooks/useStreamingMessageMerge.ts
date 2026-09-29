@@ -3,6 +3,7 @@ import { useEffect, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import type { IChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
+import { isTerminalQuestStatus, terminalQuests } from '@client/app/hooks/chatCompletionState';
 import { checkQuestTimeout } from '@client/app/utils/sessionsAPICalls';
 import { updateAllQueryData } from '@client/app/utils/react-query';
 import type { Dispatch, SetStateAction } from 'react';
@@ -166,6 +167,25 @@ export function useStreamingMessageMerge({
     return () => clearTimeout(timer);
   }, [flattenQuests, chatCompletion.quest?.id, sessionId, queryClient]);
 
+  // The websocket can miss the whole stream, leaving the composer on Stop for a quest the
+  // server already ended. A held quest's cache entry is written only by its own frames or a
+  // server refetch, so once it reads terminal the composer can be released.
+  const heldQuestId = chatCompletion.quest?.id;
+  const heldQuestCachedStatus = heldQuestId ? flattenQuests.find(q => q.id === heldQuestId)?.status : undefined;
+  useEffect(() => {
+    if (chatCompletion.completed || !heldQuestId || !isTerminalQuestStatus(heldQuestCachedStatus)) return;
+    setChatCompletion(prev =>
+      prev.quest?.id === heldQuestId && !prev.completed
+        ? {
+            ...prev,
+            completed: true,
+            statusMessage: undefined,
+            quest: { ...prev.quest, status: heldQuestCachedStatus },
+          }
+        : prev
+    );
+  }, [chatCompletion.completed, heldQuestId, heldQuestCachedStatus, setChatCompletion]);
+
   // Streaming recovery poll: while a quest sits at 'running', poll the server for its authoritative
   // state. Two failure modes strand the client on an eternal "Running..." spinner, both invisible to
   // the WebSocket stream:
@@ -175,7 +195,7 @@ export function useStreamingMessageMerge({
   //      120s threshold.
   //   2. A successful run whose terminal WebSocket frame was lost (e.g. the socket churned during
   //      the render). The quest is already 'done' in the DB with its images/replies.
-  // In both cases the server's response is terminal (status === 'done'); applying it hands the quest
+  // In both cases the server's response is terminal (done, or stopped); applying it hands the quest
   // off to ChatHistory and clears the spinner.
   //
   // Deliberately NOT gated on empty replies. The gate was written for the dedicated image-only path
@@ -195,7 +215,8 @@ export function useStreamingMessageMerge({
       try {
         const updatedQuest = await checkQuestTimeout(questId);
         if (cancelled) return;
-        if (updatedQuest.status === 'done') {
+        if (isTerminalQuestStatus(updatedQuest.status)) {
+          terminalQuests.markTerminal(questId, updatedQuest.updatedAt);
           updateAllQueryData(queryClient, 'quests', 'write', updatedQuest, {
             keysAllowedToCreate: [['quests', 'session', sessionId]],
           });

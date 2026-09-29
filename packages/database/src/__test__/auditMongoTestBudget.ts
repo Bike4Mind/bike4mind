@@ -76,6 +76,42 @@ const lineOf = (source: ts.SourceFile, node: ts.Node): number =>
 
 const isBudgetIdentifier = (node: ts.Node): boolean => ts.isIdentifier(node) && node.text === BUDGET_IDENTIFIER;
 
+/**
+ * The budget or a whole multiple of it (`MONGO_TEST_TIMEOUT_MS * 2`, either operand order). Anything
+ * else built from it - `MONGO_TEST_TIMEOUT_MS / 4`, `Math.min(...)` - can narrow it, so it does not count.
+ */
+const isBudgetOrMultiple = (node: ts.Expression): boolean => {
+  if (isBudgetIdentifier(node)) return true;
+  if (!ts.isBinaryExpression(node) || node.operatorToken.kind !== ts.SyntaxKind.AsteriskToken) return false;
+  const [budget, factor] = isBudgetIdentifier(node.left) ? [node.left, node.right] : [node.right, node.left];
+  return isBudgetIdentifier(budget) && ts.isNumericLiteral(factor) && Number(factor.text) >= 1;
+};
+
+/**
+ * Follows an identifier argument to a same-file `const` initializer, so `const OPTS = { timeout: 30000 }`
+ * or `const HOOK_MS = 30000` passed to a test/hook is audited like the inline form. Anything else
+ * (imports, `let`, computed values) is returned unchanged.
+ */
+const resolveLocalConst = (source: ts.SourceFile, argument: ts.Expression): ts.Expression => {
+  if (!ts.isIdentifier(argument) || argument.text === BUDGET_IDENTIFIER) return argument;
+  let initializer: ts.Expression | undefined;
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === argument.text &&
+      node.initializer &&
+      ts.isVariableDeclarationList(node.parent) &&
+      node.parent.flags & ts.NodeFlags.Const
+    ) {
+      initializer = node.initializer;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return initializer ?? argument;
+};
+
 /** `{ timeout: ... }` on a test/suite/hook call, if present. */
 const timeoutProperty = (argument: ts.Expression): ts.PropertyAssignment | undefined => {
   if (!ts.isObjectLiteralExpression(argument)) return undefined;
@@ -87,7 +123,8 @@ const timeoutProperty = (argument: ts.Expression): ts.PropertyAssignment | undef
 
 /**
  * Timeout arguments on a test/suite/hook call that are NOT the shared budget - a trailing numeric
- * literal (`it(name, fn, 30000)`, `beforeAll(fn, 30000)`) or a `{ timeout: <literal> }` option.
+ * literal (`it(name, fn, 30000)`, `beforeAll(fn, 30000)`) or a `{ timeout: ... }` option that is not
+ * the budget or a multiple of it - inline or through a same-file const.
  */
 const offendingTimeouts = (file: SourceFile): string[] => {
   const offenders: string[] = [];
@@ -96,14 +133,15 @@ const offendingTimeouts = (file: SourceFile): string[] => {
     const callee = rootCalleeName(call.expression);
     if (!callee || (!HOOKS.has(callee) && !TESTS_AND_SUITES.has(callee))) return;
 
-    for (const argument of call.arguments) {
+    for (const passed of call.arguments) {
+      const argument = resolveLocalConst(file.source, passed);
       if (ts.isNumericLiteral(argument)) {
-        offenders.push(`${file.relativePath}:${lineOf(file.source, argument)}: ${callee}(..., ${argument.getText()})`);
+        offenders.push(`${file.relativePath}:${lineOf(file.source, passed)}: ${callee}(..., ${argument.getText()})`);
         continue;
       }
       const timeout = timeoutProperty(argument);
-      if (timeout && !isBudgetIdentifier(timeout.initializer)) {
-        offenders.push(`${file.relativePath}:${lineOf(file.source, timeout)}: ${callee}(..., ${timeout.getText()})`);
+      if (timeout && !isBudgetOrMultiple(timeout.initializer)) {
+        offenders.push(`${file.relativePath}:${lineOf(file.source, passed)}: ${callee}(..., ${timeout.getText()})`);
       }
     }
   });

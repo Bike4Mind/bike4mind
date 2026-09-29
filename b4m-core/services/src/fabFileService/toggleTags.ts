@@ -27,30 +27,37 @@ import {
 } from '../dataLakeService/prefixArmMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
+import type { LakeMembershipAuditAdapters } from '../dataLakeService/recordLakeMembershipChange';
 
 const fabFileToggleTagsSchema = z.object({
   ids: z.array(z.string()),
   tags: z.array(z.string()),
 });
 
-interface FabFileToggleTagsAdapters extends LakeConfigAuditAdapters {
-  db: LakeConfigAuditAdapters['db'] & {
-    fabFiles: Pick<
-      IFabFileRepository,
-      'shareable' | 'findById' | 'pullTagsByFabFileId' | 'pushTagsByFabFileId' | 'computeDataLakeStats'
-    >;
-    fileTags: Pick<IFileTagRepository, 'touchLastActivityBy'>;
-    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
-    // Optional: absent -> manage falls back to createdByUserId + org rung (see loadActiveLakeGrants).
-    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes'>;
-    users: { findById: (id: string) => Promise<IUserDocument | null> };
-    // The admission contract's lever (#1680) resolves from these. `adminSettings` is REQUIRED so a
-    // door cannot quietly opt out of the contract by omitting it; the gate itself still reads
-    // nothing unless a lake being JOINED declares a required passage size. `scopedSettings` is
-    // optional - without it the lever resolves to its platform value rather than failing.
-    adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
-    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
-  };
+interface FabFileToggleTagsAdapters extends LakeConfigAuditAdapters, LakeMembershipAuditAdapters {
+  db: LakeConfigAuditAdapters['db'] &
+    LakeMembershipAuditAdapters['db'] & {
+      fabFiles: Pick<
+        IFabFileRepository,
+        | 'shareable'
+        | 'findById'
+        | 'pullTagsByFabFileId'
+        | 'pushTagsByFabFileId'
+        | 'pushTagReturningPriorState'
+        | 'computeDataLakeStats'
+      >;
+      fileTags: Pick<IFileTagRepository, 'touchLastActivityBy'>;
+      dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
+      // Optional: absent -> manage falls back to createdByUserId + org rung (see loadActiveLakeGrants).
+      dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes'>;
+      users: { findById: (id: string) => Promise<IUserDocument | null> };
+      // The admission contract's lever (#1680) resolves from these. `adminSettings` is REQUIRED so a
+      // door cannot quietly opt out of the contract by omitting it; the gate itself still reads
+      // nothing unless a lake being JOINED declares a required passage size. `scopedSettings` is
+      // optional - without it the lever resolves to its platform value rather than failing.
+      adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
+      scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
+    };
   /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
   /**
@@ -75,9 +82,9 @@ interface FabFileToggleTagsAdapters extends LakeConfigAuditAdapters {
   assertWriteScope?: () => void;
   /**
    * The resolved audit principal for an API-key caller (undefined for a session caller) - see
-   * `lakeConfigAuditPrincipal`. Attached to the actor below so a toggle that auto-activates a
-   * draft lake attributes the resulting config-change row to the key, not the human it acts for,
-   * matching every other audited config-write door (#1917).
+   * `lakeConfigAuditPrincipal`. Attached to the actor below so a membership change this toggle
+   * makes attributes any resulting audit row to the key, not the human it acts for, matching
+   * every other audited config-write door (#1917).
    */
   auditPrincipal?: LakeAuditPrincipal;
 }
@@ -267,14 +274,11 @@ export const toggleTags = async (
 
   const touchedTags = new Set<string>();
   const lakesByTag = new Map<string, Promise<MembershipLake>>();
+  // Every lake this call's membership writes touched, meta-tag and prefix-arm alike - all of them
+  // need a stats recompute (see finalizePrefixArmLeaves). There is no longer a manage-gated
+  // "activation" split here: recomputeLakeStats never publishes a lake on its own, so
+  // there is nothing left to withhold from an unmanaged prefix-arm join.
   const touchedLakes = new Map<string, MembershipLake>();
-  // Membership via a prefix-arm join is automatic (the read-side predicate grants it purely on
-  // the tag, no permission check), but recomputeLakeStats's activation side effect is gated - see
-  // finalizePrefixArmLeaves. An unmanaged join lands here instead of touchedLakes, so its stats
-  // still get corrected (skipping activation) rather than drifting forever. Checked against
-  // touchedLakes before recomputing, so a lake this actor DOES manage elsewhere in the same
-  // batch isn't redundantly recomputed a second time with activation suppressed.
-  const statsOnlyLakes = new Map<string, MembershipLake>();
   // One tagger for the whole request: it memoizes the lake lookup per meta-tag, so a bulk toggle
   // into one lake costs a single extra read, not one per file.
   const applyFallbackTags = createDataLakeFallbackTagger({ db, logger });
@@ -374,10 +378,10 @@ export const toggleTags = async (
       // This branch, and only this branch, makes the file a MEMBER - but the admission contract
       // (#1680) it must satisfy is graded in the pre-write pass above, not here, so a refusal cannot
       // land after earlier files in the batch have already joined. This function stays write-only.
-      await addFileToLake(actor, lake, file.id, { db });
+      await addFileToLake(actor, lake, file.id, { db, logger });
     } else {
       try {
-        await removeFileFromLake(actor, lake, file.id, { db });
+        await removeFileFromLake(actor, lake, file.id, { db, logger });
       } catch (error) {
         // A concurrent removal landing between the read above and this write leaves nothing to
         // remove, which is the state the caller asked for anyway.
@@ -387,8 +391,9 @@ export const toggleTags = async (
     // Touched only once the write actually lands (or hits the benign race above): both
     // addFileToLake and removeFileFromLake throw their manage-rights gate's BadRequestError
     // before any write, and that throw exits this function before reaching here - so a rejected
-    // toggle never triggers recomputeLakeStats's activateIfDraft side effect on a lake this actor
-    // cannot manage. The same treatment the prefix-arm join below already gets.
+    // meta-tag toggle never recomputes stats for a lake it did not actually move. (A prefix-arm
+    // join below needs no such gate: membership there is granted by the read-side predicate alone,
+    // and a recompute writes nothing but the counts.)
     touchedLakes.set(lake.id, lake);
   };
 
@@ -424,7 +429,7 @@ export const toggleTags = async (
       // up front (see the loop above resolving prefixLeavesByFile), before this ever runs.
       touchedLakes.set(lake.id, lake);
       try {
-        await removeFileFromLake(actor, lake, file.id, { db });
+        await removeFileFromLake(actor, lake, file.id, { db, logger });
       } catch (error) {
         // The toggle loop above already pulled the tag, so "nothing to remove" is the NORMAL
         // outcome here, not a race - this still runs to sweep a signal a concurrent writer
@@ -432,16 +437,11 @@ export const toggleTags = async (
         if (!(error instanceof NotFoundError)) throw error;
       }
     }
-    // MEMBERSHIP needs no gate here (the read-side predicate grants it purely on the tag), but
-    // recomputeLakeStats's activation side effect is stronger: it also flips a draft lake to
-    // active (activateIfDraft), a one-way, publication-visibility change. `file.userId` is the
-    // file's OWNER, not necessarily this actor - `findAllAccessibleByIds` admits a read/write
-    // share, so an unrelated sharee could otherwise force-publish a lake they have no
-    // relationship to. Gated on canManageLake; an unmanaged join still gets its stats corrected
-    // via statsOnlyLakes, just never the activation.
+    // MEMBERSHIP needs no gate here (the read-side predicate grants it purely on the tag) - and,
+    // now that a stats recompute can no longer publish a lake as a side effect, no
+    // manage-rights split is needed either. Every prefix-arm join just needs its stats corrected.
     for (const { lake } of prefixJoinsByFile.get(file.id) ?? []) {
-      if (canManageLake(lake, actor, grantResolver.get(lake.id))) touchedLakes.set(lake.id, lake);
-      else statsOnlyLakes.set(lake.id, lake);
+      touchedLakes.set(lake.id, lake);
     }
   };
 
@@ -506,10 +506,7 @@ export const toggleTags = async (
   );
 
   for (const lake of touchedLakes.values()) {
-    await recomputeLakeStats(lake, { db, logger }, { actor });
-  }
-  for (const lake of statsOnlyLakes.values()) {
-    if (!touchedLakes.has(lake.id)) await recomputeLakeStats(lake, { db, logger }, { skipActivation: true });
+    await recomputeLakeStats(lake, { db, logger });
   }
 
   // Lake meta-tags are deliberately absent from this set: they are lake membership, not entries in

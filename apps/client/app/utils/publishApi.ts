@@ -315,14 +315,22 @@ export async function updatePublishedDiscoverable(publicId: string, discoverable
   await api.patch(`/api/publish/artifacts/${publicId}`, { discoverable });
 }
 
-/** Access gate on top of `visibility: 'public'` - see issue #383. */
+/**
+ * Access gate layered on top of a share surface - see issue #383. Applies to BOTH
+ * surfaces that enforce it: `visibility: 'public'` (/p/*, via checkVisibility) and an
+ * active share token (/a/<token>, via checkShareGrant, at any visibility).
+ */
 export type PublishAccessGateInput =
   { kind: 'passphrase'; passphrase: string } | { kind: 'domain'; allowedDomains: string[] } | null;
 
 /**
- * Set, rotate, or clear (null) a public item's access gate (owner/admin).
+ * Set, rotate, or clear (null) an item's access gate (owner/admin).
  * The passphrase is sent once and stored only as a hash server-side; there is
  * no API to read it back - rotating means setting a new one.
+ *
+ * The item must already have an enforcing surface: public visibility, OR a share
+ * token (mint one with `createOrGetShareToken` FIRST). Otherwise the server rejects
+ * the write with `GATE_REQUIRES_ENFORCING_SURFACE` rather than store a gate nothing honors.
  */
 export async function updatePublishedAccessGate(publicId: string, accessGate: PublishAccessGateInput): Promise<void> {
   await api.patch(`/api/publish/artifacts/${publicId}`, { accessGate });
@@ -764,7 +772,12 @@ export async function regenerateShareToken(publicId: string): Promise<{ shareTok
   return createOrGetShareToken(publicId, true);
 }
 
-/** Revoke the share token so every `/a` link 404s immediately (owner/admin). */
+/**
+ * Revoke the share token so every `/a` link 404s immediately (owner/admin).
+ * Refused with `REVOKE_WOULD_ORPHAN_GATE` while a non-public item carries an access
+ * gate - the token is then the gate's only enforcing surface; clear the gate or go
+ * public first.
+ */
 export async function revokeShareToken(publicId: string): Promise<void> {
   await api.delete(`/api/publish/${publicId}/share-token`);
 }

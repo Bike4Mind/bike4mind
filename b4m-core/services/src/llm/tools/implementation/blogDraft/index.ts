@@ -5,6 +5,7 @@ import { ChatModels, ClaudeArtifactMimeTypes, isUserInitiatedAbort } from '@bike
 import { ToolDefinition } from '../../base/types';
 import { recordToolOperationalUsage } from '../../base/recordToolOperationalUsage';
 import { sanitizeJsonString } from '../../utils/jsonSanitize';
+import { escapeArtifactBodyJson, sanitizeArtifactTitle } from '../../utils/artifactEmission';
 
 interface ContentTransformParams {
   sourceContent: string;
@@ -114,11 +115,26 @@ IMPORTANT:
  * the embedded JSON object can be parsed instead of throwing on a stray backtick.
  */
 function stripCodeFences(raw: string): string {
-  return raw
-    .trim()
-    .replace(/^```[a-zA-Z]*[ \t]*\r?\n?/, '') // leading ``` / ```json opener
-    .replace(/\r?\n?[ \t]*```$/, '') // trailing closer
-    .trim();
+  const body = raw.trim().replace(/^```[a-zA-Z]*[ \t]*\r?\n?/, ''); // leading ``` / ```json opener
+  // endsWith, not /[ \t]*```$/: that regex rescans a whitespace run from each of its positions.
+  return (body.endsWith('```') ? body.slice(0, -3) : body).trim();
+}
+
+/**
+ * Group 1 of /```LANG[^\S\n]*\n([\s\S]*?)\n```/, or null, in linear time. The regex rescans the rest
+ * of the input from every opener when no newline-led closer follows.
+ */
+function matchNewlineFence(text: string, lang: string): string | null {
+  const opener = '```' + lang;
+  for (let at = text.indexOf(opener); at !== -1; at = text.indexOf(opener, at + 1)) {
+    let i = at + opener.length;
+    while (i < text.length && text[i] !== '\n' && /\s/.test(text[i])) i++;
+    if (text[i] !== '\n') continue;
+    // A later opener's body starts later, so it cannot find a closer this one missed.
+    const close = text.indexOf('\n```', i + 1);
+    return close === -1 ? null : text.slice(i + 1, close);
+  }
+  return null;
 }
 
 /**
@@ -139,9 +155,9 @@ function parseTransformationResult(llmResponse: string): TransformResult {
   // responses - in those cases the paired regex fails and the raw "```json..."
   // string would reach JSON.parse. Fall back to stripping a leading opener
   // fence and a trailing closer fence independently.
-  const jsonMatch = llmResponse.match(/```json\s*\n([\s\S]*?)\n```/) || llmResponse.match(/```\s*\n([\s\S]*?)\n```/);
+  const fenced = matchNewlineFence(llmResponse, 'json') ?? matchNewlineFence(llmResponse, '');
 
-  let jsonStr = jsonMatch ? jsonMatch[1] : stripCodeFences(llmResponse);
+  let jsonStr = fenced ?? stripCodeFences(llmResponse);
   jsonStr = jsonStr.trim();
 
   // Check if extracted JSON is empty
@@ -176,32 +192,6 @@ function parseTransformationResult(llmResponse: string): TransformResult {
 }
 
 /**
- * Sanitize a title for safe, display-clean embedding in the <artifact title="...">
- * attribute. The pristine title lives in the JSON body (which is what the preview
- * card renders); this attribute is only used as a label/list value and for id
- * resolution. So we strip the parse-breaking characters rather than HTML-entity-
- * encode them - entity encoding renders as "&amp;"/"&lt;" gibberish wherever
- * `metadata.title` is shown verbatim (knowledge viewer list, etc.).
- *
- * - newlines/tabs -> space: the attribute regexes use `.*?`, which won't cross newlines.
- * - strip <,>: keep the tag/attribute matchers ([^>]) from breaking.
- * - straight quotes -> typographic quotes: the value matcher is [^"'], so BOTH a "
- *   and a ' (e.g. the apostrophe in "Can't") would terminate it early and truncate
- *   the title. Typographic (curly) quotes aren't in that class, so they're parse-safe
- *   and still read naturally.
- * `&` is left as-is: it doesn't break the regexes and React renders it correctly.
- */
-function sanitizeArtifactTitle(title: string): string {
-  return title
-    .replace(/[\r\n\t]+/g, ' ')
-    .replace(/[<>]/g, '')
-    .replace(/'/g, '’') // straight apostrophe to right single quote
-    .replace(/"/g, '”') // straight double quote to right double quote
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-/**
  * Wrap a drafted blog result in an <artifact> tag so it is surfaced as a
  * first-class artifact (streamed into the reply AND persisted via the
  * sharedToolBuilder tool_result extractor).
@@ -215,7 +205,7 @@ function sanitizeArtifactTitle(title: string): string {
  */
 function wrapDraftAsArtifact(result: TransformResult, identifier: string): string {
   const artifactTitle = sanitizeArtifactTitle(result.title);
-  const artifactBody = JSON.stringify(result, null, 2).replace(/<\/artifact>/gi, '<\\/artifact>');
+  const artifactBody = escapeArtifactBodyJson(JSON.stringify(result, null, 2));
 
   return `✨ Blog draft created successfully!
 
@@ -228,7 +218,7 @@ ${artifactBody}
 }
 
 // Export for testing
-export { sanitizeJsonString, parseTransformationResult, wrapDraftAsArtifact, sanitizeArtifactTitle };
+export { sanitizeJsonString, parseTransformationResult, wrapDraftAsArtifact, sanitizeArtifactTitle, matchNewlineFence };
 
 export const blogDraftTool: ToolDefinition = {
   name: 'blog_draft',

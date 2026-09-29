@@ -141,7 +141,9 @@ async function searchFiles(params: GrepSearchParams, allowedDirectories?: string
     });
   }
 
-  rgArgs.push(pattern, targetDir);
+  // `--` ends option parsing so a user pattern that begins with `-` (e.g. `-uuLe.`,
+  // `--pre=rm`) is treated as the literal search pattern, never as a ripgrep flag.
+  rgArgs.push('--', pattern, targetDir);
 
   // Execute ripgrep (using execFile to avoid shell injection vulnerabilities)
   let stdout: string;

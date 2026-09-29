@@ -3,6 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { z } from 'zod';
+import { WHATS_NEW_DEFAULT_REPOSITORY } from '@bike4mind/common';
 import { cacheExternalImage, cacheExternalImages } from '@server/utils/cacheExternalImage';
 import { isValidObjectId } from '@server/utils/objectId';
 import { WhatsNewDistributionService } from '@server/services/whatsNewDistribution';
@@ -114,7 +115,7 @@ const handler = baseApi().put(
         metadata: {
           modelUsed: updatedModal.generationMetadata.modelUsed || 'unknown',
           correlationId: updatedModal.generationMetadata.correlationId || 'manual-edit',
-          repositoryUrl: 'https://github.com/MillionOnMars/lumina5',
+          repositoryUrl: `https://github.com/${WHATS_NEW_DEFAULT_REPOSITORY}`,
         },
       };
       const content = JSON.stringify(payload, null, 2);

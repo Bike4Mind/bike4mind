@@ -9,7 +9,10 @@ import { Logger } from '@bike4mind/observability';
 
 import { ToolContext, ToolDefinition } from '../../base/types';
 import { isObjectIdShaped } from '../../base/objectId';
+import { buildNewModel, isModelOwner } from '../../../../latticeService/latticeModelService';
+import { splitEquals } from '@bike4mind/common';
 import type { ILatticeModel, LatticeEntityType, LatticeDataType, LatticeOperation } from '@bike4mind/common';
+import { escapeArtifactBodyJson, sanitizeArtifactTitle } from '../../utils/artifactEmission';
 
 // Shared types
 
@@ -66,43 +69,6 @@ interface LatticeExplainParams {
 
 // Tool: create model
 
-/**
- * Create model data structure (used when database is not available)
- */
-function createModelData(
-  name: string,
-  modelType: string,
-  userId: string,
-  description?: string,
-  sessionId?: string
-): Partial<ILatticeModel> {
-  const now = new Date();
-
-  return {
-    name,
-    description: description || '',
-    modelType: modelType as ILatticeModel['modelType'],
-    userId,
-    sessionId,
-    data: { entities: [], relationships: [] },
-    rules: { rules: [], rulesets: [] },
-    views: { views: [] },
-    settings: {
-      currency: 'USD',
-      fiscalYearStart: '01-01',
-      periodGrain: 'quarter',
-      defaultDecimalPlaces: 2,
-      negativeFormat: 'parentheses',
-    },
-    scenarios: [],
-    operations: [],
-    operationIndex: -1,
-    version: 1,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
 export const latticeCreateModelTool: ToolDefinition = {
   name: 'lattice_create_model',
   implementation: (context: Omit<ToolContext, 'config'>) => ({
@@ -118,7 +84,14 @@ export const latticeCreateModelTool: ToolDefinition = {
         ruleCount: initialData?.rules?.length || 0,
       });
 
-      const modelData = createModelData(name, modelType, context.userId, description);
+      // Built by the service so a chat-created model carries the same `organizationId` and
+      // `sessionId` as an API-created one. Omitting either silently un-shares the model: without
+      // an org id `canReadModel` can never match a colleague, and without a session id the
+      // session-scoped list cannot find it.
+      const modelData = buildNewModel(
+        { id: context.userId, organizationId: context.user?.organizationId },
+        { name, description, modelType: modelType as ILatticeModel['modelType'], sessionId: context.sessionId }
+      );
 
       if (initialData?.entities && modelData.data) {
         const now = new Date();
@@ -261,11 +234,16 @@ export const latticeCreateModelTool: ToolDefinition = {
       // Return as artifact block that client can parse and display
       const entityCount = model.data?.entities?.length || 0;
       const ruleCount = model.rules?.rules?.length || 0;
+      // Model-controlled, and the whole tool result - prose included - is scanned for
+      // <artifact> tags by the tool_result extractor in llm/sharedToolBuilder.ts, which
+      // runs with no artifacts-enabled gate. So the name is sanitized everywhere it is
+      // emitted, not just inside the tag attribute.
+      const artifactTitle = sanitizeArtifactTitle(name);
 
-      return `Created "${name}" model with ${entityCount} entities and ${ruleCount} rules.
+      return `Created "${artifactTitle}" model with ${entityCount} entities and ${ruleCount} rules.
 
-<artifact identifier="${model.id}" type="application/vnd.b4m.lattice" title="${name}">
-${JSON.stringify(artifactData, null, 2)}
+<artifact identifier="${model.id}" type="application/vnd.b4m.lattice" title="${artifactTitle}">
+${escapeArtifactBodyJson(JSON.stringify(artifactData, null, 2))}
 </artifact>
 
 The model is ready for viewing. You can add more data by asking to add line items or create formulas.`;
@@ -363,6 +341,21 @@ Call: lattice_create_model with:
   }),
 };
 
+const toEntityId = (name: string) => name.toLowerCase().replace(/\s+/g, '_');
+
+const MAX_LISTED_ENTITIES = 50;
+
+function entityNotFoundError(entities: ILatticeModel['data']['entities'], entityName: string, attributeKey: string) {
+  // Models created with per-period values store "Revenue" + "Q2" as one entity named "Revenue Q2"
+  const perPeriod = entities.find(e => e.id === `${toEntityId(entityName)}_${toEntityId(attributeKey)}`);
+  const hint = perPeriod ? ` Did you mean entityName="${perPeriod.name}", attributeKey="value"?` : '';
+  const names = entities.slice(0, MAX_LISTED_ENTITIES).map(e => `"${e.name}"`);
+  const more = entities.length > MAX_LISTED_ENTITIES ? ` (and ${entities.length - MAX_LISTED_ENTITIES} more)` : '';
+  const available =
+    names.length > 0 ? ` Available entities: ${names.join(', ')}${more}.` : ' The model has no entities.';
+  return `Entity "${entityName}" not found; nothing was written.${hint}${available}`;
+}
+
 // Tool: add entity
 
 export const latticeAddEntityTool: ToolDefinition = {
@@ -400,8 +393,9 @@ export const latticeAddEntityTool: ToolDefinition = {
       if (context.db.latticeModels && modelId && isObjectIdShaped(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
-          // Owner-only: Lattice models have no share arrays, so a foreign id is denied
-          if (model && model.userId === context.userId) {
+          // Owner-only, via the same predicate `latticeModelService.getModelForWrite` uses: these
+          // tools MUTATE, and read access to a model (owner OR same org) is not write access.
+          if (model && isModelOwner(model, { id: context.userId })) {
             // Check if entity already exists
             const existingIndex = model.data.entities.findIndex(e => e.id === entityId);
             if (existingIndex >= 0) {
@@ -439,6 +433,12 @@ export const latticeAddEntityTool: ToolDefinition = {
           }
         } catch (error) {
           context.logger.error(`[Lattice] Failed to persist entity to database:`, error);
+          return JSON.stringify({
+            success: false,
+            action: 'ADD_ENTITY',
+            modelId,
+            error: `Failed to save entity to model ${modelId}`,
+          });
         }
       }
 
@@ -546,46 +546,50 @@ export const latticeSetValueTool: ToolDefinition = {
         value = false;
       }
 
-      // Convert entityName to entityId format
-      const entityId = entityName.toLowerCase().replace(/\s+/g, '_');
+      const entityId = toEntityId(entityName);
 
       // Try to persist to database if model is persisted
       if (context.db.latticeModels && modelId && isObjectIdShaped(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
-          // Owner-only: Lattice models have no share arrays, so a foreign id is denied
-          if (model && model.userId === context.userId) {
-            // Find the entity
-            const entity = model.data.entities.find(e => e.id === entityId || e.name === entityName);
-            if (entity) {
-              // Find or create attribute
-              const attrIndex = entity.attributes.findIndex(a => a.key === attributeKey);
-              const dataType = typeof value === 'number' ? 'number' : typeof value === 'boolean' ? 'boolean' : 'string';
-              const attributeData = {
-                key: attributeKey,
-                value,
-                dataType: dataType as LatticeDataType,
-                isComputed: false,
-              };
-
-              if (attrIndex >= 0) {
-                entity.attributes[attrIndex] = attributeData;
-              } else {
-                entity.attributes.push(attributeData);
-              }
-
-              entity.updatedAt = new Date();
-
-              // Save the updated model
-              await context.db.latticeModels.update({
-                id: modelId,
-                data: model.data,
-                updatedAt: new Date(),
-              });
-              context.logger.info(`[Lattice] Set ${entityId}.${attributeKey} = ${value} in model ${modelId}`);
-            } else {
+          // Owner-only, via the same predicate `latticeModelService.getModelForWrite` uses: these
+          // tools MUTATE, and read access to a model (owner OR same org) is not write access.
+          if (model && isModelOwner(model, { id: context.userId })) {
+            const entity = model.data.entities.find(e => e.id === entityId || toEntityId(e.name) === entityId);
+            if (!entity) {
               context.logger.warn(`[Lattice] Entity ${entityName} not found in model ${modelId}`);
+              return JSON.stringify({
+                success: false,
+                action: 'SET_VALUE',
+                modelId,
+                error: entityNotFoundError(model.data.entities, entityName, attributeKey),
+              });
             }
+            // Find or create attribute
+            const attrIndex = entity.attributes.findIndex(a => a.key === attributeKey);
+            const dataType = typeof value === 'number' ? 'number' : typeof value === 'boolean' ? 'boolean' : 'string';
+            const attributeData = {
+              key: attributeKey,
+              value,
+              dataType: dataType as LatticeDataType,
+              isComputed: false,
+            };
+
+            if (attrIndex >= 0) {
+              entity.attributes[attrIndex] = attributeData;
+            } else {
+              entity.attributes.push(attributeData);
+            }
+
+            entity.updatedAt = new Date();
+
+            // Save the updated model
+            await context.db.latticeModels.update({
+              id: modelId,
+              data: model.data,
+              updatedAt: new Date(),
+            });
+            context.logger.info(`[Lattice] Set ${entityId}.${attributeKey} = ${value} in model ${modelId}`);
           } else if (model) {
             // Model exists but is owned by another user: deny, do not report success
             context.logger.warn(`[Lattice] Access denied: caller does not own model ${modelId}`);
@@ -606,6 +610,12 @@ export const latticeSetValueTool: ToolDefinition = {
           }
         } catch (error) {
           context.logger.error(`[Lattice] Failed to persist value to database:`, error);
+          return JSON.stringify({
+            success: false,
+            action: 'SET_VALUE',
+            modelId,
+            error: `Failed to save ${entityName}.${attributeKey} to model ${modelId}`,
+          });
         }
       }
 
@@ -632,9 +642,12 @@ export const latticeSetValueTool: ToolDefinition = {
 
 **Important:** This tool is for setting raw input values. For calculated values (formulas), use \`lattice_create_rule\` instead.
 
+**Entity naming:** \`entityName\` must match an entity that already exists in the model. Models created with per-period values store each period as its own entity (e.g. "Revenue Q1") holding its number under \`attributeKey="value"\`. If the entity is not found, the call fails and lists the entities that exist - retry with one of those names.
+
 **Examples:**
-- "Q1 revenue is $100,000" → entityName="Revenue", attributeKey="Q1", value=100000
-- "Set headcount to 25" → entityName="Headcount", attributeKey="current", value=25`,
+- "Q1 revenue is $100,000" (model has a "Revenue Q1" entity) -> entityName="Revenue Q1", attributeKey="value", value=100000
+- "Q1 revenue is $100,000" (model has a "Revenue" entity keyed by period) -> entityName="Revenue", attributeKey="Q1", value=100000
+- "Set headcount to 25" -> entityName="Headcount", attributeKey="current", value=25`,
       parameters: {
         type: 'object',
         properties: {
@@ -708,8 +721,9 @@ export const latticeCreateRuleTool: ToolDefinition = {
       if (context.db.latticeModels && modelId && isObjectIdShaped(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
-          // Owner-only: Lattice models have no share arrays, so a foreign id is denied
-          if (model && model.userId === context.userId) {
+          // Owner-only, via the same predicate `latticeModelService.getModelForWrite` uses: these
+          // tools MUTATE, and read access to a model (owner OR same org) is not write access.
+          if (model && isModelOwner(model, { id: context.userId })) {
             // Check if output entity exists, if not create it
             const outputEntityExists = model.data.entities.some(
               e => e.id === outputEntityId || e.name.toLowerCase() === parsedRule.outputEntity.toLowerCase()
@@ -782,6 +796,12 @@ export const latticeCreateRuleTool: ToolDefinition = {
           }
         } catch (error) {
           context.logger.error(`[Lattice] Failed to persist rule to database:`, error);
+          return JSON.stringify({
+            success: false,
+            action: 'CREATE_RULE',
+            modelId,
+            error: `Failed to save rule "${name}" to model ${modelId}`,
+          });
         }
       }
 
@@ -980,10 +1000,10 @@ function parseFormula(formula: string): {
   const normalized = formula.toLowerCase().trim();
 
   // Pattern: "X = Y + Z" or "X equals Y plus Z" (supports multi-word entity names)
-  const equalsMatch = normalized.match(/^(.+?)\s*(?:=|equals?)\s*(.+)$/i);
+  const equalsMatch = splitEquals(normalized);
 
   if (equalsMatch) {
-    const [, output, expression] = equalsMatch;
+    const [output, expression] = equalsMatch;
 
     // Detect operation type
     if (expression.includes('+') || expression.includes('plus')) {

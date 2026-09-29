@@ -187,3 +187,71 @@ describe('FabFileRepository.pushTagsByFabFileId', () => {
     }
   });
 });
+
+// The single-name variant the lake membership door uses. Its whole reason to exist is the return
+// value: a count says the meta-tag was absent, while the PRE-IMAGE says whether the file was
+// already a member through some other signal - and only the winning write can answer that without
+// racing a concurrent writer.
+describe('FabFileRepository.pushTagReturningPriorState', () => {
+  setupMongoTest();
+
+  const userId = 'push-prior-user';
+
+  const seed = async (tags: { name: string; strength: number }[]): Promise<string> => {
+    const doc = await FabFile.create({
+      userId,
+      fileName: 'seed.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags,
+      ...{},
+    });
+    return doc.id as string;
+  };
+
+  beforeEach(async () => {
+    await FabFile.deleteMany({});
+  });
+
+  it('pushes the name and returns the document as it looked before the push', async () => {
+    const id = await seed([{ name: 'lk:q1', strength: 0.5 }]);
+
+    const prior = await fabFileRepository.pushTagReturningPriorState(id, 'datalake:lake', 1);
+
+    expect(prior?.userId).toBe(userId);
+    expect(prior?.tags).toEqual([{ name: 'lk:q1', strength: 0.5 }]);
+    const doc = await FabFile.findById(id);
+    expect(doc?.toJSON().tags).toEqual([
+      { name: 'lk:q1', strength: 0.5 },
+      { name: 'datalake:lake', strength: 1 },
+    ]);
+  });
+
+  // Null is how the caller tells "already carried the name" from "was not a member": the filtered
+  // push matched no document, so nothing was written and there is no transition to record.
+  it('reports null and writes nothing when the name is already present', async () => {
+    const id = await seed([{ name: 'datalake:lake', strength: 1 }]);
+
+    expect(await fabFileRepository.pushTagReturningPriorState(id, 'datalake:lake', 1)).toBeNull();
+    const doc = await FabFile.findById(id);
+    expect(doc?.toJSON().tags).toEqual([{ name: 'datalake:lake', strength: 1 }]);
+  });
+
+  // Exact-name presence, matching the multi-name half and the read path: a differently-cased
+  // variant is not this lake's membership tag, so the canonical one still has to go in.
+  it('pushes alongside a differently-cased variant of the same name', async () => {
+    const id = await seed([{ name: 'DataLake:Lake', strength: 1 }]);
+
+    const prior = await fabFileRepository.pushTagReturningPriorState(id, 'datalake:lake', 1);
+
+    expect(prior).not.toBeNull();
+    const doc = await FabFile.findById(id);
+    expect(doc?.toJSON().tags.map((t: { name: string }) => t.name)).toEqual(['DataLake:Lake', 'datalake:lake']);
+  });
+
+  it('reports null for an empty name rather than pushing one', async () => {
+    const id = await seed([]);
+
+    expect(await fabFileRepository.pushTagReturningPriorState(id, '')).toBeNull();
+  });
+});

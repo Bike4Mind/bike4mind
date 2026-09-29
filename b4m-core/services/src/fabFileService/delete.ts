@@ -1,13 +1,24 @@
 import { Logger } from '@bike4mind/observability';
 import {
+  IDataLakeRepository,
   IFabFileChunkRepository,
   IFabFileDocument,
   IFabFileRepository,
   ISessionRepository,
   IUserRepository,
+  LakeMembershipChangeOrigin,
 } from '@bike4mind/common';
 import { secureParameters, UnauthorizedError } from '@bike4mind/utils';
 import { z } from 'zod';
+import { findMemberLakesForFile } from '../dataLakeService/chunkPolicyConflict';
+import { satisfiesMembershipScope, type MembershipLake } from '../dataLakeService/lakeMembership';
+import { registryMembershipScope } from '../dataLakeService/lakeMembershipScope';
+import type { ManageActor } from '../dataLakeService/manageRule';
+import { registryCandidateLakes } from '../dataLakeService/registryCandidateLakes';
+import {
+  recordLakeMembershipChange,
+  type LakeMembershipAuditAdapters,
+} from '../dataLakeService/recordLakeMembershipChange';
 
 const deleteFabFileSchema = z.object({
   id: z.string(),
@@ -34,8 +45,8 @@ export type PublicDeleteFabFileAction = Exclude<DeleteFabFileAction, 'denied'>;
 export const toPublicDeleteAction = (action: DeleteFabFileAction): PublicDeleteFabFileAction =>
   action === 'denied' ? 'not_found' : action;
 
-export interface DeleteFabFileAdapter {
-  db: {
+export interface DeleteFabFileAdapter extends LakeMembershipAuditAdapters {
+  db: LakeMembershipAuditAdapters['db'] & {
     fabFiles: Pick<
       IFabFileRepository,
       'findByIdAndUserId' | 'findById' | 'findAllInIds' | 'update' | 'deleteManyInIds'
@@ -43,6 +54,9 @@ export interface DeleteFabFileAdapter {
     fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'distinctRetrievalIndexModelsByFabFileIds'>;
     users: Pick<IUserRepository, 'findById' | 'update'>;
     sessions: Pick<ISessionRepository, 'findAllWithKnowledgeId' | 'update'>;
+    // Optional, matching every other membership-write door: absent -> the removed-event recording
+    // below is skipped entirely rather than failing to compile (see LakeMembershipAuditAdapters).
+    dataLakes?: Pick<IDataLakeRepository, 'find' | 'findByDatalakeTag'>;
   };
   storage: {
     delete: (path: string) => Promise<unknown>;
@@ -53,6 +67,17 @@ export interface DeleteFabFileAdapter {
    * would survive as permanent orphans in its embeddingModel's OpenSearch index.
    */
   searchIndex?: { deleteByFabFileId: (fabFileId: string, embeddingModel: string) => Promise<void> };
+  /**
+   * Who drove this delete - forwarded to the membership `removed` events below (see
+   * `LakeMembershipChangeOrigin`'s own doc comment). Defaults to `'person'`; the Drive connector's
+   * sole-lake-copy delete (driveLakeIngest.ts) is the one caller that passes `'connector'`.
+   */
+  origin?: LakeMembershipChangeOrigin;
+  /**
+   * Rides on the actor handed to `recordLakeMembershipChange` so a key-driven delete attributes
+   * the resulting `removed` rows to the key, not the human it acts for - see `ManageActor.auditPrincipal`.
+   */
+  auditPrincipal?: ManageActor['auditPrincipal'];
 }
 
 export const deleteFabFile = async (
@@ -60,7 +85,7 @@ export const deleteFabFile = async (
   parameters: DeleteFabFileParameters,
   adapter: DeleteFabFileAdapter
 ): Promise<DeleteFabFileResult> => {
-  const { db, storage, onDeleteComplete, searchIndex } = adapter;
+  const { db, storage, onDeleteComplete, searchIndex, origin = 'person', auditPrincipal, logger } = adapter;
   const { id } = secureParameters(parameters, deleteFabFileSchema);
 
   const user = await db.users.findById(userId);
@@ -74,6 +99,40 @@ export const deleteFabFile = async (
       `[deleteFabFile] Deleting owned file — fileId: ${ownedFile.id}, fileName: ${ownedFile.fileName}, userId: ${userId}`
     );
     await db.fabFiles.update({ id: ownedFile.id, deletedAt: new Date() });
+
+    // A soft delete evicts the file from every lake it belonged to without going through
+    // removeFileFromLake (the tags are left in place, not pulled), so that path's `removed` event
+    // never fires. Record one here per member lake, best-effort, so a reader reconstructing
+    // membership from the change log does not see the file as still present. Resolved from the
+    // file's own tags, which a soft delete leaves untouched - only `dataLakes` and the audit repo
+    // gate this; a caller that wires neither records nothing.
+    //
+    // The lake-level restore door (`restoreDeletedDataLake`) records the matching `added` for a
+    // file it revives, so the two sides of a lake teardown/restore cycle stay consistent.
+    if (db.dataLakes && db.lakeMembershipChangeEvents) {
+      const memberLakes: MembershipLake[] = await findMemberLakesForFile(ownedFile, db.dataLakes).catch(err => {
+        Logger.globalInstance.error('[deleteFabFile] failed to resolve member lakes for removed event', {
+          fileId: ownedFile.id,
+          err,
+        });
+        return [];
+      });
+      // `findMemberLakesForFile` resolves DB-backed lakes only - it exists for chunk policy, which a
+      // document-less registry lake cannot declare. A file under a registry lake's open prefix arm
+      // is still a member of it, and this delete still costs it that membership.
+      memberLakes.push(
+        ...registryCandidateLakes().filter(lake => satisfiesMembershipScope(registryMembershipScope(lake), ownedFile))
+      );
+      const actor: ManageActor = { userId, isAdmin: false, auditPrincipal };
+      await Promise.all(
+        memberLakes.map(lake =>
+          recordLakeMembershipChange(
+            { actor, lake, fabFileId: ownedFile.id, action: 'removed', origin },
+            { db, logger }
+          )
+        )
+      );
+    }
 
     // Delete the main file in S3 and calculate size
     let sizeToDeduct = 0;
@@ -120,7 +179,9 @@ export const deleteFabFile = async (
     return { action: 'deleted', fabFile: ownedFile };
   }
 
-  // 2. User doesn't own the file - check if it's shared to them
+  // 2. User doesn't own the file - check if it's shared to them. A self-unshare (below), a denied
+  // removal, and a not-found id all leave the file's own tags untouched, so none of them change
+  // lake membership - only the owned soft-delete above does.
   const sharedFile = await db.fabFiles.findById(id);
   if (!sharedFile) {
     Logger.globalInstance.warn(`[deleteFabFile] File not found — fileId: ${id}, userId: ${userId}. Treating as no-op.`);

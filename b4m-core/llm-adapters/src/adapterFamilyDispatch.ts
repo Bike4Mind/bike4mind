@@ -101,10 +101,8 @@ export function backendForAdapterFamily(
       return key ? new DeepSeekBackend(key, logger) : null;
     }
     case 'bfl': {
-      // Matches the legacy switch and resolveListingKey: no key falls back to
-      // the demo key rather than to null.
       const key = keyOrThrow(apiKeyTable.bfl, 'BFL');
-      return new BFLBackend(key ?? 'demo-key');
+      return key ? new BFLBackend(key) : null;
     }
     case 'local-image': {
       const baseUrl = keyOrThrow(apiKeyTable['local-image'], 'Local image');

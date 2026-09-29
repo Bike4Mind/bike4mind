@@ -46,9 +46,14 @@ import GitHubIcon from '@mui/icons-material/GitHub';
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
-import { canViewOrgUsage, OrganizationTabs, resolveAccessibleTab } from '@client/app/routes/organizations/orgTabAccess';
-import { useParams, useSearch } from '@tanstack/react-router';
-import { FC, useMemo, useState, useEffect } from 'react';
+import {
+  canViewOrgBilling,
+  canViewOrgUsage,
+  OrganizationTabs,
+  resolveAccessibleTab,
+} from '@client/app/routes/organizations/orgTabAccess';
+import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
+import { FC, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const OrganizationPage: FC = () => {
@@ -56,13 +61,23 @@ const OrganizationPage: FC = () => {
   const { id } = useParams({ strict: false });
   const { data: organization, isLoading } = useGetOrganization(id as string);
   const { maxSeats, currentSeats } = useOrganizationSeats(id as string);
+  const navigate = useNavigate();
   const search = useSearch({ strict: false }) as { tab?: string };
-  const [selectedTab, setSelectedTab] = useState<OrganizationTabs>(
+  const { currentUser } = useUser();
+
+  // The URL is the only place the requested tab lives; the page keeps no copy, so Back and a
+  // pasted link move it like a click does. An unknown value names no tab, which would leave Tabs
+  // with nothing selected, so it reads as Overview.
+  const requestedTab =
     search.tab && Object.values(OrganizationTabs).includes(search.tab as OrganizationTabs)
       ? (search.tab as OrganizationTabs)
-      : OrganizationTabs.Overview
-  );
-  const { currentUser } = useUser();
+      : OrganizationTabs.Overview;
+
+  // Replace rather than push: a tab click is a view change, not a destination, and pushing would
+  // put one back-stack entry per click between the caller and the page they arrived from.
+  const requestTab = (tab: OrganizationTabs) => {
+    navigate({ to: '/organizations/$id', params: { id: id as string }, search: { tab }, replace: true });
+  };
 
   // Check user permissions.
   // In the b4m client only the org owner can add/remove members.
@@ -98,17 +113,29 @@ const OrganizationPage: FC = () => {
     );
   }, [currentUser, organization]);
 
+  // Billing is owner-only, narrower than canManageOrg - see canViewOrgBilling for why, and for
+  // why a platform admin is not admitted here either.
+  const canViewBilling = useMemo(() => canViewOrgBilling(currentUser, organization), [currentUser, organization]);
+
   // Only the billing owner or a platform admin may appoint org admins (admins route authz).
   const canSetAdmins = useMemo(() => {
     if (!currentUser || !organization) return false;
     return currentUser.isAdmin || currentUser.id === organization.userId;
   }, [currentUser, organization]);
 
-  // A ?tab= deep link can select a tab this caller never gets rendered, so the selection is sent
-  // back through the same visibility rules the TabList applies.
-  useEffect(() => {
-    setSelectedTab(resolveAccessibleTab(selectedTab, { canManageOrg, canViewUsage, canManageGroups }));
-  }, [canManageOrg, canViewUsage, canManageGroups, selectedTab]);
+  // A ?tab= deep link can ask for a tab this caller never gets rendered, so the request is sent
+  // back through the same visibility rules the TabList applies. Resolved during render rather than
+  // in an effect on purpose: the gates read the org document, which lands a render after mount, and
+  // until it does they deny everyone; deriving re-answers the question the moment it arrives.
+  // The answer is deliberately not written back to the URL - rewriting ?tab=usage to ?tab=overview
+  // would break the link for this caller the day they are granted access, and make one shared URL
+  // mean different things to different people.
+  const selectedTab = resolveAccessibleTab(requestedTab, {
+    canManageOrg,
+    canViewUsage,
+    canManageGroups,
+    canViewBilling,
+  });
 
   useDocumentTitle(organization?.name, ' | Organization');
 
@@ -144,7 +171,7 @@ const OrganizationPage: FC = () => {
 
       <OrganizationHeader
         organization={organization}
-        onSettingsClick={() => canManageOrg && setSelectedTab(OrganizationTabs.Settings)}
+        onSettingsClick={() => canManageOrg && requestTab(OrganizationTabs.Settings)}
       />
 
       <Box sx={{ display: 'flex', flex: 1, minHeight: 0 }}>
@@ -157,7 +184,7 @@ const OrganizationPage: FC = () => {
             minHeight: 0,
           }}
           value={selectedTab}
-          onChange={(_, value) => setSelectedTab(value as OrganizationTabs)}
+          onChange={(_, value) => requestTab(value as OrganizationTabs)}
         >
           <TabList
             sx={{
@@ -202,12 +229,14 @@ const OrganizationPage: FC = () => {
                 </Tab>
               </>
             )}
+            {canViewBilling && (
+              <Tab value={OrganizationTabs.Billing} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <CreditCardOutlinedIcon sx={{ fontSize: 16 }} />
+                Billing
+              </Tab>
+            )}
             {canManageOrg && (
               <>
-                <Tab value={OrganizationTabs.Billing} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <CreditCardOutlinedIcon sx={{ fontSize: 16 }} />
-                  Billing
-                </Tab>
                 <Tab value={OrganizationTabs.Integrations} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <ExtensionOutlinedIcon sx={{ fontSize: 16 }} />
                   Integrations
@@ -262,14 +291,16 @@ const OrganizationPage: FC = () => {
                 </TabPanel>
               </>
             )}
+            {canViewBilling && (
+              <TabPanel value={OrganizationTabs.Billing}>
+                <Typography level="title-lg" startDecorator={<CreditCardOutlinedIcon />} sx={{ mb: 3 }}>
+                  Billing & Subscription
+                </Typography>
+                <OrganizationBillingSection organization={organization} />
+              </TabPanel>
+            )}
             {canManageOrg && (
               <>
-                <TabPanel value={OrganizationTabs.Billing}>
-                  <Typography level="title-lg" startDecorator={<CreditCardOutlinedIcon />} sx={{ mb: 3 }}>
-                    Billing & Subscription
-                  </Typography>
-                  <OrganizationBillingSection organization={organization} />
-                </TabPanel>
                 <TabPanel value={OrganizationTabs.Integrations}>
                   <Typography level="title-lg" startDecorator={<ExtensionOutlinedIcon />} sx={{ mb: 3 }}>
                     Integrations

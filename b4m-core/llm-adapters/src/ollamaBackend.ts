@@ -1,5 +1,7 @@
 import {
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
+  createThinkMarkerEscaper,
+  escapeThinkMarkers,
   IMessage,
   isUserInitiatedAbort,
   ModelBackend,
@@ -20,7 +22,7 @@ import { ILogger, Logger } from '@bike4mind/observability';
 import { Agent } from 'undici';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { executeToolsBatch } from './executeToolsBatch';
-import { truncateToolResult } from './recordToolResult';
+import { attachFullToolResult, truncateToolResult } from './recordToolResult';
 import { normalizeOllamaDoneReason } from './stopReason';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -392,16 +394,20 @@ export class OllamaBackend implements ICompletionBackend {
       // stamped directly into the rebuild, index-aligned with outcomes/observations.
       const executedToolsUsed = [
         ...priorToolsUsed,
-        ...resolved.map(({ tc }, i) => ({
-          name: tc.name,
-          arguments: tc.arguments,
-          id: tc.id,
-          // String(...) matches recordToolResult's own defensive wrap on the other backends -
-          // observations[i] is already a string here (executeToolsBatch<string>), but keeping
-          // the same guard means a future change to that generic can't silently drop it.
-          returnValue: truncateToolResult(String(observations[i])),
-          success: outcomes[i].ok,
-        })),
+        ...resolved.map(({ tc }, i) => {
+          const entry = {
+            name: tc.name,
+            arguments: tc.arguments,
+            id: tc.id,
+            // String(...) matches recordToolResult's own defensive wrap on the other backends -
+            // observations[i] is already a string here (executeToolsBatch<string>), but keeping
+            // the same guard means a future change to that generic can't silently drop it.
+            returnValue: truncateToolResult(String(observations[i])),
+            success: outcomes[i].ok,
+          };
+          attachFullToolResult(entry, observations[i]);
+          return entry;
+        }),
       ];
 
       // Stop before another round if the request was cancelled mid-flight, rather
@@ -477,6 +483,7 @@ export class OllamaBackend implements ICompletionBackend {
       // Modern Ollama streams reasoning in a separate `thinking` field rather
       // than inline <think> tags; track whether we've opened a wrapper for it.
       let thinkingFieldOpen = false;
+      const thinkEscaper = createThinkMarkerEscaper();
 
       for await (const chunk of response) {
         if (chunk.message.tool_calls?.length) {
@@ -492,11 +499,12 @@ export class OllamaBackend implements ICompletionBackend {
             piece += '<think>';
             thinkingFieldOpen = true;
           }
-          piece += thinkPiece;
+          piece += thinkEscaper.push(thinkPiece);
         }
         const contentPiece = chunk.message.content || '';
         if (contentPiece) {
           if (thinkingFieldOpen) {
+            piece += thinkEscaper.flush();
             piece += '</think>';
             thinkingFieldOpen = false;
           }
@@ -511,6 +519,7 @@ export class OllamaBackend implements ICompletionBackend {
         // Non-reasoning models (e.g. qwen2.5-coder) emit neither, so nothing is
         // appended for them.
         if (chunk.done && (thinkingFieldOpen || (startedThinking && !stoppedThinking))) {
+          if (thinkingFieldOpen) piece += thinkEscaper.flush();
           piece = `${piece}</think>`;
           thinkingFieldOpen = false;
         }
@@ -534,7 +543,7 @@ export class OllamaBackend implements ICompletionBackend {
       // Prepend reasoning (from the separate thinking field) as a <think> block
       // so it renders consistently with the streaming path.
       const think = response.message.thinking || '';
-      content = (think ? `<think>${think}</think>` : '') + (response.message.content || '');
+      content = (think ? `<think>${escapeThinkMarkers(think)}</think>` : '') + (response.message.content || '');
       inputTokens = response.prompt_eval_count || 0;
       outputTokens = response.eval_count || 0;
       doneReason = response.done_reason;

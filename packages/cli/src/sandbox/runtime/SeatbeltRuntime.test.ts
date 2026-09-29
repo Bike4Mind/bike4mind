@@ -38,6 +38,7 @@ describe('SeatbeltRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
       });
 
       expect(profile).toContain('(version 1)');
@@ -56,6 +57,7 @@ describe('SeatbeltRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [`${home}/.ssh`, `${home}/.aws`],
         },
+        networkEnabled: false,
       });
 
       expect(profile).toContain(`(deny file-read* file-write* (subpath "${home}/.ssh"))`);
@@ -72,6 +74,7 @@ describe('SeatbeltRuntime', () => {
           allowedReadPaths: [`${home}/.gitconfig`, `${home}/.npmrc`],
           deniedPaths: [],
         },
+        networkEnabled: false,
       });
 
       expect(profile).toContain(`(allow file-read* (subpath "${home}/.gitconfig"))`);
@@ -87,10 +90,82 @@ describe('SeatbeltRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
       });
 
       expect(profile).toContain('(allow file-write* (subpath "/tmp"))');
       expect(profile).toContain('(allow file-write* (subpath "/private/tmp"))');
+    });
+
+    it('denies network when network is disabled (fail-closed)', () => {
+      const profile = runtime.generateProfile({
+        command: 'curl https://example.com',
+        cwd: '/Users/test/project',
+        filesystemConfig: {
+          writeOnlyToWorkingDir: true,
+          allowedReadPaths: [],
+          deniedPaths: [],
+        },
+        networkEnabled: false,
+      });
+
+      expect(profile).toContain('(deny network*)');
+    });
+
+    it('re-allows local unix sockets after denying IP, in that order (fail-closed local IPC)', () => {
+      // Regression: a bare `(deny network*)` also severs AF_UNIX (ssh-agent,
+      // gpg-agent, docker.sock). Seatbelt is last-match-wins, so the unix-socket
+      // re-allows MUST come after the deny, and the deny after `(allow default)`.
+      const profile = runtime.generateProfile({
+        command: 'ssh-add -l',
+        cwd: '/Users/test/project',
+        filesystemConfig: {
+          writeOnlyToWorkingDir: true,
+          allowedReadPaths: [],
+          deniedPaths: [],
+        },
+        networkEnabled: false,
+      });
+
+      const allowDefaultIdx = profile.indexOf('(allow default)');
+      const denyIdx = profile.indexOf('(deny network*)');
+      const unixOutboundIdx = profile.indexOf('(allow network-outbound (remote unix-socket))');
+
+      expect(allowDefaultIdx).toBeGreaterThan(-1);
+      expect(denyIdx).toBeGreaterThan(allowDefaultIdx);
+      expect(unixOutboundIdx).toBeGreaterThan(denyIdx);
+      expect(profile).toContain('(allow network-inbound (local unix-socket))');
+      expect(profile).toContain('(allow network-bind (local unix-socket))');
+    });
+
+    it('does not emit the unix-socket re-allows when network is enabled', () => {
+      const profile = runtime.generateProfile({
+        command: 'curl https://example.com',
+        cwd: '/Users/test/project',
+        filesystemConfig: {
+          writeOnlyToWorkingDir: true,
+          allowedReadPaths: [],
+          deniedPaths: [],
+        },
+        networkEnabled: true,
+      });
+
+      expect(profile).not.toContain('unix-socket');
+    });
+
+    it('does not deny network when network is enabled', () => {
+      const profile = runtime.generateProfile({
+        command: 'curl https://example.com',
+        cwd: '/Users/test/project',
+        filesystemConfig: {
+          writeOnlyToWorkingDir: true,
+          allowedReadPaths: [],
+          deniedPaths: [],
+        },
+        networkEnabled: true,
+      });
+
+      expect(profile).not.toContain('(deny network*)');
     });
 
     it('expands $HOME and $USER in paths', () => {
@@ -103,6 +178,7 @@ describe('SeatbeltRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: ['$HOME/.ssh'],
         },
+        networkEnabled: false,
       });
 
       expect(profile).toContain(`(deny file-read* file-write* (subpath "${home}/.ssh"))`);
@@ -120,6 +196,7 @@ describe('SeatbeltRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
       });
 
       expect(result.executable).toBe('sandbox-exec');
@@ -140,6 +217,7 @@ describe('SeatbeltRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
       });
 
       // Verify the mocked writeFileSync was called
@@ -159,6 +237,7 @@ describe('SeatbeltRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
       });
 
       expect(result.commandString).toContain('sandbox-exec');
@@ -174,6 +253,7 @@ describe('SeatbeltRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
         env: { HTTP_PROXY: 'http://127.0.0.1:8080', HTTPS_PROXY: 'http://127.0.0.1:8080' },
       });
 
@@ -189,6 +269,7 @@ describe('SeatbeltRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
         env: {},
       });
 
@@ -205,6 +286,7 @@ describe('SeatbeltRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
         env,
       });
 

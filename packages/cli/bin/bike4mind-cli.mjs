@@ -259,11 +259,6 @@ const argv = await yargs(hideBin(process.argv))
   .alias('version', 'V')
   .parse();
 
-// Suppress dotenv startup log unless verbose mode is enabled
-if (!argv.verbose && !argv['debug-stream']) {
-  process.env.DOTENV_CONFIG_QUIET = 'true';
-}
-
 // Set environment variables from CLI flags
 if (argv.verbose) {
   process.env.B4M_VERBOSE = '1';

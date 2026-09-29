@@ -22,8 +22,9 @@ interface RefuseWholeInviteAdapters {
  * touch anyone else's slot or the invite as a whole, since a multi-recipient invite is
  * shared state across every invitee. Revoking the WHOLE invite (a link invite, or a
  * caller who is not a named pending recipient) instead requires the same share
- * authority cancelInviteById.ts enforces via `authorizeByInviteType` (owner /
- * users-share / groups-share). This replaces two holes the manager's CASL
+ * authority cancelInviteById.ts enforces via `authorizeByInviteType` with
+ * requireManageGroups (billing owner, org admin, or platform admin for Org/Group
+ * invites; share access for FabFile/Session/Project). This replaces two holes the manager's CASL
  * `acceptOrRefuse` scope left open: any holder of a link invite id could zero it for
  * everyone, and one named recipient declining could do the same to every co-recipient.
  */
@@ -57,7 +58,7 @@ export const refuseWholeInvite = async (
     invite.recipients!.refused = [...(invite.recipients!.refused ?? []), user.email as string];
     invite.remaining -= 1;
   } else {
-    await authorizeByInviteType(user, invite.type, invite.documentId, db);
+    await authorizeByInviteType(user, invite.type, invite.documentId, db, { requireManageGroups: true });
 
     invite.remaining = 0;
     if (invite.recipients) {

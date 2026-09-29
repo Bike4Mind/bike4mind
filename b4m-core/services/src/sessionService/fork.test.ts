@@ -57,6 +57,32 @@ describe('forkSession', () => {
   });
 
   /**
+   * Pins `knowledgeIdsFromSourceSession`: the fork must copy the source's knowledgeIds without
+   * re-running the access filter, which would drop a teammate-authored organization-lake file the
+   * caller cannot independently resolve. Uses an ObjectId-shaped id so the id survives the earlier
+   * ObjectId-shape drop and actually reaches the filter this test is pinning the opt-out of.
+   */
+  it('copies the source knowledgeIds without re-running the access filter', async () => {
+    const { db } = makeAdapters();
+    const FILE_ID = '507f1f77bcf86cd799439011';
+    const findAccessibleInIds = vi.fn().mockResolvedValue([]);
+    db.fabFiles = { findAccessibleInIds };
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [FILE_ID],
+      tags: [],
+      retrievalTags: ['datalake:acme'],
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(findAccessibleInIds).not.toHaveBeenCalled();
+    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ knowledgeIds: [FILE_ID] }));
+  });
+
+  /**
    * `taggedAt` is the companion timestamp of `tags`, same as `summaryAt` is of `summary`. A fork
    * that arrives without it looks untagged, so the spider re-tags it and overwrites the copied tags.
    */
@@ -77,6 +103,76 @@ describe('forkSession', () => {
     expect(db.sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({ taggedAt, tags: [{ name: 'racing', strength: 0.9 }] })
     );
+  });
+
+  /**
+   * `summaryTrigger` is the WHY beside `summaryAt`'s WHEN. A fork already inherits the summary text
+   * and its timestamp - both claims about a run on the SOURCE - so dropping the trigger leaves the
+   * copy claiming a summary with no provenance, the exact state the admin summarization-spend view
+   * exists to read.
+   */
+
+  /**
+   * A decision-only trigger can no longer be published or stored, but a copy path must not be the
+   * thing that discovers a document holding one: rejecting it in createSessionParametersSchema
+   * would turn a stale row into a 422 that makes the notebook uncopyable. Drop the provenance,
+   * keep the copy.
+   */
+  it('drops a decision-only summaryTrigger instead of failing the fork', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      summary: 'the gist',
+      summaryTrigger: 'throttling',
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(db.sessions.create.mock.calls[0][0].summaryTrigger).toBeUndefined();
+    expect(db.sessions.create.mock.calls[0][0].summary).toBe('the gist');
+  });
+
+  it('carries the source session summaryTrigger onto the fork', async () => {
+    const { db } = makeAdapters();
+    const summaryAt = new Date('2026-01-01T00:00:00.000Z');
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      summary: 'the gist',
+      summaryAt,
+      summaryTrigger: 'manual',
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: 'the gist', summaryAt, summaryTrigger: 'manual' })
+    );
+  });
+
+  // A source summarized before the field existed must not come out of the copy carrying an invented
+  // provenance; the copy passes the field through explicitly, so the key is present holding undefined.
+  it('does not fabricate a summaryTrigger when the source has none', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      summary: 'the gist',
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(db.sessions.create.mock.calls[0][0].summaryTrigger).toBeUndefined();
   });
 
   it('forks messages up to the fork point when the message belongs to the session', async () => {

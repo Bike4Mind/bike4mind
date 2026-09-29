@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { IDataLakeResearchConfigDocument, IDataLakeResearchRunDocument } from '@bike4mind/common';
@@ -8,6 +8,7 @@ import {
   emptyResearchRunTotals,
   RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
   RESEARCH_MIN_RELEVANCE_DEFAULT,
+  RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
   RESEARCH_RUN_STALE_AFTER_MS,
 } from '@bike4mind/common';
 import { DataLakeResearchPanel } from './DataLakeResearchPanel';
@@ -67,28 +68,28 @@ const run = (overrides: Partial<IDataLakeResearchRunDocument> = {}) =>
   }) as IDataLakeResearchRunDocument;
 
 const handlers = () => ({
-  onCreate: vi.fn(),
-  onUpdate: vi.fn(),
+  onCreate: vi.fn().mockResolvedValue(undefined),
+  onUpdate: vi.fn().mockResolvedValue(undefined),
   onDelete: vi.fn(),
   onStartRun: vi.fn(),
 });
 
 const renderPanel = (props: Partial<React.ComponentProps<typeof DataLakeResearchPanel>> = {}) => {
   const spies = handlers();
-  render(
+  const { unmount } = render(
     <Wrapper>
       <DataLakeResearchPanel
         configs={[]}
         runs={[]}
         isLoading={false}
         error={null}
-        modelOptions={[{ id: 'gpt-4.1-mini', name: 'GPT-4.1 mini' }]}
+        modelOptions={[{ id: 'gpt-4.1-mini', label: 'GPT-4.1 mini' }]}
         {...spies}
         {...props}
       />
     </Wrapper>
   );
-  return spies;
+  return { ...spies, unmount };
 };
 
 beforeEach(() => vi.clearAllMocks());
@@ -132,7 +133,7 @@ describe('DataLakeResearchPanel', () => {
 
     expect(screen.getByTestId('datalake-research-config-query').textContent).toBe('coastal erosion in Cornwall');
     expect(screen.getByTestId('datalake-research-config-limits').textContent).toMatch(/Up to 5 proposals/);
-    expect(screen.getByTestId('datalake-research-config-limits').textContent).toMatch(/0\.0500 ceiling/);
+    expect(screen.getByTestId('datalake-research-config-limits').textContent).toMatch(/\$0\.05 ceiling/);
   });
 
   it('starts a run for the configuration whose button was pressed', () => {
@@ -273,6 +274,19 @@ describe('DataLakeResearchPanel', () => {
       expect(spies.onCreate).not.toHaveBeenCalled();
     });
 
+    // toFixed(2) would seed this field with "0.00", which fails the "above $0" check and blocks
+    // Save, or rounds up and saves a ceiling other than the one that was loaded.
+    it('round-trips a sub-cent cost ceiling through Edit and Save unchanged', () => {
+      const spies = renderPanel({ configs: [config({ costCeilingMicroUsd: 4_000 })] });
+
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      expect((screen.getByTestId('datalake-research-cost-ceiling-input') as HTMLInputElement).value).toBe('0.004');
+      expect(screen.getByTestId('datalake-research-save-btn')).not.toBeDisabled();
+
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+      expect(spies.onUpdate).toHaveBeenCalledWith('config-1', expect.objectContaining({ costCeilingMicroUsd: 4_000 }));
+    });
+
     // undefined would mean "unchanged" and the stored value would come straight back.
     it('sends null for a cleared recency, so clearing it actually clears it', () => {
       const spies = renderPanel({ configs: [config()] });
@@ -282,6 +296,109 @@ describe('DataLakeResearchPanel', () => {
       fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
 
       expect(spies.onUpdate.mock.calls[0][1].recencyDays).toBeNull();
+    });
+
+    it('closes the form once a save succeeds', async () => {
+      const spies = renderPanel();
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+      expect(spies.onCreate).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(screen.queryByTestId('datalake-research-form')).toBeNull());
+    });
+
+    it('keeps a new draft on screen when the create is refused, so Save can be retried', async () => {
+      const onCreate = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(undefined);
+      renderPanel({ onCreate });
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
+      fireEvent.change(screen.getByTestId('datalake-research-recency-input'), { target: { value: '45' } });
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+      await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+      await Promise.resolve();
+      expect(screen.getByTestId('datalake-research-form')).toBeInTheDocument();
+      expect((screen.getByTestId('datalake-research-name-input') as HTMLInputElement).value).toBe('Weekly');
+      expect((screen.getByTestId('datalake-research-query-input') as HTMLTextAreaElement).value).toBe('erosion');
+      expect((screen.getByTestId('datalake-research-recency-input') as HTMLInputElement).value).toBe('45');
+
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+      expect(onCreate).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'Weekly', recencyDays: 45 }));
+      await waitFor(() => expect(screen.queryByTestId('datalake-research-form')).toBeNull());
+    });
+
+    it('keeps edits on screen when the update is refused', async () => {
+      const onUpdate = vi.fn().mockRejectedValue(new Error('forbidden'));
+      renderPanel({ configs: [config()], onUpdate });
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'dune erosion' } });
+      fireEvent.change(screen.getByTestId('datalake-research-recency-input'), { target: { value: '7' } });
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledWith('config-1', expect.anything()));
+      await Promise.resolve();
+      expect(screen.getByTestId('datalake-research-form')).toBeInTheDocument();
+      expect((screen.getByTestId('datalake-research-query-input') as HTMLTextAreaElement).value).toBe('dune erosion');
+      expect((screen.getByTestId('datalake-research-recency-input') as HTMLInputElement).value).toBe('7');
+    });
+
+    // The save's own settle must not close a form that was opened after it was sent.
+    it('leaves a newer form open when an earlier save settles', async () => {
+      let resolveCreate: () => void = () => {};
+      const onCreate = vi.fn(() => new Promise<void>(resolve => (resolveCreate = resolve)));
+      renderPanel({ configs: [config()], onCreate });
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-cancel-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+
+      resolveCreate();
+      await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+      await Promise.resolve();
+      expect(screen.getByTestId('datalake-research-form')).toBeInTheDocument();
+      expect((screen.getByTestId('datalake-research-name-input') as HTMLInputElement).value).toBe('Weekly sweep');
+    });
+
+    // Every create session shares editingId '', so the guard has to tell sessions apart, not ids.
+    it('leaves a second new-configuration draft open when the first create settles', async () => {
+      let resolveCreate: () => void = () => {};
+      const onCreate = vi.fn(() => new Promise<void>(resolve => (resolveCreate = resolve)));
+      renderPanel({ onCreate });
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-cancel-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Monthly' } });
+
+      resolveCreate();
+      await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+      await Promise.resolve();
+      expect(screen.getByTestId('datalake-research-form')).toBeInTheDocument();
+      expect((screen.getByTestId('datalake-research-name-input') as HTMLInputElement).value).toBe('Monthly');
+    });
+
+    it('leaves a reopened edit of the same configuration open when the earlier update settles', async () => {
+      let resolveUpdate: () => void = () => {};
+      const onUpdate = vi.fn(() => new Promise<void>(resolve => (resolveUpdate = resolve)));
+      renderPanel({ configs: [config()], onUpdate });
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-cancel-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'dune erosion' } });
+
+      resolveUpdate();
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+      await Promise.resolve();
+      expect(screen.getByTestId('datalake-research-form')).toBeInTheDocument();
+      expect((screen.getByTestId('datalake-research-query-input') as HTMLTextAreaElement).value).toBe('dune erosion');
     });
 
     it('closes without saving on cancel', () => {
@@ -343,6 +460,26 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.queryByTestId('datalake-research-run-totals')).toBeNull();
     });
 
+    // A judge that failed on some candidates still completes, but the card must say why the totals
+    // are thin rather than leaving "N could not be judged" as the only hint.
+    it('shows the judge error on a completed run alongside its totals', () => {
+      renderPanel({
+        runs: [
+          run({
+            error: 'The relevance judge (some-model) failed on 1 candidate: rate limited',
+            totals: { ...run().totals, searchHits: 2, judgeFailed: 1, proposed: 1 },
+          }),
+        ],
+      });
+      expect(screen.getByTestId('datalake-research-run-error').textContent).toMatch(/rate limited/);
+      expect(screen.getByTestId('datalake-research-run-totals').textContent).toMatch(/1 could not be judged/);
+    });
+
+    it('names the model that judged a run', () => {
+      renderPanel({ runs: [run({ judgeModel: 'gpt-4.1-mini' })] });
+      expect(screen.getByText(/judged by gpt-4\.1-mini/)).toBeTruthy();
+    });
+
     it('shows what a run spent, at a resolution a fraction of a cent survives', () => {
       renderPanel({ runs: [run({ spentMicroUsd: 300 })] });
       expect(screen.getByTestId('datalake-research-run-row').textContent).toMatch(/\$0\.0003/);
@@ -366,6 +503,224 @@ describe('DataLakeResearchPanel', () => {
         ],
       });
       expect(screen.getByTestId('datalake-research-run-status').textContent).toBe('abandoned');
+    });
+  });
+
+  describe('form validation', () => {
+    const openFilledForm = () => {
+      const spies = renderPanel();
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
+      return spies;
+    };
+
+    // The server clamps instead of refusing, so each of these used to save a config other than the
+    // one on screen: 999 results stored as 50, a $99 ceiling as $5.00, -7 days as "no limit".
+    it.each([
+      ['max-results', '999'],
+      ['max-results', '2.5'],
+      ['max-proposals', '-3'],
+      ['recency', '-7'],
+      ['min-relevance', '5'],
+      ['cost-ceiling', '99'],
+      ['cost-ceiling', '0'],
+    ])('disables Save when %s is %s', (field, value) => {
+      const spies = openFilledForm();
+      fireEvent.change(screen.getByTestId(`datalake-research-${field}-input`), { target: { value } });
+
+      expect(screen.getByTestId('datalake-research-save-btn')).toBeDisabled();
+      expect(screen.getByTestId('datalake-research-save-hint').textContent).toMatch(/highlighted fields/i);
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+      expect(spies.onCreate).not.toHaveBeenCalled();
+    });
+
+    it('shows the range as the error in place of the help text', () => {
+      openFilledForm();
+      fireEvent.change(screen.getByTestId('datalake-research-max-proposals-input'), { target: { value: '-3' } });
+      expect(screen.getByText('Enter a whole number from 1 to 25.')).toBeTruthy();
+    });
+
+    it('explains a Save disabled for a missing name or question', () => {
+      renderPanel();
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      expect(screen.getByTestId('datalake-research-save-hint').textContent).toMatch(/name and what to look for/i);
+    });
+
+    it('counts the name and question against their limits', () => {
+      openFilledForm();
+      expect(screen.getByTestId('datalake-research-name-count').textContent).toBe('6/120');
+      expect(screen.getByTestId('datalake-research-query-count').textContent).toMatch(/7\/500$/);
+    });
+  });
+
+  describe('config card', () => {
+    it('pluralizes the proposal limit and shows a whole-cent ceiling as money', () => {
+      renderPanel({ configs: [config({ maxProposals: 1, costCeilingMicroUsd: 50_000 })] });
+      expect(screen.getByTestId('datalake-research-config-limits').textContent).toBe(
+        'Up to 1 proposal \u00b7 $0.05 ceiling'
+      );
+    });
+
+    it('names the model and lists the tags a run proposes', () => {
+      renderPanel({ configs: [config({ proposedTags: ['research', 'weekly'] })] });
+      expect(screen.getByTestId('datalake-research-config-model').textContent).toBe('Model: GPT-4.1 mini');
+      expect(screen.getByTestId('datalake-research-config-tags').textContent).toBe('researchweekly');
+    });
+
+    it('names the default model when the config leaves it unset', () => {
+      renderPanel({ configs: [config({ model: undefined })], defaultModelLabel: 'Default (GPT-4.1 Mini)' });
+      expect(screen.getByTestId('datalake-research-config-model').textContent).toBe('Model: Default (GPT-4.1 Mini)');
+    });
+
+    // `lastRunAt` is stamped at queue time; the history row shows the start time. One page, one clock.
+    it('reports the last run at the time its history row shows', () => {
+      const startedAt = new Date('2026-03-01T12:00:00.000Z');
+      renderPanel({
+        configs: [config({ lastRunAt: new Date('2026-03-01T11:00:00.000Z') })],
+        runs: [run({ startedAt })],
+      });
+      expect(screen.getByTestId('datalake-research-config-last-run').textContent).toBe(
+        `Last run ${startedAt.toLocaleString()}`
+      );
+    });
+
+    // A retired or filtered model must still read as the selection, or the picker shows blank while
+    // a save quietly keeps a model the manager cannot see.
+    it('keeps a saved model the picker no longer lists visible as the selection', () => {
+      renderPanel({ configs: [config({ model: 'o3-deep-research' })] });
+      expect(screen.getByTestId('datalake-research-config-model').textContent).toBe('Model: o3-deep-research');
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      expect(screen.getByTestId('datalake-research-model-select').textContent).toBe(
+        'o3-deep-research (not offered for research)'
+      );
+    });
+
+    it('will not run a config while its edit form holds unsaved changes', () => {
+      const spies = renderPanel({ configs: [config()] });
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      expect(screen.getByTestId('datalake-research-run-btn')).not.toBeDisabled();
+
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'something else' } });
+      const runButton = screen.getByTestId('datalake-research-run-btn');
+      expect(runButton).toBeDisabled();
+      expect(runButton.textContent).toBe('Save changes to run');
+      fireEvent.click(runButton);
+      expect(spies.onStartRun).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('scheduling (#3292)', () => {
+    it('sends the chosen cadence and review backlog limit on create', () => {
+      const spies = renderPanel();
+
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
+      fireEvent.click(screen.getByTestId('datalake-research-cadence-select'));
+      fireEvent.click(screen.getByRole('option', { name: 'Daily' }));
+      fireEvent.change(screen.getByTestId('datalake-research-review-backlog-input'), { target: { value: '10' } });
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+      expect(spies.onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ cadence: 'daily', reviewBacklogLimit: 10 })
+      );
+    });
+
+    // The field only means something once a schedule is chosen - showing it against "Off" would
+    // suggest it governs Run now, which it never does.
+    it('hides the review backlog field while the schedule is off', () => {
+      renderPanel();
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      expect(screen.queryByTestId('datalake-research-review-backlog-input')).toBeNull();
+    });
+
+    it('shows no schedule line on the config card when the cadence is off', () => {
+      renderPanel({ configs: [config()] });
+      expect(screen.queryByTestId('research-config-schedule')).toBeNull();
+    });
+
+    it('names the cadence and the next run time on the config card', () => {
+      renderPanel({
+        configs: [config({ cadence: 'weekly', nextRunAt: new Date('2026-04-01T00:00:00.000Z') })],
+      });
+      const line = screen.getByTestId('research-config-schedule').textContent ?? '';
+      expect(line).toMatch(/Runs weekly/);
+      expect(line).toMatch(/next/);
+    });
+
+    it('shows the paused line once pending proposals reach the limit, and not one below it', () => {
+      const scheduled = config({ cadence: 'daily', reviewBacklogLimit: 10 });
+      const { unmount } = renderPanel({ configs: [scheduled], pendingProposals: 9 });
+      expect(screen.queryByTestId('research-config-schedule-paused')).toBeNull();
+      unmount();
+
+      renderPanel({ configs: [scheduled], pendingProposals: 10 });
+      expect(screen.getByTestId('research-config-schedule-paused').textContent).toMatch(/10 of 10 pending proposals/);
+    });
+
+    it('says why the last scheduled tick did not start a run', () => {
+      const at = new Date('2026-03-02T00:00:00Z');
+      const { unmount } = renderPanel({
+        configs: [config({ cadence: 'daily', lastScheduledOutcome: { outcome: 'skipped', at, reason: 'daily_cap' } })],
+      });
+      expect(screen.getByTestId('research-config-schedule-outcome').textContent).toMatch(/daily run limit/);
+      unmount();
+
+      renderPanel({
+        configs: [
+          config({ cadence: 'daily', lastScheduledOutcome: { outcome: 'failed', at, error: 'Could not start.' } }),
+        ],
+      });
+      expect(screen.getByTestId('research-config-schedule-outcome').textContent).toBe('Could not start.');
+    });
+
+    // The paused line already carries a backlog skip; a second line would say it twice.
+    it('adds no outcome line for a backlog skip or a started run', () => {
+      const at = new Date('2026-03-02T00:00:00Z');
+      renderPanel({
+        configs: [
+          config({
+            id: 'a',
+            cadence: 'daily',
+            lastScheduledOutcome: { outcome: 'skipped', at, reason: 'review_backlog' },
+          }),
+          config({ id: 'b', cadence: 'daily', lastScheduledOutcome: { outcome: 'started', at, runId: 'run-1' } }),
+        ],
+      });
+      expect(screen.queryByTestId('research-config-schedule-outcome')).toBeNull();
+    });
+
+    it('counts the leading run of scheduled failures, newest first', () => {
+      renderPanel({
+        configs: [config({ cadence: 'daily' })],
+        runs: [
+          run({ id: 'run-old', trigger: 'periodic', status: 'failed', startedAt: new Date('2026-03-01T00:00:00Z') }),
+          run({ id: 'run-new', trigger: 'periodic', status: 'failed', startedAt: new Date('2026-03-02T00:00:00Z') }),
+        ],
+      });
+      expect(screen.getByTestId('research-config-schedule-failures').textContent).toBe('Last 2 scheduled runs failed');
+    });
+
+    // Run now is never blocked by the backlog limit - a person pressing it has decided to spend -
+    // so the warning must appear without touching the button's disabled state.
+    it('warns near Run now when the backlog is already at the limit, without disabling it', () => {
+      renderPanel({ configs: [config()], pendingProposals: RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT });
+
+      expect(screen.getByTestId('research-config-run-backlog-warning').textContent).toMatch(
+        /already waiting for review/
+      );
+      expect(screen.getByTestId('datalake-research-run-btn')).not.toBeDisabled();
+    });
+
+    it('marks a periodic run as Scheduled in the run history', () => {
+      renderPanel({ runs: [run({ trigger: 'periodic' })] });
+      expect(screen.getByTestId('research-run-trigger-scheduled')).toBeTruthy();
+    });
+
+    it('does not mark an on-demand run as Scheduled', () => {
+      renderPanel({ runs: [run({ trigger: 'on_demand' })] });
+      expect(screen.queryByTestId('research-run-trigger-scheduled')).toBeNull();
     });
   });
 });

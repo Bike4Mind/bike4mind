@@ -64,6 +64,7 @@ const DataLakeResearchRunSchema = new Schema<IDataLakeResearchRunDocument>(
     stopReason: { type: String, enum: RESEARCH_RUN_STOP_REASONS, default: null },
     spentMicroUsd: { type: Number, default: 0 },
     totals: { type: ResearchRunTotalsSchema, default: () => emptyResearchRunTotals() },
+    judgeModel: { type: String, default: null },
     error: { type: String, default: null },
   },
   {
@@ -139,21 +140,47 @@ class DataLakeResearchRunRepository
     return (doc?.toJSON() as IDataLakeResearchRunDocument) ?? null;
   }
 
-  async settleRun(id: string, input: SettleResearchRunInput): Promise<void> {
-    const { status, completedAt, stopReason, spentMicroUsd, totals, error } = input;
-    await this.runModel.updateOne(
-      { _id: id },
-      {
-        $set: {
-          status,
-          completedAt,
-          stopReason: stopReason ?? null,
-          spentMicroUsd,
-          totals,
-          error: error ?? null,
-        },
-      }
+  /** The `$set` body shared by every settle variant below - only the status filter differs. */
+  private settleFields(input: SettleResearchRunInput) {
+    const { status, completedAt, stopReason, spentMicroUsd, totals, judgeModel, error } = input;
+    return {
+      status,
+      completedAt,
+      stopReason: stopReason ?? null,
+      spentMicroUsd,
+      totals,
+      judgeModel: judgeModel ?? null,
+      error: error ?? null,
+    };
+  }
+
+  /**
+   * Returns whether this call actually settled the row (false when it was already terminal). The
+   * EXECUTOR's own settle: `runLakeResearch.ts` always calls this after `claimForExecution` has
+   * already flipped the row to `running`, so the guard covers `running` (its normal case) and
+   * `queued` (a compatibility arm, not a path that caller takes). A route settling a
+   * row it does NOT own the claim on must use `settleQueuedRun` instead - see that method's own
+   * comment for why admitting `running` here would be the wrong guard for that caller.
+   */
+  async settleRun(id: string, input: SettleResearchRunInput): Promise<boolean> {
+    const result = await this.runModel.updateOne(
+      { _id: id, status: { $in: ['queued', 'running'] } },
+      { $set: this.settleFields(input) }
     );
+    return result.matchedCount > 0;
+  }
+
+  /**
+   * Queued-only settle for a caller that does NOT hold the execution claim -
+   * `queueResearchRun`'s enqueue-failure path, which wrote the row but never got a message
+   * to the executor. Matches ONLY `status: 'queued'`: if the executor has already claimed the run
+   * (flipped it to `running`) this is a no-op and returns false, so the caller knows the executor -
+   * not this caller - now owns the run's outcome, rather than clobbering an in-flight claimed run
+   * with a `failed` settle the executor never asked for.
+   */
+  async settleQueuedRun(id: string, input: SettleResearchRunInput): Promise<boolean> {
+    const result = await this.runModel.updateOne({ _id: id, status: 'queued' }, { $set: this.settleFields(input) });
+    return result.matchedCount > 0;
   }
 
   async recordProgress(id: string, spentMicroUsd: number, totals: ResearchRunTotals): Promise<void> {

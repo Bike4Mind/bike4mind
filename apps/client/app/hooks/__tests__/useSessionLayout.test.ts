@@ -8,6 +8,7 @@ import useSessionLayout, {
   patchPendingMessageFileModerationStatus,
   hasBlockingPendingFiles,
   getSendableMessageFileIds,
+  markModerationScanTimedOut,
   recordModerationStatus,
   consumeBufferedModerationStatus,
   type ArtifactData,
@@ -583,6 +584,37 @@ describe('useSessionLayout - LRU Cache Functions', () => {
 
     it('returns an empty id list and no flag for an empty input', () => {
       expect(getSendableMessageFileIds([])).toEqual({ ids: [], hadBlocked: false });
+    });
+
+    it('excludes errored files (failed upload, or a moderation scan that timed out unconfirmed)', () => {
+      const { ids } = getSendableMessageFileIds([makeFile('a', 'complete'), makeFile('b', 'error')]);
+      expect(ids).toEqual(['a']);
+    });
+  });
+
+  describe('markModerationScanTimedOut', () => {
+    const makeFile = (id: string, status: PendingMessageFile['status']): PendingMessageFile => ({
+      fabFile: { id, fileName: 'photo.png', mimeType: 'image/png' } as IFabFileDocument,
+      uploadProgress: 100,
+      status,
+      scope: 'message',
+      uploadSessionId: null,
+    });
+
+    it('moves a still-scanning image to error, never to a sendable state', () => {
+      const [timedOut] = markModerationScanTimedOut([makeFile('a', 'scanning')], ['a']);
+      expect(timedOut.status).toBe('error');
+      expect(getSendableMessageFileIds([timedOut]).ids).toEqual([]);
+      expect(hasBlockingPendingFiles([timedOut])).toBe(false);
+    });
+
+    it('leaves files that resolved meanwhile, and files not named, untouched', () => {
+      const files = [makeFile('a', 'complete'), makeFile('b', 'blocked'), makeFile('c', 'scanning')];
+      expect(markModerationScanTimedOut(files, ['a', 'b']).map(f => f.status)).toEqual([
+        'complete',
+        'blocked',
+        'scanning',
+      ]);
     });
   });
 

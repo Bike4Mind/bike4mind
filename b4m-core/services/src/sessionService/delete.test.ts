@@ -1,11 +1,19 @@
-import { describe, it, expect, beforeEach, Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { deleteSession } from './delete';
 import {
   createMockSessionRepository,
   createMockProjectRepository,
   createMockFabFileRepository,
+  createMockSessionAgentConfigRepository,
+  createMockUserRepository,
 } from '../__tests__/utils/testUtils';
-import { IFabFileRepository, IProjectRepository, ISessionRepository } from '@bike4mind/common';
+import {
+  IFabFileRepository,
+  IProjectRepository,
+  ISessionRepository,
+  ISessionAgentConfigRepository,
+  IUserRepository,
+} from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 
 describe('sessionService - delete', () => {
@@ -16,11 +24,15 @@ describe('sessionService - delete', () => {
   let mockSessionRepo: ISessionRepository;
   let mockProjectRepo: IProjectRepository;
   let mockFabFileRepo: IFabFileRepository;
+  let mockSessionAgentConfigRepo: ISessionAgentConfigRepository;
+  let mockUserRepo: IUserRepository;
   let adapters: {
     db: {
       sessions: ISessionRepository;
       projects: IProjectRepository;
       fabFiles: IFabFileRepository;
+      users: IUserRepository;
+      sessionAgentConfigs: ISessionAgentConfigRepository;
     };
   };
 
@@ -28,6 +40,8 @@ describe('sessionService - delete', () => {
     mockSessionRepo = createMockSessionRepository();
     mockProjectRepo = createMockProjectRepository();
     mockFabFileRepo = createMockFabFileRepository();
+    mockSessionAgentConfigRepo = createMockSessionAgentConfigRepository();
+    mockUserRepo = createMockUserRepository();
     // The cascade now also reaches session.knowledgeIds, since a grant this session minted can sit
     // on a file uploaded somewhere else entirely.
     (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([]);
@@ -36,6 +50,8 @@ describe('sessionService - delete', () => {
         sessions: mockSessionRepo,
         projects: mockProjectRepo,
         fabFiles: mockFabFileRepo,
+        users: mockUserRepo,
+        sessionAgentConfigs: mockSessionAgentConfigRepo,
       },
     };
   });
@@ -49,7 +65,7 @@ describe('sessionService - delete', () => {
 
   it('deletes a file the session owner actually owns', async () => {
     const session = { id: sessionId, userId: ownerId, deletedAt: null };
-    const ownedFile = { id: 'file-owned', userId: ownerId, users: [] };
+    const ownedFile = { id: 'file-owned', userId: ownerId, fileSize: 100, users: [] };
 
     (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
     (mockFabFileRepo.find as Mock).mockResolvedValue([ownedFile]);
@@ -59,6 +75,87 @@ describe('sessionService - delete', () => {
 
     expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith(['file-owned']);
     expect(mockFabFileRepo.updateGuarded).not.toHaveBeenCalled();
+  });
+
+  // Otherwise the owner's storage stays counted for files that no longer exist until an admin
+  // recalculates it.
+  it('debits the owner storage for each owned file deleted', async () => {
+    const session = { id: sessionId, userId: ownerId, deletedAt: null };
+    const ownedFiles = [
+      { id: 'file-owned-1', userId: ownerId, fileSize: 100, users: [] },
+      { id: 'file-owned-2', userId: ownerId, fileSize: 50, users: [] },
+    ];
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue(ownedFiles);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await deleteSession(ownerId, { id: sessionId }, adapters);
+
+    expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledTimes(1);
+    expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledWith(ownerId, -150);
+  });
+
+  it('does not debit storage when the session has no owned files', async () => {
+    const session = { id: sessionId, userId: ownerId, deletedAt: null };
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue([]);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await deleteSession(ownerId, { id: sessionId }, adapters);
+
+    expect(mockUserRepo.incrementCurrentStorage).not.toHaveBeenCalled();
+  });
+
+  // Best-effort: a quota-accounting hiccup must not fail a delete that already tombstoned the
+  // files - the admin recalculate-storage endpoint is the backstop for the drift.
+  it('still completes the delete when the storage debit fails', async () => {
+    const session = { id: sessionId, userId: ownerId, deletedAt: null };
+    const ownedFile = { id: 'file-owned', userId: ownerId, fileSize: 100, users: [] };
+    const logger = { warn: vi.fn() };
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue([ownedFile]);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+    (mockUserRepo.incrementCurrentStorage as Mock).mockRejectedValue(new Error('storage write failed'));
+
+    await expect(deleteSession(ownerId, { id: sessionId }, { ...adapters, logger })).resolves.toBeNull();
+
+    expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith(['file-owned']);
+    expect(mockSessionAgentConfigRepo.deleteBySessionId).toHaveBeenCalledWith(sessionId);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  // Otherwise an enabled row survives its session forever - the worker's own deletedAt guard
+  // stops it firing, but the cron's eligibility scan re-checks it on every pass with nothing
+  // left to stop clearing it.
+  it('deletes the session-agent-configs for a deleted session', async () => {
+    const session = { id: sessionId, userId: ownerId, deletedAt: null };
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue([]);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await deleteSession(ownerId, { id: sessionId }, adapters);
+
+    expect(mockSessionAgentConfigRepo.deleteBySessionId).toHaveBeenCalledWith(sessionId);
+  });
+
+  // sessionAgentConfigs is optional on the published adapters shape (a patch-released signature,
+  // re-exported as @bike4mind/services) so an existing caller built against the pre-cleanup shape
+  // keeps compiling and running - the cleanup is just skipped for that caller.
+  it('completes without sessionAgentConfigs on the adapters', async () => {
+    const session = { id: sessionId, userId: ownerId, deletedAt: null };
+    const { sessionAgentConfigs: _omitted, ...dbWithoutConfigs } = adapters.db;
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue([]);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await expect(deleteSession(ownerId, { id: sessionId }, { db: dbWithoutConfigs })).resolves.not.toThrow();
+
+    expect(mockSessionAgentConfigRepo.deleteBySessionId).not.toHaveBeenCalled();
   });
 
   // A grant row records its source. Deleting a session may drop only the rows tagged with that
@@ -183,6 +280,7 @@ describe('sessionService - delete', () => {
     expect(mockSessionRepo.update).not.toHaveBeenCalled();
     expect(session.deletedAt).toBeNull();
     expect(mockFabFileRepo.deleteManyInIds).not.toHaveBeenCalled();
+    expect(mockSessionAgentConfigRepo.deleteBySessionId).not.toHaveBeenCalled();
   });
 
   it('does not delete a file attached to the session but owned by someone else', async () => {

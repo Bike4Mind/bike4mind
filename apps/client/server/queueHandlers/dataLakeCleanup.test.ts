@@ -12,8 +12,10 @@ const h = vi.hoisted(() => ({
   openSearchRetrievalIndex: vi.fn(() => ({ removeForDataLake: vi.fn() })),
   selfHostOpenSearchEnabled: vi.fn(() => false),
   releaseDriveConnectionForLake: vi.fn(),
+  releaseGitHubLakeConnectionForLake: vi.fn(),
   stampLakeMemoryPurge: vi.fn(),
   shredPrincipalMemory: vi.fn(),
+  getFilesStorage: vi.fn(() => ({ delete: vi.fn() })),
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {
@@ -25,6 +27,8 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeBatchRepository: {},
   dataLakeAccessGrantRepository: {},
   dataLakeProposalRepository: {},
+  dataLakeFindingRepository: {},
+  dataLakeCorpusActionRepository: {},
   dataLakeResearchConfigRepository: {},
   dataLakeResearchRunRepository: {},
   lakeMembershipDecisionRepository: {},
@@ -39,8 +43,14 @@ vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpen
 vi.mock('@server/integrations/google/drive/common', () => ({
   releaseDriveConnectionForLake: h.releaseDriveConnectionForLake,
 }));
+// The real module chains into @octokit (ESM), which this suite has no reason to load - mock it at
+// its own boundary like the Drive release above.
+vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
+  releaseGitHubLakeConnectionForLake: h.releaseGitHubLakeConnectionForLake,
+}));
 vi.mock('@server/memory/ledgerMemoryStore', () => ({ shredPrincipalMemory: h.shredPrincipalMemory }));
 vi.mock('@server/memory/factCipher', () => ({ createKeyProvider: () => ({}) }));
+vi.mock('@server/utils/storage', () => ({ getFilesStorage: h.getFilesStorage }));
 
 import { dispatch } from './dataLakeCleanup';
 
@@ -72,9 +82,29 @@ describe('dataLakeCleanup consumer', () => {
           // targeting a purged lake could only ever fail, and its run history has no reader left.
           dataLakeResearchConfigs: expect.anything(),
           dataLakeResearchRuns: expect.anything(),
+          // And the detected findings (#3039), reached through `?.` for the same reason again.
+          // This port carries a retention obligation the others do not: it sweeps the excerpts of
+          // documents the lake teardown destroys globally, including those quoted by findings that
+          // belong to a DIFFERENT lake sharing the file.
+          dataLakeFindings: expect.anything(),
+          // And this lake's curator corpus-action trail (#3046), reached through `?.` for the same
+          // reason once more: an unwired repo here would leave the trail behind every purge with no
+          // symptom, since the sweep call itself is a silent no-op on a missing port.
+          dataLakeCorpusActions: expect.anything(),
         }),
         logger,
       })
+    );
+  });
+
+  it("wires the object store, so a purge deletes each file's stored bytes and not just its rows", async () => {
+    h.cleanup.mockResolvedValue(undefined);
+    await dispatch(makeEvent(payload), {} as never, logger);
+    expect(h.getFilesStorage).toHaveBeenCalled();
+    expect(h.cleanup).toHaveBeenCalledWith(
+      expect.anything(),
+      'lake1',
+      expect.objectContaining({ storage: expect.anything() })
     );
   });
 
@@ -123,6 +153,29 @@ describe('dataLakeCleanup consumer', () => {
     await dispatch(makeEvent(payload), {} as never, logger);
     await h.cleanup.mock.calls[0][2].releaseDriveConnection({ dataLakeId: 'lake1' });
     expect(logger.info).not.toHaveBeenCalledWith(expect.stringContaining('folder claim'), expect.anything());
+  });
+
+  it('wires the GitHub release port, so a purge frees the repository claim it was holding', async () => {
+    // Same reason as the Drive port above: unwired, the row outlives its lake and its globally
+    // unique repositoryId can never be reached to release again.
+    h.cleanup.mockResolvedValue(undefined);
+    h.releaseGitHubLakeConnectionForLake.mockResolvedValue({ installationRetained: false });
+    await dispatch(makeEvent(payload), {} as never, logger);
+    const port = h.cleanup.mock.calls[0][2].releaseGitHubConnection;
+    await port({ dataLakeId: 'lake1' });
+    expect(h.releaseGitHubLakeConnectionForLake).toHaveBeenCalledWith('lake1');
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('repository claim'),
+      expect.objectContaining({ dataLakeId: 'lake1', installationRetained: false })
+    );
+  });
+
+  it('stays quiet when the purged lake had no GitHub connection', async () => {
+    h.cleanup.mockResolvedValue(undefined);
+    h.releaseGitHubLakeConnectionForLake.mockResolvedValue(null);
+    await dispatch(makeEvent(payload), {} as never, logger);
+    await h.cleanup.mock.calls[0][2].releaseGitHubConnection({ dataLakeId: 'lake1' });
+    expect(logger.info).not.toHaveBeenCalledWith(expect.stringContaining('repository claim'), expect.anything());
   });
 
   it('shreds the lake memory profile and raises the purge fence, in that order', async () => {

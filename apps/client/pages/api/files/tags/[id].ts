@@ -4,6 +4,7 @@ import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { tagService } from '@bike4mind/services';
 import { dataLakeRepository, fabFileRepository, fileTagRepository, userRepository } from '@bike4mind/database';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 
@@ -51,6 +52,9 @@ const handler = baseApi()
             // A prefix-arm rename can flip a draft lake to active; without these that transition
             // would be the one status change the history does not contain.
             ...lakeConfigAuditDb,
+            // A prefix-arm rename also moves files into or out of lakes in bulk; without this the
+            // membership log would show no trace of a whole lake's worth of files changing hands.
+            ...lakeMembershipAuditDb,
           },
           // Threaded so a failed audit write on that flip is reported through the request logger
           // rather than console.warn, which alerting cannot see.
@@ -85,6 +89,8 @@ const handler = baseApi()
             dataLakes: dataLakeRepository,
             // Same reason as the rename above: a prefix-arm delete can drive an auto-activate.
             ...lakeConfigAuditDb,
+            // Same reason as the rename above: a delete walks every prefix-only file out of a lake.
+            ...lakeMembershipAuditDb,
           },
           // Same reason as the rename above.
           logger: req.logger,

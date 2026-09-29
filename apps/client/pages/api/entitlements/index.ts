@@ -1,4 +1,4 @@
-import { getUserEntitlements } from '@server/entitlements';
+import { getUserEntitlements, toEntitlementUser } from '@server/entitlements';
 import { baseApi } from '@server/middlewares/baseApi';
 
 /**
@@ -16,13 +16,7 @@ const handler = baseApi().get(async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized', message: 'Authentication required' });
   }
 
-  const entitlements = await getUserEntitlements({
-    id: req.user.id,
-    tags: req.user.tags,
-    isAdmin: req.user.isAdmin,
-    email: req.user.email,
-    emailVerified: req.user.emailVerified,
-  });
+  const entitlements = await getUserEntitlements(toEntitlementUser(req.user));
 
   // User-specific payload behind CloudFront - never cacheable, anywhere.
   res.setHeader('Cache-Control', 'private, no-store');

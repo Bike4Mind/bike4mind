@@ -12,7 +12,12 @@
  * timeout or retry policy is changing both.
  */
 
-import { ChatModels, ORG_FEEDBACK_SUMMARY_JOB_TYPE, OrgFeedbackSummaryArtifact } from '@bike4mind/common';
+import {
+  ChatModels,
+  ORG_FEEDBACK_SUMMARY_JOB_TYPE,
+  ORG_FEEDBACK_SUMMARY_TAG_LIMIT,
+  OrgFeedbackSummaryArtifact,
+} from '@bike4mind/common';
 import {
   OrgFeedbackSummaryJob,
   adminSettingsRepository,
@@ -32,8 +37,6 @@ import { z } from 'zod';
 const SUMMARY_MODEL = ChatModels.CLAUDE_4_5_HAIKU_BEDROCK;
 const SUMMARY_MAX_TOKENS = 2000;
 const SUMMARY_TIMEOUT_MS = 60000;
-/** How many tag rows reach the prompt; the long tail is noise in prose. */
-const PROMPT_TAG_LIMIT = 20;
 
 export const OrgFeedbackSummaryPayload = z.object({
   jobType: z.literal(ORG_FEEDBACK_SUMMARY_JOB_TYPE),
@@ -83,6 +86,11 @@ const bucketList = (rows: { key: string; count: number }[], limit = rows.length)
  * actually turns on is the fields chosen: no feedback text, no member names, no ids.
  */
 function buildPrompt(report: Awaited<ReturnType<typeof orgFeedbackReport>>) {
+  // Either cut hides tags: the report's own top-N ceiling, or this prompt's shorter one.
+  const tagsPartial = report.byTagTruncated === true || report.byTag.length > ORG_FEEDBACK_SUMMARY_TAG_LIMIT;
+  const tagNote = tagsPartial
+    ? `\n(only the top ${Math.min(report.byTag.length, ORG_FEEDBACK_SUMMARY_TAG_LIMIT)} tags by count are listed; more tags exist, so do not describe this as the complete tag breakdown)`
+    : '';
   return `Feedback window: ${report.range.from} to ${report.range.to}
 Total items: ${report.totals.count}
 
@@ -95,8 +103,8 @@ ${bucketList(report.byStatus)}
 By area of the product:
 ${bucketList(report.bySubject)}
 
-By tag (items with no tag are absent, so these do not sum to the total):
-${bucketList(report.byTag, PROMPT_TAG_LIMIT)}
+By tag (items with no tag are absent, so these do not sum to the total):${tagNote}
+${bucketList(report.byTag, ORG_FEEDBACK_SUMMARY_TAG_LIMIT)}
 
 By day:
 ${bucketList(report.byDay.map(row => ({ key: row.day, count: row.count })))}`;
@@ -212,6 +220,7 @@ export async function runOrgFeedbackSummary(message: OrgFeedbackSummaryMessage, 
         byType: report.byType,
         byStatus: report.byStatus,
         byTag: report.byTag,
+        byTagTruncated: report.byTagTruncated,
       },
     };
 

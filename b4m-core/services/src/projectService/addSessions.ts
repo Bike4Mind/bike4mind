@@ -109,7 +109,10 @@ const updateShareableSessions = async (
     await db.sessions.update(session);
 
     if (session.knowledgeIds && session.knowledgeIds.length > 0) {
-      const files = await db.fabFiles.findAllByIds(session.knowledgeIds);
+      // Access-scoped, the same call addFiles makes: `knowledgeIds` historically took client ids
+      // unvalidated, and updateShareableFiles grants the project's members read+update on every
+      // file it is handed, so an unscoped lookup would share out a file the caller cannot read.
+      const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, session.knowledgeIds);
 
       await updateShareableFiles(user.id, { project, files }, adapters);
       // The ids that RESOLVED, not the session's raw list, so a legacy unusable id is not copied

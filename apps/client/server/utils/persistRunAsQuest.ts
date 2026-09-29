@@ -16,6 +16,7 @@
 import { agentExecutionRepository, Quest } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { materializePromptMetaSession, type PromptMeta } from '@bike4mind/common';
+import { createAgentToolEchoMarker, persistedExecutionSteps } from './markAgentToolEchoes';
 import { persistAgentArtifacts } from './persistAgentArtifacts';
 
 export async function persistRunAsQuest(
@@ -67,6 +68,7 @@ export async function persistRunAsQuest(
       logger.warn('[persistRunAsQuest] execution has no sessionId — skipping Quest write', { executionId });
       return;
     }
+    replyText = createAgentToolEchoMarker(persistedExecutionSteps(execution))(replyText);
     // Prefer patching the existing Quest created by `handleStart` so
     // we don't end up with two Quest docs for the same exchange (one prompt-
     // only from dispatch, one prompt+reply from here). Fall back to create

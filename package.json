@@ -69,7 +69,7 @@
     "@commitlint/config-conventional": "^21.2.0",
     "@eslint/eslintrc": "^3.3.6",
     "@eslint/js": "^9.39.2",
-    "@next/eslint-plugin-next": "^16.2.10",
+    "@next/eslint-plugin-next": "^16.3.6",
     "@tsconfig/node24": "^24.0.0",
     "@types/aws-lambda": "8.10.162",
     "@types/node": "^24.0.0",
@@ -169,7 +169,8 @@
       "sharp"
     ],
     "patchedDependencies": {
-      "@mui/joy@5.0.0-beta.52": "patches/@mui__joy@5.0.0-beta.52.patch"
+      "@mui/joy@5.0.0-beta.52": "patches/@mui__joy@5.0.0-beta.52.patch",
+      "@serwist/turbopack@9.5.3": "patches/@serwist__turbopack@9.5.3.patch"
     }
   }
 }
