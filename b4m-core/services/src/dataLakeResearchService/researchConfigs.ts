@@ -118,7 +118,7 @@ export async function createResearchConfig(
   return created;
 }
 
-const sameValue = <T>(a: T, b: T) => a === b;
+const sameValue = <T extends string | number | boolean>(a: T, b: T) => a === b;
 // `recencyDays`/`model` are coerced to `null` on both sides, matching how each is stored on update.
 const sameNullable = <T>(a: T | undefined, b: T | undefined) => (a ?? null) === (b ?? null);
 // Set semantics: a reordered resubmit of the same domains/tags is not an edit.

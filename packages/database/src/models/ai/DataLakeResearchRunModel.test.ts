@@ -238,8 +238,16 @@ describe('DataLakeResearchRunRepository', () => {
       expect(await repo.findByIdInLake(created.id, LAKE)).toMatchObject({ status: terminal, spentMicroUsd: 100 });
     });
 
-    it('coerces an omitted stopReason and judgeModel to null', async () => {
+    // Seeded straight through the driver: createRun always writes the schema default (null), so only
+    // a pre-populated row can show the settle actually nulls an omitted stopReason and judgeModel.
+    it('nulls a pre-populated stopReason and judgeModel when the settle omits them', async () => {
       const created = await repo.createRun(input());
+      await mongoose
+        .model('DataLakeResearchRun')
+        .collection.updateOne(
+          { _id: new mongoose.Types.ObjectId(created.id) },
+          { $set: { stopReason: 'proposal_limit', judgeModel: 'gpt-4.1-mini' } }
+        );
 
       await repo.settleQueuedRun(created.id, {
         status: 'failed',
