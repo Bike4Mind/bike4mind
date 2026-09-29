@@ -440,13 +440,14 @@ describe('ImageEditService.process mask access (#3069)', () => {
       withResolver?: boolean;
       failLakeAccess?: boolean;
       fabFileIds?: string[];
+      deleteFabFile?: (userId: string, id: string) => unknown;
     } = {}
   ) => {
     const reachable = opts.reachable ?? ((ids: string[]) => ids.map(id => (id === 'mask1' ? maskFile : null)));
     const findAccessibleInIds = vi.fn(async (ids: string[], _access: unknown, lakeAccess: unknown) =>
       reachable(ids || [], lakeAccess).filter(Boolean)
     );
-    const deleteFabFile = vi.fn();
+    const deleteFabFile = vi.fn(opts.deleteFabFile);
     const getSignedUrl = vi.fn(async (path: string) => `https://example.invalid/${path}`);
     const resolveLakeAccess = vi.fn(async () => {
       if (opts.failLakeAccess) throw new Error('lake-resolution-outage');
@@ -607,6 +608,46 @@ describe('ImageEditService.process mask access (#3069)', () => {
     expect(getSignedUrl).not.toHaveBeenCalledWith('masks/own.png');
     expect(quest.type).toBe('error');
     expect(quest.reply).toContain('lake-only-mask');
+  });
+
+  it('keeps the painted mask when a workbench file beside it is inaccessible, so a retry can reuse it', async () => {
+    // [unreachable workbench file, freshly painted mask]: the guard fails the edit before dispatch
+    // and tells the caller to remove the bad file and retry - which only works if the mask id they
+    // retry with still exists. deleteFabFile mutates the store so the retry sees the real outcome.
+    const ownMask = { ...maskFile, id: 'own-mask', filePath: 'masks/own.png' };
+    const live = new Set(['own-mask']);
+    const reachable = (ids: string[]) => ids.map(id => (live.has(id) ? ownMask : null));
+    const deleteFromStore = (_userId: string, id: string) => live.delete(id);
+
+    const failed = await run({ fabFileIds: ['ghost-file', 'own-mask'], reachable, deleteFabFile: deleteFromStore });
+
+    expect(editSpy).not.toHaveBeenCalled();
+    expect(failed.quest.type).toBe('error');
+    expect(failed.quest.reply).toContain('ghost-file');
+    expect(failed.deleteFabFile).not.toHaveBeenCalled();
+
+    const retry = await run({ fabFileIds: ['own-mask'], reachable, deleteFabFile: deleteFromStore });
+
+    expect(retry.getSignedUrl).toHaveBeenCalledWith('masks/own.png');
+    expect(editSpy).toHaveBeenCalledTimes(1);
+    // The run that did reach dispatch still cleans up its temporary mask.
+    expect(retry.deleteFabFile).toHaveBeenCalledWith('user1', 'own-mask');
+    expect(live.has('own-mask')).toBe(false);
+  });
+
+  it('keeps the painted mask when a lake outage leaves a lake-only file beside it unresolved', async () => {
+    // Same guard, outage branch: the first file needs lake membership the failed resolver could
+    // not supply, while the mask resolves by ownership.
+    const ownMask = { ...maskFile, id: 'own-mask', filePath: 'masks/own.png' };
+    const { quest, deleteFabFile } = await run({
+      failLakeAccess: true,
+      fabFileIds: ['lake-only-file', 'own-mask'],
+      reachable: ids => ids.map(id => (id === 'own-mask' ? ownMask : null)),
+    });
+
+    expect(editSpy).not.toHaveBeenCalled();
+    expect(quest.reply).toContain('data-lake lookup failed');
+    expect(deleteFabFile).not.toHaveBeenCalled();
   });
 
   it("sends the caller's own mask when every id in a two-id list resolves", async () => {

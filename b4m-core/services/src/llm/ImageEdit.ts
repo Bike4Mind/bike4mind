@@ -439,8 +439,8 @@ export class ImageEditService {
 
     const clientMessageSender = new ClientMessageSender(this.db, logger);
     const wsEndpoint = this.wsHttpsUrl;
-    // Assigned inside the try so a failed lookup lands on the quest as an error rather than
-    // escaping this method; the finally's mask cleanup reads it either way.
+    // Assigned inside the try, and only once every requested id resolves: the finally's mask
+    // cleanup reads it, so an access-guard failure leaves the painted mask in place for the retry.
     let fabFiles: IFabFileDocument[] = [];
 
     // Persist status='running' + heartbeat updatedAt so a hung/killed edit is recoverable by the
@@ -476,7 +476,7 @@ export class ImageEditService {
       // Access-scoped: a caller-supplied mask id the caller cannot reach is never presigned and
       // never fed to a provider as an alpha channel.
       const requestedFabFileIds = [...new Set(fabFileIds ?? [])];
-      fabFiles = await this.db.fabFiles.findAccessibleInIds(
+      const accessibleFabFiles = await this.db.fabFiles.findAccessibleInIds(
         requestedFabFileIds,
         { userId, userGroups: user.groups ?? undefined },
         lakeAccess
@@ -493,9 +493,10 @@ export class ImageEditService {
       // behalf, and a draft-lake file the workbench itself admitted is exactly the case that
       // reaches this (#3279).
       //
-      // The `finally` cleanup reads the same list, so an unresolved id also stops reaching
-      // deleteFabFile - which already refused it.
-      const resolvedIds = new Set(fabFiles.map(file => file.id));
+      // The `finally` cleanup only sees this list once the guard passes, so neither an unresolved
+      // id (which deleteFabFile already refused) nor a resolved mask sent alongside it is deleted
+      // on this failure - the caller retries with the same mask id after removing the bad one.
+      const resolvedIds = new Set(accessibleFabFiles.map(file => file.id));
       const unresolvedIds = requestedFabFileIds.filter(id => !resolvedIds.has(id));
       if (unresolvedIds.length > 0) {
         // Separated because the remedies differ: a deny is the caller's to clear, an outage is
@@ -510,6 +511,7 @@ export class ImageEditService {
           `Attached file ${unresolvedIds.join(', ')} was not found or is not accessible. Remove it from the workbench and try again.`
         );
       }
+      fabFiles = accessibleFabFiles;
 
       const apiKeyTable = await getEffectiveLLMApiKeys(userId, { db: this.db, getSettingsByNames });
 
