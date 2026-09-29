@@ -47,11 +47,21 @@ export function rankCandidateFilesByRelevance<T extends VectorSearchReadinessFil
   return [...withHit, ...notIndexed, ...rankedOutside];
 }
 
-/** Rejects with a timeout error once `ms` elapses, and never leaves the timer running after `promise` settles. */
+export class DeadlineExceededError extends Error {
+  constructor(label: string, ms: number) {
+    super(`${label} exceeded ${ms}ms`);
+    this.name = 'DeadlineExceededError';
+  }
+}
+
+/**
+ * Rejects with a DeadlineExceededError once `ms` elapses, and never leaves the timer running after
+ * `promise` settles. It bounds the caller's wait only; the underlying work is not cancelled.
+ */
 export async function withDeadline<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} exceeded ${ms}ms`)), ms);
+    timer = setTimeout(() => reject(new DeadlineExceededError(label, ms)), ms);
   });
   try {
     return await Promise.race([promise, deadline]);

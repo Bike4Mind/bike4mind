@@ -769,12 +769,15 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
     limit?: number;
     afterChunkId?: string;
   }): Promise<Array<{ id: string; fabFileId: string; vectorLength: number }>>;
-  /** Atlas `$vectorSearch` over a bounded, already-eligibility-checked file subset for one embedding model. */
+  /**
+   * Atlas `$vectorSearch` over a bounded, already-eligibility-checked file subset for one embedding model.
+   * `includeText: false` skips the chunk body (returned as '') for callers that only rank by score.
+   */
   vectorSearch(
     fileIds: string[],
     queryVector: number[],
     model: string,
-    options?: { limit?: number }
+    options?: { limit?: number; includeText?: boolean }
   ): Promise<Array<{ id: string; fabFileId: string; text: string; score: number }>>;
   /** Whether `model`'s Atlas vector index exists and is queryable (cached; see atlasSearchIndex.ts). */
   getAtlasIndexStatus(model: string): Promise<{ queryable: boolean; status: string } | null>;

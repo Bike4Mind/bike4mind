@@ -554,13 +554,13 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     fileIds: string[],
     queryVector: number[],
     model: string,
-    options: { limit?: number } = {}
+    options: { limit?: number; includeText?: boolean } = {}
   ): Promise<Array<{ id: string; fabFileId: string; text: string; score: number }>> {
     if (fileIds.length === 0) return [];
     const target = getAtlasIndexForModel(model);
     if (!target) return [];
 
-    const { limit = 50 } = options;
+    const { limit = 50, includeText = true } = options;
     // Atlas applies `filter` DURING HNSW traversal, not as a post-filter, but recall still
     // degrades as the filter gets more selective relative to the collection - and `fabfilechunks`
     // holds every user's chunks, while `fileIds` here is usually a handful of files out of that
@@ -581,7 +581,14 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
           filter: { $and: [{ fabFileId: { $in: fileIds } }, { embeddingModel: model }] },
         },
       },
-      { $project: { _id: 1, fabFileId: 1, text: 1, score: { $meta: 'vectorSearchScore' } } },
+      {
+        $project: {
+          _id: 1,
+          fabFileId: 1,
+          ...(includeText ? { text: 1 } : {}),
+          score: { $meta: 'vectorSearchScore' },
+        },
+      },
     ];
 
     // any: $vectorSearch and the $meta vectorSearchScore projection are Atlas-only aggregation

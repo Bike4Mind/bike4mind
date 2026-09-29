@@ -91,6 +91,7 @@ import {
 import { partitionByIndexAvailability } from '../dataLakeService/retrievalUnavailable';
 import { isVectorSearchReady, type VectorSearchReadinessFile } from '../dataLakeService/vectorSearchEligibility';
 import {
+  DeadlineExceededError,
   rankCandidateFilesByRelevance,
   withDeadline,
   type ForcedRetrievalCandidateSelection,
@@ -1894,6 +1895,8 @@ interface ForcedRetrievalCoverage {
    */
   moreFilesBeyondCap: boolean;
   candidateSelection: ForcedRetrievalCandidateSelection;
+  /** The listing's page size: FORCED_RETRIEVAL_MAX_LISTED_FILES with a relevance pick available, else the cap. */
+  listingLimit: number;
   /** Files withheld before the chunk load because they were embedded with a different model. */
   filesExcludedForeignModel: number;
   /**
@@ -2076,17 +2079,19 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // Names the selection RULE, not just the shortfall: candidates come off a fileName-ascending
       // page (see the listing above), so an over-cap library does not lose a random slice - it
       // loses the same tail on every turn, permanently. A reader told only "some were skipped"
-      // reasonably assumes a retry or a rephrase reaches the rest. It never does. A relevance pick
-      // only sets this when the LISTING it ranks overflowed, which is the same by-name cut one
-      // level up.
+      // reasonably assumes a retry or a rephrase reaches the rest. It never does. Outside a by-name
+      // pick this is only set when the widened LISTING overflowed, which is the same by-name cut
+      // one level up.
+      const cutAtCandidateCap =
+        coverage.candidateSelection === 'fileName' || coverage.listingLimit <= FORCED_RETRIEVAL_MAX_CANDIDATE_FILES;
       reasons.push(
-        coverage.candidateSelection === 'relevance'
-          ? `more than ${FORCED_RETRIEVAL_MAX_LISTED_FILES} documents matched; candidates are ranked by relevance ` +
-              `only among the first ${FORCED_RETRIEVAL_MAX_LISTED_FILES} by file name, so the rest of the library is ` +
-              'never reached'
-          : `more than the ${FORCED_RETRIEVAL_MAX_CANDIDATE_FILES}-document candidate cap matched, and candidates are ` +
+        cutAtCandidateCap
+          ? `more than the ${FORCED_RETRIEVAL_MAX_CANDIDATE_FILES}-document candidate cap matched, and candidates are ` +
               'selected alphabetically by file name - so the same documents are considered on every turn and the rest ' +
               'of the library is never reached'
+          : `more than ${coverage.listingLimit} documents matched; only the first ${coverage.listingLimit} by file ` +
+              `name are considered${coverage.candidateSelection === 'relevance' ? ' (and ranked by relevance)' : ''}, ` +
+              'so the rest of the library is never reached'
       );
     }
     if (coverage.stoppedByChunkBudget) {
@@ -2288,8 +2293,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         (async () => {
           const status = await getIndexStatus(embeddingModel);
           if (!status?.queryable) return null;
+          // Only fabFileId + score feed the ranking; skipping `text` keeps up to
+          // FORCED_RETRIEVAL_ANN_CHUNK_LIMIT chunk bodies off the wire on every turn.
           return vectorSearch(annReadyIds, queryVector, embeddingModel, {
             limit: FORCED_RETRIEVAL_ANN_CHUNK_LIMIT,
+            includeText: false,
           });
         })(),
         FORCED_RETRIEVAL_ANN_DEADLINE_MS,
@@ -2301,9 +2309,24 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         );
         return null;
       }
+      // An empty answer is not a ranking: ranking on it would return the input (by-name) order
+      // while reporting 'relevance', hiding the cut. Seen in the mongot lag window, where the
+      // index is queryable but has no chunks yet for the ready files.
+      if (hits.length === 0) {
+        this.logger.warn(
+          `🔒 Forced retrieval: ${embeddingModel} vector index returned no hits - picking candidates by name`
+        );
+        return null;
+      }
       return rankCandidateFilesByRelevance(files, hits, now);
     } catch (error) {
-      this.logger.warn('🔒 Forced retrieval: ANN candidate pick failed - picking candidates by name', error);
+      if (error instanceof DeadlineExceededError) {
+        this.logger.warn(
+          `🔒 Forced retrieval: ANN candidate pick ran past ${FORCED_RETRIEVAL_ANN_DEADLINE_MS}ms - picking candidates by name`
+        );
+      } else {
+        this.logger.warn('🔒 Forced retrieval: ANN candidate pick failed - picking candidates by name', error);
+      }
       return null;
     }
   }
@@ -2765,15 +2788,18 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       //    it decides which files are considered at all, so it must be stable turn to turn. With a
       //    relevance pick available the listing is wider and an ANN query cuts it to the cap (see
       //    selectForcedRetrievalCandidates); without one the listing IS the cut.
+      //    The widening cannot wait on index queryability: the embedding model whose index would be
+      //    asked is voted from this listing (resolveMajorityEmbeddingModel below), so the electorate
+      //    is the wider listing whenever the setting is on, even on a turn that falls back by name.
       const relevanceSelectionAvailable = await this.canSelectCandidatesByRelevance();
+      const listingLimit = relevanceSelectionAvailable
+        ? FORCED_RETRIEVAL_MAX_LISTED_FILES
+        : FORCED_RETRIEVAL_MAX_CANDIDATE_FILES;
       const fileResults = await db.fabfiles.search(
         user.id,
         '',
         { tags: nonLakeRetrievalTags, shared: false },
-        {
-          page: 1,
-          limit: relevanceSelectionAvailable ? FORCED_RETRIEVAL_MAX_LISTED_FILES : FORCED_RETRIEVAL_MAX_CANDIDATE_FILES,
-        },
+        { page: 1, limit: listingLimit },
         { by: 'fileName', direction: 'asc' },
         {
           textSearch: true,
@@ -2941,6 +2967,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // file-name pick that trimmed the servable set to the cap is the other by-name cut.
         moreFilesBeyondCap: fileResults.hasMore === true || candidateSelection === 'fileName',
         candidateSelection,
+        listingLimit,
         filesExcludedForeignModel: excludedForeignFiles.length,
         filesWithheldReindexing: reindexingFiles.length,
         filesSupersededCollapsed: supersession.count,
