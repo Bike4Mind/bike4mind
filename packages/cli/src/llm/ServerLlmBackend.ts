@@ -4,6 +4,7 @@ import { ApiClient } from '../auth/ApiClient';
 import { createParser } from 'eventsource-parser';
 import type { AxiosResponse } from 'axios';
 import { isAxiosError } from 'axios';
+import { htmlErrorTitle, htmlFirstH1 } from '../utils/htmlErrorTitle';
 import { logger } from '../utils/Logger';
 import { StreamLogger } from '../utils/StreamLogger';
 import { parseStreamEvent, type StreamEvent } from './streamEvents';
@@ -239,13 +240,13 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
 
           // If it's HTML, try to extract a meaningful error message
           if (responseText.includes('<!DOCTYPE') || responseText.includes('<html')) {
-            const titleMatch = responseText.match(/<title>(.*?)<\/title>/i);
-            const h1Match = responseText.match(/<h1>(.*?)<\/h1>/i);
+            const title = htmlErrorTitle(responseText);
+            const h1 = htmlFirstH1(responseText);
 
-            if (titleMatch && titleMatch[1] !== 'Error') {
-              errorDetails = titleMatch[1].trim();
-            } else if (h1Match) {
-              errorDetails = h1Match[1].trim();
+            if (title !== null) {
+              errorDetails = title;
+            } else if (h1 !== null) {
+              errorDetails = h1.trim();
             }
           } else if (responseText) {
             errorDetails = responseText.substring(0, 100).trim();
