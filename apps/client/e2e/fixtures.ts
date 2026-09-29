@@ -88,6 +88,18 @@ export const test = base.extend<TestFixtures>({
       route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
     );
 
+    // A fresh browser has no region cookie, so CookieConsentBanner asks, and its fixed bar
+    // intercepts clicks on the sidenav and menus. Seed a decision before any app script runs.
+    // The key must stay in sync with CONSENT_KEY in app/utils/consentRegion.ts. 'denied' keeps
+    // trackers off; a test that sets its own value first wins.
+    await page.addInitScript(() => {
+      try {
+        if (!localStorage.getItem('cookie_consent')) localStorage.setItem('cookie_consent', 'denied');
+      } catch {
+        // Opaque origins (about:blank) have no localStorage.
+      }
+    });
+
     // Authenticated projects: the access token is memory-only and dies on every full load, so a raw
     // goto to a protected route cold-loads unauthenticated and the router guard bounces to /login.
     // Route in-app navigations through /auth/success, which re-seeds the token via the client router
