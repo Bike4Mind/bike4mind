@@ -355,6 +355,9 @@ export function useConversation(
   const activeSessionId = useRef<string | null>(sessionId);
   activeSessionId.current = sessionId;
 
+  /** Replies this window has seen end; see the session load, which must not reopen one. */
+  const settledReplies = useRef(new Set<string>());
+
   useEffect(() => {
     setSendError(null);
     setNotice(null);
@@ -370,16 +373,21 @@ export function useConversation(
     }
 
     let current = true;
-    void window.b4m.chat.getSession(sessionId).then(loaded => {
-      if (!current) return;
-      setSession(loaded);
-      setMessages(loaded?.messages ?? []);
-      // A reply already running arrives here as main's live copy of it (getSession), and the
-      // events from now on extend that. The status line stays off until one arrives: this
-      // window never saw that turn start, so it cannot time it.
-      setStreaming(false);
-      setTurn(null);
-    });
+    const load = (): void => {
+      void window.b4m.chat.getSession(sessionId).then(loaded => {
+        if (!current) return;
+        // A reply already running arrives as main's live copy, and the events from now on
+        // extend it. One that settled while this read was in flight is stale: read again
+        // rather than put back a turn the 'done' already closed.
+        const live = loaded?.replyInFlight;
+        if (live && settledReplies.current.has(live.messageId)) return load();
+        setSession(loaded);
+        setMessages(loaded?.messages ?? []);
+        setStreaming(!!live);
+        setTurn(live ? { startedAt: live.startedAt, tokens: null } : null);
+      });
+    };
+    load();
     // Read rather than derived: main owns the queue, and a window opening onto a session that
     // was queued into from another one has witnessed no push for it.
     void window.b4m.chat.getQueuedMessages(sessionId).then(pending => {
@@ -421,6 +429,7 @@ export function useConversation(
 
   useEffect(() => {
     return window.b4m.chat.onStreamEvent(event => {
+      if (event.type === 'done' || event.type === 'error') settledReplies.current.add(event.messageId);
       if (event.sessionId !== activeSessionId.current) return;
 
       if (event.type === 'start') {

@@ -301,7 +301,7 @@ interface RawRound {
  */
 export class ChatService {
   /** The events of each reply in flight since its 'start'; see getSession. */
-  private readonly live = new Map<string, ChatStreamEvent[]>();
+  private readonly live = new Map<string, { messageId: string; startedAt: number; events: ChatStreamEvent[] }>();
 
   /** One in-flight reply per session; the value aborts it. */
   private readonly active = new Map<string, AbortController>();
@@ -618,16 +618,16 @@ export class ChatService {
    */
   async getSession(sessionId: string): Promise<ChatSession | null> {
     const session = await this.deps.store.get(sessionId);
-    const events = this.live.get(sessionId);
-    if (!session || !events) return session;
+    const live = this.live.get(sessionId);
+    if (!session || !live) return session;
     let messages = session.messages;
-    for (const event of events) {
+    for (const event of live.events) {
       messages =
         event.type === 'start'
           ? startReply(messages, event.messageId)
           : messages.map(message => applyLiveEvent(message, event));
     }
-    return { ...session, messages };
+    return { ...session, messages, replyInFlight: { messageId: live.messageId, startedAt: live.startedAt } };
   }
 
   private emit(event: ChatStreamEvent): void {
@@ -637,10 +637,10 @@ export class ChatService {
 
   private trackLive(event: ChatStreamEvent): void {
     if (event.type === 'start') {
-      this.live.set(event.sessionId, [event]);
+      this.live.set(event.sessionId, { messageId: event.messageId, startedAt: Date.now(), events: [event] });
       return;
     }
-    const events = this.live.get(event.sessionId);
+    const events = this.live.get(event.sessionId)?.events;
     if (!events) return;
     if (event.type === 'done' || event.type === 'error') {
       this.live.delete(event.sessionId);

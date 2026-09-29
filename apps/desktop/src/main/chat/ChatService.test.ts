@@ -93,6 +93,12 @@ describe('ChatService', () => {
       ['user', 'hello'],
       ['assistant', 'Hi the'],
     ]);
+    // With its turn's start, so the status line can show a true elapsed time.
+    const start = events.find(event => event.type === 'start');
+    expect(midTurn?.replyInFlight).toEqual({
+      messageId: start && 'messageId' in start && start.messageId,
+      startedAt: expect.any(Number),
+    });
 
     stream.write(frame({ type: 'content', text: 're', stopReason: 'end_turn' }));
     stream.write(frame('[DONE]'));
@@ -100,6 +106,7 @@ describe('ChatService', () => {
 
     // Stored once and not folded again on top of the stored copy.
     const settled = await service.getSession(id);
+    expect(settled?.replyInFlight).toBeUndefined();
     expect(settled?.messages.map(message => [message.role, message.content])).toEqual([
       ['user', 'hello'],
       ['assistant', 'Hi there'],

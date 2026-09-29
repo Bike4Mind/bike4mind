@@ -600,6 +600,12 @@ export interface ChatSession extends ChatSessionMeta {
    * follow-up like "make it darker" to the image before it.
    */
   remoteSessionId?: string;
+  /**
+   * The reply streaming into this conversation right now, and when its turn started. Never
+   * stored: ChatService.getSession adds it, so a window joining mid-turn can show the turn's
+   * status line with a true elapsed time rather than none at all.
+   */
+  replyInFlight?: { messageId: string; startedAt: number };
 }
 
 /**
