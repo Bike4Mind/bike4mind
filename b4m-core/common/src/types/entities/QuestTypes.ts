@@ -28,6 +28,11 @@ export interface IChatHistoryItemRepository extends IBaseRepository<IChatHistory
   ): Promise<IChatHistoryItemDocument[]>;
   getMostRecentChatHistory: (sessionId: string, limit: number) => Promise<IChatHistoryItemDocument[]>;
   findBySessionIdAndId: (sessionId: string, id: string) => Promise<IChatHistoryItemDocument | null>;
+  // Partial update matched on the quest id AND sessionId; null when no live (not soft-deleted) quest of that session matches.
+  updateInSession: (
+    sessionId: string,
+    data: Partial<IChatHistoryItemDocument> & { id: string }
+  ) => Promise<IChatHistoryItemDocument | null>;
   // Lightweight method for status checks
   findByIdWithStatus: (id: string) => Promise<Pick<IChatHistoryItemDocument, 'id' | 'status'> | null>;
   // Flag a quest as stopped so an in-flight pipeline's cancellation watcher aborts it.
@@ -305,8 +310,11 @@ export interface IQuestMasterPlanDocument extends IQuestMasterPlan, IMongoDocume
 export interface IQuestMasterPlanRepository extends IBaseRepository<IQuestMasterPlanDocument> {
   findByNotebookId(notebookId: string): Promise<IQuestMasterPlanDocument[]>;
 
+  // Every write below that takes a userId matches only while that user still owns the plan or is in
+  // its sharedWith, and it is not soft-deleted; otherwise it is a no-op (null / false / throw).
   updateTaskStatus(
     questMasterPlanId: string,
+    userId: string,
     mainQuestId: string,
     subQuestId: string,
     status: QuestMasterData['subQuests'][number]['status']
@@ -353,8 +361,12 @@ export interface IQuestMasterPlanRepository extends IBaseRepository<IQuestMaster
 
   continueInSession(planId: string, sessionId: string, userId: string): Promise<IQuestMasterPlanDocument>;
 
+  /** Paused -> active, gated on owner/sharee and not-deleted; null when nothing matched. */
+  resumeIfPaused(planId: string, userId: string): Promise<IQuestMasterPlanDocument | null>;
+
   updateQuestProgress(
     planId: string,
+    userId: string,
     questId: string,
     subQuestId: string,
     updates: {
@@ -375,7 +387,12 @@ export interface IQuestMasterPlanRepository extends IBaseRepository<IQuestMaster
   isValidStateTransition(fromState: string, toState: string): boolean;
 
   // Atomically updates notebookId only if it matches expected value (prevents race conditions)
-  atomicUpdateNotebookId(planId: string, expectedNotebookId: string, newNotebookId: string): Promise<boolean>;
+  atomicUpdateNotebookId(
+    planId: string,
+    userId: string,
+    expectedNotebookId: string,
+    newNotebookId: string
+  ): Promise<boolean>;
 
   // Durable workflow state methods
 
@@ -383,28 +400,34 @@ export interface IQuestMasterPlanRepository extends IBaseRepository<IQuestMaster
    * Write or update the handoff state for session continuity.
    * Called at session end so the next session can resume with full context.
    */
-  updateHandoff(planId: string, handoff: QuestHandoff): Promise<IQuestMasterPlanDocument | null>;
+  updateHandoff(planId: string, userId: string, handoff: QuestHandoff): Promise<IQuestMasterPlanDocument | null>;
 
   /**
    * Add a blocker to the plan
    */
-  addBlocker(planId: string, blocker: QuestBlocker): Promise<IQuestMasterPlanDocument | null>;
+  addBlocker(planId: string, userId: string, blocker: QuestBlocker): Promise<IQuestMasterPlanDocument | null>;
 
   /**
    * Resolve an existing blocker
    */
-  resolveBlocker(planId: string, blockerId: string, resolution: string): Promise<IQuestMasterPlanDocument | null>;
+  resolveBlocker(
+    planId: string,
+    userId: string,
+    blockerId: string,
+    resolution: string
+  ): Promise<IQuestMasterPlanDocument | null>;
 
   /**
    * Record a decision with rationale for audit trail
    */
-  addDecision(planId: string, decision: QuestDecision): Promise<IQuestMasterPlanDocument | null>;
+  addDecision(planId: string, userId: string, decision: QuestDecision): Promise<IQuestMasterPlanDocument | null>;
 
   /**
    * Update the review gate status on a sub-quest (approve/reject with feedback)
    */
   updateReviewGate(
     planId: string,
+    userId: string,
     questId: string,
     subQuestId: string,
     reviewStatus: ReviewGateStatus,

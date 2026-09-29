@@ -31,6 +31,8 @@ apps/client/pages/api/embed/__tests__/widget.test.ts    # Test file for the hand
 apps/client/pages/api/embed/__tests__/widget.dom.test.ts # jsdom test that executes the loader above; no baseApi reference, so grep -L flags it
 apps/client/pages/api/v1/openapi.json.ts                # Public OpenAPI spec; raw handler (no baseApi/DB) so it can't 5xx on a Mongo outage; no user data (#39)
 apps/client/pages/api/v1/__tests__/openapi.json.test.ts # Test file for the handler above (script greps by path, not export)
+apps/client/pages/api/v1/openapi.deployment.json.ts     # Deployment OpenAPI spec (core + add-on contracts); same raw handler as openapi.json.ts, no user data, no DB (#3358)
+apps/client/pages/api/v1/__tests__/openapi.deployment.json.test.ts # Test file for the handler above (script greps by path, not export)
 apps/client/pages/api/v1/docs.ts                        # Public Scalar API-reference page; static HTML, no user data, no DB (#39)
 apps/client/pages/api/v1/__tests__/docs.test.ts         # Test file for the handler above (script greps by path, not export)
 apps/client/pages/api/agent-quest/manifest.ts           # Public agent-quest manifest; raw handler (no baseApi/DB) so it can't 5xx on a Mongo outage; a constant document, no user data

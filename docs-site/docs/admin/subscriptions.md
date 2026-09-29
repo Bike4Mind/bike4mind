@@ -9,6 +9,14 @@ tags: [admin, subscriptions, billing]
 
 The Subscriptions tab provides a centralized view of all user subscription plans on the platform. Administrators can monitor subscription health through summary statistics, search for specific subscriptions, filter by status, and review detailed billing information for each subscriber.
 
+## Acquisition attribution
+
+Individual checkout can record the consenting buyer's first and last campaign
+touches. These are available on the subscription record and in the admin
+subscription API; the table does not yet display acquisition columns. See
+[telemetry data classification](https://github.com/Bike4Mind/bike4mind/blob/main/docs-site/docs/security/telemetry-data-classification.md)
+for consent rules, retention, and troubleshooting missing attribution.
+
 ## Stats Cards
 
 Four summary cards are displayed at the top of the page, providing an at-a-glance overview of subscription health:

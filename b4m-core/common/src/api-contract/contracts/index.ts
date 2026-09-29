@@ -11,6 +11,8 @@ import { getMeContract } from './me.contract';
 import { generateImageContract } from './imageGeneration.contract';
 import { editImageContract } from './imageEdit.contract';
 import { createFileUploadContract, getFileContract } from './files.contract';
+import { getQuestContract } from './quest.contract';
+import { createSessionContract } from './sessionCreate.contract';
 
 /**
  * Every public endpoint, as a contract. The OpenAPI generator registers each of
@@ -33,4 +35,6 @@ export const CONTRACTS: readonly EndpointContract[] = [
   editImageContract,
   createFileUploadContract,
   getFileContract,
+  getQuestContract,
+  createSessionContract,
 ];

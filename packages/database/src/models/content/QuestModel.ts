@@ -8,7 +8,7 @@ import {
   MessageContentObject,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
-import BaseRepository from '@bike4mind/db-core';
+import BaseRepository, { convertId } from '@bike4mind/db-core';
 
 export interface IChatHistoryItemModel extends Model<IChatHistoryItemDocument> {}
 
@@ -163,6 +163,8 @@ const RetrievalSummarySchema = subSchema({
   // Same shape and the same default:undefined reason as preauthorizedLakeIdsUsed above - its
   // per-arm sibling, which the two overlap by design (see both fields on the Zod side).
   grantedLakeIdsUsed: { type: [String], required: false, default: undefined },
+  // Same shape and default:undefined reason as its per-arm siblings above (see the Zod side).
+  readerOptInLakeIdsUsed: { type: [String], required: false, default: undefined },
   // default: undefined for the same auto-vivification reason as `injected` above - and here it
   // also preserves the presence contract that absence means NOT RECORDED, never "nothing excluded".
   excludedLakes: { type: ExcludedLakesSchema, required: false, default: undefined },
@@ -764,6 +766,17 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   constructor(private questModel: IChatHistoryItemModel) {
     super(questModel);
     this.ctx = null;
+  }
+
+  /** Partial update of one live quest, matched only inside `sessionId` so it cannot land on another session's quest. */
+  async updateInSession(
+    sessionId: string,
+    data: Partial<IChatHistoryItemDocument> & { id: string }
+  ): Promise<IChatHistoryItemDocument | null> {
+    const { id, ...updateData } = data;
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    // deletedAt is explicit: softDeletePlugin does not hook _plainUpdate's findOneAndUpdate.
+    return this._plainUpdate({ _id: convertId(id), sessionId, deletedAt: null }, updateData as Record<string, unknown>);
   }
 
   async findBySessionIdAndId(sessionId: string, id: string) {

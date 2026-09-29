@@ -75,4 +75,59 @@ describe('AnthropicBedrockBackend.formatMessages - consecutive same-role merge',
     expect(textOf(out[0])).toHaveLength(14);
     expect(textOf(out[0])[13]).toBe('block-13');
   });
+
+  it('does not mutate its input, so re-running it over the same array is stable', () => {
+    // The tool loop in base.ts re-enters complete() with the SAME messages array every round and
+    // re-runs formatMessages on it. When the merge wrote its cache stamps and folded content back
+    // onto the caller's messages, each round marked one more system message, so the request grew a
+    // new cache_control block per round (and duplicated the system text). This pins purity.
+    const messages: IMessage[] = [
+      sys('date'),
+      sys('artifact guidance'),
+      sys('help center'),
+      sys('memory'),
+      { ...sys('shared prefix'), cache: true } as IMessage,
+      sys('per-caller tail'),
+    ];
+    const snapshot = structuredClone(messages);
+
+    const first = backend.formatMessages(messages);
+    expect(messages).toEqual(snapshot);
+
+    const second = backend.formatMessages(messages);
+    expect(second).toEqual(first);
+    expect(messages).toEqual(snapshot);
+  });
+
+  // The two cases below pin the copies at the push sites that a "text, array-content, text" run
+  // reaches. Both merges that follow write back onto the pushed element, so without the copy they
+  // rewrite the caller's own message.
+  it('does not mutate an array-content message at the text-then-array push site', () => {
+    const messages: IMessage[] = [
+      sys('a'),
+      { role: 'system', content: [{ type: 'text', text: 'array content' }] } as IMessage,
+      sys('b'),
+    ];
+    const snapshot = structuredClone(messages);
+
+    backend.formatMessages(messages);
+
+    expect(messages).toEqual(snapshot);
+  });
+
+  it('does not mutate an array-content message at the array-then-array push site', () => {
+    // The earlier same-role pair folds to an array first, so the next push comes from the
+    // `Array.isArray(previousMessage.content)` branch rather than the text one.
+    const messages: IMessage[] = [
+      sys('a'),
+      sys('x'),
+      { role: 'system', content: [{ type: 'text', text: 'array content' }] } as IMessage,
+      sys('b'),
+    ];
+    const snapshot = structuredClone(messages);
+
+    backend.formatMessages(messages);
+
+    expect(messages).toEqual(snapshot);
+  });
 });

@@ -91,6 +91,15 @@ export interface ISessionAgentConfigRepository extends IBaseRepository<ISessionA
   findBySessionAndAgent: (sessionId: string, agentId: string) => Promise<ISessionAgentConfigDocument | null>;
 
   /**
+   * Partial ($set) update of the config keyed by session ID and agent ID (the unique pair)
+   */
+  updateBySessionAndAgent: (
+    sessionId: string,
+    agentId: string,
+    data: Partial<ISessionAgentConfigDocument>
+  ) => Promise<ISessionAgentConfigDocument | null>;
+
+  /**
    * Find all configs for a session
    */
   findBySessionId: (sessionId: string) => Promise<ISessionAgentConfigDocument[]>;

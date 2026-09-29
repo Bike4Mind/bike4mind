@@ -10,7 +10,7 @@ import { GenerateImageResponseSchema, ImageQuestSchema } from '../../schemas/ima
 export const imageQuestPollResult = {
   schema: ImageQuestSchema,
   description:
-    'The quest polled at `GET /api/quests/{id}` after this ACK. The render is finished once `status` is ' +
+    'The quest polled at `GET /api/v1/quests/{id}` after this ACK. The render is finished once `status` is ' +
     '`"done"`: on success `images` holds the rendered images; a render that FAILED is `type: "error"` with ' +
     'the reason in `reply`, never a 4xx. That covers credit exhaustion (tagged `errorCode: ' +
     '"insufficient_credits"`, the same vocabulary as the synchronous 422s on the audio endpoints), a ' +
@@ -38,7 +38,7 @@ export const generateImageContract = defineEndpoint({
   summary: 'Generate an image',
   description:
     'Queues an image generation and returns immediately with the quest that will carry the result - no ' +
-    'image yet, and the call never blocks on the render. Poll `GET /api/quests/{id}` until `status` is ' +
+    'image yet, and the call never blocks on the render. Poll `GET /api/v1/quests/{id}` until `status` is ' +
     '`"done"` (see the `generateImage200PollResult` schema). Omit `sessionId` to create a new session. ' +
     'The prompt is resolved against the session history first, so a follow-up such as "make it darker" ' +
     'binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. ' +
@@ -55,7 +55,7 @@ export const generateImageContract = defineEndpoint({
     200: {
       description:
         'Generation queued - NOT a finished render. `quest` has no images yet; its outcome arrives on ' +
-        '`GET /api/quests/{id}`.',
+        '`GET /api/v1/quests/{id}`.',
       schema: GenerateImageResponseSchema,
       pollResult: imageQuestPollResult,
     },

@@ -5,6 +5,8 @@ import {
   IProjectRepository,
   IUserDocument,
   Permission,
+  ShareableAccessShape,
+  grantablePermissions,
   secureParameters,
   BadRequestError,
   NotFoundError,
@@ -36,8 +38,7 @@ export const addFiles = async (
   const { projectId, fileIds } = secureParameters(params, addFilesProjectSchema);
   // Update-level, not read-level: adding files mutates the project and pushes share grants onto
   // the attached files, so a read grant must not reach it. Normalized to a plain object because
-  // this predicate returns a hydrated document where findAccessibleById did not, and `project` is
-  // handed to db.projects.update below.
+  // this predicate returns a hydrated document where findAccessibleById did not.
   const found = await db.projects.shareable.findUpdateAccessById(user, projectId);
   // NotFoundError, not a bare Error: this refusal is routine and user-triggerable - a read-only
   // sharee clicking the button reaches it - and a bare Error is a 500 that pages LiveOps. 404
@@ -69,15 +70,33 @@ export const addFiles = async (
   );
   project.updatedAt = new Date();
 
-  await updateShareableFiles(user.id, { project, files }, adapters);
+  // Project write first, gated in its filter: a revoke or delete landing after the read above makes
+  // this a 404 before any grant is pushed onto the files.
+  const written = await db.projects.updateWithUpdateAccess(user, {
+    id: project.id,
+    fileIds: project.fileIds,
+    updatedAt: project.updatedAt,
+  });
+  if (!written) throw new NotFoundError('Project not found');
 
-  await db.projects.update(project);
+  await updateShareableFiles(user, { project, files }, adapters);
 
   return project;
 };
 
+/**
+ * Caps a grant pushed onto `doc` at what `adder` holds on it (its owner holds everything), so adding
+ * a file or session you can only read to a project cannot hand the project's members update on it.
+ * Returns a filter to call BEFORE pushing: pushShareable mutates `doc.users`, and the adder may be
+ * one of the members being pushed.
+ */
+export const grantCap = (doc: ShareableAccessShape, adder: Pick<IUserDocument, 'id' | 'groups'>) => {
+  const grantable = grantablePermissions(doc, adder.id, adder.groups ?? []);
+  return (permissions: Permission[]) => permissions.filter(p => grantable.has(p));
+};
+
 export const updateShareableFiles = async (
-  userId: string,
+  adder: Pick<IUserDocument, 'id' | 'groups'>,
   params: { project: IProjectDocument; files: IFabFileDocument[] },
   adapters: { db: { fabFiles: IFabFileRepository } }
 ) => {
@@ -85,17 +104,15 @@ export const updateShareableFiles = async (
   const { db } = adapters;
 
   for (const file of files) {
-    if (project.userId !== userId) {
-      pushShareable(file, {
-        userId: project.userId,
-        permissions: [Permission.read, Permission.update],
-        projectId: project.id,
-      });
-    }
+    const cap = grantCap(file as ShareableAccessShape, adder);
+    const push = (userId: string, permissions: Permission[]) => {
+      const capped = cap(permissions);
+      if (capped.length > 0) pushShareable(file, { userId, permissions: capped, projectId: project.id });
+    };
 
-    for (const user of project.users) {
-      pushShareable(file, { userId: user.userId, permissions: user.permissions, projectId: project.id });
-    }
+    if (project.userId !== adder.id) push(project.userId, [Permission.read, Permission.update]);
+
+    for (const user of project.users) push(user.userId, user.permissions);
 
     await db.fabFiles.update(file);
   }

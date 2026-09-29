@@ -8,7 +8,9 @@ const API_URL_ENV_VAR = 'B4M_API_URL';
 const MCP_SERVER_NAME = 'bike4mind';
 const MCP_COMMAND = 'npx';
 // -y skips npx's install prompt, which would otherwise hang a stdio server launched by an MCP client.
-const MCP_ARGS = ['-y', '@bike4mind/cli', 'mcp', 'serve'];
+// @latest because npx prefers an installed copy of a bare package name, and a CLI older than
+// `mcp serve` fails with an unknown command.
+const MCP_ARGS = ['-y', '@bike4mind/cli@latest', 'mcp', 'serve'];
 const MCP_SERVE_COMMAND = `${MCP_COMMAND} ${MCP_ARGS.join(' ')}`;
 
 export const buildAgentPrompt = (origin: string): string =>

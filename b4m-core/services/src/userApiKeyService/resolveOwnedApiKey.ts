@@ -12,7 +12,7 @@ interface ResolveOwnedApiKeyAdapters {
  * resolution shared by revoke/rotate/updateEmbedKey and the [id] route's
  * branding-owner read. Returns the hydrated doc as-is (never serialized); writers
  * never write the whole doc back (a targeted db.userApiKeys.update({ id, ...patch }),
- * or revokeIfActive for revoke), so a concurrent revoke or spend $inc isn't reverted. The minter
+ * or revokeIfNotDisabled for revoke), so a concurrent revoke or spend $inc isn't reverted. The minter
  * lookup is tried first and the org-admin fallback only runs on a miss, so
  * the minter path pays no extra query - preserve that order in any caller.
  *

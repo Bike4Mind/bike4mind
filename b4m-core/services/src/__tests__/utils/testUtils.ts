@@ -52,6 +52,8 @@ export const createMockShareableRepository = <T>(): IShareableStaticMethods<T> =
 export const createMockProjectRepository = (): IProjectRepository => ({
   ...createMockRepository<IProjectDocument>(),
   shareable: createMockShareableRepository<IProjectDocument>(),
+  // Echoes the patch so a test that does not care about the write-time re-check sees a success.
+  updateWithUpdateAccess: vi.fn(async (_user, data) => data as IProjectDocument),
   findByIdAndUserId: vi.fn(),
   searchAccessible: vi.fn(),
   removeSession: vi.fn(),
@@ -61,6 +63,7 @@ export const createMockProjectRepository = (): IProjectRepository => ({
 export const createMockSessionAgentConfigRepository = (): ISessionAgentConfigRepository => ({
   ...createMockRepository<ISessionAgentConfigDocument>(),
   findBySessionAndAgent: vi.fn(),
+  updateBySessionAndAgent: vi.fn(),
   findBySessionId: vi.fn(),
   findAllWithProactiveMessagingEnabled: vi.fn(),
   updateLastProactiveMessageAt: vi.fn(),
@@ -112,7 +115,6 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   isLiveDataLakeMember: vi.fn(),
   findByDriveFileIdsInDataLake: vi.fn(),
   findByDriveConnectionIdInDataLake: vi.fn(),
-  findAllByDriveConnectionIdInDataLake: vi.fn(),
   countByDriveConnectionIdInDataLake: vi.fn(),
   findDriveFileIdsByBatchId: vi.fn(),
   markUploaded: vi.fn(),
@@ -192,6 +194,7 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     search: vi.fn(),
     findByIdAndUserId: vi.fn(),
     findAllWithKnowledgeId: vi.fn(),
+    pullKnowledgeIds: vi.fn(),
     searchByUserId: vi.fn(),
     findRecentlyUpdatedByUserId: vi.fn(),
     findAllByIds: vi.fn(),

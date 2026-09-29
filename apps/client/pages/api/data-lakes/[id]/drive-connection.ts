@@ -80,12 +80,12 @@ async function purgeDriveIngestedFiles(
     error: (msg: string, ...args: unknown[]) => void;
   }
 ): Promise<void> {
-  // findAllByDriveConnectionIdInDataLake, NOT the reconcile-scoped findByDriveConnectionIdInDataLake:
-  // the latter filters archivedAt/deletedAt for its sync-reconcile caller, which for an ARCHIVED lake
-  // (every member gets archivedAt-stamped on archive) returned nothing here - so the purge silently
-  // no-op'd while release still revoked the grant and hard-deleted the row, reproducing #3374's
-  // orphan state for archived lakes specifically. The purge needs its own, broader finder.
-  const files = await fabFileRepository.findAllByDriveConnectionIdInDataLake(driveConnectionId, lake.datalakeTag);
+  // includeDeleted: the reconcile default filters archivedAt/deletedAt, which for an ARCHIVED lake
+  // (every member gets archivedAt-stamped on archive) returns nothing - the purge would silently
+  // no-op while release still revoked the grant and hard-deleted the row.
+  const files = await fabFileRepository.findByDriveConnectionIdInDataLake(driveConnectionId, lake.datalakeTag, {
+    includeDeleted: true,
+  });
   if (files.length === 0) return;
   const purgingLake = { id: lake.id, datalakeTag: lake.datalakeTag, createdByUserId: lake.createdByUserId };
   await dataLakeService.purgeDataLakeConnectionFiles(dataLakeService.lakeMembershipScope(lake), files, {
@@ -215,8 +215,18 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
         // unhealed disable would quietly stop the scheduled re-sync poll for this connection with no
         // surface telling the user (the wizard's badge derives only from `status`, not `enabled`).
         // Re-enable before the error propagates so a retried DELETE resumes from a healthy connection
-        // instead of one that looks "Connected" but will never sync again.
-        await enableDriveConnectionForLake(lake.id);
+        // instead of one that looks "Connected" but will never sync again - but only if it came in
+        // enabled: an archived/soft-deleted lake's connection is meant to stay disabled.
+        if (conn.enabled) {
+          try {
+            await enableDriveConnectionForLake(lake.id);
+          } catch (reenableError) {
+            req.logger.error('Failed to re-enable Drive connection after a failed disconnect purge', {
+              dataLakeId: lake.id,
+              error: reenableError instanceof Error ? reenableError.message : 'Unknown error',
+            });
+          }
+        }
         throw error;
       }
       // Through the release seam, not the bare repo delete: it revokes the org-owned credential at

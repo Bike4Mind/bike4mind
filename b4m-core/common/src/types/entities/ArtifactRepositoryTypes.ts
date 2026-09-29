@@ -40,6 +40,15 @@ export interface IArtifactVersionDocument {
 export interface IArtifactRepository extends IBaseRepository<IArtifactDocument> {
   shareable: IShareableStaticMethods<IArtifactDocument>;
 
+  /**
+   * Partial update keyed on the custom `id` that re-checks write access (owner or
+   * permissions.canWrite) and not-deleted in the write filter; null when either fails.
+   */
+  updateWithWriteAccess(
+    userId: string,
+    data: Partial<IArtifactDocument> & { id: string }
+  ): Promise<IArtifactDocument | null>;
+
   // Artifact-specific methods
   findByType(type: string, filter?: Record<string, unknown>): Promise<IArtifactDocument[]>;
   findByUser(userId: string, filter?: Record<string, unknown>): Promise<IArtifactDocument[]>;

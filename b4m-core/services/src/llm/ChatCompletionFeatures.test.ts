@@ -32,6 +32,22 @@ vi.mock('../mementoService', async importOriginal => ({
   getRelevantMementos: getRelevantMementosMock,
 }));
 
+// Spy that KEEPS the real implementation - the reader opt-in tests below assert on the literal
+// options object this call site passes (including readerConsentDatalakeTags), which an outcome-only
+// assertion cannot pin: a resolver that quietly derived consent from something else could still
+// admit the same lake and pass every outcome check.
+const getAccessibleDataLakePromptsSpy = vi.hoisted(() => vi.fn());
+vi.mock('../dataLakeService/getDataLakePrompts', async importOriginal => {
+  const actual = await importOriginal<typeof import('../dataLakeService/getDataLakePrompts')>();
+  return {
+    ...actual,
+    getAccessibleDataLakePrompts: (...args: Parameters<typeof actual.getAccessibleDataLakePrompts>) => {
+      getAccessibleDataLakePromptsSpy(...args);
+      return actual.getAccessibleDataLakePrompts(...args);
+    },
+  };
+});
+
 const makeQuest = (overrides: Partial<IChatHistoryItemDocument> = {}): IChatHistoryItemDocument =>
   ({
     id: 'quest1',
@@ -941,6 +957,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       tags?: unknown[];
       embeddingModel?: string;
       vectorizedChunkCount?: number;
+      chunkEmbeddingModelStampedAt?: Date;
     }[];
     rows?: (ids: string[]) => unknown[];
     total?: number;
@@ -1055,6 +1072,195 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     expect(coverage?.reasons[0]).toContain('candidate cap');
     expect(coverage?.reasons[0]).toContain('selected alphabetically by file name');
     expect(coverage?.reasons[0]).toContain('the rest of the library is never reached');
+  });
+
+  describe('candidate selection on a scope larger than the candidate cap', () => {
+    // 150 files; the only one that answers the query sorts LAST by name, past the 100-file cap.
+    const STAMPED = new Date('2026-01-01T00:00:00Z');
+    const lakeFiles = Array.from({ length: 150 }, (_, i) => {
+      const n = String(i).padStart(3, '0');
+      return {
+        id: `f${n}`,
+        fileName: `doc-${n}.pdf`,
+        tags: [],
+        vectorizedChunkCount: 1,
+        chunkEmbeddingModelStampedAt: STAMPED,
+      };
+    });
+    const TARGET = 'f149';
+    // The query embeds to [1, 0]: the target's chunk scores 1, every other chunk 0 (below the floor).
+    const rows = (ids: string[]) =>
+      ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: id === TARGET ? [1, 0] : [0, 1] }));
+    const targetHeading = `### doc-149.pdf (ID: ${TARGET})`;
+
+    const makeLargeScopeCtx = (opts: { vectorSearchEnabled: boolean }) => {
+      const ctx = makeCtx({
+        files: lakeFiles,
+        rows,
+        settings: { EnableDataLakeVectorSearch: opts.vectorSearchEnabled },
+      });
+      // The real listing honours `limit`; the fixture has to, or the cut under test never happens.
+      ctx.db.fabfiles.search = vi.fn((_u, _q, _f, page: { limit: number }) =>
+        Promise.resolve({
+          data: lakeFiles.slice(0, page.limit),
+          hasMore: lakeFiles.length > page.limit,
+          total: lakeFiles.length,
+        })
+      );
+      const annDb = {
+        getAtlasIndexStatus: vi.fn().mockResolvedValue({ queryable: true, status: 'READY' }),
+        vectorSearch: vi.fn().mockResolvedValue([
+          { id: `ch-${TARGET}`, fabFileId: TARGET, text: `text ${TARGET}`, score: 0.97 },
+          { id: 'ch-f000', fabFileId: 'f000', text: 'text f000', score: 0.2 },
+        ]),
+      };
+      Object.assign(ctx.db.fabfilechunks, annDb);
+      return { ctx, annDb, warn: (ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn };
+    };
+
+    it('without vector search, keeps the alphabetical pick: the late-sorting answer is never served', async () => {
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: false });
+      const { content } = await run(ctx);
+      expect(ctx.db.fabfiles.search.mock.calls[0][3]).toEqual(expect.objectContaining({ limit: 100 }));
+      expect(annDb.vectorSearch).not.toHaveBeenCalled();
+      expect(content).not.toContain(targetHeading);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+    });
+
+    it('with vector search, picks candidates by relevance and serves the late-sorting answer', async () => {
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      const { quest, content } = await run(ctx);
+      expect(ctx.db.fabfiles.search.mock.calls[0][3]).toEqual(expect.objectContaining({ limit: 1000 }));
+      // Scoped to the servable listing (all 150 here) in the turn's embedding space.
+      expect(annDb.vectorSearch).toHaveBeenCalledWith(
+        lakeFiles.map(f => f.id),
+        [1, 0],
+        'text-embedding-ada-002',
+        expect.objectContaining({ limit: expect.any(Number), includeText: false })
+      );
+      expect(content).toContain(targetHeading);
+      // The whole listing was ranked, so the cap limited breadth - not a partial-coverage turn.
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('candidate cap'));
+      expect((quest.promptMeta as { retrievalCoverage?: unknown }).retrievalCoverage).toBeUndefined();
+      // Exactly the cap's worth of files reached the chunk scan.
+      const scanned = new Set(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]));
+      expect(scanned.size).toBe(100);
+    });
+
+    it('falls back to the alphabetical pick, and says so, when the ANN query fails', async () => {
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      annDb.vectorSearch.mockRejectedValue(new Error('mongot unavailable'));
+      const { content } = await run(ctx);
+      expect(content).not.toContain(targetHeading);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('ANN candidate pick failed'), expect.any(Error));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+    });
+
+    it('falls back without querying when the index is not queryable', async () => {
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      annDb.getAtlasIndexStatus.mockResolvedValue({ queryable: false, status: 'BUILDING' });
+      const { content } = await run(ctx);
+      expect(annDb.vectorSearch).not.toHaveBeenCalled();
+      expect(content).not.toContain(targetHeading);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+    });
+
+    it('falls back, and reports the by-name cut, when a queryable index returns no hits', async () => {
+      // The mongot lag window: queryable, but no chunks indexed yet for the ready files. Ranking on
+      // [] would keep the by-name order while claiming a relevance pick and full coverage.
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      annDb.vectorSearch.mockResolvedValue([]);
+      const { quest, content } = await run(ctx);
+      expect(annDb.vectorSearch).toHaveBeenCalledTimes(1);
+      expect(content).not.toContain(targetHeading);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('vector index returned no hits'));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+      expect((quest.promptMeta as { retrievalCoverage?: { partial: boolean } }).retrievalCoverage?.partial).toBe(true);
+    });
+
+    it('falls back without querying when the index status is unknown', async () => {
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      annDb.getAtlasIndexStatus.mockResolvedValue(null);
+      const { content } = await run(ctx);
+      expect(annDb.vectorSearch).not.toHaveBeenCalled();
+      expect(content).not.toContain(targetHeading);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('vector index not queryable'));
+    });
+
+    it('fails closed to the by-name listing when the vector-search setting cannot be read', async () => {
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      const readSetting = ctx.db.adminSettings.getSettingsValue.getMockImplementation();
+      ctx.db.adminSettings.getSettingsValue.mockImplementation(async (name: string) => {
+        if (name === 'EnableDataLakeVectorSearch') throw new Error('settings store down');
+        return readSetting?.(name);
+      });
+      const { content } = await run(ctx);
+      expect(ctx.db.fabfiles.search.mock.calls[0][3]).toEqual(expect.objectContaining({ limit: 100 }));
+      expect(annDb.getAtlasIndexStatus).not.toHaveBeenCalled();
+      expect(annDb.vectorSearch).not.toHaveBeenCalled();
+      expect(content).not.toContain(targetHeading);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('could not read EnableDataLakeVectorSearch - picking candidates by name'),
+        expect.any(Error)
+      );
+    });
+
+    it('issues no ANN query when the servable set already fits under the cap', async () => {
+      const { ctx, annDb } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      const small = lakeFiles.slice(0, 50);
+      ctx.db.fabfiles.search = vi.fn().mockResolvedValue({ data: small, hasMore: false, total: small.length });
+      await run(ctx);
+      expect(annDb.getAtlasIndexStatus).not.toHaveBeenCalled();
+      expect(annDb.vectorSearch).not.toHaveBeenCalled();
+    });
+
+    it('names the widened listing, not the candidate cap, when only the listing overflowed', async () => {
+      // <= 100 servable files, so nothing was chosen away by the cap - the 1000-row listing was the cut.
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      const small = lakeFiles.slice(0, 50);
+      ctx.db.fabfiles.search = vi.fn().mockResolvedValue({ data: small, hasMore: true, total: 1500 });
+      await run(ctx);
+      expect(annDb.vectorSearch).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('only the first 1000 by file name are considered, so'));
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('candidate cap'));
+    });
+
+    it('falls back when no candidate file is vector-index ready yet', async () => {
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      const unstamped = lakeFiles.map(f => ({ ...f, chunkEmbeddingModelStampedAt: undefined }));
+      ctx.db.fabfiles.search = vi.fn().mockResolvedValue({ data: unstamped, hasMore: false, total: unstamped.length });
+      const { content } = await run(ctx);
+      expect(annDb.vectorSearch).not.toHaveBeenCalled();
+      expect(content).not.toContain(targetHeading);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('no candidate file is vector-index ready'));
+    });
+
+    it('still reports the by-name cut when the listing the relevance pick ranks overflowed', async () => {
+      const { ctx, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      ctx.db.fabfiles.search = vi.fn().mockResolvedValue({ data: lakeFiles, hasMore: true, total: 1500 });
+      const { quest, content } = await run(ctx);
+      expect(content).toContain(targetHeading);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('only the first 1000 by file name are considered (and ranked by relevance)')
+      );
+      expect((quest.promptMeta as { retrievalCoverage?: { partial: boolean } }).retrievalCoverage?.partial).toBe(true);
+    });
+
+    it('falls back when the ANN query runs past its deadline', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+        annDb.vectorSearch.mockReturnValue(new Promise(() => {}));
+        const pending = run(ctx);
+        await vi.advanceTimersByTimeAsync(3000);
+        const { content } = await pending;
+        expect(content).not.toContain(targetHeading);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('ANN candidate pick ran past 3000ms'));
+        expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('ANN candidate pick failed'), expect.anything());
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   // The injected context described the corpus only as "the curated library", while the product calls
@@ -2125,24 +2331,28 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
     expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBe(1);
   });
 
-  it('leaves promptMeta.retrieval unset when no lake-tagged file was grounded on (site never ran)', async () => {
+  it('records present-and-empty injectedLakePromptIds when no lake-tagged file was grounded on, without calling the resolver', async () => {
     const quest = makeQuest();
+    const ctx = makeCtx([{ id: 'plain', fileName: 'plain.pdf', tags: [] }], [makeLake()]);
     const feature = new KnowledgeRetrievalFeature(
-      makeCtx([{ id: 'plain', fileName: 'plain.pdf', tags: [] }], [makeLake()]) as unknown as ConstructorParameters<
-        typeof KnowledgeRetrievalFeature
-      >[0]
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
     );
     await feature.getContextMessages(
       quest,
       embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
       'anything'
     );
-    // No datalake-tagged file was grounded on, so resolveRetrievedLakePromptMessage's own write
-    // never runs (contrast prependRetrievedLakePrompts, whose site runs even when its scoped tags
-    // resolve to no qualifying prompt) - only the coarser outcome-tracking write elsewhere in this
-    // feature touches promptMeta.retrieval here.
-    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toBeUndefined();
-    expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBeUndefined();
+    // The site still ran (it recorded attempted:true + present-and-empty ids) even though no
+    // datalake-tagged file was grounded on - "the site ran and found no lake file" must stay
+    // distinguishable from "the site never ran". But it returns BEFORE ever resolving prompts, so
+    // getAccessibleDataLakePrompts' own DB read never fires - only retrieval's OWN lake-access
+    // resolution (getDynamicDataLakeAccess) calls this same mock, once, to build the search scope.
+    // getAccessibleDataLakePrompts would be a SECOND call (with a 2-key options object, no
+    // orgGrantedLakes - getDynamicDataLakeAccess's own call carries that extra key), so pinning the
+    // count to 1 is what proves the injection resolver's read never happened.
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual([]);
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBe(0);
+    expect(ctx.db.dataLakes?.findActiveByUserTagsAndEntitlements).toHaveBeenCalledTimes(1);
   });
 
   // The field measures MEMBERSHIP in the admitted set, not causation: a lake the caller could
@@ -2288,6 +2498,69 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
       'anything'
     );
     expect(quest.promptMeta?.retrieval?.grantedLakeIdsUsed).toBeUndefined();
+  });
+
+  describe('reader opt-in arm (injectPromptForReaders)', () => {
+    // Not the creator, no org, no grant, no preauth - only the reader opt-in arm could admit this.
+    const makeReaderLake = () =>
+      makeLake({
+        createdByUserId: 'someone-else',
+        requiredUserTag: 'reader-team',
+        injectPromptForReaders: true,
+        systemPrompt: 'Reader-visible prompt.',
+      });
+
+    it('forwards the ctor readerConsentDatalakeTags arg into the injection call, admitting + recording the opt-in arm', async () => {
+      const quest = makeQuest();
+      const ctx = makeCtx([lakeFile('fA', 'datalake:x')], [makeReaderLake()]);
+      ctx.user.tags = ['reader-team'];
+      getAccessibleDataLakePromptsSpy.mockClear();
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:x'],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        // An extra tag for a lake this call never retrieved from - proves the resolver receives the
+        // constructor's OWN consent arg verbatim, not a derivation from retrievalTags/the retrieved
+        // datalakeTags list.
+        ['datalake:x', 'datalake:never-retrieved']
+      );
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'anything'
+      );
+      expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual(['lakeX']);
+      expect(quest.promptMeta?.retrieval?.readerOptInLakeIdsUsed).toEqual(['lakeX']);
+      expect(getAccessibleDataLakePromptsSpy).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          readerConsentDatalakeTags: ['datalake:x', 'datalake:never-retrieved'],
+        })
+      );
+    });
+
+    it('does NOT admit the reader opt-in arm when the session grants no consent, even with retrievalTags set', async () => {
+      const quest = makeQuest();
+      const ctx = makeCtx([lakeFile('fA', 'datalake:x')], [makeReaderLake()]);
+      ctx.user.tags = ['reader-team'];
+      // retrievalTags (scoping) is set, but the readerConsentDatalakeTags ctor arg (consent) is
+      // not - proving the two are independent: scoping retrieval to this lake is not, by itself,
+      // consent to inject its prompt (see ToolContext.sessionReaderConsentDatalakeTags).
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:x']
+      );
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'anything'
+      );
+      expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual([]);
+      expect(quest.promptMeta?.retrieval?.readerOptInLakeIdsUsed).toBeUndefined();
+    });
   });
 });
 

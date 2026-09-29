@@ -683,11 +683,11 @@ describe('Quest Plans API', () => {
       });
       req.user = { id: 'user123' } as any;
 
-      await questMasterPlanRepository.updateQuestProgress('plan1', 'q1', 'sq1', {
+      await questMasterPlanRepository.updateQuestProgress('plan1', 'user123', 'q1', 'sq1', {
         status: 'completed',
       });
 
-      expect(questMasterPlanRepository.updateQuestProgress).toHaveBeenCalledWith('plan1', 'q1', 'sq1', {
+      expect(questMasterPlanRepository.updateQuestProgress).toHaveBeenCalledWith('plan1', 'user123', 'q1', 'sq1', {
         status: 'completed',
       });
     });

@@ -28,7 +28,7 @@ const handler = baseApi()
       throw new NotFoundError('Blocker not found');
     }
 
-    const updatedPlan = await questMasterPlanRepository.resolveBlocker(planId, blockerId, resolution);
+    const updatedPlan = await questMasterPlanRepository.resolveBlocker(planId, req.user!.id, blockerId, resolution);
 
     if (!updatedPlan) {
       throw new NotFoundError('Blocker not found or already resolved');

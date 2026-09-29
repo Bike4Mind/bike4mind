@@ -24,7 +24,7 @@ import { recordSessionOperationalUsage } from '@server/events/recordSessionOpera
 
 export const handler = withEventContext(async (event, logger) => {
   const body = SessionEvents.Summarize.schema.parse(event.properties);
-  const { sessionId, userId, callTagging, trigger } = body;
+  const { sessionId, userId, callTagging, trigger, requesterId } = body;
 
   logger.updateMetadata({
     sessionId,
@@ -57,6 +57,25 @@ export const handler = withEventContext(async (event, logger) => {
   const user = await User.findById(userId ?? session.userId);
   if (!user) {
     logger.error(`User not found`);
+    return;
+  }
+
+  // Whose update access the summary write re-checks: the requester of a sharee-triggered job, else
+  // the owner (whose arm always matches, so that write only adds not-deleted). Mirrors
+  // sessionTagging.ts. summary.ts authorizes a requester with CASL, which grants update on a
+  // global-write session, hence the opt-in for that case only.
+  const requester = requesterId ? await User.findById(requesterId) : null;
+  if (requesterId && !requester) {
+    logger.warn(`Requester ${requesterId} not found, skipping summarization for session ${sessionId}`);
+    return;
+  }
+  const writer = requester ? { id: requester.id, groups: requester.groups } : { id: session.userId, groups: [] };
+  const writeOpts = requester ? { includeGlobalWrite: true } : undefined;
+
+  // Before the LLM call, so a requester revoked while the job sat in the queue does not bill the
+  // owner for a summary that the write below would refuse anyway.
+  if (requester && !(await sessionRepository.shareable.findUpdateAccessById(requester, sessionId, writeOpts))) {
+    logger.warn(`Session ${sessionId} no longer writable by ${writer.id}, skipping summarization`);
     return;
   }
 
@@ -186,7 +205,7 @@ export const handler = withEventContext(async (event, logger) => {
   // Always persist the session summary first - this is the primary value.
   // FabFile creation (for RAG vectorization) is secondary and should not
   // block the summary from being saved.
-  await sessionRepository.update({
+  const summaryFields = {
     id: session.id,
     summary: session.summary,
     summaryAt: session.summaryAt,
@@ -195,7 +214,14 @@ export const handler = withEventContext(async (event, logger) => {
     // `.save()` on this path, so the assignment above only reaches the database by being named
     // here - omitting it leaves the field undefined on every document.
     summaryTrigger: session.summaryTrigger,
-  });
+  };
+  // Re-checks update access and not-deleted, so a revoke or delete during the completion drops the
+  // result - and with it the FabFile, upload and tag job below.
+  const written = await sessionRepository.updateWithUpdateAccess(writer, summaryFields, writeOpts);
+  if (!written) {
+    logger.warn(`Session ${sessionId} no longer writable by ${writer.id}, skipping summary write`);
+    return;
+  }
 
   // Attempt to create/update the FabFile for RAG indexing.
   // If this fails due to storage limits, log a warning but don't fail the
@@ -350,7 +376,7 @@ export const handler = withEventContext(async (event, logger) => {
 
   // If requested, queue the tagging job now that the summary is generated
   if (callTagging) {
-    await SessionEvents.Tag.publish({ sessionId: session.id });
+    await SessionEvents.Tag.publish({ sessionId: session.id, requesterId });
   }
 
   await logEvent({ userId: user.id, type: AiEvents.NOTEBOOK_SUMMARIZATION, metadata: { sessionId } });

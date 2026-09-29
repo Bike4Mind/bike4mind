@@ -264,6 +264,19 @@ describe('updateSession - project propagation opt-out', () => {
     expect(updateShareableFiles).toHaveBeenCalledOnce();
   });
 
+  it('grants nothing to projects when the gated session write is refused', async () => {
+    const { project, adapters } = makeAdapters();
+    adapters.db.sessions.updateWithUpdateAccess.mockResolvedValue(null);
+
+    await expect(updateSession(user, { id: 'session-1', knowledgeIds: [NEW_FILE] }, adapters)).rejects.toThrow(
+      'Session not found'
+    );
+
+    expect(project.fileIds).toEqual(['already-there']);
+    expect(adapters.db.projects.update).not.toHaveBeenCalled();
+    expect(updateShareableFiles).not.toHaveBeenCalled();
+  });
+
   it('does NOT touch projects when propagateToProjects is false', async () => {
     // The guard this locks: an upload that lands in notebook context by DEFAULT has
     // consented to this notebook, not to every notebook in the project and not to the

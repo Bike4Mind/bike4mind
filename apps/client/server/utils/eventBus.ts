@@ -165,6 +165,10 @@ export const SessionEvents = {
       // without a trigger would leave a NEW summary sitting next to the PREVIOUS run's provenance.
       // Every publisher already passes one, and the summarizeSession chain now types it that way.
       trigger: z.enum(PERSISTED_SESSION_SUMMARY_TRIGGERS),
+      // Who asked, when not the owner: the handler's summary write re-checks this user's update
+      // access, and it is forwarded to the Tag job it queues. Distinct from `userId`, which picks
+      // the billed user.
+      requesterId: z.string().optional(),
     })
   ),
   Tag: event(
