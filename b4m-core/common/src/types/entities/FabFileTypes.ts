@@ -62,7 +62,7 @@ export enum DocumentDateSource {
    * Drive at that moment. Never taken for a binary uploaded to Drive: there `createdTime` is the
    * upload time, which is the same ingestion-time-as-document-date mistake #3047 removed.
    *
-   * This value is pinned once set - see the precedence rule in `prepareFabFileChunks`. An Editors
+   * This value is pinned once set - see the precedence rule in `resolveDocumentDate`. An Editors
    * file has no bytes of its own, so what the chunker reads is a rendition Drive generated at
    * fetch time, and that rendition's embedded metadata dates the export rather than the document.
    */
