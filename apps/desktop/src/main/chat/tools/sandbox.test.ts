@@ -1,4 +1,6 @@
-import { homedir } from 'node:os';
+import { mkdtempSync, realpathSync, symlinkSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildProfile } from './sandbox';
 
@@ -35,5 +37,21 @@ describe('buildProfile', () => {
   it('escapes quotes and backslashes so a path cannot end the profile string early', () => {
     const profile = buildProfile(['/tmp/od"d\\name'], []);
     expect(profile).toContain('(allow file-write* (subpath "/tmp/od\\"d\\\\name"))');
+  });
+
+  // On macOS tmpdir() is /var/folders/..., and seatbelt only ever sees /private/var/folders/...
+  it('allows the temp folder under its resolved path, where seatbelt actually matches', () => {
+    expect(buildProfile([], [])).toContain(`(allow file-write* (subpath "${realpathSync(tmpdir())}"))`);
+  });
+
+  it('grants and denies a symlinked folder under the path it resolves to', () => {
+    const real = mkdtempSync(join(tmpdir(), 'b4m-sandbox-real-'));
+    const link = join(mkdtempSync(join(tmpdir(), 'b4m-sandbox-link-')), 'project');
+    symlinkSync(real, link);
+
+    const profile = buildProfile([link], [link]);
+
+    expect(profile).toContain(`(allow file-write* (subpath "${realpathSync(real)}"))`);
+    expect(profile).toContain(`(deny file-read* file-write* (subpath "${realpathSync(real)}"))`);
   });
 });

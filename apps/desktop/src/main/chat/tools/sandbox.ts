@@ -1,4 +1,4 @@
-import { accessSync, constants } from 'node:fs';
+import { accessSync, constants, realpathSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { homedir, platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -80,6 +80,20 @@ function expandHome(value: string): string {
 }
 
 /**
+ * Seatbelt matches the resolved path, so a rule on a symlinked spelling never fires: macOS's
+ * tmpdir() is /var/folders/..., which is really /private/var/folders/..., and without the
+ * resolved form every tool that writes a temp file (vitest, tsc, npm) fails with EPERM.
+ */
+function spellings(path: string): string[] {
+  try {
+    const resolved = realpathSync(path);
+    return resolved === path ? [path] : [path, resolved];
+  } catch {
+    return [path];
+  }
+}
+
+/**
  * The profile that confines a shell command.
  *
  * Seatbelt is last-match-wins, so the order is load-bearing: the blanket write denial has to
@@ -96,8 +110,9 @@ export function buildProfile(writableRoots: readonly string[], alwaysDenied: rea
     '(allow default)',
     '',
     '(deny file-write*)',
-    ...writableRoots.map(root => `(allow file-write* (subpath "${escapeProfilePath(root)}"))`),
-    `(allow file-write* (subpath "${escapeProfilePath(tmpdir())}"))`,
+    ...[...writableRoots, tmpdir()]
+      .flatMap(spellings)
+      .map(root => `(allow file-write* (subpath "${escapeProfilePath(root)}"))`),
     '(allow file-write* (subpath "/tmp"))',
     '(allow file-write* (subpath "/private/tmp"))',
     ...WRITABLE_DEVICES.map(device => `(allow file-write* (literal "${device}"))`),
@@ -105,7 +120,7 @@ export function buildProfile(writableRoots: readonly string[], alwaysDenied: rea
     '',
   ];
 
-  for (const denied of [...credentialPaths(), ...alwaysDenied]) {
+  for (const denied of [...credentialPaths(), ...alwaysDenied].flatMap(spellings)) {
     lines.push(`(deny file-read* file-write* (subpath "${escapeProfilePath(denied)}"))`);
   }
 

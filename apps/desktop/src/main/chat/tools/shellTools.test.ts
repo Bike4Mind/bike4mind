@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, realpath } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -47,13 +47,27 @@ describe('bash_execute', () => {
   });
 
   it('cannot write outside every granted root', async () => {
-    const outside = await realpath(await mkdtemp(join(tmpdir(), 'b4m-outside-')));
+    // Not under tmpdir(): the profile leaves the temp folder writable for every command.
+    const cache = join(process.cwd(), 'node_modules', '.cache');
+    await mkdir(cache, { recursive: true });
+    const outside = await realpath(await mkdtemp(join(cache, 'b4m-outside-')));
     const target = join(outside, 'escaped.txt');
 
-    const result = await bashExecute.run({ command: `echo escaped > ${target}` }, context);
+    try {
+      const result = await bashExecute.run({ command: `echo escaped > ${target}` }, context);
 
-    expect(result).toMatch(/not permitted|Operation not permitted/i);
-    await expect(readFile(target, 'utf8')).rejects.toThrow();
+      expect(result).toMatch(/not permitted|Operation not permitted/i);
+      await expect(readFile(target, 'utf8')).rejects.toThrow();
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('writes to the temp folder, as test runners and compilers need to', async () => {
+    const result = await bashExecute.run({ command: 'mkdir "$(mktemp -d)/probe" && echo made' }, context);
+
+    expect(result).not.toMatch(/Operation not permitted/i);
+    expect(result).toContain('made');
   });
 
   it('cannot read a path the app protects, even when its parent is granted', async () => {
