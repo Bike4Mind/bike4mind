@@ -475,6 +475,25 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.getByTestId('datalake-research-run-totals').textContent).toMatch(/1 could not be judged/);
     });
 
+    it('shows where the hits went on a run the judge breaker stopped', () => {
+      renderPanel({
+        runs: [
+          run({
+            status: 'failed',
+            stopReason: 'judge_unavailable',
+            error: 'The relevance judge (some-model) failed on every candidate it tried (3)',
+            totals: { ...emptyResearchRunTotals(), searchHits: 10, judgeFailed: 3, notJudged: 7 },
+          }),
+        ],
+      });
+      expect(screen.getByTestId('datalake-research-run-stop-reason').textContent).toBe(
+        'Stopped: the relevance judge was unavailable'
+      );
+      const summary = screen.getByTestId('datalake-research-run-totals').textContent ?? '';
+      expect(summary).toMatch(/3 could not be judged/);
+      expect(summary).toMatch(/7 not judged \(the run stopped early\)/);
+    });
+
     it('names the model that judged a run', () => {
       renderPanel({ runs: [run({ judgeModel: 'gpt-4.1-mini' })] });
       expect(screen.getByText(/judged by gpt-4\.1-mini/)).toBeTruthy();

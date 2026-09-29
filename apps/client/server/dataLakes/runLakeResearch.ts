@@ -72,13 +72,15 @@ export function describeJudgeFailure(
   model: string,
   failedCount: number,
   judgeError: string | undefined,
-  allFailed: boolean
+  allFailed: boolean,
+  notJudged = 0
 ): string {
   const scope = allFailed
     ? `every candidate it tried (${failedCount}), so nothing was proposed`
     : `${failedCount} candidate${failedCount === 1 ? '' : 's'}`;
   const cause = judgeError ? `: ${judgeError.slice(0, JUDGE_ERROR_MAX_CHARS)}` : '';
-  return `The relevance judge (${model}) failed on ${scope}${cause}`;
+  const skipped = notJudged > 0 ? `; ${notJudged} candidate${notJudged === 1 ? '' : 's'} not judged` : '';
+  return `The relevance judge (${model}) failed on ${scope}${cause}${skipped}`;
 }
 
 /**
@@ -320,7 +322,13 @@ export async function runLakeResearch(
 
     const judgeFailure =
       result.totals.judgeFailed > 0
-        ? describeJudgeFailure(model, result.totals.judgeFailed, result.judgeError, result.judgeStepFailed)
+        ? describeJudgeFailure(
+            model,
+            result.totals.judgeFailed,
+            result.judgeError,
+            result.judgeStepFailed,
+            result.totals.notJudged
+          )
         : undefined;
 
     // A judge that failed on everything is a failed run, not an empty web - see `judgeStepFailed`.

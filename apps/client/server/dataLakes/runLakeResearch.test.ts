@@ -207,6 +207,29 @@ describe('runLakeResearch', () => {
       );
     });
 
+    it('settles a run the judge breaker stopped as failed, persisting the not-judged count', async () => {
+      h.executeResearchRun.mockResolvedValue({
+        totals: { ...emptyResearchRunTotals(), searchHits: 10, judgeFailed: 3, notJudged: 7 },
+        spentMicroUsd: 0,
+        stopReason: 'judge_unavailable',
+        judgeStepFailed: true,
+        judgeError: 'model access denied',
+      });
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.settleRun).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({
+          status: 'failed',
+          stopReason: 'judge_unavailable',
+          totals: expect.objectContaining({ judgeFailed: 3, notJudged: 7 }),
+          error:
+            'The relevance judge (default-judge-model) failed on every candidate it tried (3), so nothing was proposed: model access denied; 7 candidates not judged',
+        })
+      );
+    });
+
     it('completes a partly-failed run but carries the judge error, so the card shows it as degraded', async () => {
       h.executeResearchRun.mockResolvedValue({
         totals: { ...emptyResearchRunTotals(), searchHits: 3, judgeFailed: 1, proposed: 2 },

@@ -50,8 +50,8 @@ export const RESEARCH_RUN_STATUSES = ['queued', 'running', 'completed', 'failed'
 export type ResearchRunStatus = (typeof RESEARCH_RUN_STATUSES)[number];
 
 /**
- * Why a run's loop ended. Every value other than `exhausted` names a LEVER that fired, which is
- * what makes this field worth storing: a run that proposed two things because its ceiling was
+ * Why a run's loop ended. Every value other than `exhausted` and `judge_unavailable` names a LEVER
+ * that fired, which is what makes this field worth storing: a run that proposed two things because its ceiling was
  * $0.05 and a run that proposed two things because the web held nothing else look identical
  * without it, and only one of them is fixed by turning a dial.
  */
@@ -62,6 +62,11 @@ export const RESEARCH_RUN_STOP_REASONS = [
   'proposal_limit',
   /** The worker was running out of Lambda time and stopped rather than being killed mid-candidate. */
   'time_budget',
+  /**
+   * The judge failed several times in a row before scoring anything, so the run stopped instead of
+   * paying for a judgment on every remaining candidate. The rest are counted in `totals.notJudged`.
+   */
+  'judge_unavailable',
 ] as const;
 export type ResearchRunStopReason = (typeof RESEARCH_RUN_STOP_REASONS)[number];
 
@@ -297,6 +302,11 @@ export interface ResearchRunTotals {
   suppressedByTombstone: number;
   /** Nothing to key the source on (not an http(s) URL). */
   unusableSource: number;
+  /**
+   * Candidates never reached because the run stopped early on `judge_unavailable`, so the buckets
+   * still sum to `searchHits`. Stays 0 on every other stop reason; older stored runs read it as 0.
+   */
+  notJudged: number;
 }
 
 export const emptyResearchRunTotals = (): ResearchRunTotals => ({
@@ -310,6 +320,7 @@ export const emptyResearchRunTotals = (): ResearchRunTotals => ({
   alreadyInLake: 0,
   suppressedByTombstone: 0,
   unusableSource: 0,
+  notJudged: 0,
 });
 
 export interface IDataLakeResearchRun {
