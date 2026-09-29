@@ -142,6 +142,9 @@ describe('addSessions grant cap', () => {
     expect(grantsFor(session, OWNER)).toEqual([Permission.read]);
     expect(grantsFor(file as { users: Grants }, MEMBER)).toEqual([Permission.read]);
     expect(grantsFor(file as { users: Grants }, OWNER)).toEqual([Permission.read]);
+    // The adder is a project member too: the fan-out must not hand them update on their own grant.
+    expect(grantsFor(session, ADDER)).toEqual([Permission.read]);
+    expect(grantsFor(file as { users: Grants }, ADDER)).toEqual([Permission.read]);
   });
 
   it('still passes update through when the adder owns the session', async () => {

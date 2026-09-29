@@ -79,6 +79,37 @@ describe('addSystemPrompts authorization', () => {
     expect(fabFileUpdate).not.toHaveBeenCalled();
   });
 
+  describe('when pushing the file grants fails', () => {
+    const run = (adapters: unknown) =>
+      addSystemPrompts(
+        { id: SHAREE } as IUserDocument,
+        { projectId: 'project-1', fileIds: ['file-1'] },
+        adapters as any
+      );
+
+    it('removes the new prompts through the gated write and rethrows the original error', async () => {
+      const { adapters, projectUpdate, fabFileUpdate } = setup([Permission.read, Permission.update]);
+      fabFileUpdate.mockRejectedValue(new Error('grant failed'));
+
+      await expect(run(adapters)).rejects.toThrow('grant failed');
+
+      expect(projectUpdate).toHaveBeenCalledTimes(2);
+      expect(projectUpdate).toHaveBeenLastCalledWith({ id: SHAREE }, { id: 'project-1', systemPrompts: [] });
+    });
+
+    it.each([
+      ['matches nothing', (u: ReturnType<typeof vi.fn>) => u.mockResolvedValueOnce(null)],
+      ['throws', (u: ReturnType<typeof vi.fn>) => u.mockRejectedValueOnce(new Error('cleanup failed'))],
+    ])('still rethrows the original error when the cleanup write %s', async (_label, arrange) => {
+      const { adapters, projectUpdate, fabFileUpdate } = setup([Permission.read, Permission.update]);
+      fabFileUpdate.mockRejectedValue(new Error('grant failed'));
+      projectUpdate.mockResolvedValueOnce({});
+      arrange(projectUpdate);
+
+      await expect(run(adapters)).rejects.toThrow('grant failed');
+    });
+  });
+
   it('lets a read-only adder pass on only read on the prompt file', async () => {
     const MEMBER = 'user-member';
     const { adapters, project } = setup([Permission.read, Permission.update]);

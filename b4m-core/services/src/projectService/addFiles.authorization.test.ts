@@ -126,6 +126,8 @@ describe('addFiles grant cap', () => {
 
     expect(grantsFor(MEMBER)).toEqual([Permission.read]);
     expect(grantsFor(OWNER)).toEqual([Permission.read]);
+    // The adder is a project member too: the fan-out must not hand them update on their own file row.
+    expect(grantsFor(ADDER)).toEqual([Permission.read]);
   });
 
   it('still passes update through when the adder owns the file', async () => {
