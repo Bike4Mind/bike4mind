@@ -45,7 +45,20 @@ const AiTokenRequestSchema = z.object({
   client_secret: z.string().min(1),
   /** The federated app's ID token for its logged-in user (Cognito- or B4M-issued). */
   id_token: z.string().min(1),
+  /**
+   * Space-separated scopes to mint. Defaults to `ai:generate` when omitted (backward-compatible).
+   * Every requested scope must appear in the client's registered `allowedScopes`. Scopes that
+   * authorize spend (ai:generate) additionally require a durable OAuthGrant in enforce mode.
+   */
+  scope: z.string().optional(),
 });
+
+/**
+ * Scopes that authorize provider spend. A durable OAuthGrant must cover these when grant
+ * enforcement is active (step 5.5). Non-billable scopes (e.g. me:read) skip this sub-check
+ * but still require client registration (allowedScopes) and a grant row (step 5.5 hole-a).
+ */
+const BILLABLE_SCOPES = new Set<string>([ApiKeyScope.AI_GENERATE]);
 
 /**
  * Take the last hop from the X-Forwarded-For chain - the one CloudFront appends
@@ -80,7 +93,8 @@ const handler = baseApi({ auth: false })
       return res.status(400).json({ error: 'invalid_request', error_description: parsed.error.message });
     }
 
-    const { client_id, client_secret, id_token } = parsed.data;
+    const { client_id, client_secret, id_token, scope } = parsed.data;
+    const requestedScopes = (scope ?? ApiKeyScope.AI_GENERATE).split(' ').filter(Boolean);
 
     // 1. Client auth - verify the secret directly. Unlike the code exchange we send
     //    no redirect_uri, so we skip validateClientSecret (which also demands one).
@@ -97,6 +111,18 @@ const handler = baseApi({ auth: false })
       return res.status(403).json({
         error: 'access_denied',
         error_description: 'Client is not configured for federated AI-token exchange',
+      });
+    }
+
+    // 2.5. Scope gate - every requested scope must appear in the client's registered allowedScopes.
+    //      Mirrors code.ts (RFC 6749 4.1.2.1): a clear 403 is better than silently narrowing the
+    //      grant to what the client may have. A client mis-registered without ai:generate in
+    //      allowedScopes cannot escalate to a spend-authorizing key here.
+    const disallowedScopes = requestedScopes.filter(s => !(client.allowedScopes ?? []).includes(s));
+    if (disallowedScopes.length > 0) {
+      return res.status(403).json({
+        error: 'invalid_scope',
+        error_description: `Scopes not registered for this client: ${disallowedScopes.join(' ')}`,
       });
     }
 
@@ -174,7 +200,12 @@ const handler = baseApi({ auth: false })
         );
       }
 
-      const hasBillableScope = !!grant && (grant.scopes ?? []).includes(ApiKeyScope.AI_GENERATE);
+      // Billable scopes in this request that must be covered by the grant.
+      // Non-billable scopes (e.g. me:read) skip this sub-check but still require a grant row
+      // (hole-a: a pool token for a user who never authorized this client must be rejected).
+      const billableRequested = requestedScopes.filter(s => BILLABLE_SCOPES.has(s));
+      const grantCoversAllBillable =
+        billableRequested.length === 0 || (!!grant && billableRequested.every(s => (grant.scopes ?? []).includes(s)));
 
       if (enforce) {
         // Fail closed: an unreadable grant is UNKNOWN, not absent. Minting anyway would defeat the
@@ -190,10 +221,10 @@ const handler = baseApi({ auth: false })
             .status(403)
             .json({ error: 'access_denied', error_description: 'User has not authorized this client' });
         }
-        if (!hasBillableScope) {
+        if (!grantCoversAllBillable) {
           return res.status(403).json({
             error: 'access_denied',
-            error_description: 'User has not authorized AI generation for this client',
+            error_description: `User has not authorized the following scope(s) for this client: ${billableRequested.join(' ')}`,
           });
         }
       } else if (!lookupFailed) {
@@ -204,10 +235,10 @@ const handler = baseApi({ auth: false })
             `[OAUTH_AI_TOKEN] would-reject: no grant for user ${b4mUserId} via client ${client_id} ` +
               `(grace mode; set OAUTH_AI_TOKEN_ENFORCE_GRANT=true to enforce)`
           );
-        } else if (!hasBillableScope) {
+        } else if (!grantCoversAllBillable) {
           req.logger.warn(
-            `[OAUTH_AI_TOKEN] would-reject: grant for user ${b4mUserId} via client ${client_id} lacks the ` +
-              `${ApiKeyScope.AI_GENERATE} scope (grace mode; set OAUTH_AI_TOKEN_ENFORCE_GRANT=true to enforce)`
+            `[OAUTH_AI_TOKEN] would-reject: grant for user ${b4mUserId} via client ${client_id} lacks ` +
+              `scope(s): ${billableRequested.join(' ')} (grace mode; set OAUTH_AI_TOKEN_ENFORCE_GRANT=true to enforce)`
           );
         }
       }
@@ -245,7 +276,7 @@ const handler = baseApi({ auth: false })
       b4mUserId,
       {
         name: `AI (federated: ${client.name})`,
-        scopes: [ApiKeyScope.AI_GENERATE],
+        scopes: requestedScopes as ApiKeyScope[],
         expiresAt: new Date(Date.now() + AI_TOKEN_TTL_SECONDS * 1000),
         metadata: {
           clientIP: clientIp,
@@ -268,7 +299,7 @@ const handler = baseApi({ auth: false })
     });
 
     req.logger.info(
-      `[OAUTH_AI_TOKEN] Minted ai:generate key ${minted.id} for user ${b4mUserId} via client ${client_id}`
+      `[OAUTH_AI_TOKEN] Minted key ${minted.id} for user ${b4mUserId} via client ${client_id} (scopes: ${requestedScopes.join(' ')})`
     );
 
     // 9. Respond with the raw key exactly once.
@@ -276,7 +307,7 @@ const handler = baseApi({ auth: false })
       api_key: minted.key,
       token_type: 'ApiKey',
       expires_in: AI_TOKEN_TTL_SECONDS,
-      scope: ApiKeyScope.AI_GENERATE,
+      scope: requestedScopes.join(' '),
     });
   });
 

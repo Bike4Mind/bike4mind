@@ -401,7 +401,9 @@ export const web = new sst.aws.Nextjs(
       // ai-token.ts). Empty (default) leaves the exchange in grace mode (logs a would-reject when a
       // (user,client) grant is missing); 'true' enforces (403s it). Declared here so the lever is
       // greppable from infra and can be flipped per stage, mirroring API_KEY_SCOPE_STAGING.
-      OAUTH_AI_TOKEN_ENFORCE_GRANT: process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT || '',
+      OAUTH_AI_TOKEN_ENFORCE_GRANT: PRODUCTION_STAGES.includes($app.stage)
+        ? 'true'
+        : process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT || '',
       APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
       // Direct SSE completions endpoint advertised to the CLI via /api/settings/serverConfig.
       // Local `sst dev` has no CloudFront router mapping /api/ai/v1/completions to the

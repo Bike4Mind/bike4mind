@@ -15,7 +15,7 @@ vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 
 // Minimal enum surface the handler reads (avoids loading real @bike4mind/common).
 vi.mock('@bike4mind/common', () => ({
-  ApiKeyScope: { AI_GENERATE: 'ai:generate' },
+  ApiKeyScope: { AI_GENERATE: 'ai:generate', ME_READ: 'me:read' },
   ApiKeyStatus: { ACTIVE: 'active', RATE_LIMITED: 'rate_limited', DISABLED: 'disabled', EXPIRED: 'expired' },
 }));
 
@@ -80,6 +80,7 @@ const FEDERATED_CLIENT = {
     audience: 'app-client-id',
     providerName: 'B4M',
   },
+  allowedScopes: ['openid', 'email', 'profile', 'ai:generate', 'me:read'],
 };
 
 // A client that signs users in directly against B4M: subjectSource 'sub', no providerName, explicit jwksUri.
@@ -91,6 +92,7 @@ const B4M_ISSUED_CLIENT = {
     jwksUri: 'https://app.example.com/api/oauth/jwks',
     subjectSource: 'sub',
   },
+  allowedScopes: ['openid', 'email', 'profile', 'ai:generate', 'me:read'],
 };
 
 const CONSENTED_USER = { id: 'b4m-user-1', aupAcceptedVersion: '2025-01-01' };
@@ -171,7 +173,7 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockCreateUserApiKey).toHaveBeenCalledTimes(1);
-    expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('lacks the ai:generate scope'));
+    expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('lacks scope(s): ai:generate'));
   });
 
   it('grant gate (grace, default): no grant still mints but logs a would-reject warning', async () => {
@@ -362,6 +364,68 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
 
     expect(res._getStatusCode()).toBe(400);
     expect(res._getJSONData().error).toBe('invalid_request');
+  });
+
+  describe('allowedScopes enforcement (step 2.5)', () => {
+    it('scope not in allowedScopes → 403 invalid_scope, no mint', async () => {
+      // Client has no 'admin:write' in its allowedScopes - must be rejected before any further work.
+      const { req, res } = makeReq({ ...VALID_BODY, scope: 'ai:generate admin:write' });
+      await handler(req as any, res as any);
+
+      expect(res._getStatusCode()).toBe(403);
+      expect(res._getJSONData().error).toBe('invalid_scope');
+      expect(res._getJSONData().error_description).toContain('admin:write');
+      expect(mockCreateUserApiKey).not.toHaveBeenCalled();
+    });
+
+    it('all requested scopes in allowedScopes → proceeds to mint', async () => {
+      const { req, res } = makeReq({ ...VALID_BODY, scope: 'ai:generate me:read' });
+      // Grant covers both scopes for the billable scope check.
+      mockFindGrant.mockResolvedValue({
+        userId: 'b4m-user-1',
+        clientId: 'client-1',
+        scopes: ['ai:generate', 'me:read'],
+      });
+      mockCreateUserApiKey.mockResolvedValue({
+        id: 'key-2',
+        key: 'b4m_live_cafebabe',
+        scopes: ['ai:generate', 'me:read'],
+      });
+      await handler(req as any, res as any);
+
+      expect(res._getStatusCode()).toBe(200);
+      const data = res._getJSONData();
+      expect(data.scope).toBe('ai:generate me:read');
+      const [, params] = mockCreateUserApiKey.mock.calls[0];
+      expect(params.scopes).toEqual(['ai:generate', 'me:read']);
+    });
+  });
+
+  describe('scope parameter - defaults and non-billable', () => {
+    it('omitting scope defaults to ai:generate', async () => {
+      const { req, res } = makeReq(VALID_BODY);
+      await handler(req as any, res as any);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().scope).toBe('ai:generate');
+      const [, params] = mockCreateUserApiKey.mock.calls[0];
+      expect(params.scopes).toEqual(['ai:generate']);
+    });
+
+    it('requesting only me:read (non-billable) does not require grant coverage of that scope', async () => {
+      // me:read is not in BILLABLE_SCOPES, so a grant that lacks it still lets the mint proceed
+      // (the grant gate only covers billable scopes per its comment in the handler).
+      process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
+      mockFindGrant.mockResolvedValue({ userId: 'b4m-user-1', clientId: 'client-1', scopes: ['openid'] });
+      mockCreateUserApiKey.mockResolvedValue({ id: 'key-3', key: 'b4m_live_abc123', scopes: ['me:read'] });
+      const { req, res } = makeReq({ ...VALID_BODY, scope: 'me:read' });
+      await handler(req as any, res as any);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().scope).toBe('me:read');
+      const [, params] = mockCreateUserApiKey.mock.calls[0];
+      expect(params.scopes).toEqual(['me:read']);
+    });
   });
 
   // A client that signs its users in against B4M's own OIDC provider directly
