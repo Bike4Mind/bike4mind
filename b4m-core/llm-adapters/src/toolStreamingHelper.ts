@@ -106,12 +106,21 @@ export function createRecursiveArtifactGuard<Cb extends LooseCompletionCallback>
   const markDelivered = (markup: string) => {
     deliveredMarkup += markup;
   };
-  // Memoized so a concurrent caller awaits the in-flight cb() instead of resolving early.
+  // Memoized so a concurrent caller awaits the in-flight cb() instead of resolving early. The slot
+  // is claimed before cb() runs, so a flush() re-entered synchronously from inside cb() cannot
+  // start a second cb() call.
   let flushPromise: Promise<void> | null = null;
-  const flush = () =>
-    (flushPromise ??= (async () => {
-      const cleaned = stripDeliveredArtifactBlocks(buffer, deliveredMarkup).trim();
-      await cb(cleaned ? [cleaned] : [], meta);
-    })());
+  const flush = () => {
+    if (flushPromise) return flushPromise;
+    let resolve!: () => void;
+    let reject!: (reason: unknown) => void;
+    flushPromise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    const cleaned = stripDeliveredArtifactBlocks(buffer, deliveredMarkup).trim();
+    (async () => cb(cleaned ? [cleaned] : [], meta))().then(() => resolve(), reject);
+    return flushPromise;
+  };
   return { callback, emitArtifact, markDelivered, flush };
 }

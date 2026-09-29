@@ -244,6 +244,33 @@ describe('createRecursiveArtifactGuard: one shared buffer/flush pipe for a whole
     expect(cb).toHaveBeenCalledTimes(1);
   });
 
+  it('a flush() after cb() has rejected re-throws the same error without retrying cb()', async () => {
+    const error = new Error('delivery failed');
+    const cb = vi.fn(async () => {
+      throw error;
+    });
+    const guard = createRecursiveArtifactGuard(cb);
+
+    await expect(guard.flush()).rejects.toBe(error);
+    await expect(guard.flush()).rejects.toBe(error);
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('a flush() re-entered synchronously from inside cb() does not call cb() again', async () => {
+    let inner: Promise<void> | undefined;
+    const cb = vi.fn((): Promise<void> => {
+      inner = guard.flush();
+      return Promise.resolve();
+    });
+    const guard = createRecursiveArtifactGuard(cb);
+
+    const outer = guard.flush();
+    await outer;
+
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(inner).toBe(outer);
+  });
+
   it('a later echo of a chained artifact is also stripped on the final flush', async () => {
     const received: Array<{ text: (string | null | undefined)[]; info: unknown }> = [];
     const cb = async (text: (string | null | undefined)[], info: unknown) => {
