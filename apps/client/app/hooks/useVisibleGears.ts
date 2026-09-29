@@ -1,19 +1,10 @@
 import { useState } from 'react';
-import { useGearsStatus, type GearKey, type GearStatus } from '@client/app/hooks/useGearsStatus';
+import { useGearsStatus, type GearKey } from '@client/app/hooks/useGearsStatus';
+import { isGettingStarted } from '@client/lib/gears/tabs';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useUser } from '@client/app/contexts/UserContext';
 import { isBrandNewAccount } from '@client/app/utils/onboarding';
-
-/**
- * Leads the Getting Started tab despite being a skill: running one question past
- * many models is the story the product turns on. Placement only - the endpoint
- * still calls it a skill, because it earns no sidenav row.
- */
-export const GETTING_STARTED_LEAD: GearKey = 'models';
-
-/** Whether a gear belongs on the Gears page's Getting Started tab. */
-export const isGettingStarted = (gear: GearStatus) => gear.key === GETTING_STARTED_LEAD || gear.kind === 'destination';
 
 /**
  * The gears this deployment offers. A gear whose feature is switched off is

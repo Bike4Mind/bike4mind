@@ -51,7 +51,8 @@ import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
 import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
 import { api } from '@client/app/contexts/ApiContext';
 import { useClaimGear, type GearKey, type GearStatus } from '@client/app/hooks/useGearsStatus';
-import { GETTING_STARTED_LEAD, isGettingStarted, useVisibleGears } from '@client/app/hooks/useVisibleGears';
+import { useVisibleGears } from '@client/app/hooks/useVisibleGears';
+import { GEARS_TABS, TABS_WITH_DETAIL, groupGearsByTab, type GearsTabKey } from '@client/lib/gears/tabs';
 import { neutralFrame, rewardGreen } from '@client/app/components/common/gearRewardStyles';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
@@ -393,29 +394,6 @@ const GLYPH_VIEWBOX: Partial<Record<GearKey, string>> = {
   clidocs: '1 2 22 22',
 };
 
-type GearsTabKey = 'getting-started' | 'features' | 'generators' | 'integrations';
-
-/** Tabs whose cards open the long-form view instead of acting at once. Getting
- *  Started is the exception: those features have a sidenav row to go to, so an
- *  explanation would sit between the user and the thing itself. */
-const TABS_WITH_DETAIL: readonly GearsTabKey[] = ['features', 'generators', 'integrations'];
-
-const TABS: { key: GearsTabKey; label: string }[] = [
-  { key: 'getting-started', label: 'Getting Started' },
-  { key: 'features', label: 'Explore Features' },
-  { key: 'generators', label: 'Generators' },
-  { key: 'integrations', label: 'Integrations' },
-];
-
-/** Skills that turn a prompt into a media file. Grouped here rather than by
- *  `kind`, which the endpoint owns and which only separates the gears that earn
- *  a sidenav row from everything else. */
-const GENERATOR_KEYS: GearKey[] = ['image', 'video', 'music', 'sound'];
-
-/** Skills that connect Bike4Mind to something outside it. Slack is the only
- *  one broken out so far; MCP and the chat imports are the obvious next. */
-const INTEGRATION_KEYS: GearKey[] = ['slack'];
-
 const panelSx = {
   px: 0,
   pt: { xs: '8px', sm: '24px' },
@@ -486,26 +464,7 @@ const GearsPage = () => {
     });
   };
 
-  // The lead first, then the destinations in endpoint order.
-  const gettingStarted = [
-    ...gears.filter(g => g.key === GETTING_STARTED_LEAD),
-    ...gears.filter(g => isGettingStarted(g) && g.key !== GETTING_STARTED_LEAD),
-  ];
-  const generators = gears.filter(g => GENERATOR_KEYS.includes(g.key));
-  const integrations = gears.filter(g => INTEGRATION_KEYS.includes(g.key));
-  const skills = gears.filter(
-    g =>
-      g.kind === 'skill' &&
-      g.key !== GETTING_STARTED_LEAD &&
-      !GENERATOR_KEYS.includes(g.key) &&
-      !INTEGRATION_KEYS.includes(g.key)
-  );
-  const tabCards: Record<GearsTabKey, GearStatus[]> = {
-    'getting-started': gettingStarted,
-    features: skills,
-    generators,
-    integrations,
-  };
+  const tabCards = groupGearsByTab(gears);
 
   /** Interpret a gear's ctaAction - see lib/gears/presentation.ts for the grammar. */
   const onCta = (gear: GearStatus) => {
@@ -808,7 +767,7 @@ const GearsPage = () => {
             })}
           >
             <TabList data-testid="gears-tablist" sx={pageTabListSx}>
-              {TABS.map(({ key, label }) => {
+              {GEARS_TABS.map(({ key, label }) => {
                 const claimable = tabCards[key].filter(g => rewardState(g) === 'claimable').length;
                 return (
                   <PageTab key={key} value={key} data-testid={`gears-tab-${key}`}>

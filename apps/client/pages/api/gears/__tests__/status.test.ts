@@ -76,6 +76,7 @@ vi.mock('@bike4mind/common', () => ({
 }));
 
 import handler, { GEAR_DEFAULTS } from '../status';
+import { groupGearsByTab } from '@client/lib/gears/tabs';
 
 const run = (user?: { id: string }) => {
   const { req, res } = createMocks({ method: 'GET' });
@@ -357,5 +358,18 @@ describe('GET /api/gears/status - Manage Gears admin overrides', () => {
     const byKey = Object.fromEntries(body.gears.map(g => [g.key, g]));
     expect(byKey.projects.title).toBe('Projects');
     expect(byKey.clidocs.ctaAction).toContain('#stamp:clidocs');
+  });
+});
+
+describe('Gears page placement of the real catalog', () => {
+  // The drift guard for the page: a gear with a kind or key the tab rules do not expect
+  // would otherwise vanish from the page, or show on two tabs.
+  it('puts every gear on exactly one tab', () => {
+    const tabs = groupGearsByTab(GEAR_DEFAULTS.map(g => ({ key: g.key, kind: g.kind })));
+    const placed = Object.values(tabs)
+      .flat()
+      .map(g => g.key)
+      .sort();
+    expect(placed).toEqual(GEAR_DEFAULTS.map(g => g.key).sort());
   });
 });
