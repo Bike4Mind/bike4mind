@@ -12,7 +12,8 @@ export class PathAccessDenied extends Error {
     super(
       reason ??
         `Access denied: ${requested} is outside the folders you have granted. ` +
-          'Ask the user to add that folder from the chip row above the message box.'
+          'Ask the user to share that folder: a Code session takes one from the chip row above ' +
+          'the message box, and the sidebar card shares one with every conversation.'
     );
     this.name = 'PathAccessDenied';
   }

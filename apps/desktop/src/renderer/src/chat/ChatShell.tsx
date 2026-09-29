@@ -10,7 +10,7 @@ import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { BackgroundProcessPanel } from './BackgroundProcessPanel';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
-import { McpCard } from './McpCard';
+import { CustomizePanel } from './CustomizePanel';
 import { MessageThread } from './MessageThread';
 import { PendingApprovalBar } from './PendingApprovalBar';
 import { contentColumnSx } from './layout';
@@ -290,12 +290,8 @@ export function ChatShell({ account }: { account?: ReactNode }) {
         onDelete={sessionId => void onDelete(sessionId)}
         onTogglePin={session => void togglePin(session)}
         onToggleArchived={session => void toggleArchived(session)}
-        card={
-          <>
-            <SidebarCard />
-            <McpCard />
-          </>
-        }
+        customize={<CustomizePanel />}
+        card={<SidebarCard />}
         footer={account}
       />
 

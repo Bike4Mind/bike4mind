@@ -158,7 +158,10 @@ export function Composer({
         </Box>
       )}
 
-      <Stack direction="row" spacing={1} alignItems="flex-end" sx={{ ...contentColumnSx, pt: 1.5 }}>
+      <Box sx={{ ...contentColumnSx, pt: 1.5 }}>
+        {/* Send and Stop ride INSIDE the input rather than beside it. As siblings in a row they
+            took their own width out of the column, so the input's right edge stopped ~74px short
+            of where the transcript ends while every other composer row reached it. */}
         <Textarea
           value={text}
           onChange={event => setText(event.target.value)}
@@ -167,27 +170,34 @@ export function Composer({
           disabled={disabled}
           minRows={1}
           maxRows={8}
-          sx={{ flex: 1 }}
+          endDecorator={
+            /* Both at once while a reply runs: stopping this turn and queueing the next one are
+               different intentions, and swapping one control for the other made the second
+               unreachable. Send is labelled for what the click actually does. */
+            <Stack direction="row" spacing={1} sx={{ ml: 'auto' }}>
+              {streaming && (
+                <Button size="sm" variant="soft" color="neutral" onClick={onStop} data-testid="chat-stop-btn">
+                  Stop
+                </Button>
+              )}
+              <Button size="sm" onClick={submit} disabled={!canSubmit} data-testid="chat-send-btn">
+                {streaming ? 'Queue' : 'Send'}
+              </Button>
+            </Stack>
+          }
           // onPaste goes on the inner textarea, not Joy's root: the root is a div, and typing
           // the handler for it would lose the element the paste actually happened in.
           slotProps={{ textarea: { 'data-testid': 'chat-composer-input', onPaste } }}
         />
-
-        {/* Both at once while a reply runs: stopping this turn and queueing the next one are
-            different intentions, and swapping one control for the other made the second
-            unreachable. Send is labelled for what the click actually does. */}
-        {streaming && (
-          <Button variant="soft" color="neutral" onClick={onStop} data-testid="chat-stop-btn">
-            Stop
-          </Button>
-        )}
-        <Button onClick={submit} disabled={!canSubmit} data-testid="chat-send-btn">
-          {streaming ? 'Queue' : 'Send'}
-        </Button>
-      </Stack>
+      </Box>
 
       {/* Attach on the left, what answers the turn on the right - the shape Claude Code uses. */}
-      <Stack direction="row" alignItems="center" spacing={1} sx={{ ...contentColumnSx, py: 1 }}>
+      {/* `gap` rather than Stack's `spacing`: spacing resets every child's margin from the row
+          itself, which outranks the attach button's own negative margin below. */}
+      <Stack direction="row" alignItems="center" sx={{ ...contentColumnSx, py: 1, gap: 1 }}>
+        {/* Pulled left by the inset its own 32px box puts around a centred glyph, so the '+' the
+            user sees starts on the column's left edge - the line the transcript and the input's
+            border already sit on. Without it the glyph alone hangs ~10px inside that line. */}
         <IconButton
           size="sm"
           variant="plain"
@@ -195,6 +205,7 @@ export function Composer({
           disabled={disabled || attachments.busy}
           onClick={() => void attachments.pick()}
           aria-label="Attach a file"
+          sx={{ ml: '-10px' }}
           data-testid="composer-attach-btn"
         >
           <Typography level="body-lg">+</Typography>

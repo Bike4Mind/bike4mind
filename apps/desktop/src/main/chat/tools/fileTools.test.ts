@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -28,7 +29,33 @@ describe('file tools', () => {
 
     it('slices with offset and limit', async () => {
       const result = await fileRead.run({ path: join(root, 'notes.md'), offset: 2, limit: 1 }, context);
-      expect(result).toBe('beta gamma');
+      expect(result).toBe('2\tbeta gamma\n\n[Lines 2-2 of 3. Continue with offset 3.]');
+    });
+
+    it('numbers every line and adds no range note when the whole file fits', async () => {
+      await expect(fileRead.run({ path: join(root, 'notes.md') }, context)).resolves.toBe(
+        '1\talpha\n2\tbeta gamma\n3\tdelta'
+      );
+    });
+
+    it('stops a long file at the default page and says where to continue', async () => {
+      const lines = Array.from({ length: 2500 }, (_, index) => `line ${index + 1}`).join('\n');
+      await writeFile(join(root, 'long.txt'), lines, 'utf8');
+      const result = await fileRead.run({ path: join(root, 'long.txt') }, context);
+      expect(result).toContain('2000\tline 2000');
+      expect(result).not.toContain('line 2001');
+      expect(result).toContain('[Lines 1-2000 of 2500. Continue with offset 2001.]');
+    });
+
+    it('describes a binary file instead of dumping it', async () => {
+      await writeFile(join(root, 'blob.dat'), Buffer.from([1, 0, 2, 3]));
+      await expect(fileRead.run({ path: join(root, 'blob.dat') }, context)).resolves.toMatch(/binary file/);
+    });
+
+    it('says when the offset is past the end', async () => {
+      await expect(fileRead.run({ path: join(root, 'notes.md'), offset: 9 }, context)).resolves.toMatch(
+        /has 3 lines; offset 9 is past the end/
+      );
     });
 
     it('points at glob_files rather than dumping a directory', async () => {
@@ -75,18 +102,97 @@ describe('file tools', () => {
     it('refuses a folder outside the granted root', async () => {
       await expect(globFiles.run({ path: '/etc' }, context)).rejects.toBeInstanceOf(PathAccessDenied);
     });
+
+    it('lists the subfolders of a plain "*" with their file counts', async () => {
+      await expect(globFiles.run({ pattern: '*' }, context)).resolves.toContain('Folders:\n  sub/ (1 file)');
+    });
+
+    it('suggests "**/" when a top-level pattern misses files that exist deeper', async () => {
+      await expect(globFiles.run({ pattern: 'deep.txt' }, context)).resolves.toContain('try "**/deep.txt"');
+      await expect(globFiles.run({ pattern: '**/deep.txt' }, context)).resolves.toContain(join('sub', 'deep.txt'));
+    });
+  });
+
+  describe('inside a git work tree', () => {
+    beforeEach(async () => {
+      execFileSync('git', ['init', '-q'], { cwd: root });
+      await writeFile(join(root, '.gitignore'), 'generated/\n', 'utf8');
+      await mkdir(join(root, 'generated'), { recursive: true });
+      await writeFile(join(root, 'generated', 'built.txt'), 'beta from a build\n', 'utf8');
+    });
+
+    it('leaves out what .gitignore ignores, in both searches', async () => {
+      await expect(globFiles.run({ pattern: '**/*.txt' }, context)).resolves.not.toContain('built.txt');
+      await expect(grepSearch.run({ pattern: 'beta' }, context)).resolves.not.toContain('built.txt');
+    });
+
+    it('still searches an ignored folder when it is asked for by path', async () => {
+      await expect(grepSearch.run({ pattern: 'beta', path: join(root, 'generated') }, context)).resolves.toContain(
+        'built.txt'
+      );
+    });
+
+    it('does not follow a symlink out of the granted root', async () => {
+      const outside = await realpath(await mkdtemp(join(tmpdir(), 'b4m-outside-')));
+      await writeFile(join(outside, 'secret.txt'), 'beta secret\n', 'utf8');
+      await symlink(join(outside, 'secret.txt'), join(root, 'link.txt'));
+      await expect(grepSearch.run({ pattern: 'secret' }, context)).resolves.toMatch(/No matches/);
+    });
   });
 
   describe('grep_search', () => {
     it('finds matches across subdirectories with line numbers', async () => {
       const result = await grepSearch.run({ pattern: 'beta' }, context);
-      expect(result).toContain('notes.md:2');
+      expect(result).toContain('notes.md\n  2: beta gamma');
       expect(result).toContain(join('sub', 'deep.txt'));
     });
 
     it('honours the case-insensitive flag', async () => {
       await expect(grepSearch.run({ pattern: 'BETA' }, context)).resolves.toMatch(/No matches/);
-      await expect(grepSearch.run({ pattern: 'BETA', ignoreCase: true }, context)).resolves.toContain('notes.md:2');
+      await expect(grepSearch.run({ pattern: 'BETA', ignoreCase: true }, context)).resolves.toContain(
+        '  2: beta gamma'
+      );
+    });
+
+    it('limits the search with an include glob that matches file names at any depth', async () => {
+      const result = await grepSearch.run({ pattern: 'beta', include: '*.txt' }, context);
+      expect(result).toContain(join('sub', 'deep.txt'));
+      expect(result).not.toContain('notes.md');
+    });
+
+    it('accepts a comma-separated include as well as the brace form', async () => {
+      for (const include of ['*.txt,*.md', '*.{txt,md}']) {
+        const result = await grepSearch.run({ pattern: 'beta', include }, context);
+        expect(result).toContain('notes.md');
+        expect(result).toContain(join('sub', 'deep.txt'));
+      }
+    });
+
+    it('lists only the matching files and their counts in files mode', async () => {
+      await writeFile(join(root, 'twice.md'), 'beta\nbeta\n', 'utf8');
+      const result = await grepSearch.run({ pattern: 'beta', outputMode: 'files' }, context);
+      expect(result).toContain('twice.md (2)');
+      expect(result).toMatch(/^3 file\(s\) under .* match, 4 matching line\(s\) in all:/);
+      expect(result).not.toContain('beta gamma');
+    });
+
+    it('shows context lines around a match and separates distant blocks', async () => {
+      const lines = ['one', 'hit', 'three', 'four', 'five', 'six', 'hit', 'eight'].join('\n');
+      await writeFile(join(root, 'ctx.txt'), lines, 'utf8');
+      const result = await grepSearch.run({ pattern: '^hit$', include: 'ctx.txt', context: 1 }, context);
+      expect(result).toContain('ctx.txt\n  1- one\n  2: hit\n  3- three\n  --\n  6- six\n  7: hit\n  8- eight');
+    });
+
+    it('says there are more matches than it shows', async () => {
+      await writeFile(join(root, 'many.txt'), 'beta\n'.repeat(50), 'utf8');
+      const result = await grepSearch.run({ pattern: 'beta', maxResults: 5 }, context);
+      expect(result).toMatch(/^Showing the first 5 matching line\(s\); there are more/);
+      expect(result.split('\n').filter(line => /^ {2}\d+: /.test(line))).toHaveLength(5);
+    });
+
+    it('skips binary files', async () => {
+      await writeFile(join(root, 'blob.dat'), Buffer.concat([Buffer.from('beta'), Buffer.from([0])]));
+      await expect(grepSearch.run({ pattern: 'beta' }, context)).resolves.not.toContain('blob.dat');
     });
 
     it('reports a bad regular expression as such', async () => {

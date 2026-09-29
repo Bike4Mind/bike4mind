@@ -141,4 +141,54 @@ describe('write tools', () => {
       ).rejects.toThrow(/file_write/);
     });
   });
+  describe('parallel writes to one file', () => {
+    const importLine = 'import { formatDuration, sessionElapsedMs } from "x";';
+    let big: string;
+    let first: Record<string, unknown>;
+    let second: Record<string, unknown>;
+
+    beforeEach(async () => {
+      big = join(root, 'Big.tsx');
+      const middle = Array.from({ length: 2500 }, (_, i) => `const line${i} = ${i};`);
+      await writeFile(big, [importLine, ...middle, 'const ms = sessionElapsedMs(a);', ''].join('\n'), 'utf8');
+      first = {
+        path: big,
+        oldText: 'import { formatDuration, sessionElapsedMs }',
+        newText: 'import { elapsedMs, formatDuration }',
+      };
+      second = { path: big, oldText: 'const ms = sessionElapsedMs(a);', newText: 'const ms = elapsedMs(a);' };
+    });
+
+    async function expectBothApplied(): Promise<void> {
+      const lines = (await readFile(big, 'utf8')).split('\n');
+      expect(lines[0]).toBe('import { elapsedMs, formatDuration } from "x";');
+      expect(lines.at(-2)).toBe('const ms = elapsedMs(a);');
+      expect(lines).toHaveLength(2503);
+    }
+
+    it('applies two edits issued in one round instead of losing the first', async () => {
+      await Promise.all([fileEdit.run(first, context), fileEdit.run(second, context)]);
+      await expectBothApplied();
+    });
+
+    // Both prompts were built against the original, so the second edit's approval is stale by
+    // the time it runs - but only because of the first, which the user also approved.
+    it('re-plans an approved edit on top of a sibling approved in the same round', async () => {
+      await fileEdit.approval?.(first, context);
+      await fileEdit.approval?.(second, context);
+
+      const results = await Promise.all([fileEdit.run(first, context), fileEdit.run(second, context)]);
+      expect(results.every(result => result.includes('Written'))).toBe(true);
+      await expectBothApplied();
+    });
+
+    it('still refuses an approval the file was changed under by someone else', async () => {
+      await fileEdit.approval?.(first, context);
+      await fileEdit.approval?.(second, context);
+      await fileEdit.run(first, context);
+      await writeFile(big, `${await readFile(big, 'utf8')}// edited elsewhere\n`, 'utf8');
+
+      await expect(fileEdit.run(second, context)).rejects.toThrow(/changed on disk/);
+    });
+  });
 });
