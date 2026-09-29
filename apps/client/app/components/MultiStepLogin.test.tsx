@@ -1,11 +1,12 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, within, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
+import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
 import MultiStepLogin from './MultiStepLogin';
 
 // Factory-safe mock handles (vi.mock is hoisted above imports).
@@ -26,6 +27,9 @@ const mocks = vi.hoisted(() => ({
     forceLogoutTokens: vi.fn(),
   },
   toast: { success: vi.fn(), error: vi.fn() },
+  // Empty for every suite but the Cookie settings one, so the legal sentence stays hidden and
+  // the checkbox's Privacy Policy link is the only one on the page.
+  websiteUrl: '',
 }));
 
 vi.mock('@client/app/hooks/data/auth', () => ({
@@ -74,6 +78,13 @@ vi.mock('react-i18next', () => ({
   Trans: ({ i18nKey }: { i18nKey?: string }) => i18nKey ?? null,
 }));
 vi.mock('sonner', () => ({ toast: mocks.toast }));
+// A getter, because WEBSITE_URL is a module constant and the suite needs it both ways.
+vi.mock('@client/config/general', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/config/general')>()),
+  get WEBSITE_URL() {
+    return mocks.websiteUrl;
+  },
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderLogin = (props: React.ComponentProps<typeof MultiStepLogin> = {}) =>
@@ -327,5 +338,61 @@ describe('MultiStepLogin — already-logged-in redirect guard', () => {
     // isLoggedIn short-circuits the render to null and the effect bounces to the app shell.
     expect(screen.queryByTestId('login-email-input')).not.toBeInTheDocument();
     expect(mocks.applyRedirect).toHaveBeenCalledWith(expect.anything(), null, '/new', true);
+  });
+});
+
+// The login screen is where a signed-out visitor meets the banner, so it is the only place
+// they can change a decision before an account exists.
+describe('MultiStepLogin - Cookie settings link', () => {
+  const TRACKER_ENV = ['NEXT_PUBLIC_GA_MEASUREMENT_ID', 'NEXT_PUBLIC_REDDIT_PIXEL_ID', 'NEXT_PUBLIC_META_PIXEL_ID'];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userState.currentUser = null;
+    mocks.accessTokenState.accessToken = null;
+    for (const name of TRACKER_ENV) vi.stubEnv(name, '');
+    useCookieSettings.setState({ isOpen: false });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    mocks.websiteUrl = '';
+  });
+
+  it('reopens the consent banner from a keyboard-reachable button', () => {
+    vi.stubEnv('NEXT_PUBLIC_GA_MEASUREMENT_ID', 'test-id');
+    renderLogin();
+
+    const link = screen.getByTestId('login-cookie-settings-link');
+    expect(link.tagName).toBe('BUTTON');
+    fireEvent.click(link);
+
+    expect(useCookieSettings.getState().isOpen).toBe(true);
+  });
+
+  it('opens settings for attribution consent when no tracker is configured', () => {
+    renderLogin();
+
+    expect(screen.getByTestId('login-email-input')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('login-cookie-settings-link'));
+    expect(useCookieSettings.getState().isOpen).toBe(true);
+  });
+
+  it('follows the legal sentence even without a tracker', () => {
+    mocks.websiteUrl = 'https://marketing.test';
+    renderLogin();
+
+    expect(screen.getByText(/By continuing, you agree to our/)).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('login-cookie-settings-link'));
+    expect(useCookieSettings.getState().isOpen).toBe(true);
+  });
+
+  it('follows the legal sentence when both are configured', () => {
+    mocks.websiteUrl = 'https://marketing.test';
+    vi.stubEnv('NEXT_PUBLIC_REDDIT_PIXEL_ID', 'test-id');
+    renderLogin();
+
+    expect(screen.getByText(/By continuing, you agree to our/)).toBeInTheDocument();
+    expect(screen.getByTestId('login-cookie-settings-link')).toBeInTheDocument();
   });
 });

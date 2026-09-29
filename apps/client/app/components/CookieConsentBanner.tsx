@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { create } from 'zustand';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
@@ -10,12 +11,21 @@ import { loadRedditPixel } from '@client/app/utils/redditPixel';
 import { CONSENT_KEY, resolveConsent } from '@client/app/utils/consentRegion';
 import { clearAttributionCookies, flushUtmCapture } from '@client/app/utils/utmCapture';
 
+type Consent = 'granted' | 'denied';
+
 declare function gtag(...args: unknown[]): void;
+
+/** Reopens the banner as a manage screen, so a decision can be changed after it was made. */
+export const useCookieSettings = create<{ isOpen: boolean; open: () => void; close: () => void }>(set => ({
+  isOpen: false,
+  open: () => set({ isOpen: true }),
+  close: () => set({ isOpen: false }),
+}));
 
 /** Point the trackers at a consent state. Deliberately does not persist it, so an
  * auto-allow is re-derived each load rather than freezing the answer for someone
  * who travels. */
-function activateConsent(value: 'granted' | 'denied') {
+function activateConsent(value: Consent) {
   if (typeof gtag !== 'undefined') {
     gtag('consent', 'update', { analytics_storage: value });
   }
@@ -34,7 +44,7 @@ function activateConsent(value: 'granted' | 'denied') {
 }
 
 /** Record the visitor's own decision, and apply it. */
-function applyConsent(value: 'granted' | 'denied') {
+function applyConsent(value: Consent) {
   try {
     localStorage.setItem(CONSENT_KEY, value);
   } catch {
@@ -44,38 +54,41 @@ function applyConsent(value: 'granted' | 'denied') {
 }
 
 export function CookieConsentBanner() {
-  const [visible, setVisible] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const settingsOpen = useCookieSettings(s => s.isOpen);
+  const closeSettings = useCookieSettings(s => s.close);
 
   useEffect(() => {
-    // Precedence lives in resolveConsent, shared with every other non-essential feature
-    // that has to gate on the same answer (utmCapture's attribution cookies): this
-    // origin's decision, then one made on the marketing site, then the region. The region
-    // is only a default for a visitor who has made no decision anywhere, so it never
-    // overrides someone who declined on the other host - they cannot come back and
-    // decline again here (#3184). Outside the opt-in region the marketing site grants by
-    // default and shows nothing, so asking here would be one journey asking halfway through.
-    const state = resolveConsent();
-    if (state !== 'unset') {
-      activateConsent(state);
+    const consent = resolveConsent();
+    if (consent === 'unset') {
+      setAsking(true);
       return;
     }
-    setVisible(true);
+    activateConsent(consent);
   }, []);
 
-  if (!visible) return null;
+  if (!asking && !settingsOpen) return null;
 
-  const handleAccept = () => {
-    applyConsent('granted');
-    setVisible(false);
-  };
+  // With nothing in force yet there is nothing to manage, so a reopen shows the first-run ask.
+  const current = resolveConsent();
+  const managing = settingsOpen && current !== 'unset';
+  const cookieKinds =
+    process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID || process.env.NEXT_PUBLIC_META_PIXEL_ID
+      ? 'analytics and advertising'
+      : 'analytics';
 
-  const handleDecline = () => {
-    applyConsent('denied');
-    setVisible(false);
+  const choose = (value: Consent) => {
+    applyConsent(value);
+    setAsking(false);
+    closeSettings();
+    // An injected pixel script cannot be unloaded, so a withdrawal only takes effect this
+    // session through a reload. gtag honors it live; the ads pixels would keep running.
+    if (current === 'granted' && value === 'denied') window.location.reload();
   };
 
   return (
     <Box
+      data-testid="cookie-consent-banner"
       sx={{
         position: 'fixed',
         bottom: 0,
@@ -93,21 +106,42 @@ export function CookieConsentBanner() {
         flexWrap: 'wrap',
       }}
     >
-      {/* brand externalized */}
-      <Typography level="body-sm" sx={{ flex: 1, minWidth: 200 }}>
-        We use cookies to understand how you use {APP_NAME || 'this app'} and to improve your experience. By clicking
-        &ldquo;Accept&rdquo;, you consent to our use of analytics
-        {process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID || process.env.NEXT_PUBLIC_META_PIXEL_ID
-          ? ' and advertising'
-          : ''}{' '}
-        cookies.
+      {/* textColor is explicit because a bare body-sm resolves to text.tertiary, which this
+          theme defines at 50% alpha - 2.23:1 light and 4.35:1 dark on this surface, under WCAG AA. */}
+      <Typography level="body-sm" textColor="text.primary" sx={{ flex: 1, minWidth: 200 }}>
+        {managing ? (
+          <>
+            <Typography component="span" fontWeight="lg" textColor="inherit">
+              Cookie settings.
+            </Typography>{' '}
+            You are currently {current === 'granted' ? 'allowing' : 'declining'} {cookieKinds} cookies.
+            {current === 'granted' && ' Declining reloads the page so the change takes effect right away.'}
+          </>
+        ) : (
+          <>
+            {/* brand externalized */}
+            We use cookies to understand how you use {APP_NAME || 'this app'} and to improve your experience. By
+            clicking &ldquo;Accept&rdquo;, you consent to our use of {cookieKinds} cookies.
+          </>
+        )}
       </Typography>
       <Box sx={{ display: 'flex', gap: 1, flexShrink: 0 }}>
+        {managing && (
+          <Button
+            variant="plain"
+            color="neutral"
+            size="sm"
+            onClick={closeSettings}
+            data-testid="cookie-consent-cancel-btn"
+          >
+            Cancel
+          </Button>
+        )}
         <Button
           variant="outlined"
           color="neutral"
           size="sm"
-          onClick={handleDecline}
+          onClick={() => choose('denied')}
           data-testid="cookie-consent-decline-btn"
         >
           Decline
@@ -116,7 +150,7 @@ export function CookieConsentBanner() {
           variant="solid"
           color="primary"
           size="sm"
-          onClick={handleAccept}
+          onClick={() => choose('granted')}
           data-testid="cookie-consent-accept-btn"
         >
           Accept
