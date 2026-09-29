@@ -663,6 +663,7 @@ export default function DataLakeExplorer({
                 onCreate={onCreateLake}
                 onRetryLakes={() => void refetchLakes()}
                 onAddFiles={soleSelectedLake?.canManage ? addFilesToSelectedLake : undefined}
+                sourceLake={soleSelectedLake ?? undefined}
               />
             )
           }

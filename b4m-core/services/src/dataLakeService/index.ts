@@ -72,6 +72,7 @@ export * from './setDataLakeFileTags';
 export * from './acceptDataLakePurge';
 export * from './purgeDataLakeDocument';
 export * from './cleanupDeletedDataLake';
+export * from './purgeDataLakeConnectionFiles';
 export * from './recomputeLakeStats';
 export * from './reconcileStuckBatches';
 export * from './reconcileStuckTaxonomy';

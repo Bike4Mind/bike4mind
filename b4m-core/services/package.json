@@ -1,7 +1,7 @@
 {
   "name": "@bike4mind/services",
   "description": "This packages contains all the core business logic",
-  "version": "13.0.0",
+  "version": "14.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -238,9 +238,10 @@
     "clean": "rm -rf dist",
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
-    "typecheck": "tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit --types node",
-    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "typecheck": "tsc --noEmit && pnpm typecheck:scheduler",
+    "typecheck:native": "tsgo --noEmit --types node && pnpm typecheck:scheduler",
+    "typecheck:fast": "(tsgo --noEmit --types node || tsc --noEmit) && pnpm typecheck:scheduler",
+    "typecheck:scheduler": "tsc --noEmit -p tsconfig.scheduler-test.json",
     "dev": "tsdown --watch",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",

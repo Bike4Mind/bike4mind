@@ -8,6 +8,15 @@ export const secrets = {
   GOOGLE_CLIENT_SECRET: new sst.Secret('GOOGLE_CLIENT_SECRET', 'not-configured'),
   GITHUB_CLIENT_ID: new sst.Secret('GITHUB_CLIENT_ID', 'not-configured'),
   GITHUB_CLIENT_SECRET: new sst.Secret('GITHUB_CLIENT_SECRET', 'not-configured'),
+  // Read-only GitHub App that feeds data lakes (contents:read + metadata:read, installed on selected
+  // repositories only). Separate from the MCP OAuth app and OrgGitHubConnection automation on purpose.
+  // The client id/secret are the App's own OAuth credentials, used to prove the installer can see the
+  // installation. The private key is the PEM, newlines kept or escaped as \n.
+  GITHUB_LAKE_APP_CLIENT_ID: new sst.Secret('GITHUB_LAKE_APP_CLIENT_ID', 'not-configured'),
+  GITHUB_LAKE_APP_CLIENT_SECRET: new sst.Secret('GITHUB_LAKE_APP_CLIENT_SECRET', 'not-configured'),
+  GITHUB_LAKE_APP_ID: new sst.Secret('GITHUB_LAKE_APP_ID', 'not-configured'),
+  GITHUB_LAKE_APP_PRIVATE_KEY: new sst.Secret('GITHUB_LAKE_APP_PRIVATE_KEY', 'not-configured'),
+  GITHUB_LAKE_APP_SLUG: new sst.Secret('GITHUB_LAKE_APP_SLUG', 'not-configured'),
   STRIPE_SECRET_KEY: new sst.Secret('STRIPE_SECRET_KEY', 'not-configured'),
   STRIPE_PUBLISHABLE_KEY: new sst.Secret('STRIPE_PUBLISHABLE_KEY', 'not-configured'),
   STRIPE_WEBHOOK_SECRET: new sst.Secret('STRIPE_WEBHOOK_SECRET', 'not-configured'),

@@ -8,7 +8,8 @@ import { Request } from 'express';
 import { Resource } from 'sst';
 import { z } from 'zod';
 import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchManage';
-import { sendToQueue } from '@server/utils/sqs';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { queueResearchRun } from '@server/dataLakes/queueResearchRun';
 
 const StartInput = z.object({ configId: z.string() });
 
@@ -33,7 +34,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // may not manage this lake should not be able to probe the request schema by reading which
     // field it complains about. Nothing leaks through this particular 400, but a rule the two verbs
     // in one file disagree about is a rule that erodes.
-    const lake = await assertLakeResearchManage(req, id);
+    const { lake } = await assertLakeResearchManage(req, id);
     const { limit } = ListQuery.parse(req.query);
 
     const runs = await dataLakeResearchRunRepository.listByLake(lake.id, { limit: limit ?? DEFAULT_LIMIT });
@@ -44,7 +45,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const { id } = req.query as { id: string };
     // Gated before the body is parsed, matching the config routes: a caller who may not manage this
     // lake should not be able to probe the request schema by reading which field it complains about.
-    const lake = await assertLakeResearchManage(req, id);
+    const { lake, actor, grants } = await assertLakeResearchManage(req, id);
     const { configId } = StartInput.parse(req.body);
 
     // Checked BEFORE the row is written. Without the queue there is no executor, so a run started
@@ -55,27 +56,21 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       throw new InternalServerError('Research runs are not available on this deployment');
     }
 
-    const run = await dataLakeResearchService.startResearchRun(configId, lake.id, req.user!.id, {
-      db: {
-        dataLakeResearchConfigs: dataLakeResearchConfigRepository,
-        dataLakeResearchRuns: dataLakeResearchRunRepository,
-      },
-    });
+    const run = await dataLakeResearchService.startResearchRun(
+      configId,
+      lake,
+      { trigger: 'on_demand', actor, grants },
+      {
+        db: {
+          dataLakeResearchConfigs: dataLakeResearchConfigRepository,
+          dataLakeResearchRuns: dataLakeResearchRunRepository,
+          ...lakeConfigAuditDb,
+        },
+        logger: req.logger,
+      }
+    );
 
-    try {
-      await sendToQueue(queueUrl, { runId: run.id, dataLakeId: lake.id });
-    } catch (error) {
-      // Settle the row rather than leaving it `queued`: nothing will ever pick it up, and a
-      // permanently-queued run holds the one-at-a-time guard closed against every later attempt.
-      await dataLakeResearchRunRepository.settleRun(run.id, {
-        status: 'failed',
-        completedAt: new Date(),
-        spentMicroUsd: 0,
-        totals: run.totals,
-        error: 'The run could not be queued for execution. Try again shortly.',
-      });
-      throw error;
-    }
+    await queueResearchRun(run, lake, queueUrl, req.logger);
 
     return res.status(202).json({ data: run });
   });

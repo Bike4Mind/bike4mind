@@ -146,14 +146,8 @@ export async function recordFindingResolutionBelief(
     status: LakeFindingTerminalStatus;
     resolution: string | null | undefined;
     /**
-     * HANDLER ENTRY - not when this function runs, and not when it reaches the append.
-     *
-     * Named precisely because the gap matters: the route stamps it on its first line, which is already
-     * after `baseApi` has awaited `connectDB`, the auth/api-key chain and `requireFeatureEnabled`
-     * (`baseApi.ts:138-188`). A purge completing inside THAT window still has `destroyedAt < startedAt`
-     * and lifts the tombstone. Closing it would mean stamping before `connectDB`, in middleware, for
-     * every route; the window left open is milliseconds of middleware rather than the settings read,
-     * key-table fetch and embedding call the fence was introduced to cover.
+     * The request's arrival (`req.receivedAt`, stamped by `baseApi` ahead of connectDB and auth) - not
+     * when this function runs, and not when it reaches the append.
      *
      * The crypto-shred fence refuses a write only when `destroyedAt >= startedAt`, and LIFTS the
      * tombstone when `destroyedAt < startedAt` (`MemoryPrincipalKeyModel`). So a value stamped after

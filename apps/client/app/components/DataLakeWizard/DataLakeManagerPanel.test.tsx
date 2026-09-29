@@ -131,6 +131,7 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
     isFetchingNextPage: false,
     isFetching: false,
   }),
+  useGetFabFile: () => ({ data: undefined }),
 }));
 
 // The picker also calls useIsMutating directly, which needs a QueryClientProvider this suite

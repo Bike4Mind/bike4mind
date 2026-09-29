@@ -14,7 +14,7 @@ import { createMocks } from 'node-mocks-http';
  */
 
 const { mocks } = vi.hoisted(() => ({
-  mocks: { findOne: vi.fn(), select: vi.fn(), lean: vi.fn(), setCookie: vi.fn(() => true) },
+  mocks: { findOne: vi.fn(), select: vi.fn(), lean: vi.fn(), setCookie: vi.fn(() => true), parse: vi.fn() },
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -46,10 +46,12 @@ vi.mock('@bike4mind/database', () => ({
       };
     },
   },
+  shareTokenFilter: (token: string) => ({ __shareFilterFor: token }),
 }));
 vi.mock('@server/services/publish/parsePublishPath', () => ({
   segmentsFromViewerPathname: (p: string) => (p === '/bad' ? null : ['u', 'scope', 'slug']),
-  parsePublishPath: () => ({ kind: 'bundle', tier: 'user', scopeId: 'scope', slug: 'slug', assetPath: null }),
+  parsePublishPath: (...a: unknown[]) =>
+    mocks.parse(...a) ?? { kind: 'bundle', tier: 'user', scopeId: 'scope', slug: 'slug', assetPath: null },
 }));
 vi.mock('@server/services/publish/publishGateToken', () => ({
   setGateProofCookie: (...a: unknown[]) => mocks.setCookie(...a),
@@ -169,6 +171,18 @@ describe('POST /api/publish/gate/owner - who is admitted', () => {
 
     expect(res._getStatusCode()).toBe(401);
     expect(mocks.setCookie).not.toHaveBeenCalled();
+  });
+
+  it('resolves a share link through the shared shareTokenFilter', async () => {
+    mocks.parse.mockReturnValue({ kind: 'share', shareToken: 'tok123', assetPath: null });
+    gated();
+
+    const { res, promise } = run({ path: '/a/tok123' }, { id: 'owner1' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(204);
+    expect(mocks.setCookie).toHaveBeenCalledWith(expect.anything(), 'pub1');
+    expect(mocks.findOne.mock.calls[0][0]).toEqual({ __shareFilterFor: 'tok123', deletedAt: null });
   });
 });
 

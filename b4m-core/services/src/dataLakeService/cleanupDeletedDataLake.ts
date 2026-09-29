@@ -80,6 +80,13 @@ interface CleanupDeletedDataLakeAdapters {
    * is gone, no product surface can reach the connection to release it.
    */
   releaseDriveConnection?: (args: { dataLakeId: string }) => Promise<void>;
+  /**
+   * Release the GitHub repository connection feeding this lake (uninstall the App when it was the
+   * installation's last binding, hard-delete the row). Same reason as releaseDriveConnection: the
+   * row's repositoryId is globally unique and unreachable once the lake is gone. See
+   * releaseGitHubLakeConnectionForLake.
+   */
+  releaseGitHubConnection?: (args: { dataLakeId: string }) => Promise<void>;
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
   /** Bounds peak concurrency of the per-file/per-batch deletes (background consumer sets this). */
   chunkSize?: number;
@@ -146,6 +153,7 @@ export const cleanupDeletedDataLake = async (
     retrievalIndex,
     shredMemory,
     releaseDriveConnection,
+    releaseGitHubConnection,
     logger,
     chunkSize = DEFAULT_CLEANUP_CHUNK_SIZE,
     storage,
@@ -197,6 +205,10 @@ export const cleanupDeletedDataLake = async (
   // reads the connection once and keeps walking its in-memory copy until it ends.
   if (releaseDriveConnection) {
     await releaseDriveConnection({ dataLakeId });
+  }
+  // The GitHub repository claim, for the same reason (see 1c).
+  if (releaseGitHubConnection) {
+    await releaseGitHubConnection({ dataLakeId });
   }
 
   // 2. Hard-delete exactly the ids resolved above, NOT by re-running the membership predicate.

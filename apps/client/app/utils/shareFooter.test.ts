@@ -111,3 +111,43 @@ describe('buildSignupGateHtml', () => {
     expect(html).toContain('for="b4m-gate-dismiss"');
   });
 });
+
+describe('shouldShowSignupGate', () => {
+  it('shows only to an anonymous viewer of an open-public artifact', async () => {
+    const { shouldShowSignupGate } = await import('./shareFooter');
+    expect(shouldShowSignupGate('public', undefined)).toBe(true);
+    expect(shouldShowSignupGate('public', null)).toBe(true);
+    expect(shouldShowSignupGate('public', {})).toBe(true);
+  });
+
+  it('never shows to a signed-in viewer, owner or not', async () => {
+    const { shouldShowSignupGate } = await import('./shareFooter');
+    expect(shouldShowSignupGate('public', { id: 'owner1' })).toBe(false);
+    expect(shouldShowSignupGate('organization', { id: 'colleague' })).toBe(false);
+  });
+
+  it('never shows on a non-public artifact', async () => {
+    const { shouldShowSignupGate } = await import('./shareFooter');
+    for (const v of ['private', 'organization', 'project'] as const) {
+      expect(shouldShowSignupGate(v, undefined)).toBe(false);
+    }
+  });
+});
+
+describe('stripSignupGateHtml', () => {
+  it('removes the baked gate markup and leaves the rest of the page intact', async () => {
+    const { buildSignupGateHtml, stripSignupGateHtml } = await import('./shareFooter');
+    const gate = buildSignupGateHtml();
+    const page = `<html><head><style>${gate.styles}</style></head><body><p>content</p><footer>f</footer>${gate.html}</body></html>`;
+    const stripped = stripSignupGateHtml(page);
+    expect(stripped).not.toContain('b4m-gate-dismiss"');
+    expect(stripped).not.toContain('b4m-gate-panel"');
+    expect(stripped).toContain('<p>content</p><footer>f</footer></body></html>');
+  });
+
+  it('is a no-op on a page without a gate', async () => {
+    const { stripSignupGateHtml } = await import('./shareFooter');
+    const page = '<html><body><p>content</p></body></html>';
+    expect(stripSignupGateHtml(page)).toBe(page);
+  });
+});

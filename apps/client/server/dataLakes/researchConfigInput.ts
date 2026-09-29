@@ -1,3 +1,4 @@
+import { RESEARCH_SCHEDULE_CADENCES } from '@bike4mind/common';
 import { z } from 'zod';
 
 /**
@@ -28,3 +29,12 @@ export const ResearchLeversInput = z.object({
 });
 
 export type ResearchLeversInputShape = z.infer<typeof ResearchLeversInput>;
+
+/**
+ * The schedule half of a configuration, shared by create and update. Same permissive stance on the
+ * review limit's range: `normalizeReviewBacklogLimit` clamps it.
+ */
+export const ResearchScheduleInput = z.object({
+  cadence: z.enum(RESEARCH_SCHEDULE_CADENCES).optional(),
+  reviewBacklogLimit: z.number().optional(),
+});

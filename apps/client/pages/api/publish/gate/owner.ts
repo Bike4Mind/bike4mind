@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { optionalAuth } from '@server/middlewares/optionalAuth';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { z } from 'zod';
-import { PublishedArtifact } from '@bike4mind/database';
+import { PublishedArtifact, shareTokenFilter } from '@bike4mind/database';
 import { parsePublishPath, segmentsFromViewerPathname } from '@server/services/publish/parsePublishPath';
 import { setGateProofCookie } from '@server/services/publish/publishGateToken';
 
@@ -69,7 +69,7 @@ const handler = baseApi({ auth: false })
       resolved.kind === 'bundle'
         ? { tier: resolved.tier, scopeId: resolved.scopeId, slug: resolved.slug, deletedAt: null }
         : resolved.kind === 'share'
-          ? { shareToken: resolved.shareToken, deletedAt: null }
+          ? { ...shareTokenFilter(resolved.shareToken), deletedAt: null }
           : { publicId: resolved.publicId, 'source.kind': resolved.kind, deletedAt: null };
 
     // Only the gate KIND is needed - never the hash. This route does not compare a passphrase,

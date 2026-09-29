@@ -1,10 +1,12 @@
-import { Button, Chip, Stack, Tooltip, Typography } from '@mui/joy';
+import { Button, Chip, Stack, Typography } from '@mui/joy';
 import CloudIcon from '@mui/icons-material/Cloud';
 import CloseIcon from '@mui/icons-material/Close';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { useDriveFolderPicker } from '@client/app/hooks/data/useDriveFolderPicker';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
+import DriveAccessDisclosure from './DriveAccessDisclosure';
+import DriveConnectUnavailableButton from './DriveConnectUnavailableButton';
 
 /**
  * Pick a Google Drive folder while CREATING a data lake. There is no lake id to bind to yet, so the
@@ -31,21 +33,10 @@ export default function DrivePendingConnectAction() {
 
   if (!isOrgScope) {
     return (
-      <Tooltip
-        title={`Google Drive folders can only feed an organization ${DATA_LAKE}. Switch to your organization in the account selector, then connect a folder.`}
-      >
-        <span>
-          <Button
-            data-testid="drive-connect-personal-scope-btn"
-            variant="outlined"
-            color="neutral"
-            startDecorator={<CloudIcon />}
-            disabled
-          >
-            Connect Google Drive
-          </Button>
-        </span>
-      </Tooltip>
+      <DriveConnectUnavailableButton
+        testId="drive-connect-personal-scope-btn"
+        reason={`Google Drive folders can only feed an organization ${DATA_LAKE}. Switch to your organization in the account selector, then connect a folder.`}
+      />
     );
   }
 
@@ -90,15 +81,19 @@ export default function DrivePendingConnectAction() {
   }
 
   return (
-    <Button
-      data-testid="drive-connect-btn"
-      variant="outlined"
-      color="neutral"
-      startDecorator={<CloudIcon />}
-      loading={isPicking}
-      onClick={openFolderPicker}
-    >
-      Connect Google Drive
-    </Button>
+    <Stack gap={0.5}>
+      <Button
+        data-testid="drive-connect-btn"
+        variant="outlined"
+        color="neutral"
+        startDecorator={<CloudIcon />}
+        loading={isPicking}
+        onClick={openFolderPicker}
+        sx={{ alignSelf: 'flex-start' }}
+      >
+        Connect Google Drive
+      </Button>
+      <DriveAccessDisclosure />
+    </Stack>
   );
 }
