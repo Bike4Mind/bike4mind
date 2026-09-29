@@ -1546,24 +1546,22 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * a stored file whose driveFileId is absent from the walk was DELETED from the folder, and one
    * whose driveMd5Checksum/driveModifiedTime moved was EDITED - neither detectable from the walk
    * alone. Scoped to the connection so a re-sync only reconciles the files it owns.
+   *
+   * `includeDeleted` drops the archivedAt/deletedAt filters for the disconnect purge, which must
+   * reach an archived lake's members (every member is archivedAt-stamped when its lake archives)
+   * and soft-deleted rows, mirroring `hardDeleteByDataLakeTag`. `status: 'pending'` rows are
+   * excluded either way.
    */
-  findByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]>;
+  findByDriveConnectionIdInDataLake(
+    driveConnectionId: string,
+    datalakeTag: string,
+    options?: { includeDeleted?: boolean }
+  ): Promise<IFabFileDocument[]>;
   /**
-   * Every file a Drive connection ever ingested into a lake, INCLUDING an archived lake's members
-   * and soft-deleted rows - unlike `findByDriveConnectionIdInDataLake`, which filters both out for
-   * its sync-reconcile caller and must keep doing so. This is the disconnect purge's OWN finder:
-   * borrowing the reconcile one made an archived lake's disconnect silently purge nothing (every
-   * member is `archivedAt`-stamped when its lake archives) while still revoking the grant and
-   * hard-deleting the connection row, reproducing the exact orphan state #3374 reports. Mirrors
-   * `hardDeleteByDataLakeTag`'s own archivedAt/deletedAt-blind treatment for the whole-lake purge.
-   * Still excludes `status: 'pending'` (an unconfirmed in-flight upload, not yet a real member).
-   */
-  findAllByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]>;
-  /**
-   * Lightweight count of the same set `findAllByDriveConnectionIdInDataLake` resolves (not the
-   * narrower `findByDriveConnectionIdInDataLake`) - the disconnect-confirmation dialog needs a
-   * number, not every file's body, to warn how many documents a disconnect will actually delete,
-   * and that number must stay honest for an archived lake too.
+   * Lightweight count of the `includeDeleted` set `findByDriveConnectionIdInDataLake` resolves -
+   * the disconnect-confirmation dialog needs a number, not every file's body, to warn how many
+   * documents a disconnect will actually delete, and that number must stay honest for an
+   * archived lake too.
    */
   countByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<number>;
   /**
