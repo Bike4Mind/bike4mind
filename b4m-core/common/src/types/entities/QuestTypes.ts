@@ -28,6 +28,11 @@ export interface IChatHistoryItemRepository extends IBaseRepository<IChatHistory
   ): Promise<IChatHistoryItemDocument[]>;
   getMostRecentChatHistory: (sessionId: string, limit: number) => Promise<IChatHistoryItemDocument[]>;
   findBySessionIdAndId: (sessionId: string, id: string) => Promise<IChatHistoryItemDocument | null>;
+  // Partial update matched on the quest id AND sessionId; null when no quest of that session matches.
+  updateInSession: (
+    sessionId: string,
+    data: Partial<IChatHistoryItemDocument> & { id: string }
+  ) => Promise<IChatHistoryItemDocument | null>;
   // Lightweight method for status checks
   findByIdWithStatus: (id: string) => Promise<Pick<IChatHistoryItemDocument, 'id' | 'status'> | null>;
   // Flag a quest as stopped so an in-flight pipeline's cancellation watcher aborts it.

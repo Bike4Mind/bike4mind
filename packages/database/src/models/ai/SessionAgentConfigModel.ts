@@ -83,6 +83,19 @@ export class SessionAgentConfigRepository
     return result?.toJSON() ?? null;
   }
 
+  async updateBySessionAndAgent(
+    sessionId: string,
+    agentId: string,
+    data: Partial<ISessionAgentConfigDocument>
+  ): Promise<ISessionAgentConfigDocument | null> {
+    const result = await this.sessionAgentConfigModel.findOneAndUpdate(
+      { sessionId, agentId },
+      { $set: data },
+      { new: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
   async deleteBySessionId(sessionId: string): Promise<void> {
     await this.sessionAgentConfigModel.deleteMany({ sessionId });
   }

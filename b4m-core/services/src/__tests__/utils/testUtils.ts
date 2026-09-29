@@ -63,6 +63,7 @@ export const createMockProjectRepository = (): IProjectRepository => ({
 export const createMockSessionAgentConfigRepository = (): ISessionAgentConfigRepository => ({
   ...createMockRepository<ISessionAgentConfigDocument>(),
   findBySessionAndAgent: vi.fn(),
+  updateBySessionAndAgent: vi.fn(),
   findBySessionId: vi.fn(),
   findAllWithProactiveMessagingEnabled: vi.fn(),
   updateLastProactiveMessageAt: vi.fn(),

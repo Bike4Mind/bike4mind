@@ -97,8 +97,16 @@ const handler = baseApi()
         allowedUpdates.replies = updates.replies;
       }
 
-      const updatedMessage = await questRepository.update({
-        ...message,
+      // Re-checked right before the write: the grant lives on the session and the write is to a
+      // quest, so it cannot share one filter. A revoke landing between this read and the write still
+      // lands; closing that needs a transaction, which this edit is not worth.
+      const stillWritable = await sessionRepository.shareable.findUpdateAccessById(req.user!, sessionId!);
+      if (!stillWritable) {
+        return res.status(403).json({ error: 'Not authorized to update this session' });
+      }
+
+      const updatedMessage = await questRepository.updateInSession(sessionId!, {
+        id: message.id,
         ...allowedUpdates,
       });
 
