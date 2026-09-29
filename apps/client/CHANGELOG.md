@@ -1,5 +1,11 @@
 # @bike4mind/client
 
+## Unreleased
+
+- Record consenting individual subscribers' first and last campaign touches in checkout metadata and subscription records.
+- Honor the current consent decision at checkout even when a marketing attribution cookie remains, and share cookie precedence with conversion pixels.
+- Keep browser-reported campaign attribution out of cross-product subscription events.
+
 ## 0.1.82
 
 ### Patch Changes

@@ -240,6 +240,7 @@ describe('POST /api/subscriptions/subscribe - acquisition touches', () => {
   it('carries the first and last campaign touch into the subscription metadata', async () => {
     const { req, res } = makeReq('price_open');
     const enc = (v: unknown) => encodeURIComponent(JSON.stringify(v));
+    req.body.attributionConsent = true;
     req.headers.cookie = `b4m_app_first_touch=${enc({ source: 'widgets', medium: 'teaser' })}; b4m_last_touch=${enc({ source: 'email' })}`;
 
     await (handler as HandlerFn)(req, res);
@@ -255,10 +256,49 @@ describe('POST /api/subscriptions/subscribe - acquisition touches', () => {
     });
   });
 
+  it.each([false, undefined])(
+    'ignores every attribution cookie without explicit consent (%s)',
+    async attributionConsent => {
+      const { req, res } = makeReq('price_open');
+      req.body.attributionConsent = attributionConsent;
+      const value = encodeURIComponent(JSON.stringify({ source: 'widgets' }));
+      req.headers.cookie = ['b4m-first-touch', 'b4m_app_first_touch', 'b4m_last_touch', 'b4m_utm']
+        .map(name => `${name}=${value}`)
+        .join('; ');
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(mockSessionsCreate.mock.calls[0][0].subscription_data.metadata).toEqual({
+        userId: 'user_1',
+        stage: 'test',
+        ownerType: 'User',
+      });
+    }
+  );
+
+  it('uses the marketing first touch when consent is granted', async () => {
+    const { req, res } = makeReq('price_open');
+    req.body.attributionConsent = true;
+    req.headers.cookie = `b4m-first-touch=${encodeURIComponent(JSON.stringify({ source: 'widgets' }))}`;
+    await (handler as HandlerFn)(req, res);
+    expect(mockSessionsCreate.mock.calls[0][0].subscription_data.metadata.acq_first_source).toBe('widgets');
+  });
+
+  it.each(['true', 'false', 1, null])('rejects a non-boolean consent value (%s)', async attributionConsent => {
+    const { req, res } = makeReq('price_open');
+    req.body.attributionConsent = attributionConsent;
+    await expect((handler as HandlerFn)(req, res)).rejects.toThrow();
+    expect(mockSessionsCreate).not.toHaveBeenCalled();
+  });
+
   it('adds nothing when the browser carries no touch', async () => {
     const { req, res } = makeReq('price_open');
     await (handler as HandlerFn)(req, res);
-    expect(Object.keys(mockSessionsCreate.mock.calls[0][0].subscription_data.metadata).sort()).toEqual(['ownerType', 'stage', 'userId']);
+    expect(Object.keys(mockSessionsCreate.mock.calls[0][0].subscription_data.metadata).sort()).toEqual([
+      'ownerType',
+      'stage',
+      'userId',
+    ]);
   });
 });
-

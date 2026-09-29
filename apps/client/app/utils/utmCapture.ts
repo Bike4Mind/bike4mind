@@ -1,6 +1,7 @@
 import { resolveConsent } from './consentRegion';
+import { ACQUISITION_COOKIES } from '@client/lib/subscriptions/acquisition';
 
-const UTM_COOKIE_NAME = 'b4m_utm';
+const UTM_COOKIE_NAME = ACQUISITION_COOKIES.session;
 // 30-minute window: long enough for a landing session, short enough to not persist stale campaigns.
 const TTL_SECONDS = 30 * 60;
 
@@ -12,8 +13,8 @@ const TTL_SECONDS = 30 * 60;
 //   marketing site carry. It has its own name so the two can never be confused or overwrite
 //   each other; the server prefers the marketing site's when both exist.
 // Both are read server-side at checkout (server/analytics/acquisition.ts).
-export const LAST_TOUCH_COOKIE_NAME = 'b4m_last_touch';
-export const APP_FIRST_TOUCH_COOKIE_NAME = 'b4m_app_first_touch';
+export const LAST_TOUCH_COOKIE_NAME = ACQUISITION_COOKIES.lastTouch;
+export const APP_FIRST_TOUCH_COOKIE_NAME = ACQUISITION_COOKIES.appFirstTouch;
 const LAST_TOUCH_TTL_SECONDS = 30 * 24 * 60 * 60;
 const APP_FIRST_TOUCH_TTL_SECONDS = 90 * 24 * 60 * 60;
 
@@ -87,9 +88,9 @@ export function flushUtmCapture(): void {
 }
 
 /**
- * Expire every attribution cookie and drop any held capture. Called when consent
- * resolves to denied after an earlier grant, so a later decline actually stops
- * checkout from copying stale attribution into Stripe.
+ * Expire the app's attribution cookies and drop any held capture on denial.
+ * The parent-domain marketing cookie can remain; checkout and pixel readers
+ * separately gate its use on the resolved consent decision.
  */
 export function clearAttributionCookies(): void {
   if (typeof document === 'undefined') return;

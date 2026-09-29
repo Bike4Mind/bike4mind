@@ -17,6 +17,7 @@ vi.mock('@client/app/utils/metaPixel', () => ({
 }));
 
 import { CookieConsentBanner } from './CookieConsentBanner';
+import { captureUtmParams, flushUtmCapture } from '../utils/utmCapture';
 
 const TestWrapper = ({ children }: { children: React.ReactNode }) => <CssVarsProvider>{children}</CssVarsProvider>;
 
@@ -253,6 +254,41 @@ describe('CookieConsentBanner', () => {
       expect(mockLoadRedditPixel).not.toHaveBeenCalled();
       expect(mockLoadMetaPixel).not.toHaveBeenCalled();
       expect(screen.queryByTestId('cookie-consent-accept-btn')).not.toBeInTheDocument();
+    });
+
+    it('flushes a held landing campaign when Accept is clicked after the URL has changed', () => {
+      window.history.replaceState({}, '', '/?utm_source=newsletter');
+      captureUtmParams();
+      window.history.replaceState({}, '', '/');
+      expect(document.cookie).not.toContain('b4m_last_touch=');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+      expect(document.cookie).toContain('b4m_last_touch=%7B%22source%22%3A%22newsletter%22%7D');
+      expect(document.cookie).toContain('b4m_app_first_touch=%7B%22source%22%3A%22newsletter%22%7D');
+    });
+
+    it('discards a held landing campaign on Decline so a later grant cannot flush it', () => {
+      window.history.replaceState({}, '', '/?utm_source=newsletter');
+      captureUtmParams();
+      window.history.replaceState({}, '', '/');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+      localStorageMock.setItem('cookie_consent', 'granted');
+      flushUtmCapture();
+
+      expect(document.cookie).not.toContain('b4m_last_touch=');
+      expect(document.cookie).not.toContain('b4m_app_first_touch=');
     });
 
     it('carries an acceptance across without asking again', () => {

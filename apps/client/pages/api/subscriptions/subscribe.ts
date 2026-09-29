@@ -1,6 +1,6 @@
 import { adminSettingsRepository, userRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
-import { subscriptionPlanSchema } from '@client/lib/userSubscriptions/schemas';
+import { subscriptionCheckoutSchema } from '@client/lib/userSubscriptions/schemas';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
@@ -13,12 +13,12 @@ import { Request } from 'express';
 import Stripe from 'stripe';
 import { z } from 'zod';
 
-type RequestBody = z.infer<typeof subscriptionPlanSchema>;
+type RequestBody = z.infer<typeof subscriptionCheckoutSchema>;
 
 const handler = baseApi()
   .use(requireStripeWebhook())
   .post<Request<unknown, RequestBody>>(async (req, res) => {
-    const { priceId, callbackUrl } = subscriptionPlanSchema.parse(req.body);
+    const { priceId, callbackUrl, attributionConsent } = subscriptionCheckoutSchema.parse(req.body);
 
     // Restrict the Stripe success/cancel redirect to the deployed app origin - an
     // external callbackUrl is an open-redirect/phishing vector off Stripe's hosted
@@ -109,7 +109,7 @@ const handler = baseApi()
           ownerType: 'User', // Identifies this as a user subscription (vs organization)
           // Where the customer came from (first and last campaign touch), carried to the
           // invoice webhook, which stores it on the subscription row. See acquisition.ts.
-          ...acquisitionToStripeMetadata(readAcquisitionTouches(req)),
+          ...(attributionConsent === true && acquisitionToStripeMetadata(readAcquisitionTouches(req))),
         },
       },
     });

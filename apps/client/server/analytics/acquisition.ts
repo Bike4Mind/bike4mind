@@ -1,53 +1,15 @@
-import crypto from 'crypto';
 import type { Request } from 'express';
-import type { OverwatchUtm } from '@bike4mind/common';
 import type { SubscriptionAcquisition, SubscriptionAcquisitionTouch } from '@client/lib/subscriptions/types';
-import { UTM_COOKIE, parseCookies } from './cookies';
-
-/**
- * Where a paying customer came from: the campaign on their first landing and on their last one
- * before checkout. Read from first-party cookies at checkout, carried through Stripe as
- * subscription metadata (the only thing that survives to the webhook), and stored on the
- * subscription row when the first invoice is paid.
- */
-export interface AcquisitionTouches {
-  firstTouch?: OverwatchUtm;
-  lastTouch?: OverwatchUtm;
-}
-
-// The marketing site's parent-domain first-touch cookie (see app/utils/attributionCookies.ts),
-// then this app's own fallbacks written by app/utils/utmCapture.ts.
-const MARKETING_FIRST_TOUCH_COOKIE = 'b4m-first-touch';
-const APP_FIRST_TOUCH_COOKIE = 'b4m_app_first_touch';
-const LAST_TOUCH_COOKIE = 'b4m_last_touch';
+import { ACQUISITION_FIELD_LIMIT, readAcquisitionCookies } from '@client/lib/subscriptions/acquisition';
+import type { AcquisitionTouches } from '@client/lib/subscriptions/acquisition';
+import { parseCookies } from './cookies';
 
 const UTM_FIELDS = ['source', 'medium', 'campaign', 'content'] as const;
-// Client-controlled input that ends up in Stripe metadata (values cap at 500) and in grouped
-// analytics; the same cap as readUtmCookie.
-const MAX_FIELD = 128;
-
-function readUtmJson(raw: string | undefined): OverwatchUtm | undefined {
-  if (!raw) return undefined;
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    if (!parsed || typeof parsed !== 'object') return undefined;
-    const utm: OverwatchUtm = {};
-    for (const f of UTM_FIELDS) {
-      const v = parsed[f];
-      if (typeof v === 'string' && v.trim()) utm[f] = v.trim().substring(0, MAX_FIELD);
-    }
-    return utm.source ? utm : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 /** The touches this browser carries. A touch without a `source` is no touch. */
 export function readAcquisitionTouches(req: Pick<Request, 'headers'>): AcquisitionTouches {
   const cookies = parseCookies(req.headers.cookie);
-  const firstTouch = readUtmJson(cookies[MARKETING_FIRST_TOUCH_COOKIE]) ?? readUtmJson(cookies[APP_FIRST_TOUCH_COOKIE]);
-  const lastTouch = readUtmJson(cookies[LAST_TOUCH_COOKIE]) ?? readUtmJson(cookies[UTM_COOKIE]);
-  return { ...(firstTouch && { firstTouch }), ...(lastTouch && { lastTouch }) };
+  return readAcquisitionCookies(name => cookies[name]);
 }
 
 // Flat keys, because Stripe metadata is a flat string map (keys cap at 40 characters).
@@ -75,7 +37,7 @@ export function acquisitionFromStripeMetadata(
   for (const touch of ['firstTouch', 'lastTouch'] as const) {
     const read = (f: (typeof UTM_FIELDS)[number]) => {
       const v = metadata[`${PREFIX[touch]}${f}`];
-      return typeof v === 'string' && v ? v.substring(0, MAX_FIELD) : undefined;
+      return typeof v === 'string' && v ? v.substring(0, ACQUISITION_FIELD_LIMIT) : undefined;
     };
     const source = read('source');
     if (!source) continue;
@@ -87,15 +49,4 @@ export function acquisitionFromStripeMetadata(
     out[touch] = t;
   }
   return out.firstTouch || out.lastTouch ? out : undefined;
-}
-
-/**
- * A UUID that is the same every time for the same parts, so a retried webhook sends the same
- * eventId and the receiver keeps one event. Formatted as a version-4-shaped UUID, which is what
- * the ingest schema accepts.
- */
-export function stableEventId(...parts: string[]): string {
-  const h = crypto.createHash('sha256').update(parts.join('\u0000')).digest('hex');
-  const variant = ((parseInt(h[16], 16) & 0x3) | 0x8).toString(16);
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${variant}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }

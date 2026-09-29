@@ -267,6 +267,29 @@ describe('emitProductEvent', () => {
     mockFetch.mockResolvedValue({ status: 200 });
   });
 
+  it('preserves a caller-chosen eventId through the HTTP transport on retries', async () => {
+    resetConfig();
+    const eventId = 'a9c3e930-1d8e-4bb0-84be-758d04f14c2e';
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await emitProductEvent({ productId: 'widgets', event: 'report_generated', userId: 'u1', eventId });
+    }
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    for (const [, options] of mockFetch.mock.calls as [string, RequestInit][]) {
+      const payload: unknown = JSON.parse(String(options.body));
+      expect(payload).toMatchObject({ event: { eventId, productId: 'widgets' } });
+    }
+  });
+
+  it('generates different event IDs when the caller does not supply one', async () => {
+    resetConfig();
+    await emitProductEvent({ productId: 'widgets', event: 'report_generated' });
+    const firstId = sent().eventId;
+    mockFetch.mockClear();
+    await emitProductEvent({ productId: 'widgets', event: 'report_generated' });
+    expect(sent().eventId).toEqual(expect.any(String));
+    expect(sent().eventId).not.toBe(firstId);
+  });
+
   it("posts under the given product with that product's own key", async () => {
     resetConfig();
     await emitProductEvent({
