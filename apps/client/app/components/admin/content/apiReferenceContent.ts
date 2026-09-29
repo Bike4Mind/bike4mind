@@ -79,9 +79,11 @@ API keys can be scoped to limit access. Available scopes:
 | \`ai:chat\` | Send chat messages and use LLM endpoints |
 | \`admin:*\` | Full admin access (superuser only) |
 
-For rotate specifically, scope containment is checked literally: \`admin:*\` is not treated
-as a superset of other scopes, so an \`admin:*\`-scoped key still can't rotate a key holding
-scopes it doesn't literally list.
+An API-key caller can't escalate through key management: creating a key via
+\`POST /api/user-api-keys\` or rotating one is refused unless the calling key already holds
+every scope involved. Containment is checked literally: \`admin:*\` is not treated as a
+superset of other scopes, so an \`admin:*\`-scoped key still can't mint or rotate a key
+holding scopes it doesn't literally list.
 
 ### Rate Limits
 
