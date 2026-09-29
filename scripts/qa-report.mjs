@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Post-run QA ingest for the admin /status page (contract:
- * b4m-core/common/src/api-contract/contracts/qa.contract.ts).
+ * Post-run QA ingest for the admin /status page (routes: apps/client/pages/api/qa/,
+ * wire schemas: b4m-core/common/src/schemas/qa.ts).
  *
  * Reads Playwright's JSON report (plus optional metrics), uploads failure media
  * and the HTML report through presigned PUTs, then posts the run. Zero
@@ -9,7 +9,7 @@
  * the calling job: every error ends in a ::warning:: and exit 0.
  *
  * Parsing works in camelCase; only the request bodies are snake_case, matching
- * the contract's wire schemas (QaRunIngestRequestSchema, QaUploadRequestSchema).
+ * the wire schemas (QaRunIngestRequestSchema, QaUploadRequestSchema).
  *
  * Counting mirrors the "Parse test results" jq in .github/workflows/e2e-run.yml;
  * keep the two in sync while that step exists.
@@ -207,6 +207,10 @@ const UPLOAD_BATCH = 200; // QA_MAX_UPLOADS_PER_CALL
 const REPORT_MAX_FILES = 1000;
 const PUT_CONCURRENCY = 8;
 const defaultSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Per attempt, so a hung attempt is abandoned before its retry rather than racing it. The API
+// call matches the server's 60s Lambda timeout; an artifact PUT carries up to 50 MB.
+export const FETCH_TIMEOUT_MS = 60_000;
+export const UPLOAD_TIMEOUT_MS = 5 * 60_000;
 
 function httpError(what, status, detail = '') {
   const err = new Error(`${what} -> HTTP ${status} ${detail}`.trim().slice(0, 500));
@@ -230,11 +234,12 @@ export async function withRetry(fn, { attempts = 3, baseDelayMs = 1000, sleep = 
   return null;
 }
 
-async function postJson(fetchImpl, url, apiKey, body) {
+async function postJson(fetchImpl, url, apiKey, body, timeoutMs = FETCH_TIMEOUT_MS) {
   const res = await fetchImpl(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw httpError(`POST ${url}`, res.status, await res.text().catch(() => ''));
   return res.json();
@@ -394,21 +399,38 @@ export async function collectUploads({ tests, reportDir, log = console }) {
   return files;
 }
 
-export async function uploadFiles({ files, ingestUrl, apiKey, product, externalRunId, fetchImpl, retry, log }) {
+export async function uploadFiles({
+  files,
+  ingestUrl,
+  apiKey,
+  product,
+  externalRunId,
+  fetchImpl,
+  retry,
+  log,
+  timeoutMs = FETCH_TIMEOUT_MS,
+  uploadTimeoutMs = UPLOAD_TIMEOUT_MS,
+}) {
   const uploaded = new Map();
   for (let i = 0; i < files.length; i += UPLOAD_BATCH) {
     const batch = files.slice(i, i + UPLOAD_BATCH);
     const plan = await retry(() =>
-      postJson(fetchImpl, `${ingestUrl}/api/v1/qa/uploads`, apiKey, {
-        product,
-        external_run_id: externalRunId,
-        files: batch.map(({ path: p, kind, contentType, bytes }) => ({
-          path: p,
-          kind,
-          content_type: contentType,
-          bytes,
-        })),
-      })
+      postJson(
+        fetchImpl,
+        `${ingestUrl}/api/qa/uploads`,
+        apiKey,
+        {
+          product,
+          external_run_id: externalRunId,
+          files: batch.map(({ path: p, kind, contentType, bytes }) => ({
+            path: p,
+            kind,
+            content_type: contentType,
+            bytes,
+          })),
+        },
+        timeoutMs
+      )
     );
     if (!plan) break;
     for (const r of plan.rejected ?? []) log.warn(`::warning::qa-report: upload rejected ${r.path}: ${r.reason}`);
@@ -421,6 +443,7 @@ export async function uploadFiles({ files, ingestUrl, apiKey, product, externalR
           method: 'PUT',
           headers: { 'Content-Type': file.contentType },
           body: await fs.readFile(file.localPath),
+          signal: AbortSignal.timeout(uploadTimeoutMs),
         });
         if (!res.ok) throw httpError(`PUT ${upload.path}`, res.status);
         return true;
@@ -480,6 +503,8 @@ export async function main(argv, env, deps = {}) {
   const fetchImpl = deps.fetch ?? globalThis.fetch;
   const log = deps.log ?? console;
   const retry = fn => withRetry(fn, { sleep: deps.sleep, log });
+  const timeoutMs = deps.fetchTimeoutMs ?? FETCH_TIMEOUT_MS;
+  const uploadTimeoutMs = deps.uploadTimeoutMs ?? UPLOAD_TIMEOUT_MS;
   try {
     const args = parseArgs(argv);
     const ingestUrl = (env.QA_INGEST_URL || '').replace(/\/+$/, '');
@@ -513,6 +538,8 @@ export async function main(argv, env, deps = {}) {
         fetchImpl,
         retry,
         log,
+        timeoutMs,
+        uploadTimeoutMs,
       });
       for (const file of files) {
         const key = uploaded.get(file.path);
@@ -523,7 +550,9 @@ export async function main(argv, env, deps = {}) {
     }
 
     const payload = buildRunPayload({ identity, parsed, metrics, reportPrefix });
-    const result = await retry(() => postJson(fetchImpl, `${ingestUrl}/api/v1/qa/runs`, env.QA_INGEST_KEY, payload));
+    const result = await retry(() =>
+      postJson(fetchImpl, `${ingestUrl}/api/qa/runs`, env.QA_INGEST_KEY, payload, timeoutMs)
+    );
     if (result) log.log(`qa-report: run ${result.run_id} status=${result.status} created=${result.created}`);
     return 0;
   } catch (err) {

@@ -30,8 +30,10 @@ const QaTestResultSchema = new mongoose.Schema<IQaTestResultDocument>(
   { timestamps: true }
 );
 
-// ~1M rows a year. runId: a run's tests. testKey + _id desc: a test's recent history.
-QaTestResultSchema.index({ runId: 1 });
+// ~1M rows a year. runId + testKey: a run's tests, one row each, so a concurrent re-ingest of
+// the same run cannot double them (ingestRun.ts tolerates the duplicate-key errors). testKey +
+// _id desc: a test's recent history.
+QaTestResultSchema.index({ runId: 1, testKey: 1 }, { unique: true });
 QaTestResultSchema.index({ testKey: 1, _id: -1 });
 
 export const QaTestResult: IQaTestResultModel =

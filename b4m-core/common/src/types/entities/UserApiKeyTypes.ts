@@ -110,7 +110,7 @@ export enum ApiKeyScope {
   OVERWATCH_READ = 'overwatch:read',
   /**
    * CI-to-server ingest of Playwright runs for the admin /status page
-   * (`POST /api/v1/qa/uploads`, `POST /api/v1/qa/runs`). Admin-provisioned only,
+   * (`POST /api/qa/uploads`, `POST /api/qa/runs`). Admin-provisioned only,
    * and confined like {@link OVERWATCH_INGEST_WRITE}: a leaked CI key reaches the
    * two ingest routes and nothing else. The routes also require the key's owner
    * to carry the `qa-ingest` user tag (QA_INGEST_USER_TAG in schemas/qa.ts).

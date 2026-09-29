@@ -1,11 +1,11 @@
 import { z } from 'zod';
 
 /**
- * QA run ingest (admin /status page). The wire schemas are the public contract
- * (api-contract/contracts/qa.contract.ts) and are snake_case per CONVENTIONS.md;
- * the camelCase interfaces are the internal shape the server stores
- * (apps/client/server/qa). scripts/qa-report.mjs mirrors the wire shape because
- * it cannot import TS.
+ * QA run ingest (admin /status page). The snake_case wire schemas are what the
+ * internal CI routes validate (apps/client/pages/api/qa/{runs,uploads}.ts; kept out
+ * of the public contract set and the OpenAPI spec on purpose); the camelCase
+ * interfaces are the internal shape the server stores (apps/client/server/qa).
+ * scripts/qa-report.mjs mirrors the wire shape because it cannot import TS.
  */
 
 /** Free-form slug, never an enum (public repo). The charset keeps S3 keys safe. */

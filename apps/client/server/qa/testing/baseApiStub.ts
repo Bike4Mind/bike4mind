@@ -3,16 +3,18 @@ import errorHandler from '@server/middlewares/errorHandler';
 
 type Step = (req: Request, res: Response, next: () => void) => unknown;
 
+/** Options each route passed to baseApi, so a test can pin its scope gate (the stub skips it). */
+export const baseApiOptions: unknown[] = [];
+
 /**
  * Test stand-in for server/middlewares/baseApi.ts, used as
  * `vi.mock('@server/middlewares/baseApi', () => import('@server/qa/testing/baseApiStub'))`.
  * No DB connect and no auth chain, so requireQaIngestKey (ingest), ensureAdmin
  * (admin reads) or the report token is what enforces access in those tests.
- * The real nextRouteForContract prelude (body validation, response
- * drift check) still runs, and a throw is served by the real errorHandler, so the
- * status and body match production.
+ * A throw is served by the real errorHandler, so the status and body match production.
  */
-export function baseApi() {
+export function baseApi(options: unknown = {}) {
+  baseApiOptions.push(options);
   const compose =
     (...steps: Step[]) =>
     async (req: Request, res: Response) => {

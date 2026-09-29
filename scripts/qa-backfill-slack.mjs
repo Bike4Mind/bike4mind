@@ -2,9 +2,9 @@
 /**
  * One-off backfill for the admin /status page: replays the E2E and AI Latency bot
  * posts in a Slack channel as QA runs (source 'slack-backfill': counts, suites,
- * credits, latency; no tests or media) through POST /api/v1/qa/runs, the same
- * contract, qaRunFromWire and ingestRun path the CI ingest uses (contract:
- * b4m-core/common/src/api-contract/contracts/qa.contract.ts).
+ * credits, latency; no tests or media) through POST /api/qa/runs, the same
+ * schema, qaRunFromWire and ingestRun path the CI ingest uses (route:
+ * apps/client/pages/api/qa/runs.ts, wire schema: b4m-core/common/src/schemas/qa.ts).
  *
  * Only the current formats parse: "Parse credits" + "Notify Slack" in
  * .github/workflows/e2e-run.yml and "Aggregate results" in
@@ -326,7 +326,7 @@ async function slackHistory({ token, channel, oldest, latest, fetchImpl, sleep }
 }
 
 async function postRun(fetchImpl, ingestUrl, apiKey, run) {
-  const res = await fetchImpl(`${ingestUrl}/api/v1/qa/runs`, {
+  const res = await fetchImpl(`${ingestUrl}/api/qa/runs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
     body: JSON.stringify(run),

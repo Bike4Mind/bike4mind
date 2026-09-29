@@ -2,9 +2,10 @@ import { ApiKeyScope, QA_INGEST_USER_TAG } from '@bike4mind/common';
 import { ForbiddenError, UnauthorizedError } from '@server/utils/errors';
 
 /**
- * The contract's scope gate lets JWT callers through (apiKeyOrJwt), so ingest
- * re-checks for an API key holding qa:ingest, AND a key owner carrying the
- * admin-set qa-ingest tag so only a designated service account can write runs.
+ * baseApi's scope gate only applies to API-key callers and lets a JWT through, so
+ * ingest (pages/api/qa/*) re-checks for an API key holding qa:ingest, AND a key owner
+ * carrying the admin-set qa-ingest tag so only a designated service account can
+ * write runs.
  */
 export function requireQaIngestKey(req: {
   apiKeyInfo?: { scopes: readonly string[] };

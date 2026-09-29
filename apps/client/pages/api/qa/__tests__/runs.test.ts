@@ -5,7 +5,7 @@ import { makeIngestRequest } from '@server/qa/testFixtures';
 
 const { mockIngest, mockEvaluate } = vi.hoisted(() => ({ mockIngest: vi.fn(), mockEvaluate: vi.fn() }));
 
-// baseApi is stubbed (no auth chain); the real nextRouteForContract prelude and errorHandler run.
+// baseApi is stubbed (no auth chain); the real errorHandler runs.
 vi.mock('@server/middlewares/baseApi', () => import('@server/qa/testing/baseApiStub'));
 vi.mock('@server/qa/ingestRun', () => ({ ingestRun: (...a: unknown[]) => mockIngest(...a) }));
 vi.mock('@server/qa/evaluateAlarm', () => ({
@@ -13,6 +13,7 @@ vi.mock('@server/qa/evaluateAlarm', () => ({
   defaultAlarmDeps: () => ({ deps: 'default' }),
 }));
 
+import { baseApiOptions } from '@server/qa/testing/baseApiStub';
 import handler, { config } from '../runs';
 
 const KEY = { keyId: 'k1', scopes: [ApiKeyScope.QA_INGEST] };
@@ -32,7 +33,10 @@ beforeEach(() => {
   mockEvaluate.mockResolvedValue(null);
 });
 
-describe('POST /api/v1/qa/runs', () => {
+describe('POST /api/qa/runs', () => {
+  it('declares the qa:ingest scope gate, which is what admits the confined key', () => {
+    expect(baseApiOptions).toContainEqual(expect.objectContaining({ requiredScopes: [ApiKeyScope.QA_INGEST] }));
+  });
   it('ingests a valid run', async () => {
     const { status, json } = await call(makeIngestRequest());
     expect(status).toBe(200);
@@ -45,8 +49,6 @@ describe('POST /api/v1/qa/runs', () => {
         counts: expect.objectContaining({ notStarted: 0 }),
       })
     );
-    // The contract's response drift check stays quiet.
-    expect(logger.warn).not.toHaveBeenCalled();
   });
   it('401s a JWT-only caller', async () => {
     expect((await call(makeIngestRequest(), { user: OWNER })).status).toBe(401);
@@ -70,16 +72,16 @@ describe('POST /api/v1/qa/runs', () => {
   });
 });
 
-describe('POST /api/v1/qa/runs alarm wiring', () => {
+describe('POST /api/qa/runs alarm wiring', () => {
   it('evaluates the alarm after a first ingest', async () => {
     await call(makeIngestRequest());
     expect(mockEvaluate).toHaveBeenCalledWith('r1', { deps: 'default' });
     expect(mockIngest.mock.invocationCallOrder[0]).toBeLessThan(mockEvaluate.mock.invocationCallOrder[0]);
   });
-  it('never re-evaluates a re-ingested run', async () => {
+  it('evaluates a re-ingested run too: evaluateAlarm owns once-per-run', async () => {
     mockIngest.mockResolvedValueOnce({ runId: 'r1', status: 'failed', created: false });
     expect((await call(makeIngestRequest())).status).toBe(200);
-    expect(mockEvaluate).not.toHaveBeenCalled();
+    expect(mockEvaluate).toHaveBeenCalledWith('r1', { deps: 'default' });
   });
   it('still returns 200 and logs when the alarm throws', async () => {
     mockEvaluate.mockRejectedValueOnce(new Error('slack down'));

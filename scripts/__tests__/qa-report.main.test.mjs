@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { main } from '../qa-report.mjs';
+import { FETCH_TIMEOUT_MS, main } from '../qa-report.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ENV = {
@@ -52,7 +52,7 @@ function fakeFetch({ runs } = {}) {
   const calls = [];
   const fetch = vi.fn(async (url, init = {}) => {
     calls.push({ url, init });
-    if (url === 'https://app.example.com/api/v1/qa/uploads') {
+    if (url === 'https://app.example.com/api/qa/uploads') {
       const body = JSON.parse(init.body);
       return json(200, {
         uploads: body.files.map(f => ({
@@ -64,7 +64,7 @@ function fakeFetch({ runs } = {}) {
       });
     }
     if (url.startsWith('https://s3.example/')) return json(200, null);
-    if (url === 'https://app.example.com/api/v1/qa/runs') {
+    if (url === 'https://app.example.com/api/qa/runs') {
       return runs ? runs() : json(200, { run_id: 'r1', status: 'failed', created: true });
     }
     throw new Error(`unexpected ${url}`);
@@ -72,7 +72,7 @@ function fakeFetch({ runs } = {}) {
   return { fetch, calls };
 }
 const bodyOf = (calls, suffix) => JSON.parse(calls.find(c => c.url.endsWith(suffix)).init.body);
-const runBody = calls => bodyOf(calls, '/api/v1/qa/runs');
+const runBody = calls => bodyOf(calls, '/api/qa/runs');
 
 describe('main', () => {
   it('posts an infra-error run when no results file exists', async () => {
@@ -93,7 +93,7 @@ describe('main', () => {
       ci_run_url: 'https://github.com/example/repo/actions/runs/100',
     });
     expect(body).not.toHaveProperty('tenant');
-    expect(calls.some(c => c.url.endsWith('/api/v1/qa/uploads'))).toBe(false);
+    expect(calls.some(c => c.url.endsWith('/api/qa/uploads'))).toBe(false);
   });
 
   it('uploads failure media and the report, then posts artifact keys', async () => {
@@ -115,7 +115,7 @@ describe('main', () => {
       'https://s3.example/test-2/trace.zip',
       'https://s3.example/test-2/video.webm',
     ]);
-    const uploadBody = bodyOf(calls, '/api/v1/qa/uploads');
+    const uploadBody = bodyOf(calls, '/api/qa/uploads');
     expect(uploadBody).toMatchObject({ product: 'product-a', external_run_id: '100-1' });
     expect(uploadBody.files[0]).toEqual({
       path: 'test-2/shot.png',
@@ -144,7 +144,7 @@ describe('main', () => {
       sleep: noSleep,
       log: makeLog(),
     });
-    expect(calls.map(c => c.url)).toEqual(['https://app.example.com/api/v1/qa/runs']);
+    expect(calls.map(c => c.url)).toEqual(['https://app.example.com/api/qa/runs']);
     expect(runBody(calls).report_prefix).toBeUndefined();
   });
 
@@ -156,6 +156,55 @@ describe('main', () => {
     expect(await main([], ENV, { fetch, sleep: noSleep, log })).toBe(0);
     expect(fetch).toHaveBeenCalledTimes(3);
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('::warning::'));
+  });
+
+  it('gives every request its own timeout signal, 60s by default', async () => {
+    await writeFixture();
+    const { fetch, calls } = fakeFetch();
+    await main(['--results', path.join(dir, 'pw-results.json'), '--report-dir', path.join(dir, 'report')], ENV, {
+      fetch,
+      sleep: noSleep,
+      log: makeLog(),
+    });
+    expect(FETCH_TIMEOUT_MS).toBe(60_000);
+    expect(calls.length).toBeGreaterThan(2);
+    expect(calls.every(c => c.init.signal instanceof AbortSignal)).toBe(true);
+    expect(new Set(calls.map(c => c.init.signal)).size).toBe(calls.length);
+  });
+
+  // A hung first attempt must not outlive its retry, or both can ingest the run at once.
+  it('aborts a hung ingest POST at the timeout and retries it', async () => {
+    let attempt = 0;
+    const fetch = vi.fn((url, init) => {
+      attempt += 1;
+      if (attempt > 1) return Promise.resolve(json(200, { run_id: 'r1', status: 'passed', created: false }));
+      return new Promise((_, reject) => init.signal?.addEventListener('abort', () => reject(init.signal.reason)));
+    });
+    const log = makeLog();
+    expect(await main([], ENV, { fetch, sleep: noSleep, log, fetchTimeoutMs: 20 })).toBe(0);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(log.log).toHaveBeenCalledWith(expect.stringContaining('qa-report: run r1'));
+  });
+
+  it('aborts a hung artifact PUT at its timeout and retries it', async () => {
+    await writeFixture();
+    const { fetch: base, calls } = fakeFetch();
+    let hung = false;
+    const fetch = vi.fn((url, init) => {
+      if (!hung && url === 'https://s3.example/test-2/shot.png') {
+        hung = true;
+        return new Promise((_, reject) => init.signal?.addEventListener('abort', () => reject(init.signal.reason)));
+      }
+      return base(url, init);
+    });
+    await main(['--results', path.join(dir, 'pw-results.json'), '--report-dir', path.join(dir, 'report')], ENV, {
+      fetch,
+      sleep: noSleep,
+      log: makeLog(),
+      uploadTimeoutMs: 20,
+    });
+    const saves = runBody(calls).tests.find(t => t.test_key.endsWith('saves'));
+    expect(saves.artifacts.map(a => a.kind)).toEqual(['screenshot', 'video', 'trace']);
   });
 
   it('does not retry a 422', async () => {

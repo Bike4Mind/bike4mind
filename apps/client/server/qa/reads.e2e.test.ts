@@ -6,7 +6,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/d
 import { QaRun, QaTestResult } from '@bike4mind/database';
 import type { QaRunInput } from '@bike4mind/common';
 import { ingestRun } from './ingestRun';
-import { getQaFacets, getQaOverview, getQaRunDetail, getQaTestHistory, listQaRuns } from './reads';
+import { getQaFacets, getQaOverview, getQaRunDetail, getQaTestHistory, listQaRuns, QA_SERIES_MAX_RUNS } from './reads';
 import { failedTest, makeIngest, passedTest, TEST_A, TEST_B } from './testFixtures';
 import type { QaMediaStorage } from './storage';
 
@@ -110,6 +110,33 @@ describe('getQaOverview', () => {
     expect(flaky).toEqual([
       { testKey: TEST_B, title: 'Notebook > saves', failures: 1, total: 4, rate: 0.25, lastStatus: 'passed' },
     ]);
+  });
+
+  it('lists a test that needed a retry on every run', async () => {
+    const flakyA = { ...passedTest(TEST_A), status: 'flaky' as const, retries: 1 };
+    for (const hours of [30, 20, 10]) await seed({ hours, tests: [flakyA, passedTest(TEST_B)] });
+    const { flaky } = await getQaOverview(FILTERS, NOW);
+    expect(flaky).toEqual([
+      { testKey: TEST_A, title: 'Notebook > creates', failures: 3, total: 3, rate: 1, lastStatus: 'flaky' },
+    ]);
+  });
+
+  it('keeps the newest runs when the range holds more than the series cap', async () => {
+    const { tests: _tests, ...base } = makeIngest();
+    const newest = new Date(hoursAgo(1)).getTime();
+    await QaRun.insertMany(
+      Array.from({ length: QA_SERIES_MAX_RUNS + 1 }, (_, i) => ({
+        ...base,
+        externalRunId: `cap-${i}`,
+        startedAt: new Date(newest - i * 60_000),
+        status: 'passed',
+      }))
+    );
+    const { series } = await getQaOverview(FILTERS, NOW);
+    expect(series).toHaveLength(QA_SERIES_MAX_RUNS);
+    // Oldest first, and the one dropped is the oldest run.
+    expect(series[series.length - 1].startedAt).toBe(new Date(newest).toISOString());
+    expect(series[0].startedAt).toBe(new Date(newest - (QA_SERIES_MAX_RUNS - 1) * 60_000).toISOString());
   });
 });
 

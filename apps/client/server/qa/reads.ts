@@ -2,6 +2,7 @@ import { QaRun, QaTestResult } from '@bike4mind/database';
 import {
   computeFlakeRate,
   QA_FLAKY_THRESHOLD,
+  QA_FLAKY_WINDOW,
   QA_MEDIA_RETENTION_DAYS,
   type IQaRun,
   type IQaTestResult,
@@ -22,12 +23,22 @@ export type { QaFilters };
 
 const DAY_MS = 86_400_000;
 const STREAK_LOOKBACK = 50;
-const SERIES_MAX_RUNS = 2000;
+export const QA_SERIES_MAX_RUNS = 2000;
 const FLAKY_ROWS = 10;
 const HISTORY_LIMIT = 50;
 export const QA_RUNS_PAGE_SIZE = 50;
 
 type LeanRun = IQaRun & { _id: unknown };
+
+/**
+ * Always-failing tests are broken, not flaky: they show on the tiles instead. A `flaky` result
+ * passed on retry, so a test flaky on every run still belongs in the Flaky panel. Same window
+ * as computeFlakeRate (b4m-core/common/src/schemas/qa.ts); keep the two in sync.
+ */
+function alwaysFailed(statusesNewestFirst: readonly QaTestStatus[]): boolean {
+  const counted = statusesNewestFirst.filter(s => s !== 'skipped' && s !== 'notStarted').slice(0, QA_FLAKY_WINDOW);
+  return counted.length > 0 && counted.every(s => s === 'failed');
+}
 
 export interface QaFacets {
   products: string[];
@@ -228,10 +239,13 @@ export async function getQaOverview(f: QaFilters, now: Date = new Date()): Promi
   );
   tiles.sort((a, b) => `${a.suite}|${a.env}|${a.tenant ?? ''}`.localeCompare(`${b.suite}|${b.env}|${b.tenant ?? ''}`));
 
-  const runs = await QaRun.find({ ...match, startedAt: { $gte: since } })
-    .sort({ startedAt: 1 })
-    .limit(SERIES_MAX_RUNS)
-    .lean<LeanRun[]>();
+  // Newest first so the cap drops the oldest runs, then back to chart order.
+  const runs = (
+    await QaRun.find({ ...match, startedAt: { $gte: since } })
+      .sort({ startedAt: -1 })
+      .limit(QA_SERIES_MAX_RUNS)
+      .lean<LeanRun[]>()
+  ).reverse();
   const series = runs.map((r): QaSeriesPoint => ({
     runId: String(r._id),
     suite: r.suite,
@@ -256,9 +270,9 @@ export async function getQaOverview(f: QaFilters, now: Date = new Date()): Promi
           { $group: { _id: '$testKey', title: { $first: '$title' }, statuses: { $push: '$status' } } },
         ]).allowDiskUse(true);
   const flaky = grouped
+    .filter(g => !alwaysFailed(g.statuses))
     .map(g => ({ testKey: g._id, title: g.title, ...computeFlakeRate(g.statuses), lastStatus: g.statuses[0] }))
-    // Always-failing tests are broken, not flaky: they show on the tiles instead.
-    .filter(r => r.rate >= QA_FLAKY_THRESHOLD && r.failures < r.total)
+    .filter(r => r.rate >= QA_FLAKY_THRESHOLD)
     .sort((a, b) => b.rate - a.rate || b.failures - a.failures || a.testKey.localeCompare(b.testKey))
     .slice(0, FLAKY_ROWS);
 

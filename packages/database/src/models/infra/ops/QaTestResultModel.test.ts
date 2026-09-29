@@ -41,9 +41,15 @@ describe('QaTestResultModel', () => {
     ).rejects.toThrow();
   });
 
-  it('declares the query indexes', async () => {
-    const keys = (await QaTestResult.collection.indexes()).map(i => i.key);
-    expect(keys).toContainEqual({ runId: 1 });
-    expect(keys).toContainEqual({ testKey: 1, _id: -1 });
+  it('declares the query indexes, with one row per test in a run', async () => {
+    const indexes = await QaTestResult.collection.indexes();
+    expect(indexes).toContainEqual(expect.objectContaining({ key: { runId: 1, testKey: 1 }, unique: true }));
+    expect(indexes.map(i => i.key)).toContainEqual({ testKey: 1, _id: -1 });
+  });
+
+  it('rejects a second row for the same test in a run', async () => {
+    const row = { runId: 'r', testKey: 'k', title: 't', status: 'passed', durationMs: 0, retries: 0 };
+    await QaTestResult.create(row);
+    await expect(QaTestResult.create({ ...row })).rejects.toThrow(/duplicate key/);
   });
 });

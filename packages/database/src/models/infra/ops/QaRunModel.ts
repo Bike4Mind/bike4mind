@@ -52,6 +52,9 @@ const QaRunSchema = new mongoose.Schema<IQaRunDocument>(
     metrics: { type: [QaMetricSchema], default: [] },
     reportPrefix: { type: String },
     externalRunId: { type: String, required: true, unique: true },
+    // Never in the ingest payload, so a re-ingest's $set leaves them alone. See evaluateAlarm.ts.
+    alarmClaimedAt: { type: Date },
+    alarmEvaluatedAt: { type: Date },
   },
   { timestamps: true }
 );

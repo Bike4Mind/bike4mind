@@ -4,7 +4,7 @@ import { ApiKeyScope, QA_INGEST_USER_TAG } from '@bike4mind/common';
 
 const { mockPresign } = vi.hoisted(() => ({ mockPresign: vi.fn() }));
 
-// baseApi is stubbed (no auth chain); the real nextRouteForContract prelude and errorHandler run.
+// baseApi is stubbed (no auth chain); the real errorHandler runs.
 vi.mock('@server/middlewares/baseApi', () => import('@server/qa/testing/baseApiStub'));
 vi.mock('@server/qa/storage', () => ({
   presignQaPut: (...a: unknown[]) => mockPresign(...a),
@@ -12,6 +12,7 @@ vi.mock('@server/qa/storage', () => ({
   getQaArtifactsBucketName: () => 'example-bucket',
 }));
 
+import { baseApiOptions } from '@server/qa/testing/baseApiStub';
 import handler from '../uploads';
 
 const KEY = { keyId: 'k1', scopes: [ApiKeyScope.QA_INGEST] };
@@ -39,7 +40,14 @@ beforeEach(() => {
   mockPresign.mockResolvedValue('https://s3.example/signed');
 });
 
-describe('POST /api/v1/qa/uploads', () => {
+describe('POST /api/qa/uploads', () => {
+  it('declares the qa:ingest scope gate, which is what admits the confined key', () => {
+    expect(baseApiOptions).toContainEqual(expect.objectContaining({ requiredScopes: [ApiKeyScope.QA_INGEST] }));
+  });
+  it('401s a JWT-only caller', async () => {
+    expect((await call(body, { user: OWNER })).status).toBe(401);
+    expect(mockPresign).not.toHaveBeenCalled();
+  });
   it('returns presigned URLs bound to size and type', async () => {
     const { status, json } = await call(body);
     expect(status).toBe(200);
@@ -54,8 +62,6 @@ describe('POST /api/v1/qa/uploads', () => {
         bytes: 100,
       })
     );
-    // The contract's response drift check stays quiet.
-    expect(logger.warn).not.toHaveBeenCalled();
   });
   it('403s a key without the scope', async () => {
     const { status } = await call(body, { apiKeyInfo: { keyId: 'k', scopes: [ApiKeyScope.AI_CHAT] }, user: OWNER });

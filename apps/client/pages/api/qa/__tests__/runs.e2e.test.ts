@@ -6,7 +6,7 @@ import { createMocks } from 'node-mocks-http';
 import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
-} from '../../../../../../../packages/database/src/__test__/createMongoServer';
+} from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { QaRun, QaTestResult } from '@bike4mind/database';
 import { ApiKeyScope, QA_INGEST_USER_TAG, type QaRunIngestRequest } from '@bike4mind/common';
 import { makeIngestRequest, TEST_A, TEST_B } from '@server/qa/testFixtures';
@@ -80,7 +80,7 @@ const run = (id: string, hour: number, failing: string[] = [], o: Partial<QaRunI
     ...o,
   });
 
-describe('POST /api/v1/qa/runs alarm (real ingest)', () => {
+describe('POST /api/qa/runs alarm (real ingest)', () => {
   it('posts a state change once, and never again on re-ingest of the same run', async () => {
     expect((await call(run('1-1', 1))).status).toBe(200);
     expect(mockSlackPost).not.toHaveBeenCalled();
@@ -100,6 +100,35 @@ describe('POST /api/v1/qa/runs alarm (real ingest)', () => {
     expect(again.json).toEqual({ run_id: first.json.run_id, status: 'failed', created: false });
     expect(mockSlackPost).toHaveBeenCalledTimes(1);
     expect(await QaRun.countDocuments({})).toBe(2);
+  });
+
+  it('alarms on the re-ingest that follows a failed Slack post, then never again', async () => {
+    mockSlackPost.mockRejectedValueOnce(new Error('slack down'));
+    expect((await call(run('1-1', 1, [TEST_B]))).json).toMatchObject({ created: true });
+    expect(mockSlackPost).toHaveBeenCalledTimes(1);
+    expect((await call(run('1-1', 1, [TEST_B]))).json).toMatchObject({ created: false });
+    expect(mockSlackPost).toHaveBeenCalledTimes(2);
+    await call(run('1-1', 1, [TEST_B]));
+    expect(mockSlackPost).toHaveBeenCalledTimes(2);
+  });
+
+  it('alarms on the re-ingest that follows a failure before the post', async () => {
+    const find = vi.spyOn(QaTestResult, 'find').mockImplementationOnce(() => {
+      throw new Error('lookup failed');
+    });
+    expect((await call(run('1-1', 1, [TEST_B]))).status).toBe(200);
+    find.mockRestore();
+    expect(mockSlackPost).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('lookup failed'));
+    await call(run('1-1', 1, [TEST_B]));
+    expect(mockSlackPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('posts once when the same run is ingested twice concurrently', async () => {
+    const [a, b] = await Promise.all([call(run('1-1', 1, [TEST_B])), call(run('1-1', 1, [TEST_B]))]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    expect(mockSlackPost).toHaveBeenCalledTimes(1);
+    expect(await QaTestResult.countDocuments({ runId: a.json.run_id })).toBe(2);
   });
 
   it('stores a feature-branch failure without posting', async () => {

@@ -27,6 +27,9 @@ export interface IQaRun {
   metrics: QaMetric[];
   reportPrefix?: string;
   externalRunId: string;
+  /** Alarm once-per-run bookkeeping, written only by apps/client/server/qa/evaluateAlarm.ts. */
+  alarmClaimedAt?: Date;
+  alarmEvaluatedAt?: Date;
 }
 
 export interface IQaRunDocument extends IQaRun, IMongoDocument {}

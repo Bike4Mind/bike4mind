@@ -1,6 +1,6 @@
 import type { QaRunIngestRequest, QaRunInput, QaTestResultInput } from '@bike4mind/common';
 
-/** Shared by the server/qa and pages/api/v1/qa tests. Names are placeholders (public repo). */
+/** Shared by the server/qa and pages/api/qa tests. Names are placeholders (public repo). */
 export const passedTest = (testKey: string): QaTestResultInput => ({
   testKey,
   title: testKey.split(' > ').slice(1).join(' > ') || testKey,

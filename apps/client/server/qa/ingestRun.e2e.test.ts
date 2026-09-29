@@ -49,6 +49,25 @@ describe('ingestRun', () => {
     expect(await QaTestResult.countDocuments({ runId: first.runId })).toBe(1);
   });
 
+  it('keeps one row per test when the same run is ingested concurrently', async () => {
+    // Several rounds: one interleaving of the two delete/insert pairs is enough to double rows.
+    for (let i = 0; i < 5; i++) {
+      const input = makeIngest({ externalRunId: `${200 + i}-1` });
+      const [a, b] = await Promise.all([ingestRun(input), ingestRun(input)]);
+      expect(b.runId).toBe(a.runId);
+      const keys = (await QaTestResult.find({ runId: a.runId }).lean()).map(r => r.testKey).sort();
+      expect(keys).toEqual([TEST_A, TEST_B]);
+    }
+  });
+
+  it('rethrows an insert failure that is not a duplicate key', async () => {
+    const insert = vi
+      .spyOn(QaTestResult, 'insertMany')
+      .mockRejectedValueOnce(Object.assign(new Error('write failed'), { code: 121 }));
+    await expect(ingestRun(makeIngest())).rejects.toThrow('write failed');
+    insert.mockRestore();
+  });
+
   it('derives infra-error when nothing ran', async () => {
     const res = await ingestRun(
       makeIngest({ counts: { passed: 0, failed: 1, skipped: 0, notStarted: 40, ran: 0, total: 1 }, tests: [] })

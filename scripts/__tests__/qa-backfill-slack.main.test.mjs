@@ -35,7 +35,7 @@ const json = (body, status = 200, headers = {}) => ({
   text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
 });
 const ingested = (created = true) => json({ run_id: 'r1', status: 'passed', created });
-const ingestCalls = fetch => fetch.mock.calls.filter(([u]) => String(u).endsWith('/api/v1/qa/runs'));
+const ingestCalls = fetch => fetch.mock.calls.filter(([u]) => String(u).endsWith('/api/qa/runs'));
 
 describe('backfill main', () => {
   it('posts parseable bot posts inside the window, oldest first, and logs every other bot post', async () => {
@@ -55,7 +55,7 @@ describe('backfill main', () => {
     const calls = ingestCalls(fetch);
     expect(calls).toHaveLength(2);
     const [url, init] = calls[0];
-    expect(url).toBe('https://app.example.com/api/v1/qa/runs');
+    expect(url).toBe('https://app.example.com/api/qa/runs');
     expect(init.headers['x-api-key']).toBe('b4m_test_key');
     expect(calls.map(([, i]) => JSON.parse(i.body).external_run_id)).toEqual([
       `slack-${CHANNEL}-${inWindow}`,

@@ -28,7 +28,7 @@ afterEach(async () => {
   await Promise.all([QaRun.deleteMany({}), QaTestResult.deleteMany({})]);
 });
 
-/** The path POST /api/v1/qa/runs takes: contract validation, wire mapping, ingest. */
+/** The path POST /api/qa/runs takes: schema validation, wire mapping, ingest. */
 const ingestPost = (message: unknown) => {
   const body = parseSlackPost(message, { product: 'product-a', channel: CHANNEL });
   return ingestRun(qaRunFromWire(QaRunIngestRequestSchema.parse(body)));

@@ -10,6 +10,14 @@ const ALARM_BRANCH = 'main';
 const STREAK_LOOKBACK = 50;
 const FLAKY_LOOKUPS_MAX = 50;
 const SLACK_TIMEOUT_MS = 5000;
+/**
+ * A claim this old belongs to a dead invocation, so a retry may take it over. Well above a live
+ * evaluation (a few queries plus the Slack timeout), and below the 60s Lambda timeout, so the
+ * reporter's retry after a timed-out attempt (scripts/qa-report.mjs) finds it stale.
+ */
+export const ALARM_CLAIM_STALE_MS = 30_000;
+/** Posting later than this after claiming could overlap a takeover, so the holder gives up instead. */
+const POST_DEADLINE_MS = ALARM_CLAIM_STALE_MS - 2 * SLACK_TIMEOUT_MS;
 
 export interface AlarmDeps {
   post: (webhook: string, text: string) => Promise<void>;
@@ -17,6 +25,8 @@ export interface AlarmDeps {
   webhookFor: (product: string) => string | undefined;
   appOrigin: string;
   log: (msg: string) => void;
+  /** Test seam for the claim clock. */
+  now?: () => Date;
 }
 
 type LeanRun = IQaRun & { _id: unknown };
@@ -76,12 +86,59 @@ async function flakyHistory(prior: readonly PriorRun[], testKeys: string[]): Pro
 /**
  * Compare a freshly ingested run with the previous CI run on main for the same
  * state key and post on a state change. Returns the message (posted or logged).
- * Caller (pages/api/v1/qa/runs.ts) invokes this only when the run was created,
- * so re-ingest never re-posts.
+ * Caller (pages/api/qa/runs.ts) invokes this on every ingest: a persisted claim
+ * on the run makes it alarm once, across retries and concurrent ingests. A throw
+ * releases the claim, so the next ingest of the run evaluates it again.
  */
 export async function evaluateAlarm(runId: string, deps: AlarmDeps): Promise<string | null> {
   const run = await QaRun.findById(runId).lean<LeanRun>();
-  if (!run || run.source !== 'ci' || run.branch !== ALARM_BRANCH) return null;
+  if (!run || run.source !== 'ci' || run.branch !== ALARM_BRANCH || run.alarmEvaluatedAt) return null;
+
+  const now = deps.now ?? (() => new Date());
+  const claimedAt = now();
+  const claimed = await QaRun.findOneAndUpdate(
+    {
+      _id: run._id,
+      alarmEvaluatedAt: { $exists: false },
+      $or: [
+        { alarmClaimedAt: { $exists: false } },
+        { alarmClaimedAt: { $lte: new Date(claimedAt.getTime() - ALARM_CLAIM_STALE_MS) } },
+      ],
+    },
+    { $set: { alarmClaimedAt: claimedAt } }
+  ).lean<LeanRun>();
+  if (!claimed) return null;
+  const ours = { _id: run._id, alarmClaimedAt: claimedAt };
+
+  try {
+    const message = await decide(runId, claimed, deps);
+    if (message) {
+      const webhook = deps.webhookFor(claimed.product);
+      if (!webhook) {
+        deps.log(`[QA] alarm not posted (no webhook for ${claimed.product}): ${message}`);
+      } else if (now().getTime() - claimedAt.getTime() > POST_DEADLINE_MS) {
+        throw new Error('alarm claim went stale before the post');
+      } else {
+        await deps.post(webhook, message);
+      }
+    }
+    await QaRun.updateOne(ours, { $set: { alarmEvaluatedAt: now() } });
+    return message;
+  } catch (err) {
+    // Best effort: a claim left behind goes stale after ALARM_CLAIM_STALE_MS anyway.
+    await QaRun.updateOne(ours, { $unset: { alarmClaimedAt: 1 } }).catch(() => undefined);
+    throw err;
+  }
+}
+
+/** The alarm text for `run`, or null for no state change. */
+async function decide(runId: string, run: LeanRun, deps: AlarmDeps): Promise<string | null> {
+  // Runs on one key can overlap and finish in either order. Once a newer run is stored, this one's
+  // state is stale: R2 passing after R3 failed must not post "recovered".
+  if (await QaRun.exists({ ...stateKeyFilter(run), source: 'ci', startedAt: { $gt: run.startedAt } })) {
+    deps.log(`[QA] alarm skipped for run=${runId}: a newer run on this key is already stored`);
+    return null;
+  }
 
   // Keyed by product too, so testKeys shared across products never mix (flaky history below).
   const prior = await QaRun.find({ ...stateKeyFilter(run), source: 'ci', startedAt: { $lt: run.startedAt } })
@@ -112,7 +169,7 @@ export async function evaluateAlarm(runId: string, deps: AlarmDeps): Promise<str
   const history = await flakyHistory(prior, lookups);
   const knownFlaky = new Set(lookups.filter(k => isKnownFlaky(history.get(k) ?? [])));
 
-  const message = decideAlarm({
+  return decideAlarm({
     key: { suite: run.suite, env: run.env, ...(run.tenant ? { tenant: run.tenant } : {}) },
     runUrl: `${deps.appOrigin}/status/runs/${runId}`,
     previous: previous ? { status: previous.status, failing: previousFailing } : null,
@@ -120,10 +177,4 @@ export async function evaluateAlarm(runId: string, deps: AlarmDeps): Promise<str
     priorNonPassing: leadingNonPassing(prior).count,
     knownFlaky,
   });
-  if (!message) return null;
-
-  const webhook = deps.webhookFor(run.product);
-  if (!webhook) deps.log(`[QA] alarm not posted (no webhook for ${run.product}): ${message}`);
-  else await deps.post(webhook, message);
-  return message;
 }

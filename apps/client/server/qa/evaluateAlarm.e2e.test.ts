@@ -9,7 +9,7 @@ import type { QaRunInput } from '@bike4mind/common';
 vi.mock('@server/utils/config', () => ({ Config: { QA_ALARM_SLACK_WEBHOOKS: undefined } }));
 
 import { ingestRun } from './ingestRun';
-import { evaluateAlarm, type AlarmDeps } from './evaluateAlarm';
+import { ALARM_CLAIM_STALE_MS, evaluateAlarm, type AlarmDeps } from './evaluateAlarm';
 import { failedTest, makeIngest, passedTest, TEST_A, TEST_B } from './testFixtures';
 
 // Boots a real mongod, so the file runs on the shared real-Mongo budget (see MONGO_TEST_TIMEOUT_MS).
@@ -32,8 +32,10 @@ afterEach(async () => {
 let seq = 0;
 const DOWN = { passed: 0, failed: 0, skipped: 0, notStarted: 90, ran: 0, total: 0 };
 
-/** Ingest one run of TEST_A + TEST_B and evaluate it, as the route does on first ingest. */
-async function step(deps: AlarmDeps, o: { failing?: string[]; down?: boolean } & Partial<QaRunInput> = {}) {
+type StepOpts = { failing?: string[]; down?: boolean } & Partial<QaRunInput>;
+
+/** Ingest one run of TEST_A + TEST_B without evaluating it. */
+async function ingest(o: StepOpts = {}) {
   const { failing = [], down = false, ...rest } = o;
   seq += 1;
   const { runId, created } = await ingestRun(
@@ -48,8 +50,15 @@ async function step(deps: AlarmDeps, o: { failing?: string[]; down?: boolean } &
     })
   );
   expect(created).toBe(true);
-  return evaluateAlarm(runId, deps);
+  return runId;
 }
+
+/** Ingest one run and evaluate it, as the route does. */
+async function step(deps: AlarmDeps, o: StepOpts = {}) {
+  return evaluateAlarm(await ingest(o), deps);
+}
+
+const hour = (h: number) => new Date(Date.UTC(2026, 7, 1, h)).toISOString();
 
 const makeDeps = () => {
   const post = vi.fn<AlarmDeps['post']>(async () => {});
@@ -157,5 +166,95 @@ describe('evaluateAlarm: known flaky', () => {
     expect(await step(deps, { failing: [TEST_A, TEST_B] })).toContain(
       'now also failing: Notebook &gt; creates (known flaky) <'
     );
+  });
+});
+
+describe('evaluateAlarm: once per run', () => {
+  it('never re-posts a run it already alarmed on', async () => {
+    const { deps, post } = makeDeps();
+    const runId = await ingest({ failing: [TEST_B] });
+    expect(await evaluateAlarm(runId, deps)).toMatch(/failing: 1 test/);
+    expect(await evaluateAlarm(runId, deps)).toBeNull();
+    expect(post).toHaveBeenCalledTimes(1);
+    expect((await QaRun.findById(runId).lean())?.alarmEvaluatedAt).toBeInstanceOf(Date);
+  });
+
+  it('posts once when two ingests evaluate the same run concurrently', async () => {
+    const { deps, post } = makeDeps();
+    const runId = await ingest({ failing: [TEST_B] });
+    const results = await Promise.all([evaluateAlarm(runId, deps), evaluateAlarm(runId, deps)]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it('alarms on the retry after a Slack failure, then never again', async () => {
+    const { deps, post } = makeDeps();
+    post.mockRejectedValueOnce(new Error('slack down'));
+    const runId = await ingest({ failing: [TEST_B] });
+    await expect(evaluateAlarm(runId, deps)).rejects.toThrow('slack down');
+    expect(await evaluateAlarm(runId, deps)).toMatch(/failing: 1 test/);
+    expect(await evaluateAlarm(runId, deps)).toBeNull();
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+
+  it('alarms on the retry after a failure before the post', async () => {
+    const { deps, post } = makeDeps();
+    const runId = await ingest({ failing: [TEST_B] });
+    const find = vi.spyOn(QaTestResult, 'find').mockImplementationOnce(() => {
+      throw new Error('lookup failed');
+    });
+    await expect(evaluateAlarm(runId, deps)).rejects.toThrow('lookup failed');
+    find.mockRestore();
+    expect(post).not.toHaveBeenCalled();
+    expect(await evaluateAlarm(runId, deps)).toMatch(/failing: 1 test/);
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes over the claim of a crashed attempt only once it is stale', async () => {
+    const { deps, post } = makeDeps();
+    const runId = await ingest({ failing: [TEST_B] });
+    await QaRun.updateOne({ _id: runId }, { $set: { alarmClaimedAt: new Date(Date.now() - 1000) } });
+    expect(await evaluateAlarm(runId, deps)).toBeNull();
+    expect(post).not.toHaveBeenCalled();
+    await QaRun.updateOne(
+      { _id: runId },
+      { $set: { alarmClaimedAt: new Date(Date.now() - ALARM_CLAIM_STALE_MS - 1000) } }
+    );
+    expect(await evaluateAlarm(runId, deps)).toMatch(/failing: 1 test/);
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it('never posts once its own claim could have gone stale, and frees it for a retry', async () => {
+    const { deps, post } = makeDeps();
+    const runId = await ingest({ failing: [TEST_B] });
+    const start = Date.now();
+    let calls = 0;
+    // First call stamps the claim; every later one is a clock past the post deadline.
+    const slow: AlarmDeps = { ...deps, now: () => new Date(start + (calls++ === 0 ? 0 : ALARM_CLAIM_STALE_MS)) };
+    await expect(evaluateAlarm(runId, slow)).rejects.toThrow(/claim/);
+    expect(post).not.toHaveBeenCalled();
+    expect(await evaluateAlarm(runId, deps)).toMatch(/failing: 1 test/);
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('evaluateAlarm: out-of-order ingest', () => {
+  it('stays quiet for a run ingested after a newer one on the same key', async () => {
+    const { deps, post } = makeDeps();
+    expect(await step(deps, { failing: [TEST_B], startedAt: hour(1) })).toMatch(/failing: 1 test/); // R1
+    expect(await step(deps, { failing: [TEST_B], startedAt: hour(3) })).toBeNull(); // R3, same failure
+    // R2 started before R3 but finished last: "recovered" would contradict the newest state.
+    const r2 = await ingest({ startedAt: hour(2) });
+    expect(await evaluateAlarm(r2, deps)).toBeNull();
+    expect(post).toHaveBeenCalledTimes(1);
+    expect((await QaRun.findById(r2).lean())?.alarmEvaluatedAt).toBeInstanceOf(Date);
+  });
+
+  it('still alarms when the only newer run is on another branch or backfilled', async () => {
+    const { deps } = makeDeps();
+    await step(deps, { startedAt: hour(1) });
+    await ingest({ failing: [TEST_B], startedAt: hour(3), branch: 'feat-x' });
+    await ingest({ failing: [TEST_B], startedAt: hour(4), source: 'slack-backfill' });
+    expect(await step(deps, { failing: [TEST_B], startedAt: hour(2) })).toMatch(/failing: 1 test/);
   });
 });
