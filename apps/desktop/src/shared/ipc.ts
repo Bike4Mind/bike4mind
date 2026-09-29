@@ -102,6 +102,8 @@ export const IPC_CHANNELS = {
   toolsGetAccess: 'tools:get-access',
   toolsGrantAccess: 'tools:grant-access',
   toolsRevokeAccess: 'tools:revoke-access',
+  /** Renderer -> main only. Main decides what may be opened; see isExternallyOpenable. */
+  shellOpenExternal: 'shell:open-external',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -275,5 +277,16 @@ export interface DesktopApi {
     /** Opens the OS folder picker. Resolves unchanged if the user cancels. */
     grantAccess(): Promise<ToolAccessState>;
     revokeAccess(root: string): Promise<ToolAccessState>;
+  };
+  shell: {
+    /**
+     * Hand a link to the user's real browser. Used by links in a reply, which must never be
+     * followed in this window - see the `a` renderer in ReplyMarkdown.
+     *
+     * The url is untrusted: it comes out of model output. Main refuses anything that is not
+     * http, https or mailto, so this resolves either way and the caller cannot tell whether
+     * the link was opened. Nothing about a link in a reply needs to know.
+     */
+    openExternal(url: string): Promise<void>;
   };
 }

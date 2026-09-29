@@ -6,6 +6,7 @@ import { registerAuth } from './auth';
 import { registerChat } from './chat';
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
+import { isExternallyOpenable } from './externalLinks';
 
 // electron-vite sets this in dev only; a packaged build loads the renderer off disk.
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL;
@@ -45,8 +46,19 @@ function createWindow(): void {
   // A window opened in-app would inherit this app's session and privileges, so hand
   // every outbound link to the user's real browser instead.
   window.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    if (isExternallyOpenable(url)) void shell.openExternal(url);
     return { action: 'deny' };
+  });
+
+  // The window itself never navigates. Replies render links that route through
+  // shell:open-external instead of following in place, so anything that reaches here is either
+  // a link that missed that path or output trying to take the window somewhere - and either
+  // way, navigating would swap the app, and the b4m bridge it is holding, for a web page.
+  // A reload navigates to the url already loaded, which is not that and is left alone.
+  window.webContents.on('will-navigate', (event, url) => {
+    if (url === window.webContents.getURL()) return;
+    event.preventDefault();
+    if (isExternallyOpenable(url)) void shell.openExternal(url);
   });
 
   if (rendererDevUrl) {
@@ -57,6 +69,12 @@ function createWindow(): void {
 }
 
 ipcMain.handle(IPC_CHANNELS.getAppInfo, buildAppInfo);
+
+// Resolves either way: the renderer passes a url straight out of a reply, and a refusal is not
+// something a link in a reply has any business being told about.
+ipcMain.handle(IPC_CHANNELS.shellOpenExternal, (_event, url: unknown) => {
+  if (typeof url === 'string' && isExternallyOpenable(url)) void shell.openExternal(url);
+});
 
 void app.whenReady().then(async () => {
   // macOS reads the dock icon from the app bundle, which only a packaged build has, so a
