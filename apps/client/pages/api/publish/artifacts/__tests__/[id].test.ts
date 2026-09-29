@@ -29,6 +29,15 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   PublishedArtifact: { findOne: (...a: unknown[]) => findOne(...a) },
+  // Faithful copy of the model's helper - the real one's behavior (including the legacy-scalar
+  // fold-in) is pinned by PublishedArtifactModel.shareToken.test.ts. The gate-surface check
+  // reads it rather than the scalar as of #3255 step 3.
+  liveShareTokens: (artifact: { shareToken?: string; shareTokens?: { token?: string; revokedAt?: Date | null }[] }) => {
+    const live = (artifact.shareTokens ?? []).filter(e => !!e?.token && !e.revokedAt);
+    const legacy = artifact.shareToken;
+    if (legacy && !live.some(e => e.token === legacy)) return [{ token: legacy, revokedAt: null }, ...live];
+    return live;
+  },
 }));
 
 vi.mock('@server/services/publish', () => ({
