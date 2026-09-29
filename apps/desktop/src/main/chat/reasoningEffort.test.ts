@@ -32,8 +32,12 @@ describe('reasoningEffortFor', () => {
     expect(reasoningEffortFor('low', ChatModels.GPT5)).toBe('low');
   });
 
-  it('never sends it to a Claude model', () => {
-    expect(reasoningEffortFor('low', ChatModels.CLAUDE_5_OPUS)).toBeUndefined();
+  it('sends it to a Claude model that takes an effort', () => {
+    expect(reasoningEffortFor('low', ChatModels.CLAUDE_5_OPUS)).toBe('low');
+  });
+
+  it('never sends it to a Claude model that predates effort', () => {
+    expect(reasoningEffortFor('low', ChatModels.CLAUDE_4_5_SONNET)).toBeUndefined();
   });
 });
 
@@ -53,7 +57,8 @@ describe('storedReasoningEffortSetting', () => {
 describe('supportsReasoningEffort', () => {
   it('is true for the reasoning models and false for everything else', () => {
     expect(supportsReasoningEffort(ChatModels.GPT5)).toBe(true);
-    expect(supportsReasoningEffort(ChatModels.CLAUDE_5_OPUS)).toBe(false);
+    expect(supportsReasoningEffort(ChatModels.CLAUDE_5_OPUS)).toBe(true);
+    expect(supportsReasoningEffort(ChatModels.CLAUDE_4_5_SONNET)).toBe(false);
     expect(supportsReasoningEffort('something-this-server-invented')).toBe(false);
   });
 });

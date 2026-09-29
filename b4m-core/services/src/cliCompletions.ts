@@ -66,11 +66,13 @@ export interface CompletionParams {
      */
     response_format?: import('@bike4mind/common').ResponseFormat;
     /**
-     * Forwarded to the adapter, which only the OpenAI (reasoning models), Kimi (K3
-     * only) and DeepSeek backends read. Every other backend (Anthropic, Gemini,
-     * Bedrock, xAI, Ollama) drops it, so it is a silent no-op there.
+     * Forwarded to the adapter, which the OpenAI (reasoning models), Kimi (K3 only) and
+     * DeepSeek backends read, and Anthropic reads only when `thinking.enabled` is set.
+     * Every other backend (Gemini, Bedrock, xAI, Ollama) drops it, so it is a silent no-op there.
      */
     reasoningEffort?: import('@bike4mind/common').ReasoningEffort;
+    /** See the `thinking` field of CompletionRequestSchema. */
+    thinking?: { enabled: boolean; budget_tokens?: number };
   };
   /**
    * Server-side executable tools (each carries a live toolFn). When present, the backend
@@ -422,6 +424,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     ...(options?.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
     ...(responseFormatEnabled && options?.response_format ? { responseFormat: options.response_format } : {}),
+    // Gated on can_think as ChatCompletionProcess gates it: Ollama 400s a non-thinking model
+    // asked to think. budget_tokens only sizes legacy thinking; adaptive models take an effort.
+    ...(options?.thinking?.enabled && modelInfo?.can_think
+      ? { thinking: { enabled: true, budget_tokens: options.thinking.budget_tokens ?? 16000 } }
+      : {}),
   };
 
   if (options?.response_format) {
