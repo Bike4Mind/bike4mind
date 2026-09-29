@@ -481,7 +481,8 @@ describe('DataLakeResearchPanel', () => {
           run({
             status: 'failed',
             stopReason: 'judge_unavailable',
-            error: 'The relevance judge (some-model) failed on every candidate it tried (3)',
+            error:
+              'The relevance judge (some-model) failed on every candidate it tried (3), so nothing was proposed: model access denied',
             totals: { ...emptyResearchRunTotals(), searchHits: 10, judgeFailed: 3, notJudged: 7 },
           }),
         ],
@@ -491,7 +492,7 @@ describe('DataLakeResearchPanel', () => {
       );
       const summary = screen.getByTestId('datalake-research-run-totals').textContent ?? '';
       expect(summary).toMatch(/3 could not be judged/);
-      expect(summary).toMatch(/7 not judged \(the run stopped early\)/);
+      expect(summary).toMatch(/7 not judged \(the judge was unavailable, so the run stopped\)/);
     });
 
     it('names the model that judged a run', () => {

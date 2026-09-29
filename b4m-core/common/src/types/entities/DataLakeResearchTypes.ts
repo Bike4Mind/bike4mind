@@ -50,10 +50,10 @@ export const RESEARCH_RUN_STATUSES = ['queued', 'running', 'completed', 'failed'
 export type ResearchRunStatus = (typeof RESEARCH_RUN_STATUSES)[number];
 
 /**
- * Why a run's loop ended. Every value other than `exhausted` and `judge_unavailable` names a LEVER
- * that fired, which is what makes this field worth storing: a run that proposed two things because its ceiling was
- * $0.05 and a run that proposed two things because the web held nothing else look identical
- * without it, and only one of them is fixed by turning a dial.
+ * Why a run's loop ended. Every value other than `exhausted` and `judge_unavailable` names a
+ * LEVER that fired, which is what makes this field worth storing: a run that proposed two things
+ * because its ceiling was $0.05 and a run that proposed two things because the web held nothing
+ * else look identical without it, and only one of them is fixed by turning a dial.
  */
 export const RESEARCH_RUN_STOP_REASONS = [
   /** The candidate list ran out - the run considered everything search returned. */
@@ -303,8 +303,9 @@ export interface ResearchRunTotals {
   /** Nothing to key the source on (not an http(s) URL). */
   unusableSource: number;
   /**
-   * Candidates never reached because the run stopped early on `judge_unavailable`, so the buckets
-   * still sum to `searchHits`. Stays 0 on every other stop reason; older stored runs read it as 0.
+   * Candidates never reached because the run stopped on `judge_unavailable`, which keeps that run's
+   * buckets summing to `searchHits`. Only that stop fills it: `cost_ceiling`, `time_budget` and
+   * `proposal_limit` leave it 0, so their buckets can fall short. Older stored runs read it as 0.
    */
   notJudged: number;
 }

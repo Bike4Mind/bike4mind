@@ -375,7 +375,7 @@ const DROP_REASON_LABEL: Record<Exclude<keyof ResearchRunTotals, 'searchHits' | 
   suppressedByTombstone: 'previously declined',
   unusableSource: 'unusable source',
   fetchFailed: 'could not be fetched',
-  notJudged: 'not judged (the run stopped early)',
+  notJudged: 'not judged (the judge was unavailable, so the run stopped)',
 };
 
 /**

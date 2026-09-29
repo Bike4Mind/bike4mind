@@ -225,7 +225,7 @@ describe('runLakeResearch', () => {
           stopReason: 'judge_unavailable',
           totals: expect.objectContaining({ judgeFailed: 3, notJudged: 7 }),
           error:
-            'The relevance judge (default-judge-model) failed on every candidate it tried (3), so nothing was proposed: model access denied; 7 candidates not judged',
+            'The relevance judge (default-judge-model) failed on every candidate it tried (3), so nothing was proposed: model access denied',
         })
       );
     });
