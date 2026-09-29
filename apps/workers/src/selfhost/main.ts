@@ -12,6 +12,10 @@ import { dispatch as dataLakeResearchRunDispatch } from '@server/queueHandlers/d
 import { dispatch as driveDisconnectPurgeDispatch } from '@server/queueHandlers/driveDisconnectPurge';
 import { dispatch as imageGenerationDispatch } from '@server/queueHandlers/imageGeneration';
 import { dispatch as imageEditDispatch } from '@server/queueHandlers/imageEdit';
+import {
+  dispatch as generationCallbackDispatch,
+  GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
+} from '@server/queueHandlers/generationCallback';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
 import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
@@ -42,6 +46,8 @@ import {
  * SST queue consumers (infra/queues.ts) and cron (infra/cron.ts):
  *   - polls researchEngineQueue -> researchEngineQueue.dispatch (same handler as hosted)
  *   - polls imageGenerationQueue / imageEditQueue -> the same dispatch handlers hosted uses
+ *   - polls generationCallbackQueue -> generationCallback.dispatch, delivering signed HTTPS
+ *     completion callbacks for those jobs to API-key callers
  *   - runs taskSchedulerService.process every 5 minutes with the same handler map as
  *     the hosted cron/scheduler.ts (kept in sync with it).
  */
@@ -130,6 +136,19 @@ async function main() {
     imageGenerationDispatch
   );
   registerImageQueue('imageEditQueue', 'image edit', Resource.imageEditQueue?.url, imageEditDispatch);
+
+  // Signed HTTPS completion callbacks for image/video generation jobs, delivered to API-key
+  // callers. Optional in the manifest: an install without it just skips callback delivery.
+  const generationCallbackQueueUrl = Resource.generationCallbackQueue?.url;
+  if (generationCallbackQueueUrl) {
+    worker.registerQueueHandler('generationCallbackQueue', generationCallbackQueueUrl, generationCallbackDispatch, {
+      // Matches hosted's 2-minute visibilityTimeout (infra/queues.ts).
+      visibilityTimeoutSec: 120,
+      maxReceiveCount: GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
+    });
+  } else {
+    bootLogger.warn('generationCallbackQueue not configured; generation completion callbacks will not be delivered');
+  }
 
   // Background AI-tag suggestion, opted into per-batch on the create wizard. Optional
   // in the self-host manifest - a basic install that never set the env var simply never runs

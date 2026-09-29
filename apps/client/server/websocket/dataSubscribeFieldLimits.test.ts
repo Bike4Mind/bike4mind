@@ -15,6 +15,7 @@ describe('resolveFieldLimits', () => {
       'promptMeta.functionCalls.returnValue': false,
       'promptMeta.functionCalls.error': false,
       'promptMeta.citables.metadata.fullContext': false,
+      callback: false,
     });
   });
 
@@ -30,8 +31,12 @@ describe('resolveFieldLimits', () => {
     // The policy lives in @bike4mind/common; this branch must not grow a hand-maintained copy that
     // can drift from what the REST redaction enforces.
     expect(Object.keys(resolveFieldLimits('quests', opts()) ?? {}).sort()).toEqual(
-      [...OWNER_ONLY_PROMPT_META_PROJECTION_PATHS].sort()
+      [...OWNER_ONLY_PROMPT_META_PROJECTION_PATHS, 'callback'].sort()
     );
+  });
+
+  it('excludes the completion callback for a sharee, since a change stream ignores select: false', () => {
+    expect(resolveFieldLimits('quests', opts())).toMatchObject({ callback: false });
   });
 
   it('excludes password/stripeCustomerId/resetPasswordToken for the users collection', () => {
@@ -62,6 +67,7 @@ describe('resolveFieldLimits', () => {
       'promptMeta.functionCalls.returnValue': false,
       'promptMeta.functionCalls.error': false,
       'promptMeta.citables.metadata.fullContext': false,
+      callback: false,
     });
   });
 

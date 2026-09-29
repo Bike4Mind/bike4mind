@@ -14,15 +14,23 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
-const { mockValidate, mockFindById, mockRateLimit, mockQuestFindById, mockQuestSettle, mockSessionFindById } =
-  vi.hoisted(() => ({
-    mockValidate: vi.fn(),
-    mockFindById: vi.fn(),
-    mockRateLimit: vi.fn(),
-    mockQuestFindById: vi.fn(),
-    mockQuestSettle: vi.fn(),
-    mockSessionFindById: vi.fn(),
-  }));
+const {
+  mockValidate,
+  mockFindById,
+  mockRateLimit,
+  mockQuestFindById,
+  mockQuestSettle,
+  mockSessionFindById,
+  mockDispatchQuestCallback,
+} = vi.hoisted(() => ({
+  mockValidate: vi.fn(),
+  mockFindById: vi.fn(),
+  mockRateLimit: vi.fn(),
+  mockQuestFindById: vi.fn(),
+  mockQuestSettle: vi.fn(),
+  mockSessionFindById: vi.fn(),
+  mockDispatchQuestCallback: vi.fn(),
+}));
 
 const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Limit-Minute': '60',
@@ -40,6 +48,10 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+
+vi.mock('@server/generationCallback/dispatchQuestCallback', () => ({
+  dispatchQuestCallback: (...a: unknown[]) => mockDispatchQuestCallback(...a),
+}));
 
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
@@ -425,6 +437,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
 
     beforeEach(() => {
       mockQuestSettle.mockResolvedValue(true);
+      mockDispatchQuestCallback.mockResolvedValue(undefined);
     });
 
     it('recovers a stuck quest on GET and returns terminal status', async () => {
@@ -442,6 +455,16 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
         'quest-1',
         expect.objectContaining({ status: 'done', type: 'error' })
       );
+    });
+
+    it('dispatches the generation callback once a recovery write is actually applied', async () => {
+      mockQuestFindById.mockResolvedValue(stuckQuest());
+      ownedByJwtUser();
+
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockDispatchQuestCallback).toHaveBeenCalledWith('quest-1', expect.anything());
     });
 
     it('preserves content on a stuck quest that has replies', async () => {
@@ -477,6 +500,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().status).toBe('running');
       expect(mockQuestSettle).not.toHaveBeenCalled();
+      expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
     });
 
     it('does not re-recover an already-terminal quest', async () => {
@@ -488,6 +512,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().status).toBe('done');
       expect(mockQuestSettle).not.toHaveBeenCalled();
+      expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
     });
 
     it('works for API-key callers (the actual bug: headless API clients never got recovery)', async () => {
@@ -513,6 +538,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().status).toBe('running');
+      expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
     });
 
     it('still answers with the quest when the recovery write throws', async () => {
@@ -526,6 +552,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().status).toBe('running');
+      expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
     });
 
     it('does not let a sharee read write a terminal status onto the owner quest', async () => {
@@ -539,6 +566,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().status).toBe('running');
       expect(mockQuestSettle).not.toHaveBeenCalled();
+      expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
     });
   });
 

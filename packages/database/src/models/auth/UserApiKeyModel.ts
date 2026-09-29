@@ -10,6 +10,7 @@ import {
   IUserApiKeyRepository,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
+import { decryptAtRest, encryptAtRest } from '@bike4mind/utils/security';
 
 interface IUserApiKeyModel extends mongoose.Model<IUserApiKeyDocument> {}
 
@@ -178,6 +179,26 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     });
   }
 
+  async setCallbackSigningSecret(id: string, secret: string, createdAt: Date) {
+    await this.model.updateOne(
+      { _id: id },
+      { $set: { callbackSigningSecret: encryptAtRest(secret), callbackSigningSecretCreatedAt: createdAt } }
+    );
+  }
+
+  async findCallbackSigningSecret(id: string) {
+    const key = await this.model
+      .findById(id)
+      .select('+callbackSigningSecret userId status expiresAt')
+      .lean<Pick<IUserApiKeyDocument, 'callbackSigningSecret' | 'userId' | 'status' | 'expiresAt'>>()
+      .exec();
+    // decryptAtRest returns '' for ciphertext it cannot decrypt; treat that as "no secret" so a
+    // broken key rotation fails the delivery rather than signing with an empty key.
+    const secret = key?.callbackSigningSecret ? decryptAtRest(key.callbackSigningSecret) : '';
+    if (!key || !secret) return null;
+    return { secret, userId: key.userId, status: key.status, expiresAt: key.expiresAt };
+  }
+
   async updateBaseline(id: string, baseline: IUserApiKeyDocument['metadata']['baseline']) {
     await this.model.updateOne(
       { _id: id },
@@ -205,6 +226,10 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     revokedAt: { type: Date },
     revokedBy: { type: String },
     revokedReason: { type: String },
+    // Encrypted at rest; select: false keeps it out of every read (and out of the whole-doc
+    // update() writes rotate/revoke do) except findCallbackSigningSecret. See IUserApiKey.
+    callbackSigningSecret: { type: String, select: false },
+    callbackSigningSecretCreatedAt: { type: Date },
     rateLimit: {
       requestsPerMinute: { type: Number, required: true, default: 60 },
       requestsPerDay: { type: Number, required: true, default: 1000 },
@@ -294,6 +319,7 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
       transform: function (doc, ret: any) {
         // Never expose the keyHash in JSON responses
         delete ret.keyHash;
+        delete ret.callbackSigningSecret;
         return ret;
       },
     },

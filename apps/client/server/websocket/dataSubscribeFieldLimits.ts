@@ -18,6 +18,10 @@ import {
  * the exclusion for the session's own owner: the client cache merges a WS quest update as a
  * top-level spread (react-query.ts), so an unconditional exclusion replaced the owner's own
  * cached returnValue with nothing the moment any live update landed, not just a sharee's.
+ * `callback` (the API caller's completion-callback URL and signing key id) is `select: false` on
+ * QuestModel, which a change stream ignores, so it is dropped for a sharee here too. The owner is
+ * the caller who armed it, so their subscription keeps it rather than gaining its first
+ * projection (which would also start dropping any inclusion fields they send).
  *
  * organizations: the subscription streams raw org documents, so it has to reproduce what
  * `toSafeOrganization` applies on every REST path - it reads the same two field lists so the
@@ -27,6 +31,9 @@ import {
  * of every co-member org the same subscription happens to match. An owner's own billing contact
  * still reaches them through the access-gated REST GET.
  */
+/** Quest fields no session viewer but the owner should see; see the quests note above. */
+const QUEST_OWNER_ONLY_FIELDS = ['callback'] as const;
+
 export type FieldLimitOptions = {
   /** Passed in rather than hardcoded so a collection rename can't silently drop the exclusion. */
   questCollectionName: string;
@@ -45,7 +52,8 @@ export function resolveFieldLimits(
     return { password: false, stripeCustomerId: false, resetPasswordToken: false };
   }
   if (collectionName === questCollectionName && !isQuestOwner) {
-    return Object.fromEntries(OWNER_ONLY_PROMPT_META_PROJECTION_PATHS.map(path => [path, false]));
+    const excluded = [...OWNER_ONLY_PROMPT_META_PROJECTION_PATHS, ...QUEST_OWNER_ONLY_FIELDS];
+    return Object.fromEntries(excluded.map(path => [path, false]));
   }
   if (collectionName === organizationCollectionName) {
     const excluded = [...ORGANIZATION_SECRET_FIELDS, ...(isPlatformAdmin ? [] : ORGANIZATION_OWNER_ONLY_FIELDS)];

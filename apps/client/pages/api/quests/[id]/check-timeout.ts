@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import { resolveQuestTimeoutRecovery } from '@server/chatCompletion/questTimeoutRecovery';
+import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
 import type { Request } from 'express';
 
 const handler = baseApi().post(async (req: Request<{}, {}, {}, { id: string }>, res) => {
@@ -45,6 +46,8 @@ const handler = baseApi().post(async (req: Request<{}, {}, {}, { id: string }>, 
   if (!updatedQuest) {
     throw new NotFoundError('Quest not found');
   }
+  // A recovery settles the quest; same settle-site dispatch as the poll route's recovery.
+  await dispatchQuestCallback(quest.id, req.logger);
   return res.json(updatedQuest);
 });
 

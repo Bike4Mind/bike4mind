@@ -12,11 +12,13 @@ import {
   IUserApiKeyRepository,
 } from '@bike4mind/common';
 import { secureParameters, BadRequestError, ForbiddenError } from '@bike4mind/utils';
+import { encryptAtRest } from '@bike4mind/utils/security';
 import { randomBytes } from 'crypto';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { KEY_PREFIX_LENGTH } from './constants';
 import { API_KEY_RATE_LIMIT_DEFAULTS, apiKeyRateLimitSchema } from './rateLimit';
+import { generateCallbackSigningSecret } from './callbackSigningSecret';
 
 // Sanity ceiling for a per-embed-key spend cap, in whole credits - a guard against
 // fat-finger/overflow values, not a product limit. Shared with the spend-cap update
@@ -98,6 +100,8 @@ export interface CreateUserApiKeyResult {
   name: string;
   keyPrefix: string;
   key: string; // Only returned once during creation
+  /** Signs this key's generation completion callbacks. Only returned once, like `key`. */
+  callbackSigningSecret: string;
   scopes: ApiKeyScope[];
   status: ApiKeyStatus;
   expiresAt?: Date;
@@ -252,6 +256,7 @@ export const createUserApiKey = async (
   }
 
   const { key, keyPrefix, keyHash } = generateApiKey();
+  const callbackSigningSecret = generateCallbackSigningSecret();
 
   const rateLimit = params.rateLimit || API_KEY_RATE_LIMIT_DEFAULTS;
 
@@ -260,6 +265,8 @@ export const createUserApiKey = async (
     name: params.name,
     keyHash,
     keyPrefix,
+    callbackSigningSecret: encryptAtRest(callbackSigningSecret),
+    callbackSigningSecretCreatedAt: new Date(),
     scopes: params.scopes,
     status: ApiKeyStatus.ACTIVE,
     expiresAt: params.expiresAt,
@@ -287,6 +294,7 @@ export const createUserApiKey = async (
     name: apiKeyDocument.name,
     keyPrefix: apiKeyDocument.keyPrefix,
     key, // This is the only time the raw key is returned
+    callbackSigningSecret,
     scopes: apiKeyDocument.scopes,
     status: apiKeyDocument.status,
     expiresAt: apiKeyDocument.expiresAt,

@@ -4,6 +4,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ApiKeyScope } from '@bike4mind/common';
+import type { CreateUserApiKeyResponse, RotateCallbackSigningSecretResponse } from '@client/app/hooks/data/userApiKeys';
 import UserApiKeysTab from './UserApiKeysTab';
 
 /**
@@ -29,19 +30,48 @@ const revokedKey = {
   createdAt: new Date('2026-01-02'),
   revokedAt: new Date('2026-02-01'),
 };
+const keyWithSigningSecret = {
+  id: 'key-3',
+  name: 'Webhook key',
+  scopes: [ApiKeyScope.AI_CHAT],
+  status: 'active',
+  keyPrefix: 'b4m_live_def',
+  createdAt: new Date('2026-01-03'),
+  callbackSigningSecretCreatedAt: new Date('2026-02-15'),
+};
 
 const h = vi.hoisted(() => ({
   keys: [] as any[],
   deleteMutate: vi.fn(),
+  createResult: { key: 'b4m_live_newkey123' } as Partial<CreateUserApiKeyResponse>,
+  signingSecretMutate: vi.fn(),
+  signingSecretResult: {
+    id: 'key-1',
+    name: 'CI key',
+    callbackSigningSecret: 'whsec_rotated999',
+    callbackSigningSecretCreatedAt: new Date('2026-03-01'),
+  } as RotateCallbackSigningSecretResponse,
 }));
 
 vi.mock('@client/app/hooks/data/userApiKeys', () => ({
   useGetUserApiKeys: () => ({ data: h.keys, isLoading: false, error: null, refetch: vi.fn() }),
-  useCreateUserApiKey: () => ({ mutate: vi.fn(), isPending: false }),
+  useCreateUserApiKey: ({ onSuccess }: { onSuccess?: (result: Partial<CreateUserApiKeyResponse>) => void } = {}) => ({
+    mutate: () => onSuccess?.(h.createResult),
+    isPending: false,
+  }),
   useRotateUserApiKey: () => ({ mutate: vi.fn(), isPending: false }),
   useRevokeUserApiKey: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteUserApiKey: () => ({ mutate: h.deleteMutate, isPending: false }),
   useBillingOrganizations: () => ({ data: [], isLoading: false }),
+  useRotateCallbackSigningSecret: ({
+    onSuccess,
+  }: { onSuccess?: (result: RotateCallbackSigningSecretResponse) => void } = {}) => ({
+    mutate: (keyId: string) => {
+      h.signingSecretMutate(keyId);
+      onSuccess?.(h.signingSecretResult);
+    },
+    isPending: false,
+  }),
 }));
 
 vi.mock('@client/app/hooks/useCopyToClipboard', () => ({
@@ -60,6 +90,8 @@ describe('UserApiKeysTab - revoked keys', () => {
   beforeEach(() => {
     h.keys = [];
     h.deleteMutate.mockClear();
+    h.createResult = { key: 'b4m_live_newkey123' };
+    h.signingSecretMutate.mockClear();
   });
 
   it('hides revoked rows by default and counts them on the toggle', () => {
@@ -118,5 +150,79 @@ describe('UserApiKeysTab - revoked keys', () => {
 
     fireEvent.click(screen.getByTestId('confirmation-confirm-btn'));
     expect(h.deleteMutate).toHaveBeenCalledWith('key-2');
+  });
+});
+
+/**
+ * The callback signing secret half of the table: per-key create/rotate action,
+ * plus the one-time reveal shown after minting a key or its signing secret.
+ */
+describe('UserApiKeysTab - callback signing secret', () => {
+  beforeEach(() => {
+    h.keys = [];
+    h.deleteMutate.mockClear();
+    h.createResult = { key: 'b4m_live_newkey123' };
+    h.signingSecretMutate.mockClear();
+  });
+
+  it('shows the signing secret in the one-time display after creating a key', () => {
+    h.createResult = { key: 'b4m_live_newkey123', callbackSigningSecret: 'whsec_fresh123' };
+    h.keys = [activeKey];
+    renderTab();
+
+    fireEvent.click(screen.getByText('Create API Key'));
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'New key' },
+    });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+
+    expect(screen.getByText('Callback Signing Secret')).toBeInTheDocument();
+    expect(screen.getByText(/X-Webhook-Signature-256/)).toBeInTheDocument();
+  });
+
+  it('does not render a signing secret block when the create response lacks one', () => {
+    h.createResult = { key: 'b4m_live_newkey123' };
+    h.keys = [activeKey];
+    renderTab();
+
+    fireEvent.click(screen.getByText('Create API Key'));
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'New key' },
+    });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+
+    expect(screen.queryByText('Callback Signing Secret')).not.toBeInTheDocument();
+  });
+
+  it('offers "Create signing secret" for a key without one and "Rotate signing secret" for a key with one', () => {
+    h.keys = [activeKey, keyWithSigningSecret];
+    renderTab();
+
+    expect(screen.getByTestId('api-key-signing-secret-action-key-1')).toHaveTextContent('Create signing secret');
+    expect(screen.getByTestId('api-key-signing-secret-action-key-3')).toHaveTextContent('Rotate signing secret');
+    expect(screen.getByTestId('api-key-signing-secret-status-key-1')).toHaveTextContent('No signing secret');
+    expect(screen.getByTestId('api-key-signing-secret-status-key-3')).toHaveTextContent('Signing secret: created');
+  });
+
+  it('mints a signing secret immediately and shows it once for a key without one', () => {
+    h.keys = [activeKey];
+    renderTab();
+
+    fireEvent.click(screen.getByTestId('api-key-signing-secret-action-key-1'));
+
+    expect(h.signingSecretMutate).toHaveBeenCalledWith('key-1');
+    expect(screen.getByText('Signing secret ready for CI key')).toBeInTheDocument();
+  });
+
+  it('requires confirmation before rotating an existing signing secret', () => {
+    h.keys = [keyWithSigningSecret];
+    renderTab();
+
+    fireEvent.click(screen.getByTestId('api-key-signing-secret-action-key-3'));
+    expect(h.signingSecretMutate).not.toHaveBeenCalled();
+    expect(screen.getByTestId('confirmation-dialog')).toHaveTextContent('Webhook key');
+
+    fireEvent.click(screen.getByTestId('confirmation-confirm-btn'));
+    expect(h.signingSecretMutate).toHaveBeenCalledWith('key-3');
   });
 });

@@ -5,6 +5,7 @@ import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 import { GenerateImageRequestBodySchema } from '../../llm';
 import { ApiErrorSchema } from '../../schemas/chat';
 import { GenerateImageResponseSchema, ImageQuestSchema } from '../../schemas/imageApi';
+import { GENERATION_CALLBACK_DESCRIPTION } from '../../schemas/generationCallback';
 
 /** Shared by generateImage and editImage: both hand off to the same quest poll. */
 export const imageQuestPollResult = {
@@ -45,7 +46,8 @@ export const generateImageContract = defineEndpoint({
     '`referenceImageFabFileIds` (gpt-image models only) passes up to 4 already-uploaded images as style ' +
     'anchors, after the input image taken from `fabFileIds`. Credits are checked when the render runs, so ' +
     'insufficient credits arrive on the polled quest rather than as a 422. `POST /api/ai/generate-image` ' +
-    'is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.',
+    'is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
+    GENERATION_CALLBACK_DESCRIPTION,
   tags: ['Images'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_GENERATE],

@@ -862,6 +862,18 @@ describe('ImageEditService.invoke (retry quest bound to its session)', () => {
     await invoke();
     expect(update).toHaveBeenCalled();
   });
+
+  it('settles the quest as a done error when the process fails to start', async () => {
+    const { invoke, update, startImageEditProcess } = makeInvokeService('session1');
+    startImageEditProcess.mockRejectedValueOnce(new Error('queue unavailable'));
+    await invoke();
+    expect(update).toHaveBeenLastCalledWith({
+      id: 'quest1',
+      type: 'error',
+      status: 'done',
+      reply: 'queue unavailable',
+    });
+  });
 });
 
 describe('ImageEditService quest partial writes', () => {

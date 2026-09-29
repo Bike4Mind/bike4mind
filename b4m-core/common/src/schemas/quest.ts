@@ -21,6 +21,8 @@ export const QuestPollResponseSchema = ChatQuestPollResultSchema.extend({
   status: z.enum(['pending', 'running', 'done', 'stopped']).optional(),
   sessionId: z.string(),
   images: z.array(z.string()),
+  // Rendered-video basenames; resolved into `files` alongside `images`.
+  videos: z.array(z.string()),
   files: z.array(GeneratedFileSchema),
   // Loose: tool payloads are a heterogeneous union with no shared Zod shape.
   toolPayloads: z.array(z.unknown()),

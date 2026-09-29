@@ -245,10 +245,13 @@ export class VideoGenerationService {
       }
 
       quest.type = 'error';
+      quest.status = 'done';
       quest.reply = errorMessage;
       // Write only the fields this error path sets, not the whole stale quest: this catch can run
       // after the success-path update above, and a whole-doc write would clobber that update.
-      await this.db.quests.update({ id: quest.id, type: quest.type, reply: quest.reply });
+      // `status` settles the quest like process()'s own catch does, so a poller (and an armed
+      // completion callback) sees a terminal failure instead of a quest stuck in flight.
+      await this.db.quests.update({ id: quest.id, type: quest.type, status: quest.status, reply: quest.reply });
     }
 
     return quest;

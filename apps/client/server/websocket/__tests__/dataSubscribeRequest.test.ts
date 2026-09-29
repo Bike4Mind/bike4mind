@@ -28,7 +28,10 @@ vi.mock('@bike4mind/common', async importOriginal => ({
  * go red when the projection grew citables.metadata.fullContext. A new owner-only path now lands
  * in both expectations for free.
  */
-const expectedQuestExclusions = Object.fromEntries(OWNER_ONLY_PROMPT_META_PROJECTION_PATHS.map(path => [path, false]));
+const expectedQuestExclusions = {
+  ...Object.fromEntries(OWNER_ONLY_PROMPT_META_PROJECTION_PATHS.map(path => [path, false])),
+  callback: false,
+};
 
 const mockFindModelByCollectionName = vi.fn();
 const mockQuerySubscriptionFindOneAndUpdate = vi.fn();

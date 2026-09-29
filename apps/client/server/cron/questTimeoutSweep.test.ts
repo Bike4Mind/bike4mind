@@ -3,13 +3,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockFindStaleRunning = vi.fn();
 const mockSettleIfUnfinished = vi.fn();
 const mockConnectDB = vi.fn();
+const mockFindUndispatchedCallbacks = vi.fn();
+const mockDispatchQuestCallback = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   connectDB: (...args: unknown[]) => mockConnectDB(...args),
   questRepository: {
     findStaleRunning: (...args: unknown[]) => mockFindStaleRunning(...args),
     settleIfUnfinished: (...args: unknown[]) => mockSettleIfUnfinished(...args),
+    findUndispatchedCallbacks: (...args: unknown[]) => mockFindUndispatchedCallbacks(...args),
   },
+}));
+
+vi.mock('@server/generationCallback/dispatchQuestCallback', () => ({
+  dispatchQuestCallback: (...args: unknown[]) => mockDispatchQuestCallback(...args),
 }));
 
 vi.mock('@bike4mind/observability', () => {
@@ -64,6 +71,8 @@ describe('questTimeoutSweep cron', () => {
     mockFindStaleRunning.mockResolvedValue([]);
     mockSettleIfUnfinished.mockResolvedValue(true);
     mockConnectDB.mockResolvedValue(undefined);
+    mockFindUndispatchedCallbacks.mockResolvedValue([]);
+    mockDispatchQuestCallback.mockResolvedValue(undefined);
   });
 
   it('returns zero recovered when no stuck quests exist', async () => {
@@ -98,6 +107,7 @@ describe('questTimeoutSweep cron', () => {
       'q-1',
       expect.objectContaining({ status: 'done', type: 'error' })
     );
+    expect(mockDispatchQuestCallback).toHaveBeenCalledWith('q-1', expect.anything());
   });
 
   it('recovers a stuck quest with content as unfinished, never as an error', async () => {
@@ -204,5 +214,39 @@ describe('questTimeoutSweep cron', () => {
     expect(mockSettleIfUnfinished).toHaveBeenCalledWith('q-1', expect.objectContaining({ status: 'done' }));
     expect(mockConnectDB).not.toHaveBeenCalled();
     expect(mockEmitMetric).not.toHaveBeenCalled();
+  });
+
+  it('runs the callback backstop even when no quest is stuck, redispatching each id', async () => {
+    // The steady-state tick: nothing to recover. The backstop must still run, since a missed
+    // callback is independent of timeout recovery.
+    mockFindStaleRunning.mockResolvedValue([]);
+    mockFindUndispatchedCallbacks.mockResolvedValue(['q-x', 'q-y']);
+
+    await handler();
+
+    expect(mockFindUndispatchedCallbacks).toHaveBeenCalledTimes(1);
+    const [opts] = mockFindUndispatchedCallbacks.mock.calls[0];
+    expect(opts.limit).toBe(100);
+
+    const now = Date.now();
+    const graceMs = 2 * 60 * 1000;
+    expect(now - opts.settledBefore.getTime()).toBeGreaterThanOrEqual(graceMs);
+    expect(now - opts.settledBefore.getTime()).toBeLessThan(graceMs + 60_000);
+
+    expect(mockDispatchQuestCallback).toHaveBeenCalledTimes(2);
+    expect(mockDispatchQuestCallback).toHaveBeenCalledWith('q-x', expect.anything());
+    expect(mockDispatchQuestCallback).toHaveBeenCalledWith('q-y', expect.anything());
+  });
+
+  it('does not fail the sweep when the callback backstop read fails', async () => {
+    mockFindStaleRunning.mockResolvedValue([staleQuest({ id: 'q-not-applied' })]);
+    mockSettleIfUnfinished.mockResolvedValue(false);
+    mockFindUndispatchedCallbacks.mockRejectedValue(new Error('cannot reach primary'));
+
+    const result = await handler();
+
+    expect(result).toEqual({ status: 'OK', recovered: 0 });
+    expect(mockFindUndispatchedCallbacks).toHaveBeenCalledTimes(1);
+    expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
   });
 });

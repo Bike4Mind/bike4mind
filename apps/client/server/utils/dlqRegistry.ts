@@ -43,6 +43,12 @@ const DLQ_REGISTRY = [
     sourceQueue: 'imageEditQueue',
   },
   {
+    label: 'generation-callback',
+    displayName: 'Generation Callback',
+    application: 'ImageGeneration',
+    sourceQueue: 'generationCallbackQueue',
+  },
+  {
     label: 'data-lake-research',
     displayName: 'Data Lake Research Run',
     application: 'DataLakeManagement',

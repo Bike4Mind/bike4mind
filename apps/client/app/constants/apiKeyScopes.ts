@@ -54,6 +54,7 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     endpoints: [
       'POST /api/v1/image-generations',
       'POST /api/v1/image-edits',
+      'POST /api/v1/video-generations',
       'POST /api/v1/embeddings',
       'GET /api/v1/quests/:id',
     ],

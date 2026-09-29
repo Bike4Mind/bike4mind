@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { KEY_PREFIX_LENGTH } from './constants';
 import { resolveOwnedApiKey } from './resolveOwnedApiKey';
+import { generateCallbackSigningSecret } from './callbackSigningSecret';
 
 const rotateUserApiKeySchema = z.object({
   keyId: z.string(),
@@ -32,6 +33,12 @@ export interface RotateUserApiKeyResult {
   key: string; // Only returned once during rotation
   /** Set only when rotation re-owned the key; the user it belonged to before. */
   previousOwnerUserId?: string;
+  /**
+   * Set only on a re-own: the fresh completion-callback signing secret, since the previous
+   * owner knew the old one and could otherwise forge callbacks to the new owner's receiver.
+   * Only returned once, like `key`.
+   */
+  callbackSigningSecret?: string;
 }
 
 /**
@@ -129,11 +136,16 @@ export const rotateUserApiKey = async (
 
   await db.userApiKeys.update({ id: apiKey.id, keyHash, keyPrefix, ...(reOwned ? { userId } : {}) });
 
+  const callbackSigningSecret = reOwned ? generateCallbackSigningSecret() : undefined;
+  if (callbackSigningSecret) {
+    await db.userApiKeys.setCallbackSigningSecret(apiKey.id, callbackSigningSecret, new Date());
+  }
+
   return {
     id: apiKey.id,
     name: apiKey.name,
     keyPrefix: apiKey.keyPrefix,
     key, // This is the only time the raw key is returned
-    ...(reOwned ? { previousOwnerUserId } : {}),
+    ...(reOwned ? { previousOwnerUserId, callbackSigningSecret } : {}),
   };
 };

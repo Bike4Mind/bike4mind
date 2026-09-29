@@ -109,7 +109,7 @@ describe('VideoGenerationService.invoke (retry quest bound to its session)', () 
     await invoke();
     const calls = update.mock.calls as unknown[][];
     const errorWrite = calls.find(c => (c[0] as { type?: string }).type === 'error');
-    expect(errorWrite?.[0]).toStrictEqual({ id: 'quest1', type: 'error', reply: 'queue down' });
+    expect(errorWrite?.[0]).toStrictEqual({ id: 'quest1', type: 'error', status: 'done', reply: 'queue down' });
   });
 });
 
