@@ -177,6 +177,7 @@ import {
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
 import { vetPreauthorizedLakeIds } from './vetPreauthorizedLakeIds';
+import { vetReaderConsentDatalakeTags } from './vetReaderConsentDatalakeTags';
 import {
   unionPreauthorizedLakeAccess,
   type ResolvedLakeAccessSetWithAdmissions,
@@ -2177,7 +2178,8 @@ export class ChatCompletionProcess {
         session.citationStyle,
         toRetrievalFilter(session),
         session.lakeScopeExplicit,
-        vettedPreauthorizedLakeIds
+        vettedPreauthorizedLakeIds,
+        vetReaderConsentDatalakeTags(session, this.user.id)
       );
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Optimized features built (${optimizedFeatureList.join(', ')}) in ${
@@ -2858,6 +2860,9 @@ export class ChatCompletionProcess {
         suppressLakeArms: this.personalCorpusOnly,
         // Narrows the knowledge tools' lake access to the lake this session is FOR.
         sessionRetrievalTags: session.retrievalTags,
+        // Owner-vetted separately from the (unvetted) scope above - a share or teammate reply must
+        // not inherit the owner's consent to the reader opt-in prompt-injection arm.
+        sessionReaderConsentDatalakeTags: vetReaderConsentDatalakeTags(session, this.user.id),
         sessionLakeScopeExplicit: session.lakeScopeExplicit,
         sessionPreauthorizedLakeIds: vetPreauthorizedLakeIds(session, this.user.id),
         logger: this.logger,
@@ -6420,7 +6425,9 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     retrievalFilter?: RetrievalExclusionOptions,
     lakeScopeExplicit?: boolean,
     /** Already vetted against the request's authenticated principal by the caller - see ChatCompletionProcess's call site. */
-    preauthorizedLakeIds?: string[]
+    preauthorizedLakeIds?: string[],
+    /** Already vetted against the request's authenticated principal by the caller (vetReaderConsentDatalakeTags). */
+    readerConsentDatalakeTags?: string[]
   ) {
     const adminSettingsEnableMementos = getSettingsValue('EnableMementos', adminSettings);
     const adminSettingsEnableQuestMaster = getSettingsValue('EnableQuestMaster', adminSettings);
@@ -6538,7 +6545,8 @@ When using tools that require file IDs (like edit_image), use the ID shown above
           citationStyle,
           retrievalFilter,
           preauthorizedLakeIds,
-          lakeScopeExplicit
+          lakeScopeExplicit,
+          readerConsentDatalakeTags
         )
       );
 

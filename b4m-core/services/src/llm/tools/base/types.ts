@@ -232,10 +232,21 @@ export interface ToolContext {
    * access to the lake(s) this session is FOR, so a session created for one lake stops searching
    * every lake its owner can reach. Purely subtractive - see narrowLakeAccessToSession, which also
    * documents why the prefix buckets are filtered rather than rebuilt. Absent = unscoped; EMPTY is
-   * decided by the sidecar below, not by this field. Also the reader's consent for the lake-prompt
-   * READER OPT-IN arm (see getAccessibleDataLakePrompts), which widens prompt trust but never file access.
+   * decided by the sidecar below, not by this field. File-access scoping only - NOT the reader
+   * opt-in arm's consent input; see sessionReaderConsentDatalakeTags for that.
    */
   sessionRetrievalTags?: string[];
+  /**
+   * Owner-vetted subset of `sessionRetrievalTags` - the reader's consent for the lake-prompt READER
+   * OPT-IN arm (see getAccessibleDataLakePrompts), which widens prompt-injection trust but never
+   * file access. Deliberately a SEPARATE field from `sessionRetrievalTags` rather than a reuse of
+   * it: that one must stay populated for a non-owner request (a share, a teammate reply) so
+   * retrieval scoping keeps working, while consent must NOT - a request acting on someone else's
+   * session must not inherit the owner's consent to inject that lake's prompt. Populated only when
+   * the acting principal IS the session owner (see vetReaderConsentDatalakeTags); absent otherwise,
+   * which is what keeps the opt-in arm from firing.
+   */
+  sessionReaderConsentDatalakeTags?: string[];
   /**
    * `session.lakeScopeExplicit` - the sidecar that makes an EMPTY `sessionRetrievalTags` above
    * mean "grounds on no lake" rather than "expressed no lake opinion". Without it the two are the

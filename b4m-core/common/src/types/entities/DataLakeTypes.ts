@@ -315,11 +315,16 @@ export interface IDataLake {
   systemPrompt?: string;
   /**
    * Manager-set opt-in: `systemPrompt` also steers a READER who reaches the lake by its
-   * `requiredUserTag` / `requiredEntitlement`, but only on a session that explicitly scopes to this
-   * lake (`lakeScope` or `dataLakeId`). The session scope is the reader's own consent, so an opted-in
-   * lake can never steer a turn that merely happened to retrieve from it - see the READER OPT-IN
-   * arm in getAccessibleDataLakePrompts. Reader-visible, so a reader can see a prompt is active.
-   * Has no effect on a lake with no tag/entitlement gate. Absent = false.
+   * `requiredUserTag` / `requiredEntitlement`, but only on a session scoped to this lake
+   * (`session.retrievalTags`). That scope is produced any of several ways: the `lakeScope` picker
+   * or a `dataLakeId` create seed at session creation, a direct write of `retrievalTags` (session
+   * update), or derivation from a lake file attached to an otherwise-unscoped session - attaching
+   * one of the lake's files counts as consent too. It is always the session OWNER's scope, honored
+   * only on the owner's own turns (never a share's or a teammate's) - so an opted-in lake can never
+   * steer a turn that merely happened to retrieve from it, or a turn acting on someone else's
+   * session - see the READER OPT-IN arm in getAccessibleDataLakePrompts. Reader-visible, so a
+   * reader can see a prompt is active. Has no effect on a lake with no tag/entitlement gate.
+   * Absent = false.
    */
   injectPromptForReaders?: boolean;
   /**

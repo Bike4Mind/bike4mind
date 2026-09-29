@@ -72,6 +72,24 @@ describe('prependRetrievedLakePrompts', () => {
     });
   });
 
+  it('records a present-and-empty array when the tool result carried no datalake-tagged files at all', async () => {
+    const context = makeContext();
+    const result = await prependRetrievedLakePrompts(context, 'result text', [], new Set());
+
+    expect(result).toBe('result text');
+    expect(getAccessibleDataLakePromptsMock).not.toHaveBeenCalled();
+    expect(context.statusUpdate).toHaveBeenCalledWith({
+      promptMeta: {
+        retrieval: {
+          attempted: true,
+          surfaces: [],
+          dataLakeTags: [],
+          injectedLakePromptIds: [],
+        },
+      },
+    });
+  });
+
   it('does not call statusUpdate when every tag was already injected this tool', async () => {
     const context = makeContext();
     const result = await prependRetrievedLakePrompts(
@@ -112,17 +130,20 @@ describe('prependRetrievedLakePrompts', () => {
     expect(result).toContain('Sales playbook.');
   });
 
-  it('forwards sessionRetrievalTags as sessionScopedDatalakeTags into the injection call', async () => {
+  it('forwards sessionReaderConsentDatalakeTags as readerConsentDatalakeTags, from the SESSION scope not the retrieved tags', async () => {
     getAccessibleDataLakePromptsMock.mockResolvedValueOnce([
       { id: 'reader1', name: 'Reader Lake', systemPrompt: 'Reader prompt.', admittedByReaderOptIn: true },
     ]);
-    const context = makeContext({ sessionRetrievalTags: ['datalake:reader1'] });
+    // The session's consent scope names an extra lake ('datalake:other') this call never retrieved -
+    // proving the resolver is handed the session's declared scope verbatim, not the `fresh`
+    // retrieved-tag list this call actually returned.
+    const context = makeContext({ sessionReaderConsentDatalakeTags: ['datalake:reader1', 'datalake:other'] });
     await prependRetrievedLakePrompts(context, 'result text', ['datalake:reader1'], new Set());
 
     expect(getAccessibleDataLakePromptsMock).toHaveBeenCalledWith(context, {
       restrictToDatalakeTags: ['datalake:reader1'],
       preauthorizedLakeIds: undefined,
-      sessionScopedDatalakeTags: ['datalake:reader1'],
+      readerConsentDatalakeTags: ['datalake:reader1', 'datalake:other'],
     });
   });
 
@@ -131,7 +152,7 @@ describe('prependRetrievedLakePrompts', () => {
       { id: 'reader1', name: 'Reader Lake', systemPrompt: 'Reader prompt.', admittedByReaderOptIn: true },
       { id: 'ordinary', name: 'Ordinary Lake', systemPrompt: 'Ordinary.' },
     ]);
-    const context = makeContext({ sessionRetrievalTags: ['datalake:reader1'] });
+    const context = makeContext({ sessionReaderConsentDatalakeTags: ['datalake:reader1'] });
     await prependRetrievedLakePrompts(context, 'result text', ['datalake:reader1', 'datalake:ordinary'], new Set());
 
     expect(context.statusUpdate).toHaveBeenCalledWith({

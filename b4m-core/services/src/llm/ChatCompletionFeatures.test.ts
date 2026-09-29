@@ -32,6 +32,22 @@ vi.mock('../mementoService', async importOriginal => ({
   getRelevantMementos: getRelevantMementosMock,
 }));
 
+// Spy that KEEPS the real implementation - the reader opt-in tests below assert on the literal
+// options object this call site passes (including readerConsentDatalakeTags), which an outcome-only
+// assertion cannot pin: a resolver that quietly derived consent from something else could still
+// admit the same lake and pass every outcome check.
+const getAccessibleDataLakePromptsSpy = vi.hoisted(() => vi.fn());
+vi.mock('../dataLakeService/getDataLakePrompts', async importOriginal => {
+  const actual = await importOriginal<typeof import('../dataLakeService/getDataLakePrompts')>();
+  return {
+    ...actual,
+    getAccessibleDataLakePrompts: (...args: Parameters<typeof actual.getAccessibleDataLakePrompts>) => {
+      getAccessibleDataLakePromptsSpy(...args);
+      return actual.getAccessibleDataLakePrompts(...args);
+    },
+  };
+});
+
 const makeQuest = (overrides: Partial<IChatHistoryItemDocument> = {}): IChatHistoryItemDocument =>
   ({
     id: 'quest1',
@@ -2494,13 +2510,22 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
         systemPrompt: 'Reader-visible prompt.',
       });
 
-    it('forwards the retrievalTags ctor arg as sessionScopedDatalakeTags, admitting + recording the opt-in arm', async () => {
+    it('forwards the ctor readerConsentDatalakeTags arg into the injection call, admitting + recording the opt-in arm', async () => {
       const quest = makeQuest();
       const ctx = makeCtx([lakeFile('fA', 'datalake:x')], [makeReaderLake()]);
       ctx.user.tags = ['reader-team'];
+      getAccessibleDataLakePromptsSpy.mockClear();
       const feature = new KnowledgeRetrievalFeature(
         ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
-        ['datalake:x']
+        ['datalake:x'],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        // An extra tag for a lake this call never retrieved from - proves the resolver receives the
+        // constructor's OWN consent arg verbatim, not a derivation from retrievalTags/the retrieved
+        // datalakeTags list.
+        ['datalake:x', 'datalake:never-retrieved']
       );
       await feature.getContextMessages(
         quest,
@@ -2509,16 +2534,24 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
       );
       expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual(['lakeX']);
       expect(quest.promptMeta?.retrieval?.readerOptInLakeIdsUsed).toEqual(['lakeX']);
+      expect(getAccessibleDataLakePromptsSpy).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          readerConsentDatalakeTags: ['datalake:x', 'datalake:never-retrieved'],
+        })
+      );
     });
 
-    it('does NOT admit the reader opt-in arm when the session is not explicitly scoped to the lake', async () => {
+    it('does NOT admit the reader opt-in arm when the session grants no consent, even with retrievalTags set', async () => {
       const quest = makeQuest();
       const ctx = makeCtx([lakeFile('fA', 'datalake:x')], [makeReaderLake()]);
       ctx.user.tags = ['reader-team'];
-      // No retrievalTags ctor arg here - the caller holds the gate tag and the file grounds on the
-      // lake, but the caller's own session never named it, so sessionScopedDatalakeTags is empty.
+      // retrievalTags (scoping) is set, but the readerConsentDatalakeTags ctor arg (consent) is
+      // not - proving the two are independent: scoping retrieval to this lake is not, by itself,
+      // consent to inject its prompt (see ToolContext.sessionReaderConsentDatalakeTags).
       const feature = new KnowledgeRetrievalFeature(
-        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:x']
       );
       await feature.getContextMessages(
         quest,

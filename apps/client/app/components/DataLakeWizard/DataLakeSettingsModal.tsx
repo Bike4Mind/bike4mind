@@ -528,7 +528,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
             <FormHelperText data-testid="datalake-reader-prompt-toggle-help" sx={{ mt: 0 }}>
               {requiredUserTag.trim() || requiredEntitlement.trim()
                 ? 'Also apply the system prompt for users who reach this lake by its access tag or entitlement, ' +
-                  "but only in chats they've scoped to this lake. They can see that it's on, but can't read the text."
+                  "but only in chats they've scoped to this lake. They can't read the text."
                 : 'Has no effect until this lake has an access tag or required entitlement.'}
             </FormHelperText>
           </Box>

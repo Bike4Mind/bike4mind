@@ -251,12 +251,19 @@ async function injectionSupersededOwnLakeIds(context: DataLakeAccessContext, use
  *
  * READER OPT-IN ARM: a reader who reaches a lake by its `requiredUserTag` / `requiredEntitlement`
  * is trusted for its prompt when the lake sets `injectPromptForReaders` AND the caller's session
- * names the lake in `sessionScopedDatalakeTags` (its `retrievalTags` - set by `lakeScope`, or seeded
- * by a `dataLakeId` create). The session-scope conjunct is the load-bearing one: a lake's gate tag is
- * chosen by its owner and the tag arm crosses orgs, so without it one owner could steer every holder
- * of a common tag whose retrieval happened to rank a chunk of theirs. A gateless lake never qualifies
- * (`lakeMatchesAccess` admits it to everyone), and the tag is screened for well-formedness like the
- * grant arm's, so a shadowing row cannot ride a reader's consent to the registry lake it shadows.
+ * names the lake in `readerConsentDatalakeTags` (`session.retrievalTags`, but ALWAYS the session
+ * OWNER's - see the option's JSDoc and vetReaderConsentDatalakeTags, which is what keeps a share or
+ * teammate reply from inheriting an owner's consent). That scope is produced any of several ways -
+ * the `lakeScope` picker or a `dataLakeId` create seed at session creation, a direct
+ * `retrievalTags` write, or derivation from a lake file attached to an otherwise-unscoped session
+ * (attaching one of the lake's files counts as consent too). The session-scope conjunct is the
+ * load-bearing one: a lake's gate tag is chosen by its owner and the tag arm crosses orgs, so
+ * without it one owner could steer every holder of a common tag whose retrieval happened to rank a
+ * chunk of theirs. A gateless lake never qualifies (`lakeMatchesAccess` admits it to everyone). The
+ * well-formedness check here is SELF-consistency only (the row's own tag matches what its own
+ * slug/org would mint) - it is the loop-level reservedRegistryTags check above that screens out a
+ * row shadowing a registry lake's tag, so a shadowing row cannot ride a reader's consent to the
+ * registry lake it shadows.
  */
 export async function getAccessibleDataLakePrompts(
   // The re-check slice is intersected here rather than added to DataLakeAccessContext because only
@@ -266,8 +273,11 @@ export async function getAccessibleDataLakePrompts(
   options?: {
     restrictToDatalakeTags?: Iterable<string>;
     preauthorizedLakeIds?: Iterable<string>;
-    /** The session's explicit lake scope (`retrievalTags`) - the reader's consent for the opt-in arm. */
-    sessionScopedDatalakeTags?: Iterable<string>;
+    /**
+     * The session's declared lake scope (`retrievalTags`), never the retrieved subset - the
+     * reader's consent for the opt-in arm.
+     */
+    readerConsentDatalakeTags?: Iterable<string>;
   }
 ): Promise<DataLakePrompt[]> {
   // Normalize the scope once. An EMPTY (but present) restrict set means "this turn retrieved no
@@ -275,7 +285,7 @@ export async function getAccessibleDataLakePrompts(
   const restrictTags = options?.restrictToDatalakeTags ? new Set(options.restrictToDatalakeTags) : undefined;
   if (restrictTags && restrictTags.size === 0) return [];
   const preauthorizedIds = options?.preauthorizedLakeIds ? new Set(options.preauthorizedLakeIds) : undefined;
-  const sessionScopedTags = new Set(options?.sessionScopedDatalakeTags ?? []);
+  const readerConsentTags = new Set(options?.readerConsentDatalakeTags ?? []);
 
   const userTags = context.user.tags || [];
   const entitlementKeys = context.entitlementKeys ?? [];
@@ -411,12 +421,11 @@ export async function getAccessibleDataLakePrompts(
     //     browse gate) and the injection trust, so it has to bypass the grant-blind
     //     `lakeMatchesAccess` as well as `isTrustedForInjection` (see GRANT ARM).
     if (stillManagedPreauthorizedIds?.has(lake.id)) return 'trusted';
-    // Well-formedness mirrors the SAME screen retrieval puts on its grant restoration
-    // (getDynamicDataLakeAccess's grantedGatedLakes). Without it a granted row whose
-    // datalakeTag shadows a registry lake's could inject on a turn that retrieved the
-    // REGISTRY lake's files - retrieval drops such a row, and injection must not be a
-    // superset of retrieval. Needs a legacy shadowing row to reach, so this is
-    // defense-in-depth, not a live repro.
+    // Well-formedness here is SELF-consistency (mirrors the same screen retrieval puts on its
+    // grant restoration, getDynamicDataLakeAccess's grantedGatedLakes): the row's own tag matches
+    // what its own slug/org would mint. It is the loop-level reservedRegistryTags check, not this
+    // one, that catches a row whose tag shadows a DIFFERENT (registry) lake's - see that check's
+    // comment. Kept here too as defense-in-depth against a legacy malformed row.
     if (grantedLakeIds.has(lake.id) && isDatalakeTagWellFormed(lake)) return 'trusted';
     if (!lakeMatchesAccess(lake, normalizedTags, normalizedKeys)) return undefined;
     if (isTrustedForInjection(lake, { userId, organizationIds, supersededOwnLakeIds })) return 'trusted';
@@ -425,7 +434,7 @@ export async function getAccessibleDataLakePrompts(
     if (
       lake.injectPromptForReaders === true &&
       declaresGate &&
-      sessionScopedTags.has(lake.datalakeTag) &&
+      readerConsentTags.has(lake.datalakeTag) &&
       isDatalakeTagWellFormed(lake)
     ) {
       return 'readerOptIn';
@@ -433,12 +442,20 @@ export async function getAccessibleDataLakePrompts(
     return undefined;
   };
 
+  // A DB lake whose datalakeTag shadows a static registry lake's must never inject, mirroring
+  // isShadowedRegistryTag in getDynamicDataLakeTags.ts (~line 694-699), which drops such a row
+  // outright for retrieval - injection must not be a superset of retrieval.
+  const reservedRegistryTags = new Set(DATA_LAKES.map(dl => dl.datalakeTag));
+
   const dbPrompts: DataLakePrompt[] = [];
   for (const lake of lakes) {
     // Retrieval scope: keep only lakes this turn actually used. `datalakeTag` is the exact string a
     // lake's files carry, so this is a precise lake<->retrieval match, not a prefix. An unconditional
     // conjunct on EVERY arm, so no arm ever injects a prompt the turn did not actually retrieve.
     if (restrictTags && !restrictTags.has(lake.datalakeTag)) continue;
+    // Unconditional, like the retrieval-scope check above: a shadowing row must never inject,
+    // regardless of which arm would otherwise admit it.
+    if (reservedRegistryTags.has(lake.datalakeTag)) continue;
     const arm = admissionArm(lake);
     if (!arm) continue;
     dbPrompts.push({

@@ -335,6 +335,28 @@ describe('getAccessibleDataLakePrompts', () => {
       expect(await getAccessibleDataLakePrompts(asCurator('reader'))).toEqual([]);
     });
 
+    /**
+     * BLOCKER regression, grant-arm variant: a granted lake whose datalakeTag shadows a static
+     * registry lake's must never inject either - the loop-level reservedRegistryTags check runs
+     * unconditionally, ahead of every arm including this one.
+     */
+    it('does NOT inject for a granted lake whose datalakeTag shadows a registry lake', async () => {
+      const SHADOW_REGISTRY: DataLakeConfig = {
+        id: 'test-only-shadow-registry-grant',
+        slug: 'test-only-shadow-registry-grant',
+        name: 'Shadow Registry Lake (grant)',
+        fileTagPrefix: 'shadowreggrant:',
+        datalakeTag: sharedLake.datalakeTag,
+      };
+      DATA_LAKES.push(SHADOW_REGISTRY);
+      try {
+        expect(await getAccessibleDataLakePrompts(asCurator('curator'))).toEqual([]);
+      } finally {
+        const idx = DATA_LAKES.indexOf(SHADOW_REGISTRY);
+        if (idx !== -1) DATA_LAKES.splice(idx, 1);
+      }
+    });
+
     it('does NOT inject for an org-principal grant the caller would reach by membership', async () => {
       // A REAL org grant is present on the lake, for an org the caller belongs to - so this fails
       // if the arm ever starts honouring org principals, rather than passing vacuously on an empty
@@ -838,7 +860,7 @@ describe('getAccessibleDataLakePrompts', () => {
    * READER OPT-IN arm: a reader who reaches a gated lake by `requiredUserTag`/`requiredEntitlement`
    * (never the creator, no grant, no preauth) is admitted when the lake sets
    * `injectPromptForReaders` AND the caller's session explicitly scopes to it via
-   * `sessionScopedDatalakeTags`. Every lake here is a stranger's and org-less, so the trust arms
+   * `readerConsentDatalakeTags`. Every lake here is a stranger's and org-less, so the trust arms
    * above (owner/org/grant/preauth) cannot fire - only this arm could admit it.
    */
   describe('reader opt-in arm (injectPromptForReaders)', () => {
@@ -858,7 +880,7 @@ describe('getAccessibleDataLakePrompts', () => {
     it('(a) admits a tag-gated org-less lake for a scoped reader, marked admittedByReaderOptIn', async () => {
       const ctx = makeContext([tagGatedLake], { id: READER, tags: ['reader-team'] });
       const prompts = await getAccessibleDataLakePrompts(ctx, {
-        sessionScopedDatalakeTags: ['datalake:reader-tag'],
+        readerConsentDatalakeTags: ['datalake:reader-tag'],
       });
       expect(prompts).toEqual([
         {
@@ -870,7 +892,7 @@ describe('getAccessibleDataLakePrompts', () => {
       ]);
     });
 
-    it('(b) does NOT admit without sessionScopedDatalakeTags (absent session scope)', async () => {
+    it('(b) does NOT admit without readerConsentDatalakeTags (absent session scope)', async () => {
       const ctx = makeContext([tagGatedLake], { id: READER, tags: ['reader-team'] });
       expect(await getAccessibleDataLakePrompts(ctx)).toEqual([]);
     });
@@ -887,7 +909,7 @@ describe('getAccessibleDataLakePrompts', () => {
       for (const lake of [flagFalse, flagAbsent]) {
         const ctx = makeContext([lake], { id: READER, tags: ['reader-team'] });
         const prompts = await getAccessibleDataLakePrompts(ctx, {
-          sessionScopedDatalakeTags: ['datalake:reader-tag'],
+          readerConsentDatalakeTags: ['datalake:reader-tag'],
         });
         expect(prompts).toEqual([]);
       }
@@ -908,7 +930,7 @@ describe('getAccessibleDataLakePrompts', () => {
       const ctx = makeContext([entitlementGatedLake], { id: READER, tags: [] });
       ctx.entitlementKeys = ['product:pro'];
       const prompts = await getAccessibleDataLakePrompts(ctx, {
-        sessionScopedDatalakeTags: ['datalake:reader-ent'],
+        readerConsentDatalakeTags: ['datalake:reader-ent'],
       });
       expect(prompts).toEqual([
         {
@@ -933,7 +955,7 @@ describe('getAccessibleDataLakePrompts', () => {
       });
       const ctx = makeContext([gateless], { id: READER, tags: [] });
       const prompts = await getAccessibleDataLakePrompts(ctx, {
-        sessionScopedDatalakeTags: ['datalake:reader-gateless'],
+        readerConsentDatalakeTags: ['datalake:reader-gateless'],
       });
       expect(prompts).toEqual([]);
     });
@@ -941,7 +963,7 @@ describe('getAccessibleDataLakePrompts', () => {
     it('(f) flag + scope but the caller lacks the gate tag entirely: dropped before the arm runs', async () => {
       const ctx = makeContext([tagGatedLake], { id: READER, tags: [] });
       const prompts = await getAccessibleDataLakePrompts(ctx, {
-        sessionScopedDatalakeTags: ['datalake:reader-tag'],
+        readerConsentDatalakeTags: ['datalake:reader-tag'],
       });
       expect(prompts).toEqual([]);
     });
@@ -949,7 +971,7 @@ describe('getAccessibleDataLakePrompts', () => {
     it('(g) restrictToDatalakeTags excluding the lake still wins over the opt-in arm', async () => {
       const ctx = makeContext([tagGatedLake], { id: READER, tags: ['reader-team'] });
       const prompts = await getAccessibleDataLakePrompts(ctx, {
-        sessionScopedDatalakeTags: ['datalake:reader-tag'],
+        readerConsentDatalakeTags: ['datalake:reader-tag'],
         restrictToDatalakeTags: ['datalake:something-else'],
       });
       expect(prompts).toEqual([]);
@@ -971,7 +993,7 @@ describe('getAccessibleDataLakePrompts', () => {
       });
       const ctx = makeContext([ownLake], { id: OWNER, tags: ['reader-team'] });
       const prompts = await getAccessibleDataLakePrompts(ctx, {
-        sessionScopedDatalakeTags: ['datalake:own-flagged'],
+        readerConsentDatalakeTags: ['datalake:own-flagged'],
       });
       expect(prompts).toEqual([{ id: 'own-flagged', name: 'Own Flagged Lake', systemPrompt: 'Owner prompt.' }]);
     });
@@ -992,10 +1014,104 @@ describe('getAccessibleDataLakePrompts', () => {
       });
       const ctx = makeContext([ownLake, foreignReaderLake], { id: READER, tags: ['reader-team'] });
       const prompts = await getAccessibleDataLakePrompts(ctx, {
-        sessionScopedDatalakeTags: ['datalake:own-flagged', 'datalake:reader-tag'],
+        readerConsentDatalakeTags: ['datalake:own-flagged', 'datalake:reader-tag'],
       });
       expect(prompts.map(p => p.id).sort()).toEqual(['own-flagged', 'reader-tag']);
       expect(readerOptInLakeIdsUsedFrom(prompts)).toEqual(['reader-tag']);
+    });
+
+    it('(j) consent scope naming a DIFFERENT lake does not admit this one', async () => {
+      const ctx = makeContext([tagGatedLake], { id: READER, tags: ['reader-team'] });
+      const prompts = await getAccessibleDataLakePrompts(ctx, {
+        readerConsentDatalakeTags: ['datalake:some-other-lake'],
+      });
+      expect(prompts).toEqual([]);
+    });
+
+    it('(k) a reader-arm lake whose datalakeTag is malformed (does not match its own slug) never qualifies', async () => {
+      // Same slug/gate/flag as tagGatedLake, but a datalakeTag buildDatalakeTag(slug) would never
+      // mint - well-formedness here is SELF-consistency, checked independently of the blocker's
+      // loop-level registry-shadow screen below.
+      const malformed = makeLake({
+        ...tagGatedLake,
+        id: 'reader-malformed',
+        datalakeTag: 'datalake:not-the-slug',
+      });
+      const ctx = makeContext([malformed], { id: READER, tags: ['reader-team'] });
+      const prompts = await getAccessibleDataLakePrompts(ctx, {
+        readerConsentDatalakeTags: ['datalake:not-the-slug'],
+      });
+      expect(prompts).toEqual([]);
+    });
+
+    /**
+     * BLOCKER regression: a DB row whose datalakeTag collides with a static registry lake's must
+     * never inject, even when every reader-opt-in condition (flag, gate, consent) is otherwise
+     * satisfied - mirrors isShadowedRegistryTag in getDynamicDataLakeTags.ts, which drops such a
+     * row outright for retrieval.
+     */
+    it('(l) BLOCKER: a DB row shadowing a registry lake tag never injects via the reader opt-in arm', async () => {
+      const SHADOW_REGISTRY: DataLakeConfig = {
+        id: 'test-only-shadow-registry',
+        slug: 'test-only-shadow-registry',
+        name: 'Shadow Registry Lake',
+        fileTagPrefix: 'shadowreg:',
+        datalakeTag: tagGatedLake.datalakeTag,
+      };
+      DATA_LAKES.push(SHADOW_REGISTRY);
+      try {
+        const shadowingDbLake = makeLake({ ...tagGatedLake });
+        const ctx = makeContext([shadowingDbLake], { id: READER, tags: ['reader-team'] });
+        const prompts = await getAccessibleDataLakePrompts(ctx, {
+          readerConsentDatalakeTags: [tagGatedLake.datalakeTag],
+        });
+        expect(prompts).toEqual([]);
+      } finally {
+        const idx = DATA_LAKES.indexOf(SHADOW_REGISTRY);
+        if (idx !== -1) DATA_LAKES.splice(idx, 1);
+      }
+    });
+
+    /**
+     * Registry lakes have NO reader opt-in arm at all (see the function doc comment) - setting
+     * `injectPromptForReaders` + a gate on a REGISTRY entry has no effect on a non-member reader,
+     * even with matching consent. Only an org member gets the overlay, through the ordinary
+     * org-trust arm, and it is never marked admittedByReaderOptIn.
+     */
+    it('(m) a registry entry flagged + gated still requires org trust, never a reader-opt-in admission', async () => {
+      const REGISTRY_READER_GATED: DataLakeConfig = {
+        id: 'test-only-registry-reader-gated',
+        slug: 'test-only-registry-reader-gated',
+        name: 'Registry Reader Gated Lake',
+        fileTagPrefix: 'regreadergated:',
+        datalakeTag: 'datalake:test-only-registry-reader-gated',
+        organizationId: ORG,
+        requiredUserTag: 'reader-team',
+        injectPromptForReaders: true,
+      };
+      DATA_LAKES.push(REGISTRY_READER_GATED);
+      try {
+        const fallbackLakeSettings = {
+          findByLakeIds: vi
+            .fn()
+            .mockResolvedValue([{ lakeId: REGISTRY_READER_GATED.id, systemPrompt: 'Registry prompt.' }]),
+        };
+        const readerCtx = makeContext([], { id: READER, tags: ['reader-team'] }, [], fallbackLakeSettings);
+        const readerPrompts = await getAccessibleDataLakePrompts(readerCtx, {
+          readerConsentDatalakeTags: [REGISTRY_READER_GATED.datalakeTag],
+        });
+        expect(readerPrompts).toEqual([]);
+
+        const memberCtx = makeContext([], { id: 'org-member', tags: ['reader-team'] }, [ORG], fallbackLakeSettings);
+        const memberPrompts = await getAccessibleDataLakePrompts(memberCtx);
+        expect(memberPrompts).toEqual([
+          { id: REGISTRY_READER_GATED.id, name: REGISTRY_READER_GATED.name, systemPrompt: 'Registry prompt.' },
+        ]);
+        expect(readerOptInLakeIdsUsedFrom(memberPrompts)).toEqual([]);
+      } finally {
+        const idx = DATA_LAKES.indexOf(REGISTRY_READER_GATED);
+        if (idx !== -1) DATA_LAKES.splice(idx, 1);
+      }
     });
   });
 });

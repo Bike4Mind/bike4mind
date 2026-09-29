@@ -2192,6 +2192,27 @@ describe('updateDataLake - per-lake systemPrompt (#843)', () => {
   });
 });
 
+describe('updateDataLake - reader opt-in flag (injectPromptForReaders)', () => {
+  it('persists injectPromptForReaders set by the lake creator', async () => {
+    const l = lake({ createdByUserId: 'owner', injectPromptForReaders: false });
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { injectPromptForReaders: true }, { db })
+    ).resolves.toMatchObject({ injectPromptForReaders: true });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ injectPromptForReaders: true }));
+  });
+
+  it('persists turning injectPromptForReaders back off', async () => {
+    const l = lake({ createdByUserId: 'owner', injectPromptForReaders: true });
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { injectPromptForReaders: false }, { db })
+    ).resolves.toMatchObject({ injectPromptForReaders: false });
+  });
+});
+
 describe('updateDataLake - clearing an access gate', () => {
   const gated = () => lake({ createdByUserId: 'owner', requiredUserTag: 'Opti', requiredEntitlement: 'product:pro' });
   const makeDb = (l: IDataLakeDocument) => {

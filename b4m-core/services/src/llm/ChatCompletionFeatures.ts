@@ -1986,6 +1986,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   private preauthorizedLakeIds: string[];
   /** `session.lakeScopeExplicit` - see sessionGroundsOnNoLake for why an empty scope needs it. */
   private lakeScopeExplicit: boolean | undefined;
+  /**
+   * Owner-vetted subset of `retrievalTags` - the reader's consent for the lake-prompt READER
+   * OPT-IN arm. Kept separate from `retrievalTags`, which stays populated for a non-owner turn so
+   * retrieval scoping keeps working; see ToolContext.sessionReaderConsentDatalakeTags.
+   */
+  private readerConsentTags: string[];
 
   constructor(
     chatCompletion: ChatCompletionContext,
@@ -1993,7 +1999,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     citationStyle?: 'named' | 'indexed',
     retrievalFilter?: RetrievalExclusionOptions,
     preauthorizedLakeIds?: string[],
-    lakeScopeExplicit?: boolean
+    lakeScopeExplicit?: boolean,
+    readerConsentDatalakeTags?: string[]
   ) {
     this.chatCompletion = chatCompletion;
     this.logger = chatCompletion.logger;
@@ -2002,6 +2009,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     this.retrievalFilter = retrievalFilter ?? {};
     this.preauthorizedLakeIds = Array.isArray(preauthorizedLakeIds) ? preauthorizedLakeIds : [];
     this.lakeScopeExplicit = lakeScopeExplicit;
+    this.readerConsentTags = Array.isArray(readerConsentDatalakeTags) ? readerConsentDatalakeTags : [];
   }
 
   async beforeDataGathering(): Promise<{ shouldContinue: boolean }> {
@@ -2186,7 +2194,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const prompts = await getAccessibleDataLakePrompts(lakeAccessContext, {
         restrictToDatalakeTags: datalakeTags,
         preauthorizedLakeIds: this.preauthorizedLakeIds,
-        sessionScopedDatalakeTags: this.retrievalTags,
+        readerConsentDatalakeTags: this.readerConsentTags,
       });
       const injectedLakePromptIds = prompts.map(p => p.id);
       const preauthorizedSet = new Set(this.preauthorizedLakeIds);

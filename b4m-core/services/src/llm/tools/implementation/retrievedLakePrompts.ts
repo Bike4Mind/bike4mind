@@ -29,7 +29,25 @@ export async function prependRetrievedLakePrompts(
   injectedLakeTags: Set<string>
 ): Promise<string> {
   try {
+    if (datalakeTags.length === 0) {
+      // Still recorded, as present-and-empty: "this tool call ran and returned no lake file" must
+      // stay distinguishable from "the site never ran" (absent) - mirrors the forced path's
+      // resolveRetrievedLakePromptMessage in ChatCompletionFeatures.ts. Its own try/catch, like the
+      // recording below: a telemetry failure here must not turn into "lake prompt resolution failed".
+      try {
+        await context.statusUpdate({
+          promptMeta: {
+            retrieval: { attempted: true, surfaces: [], dataLakeTags: [], injectedLakePromptIds: [] },
+          },
+        });
+      } catch (err) {
+        context.logger.warn('\u{1F4CB} KB tool: lake-prompt telemetry write failed:', err);
+      }
+      return resultText;
+    }
     const fresh = datalakeTags.filter(tag => !injectedLakeTags.has(tag));
+    // Every RETRIEVED tag was already injected by an earlier call to this tool - stays silent,
+    // unlike the present-and-empty case above: that first call already recorded telemetry.
     if (fresh.length === 0) return resultText;
     // Mark every fresh RETRIEVED tag injected up front - including lakes that resolve to no prompt
     // (untrusted, or empty systemPrompt) - so a later call over the same lake is not re-resolved.
@@ -38,7 +56,7 @@ export async function prependRetrievedLakePrompts(
     const prompts = await getAccessibleDataLakePrompts(context, {
       restrictToDatalakeTags: fresh,
       preauthorizedLakeIds: context.sessionPreauthorizedLakeIds,
-      sessionScopedDatalakeTags: context.sessionRetrievalTags,
+      readerConsentDatalakeTags: context.sessionReaderConsentDatalakeTags,
     });
     const injectedLakePromptIds = prompts.map(p => p.id);
     const preauthorizedSet = new Set(context.sessionPreauthorizedLakeIds ?? []);
