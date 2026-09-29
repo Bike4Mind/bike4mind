@@ -426,6 +426,21 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
       const [, params] = mockCreateUserApiKey.mock.calls[0];
       expect(params.scopes).toEqual(['me:read']);
     });
+
+    it('non-billable scope + enforce=true + NO grant -> 403 access_denied (hole-a still applies)', async () => {
+      // Even when only non-billable scopes are requested, the grant-existence check (hole-a) still
+      // fires: a pool-signed token for a user who never authorized this client must be rejected,
+      // regardless of whether the requested scopes are billable.
+      process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
+      mockFindGrant.mockResolvedValue(null);
+      const { req, res } = makeReq({ ...VALID_BODY, scope: 'me:read' });
+      await handler(req as any, res as any);
+
+      expect(res._getStatusCode()).toBe(403);
+      expect(res._getJSONData().error).toBe('access_denied');
+      expect(mockCreateUserApiKey).not.toHaveBeenCalled();
+      expect(mockAuditCreate).not.toHaveBeenCalled();
+    });
   });
 
   // A client that signs its users in against B4M's own OIDC provider directly

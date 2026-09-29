@@ -50,7 +50,7 @@ const AiTokenRequestSchema = z.object({
    * Every requested scope must appear in the client's registered `allowedScopes`. Scopes that
    * authorize spend (ai:generate) additionally require a durable OAuthGrant in enforce mode.
    */
-  scope: z.string().optional(),
+  scope: z.string().min(1).optional(),
 });
 
 /**
@@ -118,6 +118,12 @@ const handler = baseApi({ auth: false })
     //      Mirrors code.ts (RFC 6749 4.1.2.1): a clear 403 is better than silently narrowing the
     //      grant to what the client may have. A client mis-registered without ai:generate in
     //      allowedScopes cannot escalate to a spend-authorizing key here.
+    //
+    //      Pre-deploy invariant: all production federated clients seeded before this gate was added
+    //      include ai:generate in their allowedScopes (seed-oauth-client.ts has always done so for
+    //      federated clients). Any client that does not will 403 on its next call. Verify with a
+    //      one-time query before deploying to production if in doubt:
+    //        db.oauthclients.find({ 'federatedIdp': { $exists: true }, allowedScopes: { $nin: ['ai:generate'] } })
     const disallowedScopes = requestedScopes.filter(s => !(client.allowedScopes ?? []).includes(s));
     if (disallowedScopes.length > 0) {
       return res.status(403).json({
@@ -222,9 +228,10 @@ const handler = baseApi({ auth: false })
             .json({ error: 'access_denied', error_description: 'User has not authorized this client' });
         }
         if (!grantCoversAllBillable) {
+          const uncovered = billableRequested.filter(s => !(grant.scopes ?? []).includes(s));
           return res.status(403).json({
             error: 'access_denied',
-            error_description: `User has not authorized the following scope(s) for this client: ${billableRequested.join(' ')}`,
+            error_description: `User has not authorized the following scope(s) for this client: ${uncovered.join(' ')}`,
           });
         }
       } else if (!lookupFailed) {
@@ -236,9 +243,10 @@ const handler = baseApi({ auth: false })
               `(grace mode; set OAUTH_AI_TOKEN_ENFORCE_GRANT=true to enforce)`
           );
         } else if (!grantCoversAllBillable) {
+          const uncovered = billableRequested.filter(s => !(grant.scopes ?? []).includes(s));
           req.logger.warn(
             `[OAUTH_AI_TOKEN] would-reject: grant for user ${b4mUserId} via client ${client_id} lacks ` +
-              `scope(s): ${billableRequested.join(' ')} (grace mode; set OAUTH_AI_TOKEN_ENFORCE_GRANT=true to enforce)`
+              `scope(s): ${uncovered.join(' ')} (grace mode; set OAUTH_AI_TOKEN_ENFORCE_GRANT=true to enforce)`
           );
         }
       }
