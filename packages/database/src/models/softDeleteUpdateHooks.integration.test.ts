@@ -38,8 +38,7 @@ afterEach(async () => {
 });
 
 // Straight from the collection: the plugin's find hooks hide tombstones.
-const rawDoc = (id: mongoose.Types.ObjectId) =>
-  mongoose.connection.collection(SoftModel.collection.name).findOne({ _id: id });
+const rawDoc = (id: mongoose.Types.ObjectId) => SoftModel.collection.findOne({ _id: id });
 
 const includeDeleted = { includeDeleted: true } as mongoose.QueryOptions;
 
