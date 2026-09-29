@@ -71,15 +71,72 @@ function remember(key: string, state: string): void {
   approvedState.set(key, state);
 }
 
+/**
+ * What each write this module made replaced, keyed by the target and the fingerprint it left
+ * behind. Lets a stale approval be traced back through this app's own writes: two approved
+ * edits to one file in a single round both saw the original, and the second must still apply
+ * on top of the first rather than be refused as if someone else had touched the file.
+ */
+const ownWrites = new Map<string, string>();
+const MAX_OWN_WRITES = 200;
+
+function recordOwnWrite(target: string, before: string, after: string): void {
+  if (ownWrites.size >= MAX_OWN_WRITES) {
+    const oldest = ownWrites.keys().next().value;
+    if (oldest !== undefined) ownWrites.delete(oldest);
+  }
+  ownWrites.set(`${target}\x00${after}`, before);
+}
+
+/** Whether `current` is `approved`, or was reached from it by this module's writes alone. */
+function descendsFrom(target: string, approved: string, current: string): boolean {
+  const seen = new Set<string>();
+  for (let state: string | undefined = current; state !== undefined && !seen.has(state);) {
+    if (state === approved) return true;
+    seen.add(state);
+    state = ownWrites.get(`${target}\x00${state}`);
+  }
+  return false;
+}
+
 /** Reject a stale approval. Absent state means no gate ran, which the gate itself decides. */
 function assertUnchanged(key: string, target: string, current: string): void {
   const approved = approvedState.get(key);
-  if (approved !== undefined && approved !== current) {
+  if (approved !== undefined && !descendsFrom(target, approved, current)) {
     throw new Error(
       `${target} changed on disk after the user approved this change, so the change they saw no ` +
         'longer applies. Read the file again and propose the edit against its current contents.'
     );
   }
+}
+
+/**
+ * Write tools run one at a time per file. The model issues a round's calls in parallel, and two
+ * edits to one file would otherwise both read the original, the later write silently dropping
+ * the earlier edit - or, with both writes in flight at once, tearing the file.
+ */
+const pathLocks = new Map<string, Promise<unknown>>();
+
+async function withPathLock<T>(key: string, task: () => Promise<T>): Promise<T> {
+  const previous = pathLocks.get(key) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(task);
+  pathLocks.set(key, current);
+  try {
+    return await current;
+  } finally {
+    if (pathLocks.get(key) === current) pathLocks.delete(key);
+  }
+}
+
+/** Plans against the file as it is once every earlier write to it has landed, then applies. */
+async function planAndApply(
+  input: Record<string, unknown>,
+  context: ToolContext,
+  plan: (input: Record<string, unknown>, context: ToolContext) => Promise<WritePlan>
+): Promise<string> {
+  const target = await resolveWritablePath(requireString(input, 'path'), context);
+  // The real path, so two spellings of one file (a symlinked folder) share a lock.
+  return withPathLock(await realpathNearest(target), async () => applyPlan(await plan(input, context), context));
 }
 
 function requireText(input: Record<string, unknown>, key: string): string {
@@ -217,6 +274,7 @@ async function applyPlan(plan: WritePlan, context: ToolContext): Promise<string>
   // this creates is inside it too.
   await mkdir(dirname(plan.target), { recursive: true });
   await writeFile(plan.target, plan.after, 'utf8');
+  recordOwnWrite(plan.target, fingerprint(plan.state.exists, plan.state.content), fingerprint(true, plan.after));
   approvedState.delete(plan.key);
 
   const lines = splitLines(plan.after).length;
@@ -251,7 +309,7 @@ export const fileWrite: ToolDefinition = {
   approval: async (input, context) => toPrompt(await planWrite(input, context)),
 
   async run(input, context) {
-    return applyPlan(await planWrite(input, context), context);
+    return planAndApply(input, context, planWrite);
   },
 };
 
@@ -284,6 +342,6 @@ export const fileEdit: ToolDefinition = {
   approval: async (input, context) => toPrompt(await planEdit(input, context)),
 
   async run(input, context) {
-    return applyPlan(await planEdit(input, context), context);
+    return planAndApply(input, context, planEdit);
   },
 };
