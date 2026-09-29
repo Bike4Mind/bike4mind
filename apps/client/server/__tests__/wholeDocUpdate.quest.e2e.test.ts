@@ -46,17 +46,24 @@ async function readThenRace(concurrent: (id: string) => Promise<unknown>) {
   return quest!;
 }
 
-/** Runs QuestMasterFeature to its error path: status=running write, then the error write. */
-async function runToErrorPath(quest: Awaited<ReturnType<typeof readThenRace>>) {
-  const feature = new QuestMasterFeature({
+type InMemoryQuest = Awaited<ReturnType<typeof readThenRace>>;
+
+/** Mirrors StatusManager.sendStatusUpdate: appends to the in-memory statusLog, persists nothing. */
+const sendStatusUpdate = vi.fn(async (quest: InMemoryQuest, status: string | null) => {
+  if (status) quest.promptMeta?.statusLog?.push({ status, timestamp: new Date() });
+});
+
+function newFeature() {
+  return new QuestMasterFeature({
     user: { id: 'user1' },
     db: { quests: questRepository },
     logger: { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() },
-    sendStatusUpdate: vi.fn(async () => undefined),
+    sendStatusUpdate,
   } as unknown as ChatCompletionContext);
-  vi.spyOn(feature as never, 'sendQuestMasterRapidReply').mockRejectedValue(new Error('planner unavailable') as never);
+}
 
-  const result = await feature.beforeDataGathering({
+function runFeature(feature: QuestMasterFeature, quest: InMemoryQuest) {
+  return feature.beforeDataGathering({
     quest,
     session: { id: 'session1' },
     startParams: {},
@@ -69,7 +76,13 @@ async function runToErrorPath(quest: Awaited<ReturnType<typeof readThenRace>>) {
     questId: quest.id,
     questMaster: undefined,
   } as never);
-  expect(result).toEqual({ shouldContinue: true });
+}
+
+/** Runs QuestMasterFeature to its error path: status=running write, then the error write. */
+async function runToErrorPath(quest: InMemoryQuest) {
+  const feature = newFeature();
+  vi.spyOn(feature as never, 'sendQuestMasterRapidReply').mockRejectedValue(new Error('planner unavailable') as never);
+  expect(await runFeature(feature, quest)).toEqual({ shouldContinue: true });
 }
 
 describe('quest: QuestMasterFeature status writes', () => {
@@ -86,6 +99,23 @@ describe('quest: QuestMasterFeature status writes', () => {
     expect(after?.type).toBe('error');
     expect(after?.status).toBe('done');
     expect(after?.reply).toBe('planner unavailable');
+  });
+
+  it('persist the in-memory statusLog on a QuestMaster takeover, which skips the pipeline saveQuest', async () => {
+    const quest = await readThenRace(async () => undefined);
+    quest.promptMeta = { statusLog: [{ status: 'Spinning up...', timestamp: new Date() }] } as typeof quest.promptMeta;
+    const feature = newFeature();
+    vi.spyOn(feature as never, 'sendQuestMasterRapidReply').mockResolvedValue(undefined as never);
+    vi.spyOn(feature as never, 'questMasterRequest').mockResolvedValue(undefined as never);
+
+    expect(await runFeature(feature, quest)).toEqual({ shouldContinue: false });
+
+    const after = await Quest.findById(quest.id).lean();
+    expect(after?.status).toBe('done');
+    expect(after?.promptMeta?.statusLog?.map(entry => entry.status)).toEqual([
+      'Spinning up...',
+      'QuestMaster plan generated',
+    ]);
   });
 
   it('do not resurrect a quest soft-deleted after the in-memory read', async () => {

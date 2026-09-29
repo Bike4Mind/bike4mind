@@ -107,6 +107,23 @@ describe('ChatCompletionInvoke retry path session binding', () => {
     expect(questsUpdate).toHaveBeenCalledWith(expect.objectContaining({ id: 'quest-1', status: 'running' }), {
       unset: ['errorCode'],
     });
-    expect(questsUpdate.mock.calls[0][0]).not.toHaveProperty('errorCode');
+    // Pins the full reset: a key dropped from this partial is a retry field that silently stops
+    // reaching the database.
+    expect(Object.keys(questsUpdate.mock.calls[0][0]).sort()).toEqual(
+      [
+        'agentIds',
+        'fabFileIds',
+        'id',
+        'images',
+        'prompt',
+        'promptMeta',
+        'questMasterReply',
+        'replies',
+        'reply',
+        'status',
+        'timestamp',
+        'type',
+      ].sort()
+    );
   });
 });

@@ -1103,7 +1103,14 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     try {
       quest.status = 'running';
       quest.type = 'message';
-      await this.chatCompletion.db.quests.update({ id: quest.id, status: quest.status, type: quest.type });
+      // promptMeta carries the in-memory statusLog ('Spinning up...'); a QuestMaster takeover
+      // returns without the pipeline's saveQuest, so these writes are the only ones that persist it.
+      await this.chatCompletion.db.quests.update({
+        id: quest.id,
+        status: quest.status,
+        type: quest.type,
+        promptMeta: quest.promptMeta,
+      });
 
       await this.chatCompletion.sendStatusUpdate(quest, 'Generating QuestMaster plan...');
 
@@ -1154,7 +1161,11 @@ export class QuestMasterFeature implements ChatCompletionFeature {
       });
 
       updatedQuest.status = 'done';
-      await this.chatCompletion.db.quests.update({ id: updatedQuest.id, status: updatedQuest.status });
+      await this.chatCompletion.db.quests.update({
+        id: updatedQuest.id,
+        status: updatedQuest.status,
+        promptMeta: updatedQuest.promptMeta,
+      });
 
       await this.chatCompletion.sendStatusUpdate(updatedQuest, null);
 

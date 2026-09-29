@@ -78,6 +78,7 @@ const handler = baseApi().post(
     // `accepted` below, which does not distinguish a send from a skip.
     const sent: string[] = [];
     const failed: string[] = [];
+    const newInviteIds: string[] = [];
 
     if (!user.regInvites) {
       user.regInvites = [];
@@ -107,6 +108,7 @@ const handler = baseApi().post(
           const savedInvite = await createRegInvite(newRegInvite);
           try {
             user.regInvites.push(savedInvite.id);
+            newInviteIds.push(savedInvite.id);
           } catch (error) {
             console.error(`Failed to add invite ID to user's regInvites for ${target}: ${error}`);
           }
@@ -192,7 +194,7 @@ const handler = baseApi().post(
     const accepted = friendEmail.filter(email => !failedSet.has(email));
 
     user.numReferralsAvailable = Math.max(0, user.numReferralsAvailable - accepted.length);
-    await userRepository.decrementReferralsAvailable(user.id, accepted.length);
+    await userRepository.recordReferrals(user.id, accepted.length, newInviteIds);
     await logEvent(
       {
         userId,

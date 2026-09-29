@@ -20,7 +20,8 @@ import path from 'node:path';
  * Not covered: dynamic receivers (`db[name].update(x)`) and non-repository receivers.
  *
  * ALLOWED is keyed by `relpath::argText` (not line number, so edits do not churn it). It only
- * shrinks: every entry must still match a site (stale-entry check below).
+ * shrinks: each entry must match exactly its expected number of sites (1 unless SITE_COUNT says
+ * otherwise), so a stale entry fails and so does a NEW same-shaped write in an allow-listed file.
  */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SCAN_ROOTS = ['apps', 'b4m-core', 'packages'];
@@ -64,6 +65,9 @@ const ALLOWED = new Map<string, string>([
   ['b4m-core/services/src/tagService/update.ts::buildData', 'id plus validated params'],
   ['b4m-core/services/src/userService/adminUpdate.ts::writeData', 'built by toUserUpdatePartial'],
   ['packages/scripts/generateAgentSystemPrompts.ts::updateData', PARTIAL],
+]);
+const SITE_COUNT = new Map<string, number>([
+  ['b4m-core/services/src/latticeService/latticeModelService.ts::updatedModel', 3],
 ]);
 
 const RECEIVER = /(?:^|[^\w$.])((?:[\w$]+[?!]?\.)*[\w$]+)[?!]?\s*\.update\(/g;
@@ -160,9 +164,13 @@ describe('repository whole-document update guard', () => {
     );
   });
 
-  it('has no stale ALLOWED entries', () => {
-    const keys = new Set(hits.map(h => h.key));
-    expect([...ALLOWED.keys()].filter(k => !keys.has(k))).toEqual([]);
+  it('matches each ALLOWED entry to exactly its expected number of sites', () => {
+    const counts = new Map<string, number>();
+    for (const h of hits) counts.set(h.key, (counts.get(h.key) ?? 0) + 1);
+    const mismatched = [...ALLOWED.keys()]
+      .map(k => ({ key: k, expected: SITE_COUNT.get(k) ?? 1, actual: counts.get(k) ?? 0 }))
+      .filter(e => e.actual !== e.expected);
+    expect(mismatched, 'drop a stale entry, or convert the new site instead of raising SITE_COUNT').toEqual([]);
   });
 
   it('classifies argument shapes', () => {

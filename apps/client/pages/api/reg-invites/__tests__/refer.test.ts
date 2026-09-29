@@ -25,13 +25,13 @@ vi.mock('@server/utils/eventBus', () => ({
 }));
 
 const mockUserUpdate = vi.fn();
-const mockDecrementReferrals = vi.fn();
+const mockRecordReferrals = vi.fn();
 const mockInviteFindOne = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   registrationInviteRepository: { findOne: (...a: any[]) => mockInviteFindOne(...a) },
   userRepository: {
     update: (...a: any[]) => mockUserUpdate(...a),
-    decrementReferralsAvailable: (...a: any[]) => mockDecrementReferrals(...a),
+    recordReferrals: (...a: any[]) => mockRecordReferrals(...a),
   },
   adminSettingsRepository: {},
   User: {
@@ -82,7 +82,7 @@ describe('/api/reg-invites/refer — sender verification gate', () => {
     // No invite is minted and no referral slot is spent.
     expect(mockInviteFindOne).not.toHaveBeenCalled();
     expect(mockUserUpdate).not.toHaveBeenCalled();
-    expect(mockDecrementReferrals).not.toHaveBeenCalled();
+    expect(mockRecordReferrals).not.toHaveBeenCalled();
   });
 
   it('allows a sender with a verified email', async () => {
@@ -176,6 +176,6 @@ describe('/api/reg-invites/refer - duplicate addresses', () => {
     // One credit for one distinct address, not one per submitted copy.
     expect(res._getJSONData().sent).toEqual(['friend@example.com']);
     expect((req as any).user.numReferralsAvailable).toBe(2);
-    expect(mockDecrementReferrals).toHaveBeenCalledWith('user-1', 1);
+    expect(mockRecordReferrals).toHaveBeenCalledWith('user-1', 1, ['invite-1']);
   });
 });

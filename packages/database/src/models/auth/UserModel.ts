@@ -516,8 +516,12 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     );
   }
 
-  /** Atomic, floor-at-zero decrement, so a concurrent change to the counter is not reverted. */
-  async decrementReferralsAvailable(userId: string, count: number): Promise<void> {
+  /**
+   * Charge `count` referrals (atomic, floored at zero) and record the invites they created, so a
+   * concurrent change to either field is not reverted. Two writes: a pipeline update can't use
+   * `$addToSet`, and pipeline values skip Mongoose's ObjectId casting.
+   */
+  async recordReferrals(userId: string, count: number, newInviteIds: string[]): Promise<void> {
     await this.model.updateOne({ _id: userId }, [
       {
         $set: {
@@ -525,6 +529,9 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
         },
       },
     ]);
+    if (newInviteIds.length > 0) {
+      await this.model.updateOne({ _id: userId }, { $addToSet: { regInvites: { $each: newInviteIds } } });
+    }
   }
 
   async incrementTokenVersion(userId: string): Promise<number> {

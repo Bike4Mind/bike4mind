@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
-import mongoose from 'mongoose';
+import mongoose, { Types } from 'mongoose';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../__test__/createMongoServer';
 import { User, userRepository } from './UserModel';
 
@@ -98,14 +98,27 @@ describe('BaseRepository.update whole-document hazard (via userRepository)', () 
     expect(after!.currentCredits).toBe(100); // reverted, identical to a plain snapshot
   });
 
-  it('decrementReferralsAvailable decrements atomically and floors at zero', async () => {
-    const u = await User.create({ username: 'referrer', name: 'R', email: 'r@example.com', numReferralsAvailable: 3 });
+  it('recordReferrals decrements atomically, floors at zero and appends the new invites', async () => {
+    const existingInvite = new Types.ObjectId();
+    const u = await User.create({
+      username: 'referrer',
+      name: 'R',
+      email: 'r@example.com',
+      numReferralsAvailable: 3,
+      regInvites: [existingInvite],
+    });
     const id = String(u._id);
+    const invite1 = new Types.ObjectId().toString();
+    const invite2 = new Types.ObjectId().toString();
 
-    await userRepository.decrementReferralsAvailable(id, 2);
-    expect((await User.findById(id))!.numReferralsAvailable).toBe(1);
+    await userRepository.recordReferrals(id, 2, [invite1]);
+    let after = await User.findById(id);
+    expect(after!.numReferralsAvailable).toBe(1);
+    expect(after!.regInvites.map(String)).toEqual([existingInvite.toString(), invite1]);
 
-    await userRepository.decrementReferralsAvailable(id, 5);
-    expect((await User.findById(id))!.numReferralsAvailable).toBe(0);
+    await userRepository.recordReferrals(id, 5, [invite2]);
+    after = await User.findById(id);
+    expect(after!.numReferralsAvailable).toBe(0);
+    expect(after!.regInvites.map(String)).toEqual([existingInvite.toString(), invite1, invite2]);
   });
 });

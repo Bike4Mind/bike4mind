@@ -41,7 +41,7 @@ export const leave = async (
   organization.userDetails = organization.userDetails?.filter(u => u.id !== user.id) ?? [];
 
   // Strip this org's group ids from the departing user, end their data-lake access on this org's
-  // lakes, and drop them from adminUserIds and from the manager appointment (the org doc, persisted
+  // lakes, and drop them from adminUserIds and from the manager appointment (persisted by removeMember
   // just below). None of `user.groups[]`, the grant rows, `adminUserIds` or `managerId` carries an
   // org qualifier, so leaving must clear them or the user keeps group-shared data access, direct
   // lake access and org-admin authority. Idempotent, so safe under a withTransaction retry.
