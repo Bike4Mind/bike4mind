@@ -59,8 +59,24 @@ const writers: [
   ],
   [
     'continueInSession',
-    (id, u) => repo.continueInSession(id, 'session-1', u),
+    (id, u) => {
+      // Its own findById refuses a revoked or deleted plan first; hand it the pre-revoke read so the
+      // write filter is what refuses.
+      vi.spyOn(repo, 'findById').mockResolvedValueOnce({ userId: OWNER, sharedWith: [SHAREE] } as never);
+      return repo.continueInSession(id, 'session-1', u);
+    },
     d => (d!.sessionHistory ?? []).length === 1,
+  ],
+  [
+    'resumeIfPaused',
+    async (id, u) => {
+      await QuestMasterPlan.collection.updateOne(
+        { _id: new mongoose.Types.ObjectId(id) },
+        { $set: { state: 'paused' } }
+      );
+      return repo.resumeIfPaused(id, u);
+    },
+    d => d!.state === 'active',
   ],
   [
     'atomicUpdateNotebookId',
@@ -120,6 +136,7 @@ afterAll(async () => {
 afterEach(async () => {
   // Let the fire-and-forget metrics recompute a successful progress write schedules settle first.
   await new Promise(resolve => setTimeout(resolve, 50));
+  vi.restoreAllMocks();
   await QuestMasterPlan.collection.deleteMany({});
 });
 
@@ -157,5 +174,16 @@ describe('QuestMasterPlanRepository write-time access re-check', () => {
       expect(await refused(() => write(id, OWNER))).toBe(true);
       expect(applied(await raw(id))).toBe(false);
     });
+  });
+
+  it('resumeIfPaused leaves a plan that is not paused alone', async () => {
+    const id = await seed();
+    await QuestMasterPlan.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      { $set: { state: 'archived' } }
+    );
+
+    expect(await repo.resumeIfPaused(id, OWNER)).toBeNull();
+    expect((await raw(id))!.state).toBe('archived');
   });
 });

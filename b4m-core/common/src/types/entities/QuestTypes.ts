@@ -361,6 +361,9 @@ export interface IQuestMasterPlanRepository extends IBaseRepository<IQuestMaster
 
   continueInSession(planId: string, sessionId: string, userId: string): Promise<IQuestMasterPlanDocument>;
 
+  /** Paused -> active, gated on owner/sharee and not-deleted; null when nothing matched. */
+  resumeIfPaused(planId: string, userId: string): Promise<IQuestMasterPlanDocument | null>;
+
   updateQuestProgress(
     planId: string,
     userId: string,

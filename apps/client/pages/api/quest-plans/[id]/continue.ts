@@ -124,12 +124,11 @@ const handler = baseApi()
 
       const plan = await questMasterPlanRepository.continueInSession(planId, actualSessionId, userId);
 
-      // Auto-resume if paused. After continueInSession, whose write re-checks access in its filter, so
-      // a caller revoked since the check above is refused before reaching this; targeted, not the
-      // whole stale plan.
+      // Auto-resume if paused. Gated and conditional on the stored state, so neither a revoke since
+      // continueInSession nor a concurrent archive can be overwritten by the stale read.
       if (plan.state === 'paused') {
-        plan.state = 'active';
-        await questMasterPlanRepository.update({ id: planId, state: 'active' });
+        const resumed = await questMasterPlanRepository.resumeIfPaused(planId, userId);
+        if (resumed) plan.state = resumed.state;
       }
 
       const contextMessage = await questRepository.create({

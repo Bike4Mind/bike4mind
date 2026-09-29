@@ -698,6 +698,15 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
     return this.questMasterPlanModel.findByIdAndUpdate(planId, updateOp, { new: true });
   }
 
+  /** Flips a paused plan to active through the write gate; null when not paused, revoked or deleted. */
+  async resumeIfPaused(planId: string, userId: string): Promise<IQuestMasterPlanDocument | null> {
+    return this.questMasterPlanModel.findOneAndUpdate(
+      { _id: planId, ...writableBy(userId), state: 'paused' },
+      { $set: { state: 'active' } },
+      { new: true }
+    );
+  }
+
   async updateHandoff(planId: string, userId: string, handoff: QuestHandoff): Promise<IQuestMasterPlanDocument | null> {
     return this.questMasterPlanModel.findOneAndUpdate(
       { _id: planId, ...writableBy(userId) },

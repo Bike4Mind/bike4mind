@@ -13,7 +13,7 @@ const h = vi.hoisted(() => ({
   postHandler: null as null | RouteHandler,
   planFindById: vi.fn(),
   continueInSession: vi.fn(),
-  planUpdate: vi.fn(),
+  resumeIfPaused: vi.fn(),
   questCreate: vi.fn(),
   sessionFindById: vi.fn(),
 }));
@@ -41,7 +41,7 @@ vi.mock('@bike4mind/database', () => ({
   questMasterPlanRepository: {
     findById: h.planFindById,
     continueInSession: h.continueInSession,
-    update: h.planUpdate,
+    resumeIfPaused: h.resumeIfPaused,
   },
 }));
 
@@ -78,7 +78,7 @@ describe('POST /api/quest-plans/[id]/continue write-time re-check', () => {
     const res = await call();
 
     expect(res._getStatusCode()).toBe(403);
-    expect(h.planUpdate).not.toHaveBeenCalled();
+    expect(h.resumeIfPaused).not.toHaveBeenCalled();
     expect(h.questCreate).not.toHaveBeenCalled();
   });
 
@@ -90,14 +90,27 @@ describe('POST /api/quest-plans/[id]/continue write-time re-check', () => {
     expect(res._getStatusCode()).toBe(404);
   });
 
-  it('auto-resumes a paused plan with a targeted write after the gated one', async () => {
+  it('auto-resumes a paused plan through the gated resume after continueInSession', async () => {
     h.continueInSession.mockResolvedValue({ id: PLAN_ID, state: 'paused', goal: 'Goal', metrics: {} });
+    h.resumeIfPaused.mockResolvedValue({ id: PLAN_ID, state: 'active' });
     h.questCreate.mockResolvedValue({ id: 'q1', prompt: 'p' });
 
     const res = await call();
 
     expect(res._getStatusCode()).toBe(200);
     expect(h.continueInSession).toHaveBeenCalledWith(PLAN_ID, SESSION_ID, USER);
-    expect(h.planUpdate).toHaveBeenCalledWith({ id: PLAN_ID, state: 'active' });
+    expect(h.resumeIfPaused).toHaveBeenCalledWith(PLAN_ID, USER);
+    expect(res._getJSONData().plan.state).toBe('active');
+  });
+
+  it('reports the stored state when the gated resume matches nothing', async () => {
+    h.continueInSession.mockResolvedValue({ id: PLAN_ID, state: 'paused', goal: 'Goal', metrics: {} });
+    h.resumeIfPaused.mockResolvedValue(null);
+    h.questCreate.mockResolvedValue({ id: 'q1', prompt: 'p' });
+
+    const res = await call();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().plan.state).toBe('paused');
   });
 });
