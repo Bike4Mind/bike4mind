@@ -1259,7 +1259,7 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
   });
 
   // Same shape as the Research draft: the half-typed reason is this panel's own state, so an
-  // unmount loses it. Unlike Research it reports no dirty state, so nothing would warn either.
+  // unmount loses it.
   it('keeps a half-typed decline reason while the curator visits another tab', async () => {
     withQueue([queued()]);
     const user = userEvent.setup();
@@ -1277,6 +1277,42 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
     await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
 
     expect(screen.getByTestId('datalake-proposal-decline-reason')).toHaveValue('Paywalled');
+  });
+
+  it('asks before discarding an unsaved decline reason', async () => {
+    withQueue([queued()]);
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={onClose} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
+    await user.click(screen.getByTestId('datalake-proposal-decline-btn'));
+    await user.type(screen.getByTestId('datalake-proposal-decline-reason'), 'Paywalled');
+    await user.click(screen.getByTestId('datalake-settings-close-btn'));
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('datalake-discard-confirm')).toBeInTheDocument();
+  });
+
+  it('closes without asking when a decline was opened but no reason typed', async () => {
+    withQueue([queued()]);
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={onClose} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
+    await user.click(screen.getByTestId('datalake-proposal-decline-btn'));
+    await user.click(screen.getByTestId('datalake-settings-close-btn'));
+
+    expect(onClose).toHaveBeenCalled();
   });
 });
 
