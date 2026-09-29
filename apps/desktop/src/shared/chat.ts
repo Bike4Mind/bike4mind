@@ -34,11 +34,17 @@ export interface ChatDiffLine {
 }
 
 /**
- * What a write tool is about to do, computed BEFORE the user is asked.
+ * A line-by-line change to one file.
  *
- * This is the whole point of the write gate: approving "write file" with no visible change is
- * not informed consent. It describes an intention, never a completed action - nothing has
- * touched the disk when this is shown.
+ * It is carried in two places, and which one holds it is the whole contract:
+ *  - `ChatToolCall.approvalDiff` is an INTENTION, computed BEFORE the user is asked. That is
+ *    the point of the write gate: approving "write file" with no visible change is not
+ *    informed consent. Nothing has touched the disk for as long as it is on screen.
+ *  - `ChatToolCall.diff` is a RECORD, attached only after the write returned.
+ *
+ * One shape serves both because the write tools hold a per-file lock across the read and the
+ * write and re-check the file against the snapshot they planned against, so the change they
+ * planned is the change they applied. Neither field is ever set on the other's behalf.
  */
 export interface ChatDiff {
   /** Absolute path the change applies to. */
@@ -137,6 +143,18 @@ export interface ChatToolCall {
    * conversation, and only the call that resolved the id knows its title.
    */
   label?: string;
+  /**
+   * What a write tool actually changed, set only once the bytes landed - see ChatDiff for why
+   * the diff planned before the write is a truthful record of it.
+   *
+   * Never present on a call that failed, was declined, or was stopped by the stale-file
+   * re-check. The transcript keeps this row for good, and a diff under a row for a write that
+   * did not happen is a claim the reader has no way to check.
+   *
+   * Absent on every message stored before writes recorded one; the row then renders exactly as
+   * it did then, with no diff panel.
+   */
+  diff?: ChatDiff;
 }
 
 /**

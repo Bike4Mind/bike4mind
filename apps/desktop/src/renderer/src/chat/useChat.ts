@@ -11,7 +11,6 @@ import type {
   ChatSession,
   ChatSessionStatus,
   ChatSessionSummary,
-  ChatToolCall,
   CreateCodeSessionRequest,
   UpdateProjectRequest,
 } from '@shared/chat';
@@ -256,19 +255,6 @@ export function useModelCatalog(): ModelCatalogController {
 }
 
 /**
- * Fold a settled tool call over the one it settles.
- *
- * The settled call replaces its predecessor wholesale except for `approvalDiff`, which main
- * sends ONLY with the approval prompt. Taking the later call whole would throw away the one
- * record of what the edit actually changed - and an expanded row is exactly where a user goes
- * looking for that after they have clicked through it.
- */
-function mergeToolCall(previous: ChatToolCall, next: ChatToolCall): ChatToolCall {
-  if (next.approvalDiff || !previous.approvalDiff) return next;
-  return { ...next, approvalDiff: previous.approvalDiff };
-}
-
-/**
  * Rebuild the reply's round structure from the stream, which does not carry it.
  *
  * It does not need to: a round is prose and then the tools that prose announced, so the FIRST
@@ -504,7 +490,10 @@ export function useConversation(
             return {
               ...message,
               toolCalls: known
-                ? existing.map(call => (call.id === event.call.id ? mergeToolCall(call, event.call) : call))
+                ? // Wholesale, with nothing carried over from the state it replaces. The
+                  // approval prompt's diff is a proposal and must not outlive the answer; the
+                  // record of what landed arrives on the settled call itself as `diff`.
+                  existing.map(call => (call.id === event.call.id ? event.call : call))
                 : [...existing, event.call],
               rounds: known ? message.rounds : attachCall(message.rounds, event.call.id),
             };

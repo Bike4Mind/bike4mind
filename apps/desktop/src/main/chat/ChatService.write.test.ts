@@ -147,4 +147,61 @@ describe('ChatService write gate', () => {
     expect(toolEvents('error')).toHaveLength(1);
     expect(lastToolResult()).toMatchObject({ is_error: true, content: expect.stringMatching(/does not appear/) });
   });
+
+  // T34. The transcript keeps these rows for good, so a diff on one is a claim about the past:
+  // it is there when the bytes went down and absent every other time.
+  describe('the diff kept on the settled call', () => {
+    /** The call as one of those events carries it. `toolEvents` only filters; this narrows. */
+    const callWith = (status: ChatToolCall['status']): ChatToolCall | undefined => {
+      const event = toolEvents(status)[0];
+      return event && 'call' in event ? event.call : undefined;
+    };
+
+    it('records what the write changed, once it has changed it', async () => {
+      await startTurn('fix the second line');
+      streams[0].write(toolTurn('c1', 'file_edit', { path: target, oldText: 'beta', newText: 'BETA' }));
+      streams[0].write(frame('[DONE]'));
+
+      const call = await pendingApproval();
+      approvals.resolve(call.approvalId as string, 'once');
+      await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 5000, interval: 10 });
+
+      expect(callWith('done')?.diff).toMatchObject({ path: target, operation: 'edit', added: 1, removed: 1 });
+      expect(callWith('done')?.diff?.lines).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: 'remove', text: 'beta' }),
+          expect.objectContaining({ kind: 'add', text: 'BETA' }),
+        ])
+      );
+    });
+
+    it('leaves none on a write the user declined', async () => {
+      await startTurn('rewrite it');
+      streams[0].write(toolTurn('c1', 'file_write', { path: target, content: 'replaced\n' }));
+      streams[0].write(frame('[DONE]'));
+
+      const call = await pendingApproval();
+      approvals.resolve(call.approvalId as string, 'deny');
+      await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 5000, interval: 10 });
+
+      expect(callWith('denied')?.diff).toBeUndefined();
+    });
+
+    // The diff is built before the write, so this is the case that decides whether it is an
+    // intention or a record: the plan was made, and then nothing was written.
+    it('leaves none on a write the stale-file check refused', async () => {
+      await startTurn('fix the second line');
+      streams[0].write(toolTurn('c1', 'file_edit', { path: target, oldText: 'beta', newText: 'BETA' }));
+      streams[0].write(frame('[DONE]'));
+
+      const call = await pendingApproval();
+      await writeFile(target, 'alpha\nsomeone else got here\ngamma\n', 'utf8');
+      approvals.resolve(call.approvalId as string, 'once');
+      await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 5000, interval: 10 });
+
+      expect(toolEvents('error')).toHaveLength(1);
+      expect(callWith('error')?.diff).toBeUndefined();
+      await expect(readFile(target, 'utf8')).resolves.toBe('alpha\nsomeone else got here\ngamma\n');
+    });
+  });
 });

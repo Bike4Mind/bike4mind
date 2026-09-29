@@ -5,6 +5,7 @@ import type {
   ChatApprovalMode,
   ChatArtifact,
   ChatAttachment,
+  ChatDiff,
   ChatMedia,
   ChatMessage,
   ChatMessageSkill,
@@ -1375,6 +1376,7 @@ export class ChatService {
         const attachments: ChatMedia[] = [];
         let notice: ChatToolNotice | undefined;
         let label: string | undefined;
+        let diff: ChatDiff | undefined;
         const report: ToolReporter = {
           progress: text => this.deps.emit({ type: 'tool-progress', sessionId, messageId, callId: call.id, text }),
           media: item => attachments.push(item),
@@ -1384,12 +1386,21 @@ export class ChatService {
           label: text => {
             label = text;
           },
+          diff: value => {
+            diff = value;
+          },
         };
         const decorate = (settled: ChatToolCall): ChatToolCall => ({
           ...settled,
           ...(attachments.length > 0 ? { media: attachments } : {}),
           ...(notice ? { notice } : {}),
           ...(label ? { label } : {}),
+          // The one channel above that is NOT kept on a call that failed. A write tool only
+          // reports a diff once the bytes are down, so there is nothing to drop here in
+          // practice - the condition is what makes that a property of this loop rather than
+          // of one tool's ordering, because a diff under a red row would claim a change the
+          // user never got.
+          ...(diff && settled.status === 'done' ? { diff } : {}),
         });
 
         const context: ToolContext = {

@@ -277,6 +277,13 @@ async function applyPlan(plan: WritePlan, context: ToolContext): Promise<string>
   recordOwnWrite(plan.target, fingerprint(plan.state.exists, plan.state.content), fingerprint(true, plan.after));
   approvedState.delete(plan.key);
 
+  // AFTER the write, deliberately: everything above can throw - a revoked root, a stale
+  // approval, a stopped turn - and a transcript row showing a diff for a write that never
+  // happened would be worse than one showing none. The diff is the plan rather than a re-read
+  // of the file because the plan is what was written, under this path's lock, having just
+  // checked the file still matched it; re-reading now would pick up whoever wrote next.
+  context.report?.diff(plan.diff);
+
   const lines = splitLines(plan.after).length;
   return `${summarizeDiff(plan.diff)}\nWritten. ${plan.target} is now ${lines} line${lines === 1 ? '' : 's'}.`;
 }

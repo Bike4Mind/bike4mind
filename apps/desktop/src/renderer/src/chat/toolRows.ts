@@ -253,12 +253,23 @@ export function toolRowLabel(call: ChatToolCall): string {
   return phrases.did && argument ? `${phrases.did} ${argument}` : phrases.didAlone;
 }
 
+/** Lines added and removed by the writes in a group, once there has been at least one. */
+export interface DiffTotals {
+  added: number;
+  removed: number;
+}
+
 export interface ToolCallGroup {
   /** The first call's id - stable across the re-renders that settle the rest of the group. */
   id: string;
-  name: string;
   calls: ChatToolCall[];
   label: string;
+  /**
+   * Beside `label` rather than inside it, because the label is what gets ellipsized: a run of
+   * four clauses is longer than the row, and "+9 -2" at the end of it would be the first thing
+   * to disappear and the last thing a reader wants to lose.
+   */
+  diffstat?: DiffTotals;
   status: ChatToolStatus;
 }
 
@@ -284,36 +295,137 @@ function groupStatus(calls: readonly ChatToolCall[]): ChatToolStatus {
   );
 }
 
+/** One stretch of a group that the phrase table can speak about in a single clause. */
+interface ToolSegment {
+  name: string;
+  calls: ChatToolCall[];
+}
+
 /**
- * Collapse runs of the same tool into one row apiece.
+ * Whether a call may share a clause with its neighbours.
  *
- * Only CONSECUTIVE calls merge: the order is what the model did, and folding together two reads
- * that had a command between them would claim a sequence that never happened.
- *
- * A call waiting at the approval gate is always its own group, in both directions. It blocks the
- * turn and needs an answer, so it must never be hidden inside a count - and the calls around it
- * have already been answered, which is a different thing to say about them.
+ * A failure, a refusal and a call still at the gate never do. The `many` phrases are past-tense
+ * counts - "Read 3 files" - so folding a failed read into one reports it as having happened,
+ * which is the one thing a row must never do. Alone, each of those gets `toolRowLabel`, which
+ * has the infinitive forms for exactly this.
  */
-export function groupToolCalls(calls: readonly ChatToolCall[]): ToolCallGroup[] {
-  const groups: ToolCallGroup[] = [];
+function sharesAClause(call: ChatToolCall): boolean {
+  return call.status === 'done' || call.status === 'running';
+}
+
+/** Consecutive calls to one tool that read the same way, in the order the model made them. */
+function toSegments(calls: readonly ChatToolCall[]): ToolSegment[] {
+  const segments: ToolSegment[] = [];
 
   for (const call of calls) {
-    const open = groups[groups.length - 1];
+    const open = segments[segments.length - 1];
     const mergeable =
       open !== undefined &&
       open.name === call.name &&
-      call.status !== 'awaiting-approval' &&
-      open.status !== 'awaiting-approval';
+      sharesAClause(call) &&
+      sharesAClause(open.calls[open.calls.length - 1]);
 
-    if (mergeable) {
-      open.calls.push(call);
-      open.status = groupStatus(open.calls);
-      open.label = phrasesFor(open.name).many(open.calls.length);
+    if (mergeable) open.calls.push(call);
+    else segments.push({ name: call.name, calls: [call] });
+  }
+
+  return segments;
+}
+
+function segmentLabel(segment: ToolSegment): string {
+  if (segment.calls.length === 1) return toolRowLabel(segment.calls[0]);
+  return phrasesFor(segment.name).many(segment.calls.length);
+}
+
+/**
+ * Second and later clauses read as a list rather than as sentences of their own: "Ran 7
+ * commands, edited ChatService.ts". Only the first character moves - what follows it is a path,
+ * a command or a tool's own name, and none of those are this function's to recase.
+ */
+function continueSentence(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1);
+}
+
+/**
+ * What a set of calls changed, over the writes in it that LANDED.
+ *
+ * Undefined when none of them changed a file - which is also what a transcript written before
+ * tool calls recorded their diffs gives, so those rows read exactly as they always did.
+ */
+export function diffTotals(calls: readonly ChatToolCall[]): DiffTotals | undefined {
+  let added = 0;
+  let removed = 0;
+  let wrote = false;
+
+  for (const call of calls) {
+    if (!call.diff) continue;
+    wrote = true;
+    added += call.diff.added;
+    removed += call.diff.removed;
+  }
+
+  return wrote ? { added, removed } : undefined;
+}
+
+/**
+ * How many clauses one row may carry.
+ *
+ * The label has to name every call under it - a row that says less than it hides is not a
+ * summary, it is a lid - so a group holds no more parts than its label can spell out. Four is
+ * where the line stops reading as a sentence and starts reading as a list nobody finishes.
+ */
+const MAX_SEGMENTS = 4;
+
+/**
+ * Collapse a consecutive run of tool calls into one row apiece.
+ *
+ * Only CONSECUTIVE calls merge, across tools as well as within one: the order is what the model
+ * did, and the row reads as the list of what it did in that order - "Ran 7 commands, edited
+ * ChatService.ts +9 -2". Every word of that still comes from the phrase table; composing is
+ * joining its clauses with commas, never writing new prose for them.
+ *
+ * Where a group STOPS, because an unbounded one would fold a two-hundred-round turn into a
+ * single line and call that progress:
+ *  - at a round boundary, which costs nothing here: the thread already draws one ToolCallList
+ *    per round (MessageThread, over replyRounds.roundsOf), so a run never reaches this function
+ *    spanning two. Prose between rounds is the narrative's own break and not ours to cross;
+ *  - either side of a call waiting at the approval gate, which blocks the turn and must never
+ *    be hidden inside a count - and the calls around it have already been answered, which is a
+ *    different thing to say about them;
+ *  - at MAX_SEGMENTS clauses, so the label never runs out of room to name what it covers.
+ */
+export function groupToolCalls(calls: readonly ChatToolCall[]): ToolCallGroup[] {
+  const groups: ToolCallGroup[] = [];
+  let pending: ToolSegment[] = [];
+
+  const flush = () => {
+    if (pending.length === 0) return;
+    const members = pending.flatMap(segment => segment.calls);
+    const clauses = pending.map((segment, index) =>
+      index === 0 ? segmentLabel(segment) : continueSentence(segmentLabel(segment))
+    );
+    const totals = diffTotals(members);
+    groups.push({
+      id: members[0].id,
+      calls: members,
+      label: clauses.join(', '),
+      ...(totals ? { diffstat: totals } : {}),
+      status: groupStatus(members),
+    });
+    pending = [];
+  };
+
+  for (const segment of toSegments(calls)) {
+    if (segment.calls[0].status === 'awaiting-approval') {
+      flush();
+      pending = [segment];
+      flush();
       continue;
     }
-
-    groups.push({ id: call.id, name: call.name, calls: [call], label: toolRowLabel(call), status: call.status });
+    if (pending.length === MAX_SEGMENTS) flush();
+    pending.push(segment);
   }
+  flush();
 
   return groups;
 }

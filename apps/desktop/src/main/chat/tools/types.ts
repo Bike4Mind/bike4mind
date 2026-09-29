@@ -41,6 +41,11 @@ export interface ToolReporter {
   notice(notice: ChatToolNotice): void;
   /** Name this call's collapsed row, for a tool whose arguments do not read as one. */
   label(text: string): void;
+  /**
+   * Record what this call changed on disk. Called only once the write has landed: unlike the
+   * other channels here, this one is kept off a call that failed. See ChatToolCall.diff.
+   */
+  diff(value: ChatDiff): void;
 }
 
 /**

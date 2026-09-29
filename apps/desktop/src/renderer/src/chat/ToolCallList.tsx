@@ -9,7 +9,14 @@ import type { ChatApprovalDecision, ChatToolCall, ChatToolNotice, ChatToolStatus
 import { DiffView } from './DiffView';
 import { ChevronIcon } from './icons';
 import { MediaAttachments } from './MediaAttachment';
-import { groupToolCalls, summarizeInput, type ToolCallGroup } from './toolRows';
+import {
+  diffTotals,
+  groupToolCalls,
+  summarizeInput,
+  toolRowLabel,
+  type DiffTotals,
+  type ToolCallGroup,
+} from './toolRows';
 
 /** Tools that spend credits on the server rather than doing something to this machine. */
 function isGeneration(name: string): boolean {
@@ -173,7 +180,9 @@ function ApprovalPrompt({
 
 /** One call's full detail, behind the disclosure: what it was given, and what it returned. */
 function ToolCallDetail({ call }: { call: ChatToolCall }) {
-  const argument = summarizeInput(call);
+  // The diff names the file in its own header, so repeating the path above it is the same
+  // string twice in three lines - and a write has no other argument worth a line of its own.
+  const argument = call.diff ? '' : summarizeInput(call);
 
   return (
     <Box data-testid="chat-tool-detail">
@@ -189,11 +198,11 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
         </Typography>
       )}
 
-      {/* Only a write tool carries one, and only because it was approved: this is the change the
-          user allowed, kept where they can go back and check what it actually was. */}
-      {call.approvalDiff && (
+      {/* `diff`, never `approvalDiff`: this row is a record of a turn that has happened, and
+          only the first of those is one. See ChatToolCall.diff. */}
+      {call.diff && (
         <Box sx={{ mt: 0.5 }}>
-          <DiffView diff={call.approvalDiff} />
+          <DiffView diff={call.diff} />
         </Box>
       )}
 
@@ -220,6 +229,78 @@ const ROW_TONE: Record<ChatToolStatus, string> = {
 };
 
 /**
+ * The `+N -M` beside a row's label.
+ *
+ * Its own element rather than part of the label, and not allowed to shrink: the label is what
+ * ellipsizes when the row runs out of width, and these two numbers are the part of it a reader
+ * scanning a turn is actually counting on.
+ */
+function DiffStat({ totals }: { totals: DiffTotals }) {
+  return (
+    <Stack direction="row" spacing={0.5} sx={{ flex: '0 0 auto' }} data-testid="chat-tool-row-diffstat">
+      <Typography level="body-xs" textColor="success.plainColor">
+        +{totals.added}
+      </Typography>
+      <Typography level="body-xs" textColor="danger.plainColor">
+        -{totals.removed}
+      </Typography>
+    </Stack>
+  );
+}
+
+/**
+ * One call inside an expanded group of several.
+ *
+ * It gets its own label because the group's label is a tally: "Ran 7 commands, edited
+ * ChatService.ts" is the right thing to read at rest and the wrong thing to navigate by, and a
+ * reader who opened the row did so to find which of the seven is the one they want.
+ */
+function ToolCallEntry({ call, first }: { call: ChatToolCall; first: boolean }) {
+  const [open, setOpen] = useState(false);
+  const totals = diffTotals([call]);
+
+  return (
+    <Box
+      component="details"
+      open={open}
+      onToggle={event => setOpen(event.currentTarget.open)}
+      sx={{ borderTop: first ? undefined : '1px solid', borderColor: 'divider' }}
+      data-testid="chat-tool-entry"
+      data-status={call.status}
+    >
+      <Stack
+        component="summary"
+        direction="row"
+        spacing={0.75}
+        alignItems="center"
+        sx={{
+          cursor: 'pointer',
+          listStyle: 'none',
+          px: 1,
+          py: 0.5,
+          color: ROW_TONE[call.status],
+          '&::-webkit-details-marker': { display: 'none' },
+          '&:hover': { opacity: 0.85 },
+        }}
+        data-testid="chat-tool-entry-summary"
+      >
+        <Typography level="body-xs" textColor="inherit" noWrap sx={{ minWidth: 0, flex: 1 }}>
+          {toolRowLabel(call)}
+        </Typography>
+        {totals && <DiffStat totals={totals} />}
+        <Box sx={{ display: 'flex', opacity: 0.6 }}>
+          <ChevronIcon open={open} />
+        </Box>
+      </Stack>
+
+      <Box sx={{ px: 1, pb: 0.75 }}>
+        <ToolCallDetail call={call} />
+      </Box>
+    </Box>
+  );
+}
+
+/**
  * One collapsed line of the transcript, and everything behind it.
  *
  * Muted and unboxed on purpose: the assistant's prose is the thing being read, and a panel per
@@ -233,6 +314,7 @@ const ROW_TONE: Record<ChatToolStatus, string> = {
 function ToolGroupRow({ group }: { group: ToolCallGroup }) {
   const [open, setOpen] = useState(false);
   const running = group.status === 'running';
+  const single = group.calls.length === 1;
 
   return (
     <Box sx={{ borderLeft: '2px solid', borderColor: 'divider', pl: 1.25 }}>
@@ -268,21 +350,41 @@ function ToolGroupRow({ group }: { group: ToolCallGroup }) {
               }}
             />
           )}
-          <Typography level="body-xs" textColor="inherit" noWrap sx={{ minWidth: 0 }} data-testid="chat-tool-row-label">
+          <Typography
+            level="body-xs"
+            textColor="inherit"
+            noWrap
+            sx={{ minWidth: 0, flex: '0 1 auto' }}
+            data-testid="chat-tool-row-label"
+          >
             {group.label}
           </Typography>
+          {group.diffstat && <DiffStat totals={group.diffstat} />}
           <Box sx={{ display: 'flex', opacity: 0.6 }}>
             <ChevronIcon open={open} />
           </Box>
         </Stack>
 
-        {/* No rule of its own: the group already sits behind one, and nesting a second turns an
-            expanded row into a ladder. */}
-        <Stack spacing={1} sx={{ pt: 0.5, pb: 0.5 }}>
-          {group.calls.map(call => (
-            <ToolCallDetail key={call.id} call={call} />
-          ))}
-        </Stack>
+        {/* One call needs no list around it: the summary above already named it, and a second
+            copy of that label under a second chevron is the same sentence twice.
+
+            No rule of its own either way: the group already sits behind one, and nesting a
+            second turns an expanded row into a ladder. */}
+        {single ? (
+          <Box sx={{ pt: 0.5, pb: 0.5 }}>
+            <ToolCallDetail call={group.calls[0]} />
+          </Box>
+        ) : (
+          <Sheet
+            variant="outlined"
+            sx={{ borderRadius: 'sm', my: 0.5, bgcolor: 'transparent' }}
+            data-testid="chat-tool-entries"
+          >
+            {group.calls.map((call, index) => (
+              <ToolCallEntry key={call.id} call={call} first={index === 0} />
+            ))}
+          </Sheet>
+        )}
       </Box>
 
       {/* Outside the <details>, both of them: a generated image nobody can see until they

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { ChatToolCall, ChatToolStatus } from '@shared/chat';
-import { groupToolCalls, shortenArgument, toolRowLabel } from './toolRows';
+import type { ChatDiff, ChatToolCall, ChatToolStatus } from '@shared/chat';
+import { diffTotals, groupToolCalls, shortenArgument, toolRowLabel } from './toolRows';
 
 function call(
   id: string,
@@ -9,6 +9,12 @@ function call(
   status: ChatToolStatus = 'done'
 ): ChatToolCall {
   return { id, name, input, status };
+}
+
+/** A write that landed. Only the counts matter here; DiffView's tests cover the lines. */
+function wrote(id: string, path: string, added: number, removed: number): ChatToolCall {
+  const diff: ChatDiff = { path, operation: 'edit', added, removed, lines: [] };
+  return { ...call(id, 'file_edit', { path }), diff };
 }
 
 describe('toolRowLabel', () => {
@@ -98,14 +104,43 @@ describe('groupToolCalls', () => {
     expect(groups[0].calls).toHaveLength(3);
   });
 
-  it('does not merge calls that were not consecutive', () => {
+  it('folds a mixed run into one row, as a list in the order the tools ran', () => {
+    const groups = groupToolCalls([
+      call('1', 'bash_execute', { command: 'a' }),
+      call('2', 'bash_execute', { command: 'b' }),
+      call('3', 'file_read', { path: 'src/app.ts' }),
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].label).toBe('Ran 2 commands, read src/app.ts');
+    expect(groups[0].calls).toHaveLength(3);
+  });
+
+  // The count is a claim about a run, so two reads with a command between them are two clauses
+  // and never "Read 2 files" - that would report a sequence the model never performed.
+  it('counts only calls that really were consecutive', () => {
     const groups = groupToolCalls([
       call('1', 'file_read', { path: 'a.ts' }),
       call('2', 'bash_execute', { command: 'ls' }),
       call('3', 'file_read', { path: 'b.ts' }),
     ]);
 
-    expect(groups.map(group => group.label)).toEqual(['Read a.ts', 'Ran ls', 'Read b.ts']);
+    expect(groups.map(group => group.label)).toEqual(['Read a.ts, ran ls, read b.ts']);
+  });
+
+  it('breaks a run rather than composing a label too long to name what it covers', () => {
+    const groups = groupToolCalls([
+      call('1', 'file_read', { path: 'a.ts' }),
+      call('2', 'bash_execute', { command: 'ls' }),
+      call('3', 'grep_search', { pattern: 'handleClick' }),
+      call('4', 'glob_files', { pattern: '*.ts' }),
+      call('5', 'file_read', { path: 'b.ts' }),
+      call('6', 'bash_execute', { command: 'pwd' }),
+    ]);
+
+    expect(groups).toHaveLength(2);
+    expect(groups[0].label).toBe('Read a.ts, ran ls, searched for handleClick, searched for *.ts');
+    expect(groups[1].label).toBe('Read b.ts, ran pwd');
   });
 
   it('leaves a call at the approval gate on its own row', () => {
@@ -120,14 +155,28 @@ describe('groupToolCalls', () => {
     expect(groups[1].calls).toHaveLength(1);
   });
 
+  // A count is written in the past tense, so a failure can never be inside one: "Read 2 files"
+  // over a read that failed reports the opposite of what happened.
   it('reports a failure in a group rather than the successes around it', () => {
     const groups = groupToolCalls([
       call('1', 'file_read', { path: 'a.ts' }),
       call('2', 'file_read', { path: 'b.ts' }, 'error'),
     ]);
 
+    expect(groups).toHaveLength(1);
     expect(groups[0].status).toBe('error');
-    expect(groups[0].label).toBe('Read 2 files');
+    expect(groups[0].label).toBe('Read a.ts, failed to read b.ts');
+  });
+
+  it('keeps a refusal out of the count too', () => {
+    const groups = groupToolCalls([
+      call('1', 'bash_execute', { command: 'a' }),
+      call('2', 'bash_execute', { command: 'b' }),
+      call('3', 'bash_execute', { command: 'rm -rf /' }, 'denied'),
+    ]);
+
+    expect(groups[0].status).toBe('denied');
+    expect(groups[0].label).toBe('Ran 2 commands, did not run rm -rf /');
   });
 
   it('keeps the spinner on a group whose last call is still running', () => {
@@ -137,6 +186,42 @@ describe('groupToolCalls', () => {
     ]);
 
     expect(groups[0].status).toBe('running');
+  });
+
+  // Beside the label, never inside it: the label is what the row ellipsizes, and these are the
+  // two numbers a reader scanning a turn is counting on.
+  it("carries the group's own total for the writes in it that landed", () => {
+    const groups = groupToolCalls([
+      call('1', 'bash_execute', { command: 'ls' }),
+      wrote('2', '/repo/src/ChatService.ts', 9, 2),
+    ]);
+
+    expect(groups[0].label).toBe('Ran ls, edited /repo/src/ChatService.ts');
+    expect(groups[0].diffstat).toEqual({ added: 9, removed: 2 });
+  });
+
+  it('sums the writes across a group rather than showing the last one', () => {
+    const groups = groupToolCalls([wrote('1', '/repo/a.ts', 9, 2), wrote('2', '/repo/b.ts', 4, 0)]);
+
+    expect(groups[0].label).toBe('Edited 2 files');
+    expect(groups[0].diffstat).toEqual({ added: 13, removed: 2 });
+  });
+
+  // Every message stored before writes recorded a diff, and every group that wrote nothing.
+  it('says nothing about lines when no call in the group has a diff', () => {
+    const groups = groupToolCalls([call('1', 'file_edit', { path: 'a.ts' }), call('2', 'file_read', { path: 'b.ts' })]);
+
+    expect(groups[0].label).toBe('Edited a.ts, read b.ts');
+    expect(groups[0].diffstat).toBeUndefined();
+    expect(diffTotals(groups[0].calls)).toBeUndefined();
+  });
+
+  // A create with nothing removed still has a total worth showing; only "no write at all" does
+  // not, which is why this is not a truthiness check on the numbers.
+  it('shows a total of zero removals rather than no total', () => {
+    const groups = groupToolCalls([wrote('1', '/repo/new.ts', 28, 0)]);
+
+    expect(groups[0].diffstat).toEqual({ added: 28, removed: 0 });
   });
 
   it('keys each group on its first call, so settling the rest does not remount it', () => {
