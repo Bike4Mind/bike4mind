@@ -1,8 +1,7 @@
 // Hand scanners for the lattice rule-parser patterns. Each returns the same captures as the
 // regex in its doc comment, but in linear time: those regexes backtracked quadratically or
 // worse on runs of whitespace or operators. `.` there excludes line terminators and `\s`
-// spans them, which is why the scanners track both. splitEquals has a copy in
-// apps/client/app/utils/splitEquals.ts.
+// spans them, which is why the scanners track both.
 
 const WHITESPACE = /\s/;
 const OPERATORS = '+-*/';

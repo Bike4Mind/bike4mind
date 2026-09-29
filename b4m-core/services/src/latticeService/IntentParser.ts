@@ -1,5 +1,4 @@
 import { Logger } from '@bike4mind/observability';
-import { matchExplain, matchFormula, matchSetValue } from './intentScan';
 /**
  * IntentParser
  *
@@ -14,6 +13,7 @@ import type {
   ILatticeError,
   LatticeIntentType,
 } from '@bike4mind/common';
+import { matchExplain, matchFormula, matchSetValue } from '@bike4mind/common';
 
 // TYPES
 

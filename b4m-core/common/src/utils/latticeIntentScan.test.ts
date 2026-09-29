@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { splitEquals } from './splitEquals';
+import { matchExplain, matchFormula, matchSetValue, splitEquals } from './latticeIntentScan';
 
-// The regex the scanner replaced, kept as the differential oracle.
+// The regexes the scanners replaced, kept as the differential oracle.
 const SITES: Array<[string, RegExp, (s: string) => string[] | null]> = [
   ['equals', /^(.+?)\s*(?:=|equals?)\s*(.+)$/i, splitEquals],
+  ['set', /(?:set\s+)?(.+?)\s+(?:is|to|=|equals?)\s+\$?([\d,]+(?:\.\d+)?)/i, matchSetValue],
+  ['formula', /(.+?)\s*(?:=|equals?)\s*(.+?)\s*([+\-*/])\s*(.+)/i, matchFormula],
+  ['explain', /(?:explain|how\s+is)\s+(.+?)(?:\s+calculated)?(?:\?)?$/i, matchExplain],
 ];
 const oldCaptures = (re: RegExp, s: string) => re.exec(s)?.slice(1) ?? null;
 
@@ -55,7 +58,7 @@ const TOKENS = [
 const corpus = (() => {
   const rand = mulberry32(2998);
   const pick = <T>(xs: T[]) => xs[Math.floor(rand() * xs.length)];
-  const cases = ['set    is 5', 'a =   + b', 'a equals+b', 'x equals'];
+  const cases = ['set    is 5', 'a =   + b', 'a equals+b', 'x equals', 'explain  calculated', 'how is x calculated?'];
   for (let i = 0; i < 3000; i++) {
     let s = pick(LEADS);
     const len = 1 + Math.floor(rand() * 24);
@@ -65,7 +68,7 @@ const corpus = (() => {
   return cases;
 })();
 
-describe('splitEquals', () => {
+describe('lattice intent scanners', () => {
   it.each(SITES)('%s: yields exactly what the old regex captured across a seeded corpus', (_name, re, scan) => {
     let matched = 0;
     for (const input of corpus) {
@@ -113,6 +116,16 @@ describe('splitEquals', () => {
   const SHAPES: Array<[string, (s: string) => unknown, (n: number) => string]> = [
     ['equals, spaces', splitEquals, n => 'a' + ' '.repeat(n) + 'x'],
     ['equals, operator run', splitEquals, n => 'a' + '= '.repeat(n) + '\nx'],
+    ['set, spaces', matchSetValue, n => 'set a' + ' '.repeat(n) + 'x'],
+    ['set, keyword run', matchSetValue, n => 'set a' + ' is'.repeat(n) + '\nx'],
+    ['set, space-newlines', matchSetValue, n => 'set a' + ' \n'.repeat(n) + 'x'],
+    ['formula, spaces', matchFormula, n => 'a' + ' '.repeat(n) + 'x'],
+    ['formula, operator run', matchFormula, n => 'a' + '= '.repeat(n) + '\nx'],
+    ['formula, space-newlines', matchFormula, n => 'a' + ' \n'.repeat(n) + 'x'],
+    ['explain, spaces', matchExplain, n => 'explain a' + ' '.repeat(n) + 'x'],
+    ['set, repeated openers', matchSetValue, n => 'set a '.repeat(n) + '\nx'],
+    ['formula, repeated equations', matchFormula, n => 'a=b '.repeat(n) + '\nx'],
+    ['explain, repeated openers', matchExplain, n => 'explain a '.repeat(n) + '\nx'],
   ];
   it.each(SHAPES)('stays linear: %s', (_name, scan, build) => {
     assertLinearGrowth(scan, build, 20_000);

@@ -123,6 +123,7 @@ export * from './utils/dataLakeTaxonomy';
 export * from './utils/tagName';
 export * from './utils/generatedMedia';
 export * from './utils/imageSize';
+export * from './utils/latticeIntentScan';
 export * from './navigation';
 export * from './sample';
 export * from './rateLimitHeaders';
