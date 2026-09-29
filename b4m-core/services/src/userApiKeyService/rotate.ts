@@ -127,7 +127,7 @@ export const rotateUserApiKey = async (
     apiKey.userId = userId;
   }
 
-  await db.userApiKeys.update(apiKey);
+  await db.userApiKeys.update({ id: apiKey.id, keyHash, keyPrefix, ...(reOwned ? { userId } : {}) });
 
   return {
     id: apiKey.id,

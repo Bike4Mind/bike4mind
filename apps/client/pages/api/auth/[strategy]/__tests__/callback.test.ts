@@ -179,7 +179,9 @@ describe('[strategy]/callback - signup credited to the source product', () => {
   const touchCookie = `b4m_last_touch=${encodeURIComponent(JSON.stringify({ source: 'widgets', medium: 'landing' }))}`;
 
   it("sends a new account's touches, read from its own cookies, with the provider as the method", async () => {
-    const res = await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
+    const res = await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
+      cookie: touchCookie,
+    });
     await new Promise(resolve => setImmediate(resolve));
 
     expect(mockEmitSignup).toHaveBeenCalledWith({

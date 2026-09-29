@@ -5,6 +5,7 @@
  */
 
 import { IChatHistoryItemDocument } from '@bike4mind/common';
+import { stripToolOutputMarker } from './artifactParser';
 
 export interface FormatVoiceHistoryOptions {
   /** Maximum characters for the formatted history (default: 3000) */
@@ -75,7 +76,7 @@ export function formatVoiceHistory(
     if (item.replies && Array.isArray(item.replies)) {
       const validReply = item.replies.find((reply: string) => !reply.trim().startsWith('<think>'));
       if (validReply) {
-        lines.push(formatMessage('assistant', validReply, maxCharsPerMessage));
+        lines.push(formatMessage('assistant', stripToolOutputMarker(validReply), maxCharsPerMessage));
       }
     }
   }

@@ -27,10 +27,9 @@ import { ChatModels } from '../../models';
  * What starts a run. Deliberately the same three concepts as `ResearchTaskExecutionType`, in this
  * package's naming convention, so a reader who knows one knows the other.
  *
- * v1 accepts `on_demand` ONLY - `startResearchRun` rejects the other two. They exist in the union
- * now because the whole point of making configuration a saved object is that v2 is a scheduling
- * change: a scheduler enqueues the same run against the same stored config, and nothing here or
- * downstream has to move.
+ * `on_demand` is a human pressing Run; `periodic` is a config with a `cadence`, fired by the
+ * research scheduler (`runDueResearchSchedules`). `scheduled` - a one-off run at a set time - is
+ * storable but refused: nothing fires it.
  */
 export const RESEARCH_RUN_TRIGGERS = ['on_demand', 'periodic', 'scheduled'] as const;
 export type ResearchRunTrigger = (typeof RESEARCH_RUN_TRIGGERS)[number];
@@ -43,8 +42,9 @@ export const RESEARCH_RUN_PRODUCER = 'research_run';
  * started is visible immediately rather than appearing only once a worker picks it up.
  *
  * `completed` means the run finished its own loop, INCLUDING when it stopped early on a lever
- * (`stopReason`). A stopped-early run did the work it was allowed to do; only an unhandled failure
- * is `failed`.
+ * (`stopReason`). A stopped-early run did the work it was allowed to do. `failed` is an unhandled
+ * fault, an operator fact that makes the run impossible, or a judge that failed on every candidate
+ * it tried - the last because "nothing proposed" would otherwise read as "the web had nothing".
  */
 export const RESEARCH_RUN_STATUSES = ['queued', 'running', 'completed', 'failed'] as const;
 export type ResearchRunStatus = (typeof RESEARCH_RUN_STATUSES)[number];
@@ -199,15 +199,70 @@ export interface ResearchRunLevers {
   proposedTags: string[];
 }
 
+// -- Schedule ----------------------------------------------------------------------------------
+//
+// A config with a cadence is fired by the research scheduler cron without a user present. The
+// schedule is NOT a lever: levers are snapshotted onto the run, the schedule only decides whether
+// a run starts at all.
+
+export const RESEARCH_SCHEDULE_CADENCES = ['off', 'daily', 'weekly', 'monthly'] as const;
+export type ResearchScheduleCadence = (typeof RESEARCH_SCHEDULE_CADENCES)[number];
+
+/**
+ * A due scheduled run is skipped while the lake holds this many pending proposals or more. Gathering
+ * candidates nobody is reviewing spends money on a queue that only grows, so the scheduler waits for
+ * a human instead. Run now only warns - a person pressing it has decided to spend.
+ */
+export const RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT = 25;
+export const RESEARCH_REVIEW_BACKLOG_LIMIT_MAX = 500;
+
+export const RESEARCH_SCHEDULE_SKIP_REASONS = [
+  /** The lake's pending proposals were at or above the config's `reviewBacklogLimit`. */
+  'review_backlog',
+  /** Another run for this lake was still in flight. */
+  'run_in_progress',
+  /** The lake had already started its daily allowance of runs. */
+  'daily_cap',
+  /** The lake is not active (archived, deleted or missing). */
+  'lake_inactive',
+] as const;
+export type ResearchScheduleSkipReason = (typeof RESEARCH_SCHEDULE_SKIP_REASONS)[number];
+
+/**
+ * What the scheduler did the last time this config came due, shown on the config card. Execution
+ * failures after a run starts are on the run row, not here - this records only the decision to
+ * start, so a skipped or refused tick is visible even though it produced no run.
+ */
+export type ResearchScheduleOutcome =
+  | { outcome: 'started'; at: Date; runId: string }
+  | {
+      outcome: 'skipped';
+      at: Date;
+      reason: ResearchScheduleSkipReason;
+      /** Set for `review_backlog`: the count against the limit that caused the skip. */
+      pendingProposals?: number;
+      reviewBacklogLimit?: number;
+    }
+  | { outcome: 'failed'; at: Date; error: string };
+
 export interface IDataLakeResearchConfig extends ResearchRunLevers {
   dataLakeId: string;
   /** What a human calls this config in the list. */
   name: string;
-  /**
-   * v1 writes `on_demand` and `startResearchRun` refuses anything else. Stored rather than implied
-   * so a v2 scheduler has a field to select on instead of a schema migration.
-   */
+  /** Derived from `cadence`: `periodic` while a cadence is set, `on_demand` otherwise. */
   trigger: ResearchRunTrigger;
+  cadence: ResearchScheduleCadence;
+  /** Pending-proposal count at which a due scheduled run is skipped. See the default's comment. */
+  reviewBacklogLimit: number;
+  /** When the scheduler next fires this config. Null exactly when `cadence` is `off`. */
+  nextRunAt?: Date | null;
+  /**
+   * The first slot of the current cadence, set with it. Every regular slot is this plus a whole
+   * number of periods, so a retried tick cannot shift the cadence and a monthly config keeps its
+   * day of the month past a short month. Null exactly when `cadence` is `off`.
+   */
+  scheduleAnchorAt?: Date | null;
+  lastScheduledOutcome?: ResearchScheduleOutcome | null;
   createdByUserId: string;
   lastUpdatedByUserId?: string | null;
   /** When a run last STARTED from this config. The list's "when did I last use this" column. */
@@ -225,7 +280,7 @@ export interface ResearchRunTotals {
   /** Candidates the judge scored below `minRelevance`. */
   belowRelevance: number;
   /**
-   * Candidates the judge could not score at all, because the model was unreachable. Counted apart
+   * Candidates the judge could not score at all: the model call failed or its response was unusable. Counted apart
    * from `belowRelevance` even though the candidate meets the same fate: a run whose judge is down
    * reports "20 hits, 20 below relevance, 0 proposed", which reads as "the web had nothing" and
    * sends a manager off to retune a query that was never the problem.
@@ -272,7 +327,7 @@ export interface IDataLakeResearchRun {
    */
   levers: ResearchRunLevers;
   trigger: ResearchRunTrigger;
-  /** Who started it. Absent for a future scheduled run with no human behind it. */
+  /** Who started it. Absent for a scheduled run, which has no human behind it. */
   startedByUserId?: string | null;
   status: ResearchRunStatus;
   startedAt?: Date | null;
@@ -281,14 +336,27 @@ export interface IDataLakeResearchRun {
   /** What the run actually spent on relevance judgments, micro-USD. Reported next to the ceiling. */
   spentMicroUsd: number;
   totals: ResearchRunTotals;
-  /** Why a `failed` run failed, in terms a lake manager can act on. Never a raw stack. */
+  /**
+   * The judge model the run actually resolved, which is not always `levers.model`: that lever is
+   * absent on "Default" and falls back when the configured model is gone. Recorded so spend and
+   * quality trace to a model, and so changing the default does not rewrite history. Absent on a run
+   * that failed before resolving one.
+   */
+  judgeModel?: string | null;
+  /**
+   * Why a `failed` run failed, in terms a lake manager can act on. Never a raw stack. Also set on a
+   * `completed` run whose judge failed on some candidates, so a degraded run carries its cause.
+   */
   error?: string | null;
 }
 
 export type IDataLakeResearchRunDocument = IDataLakeResearchRun & IMongoDocument;
 
 /** What a caller supplies to save a config. Ids, timestamps and `lastRunAt` are the server's. */
-export type CreateDataLakeResearchConfigInput = Omit<IDataLakeResearchConfig, 'lastUpdatedByUserId' | 'lastRunAt'>;
+export type CreateDataLakeResearchConfigInput = Omit<
+  IDataLakeResearchConfig,
+  'lastUpdatedByUserId' | 'lastRunAt' | 'lastScheduledOutcome'
+>;
 
 /**
  * The editable half of a config. `dataLakeId` and `createdByUserId` are not editable.
@@ -301,6 +369,12 @@ export type UpdateDataLakeResearchConfigInput = Partial<Omit<ResearchRunLevers, 
   recencyDays?: number | null;
   model?: string | null;
   name?: string;
+  trigger?: ResearchRunTrigger;
+  cadence?: ResearchScheduleCadence;
+  reviewBacklogLimit?: number;
+  nextRunAt?: Date | null;
+  scheduleAnchorAt?: Date | null;
+  lastScheduledOutcome?: null;
   lastUpdatedByUserId: string;
 };
 
@@ -311,6 +385,7 @@ export interface SettleResearchRunInput {
   stopReason?: ResearchRunStopReason;
   spentMicroUsd: number;
   totals: ResearchRunTotals;
+  judgeModel?: string;
   error?: string;
 }
 
@@ -330,6 +405,23 @@ export interface IDataLakeResearchConfigRepository extends IBaseRepository<IData
   ): Promise<IDataLakeResearchConfigDocument | null>;
   /** Stamp the start of a run. Separate from updateConfig so it needs no actor and no levers. */
   recordRunStarted(id: string, at: Date): Promise<void>;
+  /**
+   * Atomically claim up to `limit` configs whose `nextRunAt <= now`, pushing each one's `nextRunAt`
+   * out to `leaseUntil` so an overlapping scheduler tick cannot claim it again. Returns the configs
+   * as they were BEFORE the claim, so the caller still sees the slot that came due.
+   */
+  claimDueConfigs(now: Date, leaseUntil: Date, limit: number): Promise<IDataLakeResearchConfigDocument[]>;
+  /**
+   * Record what a scheduler tick decided and when the config is next due. Applied only while the
+   * config still has the cadence it was claimed with: a user who switched the schedule off or
+   * changed it mid-tick has already set the next slot, and this must not overwrite it.
+   */
+  recordScheduleOutcome(
+    id: string,
+    claimedCadence: ResearchScheduleCadence,
+    outcome: ResearchScheduleOutcome,
+    nextRunAt: Date
+  ): Promise<void>;
   deleteConfig(id: string, dataLakeId: string): Promise<boolean>;
   /** Drop a deleted lake's configs. */
   deleteForLake(dataLakeId: string): Promise<number>;
@@ -349,9 +441,24 @@ export interface IDataLakeResearchRunRepository extends IBaseRepository<IDataLak
    * spend a second ceiling's worth of money.
    */
   claimForExecution(id: string, startedAt: Date): Promise<IDataLakeResearchRunDocument | null>;
-  settleRun(id: string, input: SettleResearchRunInput): Promise<void>;
-  /** Live progress while the loop runs, so the panel is not blank for a minute. */
-  recordProgress(id: string, spentMicroUsd: number, totals: ResearchRunTotals): Promise<void>;
+  /**
+   * The executor's own settle - matches `queued` or `running`. Returns false when the row was
+   * already terminal (settle was a no-op), true when it settled. A caller that does not hold the
+   * execution claim must use `settleQueuedRun` instead.
+   */
+  settleRun(id: string, input: SettleResearchRunInput): Promise<boolean>;
+  /**
+   * Settle for a caller that has NOT claimed the run - matches `queued` ONLY, so it can never
+   * overwrite a run the executor has already claimed (`running`) or resolved. Returns false when
+   * the row was not queued (the executor now owns it), true when it settled.
+   */
+  settleQueuedRun(id: string, input: SettleResearchRunInput): Promise<boolean>;
+  /**
+   * Live progress while the loop runs, so the panel is not blank for a minute. When given, also
+   * stamps the resolved judge model, so an in-flight run's card can name its judge before the run
+   * settles. Optional so existing callers keep compiling; an omitted model leaves the field as is.
+   */
+  recordProgress(id: string, spentMicroUsd: number, totals: ResearchRunTotals, judgeModel?: string): Promise<void>;
   /** How many runs a lake started since `since`. Backs the per-lake daily spend cap. */
   countStartedSince(dataLakeId: string, since: Date): Promise<number>;
   /**

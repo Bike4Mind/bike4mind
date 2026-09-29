@@ -292,6 +292,16 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
   claimForSync(id: string): Promise<string | null>;
 
   /**
+   * Route-side half of the disconnect/claimForSync race: atomically disables the connection only if
+   * it is not currently 'syncing', instead of a snapshot-read-then-unconditional-disable that a
+   * concurrent claimForSync could land inside of. Returns whether the disable took effect; false
+   * means a sync is in flight and the caller should refuse the disconnect (409) rather than proceed.
+   * organizationId is REQUIRED, matching `updateCredential`/`release`, so this cannot disable a
+   * connection outside the caller's own org even if a route ever forgot its own gate.
+   */
+  disableIfNotSyncing(id: string, organizationId: string): Promise<boolean>;
+
+  /**
    * Continuation-only claim take-over: refreshes `syncClaimedAt` iff the connection is still 'syncing'
    * for THIS `activeIngestBatchId` AND still presents `claimToken` (the value the previous slice's
    * renewSyncClaim/adoptSyncClaim minted). A sliced ingest hands the claim from one run to the next

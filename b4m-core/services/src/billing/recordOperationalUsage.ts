@@ -28,7 +28,7 @@ export interface RecordOperationalUsageParams {
   /** The user's organization, when they belong to one; attribution rolls up to it. */
   organization?: IOrganizationDocument | null;
   sessionId?: string;
-  /** Data lake this call is 1:1 attributable to (ingestion embeds only). */
+  /** Data lake this call is 1:1 attributable to - ingestion embeds and research-run judge calls. */
   dataLakeId?: string;
   feature: OperationalUsageFeature;
   /** Provider/backend, e.g. 'openai', 'voyageai'. */

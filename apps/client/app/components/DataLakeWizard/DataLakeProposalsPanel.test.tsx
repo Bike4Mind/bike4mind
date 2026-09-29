@@ -119,6 +119,60 @@ describe('DataLakeProposalsPanel', () => {
     expect(screen.getByTestId('datalake-proposal-approve-btn')).toBeInTheDocument();
   });
 
+  describe('onDirtyChange', () => {
+    it('reports dirty only while a typed decline reason is unsubmitted', () => {
+      const onDirtyChange = vi.fn();
+      renderPanel({ onDirtyChange });
+      expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+
+      fireEvent.click(screen.getByTestId('datalake-proposal-decline-btn'));
+      expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+
+      fireEvent.change(screen.getByTestId('datalake-proposal-decline-reason'), { target: { value: 'paywalled' } });
+      expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+
+      fireEvent.change(screen.getByTestId('datalake-proposal-decline-reason'), { target: { value: '   ' } });
+      expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+
+      fireEvent.change(screen.getByTestId('datalake-proposal-decline-reason'), { target: { value: 'paywalled' } });
+      fireEvent.click(screen.getByTestId('datalake-proposal-decline-cancel-btn'));
+      expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+    });
+
+    it('drops the draft and reports clean when the reviewer switches views', () => {
+      const onDirtyChange = vi.fn();
+      renderPanel({ onDirtyChange, onViewChange: vi.fn() });
+      fireEvent.click(screen.getByTestId('datalake-proposal-decline-btn'));
+      fireEvent.change(screen.getByTestId('datalake-proposal-decline-reason'), { target: { value: 'paywalled' } });
+      expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+
+      fireEvent.click(screen.getByTestId('datalake-proposals-view-declined'));
+
+      expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+      expect(screen.queryByTestId('datalake-proposal-decline-reason')).not.toBeInTheDocument();
+    });
+
+    it('reports clean once the declined row has left the list', () => {
+      const onDirtyChange = vi.fn();
+      const props = { isLoading: false, error: null, onApprove: vi.fn(), onDecline: vi.fn(), onDirtyChange };
+      const { rerender } = render(
+        <Wrapper>
+          <DataLakeProposalsPanel proposals={[proposal()]} {...props} />
+        </Wrapper>
+      );
+      fireEvent.click(screen.getByTestId('datalake-proposal-decline-btn'));
+      fireEvent.change(screen.getByTestId('datalake-proposal-decline-reason'), { target: { value: 'paywalled' } });
+      expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+
+      rerender(
+        <Wrapper>
+          <DataLakeProposalsPanel proposals={[]} {...props} />
+        </Wrapper>
+      );
+      expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+    });
+  });
+
   // The spinner used to be unreachable: the row left decline mode in the same tick as the click, so a
   // decline showed no in-flight feedback and looked like nothing had happened.
   it('holds the decline row open after confirming so the in-flight state is visible', () => {

@@ -8,6 +8,8 @@ import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { admitProposedSource } from '@server/dataLakes/proposalAdmissionDeps';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 
 const ReviewInput = z.object({
   decision: z.enum(['approve', 'decline', 'restore']),
@@ -48,22 +50,33 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       dataLakeProposals: dataLakeProposalRepository,
       dataLakes: dataLakeRepository,
       dataLakeAccessGrants: dataLakeAccessGrantRepository,
+      ...lakeConfigAuditDb,
     };
+    // Attribute a key-driven review decision to the KEY, matching every other config-write route
+    // (grants.ts, lifecycle.ts) - see lakeConfigAuditPrincipal for why a session write needs no override.
+    const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
 
     if (decision === 'restore') {
-      const restored = await dataLakeService.restoreDataLakeProposal(proposalId, ctx, { db });
+      const restored = await dataLakeService.restoreDataLakeProposal(proposalId, actor, { db, logger: req.logger });
       return res.json({ data: restored });
     }
 
     if (decision === 'decline') {
-      const declined = await dataLakeService.declineDataLakeProposal(proposalId, ctx, { reason }, { db });
+      const declined = await dataLakeService.declineDataLakeProposal(
+        proposalId,
+        actor,
+        { reason },
+        { db, logger: req.logger }
+      );
       return res.json({ data: declined });
     }
 
-    const { proposal: approved, fabFile } = await dataLakeService.approveDataLakeProposal(proposalId, ctx, {
-      db,
-      admitSource: admitProposedSource,
-    });
+    const { proposal: approved, fabFile } = await dataLakeService.approveDataLakeProposal(
+      proposalId,
+      actor,
+      { db, admitSource: admitProposedSource, logger: req.logger },
+      { approverName: req.user?.name || req.user?.username || undefined }
+    );
     return res.json({ data: approved, fabFile: { id: fabFile.id, fileName: fabFile.fileName } });
   });
 

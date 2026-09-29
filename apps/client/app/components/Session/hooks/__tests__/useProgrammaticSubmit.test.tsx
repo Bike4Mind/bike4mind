@@ -54,6 +54,7 @@ type Props = {
   readyState: ReadyState;
   submitting: boolean;
   currentSession: ISessionDocument | null;
+  isNewChat: boolean;
 };
 
 const baseProps = (over: Partial<Props> = {}): Props => ({
@@ -61,6 +62,7 @@ const baseProps = (over: Partial<Props> = {}): Props => ({
   readyState: ReadyState.OPEN,
   submitting: false,
   currentSession: SESSION,
+  isNewChat: false,
   ...over,
 });
 
@@ -162,6 +164,64 @@ describe('useProgrammaticSubmit › programmaticLaunch', () => {
     expect(props.handleSendClick).not.toHaveBeenCalled();
     // Not consumed - left for the matching surface.
     expect(h.store.state.programmaticLaunch).not.toBeNull();
+  });
+
+  it('holds a launch pinned to the current optimistic session, then consumes once re-pinned to the real id', () => {
+    const tmp = { id: 'optimistic-session-abc' } as unknown as ISessionDocument;
+    h.store.state.programmaticLaunch = launch({ sessionId: tmp.id });
+    const props = baseProps({ currentSession: tmp });
+
+    const { rerender } = renderSubmit(props);
+    act(() => void vi.advanceTimersByTime(150));
+    expect(props.handleSendClick).not.toHaveBeenCalled();
+    expect(h.store.state.programmaticLaunch).not.toBeNull();
+
+    // useSessionCacheMigration re-pins the launch as session.created swaps in the real session.
+    h.store.state.programmaticLaunch = launch({ sessionId: SESSION.id });
+    rerender(baseProps({ handleSendClick: props.handleSendClick, currentSession: SESSION }));
+    act(() => void vi.advanceTimersByTime(150));
+    expect(props.handleSendClick).toHaveBeenCalledTimes(1);
+    expect(props.handleSendClick).toHaveBeenCalledWith('go', { toolsOverride: ['web_search'] });
+  });
+
+  it('consumes an unpinned launch on /new with no session, so the send mints one', () => {
+    h.store.state.programmaticLaunch = launch({ sessionId: null });
+    const props = baseProps({ currentSession: null, isNewChat: true });
+
+    renderSubmit(props);
+    act(() => void vi.advanceTimersByTime(150));
+
+    expect(props.handleSendClick).toHaveBeenCalledTimes(1);
+    expect(props.handleSendClick).toHaveBeenCalledWith('go', { toolsOverride: ['web_search'] });
+    expect(h.store.state.programmaticLaunch).toBeNull();
+  });
+
+  it('keeps the null-session guard for launches outside /new', () => {
+    h.store.state.programmaticLaunch = launch({ sessionId: null });
+    const props = baseProps({ currentSession: null });
+
+    renderSubmit(props);
+    act(() => void vi.advanceTimersByTime(150));
+
+    expect(props.handleSendClick).not.toHaveBeenCalled();
+    expect(h.store.state.programmaticLaunch).not.toBeNull();
+  });
+
+  it('drops a /new launch if a session appears during the settle delay', () => {
+    h.store.state.programmaticLaunch = launch({ sessionId: null });
+    const props = baseProps({ currentSession: null, isNewChat: true });
+
+    const { rerender } = renderSubmit(props);
+    rerender(
+      baseProps({
+        handleSendClick: props.handleSendClick,
+        currentSession: { id: 'optimistic-session-abc' } as unknown as ISessionDocument,
+        isNewChat: true,
+      })
+    );
+    act(() => void vi.advanceTimersByTime(150));
+
+    expect(props.handleSendClick).not.toHaveBeenCalled();
   });
 
   it('clears pending launch timers on unmount so no send fires into a stale session', () => {

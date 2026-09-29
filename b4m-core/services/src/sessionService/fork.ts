@@ -68,7 +68,8 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
       // retrieval where its source does not, until the source is itself updated.
       forceKnowledgeRetrieval: session.forceKnowledgeRetrieval,
     },
-    adapters
+    adapters,
+    { knowledgeIdsFromSourceSession: true }
   );
 
   const messagesToFork = await db.chatHistories.findAllBySessionIdAndLessThanOrEqualToTimestamp(

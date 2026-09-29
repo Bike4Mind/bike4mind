@@ -3,6 +3,7 @@ import BaseRepository from '@bike4mind/database';
 import { StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
 import Stripe from 'stripe';
 import { z } from 'zod';
+import type { AcquisitionTouch, AcquisitionTouches } from './acquisition';
 
 export enum SubscriptionOwnerType {
   User = 'User',
@@ -100,18 +101,10 @@ export const isDelinquentSubscriptionStatus = (status: Stripe.Subscription.Statu
   DELINQUENT_SUBSCRIPTION_STATUSES.has(status);
 
 /** One campaign touch: the utm_* fields of a landing. `source` is always present. */
-export interface SubscriptionAcquisitionTouch {
-  source: string;
-  medium?: string;
-  campaign?: string;
-  content?: string;
-}
+export type SubscriptionAcquisitionTouch = AcquisitionTouch;
 
 /** Where a subscription's customer came from, recorded at checkout. */
-export interface SubscriptionAcquisition {
-  firstTouch?: SubscriptionAcquisitionTouch;
-  lastTouch?: SubscriptionAcquisitionTouch;
-}
+export type SubscriptionAcquisition = AcquisitionTouches;
 
 export interface ISubscription {
   ownerType: SubscriptionOwnerType;

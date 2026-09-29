@@ -13,7 +13,7 @@ Bike4Mind equips your AI conversations with a set of smart tools that extend wha
 
 ## Enabling Tools
 
-Tools are managed per-notebook. You can toggle them from either of two surfaces — both edit the same per-notebook state:
+Your tool selection is a single setting that applies across all your notebooks. You can toggle tools from either of two surfaces, and both edit the same setting:
 
 - **Smart Tools dropdown in the composer** (recommended) — click the **Smart Tools** button next to the message input. The dropdown shows the catalog inline and is the fastest way to toggle tools while you're chatting.
 - **AI Settings panel** — open a notebook, click the **AI Settings** panel, and scroll to the **Tools** section.

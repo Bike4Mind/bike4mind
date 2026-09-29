@@ -44,8 +44,10 @@ function productIngestKeys(): Record<string, string> {
 
 /** The ingest key for a product, or undefined when it has none. For callers that post other Overwatch writes (such as a daily stats snapshot) with the same key. */
 export function ingestKeyFor(productId: string): string | undefined {
-  if (productId === HOST_PRODUCT_ID) return isSet(Config.OVERWATCH_INGEST_KEY) ? Config.OVERWATCH_INGEST_KEY : undefined;
-  return productIngestKeys()[productId];
+  if (productId === HOST_PRODUCT_ID)
+    return isSet(Config.OVERWATCH_INGEST_KEY) ? Config.OVERWATCH_INGEST_KEY : undefined;
+  const keys = productIngestKeys();
+  return Object.hasOwn(keys, productId) ? keys[productId] : undefined;
 }
 
 export function isAnalyticsConfigured(productId: string = HOST_PRODUCT_ID): boolean {

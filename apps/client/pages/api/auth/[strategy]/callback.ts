@@ -146,7 +146,11 @@ const handler = baseApi({ auth: false })
           }
           // Credit the signup to the product the visitor came through, if any. The provider's
           // redirect back here is a top-level GET, so the first-party touch cookies arrive.
-          await emitSignupForSourceProducts({ userId: user.id, touches: readAcquisitionTouches(req), method: strategy });
+          await emitSignupForSourceProducts({
+            userId: user.id,
+            touches: readAcquisitionTouches(req),
+            method: strategy,
+          });
         }
 
         // Every OAuth callback is a successful authentication; only a genuine

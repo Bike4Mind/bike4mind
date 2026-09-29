@@ -90,6 +90,11 @@ started from the lake's panel before the first finished. Only one of them can co
 other reports this instead of overwriting it. The message names the status that won; the lake is in
 that state and is safe to act on from there. Re-run the action you wanted if it is still available.
 
+**I saved a research configuration and nothing new appeared in the lake's History tab. Why?**
+The History tab records a research-configuration edit only when a setting meaningfully changes.
+Saving the same values again, or reordering the same entries in **Only these sites**, **Never these
+sites** or **Tags to propose**, does not add a row.
+
 ## Related
 
 - [Knowledge Management](./knowledge-management.md) -- uploading and managing files

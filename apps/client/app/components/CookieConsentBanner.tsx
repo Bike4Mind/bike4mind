@@ -8,7 +8,7 @@ import { APP_NAME } from '@client/config/general';
 import { loadMetaPixel } from '@client/app/utils/metaPixel';
 import { loadRedditPixel } from '@client/app/utils/redditPixel';
 import { CONSENT_KEY, resolveConsent } from '@client/app/utils/consentRegion';
-import { flushUtmCapture } from '@client/app/utils/utmCapture';
+import { clearAttributionCookies, flushUtmCapture } from '@client/app/utils/utmCapture';
 
 declare function gtag(...args: unknown[]): void;
 
@@ -28,6 +28,8 @@ function activateConsent(value: 'granted' | 'denied') {
     // The campaign this visitor landed on, held unwritten since module load if they were
     // still being asked at the time. No-op once written, or when there was none.
     flushUtmCapture();
+  } else {
+    clearAttributionCookies();
   }
 }
 

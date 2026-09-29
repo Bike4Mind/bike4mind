@@ -203,6 +203,13 @@ const NOT_THIS_RULE: { pattern: RegExp; reason: string }[] = [
       '>= direction; these two can never be satisfied at once. Only reachable via ' +
       '`bindsBothCounters`, which sees any object literal naming both counters.',
   },
+  {
+    pattern: /Embedding passages \(/,
+    reason:
+      'AdmittedSourceDetails describeProcessingState: renders "N of M" progress text for a human, ' +
+      'never compares the two counters. Only reachable via `bindsBothCounters`, which sees the ' +
+      'template-literal `${...}` braces around `vectorizedChunkCount` as an object literal.',
+  },
 ];
 
 /**

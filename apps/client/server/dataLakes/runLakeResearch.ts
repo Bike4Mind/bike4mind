@@ -5,14 +5,18 @@ import {
   dataLakeRepository,
   dataLakeResearchRunRepository,
   fabFileRepository,
+  organizationRepository,
+  usageEventRepository,
+  userRepository,
 } from '@bike4mind/database';
-import { apiKeyService, dataLakeResearchService, dataLakeService } from '@bike4mind/services';
+import { apiKeyService, dataLakeResearchService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
 import { resolveWebSearchProvider } from '@bike4mind/services/llm';
 import { getAvailableModels, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { fetchAndParseURL } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
-import type { ResearchRunTotals } from '@bike4mind/common';
+import type { ResearchRunTotals, SettleResearchRunInput } from '@bike4mind/common';
+import { lakeConfigAuditDb } from './lakeConfigAuditDb';
 
 /**
  * Binds one queued research run (#1682) to the real world and executes it: the admin-configured
@@ -57,6 +61,26 @@ async function fetchSourceForProposal(url: string, logger: Logger) {
   }
 }
 
+/** Provider errors can carry a whole request echo; the run card needs the gist, not the payload. */
+const JUDGE_ERROR_MAX_CHARS = 300;
+
+/**
+ * The run card's account of a judge that failed on `failedCount` candidates. Names the model and
+ * the first error, because "the model failed" is only actionable when it says which model and how.
+ */
+export function describeJudgeFailure(
+  model: string,
+  failedCount: number,
+  judgeError: string | undefined,
+  allFailed: boolean
+): string {
+  const scope = allFailed
+    ? `every candidate it tried (${failedCount}), so nothing was proposed`
+    : `${failedCount} candidate${failedCount === 1 ? '' : 's'}`;
+  const cause = judgeError ? `: ${judgeError.slice(0, JUDGE_ERROR_MAX_CHARS)}` : '';
+  return `The relevance judge (${model}) failed on ${scope}${cause}`;
+}
+
 /**
  * Execute one queued run end to end. Idempotent at the claim: a redelivery of a run that already
  * ran finds it non-`queued` and returns `claimed: false` without spending anything.
@@ -69,8 +93,13 @@ export async function runLakeResearch(
   const claimed = await dataLakeResearchRunRepository.claimForExecution(runId, new Date());
   if (!claimed) return { claimed: false };
 
-  const settle = (input: Parameters<typeof dataLakeResearchRunRepository.settleRun>[1]) =>
-    dataLakeResearchRunRepository.settleRun(runId, input);
+  // Set once the judge model resolves, and stamped on every settle from then on - including a
+  // fault's. Also read by `recordSpend` below, so the eventual usage event names the real
+  // model/provider rather than a guess - undefined here means no judgment ever ran.
+  let judgeModel: string | undefined;
+
+  const settle = (input: Omit<SettleResearchRunInput, 'judgeModel'>) =>
+    dataLakeResearchRunRepository.settleRun(runId, { ...input, judgeModel });
 
   /**
    * The claim is a one-way door, so EVERY path from here on has to settle: a run left `running`
@@ -97,7 +126,8 @@ export async function runLakeResearch(
     .findById(claimed.dataLakeId)
     .catch(error => failAndRethrow(error, 0, claimed.totals));
   if (!lake) {
-    // The lake genuinely went away between enqueue and execution. Terminal, not retryable.
+    // The lake genuinely went away between enqueue and execution. Terminal, not retryable. No
+    // History event either - there is no lake left to audit into.
     await settle({
       status: 'failed',
       completedAt: new Date(),
@@ -108,14 +138,102 @@ export async function runLakeResearch(
     return { claimed: true };
   }
 
-  const keyAdapters = { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames };
-
   // Mirrors what the loop last reported, so the `failed` settle below records the money actually
   // spent rather than zero. A run that dies after four judgments really did spend four judgments,
   // and reporting 0 would make the per-lake ceiling look untouched on the very run that proves it
   // is needed.
   let spentMicroUsd = 0;
   let totals: ResearchRunTotals = claimed.totals;
+  let judgeProvider: string | undefined;
+
+  // A run reaching an outcome left no trace in the lake's History tab. `.catch()` here is
+  // deliberate belt-and-suspenders: `recordLakeConfigChange` itself is already best-effort and
+  // never throws, but `recordRunEffects` below awaits this alongside `recordSpend` via
+  // `Promise.all`, so ANY future addition to this call that could reject (a query, a lookup) would
+  // otherwise be able to re-settle an already-completed run as failed, or leave a failed run stuck
+  // `running` forever - exactly the bug a missing guard here caused once already.
+  const recordOutcome = (outcome: 'completed' | 'failed') =>
+    dataLakeResearchService
+      .recordResearchRunOutcome(lake, claimed.levers.query, outcome, runId, {
+        db: { ...lakeConfigAuditDb },
+        logger,
+      })
+      .catch(err => logger.warn(`[lakeResearch] outcome record failed: ${err}`));
+
+  // The judge's own cost never reached a UsageEvent, so it never showed up on the Spend
+  // tab even though the runs API reported it. Recorded ONCE per run (not per judged candidate) -
+  // one ledger row per run is what the "By feature" breakdown on the Spend tab groups against,
+  // matching how the runs list itself reports a single total rather than a row per judgment.
+  //
+  // Takes the amount EXPLICITLY rather than reading the outer `spentMicroUsd` closure variable:
+  // on success, that variable happens to equal `result.spentMicroUsd` in the real executor (every
+  // judgment branch ticks `onProgress` before returning), but a caller with no `onProgress` port
+  // (a test double, or a future one) would otherwise read a stale 0. On the failure path the
+  // closure value is the best available regardless, and can itself undercount by one judgment if
+  // `propose` throws after that judgment was priced but before its progress tick.
+  const recordSpend = async (amountMicroUsd: number) => {
+    if (amountMicroUsd <= 0) return;
+    if (!judgeModel) {
+      // Should not happen once any judgment has run (judgeModel is set before the first `judge`
+      // port call), but this guards against a future path that could report spend without one.
+      logger.warn('[lakeResearch] research spend not recorded: no judge model was resolved', {
+        runId,
+        dataLakeId: lake.id,
+        amountMicroUsd,
+      });
+      return;
+    }
+    // `recordOperationalUsage` needs a real, billable IUserDocument even with bypassCreditBilling
+    // set (its credit-deduction path shares the same required type) - there is no safe synthetic
+    // stand-in for a creator whose account was deleted. Logged so the drop is traceable instead of
+    // the money silently vanishing from the Spend tab a second time.
+    const user = await userRepository.findById(lake.createdByUserId).catch(() => null);
+    if (!user) {
+      logger.warn('[lakeResearch] research spend not recorded: the lake creator could not be resolved', {
+        runId,
+        dataLakeId: lake.id,
+        createdByUserId: lake.createdByUserId,
+        amountMicroUsd,
+      });
+      return;
+    }
+    const organization = user.organizationId
+      ? await organizationRepository.findById(user.organizationId).catch(() => null)
+      : null;
+    await recordOperationalUsage(
+      {
+        requestId: runId,
+        user,
+        organization,
+        dataLakeId: lake.id,
+        feature: 'operations',
+        provider: judgeProvider ?? 'unknown',
+        model: judgeModel,
+        // Token counts are not accumulated at the run level today (only the priced total is) - see
+        // RelevanceJudgeService.priceCall. The ledger's cost figure is real; only the token column
+        // reads zero.
+        inputTokens: 0,
+        costUsd: amountMicroUsd / 1_000_000,
+        source: 'system',
+        // Already governed by the run's own cost ceiling (executeResearchRun stops the run once
+        // spentMicroUsd reaches levers.costCeilingMicroUsd) - debiting credits on top would
+        // double-charge, the same reasoning fabFileVectorize.ts applies to its own spend-gated
+        // embed calls.
+        bypassCreditBilling: true,
+      },
+      { db: { usageEvents: usageEventRepository, adminSettings: adminSettingsRepository }, logger }
+    ).catch(err => logger.warn(`[lakeResearch] spend record failed: ${err}`));
+  };
+
+  const recordRunEffects = (outcome: 'completed' | 'failed', amountMicroUsd: number) =>
+    Promise.all([recordOutcome(outcome), recordSpend(amountMicroUsd)]);
+
+  const keyAdapters = { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames };
+
+  // True once `executeResearchRun` itself has resolved - distinguishes "the run failed" from "the
+  // run succeeded but recording its outcome failed", so the catch below never mistakes the latter
+  // for the former (see the catch block for why that distinction matters).
+  let executionSucceeded = false;
 
   try {
     const provider = await resolveWebSearchProvider(keyAdapters);
@@ -131,6 +249,7 @@ export async function runLakeResearch(
         error:
           'Web search is not configured. An administrator needs to set a Serper API key or a SearXNG URL in Admin > API Keys.',
       });
+      await recordRunEffects('failed', 0);
       return { claimed: true };
     }
 
@@ -144,12 +263,14 @@ export async function runLakeResearch(
     const models = await getAvailableModels(apiKeyTable);
     const judgeService = new dataLakeResearchService.RelevanceJudgeService(logger);
     // Resolved once, against the live catalog: a config naming a model this deployment has since
-    // retired falls back rather than failing the whole run.
+    // retired or disabled falls back rather than failing the whole run. Disabled counts because the
+    // picker drops disabled models, but a config saved before the model was disabled still names it.
     const configuredModel = claimed.levers.model;
     const model =
-      configuredModel && models.some(m => m.id === configuredModel)
+      configuredModel && models.some(m => m.id === configuredModel && !m.disabled)
         ? configuredModel
         : dataLakeResearchService.RELEVANCE_JUDGE_DEFAULT_MODEL;
+    judgeModel = model;
     if (configuredModel && model !== configuredModel) {
       logger.warn('[lakeResearch] configured judge model is unavailable; falling back', {
         runId,
@@ -157,6 +278,7 @@ export async function runLakeResearch(
         model,
       });
     }
+    judgeProvider = models.find(m => m.id === model)?.backend;
 
     const ports: dataLakeResearchService.ResearchRunPorts = {
       search: async (query, maxResults, recencyDays) => {
@@ -186,7 +308,7 @@ export async function runLakeResearch(
         spentMicroUsd = spent;
         totals = running;
         return dataLakeResearchRunRepository
-          .recordProgress(runId, spent, running)
+          .recordProgress(runId, spent, running, model)
           .catch(error => logger.warn('[lakeResearch] progress write failed; run continues', { runId, error }));
       },
       now: () => new Date(),
@@ -194,18 +316,54 @@ export async function runLakeResearch(
     };
 
     const result = await dataLakeResearchService.executeResearchRun(claimed.levers, runId, ports);
+    executionSucceeded = true;
 
+    const judgeFailure =
+      result.totals.judgeFailed > 0
+        ? describeJudgeFailure(model, result.totals.judgeFailed, result.judgeError, result.judgeStepFailed)
+        : undefined;
+
+    // A judge that failed on everything is a failed run, not an empty web - see `judgeStepFailed`.
+    // Settled rather than thrown: a model that cannot judge fails the same way on every redelivery.
+    const outcome: 'completed' | 'failed' = result.judgeStepFailed ? 'failed' : 'completed';
     await settle({
-      status: 'completed',
+      status: outcome,
       completedAt: new Date(),
       stopReason: result.stopReason,
       spentMicroUsd: result.spentMicroUsd,
       totals: result.totals,
+      error: judgeFailure,
     });
-    logger.log('[lakeResearch] run finished', { runId, stopReason: result.stopReason, ...result.totals });
+    await recordRunEffects(outcome, result.spentMicroUsd);
+    logger.log('[lakeResearch] run finished', {
+      runId,
+      judgeModel: model,
+      stopReason: result.stopReason,
+      judgeStepFailed: result.judgeStepFailed,
+      ...result.totals,
+    });
     return { claimed: true };
   } catch (error) {
+    if (executionSucceeded) {
+      // The run itself succeeded and spent money - what threw was the terminal settle write (e.g. a
+      // step-down/connection reset on the updateOne), not the run. We cannot tell whether that write
+      // actually landed server-side before the ack was lost, so re-settling or re-recording here
+      // would either silently overwrite a real outcome row or permanently misreport a run that
+      // worked. Rethrown as-is instead, deliberately at the cost of leaving the row stuck `running`:
+      // `claimForExecution` only reclaims `queued` rows, so nothing automatically repairs this any
+      // more than it would a wrong `failed` - there is no reaper (see `countActiveByLake`'s own
+      // "no cancel endpoint, no reaper cron" note; the age bound there only excludes a stale row
+      // from the active-run count, it does not flip its status). But a row stuck `running` is a
+      // detectable, honest "we don't know" - this `logger.error` and the run's own age are what an
+      // operator would query for - where a silently-wrong `failed` is neither detectable nor undoable.
+      logger.error('[lakeResearch] run completed but recording its outcome failed; leaving the run unresolved', {
+        runId,
+        error,
+      });
+      throw error;
+    }
     // The spend and totals the loop last reported, not zero - see `spentMicroUsd` above.
+    await recordRunEffects('failed', spentMicroUsd);
     return failAndRethrow(error, spentMicroUsd, totals);
   }
 }

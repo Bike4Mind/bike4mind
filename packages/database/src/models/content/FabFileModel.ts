@@ -554,13 +554,13 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     fileIds: string[],
     queryVector: number[],
     model: string,
-    options: { limit?: number } = {}
+    options: { limit?: number; includeText?: boolean } = {}
   ): Promise<Array<{ id: string; fabFileId: string; text: string; score: number }>> {
     if (fileIds.length === 0) return [];
     const target = getAtlasIndexForModel(model);
     if (!target) return [];
 
-    const { limit = 50 } = options;
+    const { limit = 50, includeText = true } = options;
     // Atlas applies `filter` DURING HNSW traversal, not as a post-filter, but recall still
     // degrades as the filter gets more selective relative to the collection - and `fabfilechunks`
     // holds every user's chunks, while `fileIds` here is usually a handful of files out of that
@@ -581,7 +581,14 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
           filter: { $and: [{ fabFileId: { $in: fileIds } }, { embeddingModel: model }] },
         },
       },
-      { $project: { _id: 1, fabFileId: 1, text: 1, score: { $meta: 'vectorSearchScore' } } },
+      {
+        $project: {
+          _id: 1,
+          fabFileId: 1,
+          ...(includeText ? { text: 1 } : {}),
+          score: { $meta: 'vectorSearchScore' },
+        },
+      },
     ];
 
     // any: $vectorSearch and the $meta vectorSearchScore projection are Atlas-only aggregation
@@ -939,11 +946,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // the door that admitted the file and silently drop lake-only images. Same builder, same
     // `archivedAt: null` post-processing on each arm - so the two doors can never disagree.
     //
-    // They still disagree on DRAFT lakes, and not because of anything here: the arms are only as
-    // wide as the `lakeAccess` a caller passes, and every attachment door resolves that through
-    // `findActiveByUserTagsAndEntitlements` (`status: 'active'`), while browse - `GET
-    // /api/files/byIds`, which is what admits the file to the workbench - selects draft AND active.
-    // So an unpublished lake's file is attachable and readable there, and absent here. Pinned by
+    // DRAFT lakes follow the same rule, but not from anything here: the arms are only as wide as
+    // the `lakeAccess` a caller passes. Browse (`GET /api/files/byIds`, which admits the file to the
+    // workbench) selects draft AND active, so every attachment door resolves its `lakeAccess` with
+    // `includeDraftLakes` to match - an active-only scope would drop an unpublished lake's file
+    // here that browse just showed. Retrieval and semantic search stay active-only. Pinned by
     // `queries/dataLakeDraftAttachmentScope.integration.test.ts`.
     const lakeArms = buildLakeArms({
       lakeMemberships: lakeAccess?.lakeMemberships,
@@ -1801,18 +1808,34 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return results;
   }
 
-  async findByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]> {
-    const docs = await this.fabFileModel.find({
+  /** Shared by the Drive-connection finder and count so the disconnect dialog and the purge agree. */
+  private driveConnectionInDataLakeFilter(driveConnectionId: string, datalakeTag: string) {
+    return {
       driveConnectionId,
-      deletedAt: null,
-      archivedAt: null,
       tags: { $elemMatch: { name: datalakeTag } },
       // Exclude in-flight rows: a 'pending' file from a sync still mid-upload is not yet a
       // durable member, so it must not be mistaken for a delete (absent from the fresh walk it
       // has not finished ingesting) nor for a stale copy.
       status: { $ne: 'pending' },
-    });
+    };
+  }
+
+  async findByDriveConnectionIdInDataLake(
+    driveConnectionId: string,
+    datalakeTag: string,
+    options?: { includeDeleted?: boolean }
+  ): Promise<IFabFileDocument[]> {
+    const filter = this.driveConnectionInDataLakeFilter(driveConnectionId, datalakeTag);
+    const docs = options?.includeDeleted
+      ? await this.fabFileModel.find(filter).setOptions({ includeDeleted: true })
+      : await this.fabFileModel.find({ ...filter, deletedAt: null, archivedAt: null });
     return docs.map(d => d.toJSON());
+  }
+
+  async countByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<number> {
+    // countDocuments is not soft-delete-plugin-filtered, so this counts the includeDeleted set the
+    // disconnect purge reaches, archived and soft-deleted rows included.
+    return this.fabFileModel.countDocuments(this.driveConnectionInDataLakeFilter(driveConnectionId, datalakeTag));
   }
 
   async findDriveFileIdsByBatchId(batchId: string): Promise<string[]> {

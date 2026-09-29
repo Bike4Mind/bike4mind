@@ -301,6 +301,7 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
         periodEndsAt: 1,
         quantity: 1,
         customCreditsPerCycle: 1,
+        acquisition: 1,
         createdAt: 1,
         updatedAt: 1,
         'owner.username': 1,

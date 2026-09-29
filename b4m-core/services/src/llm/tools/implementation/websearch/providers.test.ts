@@ -8,7 +8,13 @@ vi.mock('../../../../apiKeyService', () => ({
 }));
 
 import { getSerperKey, getSearxngUrl, getWebSearchProviderSetting } from '../../../../apiKeyService';
-import { createSearxngProvider, createSerpApiProvider, resolveWebSearchProvider, serpApiSearch } from './providers';
+import {
+  WEB_SEARCH_WORST_CASE_MS,
+  createSearxngProvider,
+  createSerpApiProvider,
+  resolveWebSearchProvider,
+  serpApiSearch,
+} from './providers';
 
 const mockGetSerperKey = vi.mocked(getSerperKey);
 const mockGetSearxngUrl = vi.mocked(getSearxngUrl);
@@ -496,12 +502,12 @@ describe('serpApiSearch retry behavior', () => {
     fetchMock.mockImplementation(neverSettlingFetch());
 
     const pending = expect(serpApiSearch(adapters, 'q')).rejects.toThrow(
-      'Web search timed out: SerpAPI did not respond within 20s (tried 2 times)'
+      'Web search timed out: SerpAPI did not respond within 10s (tried 2 times)'
     );
 
-    await vi.advanceTimersByTimeAsync(20_000); // first attempt aborts
+    await vi.advanceTimersByTimeAsync(10_000); // first attempt aborts
     await vi.advanceTimersByTimeAsync(500); // fixed retry delay
-    await vi.advanceTimersByTimeAsync(20_000); // second attempt aborts
+    await vi.advanceTimersByTimeAsync(10_000); // second attempt aborts
 
     await pending;
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -520,7 +526,7 @@ describe('serpApiSearch retry behavior', () => {
       organic_results: [{ title: 'T', link: 'https://x.com', snippet: 's' }],
     });
 
-    await vi.advanceTimersByTimeAsync(20_000); // first attempt aborts
+    await vi.advanceTimersByTimeAsync(10_000); // first attempt aborts
     await vi.advanceTimersByTimeAsync(500); // fixed retry delay, then second attempt resolves
 
     await pending;
@@ -570,7 +576,7 @@ describe('serpApiSearch retry behavior', () => {
 
   // Regression: the final error used to read ONLY the last attempt's outcome, so a first
   // attempt that got a concrete HTTP 503 followed by a second attempt that timed out produced
-  // "SerpAPI did not respond within 20s" - false, since the first attempt proves SerpAPI DID
+  // "SerpAPI did not respond within 10s" - false, since the first attempt proves SerpAPI DID
   // respond. The message now distinguishes "the last attempt timed out" from "nothing ever
   // responded" and names the earlier attempt's actual failure.
   it('reports the earlier response, not a blanket "did not respond", when only the last attempt times out', async () => {
@@ -583,11 +589,11 @@ describe('serpApiSearch retry behavior', () => {
     });
 
     const pending = expect(serpApiSearch(adapters, 'q')).rejects.toThrow(
-      "Web search timed out: SerpAPI's last attempt did not respond within 20s (earlier attempt: HTTP 503)"
+      "Web search timed out: SerpAPI's last attempt did not respond within 10s (earlier attempt: HTTP 503)"
     );
 
     await vi.advanceTimersByTimeAsync(500); // fixed retry delay before the second attempt
-    await vi.advanceTimersByTimeAsync(20_000); // second attempt aborts
+    await vi.advanceTimersByTimeAsync(10_000); // second attempt aborts
 
     await pending;
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -599,5 +605,61 @@ describe('serpApiSearch retry behavior', () => {
 
     await expect(serpApiSearch(adapters, 'q')).rejects.toThrow('SERP API error');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// An inline chat turn runs in the 60s server Lambda and has already spent time on retrieval and
+// the first model call before the tool starts. A search that can only fail near 60s is killed with
+// the Lambda instead of erroring back to the model (#3356).
+describe('web_search time budget', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('leaves at least half the server Lambda budget for the rest of the turn', () => {
+    expect(WEB_SEARCH_WORST_CASE_MS).toBeLessThanOrEqual(30_500);
+  });
+
+  it('aborts a hung image search at 10s and resolves to no images', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockImplementation(neverSettlingFetch());
+
+    const pending = createSerpApiProvider(adapters).searchImages!('q');
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(pending).resolves.toEqual([]);
+  });
+
+  it('aborts a hung place search at 10s and resolves to no places', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockImplementation(neverSettlingFetch());
+
+    const pending = createSerpApiProvider(adapters).searchPlaces!('q');
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(pending).resolves.toEqual([]);
+  });
+
+  it('aborts a hung SearXNG search at 10s and resolves to no results', async () => {
+    fetchMock.mockImplementation(neverSettlingFetch());
+
+    const pending = createSearxngProvider('http://searxng:8080').search('q', 3);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(pending).resolves.toEqual([]);
+  });
+
+  it('fails a hung organic SerpAPI search by 20.5s, still inside the Lambda', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockImplementation(neverSettlingFetch());
+
+    const pending = expect(serpApiSearch(adapters, 'q')).rejects.toThrow('Web search timed out');
+    await vi.advanceTimersByTimeAsync(20_500);
+
+    await pending;
   });
 });

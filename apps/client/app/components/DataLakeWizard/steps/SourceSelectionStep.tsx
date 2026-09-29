@@ -33,6 +33,7 @@ import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { canConnectLakeDrive } from '@client/app/components/datalake/lakeVisibility';
 import DriveConnectAction from './DriveConnectAction';
 import DrivePendingConnectAction from './DrivePendingConnectAction';
+import DriveConnectUnavailableButton, { DRIVE_ORG_ONLY_REASON } from './DriveConnectUnavailableButton';
 
 const supportsWebkitDirectory =
   typeof HTMLInputElement !== 'undefined' && 'webkitdirectory' in HTMLInputElement.prototype;
@@ -310,8 +311,19 @@ export default function SourceSelectionStep() {
         </Box>
 
         {/* Append mode has a lake to bind to, so the folder connects on the spot. Create mode
-            does not, so the selection is parked and connected on commit. */}
-        {targetLake ? canConnectDrive && <DriveConnectAction lake={targetLake} /> : <DrivePendingConnectAction />}
+            does not, so the selection is parked and connected on commit. A personal lake gets the
+            control disabled with its reason, so Drive stays discoverable where it cannot connect. */}
+        {targetLake ? (
+          canConnectDrive ? (
+            <DriveConnectAction lake={targetLake} />
+          ) : (
+            !targetLake.organizationId && (
+              <DriveConnectUnavailableButton testId="drive-connect-personal-lake-btn" reason={DRIVE_ORG_ONLY_REASON} />
+            )
+          )
+        ) : (
+          <DrivePendingConnectAction />
+        )}
       </Stack>
 
       {/* Once files are in hand: what was picked up, plus the two opt-in steps. Both default

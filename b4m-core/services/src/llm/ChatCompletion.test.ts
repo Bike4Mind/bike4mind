@@ -26,11 +26,18 @@ import {
   getSettingsValue,
   processFabFilesServer,
   fetchAndConvertFabFiles,
+  ClientMessageSender,
 } from '@bike4mind/utils';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { measureIdentityNamedExclusion } from '../dataLakeService/getDynamicDataLakeTags';
 import type { FabFileNotice } from '@bike4mind/utils';
-import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
+import {
+  getLlmByModel,
+  getAvailableModels,
+  attachFullToolResult,
+  getFullToolResult,
+  MAX_FULL_TOOL_RESULT_CHARS,
+} from '@bike4mind/llm-adapters';
 import {
   ChatModels,
   ImageModels,
@@ -1104,6 +1111,29 @@ describe('ChatCompletionProcess', () => {
       const count = await (service as any).countLakeReachableAttachments(['f1']);
       expect(count).toBe(1);
     });
+
+    it('asks through the RETRIEVAL scope, never the draft-inclusive attachment one', async () => {
+      // Switching to the attachment memo would count a draft-lake attachment as lake content and
+      // flip personalCorpusOnly, even though retrieval cannot reach that lake.
+      (service as any).accessibleDataLakeAccessMemo = {
+        dataLakeTags: [LAKE.datalakeTag],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [],
+        lakes: [{ ...LAKE, source: 'dynamic' as const, membership: MEMBERSHIP }],
+      };
+      (service as any).attachmentDataLakeAccessMemo = {
+        dataLakeTags: [LAKE.datalakeTag, 'datalake:draft'],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [],
+        lakes: [],
+      };
+      const search = vi.fn().mockResolvedValue({ data: [], hasMore: false, total: 0 });
+      (service as any).db = { fabfiles: { search } };
+
+      await (service as any).countLakeReachableAttachments(['f1']);
+
+      expect(search.mock.calls[0][5].dataLakeTags).toEqual([LAKE.datalakeTag]);
+    });
   });
 
   describe('attachmentLakeAccess (#1576 attachment door lake-membership arm)', () => {
@@ -1132,7 +1162,9 @@ describe('ChatCompletionProcess', () => {
     };
 
     it('derives lakeMemberships via lakeMembershipsFrom (owned only) and forwards tags/prefixes verbatim', async () => {
-      (service as any).accessibleDataLakeAccessMemo = {
+      // Seeds the ATTACHMENT memo, not the retrieval one: the two are separate resolutions -
+      // the attachment scope admits draft lakes, as browse does.
+      (service as any).attachmentDataLakeAccessMemo = {
         dataLakeTags: ['datalake:acme', 'datalake:reg'],
         dataLakeTagPrefixes: ['reg:'],
         lakes: [OWNED_LAKE, REGISTRY_LAKE],
@@ -1197,8 +1229,142 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    // The attachment door re-authorizes a file the user NAMED and that browse
+    // (`GET /api/files/byIds`) already admitted to the workbench, so it must track browse's
+    // draft+active status set. Retrieval must not follow it there - an unpublished lake is not
+    // ground truth for a question the user never pointed at. These three pin both halves.
+    it('resolves the attachment scope with draft lakes included', async () => {
+      const findActiveByUserTagsAndEntitlements = vi.fn().mockResolvedValue([]);
+      (service as any).attachmentDataLakeAccessMemo = undefined;
+      (service as any).user = { ...(service as any).user, id: 'user-1' };
+      (service as any).db = {
+        ...(service as any).db,
+        dataLakes: { findActiveByUserTagsAndEntitlements, countGateExcludedLakes: vi.fn().mockResolvedValue(0) },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      };
+
+      await (service as any).attachmentLakeAccess();
+
+      expect(findActiveByUserTagsAndEntitlements.mock.calls[0][4]).toMatchObject({ includeDraftLakes: true });
+    });
+
+    it('leaves the RETRIEVAL resolution active-only', async () => {
+      const findActiveByUserTagsAndEntitlements = vi.fn().mockResolvedValue([]);
+      (service as any).accessibleDataLakeAccessMemo = undefined;
+      (service as any).user = { ...(service as any).user, id: 'user-1' };
+      (service as any).db = {
+        ...(service as any).db,
+        dataLakes: { findActiveByUserTagsAndEntitlements, countGateExcludedLakes: vi.fn().mockResolvedValue(0) },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      };
+
+      await (service as any).getAccessibleDataLakeAccess();
+
+      expect(findActiveByUserTagsAndEntitlements.mock.calls[0][4]).not.toHaveProperty('includeDraftLakes', true);
+    });
+
+    it('keeps the two on separate memos, so neither can serve the other its status set', async () => {
+      // A single shared memo would make the answer depend on which door ran first in the turn.
+      const findActiveByUserTagsAndEntitlements = vi.fn().mockResolvedValue([]);
+      (service as any).accessibleDataLakeAccessMemo = undefined;
+      (service as any).attachmentDataLakeAccessMemo = undefined;
+      (service as any).user = { ...(service as any).user, id: 'user-1' };
+      (service as any).db = {
+        ...(service as any).db,
+        dataLakes: { findActiveByUserTagsAndEntitlements, countGateExcludedLakes: vi.fn().mockResolvedValue(0) },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      };
+
+      await (service as any).getAccessibleDataLakeAccess();
+      await (service as any).attachmentLakeAccess();
+      // Second call of each is served from its own memo - one query per scope, not per caller.
+      await (service as any).getAccessibleDataLakeAccess();
+      await (service as any).attachmentLakeAccess();
+
+      expect(findActiveByUserTagsAndEntitlements).toHaveBeenCalledTimes(2);
+      expect(findActiveByUserTagsAndEntitlements.mock.calls[0][4]).not.toHaveProperty('includeDraftLakes', true);
+      expect(findActiveByUserTagsAndEntitlements.mock.calls[1][4]).toMatchObject({ includeDraftLakes: true });
+    });
+
+    describe('getToolReadableAttachedFiles (the knowledge-tool offer gate)', () => {
+      const DRAFT_LAKE = {
+        ...OWNED_LAKE,
+        id: 'lake-draft',
+        datalakeTag: 'datalake:draft',
+        fileTagPrefix: 'draft:',
+        membership: { ...OWNED_LAKE.membership, datalakeTag: 'datalake:draft', fileTagPrefix: 'draft:' },
+      };
+      const ACTIVE_FILE = { id: 'f-active', vectorized: true } as any;
+      const DRAFT_FILE = { id: 'f-draft', vectorized: true } as any;
+
+      beforeEach(() => {
+        (service as any).accessibleDataLakeAccessMemo = {
+          dataLakeTags: [OWNED_LAKE.datalakeTag],
+          dataLakeTagPrefixes: [],
+          scopedTagPrefixes: [],
+          lakes: [OWNED_LAKE],
+        };
+        (service as any).getScopeFilter = vi.fn().mockReturnValue({ userId: 'u1' });
+      });
+
+      it('returns the attached files as-is, with no second read, when both scopes reach the same lakes', async () => {
+        (service as any).attachmentDataLakeAccessMemo = (service as any).accessibleDataLakeAccessMemo;
+        const getAccessibleFiles = vi.fn();
+        (service as any).db = { fabfiles: { getAccessibleFiles } };
+
+        const files = await (service as any).getToolReadableAttachedFiles([ACTIVE_FILE]);
+
+        expect(files).toEqual([ACTIVE_FILE]);
+        expect(getAccessibleFiles).not.toHaveBeenCalled();
+      });
+
+      it('re-reads through the RETRIEVAL scope when a draft lake is in reach, dropping the draft-only file', async () => {
+        // The tools search active-only, so offering them for a draft-lake-only file could only
+        // return an empty reply for content that is already inlined.
+        (service as any).attachmentDataLakeAccessMemo = {
+          dataLakeTags: [OWNED_LAKE.datalakeTag, DRAFT_LAKE.datalakeTag],
+          dataLakeTagPrefixes: [],
+          scopedTagPrefixes: [],
+          lakes: [OWNED_LAKE, DRAFT_LAKE],
+        };
+        const getAccessibleFiles = vi.fn().mockResolvedValue([ACTIVE_FILE]);
+        (service as any).db = { fabfiles: { getAccessibleFiles } };
+
+        const files = await (service as any).getToolReadableAttachedFiles([ACTIVE_FILE, DRAFT_FILE]);
+
+        expect(files).toEqual([ACTIVE_FILE]);
+        expect(getAccessibleFiles).toHaveBeenCalledWith(
+          ['f-active', 'f-draft'],
+          { userId: 'u1' },
+          {
+            lakeMemberships: [OWNED_LAKE.membership],
+            dataLakeTags: [OWNED_LAKE.datalakeTag],
+            dataLakeTagPrefixes: [],
+          }
+        );
+      });
+
+      it('fails open (null) when the re-read throws, matching the gate it feeds', async () => {
+        (service as any).attachmentDataLakeAccessMemo = {
+          dataLakeTags: [OWNED_LAKE.datalakeTag, DRAFT_LAKE.datalakeTag],
+          dataLakeTagPrefixes: [],
+          scopedTagPrefixes: [],
+          lakes: [OWNED_LAKE, DRAFT_LAKE],
+        };
+        (service as any).db = { fabfiles: { getAccessibleFiles: vi.fn().mockRejectedValue(new Error('db down')) } };
+        (service as any).logger = { warn: vi.fn() };
+
+        await expect((service as any).getToolReadableAttachedFiles([DRAFT_FILE])).resolves.toBeNull();
+        expect((service as any).logger.warn).toHaveBeenCalled();
+      });
+
+      it('passes a null (skipped or failed) attached-file lookup straight through', async () => {
+        await expect((service as any).getToolReadableAttachedFiles(null)).resolves.toBeNull();
+      });
+    });
+
     it('getAttachedKnowledgeFiles forwards the resolved lakeAccess as the getAccessibleFiles third argument', async () => {
-      (service as any).accessibleDataLakeAccessMemo = {
+      (service as any).attachmentDataLakeAccessMemo = {
         dataLakeTags: ['datalake:acme'],
         dataLakeTagPrefixes: [],
         lakes: [OWNED_LAKE],
@@ -1452,6 +1618,85 @@ describe('ChatCompletionProcess', () => {
         await runTurn();
 
         expect(mockQuest.replies).toEqual(['Hi!']);
+      });
+      describe('echoed tool output', () => {
+        beforeEach(() => {
+          mockedGetSettingsValue.mockImplementation(((key: string) =>
+            key === 'EnableArtifacts' ? true : undefined) as typeof getSettingsValue);
+        });
+        afterEach(() => mockedGetSettingsValue.mockReset());
+
+        const page =
+          '<!DOCTYPE html>\n<html>\n<head><title>Fetched page</title></head>\n<body><h1>Hello from the fetched page</h1><p>Body text.</p></body>\n</html>';
+
+        const htmlArtifacts = () =>
+          ((mockQuest.promptMeta.artifacts ?? []) as Array<{ type: string }>).filter(a => a.type === 'html');
+
+        function fetchThenAnswer(answer: string, toolName = 'web_fetch') {
+          setupTurn(async cb => {
+            const toolsUsed: Array<Record<string, unknown>> = [];
+            toolsUsed.push({ name: toolName, arguments: '{"url":"x"}', id: 't1' });
+            await cb(['Fetching.'], { toolsUsed });
+            // Stamped in place with no callback after it, as recordToolResult does.
+            Object.assign(toolsUsed[0], { returnValue: page, success: true });
+            attachFullToolResult(toolsUsed[0], page);
+            await cb([answer]);
+            await cb([], { stopReason: 'end_turn' });
+          });
+        }
+
+        it('keeps a fenced html echo of web_fetch output as a marked code block', async () => {
+          fetchThenAnswer(`Here is the page:\n\n\`\`\`html\n${page}\n\`\`\`\n`);
+
+          await runTurn();
+
+          const reply = mockQuest.replies.join('');
+          expect(reply).toContain('~~~html b4m-tool-output');
+          expect(reply).not.toContain('<artifact');
+          expect(htmlArtifacts()).toHaveLength(0);
+        });
+
+        it('keeps a bare echoed html document as a marked code block', async () => {
+          fetchThenAnswer(`Here is the page:\n\n${page}\n`);
+
+          await runTurn();
+
+          const reply = mockQuest.replies.join('');
+          expect(reply).toContain('b4m-tool-output');
+          expect(reply).not.toContain('<artifact');
+          expect(htmlArtifacts()).toHaveLength(0);
+        });
+
+        it('still promotes model-authored html that no tool returned', async () => {
+          fetchThenAnswer(
+            '```html\n<!DOCTYPE html>\n<html><body><h1>A page I wrote myself for you today</h1></body></html>\n```\n'
+          );
+
+          await runTurn();
+
+          const reply = mockQuest.replies.join('');
+          expect(reply).toContain('<artifact');
+          expect(reply).not.toContain('b4m-tool-output');
+          expect(htmlArtifacts()).toHaveLength(1);
+        });
+
+        it('still promotes html returned by an artifact-emitting tool', async () => {
+          fetchThenAnswer(`\`\`\`html\n${page}\n\`\`\`\n`, 'mermaid_chart');
+
+          await runTurn();
+
+          expect(mockQuest.replies.join('')).toContain('<artifact');
+        });
+
+        it('still promotes html quoted from the user own knowledge content', async () => {
+          fetchThenAnswer(`\`\`\`html\n${page}\n\`\`\`\n`, 'retrieve_knowledge_content');
+
+          await runTurn();
+
+          const reply = mockQuest.replies.join('');
+          expect(reply).toContain('<artifact');
+          expect(reply).not.toContain('b4m-tool-output');
+        });
       });
     });
 
@@ -3307,6 +3552,9 @@ describe('ChatCompletionProcess', () => {
       // widening), so a test can pin that the targeted exclusion measurement excludes exactly
       // these tags rather than the raw session-named list - see admittedPreauthorizedTags's own doc.
       admittedPreauthorizedTags?: string[];
+      // Lakes the draft-inclusive ATTACHMENT scope reaches. Unset leaves that memo unseeded, so it
+      // resolves no lake beyond the retrieval scope and the offer gate never re-reads.
+      attachmentLakes?: unknown[];
     }) => {
       mockSession.knowledgeIds = opts.knowledgeIds ?? [];
       mockSession.retrievalTags = opts.retrievalTags ?? [];
@@ -3327,6 +3575,15 @@ describe('ChatCompletionProcess', () => {
         admittedPreauthorizedTags: new Set(opts.admittedPreauthorizedTags ?? []),
         ...(opts.excludedByAccessCount !== undefined ? { excludedByAccessCount: opts.excludedByAccessCount } : {}),
       };
+      if (opts.attachmentLakes) {
+        (service as any).attachmentDataLakeAccessMemo = {
+          dataLakeTags: [],
+          dataLakeTagPrefixes: [],
+          scopedTagPrefixes: [],
+          lakes: opts.attachmentLakes,
+          admittedPreauthorizedTags: new Set(),
+        };
+      }
       (service as any).getScopeFilter = vi.fn().mockReturnValue({});
 
       if (opts.fabPromptMessages || opts.fabFileNotices) {
@@ -3497,6 +3754,23 @@ describe('ChatCompletionProcess', () => {
       expect(enabledToolsArg).toContain('search_knowledge_base');
       expect(enabledToolsArg).toContain('retrieve_knowledge_content');
       expect(getAccessibleFiles).toHaveBeenCalledTimes(1);
+    });
+
+    // The attachment scope admits a DRAFT lake's file, but the tools search active-only, so they
+    // could only reply empty for it. The file is still inlined; only the tool offer is withheld.
+    it('withholds both knowledge tools for an indexed attachment reachable only through a draft lake', async () => {
+      let reads = 0;
+      const { enabledToolsArg, getAccessibleFiles } = await runKnowledgeGatingCase({
+        knowledgeIds: ['f-draft'],
+        attachmentLakes: [{ id: 'lake-draft', datalakeTag: 'datalake:draft', source: 'dynamic' }],
+        // First read is the attachment scope (the file resolves); second is the retrieval-scoped
+        // re-read for the offer gate (it does not).
+        getAccessibleFilesImpl: async () =>
+          reads++ === 0 ? [{ id: 'f-draft', fileName: 'draft.pdf', vectorized: true, chunkCount: 2 }] : [],
+      });
+      expect(getAccessibleFiles).toHaveBeenCalledTimes(2);
+      expect(enabledToolsArg).not.toContain('search_knowledge_base');
+      expect(enabledToolsArg).not.toContain('retrieve_knowledge_content');
     });
 
     it('offers both knowledge tools from an accessible lake with no attachment, and never reads files', async () => {
@@ -3900,7 +4174,8 @@ describe('ChatCompletionProcess', () => {
      * `getAttachedKnowledgeFiles` (getAccessibleFiles) and `fabFilesToMessages`
      * (fetchAndConvertFabFiles) must resolve `attachmentLakeAccess()` off the SAME
      * memoized per-turn access, or an id reachable through one door could silently
-     * disagree with the other.
+     * disagree with the other. That memo is the ATTACHMENT one, which is what this
+     * seeds.
      */
     it('forwards the same attachmentLakeAccess to fetchAndConvertFabFiles as getAttachedKnowledgeFiles gets from getAccessibleFiles', async () => {
       const membership = {
@@ -3909,7 +4184,7 @@ describe('ChatCompletionProcess', () => {
         fileTagPrefix: 'acme:',
         creatorUserId: 'creator-1',
       };
-      (service as any).accessibleDataLakeAccessMemo = {
+      (service as any).attachmentDataLakeAccessMemo = {
         dataLakeTags: ['datalake:acme'],
         dataLakeTagPrefixes: [],
         lakes: [
@@ -5307,6 +5582,31 @@ describe('ChatCompletionProcess', () => {
       expect(tokens.lakeRetrieval).toBe(0);
       // No lake rows, so nothing moved and the residual is the whole billed system-prompt total.
       expect(tokens.systemPrompts).toBe(grossResidual);
+    });
+  });
+
+  describe('research-mode stream payload', () => {
+    it('does not send the in-memory full tool result over the websocket', async () => {
+      const sendToClient = vi.fn();
+
+      vi.mocked(ClientMessageSender).mockImplementationOnce(function () {
+        return { sendToClient };
+      } as any);
+      const page = 'p'.repeat(MAX_FULL_TOOL_RESULT_CHARS);
+      const entry = { name: 'web_fetch', id: 't1', returnValue: 'short', success: true };
+      attachFullToolResult(entry, page);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (service as any).sendResearchModeStreamUpdate({ id: 'q1', sessionId: 's1' }, 'cfg-1', ['chunk'], {
+        toolsUsed: [entry],
+      });
+
+      expect(sendToClient).toHaveBeenCalledTimes(1);
+      const wire = JSON.stringify(sendToClient.mock.calls[0][2]);
+      expect(wire).toContain('"returnValue":"short"');
+      expect(wire).not.toContain('ppppp');
+      expect(wire.length).toBeLessThan(128 * 1024);
+      expect(getFullToolResult(entry)?.text).toBe(page);
     });
   });
 

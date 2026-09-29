@@ -62,7 +62,7 @@ export enum DocumentDateSource {
    * Drive at that moment. Never taken for a binary uploaded to Drive: there `createdTime` is the
    * upload time, which is the same ingestion-time-as-document-date mistake #3047 removed.
    *
-   * This value is pinned once set - see the precedence rule in `prepareFabFileChunks`. An Editors
+   * This value is pinned once set - see the precedence rule in `resolveDocumentDate`. An Editors
    * file has no bytes of its own, so what the chunker reads is a rendition Drive generated at
    * fetch time, and that rendition's embedded metadata dates the export rather than the document.
    */
@@ -769,12 +769,15 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
     limit?: number;
     afterChunkId?: string;
   }): Promise<Array<{ id: string; fabFileId: string; vectorLength: number }>>;
-  /** Atlas `$vectorSearch` over a bounded, already-eligibility-checked file subset for one embedding model. */
+  /**
+   * Atlas `$vectorSearch` over a bounded, already-eligibility-checked file subset for one embedding model.
+   * `includeText: false` skips the chunk body (returned as '') for callers that only rank by score.
+   */
   vectorSearch(
     fileIds: string[],
     queryVector: number[],
     model: string,
-    options?: { limit?: number }
+    options?: { limit?: number; includeText?: boolean }
   ): Promise<Array<{ id: string; fabFileId: string; text: string; score: number }>>;
   /** Whether `model`'s Atlas vector index exists and is queryable (cached; see atlasSearchIndex.ts). */
   getAtlasIndexStatus(model: string): Promise<{ queryable: boolean; status: string } | null>;
@@ -1543,8 +1546,24 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * a stored file whose driveFileId is absent from the walk was DELETED from the folder, and one
    * whose driveMd5Checksum/driveModifiedTime moved was EDITED - neither detectable from the walk
    * alone. Scoped to the connection so a re-sync only reconciles the files it owns.
+   *
+   * `includeDeleted` drops the archivedAt/deletedAt filters for the disconnect purge, which must
+   * reach an archived lake's members (every member is archivedAt-stamped when its lake archives)
+   * and soft-deleted rows, mirroring `hardDeleteByDataLakeTag`. `status: 'pending'` rows are
+   * excluded either way.
    */
-  findByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]>;
+  findByDriveConnectionIdInDataLake(
+    driveConnectionId: string,
+    datalakeTag: string,
+    options?: { includeDeleted?: boolean }
+  ): Promise<IFabFileDocument[]>;
+  /**
+   * Lightweight count of the `includeDeleted` set `findByDriveConnectionIdInDataLake` resolves -
+   * the disconnect-confirmation dialog needs a number, not every file's body, to warn how many
+   * documents a disconnect will actually delete, and that number must stay honest for an
+   * archived lake too.
+   */
+  countByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<number>;
   /**
    * The Drive file ids a given ingest batch has already UPLOADED a FabFile for. This is what a
    * resumed ingest slice subtracts from its fresh walk, so it must exclude a row whose bytes never

@@ -124,6 +124,7 @@ describe('captureUtmParams', () => {
     });
 
     it('writes nothing for a visitor who declined here', () => {
+      document.cookie = 'b4m-region=row; path=/';
       localStorage.setItem('cookie_consent', 'denied');
       setSearch('?utm_source=newsletter');
       captureUtmParams();
@@ -131,6 +132,7 @@ describe('captureUtmParams', () => {
     });
 
     it('writes nothing for a visitor who declined on the marketing site', () => {
+      document.cookie = 'b4m-region=row; path=/';
       document.cookie = 'b4m-consent-decision=denied; path=/';
       setSearch('?utm_source=newsletter');
       captureUtmParams();
