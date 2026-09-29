@@ -100,6 +100,8 @@ function loadMockFiles(): { path: string; text: string }[] {
 }
 
 describe('vi.mock specifiers match what the mocked module exports', () => {
+  // Whole-tree scan (~25s on CI and growing with the mock count), so it outgrows the package's
+  // 30s per-test budget; give it its own ceiling rather than raising the budget for every test.
   it('has no mock stubbing a symbol its specifier does not export', () => {
     const entries = loadEntries();
     const files = loadMockFiles();
@@ -126,7 +128,7 @@ describe('vi.mock specifiers match what the mocked module exports', () => {
       checked,
       'the guard compared far fewer mocks than this tree has - has the scan or the build broken?'
     ).toBeGreaterThan(MIN_CHECKED_CALLS);
-  });
+  }, 120_000);
 
   it('can enumerate the exports of every entry point it guards', () => {
     // Absence of a key is the whole signal, so an entry whose export list came back empty or
