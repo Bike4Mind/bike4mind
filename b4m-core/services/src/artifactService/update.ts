@@ -309,6 +309,7 @@ async function rollbackVersionRows(
   if (contentId) await step('delete content', () => db.artifactContents.delete(String(contentId)));
   if (deactivatedVersionId) {
     await step('reactivate previous version', () =>
+      // any: `id` is not a known key of Partial<IArtifactVersionDocument>
       db.artifactVersions.update({ id: deactivatedVersionId, isActive: true } as any)
     );
   }
