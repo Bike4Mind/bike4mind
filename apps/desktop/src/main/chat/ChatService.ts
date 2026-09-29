@@ -1619,12 +1619,13 @@ export class ChatService {
   /**
    * Give a new conversation a name of its own, replacing the truncated first prompt.
    *
-   * Runs BESIDE the turn: this request and the turn's own go out concurrently and neither
-   * waits on the other, which is the whole point - a first answer held up by a title request
-   * would be a worse product than a conversation with a truncated name. Every failure path
-   * lands on the same outcome: the session keeps the truncation it already has. Nothing here reaches the
-   * conversation - a title that could not be generated is cosmetic, and an error message about
-   * one would be the most annoying thing in the app.
+   * Runs BESIDE the turn: this request and the turn's own go out concurrently and neither waits
+   * on the other, which is the whole point - a first answer held up by a title request would be
+   * a worse product than a conversation with a truncated name.
+   *
+   * Every failure path lands on the same outcome: the session keeps the truncation it already
+   * has, and nothing reaches the conversation. A title that could not be generated is cosmetic,
+   * and an error message about one would be the most annoying thing in the app.
    *
    * Titles Code sessions too. SessionStore.create leaves one untitled because the project name
    * is already the group header, which is an argument about not REUSING the project name - the
@@ -1638,8 +1639,6 @@ export class ChatService {
     // Everything is inside, including reading the catalog: this runs as a floating promise, so
     // a throw out of it would be an unhandled rejection in main rather than a missing title.
     try {
-      if (!prompt.trim()) return;
-
       const model = pickTitleModel(this.deps.models?.cached() ?? [], session.model);
       if (!model) return;
 
