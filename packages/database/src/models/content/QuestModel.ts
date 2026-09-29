@@ -766,14 +766,15 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     this.ctx = null;
   }
 
-  /** Partial update of one quest, matched only inside `sessionId` so it cannot land on another session's quest. */
+  /** Partial update of one live quest, matched only inside `sessionId` so it cannot land on another session's quest. */
   async updateInSession(
     sessionId: string,
     data: Partial<IChatHistoryItemDocument> & { id: string }
   ): Promise<IChatHistoryItemDocument | null> {
     const { id, ...updateData } = data;
     if (!mongoose.isObjectIdOrHexString(id)) return null;
-    return this._plainUpdate({ _id: convertId(id), sessionId }, updateData as Record<string, unknown>);
+    // deletedAt is explicit: softDeletePlugin does not hook _plainUpdate's findOneAndUpdate.
+    return this._plainUpdate({ _id: convertId(id), sessionId, deletedAt: null }, updateData as Record<string, unknown>);
   }
 
   async findBySessionIdAndId(sessionId: string, id: string) {
