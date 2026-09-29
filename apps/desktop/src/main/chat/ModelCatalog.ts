@@ -25,6 +25,7 @@ interface WireModel {
   type?: unknown;
   backend?: unknown;
   contextWindow?: unknown;
+  max_tokens?: unknown;
   supportsTools?: unknown;
   supportsVision?: unknown;
 }
@@ -159,6 +160,7 @@ export function selectUsableModels(wire: unknown): ChatModelOption[] {
       name: typeof model.name === 'string' && model.name ? model.name : (model.id as string),
       ...(typeof model.backend === 'string' ? { backend: model.backend } : {}),
       ...(typeof model.contextWindow === 'number' ? { contextWindow: model.contextWindow } : {}),
+      ...(typeof model.max_tokens === 'number' && model.max_tokens > 0 ? { maxOutputTokens: model.max_tokens } : {}),
       // Carried through only when the server stated it. Absent is "not said", which the
       // attachment gate treats differently from an explicit false - see ChatService.
       ...(typeof model.supportsVision === 'boolean' ? { supportsVision: model.supportsVision } : {}),

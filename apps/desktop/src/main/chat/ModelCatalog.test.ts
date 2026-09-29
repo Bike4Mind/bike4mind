@@ -15,6 +15,11 @@ function wireModel(overrides: Record<string, unknown> = {}) {
 }
 
 describe('selectUsableModels', () => {
+  it("carries the model's output ceiling from the catalog's max_tokens", () => {
+    expect(selectUsableModels([wireModel({ max_tokens: 16_384 })])[0]).toMatchObject({ maxOutputTokens: 16_384 });
+    expect(selectUsableModels([wireModel()])[0]).not.toHaveProperty('maxOutputTokens');
+  });
+
   it('keeps only text models that can call tools', () => {
     const models = selectUsableModels([
       wireModel(),

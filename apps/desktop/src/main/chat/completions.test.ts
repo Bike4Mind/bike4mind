@@ -123,7 +123,19 @@ describe('streamCompletion', () => {
     const [url, body, config] = post.mock.calls[0];
     expect(url).toBe('/c');
     expect(body).toMatchObject({ model: 'm', options: { stream: true, tools: [] } });
+    expect(body).not.toHaveProperty('max_tokens');
     expect(config.responseType).toBe('stream');
+  });
+
+  it('sends an output ceiling as the top-level max_tokens the endpoint normalizes', async () => {
+    const stream = new PassThrough();
+    const { instance, post } = fakeAxios(stream);
+
+    const done = streamCompletion(instance, '/c', { ...REQUEST, maxTokens: 16_384 }, () => {});
+    stream.write(frame('[DONE]'));
+    await done;
+
+    expect(post.mock.calls[0][1]).toMatchObject({ max_tokens: 16_384 });
   });
 
   it('forwards declared tools in the envelope the endpoint expects', async () => {

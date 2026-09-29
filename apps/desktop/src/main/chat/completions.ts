@@ -22,6 +22,8 @@ export interface CompletionRequest {
   messages: CompletionMessage[];
   /** Declared tools. The model may ASK for these; running them is this client's job. */
   tools?: { toolSchema: unknown }[];
+  /** Output ceiling for the reply. Absent lets the server choose, which is 4096 for most models. */
+  maxTokens?: number;
 }
 
 /**
@@ -50,6 +52,7 @@ export async function streamCompletion(
       {
         model: request.model,
         messages: request.messages,
+        ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
         // The tool loop on this endpoint belongs to the CALLER: the model emits tool_use and
         // this client executes it locally, then sends the result back as another turn.
         options: { stream: true, tools: request.tools ?? [] },

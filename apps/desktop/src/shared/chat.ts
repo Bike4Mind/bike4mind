@@ -410,6 +410,12 @@ export interface ChatModelOption {
   backend?: string;
   contextWindow?: number;
   /**
+   * The most output tokens this model can produce in one reply, sent as `max_tokens` on every
+   * turn. Without it the server falls back to 4096 for a model that does not reason, which a
+   * single file write outgrows.
+   */
+  maxOutputTokens?: number;
+  /**
    * Whether this model accepts images. Absent means the server said nothing, which is NOT the
    * same as "no": the catalog only carries the flag for backends that report it, so an attached
    * image is refused on an explicit `false` and allowed through on silence.

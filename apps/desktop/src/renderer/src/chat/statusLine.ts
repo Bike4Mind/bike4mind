@@ -1,4 +1,5 @@
 import type { ChatToolCall, ChatUsage } from '@shared/chat';
+import { pendingCodePhrase, type PendingCode } from './codeStream';
 import { activePhrase } from './toolRows';
 
 /**
@@ -47,9 +48,14 @@ export function formatTokens(count: number): string {
  *
  * Read off the state the turn already publishes - tool statuses and the progress lines the slow
  * tools report - rather than asked for. Approval outranks everything, because a turn parked at
- * the gate is not working on anything at all.
+ * the gate is not working on anything at all. Code being written is named rather than shown; see
+ * presentReply.
  */
-export function describeActivity(calls: readonly ChatToolCall[], hasText: boolean): string {
+export function describeActivity(
+  calls: readonly ChatToolCall[],
+  hasText: boolean,
+  pending: PendingCode | null = null
+): string {
   if (calls.some(call => call.status === 'awaiting-approval')) return 'Waiting for your answer...';
 
   const running = calls.filter(call => call.status === 'running');
@@ -58,6 +64,7 @@ export function describeActivity(calls: readonly ChatToolCall[], hasText: boolea
     return only.progress?.trim() || activePhrase(only.name);
   }
   if (running.length > 1) return 'Running tools...';
+  if (pending) return pendingCodePhrase(pending);
 
   return hasText ? 'Responding...' : 'Thinking...';
 }

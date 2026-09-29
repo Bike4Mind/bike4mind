@@ -1058,6 +1058,8 @@ export class ChatService {
       wire.unshift(
         buildSystemMessage(roots, !!media, !!host, this.deps.mcp?.connectedServerNames() ?? [], session.project)
       );
+      const catalog = await this.deps.models?.list();
+      const maxTokens = catalog?.models.find(option => option.id === session.model)?.maxOutputTokens;
 
       for (let roundIndex = 0; roundIndex < limits.rounds; roundIndex++) {
         const requested: RequestedTool[] = [];
@@ -1068,7 +1070,7 @@ export class ChatService {
         const failure = await streamRound(
           api.getAxiosInstance(),
           serverConfig.endpoint,
-          { model: session.model, messages: wire, tools },
+          { model: session.model, messages: wire, tools, ...(maxTokens ? { maxTokens } : {}) },
           event => {
             // `error` never reaches here (the transport throws on it); `meta` carries no reply.
             if (event.type === 'error' || event.type === 'meta') return;

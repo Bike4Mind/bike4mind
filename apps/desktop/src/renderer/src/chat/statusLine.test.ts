@@ -38,6 +38,20 @@ describe('totalTokens', () => {
 });
 
 describe('describeActivity', () => {
+  it('names code being written instead of calling it responding', () => {
+    expect(describeActivity([], true, { kind: 'artifact', title: 'Dashboard' })).toBe(
+      'Creating an artifact: Dashboard...'
+    );
+    expect(describeActivity([], true, { kind: 'code' })).toBe('Writing code...');
+  });
+
+  it('still lets a running tool or an approval outrank code being written', () => {
+    expect(describeActivity([call('file_read', 'running')], true, { kind: 'code' })).not.toBe('Writing code...');
+    expect(describeActivity([call('file_write', 'awaiting-approval')], true, { kind: 'code' })).toBe(
+      'Waiting for your answer...'
+    );
+  });
+
   it('puts a blocked approval ahead of everything else', () => {
     expect(describeActivity([call('bash_execute', 'awaiting-approval'), call('file_read', 'running')], false)).toBe(
       'Waiting for your answer...'

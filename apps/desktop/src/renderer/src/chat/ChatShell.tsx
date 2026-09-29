@@ -19,6 +19,8 @@ import { SessionChips } from './SessionChips';
 import { SessionList } from './SessionList';
 import { SidebarCard } from './SidebarCard';
 import { TurnStatus } from './TurnStatus';
+import { presentReply } from './codeStream';
+import { roundsOf } from './replyRounds';
 import { describeActivity } from './statusLine';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
@@ -163,7 +165,12 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   // What the turn in flight is doing, read off the reply being streamed into the thread. Only
   // the last message can be that reply, so nothing earlier is consulted.
   const inFlight = conversation.messages[conversation.messages.length - 1];
-  const activity = describeActivity(inFlight?.toolCalls ?? [], (inFlight?.content.length ?? 0) > 0);
+  const liveText = inFlight ? (roundsOf(inFlight).at(-1)?.text ?? '') : '';
+  const activity = describeActivity(
+    inFlight?.toolCalls ?? [],
+    (inFlight?.content.length ?? 0) > 0,
+    presentReply(liveText, true).pending
+  );
 
   const onSend = useCallback(
     async (text: string) => {

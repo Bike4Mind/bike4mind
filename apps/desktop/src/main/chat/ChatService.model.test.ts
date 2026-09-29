@@ -9,6 +9,7 @@ import { ChatService } from './ChatService';
 import type { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
+import { TITLE_INSTRUCTION } from './sessionTitle';
 
 const HOSTED: ChatModelOption[] = [
   { id: 'claude-sonnet-4-5-20250929', name: 'Claude 4.5 Sonnet', backend: 'anthropic' },
@@ -17,6 +18,13 @@ const HOSTED: ChatModelOption[] = [
 
 /** What a self-host stack with only a local Ollama looks like: no Anthropic key, no Claude. */
 const SELF_HOST: ChatModelOption[] = [{ id: 'qwen3.5', name: 'qwen3.5', backend: 'ollama' }];
+
+/** The turn's own request, not the title request that a first message also sends. */
+function turnRequest(post: ReturnType<typeof vi.fn>): Record<string, unknown> | undefined {
+  return post.mock.calls
+    .map(call => call[1] as { messages: { content: unknown }[] })
+    .find(body => body.messages[0]?.content !== TITLE_INSTRUCTION);
+}
 
 describe('ChatService model selection', () => {
   let store: SessionStore;
@@ -77,6 +85,27 @@ describe('ChatService model selection', () => {
     await vi.waitUntil(() => post.mock.calls.length > 0, { timeout: 2000, interval: 5 });
 
     expect(post.mock.calls[0][1]).toMatchObject({ model: 'gpt-4o' });
+  });
+
+  it("asks for the model's own output ceiling, so a long file write is not cut off at 4096", async () => {
+    available = [{ id: 'gpt-4o', name: 'GPT-4o', maxOutputTokens: 16_384 }];
+    const { id } = await service.createSession();
+    await service.setSessionModel(id, 'gpt-4o');
+
+    await service.send(id, 'hello');
+    const turn = await vi.waitUntil(() => turnRequest(post), { timeout: 2000, interval: 5 });
+
+    expect(turn).toMatchObject({ model: 'gpt-4o', max_tokens: 16_384 });
+  });
+
+  it('leaves max_tokens to the server when the catalog does not state a ceiling', async () => {
+    const { id } = await service.createSession();
+    await service.setSessionModel(id, 'gpt-4o');
+
+    await service.send(id, 'hello');
+    const turn = await vi.waitUntil(() => turnRequest(post), { timeout: 2000, interval: 5 });
+
+    expect(turn).not.toHaveProperty('max_tokens');
   });
 
   // Switching environments is the everyday way in: hosted's Claude is not on a keyless self-host.

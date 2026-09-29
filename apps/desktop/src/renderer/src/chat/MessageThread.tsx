@@ -8,6 +8,7 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { isTurnBudgetStop, type ChatMessage } from '@shared/chat';
 import { ArtifactList } from './ArtifactCard';
+import { presentReply } from './codeStream';
 import { AttachmentRow } from './Attachments';
 import { ChevronIcon } from './icons';
 import { contentColumnSx } from './layout';
@@ -157,9 +158,12 @@ function AssistantTurn({
   onRespond,
   onContinue,
   status,
+  live = false,
 }: {
   message: ChatMessage;
   onRespond: RespondToApproval;
+  /** The reply still streaming: its last round may end in code that is still being written. */
+  live?: boolean;
   /** Absent unless this is the turn a Continue would resume; see MessageThread. */
   onContinue?: () => void;
   /** What this turn is doing, while it is the one in flight; see MessageThread. */
@@ -173,17 +177,27 @@ function AssistantTurn({
       {/* The turn in the order it happened: each round's prose, then the tools that round went
           on to run, then the next round's prose. A reply that touched six files across ten
           rounds is a narrative, and every row piled up after every word is not that narrative. */}
-      {rounds.map((round, index) => (
-        // The gap lives here rather than as a blank line inside the text, so a round that ran
-        // tools and said nothing does not leave an empty paragraph behind.
-        <Box key={index} sx={{ mt: index === 0 ? 0 : 1.5 }} data-testid="chat-message-round">
-          {/* Per round rather than over the whole reply, which is also what keeps a code fence
-              from leaking: a block opened in one round cannot swallow the next round's prose,
-              because the next round is a parse of its own. */}
-          {round.text.length > 0 && <ReplyMarkdown text={round.text} />}
-          <ToolCallList calls={callsIn(round, toolCalls)} onRespond={onRespond} />
-        </Box>
-      ))}
+      {rounds.map((round, index) => {
+        const presented = presentReply(round.text, live && index === rounds.length - 1);
+        return (
+          // The gap lives here rather than as a blank line inside the text, so a round that ran
+          // tools and said nothing does not leave an empty paragraph behind.
+          <Box key={index} sx={{ mt: index === 0 ? 0 : 1.5 }} data-testid="chat-message-round">
+            {/* Per round rather than over the whole reply, which is also what keeps a code fence
+                from leaking: a block opened in one round cannot swallow the next round's prose,
+                because the next round is a parse of its own. */}
+            {presented.text.length > 0 && <ReplyMarkdown text={presented.text} />}
+            {presented.unfinishedArtifact !== null && (
+              <Typography level="body-sm" color="warning" sx={{ mt: 1 }} data-testid="chat-unfinished-artifact">
+                {presented.unfinishedArtifact
+                  ? `The artifact "${presented.unfinishedArtifact}" was cut off before it was finished, so it was not saved.`
+                  : 'An artifact was cut off before it was finished, so it was not saved.'}
+              </Typography>
+            )}
+            <ToolCallList calls={callsIn(round, toolCalls)} onRespond={onRespond} />
+          </Box>
+        );
+      })}
 
       {/* After both, because an artifact is what the turn produced rather than part of how it
           got there. `content` has already had the markup removed, so nothing is shown twice. */}
@@ -352,7 +366,7 @@ export function MessageThread({
               // Only the last turn, and only while nothing is running: resuming writes back
               // into its own message, so a Continue on an older one would edit history.
               {...(index === messages.length - 1 && !streaming ? { onContinue } : {})}
-              {...(index === messages.length - 1 && streaming ? { status } : {})}
+              {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
             />
           )
         )}
