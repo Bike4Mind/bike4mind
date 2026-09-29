@@ -8,6 +8,7 @@ import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { NotFoundError } from '@bike4mind/utils';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
+import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { getFilesStorage } from '@server/utils/storage';
 import type { Request } from 'express';
@@ -43,6 +44,9 @@ export async function loadAccessibleFabFile(req: Request, id: string) {
     return await fabFilesService.getFabFile(req.user.id, { id }, adapter);
   } catch (error) {
     if (!(error instanceof NotFoundError)) throw error;
+    // The same lake read through /api/data-lakes/articles needs datalake:read, so a key scoped to
+    // files alone must not reach lake files through this fallback. JWT callers are unaffected.
+    if (!holdsDataLakeReadScope(req)) throw error;
     // Fallback: data-lake files are authorized by lake tag/prefix, NOT by per-file ACL.
     // Curated/shared lake articles (e.g. OptiHashi's opti-knowledge) are owned by a curator,
     // so getFabFile 404s for entitled non-owner users. Re-authorize via the SAME lake gate the
