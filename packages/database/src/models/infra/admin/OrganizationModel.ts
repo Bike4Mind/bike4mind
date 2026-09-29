@@ -475,7 +475,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   async incrementCurrentStorage(organizationId: string, count: number): Promise<void> {
-    await this.organizationModel.findByIdAndUpdate(organizationId, [
+    await this.organizationModel.updateOne({ _id: organizationId }, [
       {
         $set: {
           currentStorageSize: {
@@ -483,7 +483,6 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
           },
         },
       },
-      { new: true },
     ]);
   }
 
