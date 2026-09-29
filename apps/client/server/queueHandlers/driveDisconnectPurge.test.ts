@@ -7,7 +7,9 @@ vi.mock('@server/queueHandlers/utils', () => ({
 const h = vi.hoisted(() => ({
   dlFindById: vi.fn(),
   connFindByDataLakeIdAny: vi.fn(),
-  connMarkDisconnecting: vi.fn(async () => true),
+  connMarkDisconnecting: vi.fn(
+    async (): Promise<{ stamp: Date; created: boolean; previousEnabled: boolean } | null> => null
+  ),
   findFiles: vi.fn(async (): Promise<unknown[]> => []),
   purge: vi.fn(async () => ({ filesPurged: 0, storageObjectsDeleted: 0 })),
   recomputeLakeStats: vi.fn(async () => ({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 })),
@@ -58,7 +60,7 @@ describe('driveDisconnectPurge consumer', () => {
     vi.clearAllMocks();
     h.dlFindById.mockResolvedValue(lake);
     h.connFindByDataLakeIdAny.mockResolvedValue(pendingConn);
-    h.connMarkDisconnecting.mockResolvedValue(true);
+    h.connMarkDisconnecting.mockResolvedValue({ stamp: new Date(), created: false, previousEnabled: false });
     h.findFiles.mockResolvedValue([]);
   });
 
@@ -155,14 +157,14 @@ describe('driveDisconnectPurge consumer', () => {
   });
 
   it('defers behind a sync that slipped in, instead of purging past it', async () => {
-    h.connMarkDisconnecting.mockResolvedValue(false);
+    h.connMarkDisconnecting.mockResolvedValue(null);
     await run();
     expect(h.findFiles).not.toHaveBeenCalled();
     expect(h.sendToQueue).toHaveBeenCalledWith('purge-queue-url', { ...payload, syncDeferrals: 1 }, 300);
   });
 
   it('gives up into the DLQ once the sync deferrals are exhausted', async () => {
-    h.connMarkDisconnecting.mockResolvedValue(false);
+    h.connMarkDisconnecting.mockResolvedValue(null);
     await expect(run({ ...payload, syncDeferrals: 12 })).rejects.toThrow(/blocked by a sync/);
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });

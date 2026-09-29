@@ -407,20 +407,31 @@ class OrgGoogleDriveConnectionRepository
    * Returns whether the disable took effect; false means the caller should 409 (a sync is currently
    * in flight) rather than proceed to purge past a connection that might still be ingesting.
    */
-  async markDisconnecting(id: string, organizationId: string): Promise<boolean> {
-    const result = await this.model.findOneAndUpdate(
+  async markDisconnecting(
+    id: string,
+    organizationId: string
+  ): Promise<{ stamp: Date; created: boolean; previousEnabled: boolean } | null> {
+    const stamp = new Date();
+    // Returns the PRE-update document, which is what tells a creator apart from a re-stamp.
+    const previous = await this.model.findOneAndUpdate(
       { _id: id, organizationId, status: { $ne: 'syncing' } },
-      // $min keeps the first stamp across a retried DELETE or a consumer re-assert.
-      { $set: { enabled: false }, $min: { disconnectRequestedAt: new Date() } }
+      { $set: { enabled: false, disconnectRequestedAt: stamp } }
     );
-    return result !== null;
+    if (!previous) return null;
+    return { stamp, created: !previous.disconnectRequestedAt, previousEnabled: previous.enabled !== false };
   }
 
-  async cancelDisconnect(id: string, organizationId: string, enabled: boolean): Promise<void> {
-    await this.model.updateOne(
-      { _id: id, organizationId },
+  async cancelDisconnect(id: string, organizationId: string, stamp: Date, enabled: boolean): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, organizationId, disconnectRequestedAt: stamp },
       { $set: { enabled }, $unset: { disconnectRequestedAt: '' } }
     );
+    return result.matchedCount > 0;
+  }
+
+  async enableUnlessDisconnecting(id: string): Promise<boolean> {
+    const result = await this.model.updateOne({ _id: id, disconnectRequestedAt: null }, { $set: { enabled: true } });
+    return result.matchedCount > 0;
   }
 
   /**

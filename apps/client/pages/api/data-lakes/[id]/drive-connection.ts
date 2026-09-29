@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeRepository, fabFileRepository, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
+import { isDriveDisconnectStalled } from '@bike4mind/common';
 import type { IDataLakeDocument, IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
 import type { DriveDisconnectPurgePayload } from '@server/queueHandlers/driveDisconnectPurge';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
@@ -30,6 +31,7 @@ function toSafeConnection(c: IOrgGoogleDriveConnectionDocument, fileCount: numbe
     connectedAt: c.connectedAt ?? null,
     fileCount,
     disconnecting: !!c.disconnectRequestedAt,
+    disconnectStalled: !!c.disconnectRequestedAt && isDriveDisconnectStalled(c.disconnectRequestedAt),
   };
 }
 
@@ -109,6 +111,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const { lake, organizationId } = await resolveOrgLake(req);
     const conn = await findLakeConnection(lake.id, organizationId);
     if (conn) {
+      // A purge that ran recently is still progressing; another message would only start a second
+      // self-re-enqueueing chain over the same files.
+      if (conn.disconnectRequestedAt && !isDriveDisconnectStalled(conn.disconnectRequestedAt)) {
+        return res.status(202).json({ success: true, queued: true });
+      }
       // Don't hard-delete under a live ingest: the running handler still holds the connection it
       // loaded and would keep creating FabFiles stamped with a driveConnectionId that no longer
       // resolves, while the UI reads "Disconnected". Make the user wait out (or the claim go stale).
@@ -133,10 +140,16 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
         await sendToQueue(getSourceQueueUrl('driveDisconnectPurgeQueue'), message);
       } catch (error) {
         // No message behind the mark would leave the connection disabled with nothing to finish it,
-        // so undo it - unless an earlier accepted disconnect is still pending, whose message stands.
-        if (!conn.disconnectRequestedAt) {
+        // so undo it - but only a mark this call created, and only if nothing re-stamped it since
+        // (a concurrent DELETE whose message did land, or a purge run already under way).
+        if (marked.created) {
           try {
-            await orgGoogleDriveConnectionRepository.cancelDisconnect(conn.id, organizationId, conn.enabled);
+            await orgGoogleDriveConnectionRepository.cancelDisconnect(
+              conn.id,
+              organizationId,
+              marked.stamp,
+              marked.previousEnabled
+            );
           } catch (cancelError) {
             req.logger.error('Failed to roll back a Drive disconnect whose purge could not be queued', {
               dataLakeId: lake.id,

@@ -222,7 +222,7 @@ async function setDriveConnectionEnabledForLake(dataLakeId: string, enabled: boo
   const connection = await orgGoogleDriveConnectionRepository.findByDataLakeIdAny(dataLakeId);
   if (!connection) return false;
   // A pending disconnect keeps the row disabled until its queued purge releases it.
-  if (enabled && connection.disconnectRequestedAt) return false;
+  if (enabled) return orgGoogleDriveConnectionRepository.enableUnlessDisconnecting(connection.id);
   await orgGoogleDriveConnectionRepository.update({ id: connection.id, enabled });
   return true;
 }

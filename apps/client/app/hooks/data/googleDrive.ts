@@ -17,6 +17,8 @@ export type LakeDriveConnection = {
   fileCount: number;
   /** A disconnect was accepted and its file purge is running in the background. */
   disconnecting: boolean;
+  /** The pending purge has made no progress for DRIVE_DISCONNECT_STALL_MS, so a retry may re-queue it. */
+  disconnectStalled: boolean;
 };
 
 const lakeDriveConnectionKey = (dataLakeId?: string) => ['lake-drive-connection', dataLakeId];

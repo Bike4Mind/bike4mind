@@ -127,6 +127,7 @@ describe('driveConnectionPollInterval', () => {
     connectedAt: null,
     fileCount: 0,
     disconnecting: false,
+    disconnectStalled: false,
     ...overrides,
   });
 

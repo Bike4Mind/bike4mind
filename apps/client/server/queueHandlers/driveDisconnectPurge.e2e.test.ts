@@ -127,7 +127,8 @@ describe('Drive disconnect purge via the queue (real repos + Mongo)', () => {
   it('works through a connection larger than one invocation slice by slice, then releases it', async () => {
     const { lake, conn, manual } = await seed(5);
     // The route's half: mark first, then the message.
-    expect(await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG)).toBe(true);
+    const marked = await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG);
+    expect(marked?.created).toBe(true);
     const payload = { connectionId: conn.id, dataLakeId: lake.id, organizationId: ORG };
 
     const outcomes = await drain(payload, 2);
@@ -142,6 +143,17 @@ describe('Drive disconnect purge via the queue (real repos + Mongo)', () => {
 
     // A late redelivery after release is a no-op.
     expect(await runDriveDisconnectPurge(payload, { logger, sliceSize: 2, enqueue: async () => {} })).toBe('dropped');
+  });
+
+  it('re-stamps the pending disconnect on every run, so a progressing purge never reads as stalled', async () => {
+    const { lake, conn } = await seed(3);
+    const marked = await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const payload = { connectionId: conn.id, dataLakeId: lake.id, organizationId: ORG };
+
+    expect(await runDriveDisconnectPurge(payload, { logger, sliceSize: 1, enqueue: async () => {} })).toBe('continued');
+    const row = await OrgGoogleDriveConnection.findById(conn.id);
+    expect(row!.disconnectRequestedAt!.getTime()).toBeGreaterThan(marked!.stamp.getTime());
   });
 
   it('converges under a redelivered message without refunding any owner twice', async () => {
