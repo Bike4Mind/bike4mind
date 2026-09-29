@@ -126,6 +126,63 @@ describe('softDeletePlugin update hook', () => {
     expect((await rawDoc(id))?.name).toBe('upserted');
   });
 
+  it('an upsert onto a tombstone leaves it deleted', async () => {
+    const { id, deletedAt } = await seedTombstone('taken');
+
+    await SoftModel.updateOne({ slug: 'taken' }, { $set: { name: 'upserted' } }, { upsert: true });
+
+    expect((await rawDoc(id))?.deletedAt).toEqual(deletedAt);
+  });
+
+  it('a filter with deletedAt: undefined is still guarded', async () => {
+    const { id } = await seedTombstone();
+
+    const result = await SoftModel.updateOne({ _id: id, deletedAt: undefined }, { $set: { name: 'x' } });
+
+    expect(result.matchedCount).toBe(0);
+    expect((await rawDoc(id))?.name).toBe('before');
+  });
+
+  it('replaceOne / findOneAndReplace on a tombstone are no-ops unless includeDeleted', async () => {
+    const { id, deletedAt } = await seedTombstone();
+
+    expect((await SoftModel.replaceOne({ _id: id }, { name: 'r', slug: 'dead' })).matchedCount).toBe(0);
+    expect(await SoftModel.findOneAndReplace({ _id: id }, { name: 'r', slug: 'dead' })).toBeNull();
+    expect(await rawDoc(id)).toMatchObject({ name: 'before', deletedAt });
+
+    await SoftModel.replaceOne({ _id: id }, { name: 'r1', slug: 'dead', deletedAt }, includeDeleted);
+    expect((await rawDoc(id))?.name).toBe('r1');
+    await SoftModel.findOneAndReplace({ _id: id }, { name: 'r2', slug: 'dead', deletedAt }, includeDeleted);
+    expect(await rawDoc(id)).toMatchObject({ name: 'r2', deletedAt });
+  });
+
+  it('a replace upsert onto a tombstoned unique key keeps matching it', async () => {
+    const { id } = await seedTombstone('taken');
+
+    await SoftModel.replaceOne({ slug: 'taken' }, { name: 'up', slug: 'taken' }, { upsert: true });
+
+    expect(await SoftModel.collection.countDocuments()).toBe(1);
+    expect((await rawDoc(id))?.name).toBe('up');
+  });
+
+  it('doc.updateOne() on a doc loaded with includeDeleted writes to the tombstone', async () => {
+    const { id, deletedAt } = await seedTombstone();
+    const tomb = await SoftModel.findById(id).setOptions(includeDeleted);
+
+    await tomb!.updateOne({ $set: { name: 'doc' } }).setOptions(includeDeleted);
+
+    expect(await rawDoc(id)).toMatchObject({ name: 'doc', deletedAt });
+  });
+
+  // Known gap: Model.bulkWrite fires no query middleware, so it bypasses the tombstone guard.
+  it('bulkWrite is not hooked and still writes to a tombstone', async () => {
+    const { id } = await seedTombstone();
+
+    await SoftModel.bulkWrite([{ updateOne: { filter: { _id: id }, update: { $set: { name: 'bulk' } } } }]);
+
+    expect((await rawDoc(id))?.name).toBe('bulk');
+  });
+
   it('delete statics, findOneAndDelete, softDelete() and restore() still work', async () => {
     const a = await SoftModel.create({ slug: 'a' });
     const b = await SoftModel.create({ slug: 'b' });

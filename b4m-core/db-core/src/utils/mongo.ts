@@ -297,7 +297,9 @@ export function findModelByCollectionName(collectionName: string) {
   return null;
 }
 
-// TODO: populate when soft-delete options (e.g. deletedAtField name) are needed
+// Plugin-level config: none yet. Per-query behavior is set with query options instead:
+// `includeDeleted: true` lets find/count AND update/replace queries reach tombstones (writes are
+// guarded by default so a snapshot cannot resurrect one); `hardDelete: true` makes a delete real.
 export interface SoftDeletePluginOptions {}
 
 // Casts all string/ObjectId values inside a MongoDB operator object so every
@@ -462,18 +464,26 @@ export const softDeletePlugin = (
     next();
   });
 
-  // Same default for update queries, so a whole-doc BaseRepository.update(snapshot) - which $sets
-  // deletedAt: null - cannot resurrect a tombstone (SessionModel's explicit deletedAt: null filter is
-  // now redundant but kept). Skipped for includeDeleted, for a caller filter with a top-level
-  // deletedAt (nested $or/$and is not detected), and for upserts: a unique- or _id-keyed upsert onto
-  // a tombstone would otherwise miss and E11000, so an upsert can still write into a tombstone.
-  schema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], { document: false, query: true }, function (next) {
-    const opts = this.getOptions();
-    if (!opts.includeDeleted && !opts.upsert && !Object.hasOwn(this.getFilter(), 'deletedAt')) {
-      this.where({ deletedAt: null });
+  // Same default for update and replace queries, so a whole-doc BaseRepository.update(snapshot) - which
+  // $sets deletedAt: null - or a replacement that omits deletedAt (schema default null) cannot
+  // resurrect a tombstone (SessionModel's explicit deletedAt: null filter is now redundant but kept).
+  // Skipped for includeDeleted, for a caller filter with a top-level deletedAt (nested $or/$and is not
+  // detected), and for upserts: a unique- or _id-keyed upsert onto a tombstone would otherwise miss and
+  // E11000, so an upsert can still write into a tombstone. Known gap: Model.bulkWrite fires no query
+  // middleware, so its ops are unguarded.
+  schema.pre(
+    ['findOneAndUpdate', 'updateOne', 'updateMany', 'findOneAndReplace', 'replaceOne'],
+    { document: false, query: true },
+    function (next) {
+      const opts = this.getOptions();
+      // `!== undefined` rather than hasOwn: `deletedAt: undefined` constrains nothing once
+      // ignoreUndefined drops it, so it must not count as the caller taking over.
+      if (!opts.includeDeleted && !opts.upsert && this.getFilter().deletedAt === undefined) {
+        this.where({ deletedAt: null });
+      }
+      next();
     }
-    next();
-  });
+  );
 
   // Document-level middleware for deleteOne/deleteMany
   schema.pre(['deleteOne', 'deleteMany'], { document: true, query: false }, async function (next) {
