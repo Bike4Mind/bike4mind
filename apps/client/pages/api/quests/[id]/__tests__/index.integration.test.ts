@@ -86,7 +86,7 @@ vi.mock('@server/auth/auth', async orig => {
 
 import handler from '../index';
 import { ApiKeyScope } from '@bike4mind/common';
-import { QUEST_TIMEOUT_THRESHOLD_MS } from '@server/chatCompletion/questTimeoutRecovery';
+import { QUEST_TIMEOUT_THRESHOLD_MS, UNFINISHED_REPLY_NOTICE } from '@server/chatCompletion/questTimeoutRecovery';
 
 const VALID_KEY = 'sk-test-valid-key';
 
@@ -445,15 +445,27 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     });
 
     it('preserves content on a stuck quest that has replies', async () => {
-      mockQuestFindById.mockResolvedValue(stuckQuest({ reply: 'partial answer', replies: ['partial answer'] }));
+      mockQuestFindById.mockResolvedValue(
+        stuckQuest({ type: 'message', reply: 'partial answer', replies: ['partial answer'] })
+      );
       ownedByJwtUser();
 
       const { req, res } = fire({ apiKey: null });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
-      expect(res._getJSONData().status).toBe('done');
-      // No error type when content exists
-      expect(mockQuestSettle).toHaveBeenCalledWith('quest-1', { status: 'done' });
+      const body = res._getJSONData();
+      expect(body.status).toBe('done');
+      // Content exists, so not an error - but the poll must still say the run never finished.
+      expect(body.type).toBe('message');
+      expect(body.promptMeta?.finishReason).toBe('timeout');
+      expect(body.replies).toEqual(['partial answer', `\n\n${UNFINISHED_REPLY_NOTICE}`]);
+      expect(body.reply).toBe(`partial answer\n\n${UNFINISHED_REPLY_NOTICE}`);
+      expect(mockQuestSettle).toHaveBeenCalledWith('quest-1', {
+        status: 'done',
+        finishReason: 'timeout',
+        replies: ['partial answer', `\n\n${UNFINISHED_REPLY_NOTICE}`],
+        reply: `partial answer\n\n${UNFINISHED_REPLY_NOTICE}`,
+      });
     });
 
     it('does not recover a fresh running quest (heartbeat still alive)', async () => {

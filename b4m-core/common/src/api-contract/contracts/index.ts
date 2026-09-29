@@ -8,6 +8,8 @@ import { synthesizeSpeechContract } from './tts.contract';
 import { generateMusicContract } from './music.contract';
 import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
+import { generateImageContract } from './imageGeneration.contract';
+import { editImageContract } from './imageEdit.contract';
 
 /**
  * Every public endpoint, as a contract. The OpenAPI generator registers each of
@@ -26,4 +28,6 @@ export const CONTRACTS: readonly EndpointContract[] = [
   generateMusicContract,
   generateSoundEffectContract,
   getMeContract,
+  generateImageContract,
+  editImageContract,
 ];

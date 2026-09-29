@@ -554,13 +554,13 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     fileIds: string[],
     queryVector: number[],
     model: string,
-    options: { limit?: number } = {}
+    options: { limit?: number; includeText?: boolean } = {}
   ): Promise<Array<{ id: string; fabFileId: string; text: string; score: number }>> {
     if (fileIds.length === 0) return [];
     const target = getAtlasIndexForModel(model);
     if (!target) return [];
 
-    const { limit = 50 } = options;
+    const { limit = 50, includeText = true } = options;
     // Atlas applies `filter` DURING HNSW traversal, not as a post-filter, but recall still
     // degrades as the filter gets more selective relative to the collection - and `fabfilechunks`
     // holds every user's chunks, while `fileIds` here is usually a handful of files out of that
@@ -581,7 +581,14 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
           filter: { $and: [{ fabFileId: { $in: fileIds } }, { embeddingModel: model }] },
         },
       },
-      { $project: { _id: 1, fabFileId: 1, text: 1, score: { $meta: 'vectorSearchScore' } } },
+      {
+        $project: {
+          _id: 1,
+          fabFileId: 1,
+          ...(includeText ? { text: 1 } : {}),
+          score: { $meta: 'vectorSearchScore' },
+        },
+      },
     ];
 
     // any: $vectorSearch and the $meta vectorSearchScore projection are Atlas-only aggregation
@@ -939,11 +946,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // the door that admitted the file and silently drop lake-only images. Same builder, same
     // `archivedAt: null` post-processing on each arm - so the two doors can never disagree.
     //
-    // They still disagree on DRAFT lakes, and not because of anything here: the arms are only as
-    // wide as the `lakeAccess` a caller passes, and every attachment door resolves that through
-    // `findActiveByUserTagsAndEntitlements` (`status: 'active'`), while browse - `GET
-    // /api/files/byIds`, which is what admits the file to the workbench - selects draft AND active.
-    // So an unpublished lake's file is attachable and readable there, and absent here. Pinned by
+    // DRAFT lakes follow the same rule, but not from anything here: the arms are only as wide as
+    // the `lakeAccess` a caller passes. Browse (`GET /api/files/byIds`, which admits the file to the
+    // workbench) selects draft AND active, so every attachment door resolves its `lakeAccess` with
+    // `includeDraftLakes` to match - an active-only scope would drop an unpublished lake's file
+    // here that browse just showed. Retrieval and semantic search stay active-only. Pinned by
     // `queries/dataLakeDraftAttachmentScope.integration.test.ts`.
     const lakeArms = buildLakeArms({
       lakeMemberships: lakeAccess?.lakeMemberships,

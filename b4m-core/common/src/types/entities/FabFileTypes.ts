@@ -62,7 +62,7 @@ export enum DocumentDateSource {
    * Drive at that moment. Never taken for a binary uploaded to Drive: there `createdTime` is the
    * upload time, which is the same ingestion-time-as-document-date mistake #3047 removed.
    *
-   * This value is pinned once set - see the precedence rule in `prepareFabFileChunks`. An Editors
+   * This value is pinned once set - see the precedence rule in `resolveDocumentDate`. An Editors
    * file has no bytes of its own, so what the chunker reads is a rendition Drive generated at
    * fetch time, and that rendition's embedded metadata dates the export rather than the document.
    */
@@ -769,12 +769,15 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
     limit?: number;
     afterChunkId?: string;
   }): Promise<Array<{ id: string; fabFileId: string; vectorLength: number }>>;
-  /** Atlas `$vectorSearch` over a bounded, already-eligibility-checked file subset for one embedding model. */
+  /**
+   * Atlas `$vectorSearch` over a bounded, already-eligibility-checked file subset for one embedding model.
+   * `includeText: false` skips the chunk body (returned as '') for callers that only rank by score.
+   */
   vectorSearch(
     fileIds: string[],
     queryVector: number[],
     model: string,
-    options?: { limit?: number }
+    options?: { limit?: number; includeText?: boolean }
   ): Promise<Array<{ id: string; fabFileId: string; text: string; score: number }>>;
   /** Whether `model`'s Atlas vector index exists and is queryable (cached; see atlasSearchIndex.ts). */
   getAtlasIndexStatus(model: string): Promise<{ queryable: boolean; status: string } | null>;
