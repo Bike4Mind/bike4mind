@@ -18,7 +18,7 @@ function ChatIcon() {
       strokeWidth={1.8}
       strokeLinecap="round"
       strokeLinejoin="round"
-      sx={{ width: 16, height: 16 }}
+      sx={{ width: 14, height: 14 }}
       aria-hidden
     >
       <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.9 9.9 0 0 1-4.2-.9L3 20.5l1.6-4.4A8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4Z" />
@@ -36,7 +36,7 @@ function CodeIcon() {
       strokeWidth={1.8}
       strokeLinecap="round"
       strokeLinejoin="round"
-      sx={{ width: 16, height: 16 }}
+      sx={{ width: 14, height: 14 }}
       aria-hidden
     >
       <path d="m9 17-5-5 5-5" />
@@ -70,8 +70,10 @@ export function ModeSwitcher({ mode, onChange }: { mode: ChatSessionMode; onChan
     <Box
       role="group"
       aria-label="Session mode"
+      // inline-flex, not flex: the control is sized to its two buttons so the header row's
+      // spare width sits between it and the collapse button rather than stretching it.
       sx={{
-        display: 'flex',
+        display: 'inline-flex',
         gap: 0.25,
         p: 0.25,
         borderRadius: 'sm',
@@ -84,11 +86,11 @@ export function ModeSwitcher({ mode, onChange }: { mode: ChatSessionMode; onChan
           <Button
             size="sm"
             aria-pressed={mode === value}
-            variant={mode === value ? 'solid' : 'plain'}
+            variant={mode === value ? 'soft' : 'plain'}
             color={mode === value ? 'primary' : 'neutral'}
             startDecorator={<Icon />}
             onClick={() => onChange(value)}
-            sx={{ flex: 1, minWidth: 0 }}
+            sx={{ px: 0.75, minHeight: 24, fontSize: 'xs', '--Button-gap': '4px' }}
             data-testid={`mode-switch-${value}-btn`}
           >
             {label}

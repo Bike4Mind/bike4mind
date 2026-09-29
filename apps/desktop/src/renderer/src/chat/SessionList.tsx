@@ -122,7 +122,9 @@ function SessionRow({ session, activeId, statuses, onSelect, onDelete, onToggleP
       >
         <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center', minWidth: 0, width: '100%' }}>
           <SessionBadge status={status} />
-          <Typography level="body-sm" noWrap sx={{ minWidth: 0 }}>
+          {/* Between Joy's body-sm and body-xs: at body-xs the row matches its own group header,
+              which is bold, so the header outweighs the content it labels. */}
+          <Typography level="body-xs" noWrap sx={{ minWidth: 0, fontSize: '0.8125rem' }}>
             {session.title}
           </Typography>
           {/* A session the agent started is marked, because the user did not open it and will
@@ -355,9 +357,8 @@ export function SessionList({
       data-testid="sidebar"
     >
       <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, px: 1.5, pt: 1.5, pb: 1 }}>
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <ModeSwitcher mode={mode} onChange={onModeChange} />
-        </Box>
+        <ModeSwitcher mode={mode} onChange={onModeChange} />
+        <Box sx={{ flex: 1 }} />
         <IconButton
           size="sm"
           variant="plain"
