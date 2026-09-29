@@ -394,12 +394,18 @@ class OrgGoogleDriveConnectionRepository
    * 'syncing', enabled flips false, and claimForSync's own guard then refuses any claim that lands
    * after) or a claim already won (status is 'syncing') and this matches nothing - never both.
    *
+   * organizationId is REQUIRED, matching its sibling mutators (`updateCredential`, `release`): the
+   * caller's own gate (verifyOrgAccess + findLakeConnection's org comparison) already stops a
+   * cross-org id from reaching here, so nothing is exploitable without it today, but a repository
+   * method that would otherwise disable ANY connection by id alone is the piece that turns that
+   * caller-side comparison into the only thing standing between them.
+   *
    * Returns whether the disable took effect; false means the caller should 409 (a sync is currently
    * in flight) rather than proceed to purge past a connection that might still be ingesting.
    */
-  async disableIfNotSyncing(id: string): Promise<boolean> {
+  async disableIfNotSyncing(id: string, organizationId: string): Promise<boolean> {
     const result = await this.model.findOneAndUpdate(
-      { _id: id, status: { $ne: 'syncing' } },
+      { _id: id, organizationId, status: { $ne: 'syncing' } },
       { $set: { enabled: false } }
     );
     return result !== null;
