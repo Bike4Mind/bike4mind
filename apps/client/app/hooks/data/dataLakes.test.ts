@@ -1214,9 +1214,10 @@ describe('useDataLakeResearchRuns settle -> proposals invalidation', () => {
     await waitFor(() => {
       const keys = invalidatedKeys(invalidate);
       expect(keys).toContain(JSON.stringify(['dataLakeProposals', 'lake-1']));
-      // The queue only. `lastRunAt` is the config row's one run-derived field and it is stamped at
-      // START, so refreshing the config list here would be a read that can never return anything new.
-      expect(keys).not.toContain(JSON.stringify(['dataLakeResearchConfigs', 'lake-1']));
+      // The configs too (#3292): `lastRunAt` is stamped at START and needs no help here, but
+      // `lastScheduledOutcome` is written at SETTLE, and there is no other client event to hang
+      // that refetch on.
+      expect(keys).toContain(JSON.stringify(['dataLakeResearchConfigs', 'lake-1']));
     });
   });
 

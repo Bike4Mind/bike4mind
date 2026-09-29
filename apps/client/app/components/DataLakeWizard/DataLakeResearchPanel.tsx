@@ -20,6 +20,9 @@ import type {
   IDataLakeResearchConfigDocument,
   IDataLakeResearchRunDocument,
   ResearchRunTotals,
+  ResearchScheduleCadence,
+  ResearchScheduleOutcome,
+  ResearchScheduleSkipReason,
 } from '@bike4mind/common';
 import {
   isResearchRunInFlight,
@@ -33,6 +36,9 @@ import {
   RESEARCH_MAX_RESULTS_LIMIT,
   RESEARCH_MIN_RELEVANCE_DEFAULT,
   RESEARCH_RECENCY_DAYS_LIMIT,
+  RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
+  RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
+  RESEARCH_SCHEDULE_CADENCES,
 } from '@bike4mind/common';
 import type { ResearchConfigInput } from '@client/app/hooks/data/dataLakes';
 import type { ResearchModelOption } from '@client/app/utils/researchJudgeModels';
@@ -42,6 +48,9 @@ export interface DataLakeResearchPanelProps {
   runs: IDataLakeResearchRunDocument[] | undefined;
   isLoading: boolean;
   error: unknown;
+  /** The lake's live pending-proposal count - the same number the scheduler compares against each
+   *  config's `reviewBacklogLimit`. Undefined while it has not loaded yet. */
+  pendingProposals?: number;
   /** Relevance-judge models, already ordered and labelled by `researchJudgeModelOptions`. */
   modelOptions: ResearchModelOption[];
   /** The "no model chosen" option's label, naming what the run falls back to. */
@@ -73,6 +82,8 @@ interface ConfigDraft {
   allowedDomains: string;
   blockedDomains: string;
   proposedTags: string;
+  cadence: ResearchScheduleCadence;
+  reviewBacklogLimit: string;
 }
 
 const microUsdToUsdInput = (micro: number): string => (micro / 1_000_000).toFixed(2);
@@ -113,6 +124,8 @@ const emptyDraft = (): ConfigDraft => ({
   allowedDomains: '',
   blockedDomains: '',
   proposedTags: '',
+  cadence: 'off',
+  reviewBacklogLimit: String(RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
 });
 
 const draftFromConfig = (config: IDataLakeResearchConfigDocument): ConfigDraft => ({
@@ -127,6 +140,10 @@ const draftFromConfig = (config: IDataLakeResearchConfigDocument): ConfigDraft =
   allowedDomains: config.allowedDomains.join('\n'),
   blockedDomains: config.blockedDomains.join('\n'),
   proposedTags: config.proposedTags.join(', '),
+  // A config saved before this feature carries neither field on the wire - read that as off/default
+  // rather than leaving the form blank.
+  cadence: config.cadence ?? 'off',
+  reviewBacklogLimit: String(config.reviewBacklogLimit ?? RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
 });
 
 const parseList = (value: string): string[] =>
@@ -211,6 +228,12 @@ const validateDraft = (draft: ConfigDraft): DraftErrors => {
       integer: false,
       message: `Enter an amount above $0 and up to $${microUsdToUsdInput(RESEARCH_COST_CEILING_MICRO_USD_LIMIT)}.`,
     }),
+    reviewBacklogLimit: rangeError(draft.reviewBacklogLimit, {
+      min: 1,
+      max: RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
+      integer: true,
+      message: `Enter a whole number from 1 to ${RESEARCH_REVIEW_BACKLOG_LIMIT_MAX}.`,
+    }),
   };
   return Object.fromEntries(Object.entries(errors).filter(([, message]) => message)) as DraftErrors;
 };
@@ -229,6 +252,8 @@ const draftToInput = (draft: ConfigDraft): ResearchConfigInput => ({
   allowedDomains: parseList(draft.allowedDomains),
   blockedDomains: parseList(draft.blockedDomains),
   proposedTags: parseList(draft.proposedTags),
+  cadence: draft.cadence,
+  reviewBacklogLimit: parseNumber(draft.reviewBacklogLimit, RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
 });
 
 const RUN_STATUS_COLOR = {
@@ -258,6 +283,71 @@ const formatWhen = (value: Date | string | null | undefined): string => {
   if (!value) return 'not yet';
   const date = value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime()) ? 'unknown' : date.toLocaleString();
+};
+
+/** The Schedule select's own copy - what a manager picks, not what the card later reports. */
+const CADENCE_OPTION_LABEL: Record<ResearchScheduleCadence, string> = {
+  off: 'Off (Run now only)',
+  daily: 'Daily',
+  weekly: 'Weekly',
+  monthly: 'Monthly',
+};
+
+/** How the schedule line on a config card names its own cadence. No entry for `off` - that line
+ *  never renders for an off config. */
+const SCHEDULE_CADENCE_LABEL: Record<Exclude<ResearchScheduleCadence, 'off'>, string> = {
+  daily: 'daily',
+  weekly: 'weekly',
+  monthly: 'monthly',
+};
+
+/** A config saved before this feature carries neither field on the wire. */
+const configCadence = (config: IDataLakeResearchConfigDocument): ResearchScheduleCadence => config.cadence ?? 'off';
+const configReviewBacklogLimit = (config: IDataLakeResearchConfigDocument): number =>
+  config.reviewBacklogLimit ?? RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT;
+
+/** Why the scheduler skipped a tick, in the manager's terms. No entry for `review_backlog` - the
+ *  paused line above already covers that reason, and repeating it here would say the same thing twice. */
+const SCHEDULE_SKIP_LABEL: Partial<Record<ResearchScheduleSkipReason, string>> = {
+  run_in_progress: 'another run was in progress',
+  daily_cap: 'the lake reached its daily run limit',
+  lake_inactive: 'the data lake is not active',
+};
+
+/**
+ * The one line a config card shows for what the scheduler did the last time this config came due.
+ * Null when there is nothing worth a separate line: a `started` tick needs no comment, and a
+ * `review_backlog` skip is already the paused line above.
+ */
+const scheduleOutcomeMessage = (
+  outcome: ResearchScheduleOutcome | null | undefined
+): { text: string; color: 'danger' | 'neutral' } | null => {
+  if (!outcome) return null;
+  if (outcome.outcome === 'failed') return { text: outcome.error, color: 'danger' };
+  if (outcome.outcome === 'skipped' && outcome.reason !== 'review_backlog') {
+    return {
+      text: `Last scheduled run was skipped: ${SCHEDULE_SKIP_LABEL[outcome.reason]}. It will be retried in about an hour.`,
+      color: 'neutral',
+    };
+  }
+  return null;
+};
+
+/**
+ * How many of this config's most recent PERIODIC runs failed in a row, counting from the newest.
+ * Stops at the first non-failure, so one bad run sandwiched between two good ones reads as zero -
+ * this is a "something is still broken" signal, not a lifetime failure tally.
+ */
+const trailingScheduledFailureCount = (configId: string, runs: IDataLakeResearchRunDocument[] | undefined): number => {
+  const periodic = (runs ?? [])
+    .filter(run => run.configId === configId && run.trigger === 'periodic')
+    .sort((a, b) => new Date(runStartedAt(b)).getTime() - new Date(runStartedAt(a)).getTime());
+  let count = 0;
+  for (const run of periodic) {
+    if (run.status !== 'failed') break;
+    count++;
+  }
+  return count;
 };
 
 /**
@@ -326,6 +416,7 @@ export function DataLakeResearchPanel({
   runs,
   isLoading,
   error,
+  pendingProposals,
   modelOptions,
   defaultModelLabel = 'Default',
   isCreating,
@@ -450,6 +541,12 @@ export function DataLakeResearchPanel({
       {configs?.map(config => {
         const busy = savingConfigId === config.id || deletingConfigId === config.id;
         const unsaved = editingId === config.id && hasUnsavedEdits;
+        const cadence = configCadence(config);
+        const reviewBacklogLimit = configReviewBacklogLimit(config);
+        // Same comparison the scheduler makes, so "paused" here always means the scheduler agrees.
+        const atOrOverBacklogLimit = pendingProposals !== undefined && pendingProposals >= reviewBacklogLimit;
+        const scheduleOutcome = scheduleOutcomeMessage(config.lastScheduledOutcome);
+        const trailingFailures = trailingScheduledFailureCount(config.id, runs);
         return (
           <Box
             key={config.id}
@@ -488,6 +585,35 @@ export function DataLakeResearchPanel({
               <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-config-last-run">
                 {`Last run ${formatWhen(lastRunAtByConfig.get(config.id) ?? config.lastRunAt)}`}
               </Typography>
+              {cadence !== 'off' && (
+                <>
+                  <Typography level="body-xs" textColor="text.tertiary" data-testid="research-config-schedule">
+                    {`Runs ${SCHEDULE_CADENCE_LABEL[cadence]} \u00b7 next ${formatWhen(config.nextRunAt)}`}
+                  </Typography>
+                  {atOrOverBacklogLimit && (
+                    <Typography level="body-xs" color="warning" data-testid="research-config-schedule-paused">
+                      {`Scheduled runs are paused: ${pendingProposals} of ${reviewBacklogLimit} pending proposals are ` +
+                        `waiting for review. They resume once the queue is below ${reviewBacklogLimit}.`}
+                    </Typography>
+                  )}
+                  {scheduleOutcome && (
+                    <Typography
+                      level="body-xs"
+                      color={scheduleOutcome.color}
+                      data-testid="research-config-schedule-outcome"
+                    >
+                      {scheduleOutcome.text}
+                    </Typography>
+                  )}
+                  {trailingFailures > 0 && (
+                    <Typography level="body-xs" color="danger" data-testid="research-config-schedule-failures">
+                      {trailingFailures === 1
+                        ? 'Last scheduled run failed'
+                        : `Last ${trailingFailures} scheduled runs failed`}
+                    </Typography>
+                  )}
+                </>
+              )}
               <Stack direction="row" spacing={1}>
                 <Button
                   size="sm"
@@ -522,6 +648,14 @@ export function DataLakeResearchPanel({
                   Delete
                 </Button>
               </Stack>
+              {atOrOverBacklogLimit && (
+                // Shown for every config regardless of cadence: Run now still starts a run, and a
+                // person pressing it has decided to spend - this only makes sure they know the queue
+                // is already behind, never disables the button over it.
+                <Typography level="body-xs" color="warning" data-testid="research-config-run-backlog-warning">
+                  {`${pendingProposals} proposals are already waiting for review; this run will add more.`}
+                </Typography>
+              )}
             </Stack>
           </Box>
         );
@@ -589,6 +723,51 @@ export function DataLakeResearchPanel({
                 carefully.
               </FormHelperText>
             </FormControl>
+
+            <FormControl size="sm">
+              <FormLabel>Schedule</FormLabel>
+              <Select
+                value={draft.cadence}
+                onChange={(_e, value) => setDraft(prev => ({ ...prev, cadence: value ?? 'off' }))}
+                slotProps={{ button: { 'data-testid': 'datalake-research-cadence-select' } }}
+              >
+                {RESEARCH_SCHEDULE_CADENCES.map(cadence => (
+                  <Option key={cadence} value={cadence}>
+                    {CADENCE_OPTION_LABEL[cadence]}
+                  </Option>
+                ))}
+              </Select>
+              <FormHelperText>
+                {draft.cadence === 'off'
+                  ? 'Only runs when you press Run now.'
+                  : `Also runs automatically, ${SCHEDULE_CADENCE_LABEL[draft.cadence]}.`}
+              </FormHelperText>
+            </FormControl>
+
+            {draft.cadence !== 'off' && (
+              <FormControl size="sm">
+                <FormLabel>Pause scheduled runs at</FormLabel>
+                <Input
+                  type="number"
+                  value={draft.reviewBacklogLimit}
+                  onChange={e => setField('reviewBacklogLimit')(e.target.value)}
+                  error={!!errors.reviewBacklogLimit}
+                  endDecorator="pending proposals"
+                  slotProps={{
+                    input: {
+                      'data-testid': 'datalake-research-review-backlog-input',
+                      min: 1,
+                      max: RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
+                    },
+                  }}
+                />
+                <FormHelperText>
+                  {errors.reviewBacklogLimit ??
+                    `Scheduled runs skip while the review queue is at or above this many pending proposals. ` +
+                      `1 to ${RESEARCH_REVIEW_BACKLOG_LIMIT_MAX}. Run now is never blocked by this.`}
+                </FormHelperText>
+              </FormControl>
+            )}
 
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
               <FormControl size="sm" sx={{ flex: 1 }}>
@@ -786,6 +965,11 @@ export function DataLakeResearchPanel({
                   >
                     {runStateLabel(run)}
                   </Chip>
+                  {run.trigger === 'periodic' && (
+                    <Chip size="sm" variant="soft" color="neutral" data-testid="research-run-trigger-scheduled">
+                      Scheduled
+                    </Chip>
+                  )}
                   <Typography level="body-xs" data-testid="datalake-research-run-config">
                     {runConfigLabel(run, configById)}
                   </Typography>

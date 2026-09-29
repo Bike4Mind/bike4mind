@@ -3,14 +3,36 @@ import type {
   CreateDataLakeResearchConfigInput,
   IDataLakeResearchConfigDocument,
   IDataLakeResearchConfigRepository,
+  ResearchScheduleCadence,
+  ResearchScheduleOutcome,
   UpdateDataLakeResearchConfigInput,
 } from '@bike4mind/common';
-import { RESEARCH_RUN_TRIGGERS } from '@bike4mind/common';
+import {
+  RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
+  RESEARCH_RUN_TRIGGERS,
+  RESEARCH_SCHEDULE_CADENCES,
+  RESEARCH_SCHEDULE_SKIP_REASONS,
+} from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
 const ModelName = 'DataLakeResearchConfig';
 
 interface IDataLakeResearchConfigModel extends Model<IDataLakeResearchConfigDocument> {}
+
+// One flat shape for every arm of the ResearchScheduleOutcome union; which fields are set depends
+// on `outcome`.
+const ResearchScheduleOutcomeSchema = new Schema(
+  {
+    outcome: { type: String, enum: ['started', 'skipped', 'failed'], required: true },
+    at: { type: Date, required: true },
+    runId: { type: String },
+    reason: { type: String, enum: RESEARCH_SCHEDULE_SKIP_REASONS },
+    pendingProposals: { type: Number },
+    reviewBacklogLimit: { type: Number },
+    error: { type: String },
+  },
+  { _id: false }
+);
 
 /**
  * One saved, reusable research-run configuration for one lake (#1682). See
@@ -38,6 +60,12 @@ const DataLakeResearchConfigSchema = new Schema<IDataLakeResearchConfigDocument>
     costCeilingMicroUsd: { type: Number, required: true },
     proposedTags: { type: [String], default: [] },
     trigger: { type: String, enum: RESEARCH_RUN_TRIGGERS, required: true },
+    // Defaults rather than `required`, so configs saved before scheduling existed read as unscheduled.
+    cadence: { type: String, enum: RESEARCH_SCHEDULE_CADENCES, default: 'off' },
+    reviewBacklogLimit: { type: Number, default: RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT },
+    nextRunAt: { type: Date, default: null },
+    scheduleAnchorAt: { type: Date, default: null },
+    lastScheduledOutcome: { type: ResearchScheduleOutcomeSchema, default: null },
     createdByUserId: { type: String, required: true },
     lastUpdatedByUserId: { type: String, default: null },
     lastRunAt: { type: Date, default: null },
@@ -50,8 +78,10 @@ const DataLakeResearchConfigSchema = new Schema<IDataLakeResearchConfigDocument>
   }
 );
 
-// The only read path: one lake's configs, newest first.
+// One lake's configs, newest first.
 DataLakeResearchConfigSchema.index({ dataLakeId: 1, createdAt: -1 });
+// The research scheduler's due-config scan (claimDueConfigs).
+DataLakeResearchConfigSchema.index({ nextRunAt: 1 });
 
 export const DataLakeResearchConfigModel: IDataLakeResearchConfigModel =
   (mongoose.models[ModelName] as IDataLakeResearchConfigModel) ||
@@ -101,6 +131,34 @@ class DataLakeResearchConfigRepository
 
   async recordRunStarted(id: string, at: Date): Promise<void> {
     await this.configModel.updateOne({ _id: id }, { $set: { lastRunAt: at } }).catch(() => undefined);
+  }
+
+  async claimDueConfigs(now: Date, leaseUntil: Date, limit: number): Promise<IDataLakeResearchConfigDocument[]> {
+    const claimed: IDataLakeResearchConfigDocument[] = [];
+    // One findOneAndUpdate per config rather than find-then-updateMany: each claim is its own
+    // compare-and-set, so two overlapping ticks split the due set instead of both taking all of it.
+    while (claimed.length < limit) {
+      const doc = await this.configModel.findOneAndUpdate(
+        { cadence: { $ne: 'off' }, nextRunAt: { $lte: now } },
+        { $set: { nextRunAt: leaseUntil } },
+        { sort: { nextRunAt: 1 }, new: false }
+      );
+      if (!doc) break;
+      claimed.push(doc.toJSON() as IDataLakeResearchConfigDocument);
+    }
+    return claimed;
+  }
+
+  async recordScheduleOutcome(
+    id: string,
+    claimedCadence: ResearchScheduleCadence,
+    outcome: ResearchScheduleOutcome,
+    nextRunAt: Date
+  ): Promise<void> {
+    await this.configModel.updateOne(
+      { _id: id, cadence: claimedCadence },
+      { $set: { lastScheduledOutcome: outcome, nextRunAt } }
+    );
   }
 
   async deleteConfig(id: string, dataLakeId: string): Promise<boolean> {

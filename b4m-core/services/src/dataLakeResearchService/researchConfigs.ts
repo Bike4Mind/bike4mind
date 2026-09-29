@@ -2,6 +2,7 @@ import type {
   IDataLakeResearchConfigDocument,
   IDataLakeResearchConfigRepository,
   ResearchRunTrigger,
+  ResearchScheduleCadence,
 } from '@bike4mind/common';
 import { RESEARCH_CONFIG_NAME_MAX_CHARS } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
@@ -13,11 +14,12 @@ import {
   type LakeConfigAuditLakeRef,
 } from '../dataLakeService/recordLakeConfigChange';
 import { normalizeResearchLevers, type ResearchLeversDraft } from './researchLevers';
+import { firstResearchRunAt, normalizeReviewBacklogLimit } from './researchSchedule';
 
 /**
  * CRUD for the saved run configuration (#1682). Thin on purpose: the caller has already gated the
  * lake (read gate then manage gate, the same pair the proposal routes use), so what is left here is
- * normalization and the one rule that is not a lever - v1 accepts only `on_demand`.
+ * normalization and the schedule, which is not a lever.
  */
 
 export interface ResearchConfigAdapters extends LakeConfigAuditAdapters {
@@ -30,6 +32,14 @@ export interface ResearchConfigAdapters extends LakeConfigAuditAdapters {
     // routes, so leaving it optional would let a create/edit/delete go unaudited silently.
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
   };
+  now?: () => Date;
+}
+
+/** The schedule half of a create or update request. */
+export interface ResearchScheduleDraft {
+  trigger?: ResearchRunTrigger;
+  cadence?: ResearchScheduleCadence;
+  reviewBacklogLimit?: number;
 }
 
 /** How many saved configs one lake may hold, so a config list stays a list a human reads. */
@@ -41,24 +51,38 @@ const normalizeName = (name: unknown): string => {
   return trimmed.slice(0, RESEARCH_CONFIG_NAME_MAX_CHARS);
 };
 
+const triggerFor = (cadence: ResearchScheduleCadence): ResearchRunTrigger =>
+  cadence === 'off' ? 'on_demand' : 'periodic';
+
 /**
- * v1 is user-triggered, full stop. The other two triggers are storable so that v2 is a scheduling
- * change rather than a schema change, but accepting one now would save a config nothing will ever
- * run - a setting that silently does nothing, which is worse than a refusal.
+ * The cadence is the schedule; `trigger` is derived from it. A caller may still send `trigger`, but
+ * only one that agrees: a `periodic` config with no cadence, or a one-off `scheduled` run nothing
+ * fires, would save a setting that silently does nothing - worse than a refusal.
  */
-const assertSupportedTrigger = (trigger: ResearchRunTrigger | undefined): ResearchRunTrigger => {
-  if (trigger && trigger !== 'on_demand') {
-    throw new BadRequestError('Scheduled and periodic research runs are not available yet; use on-demand');
+const resolveCadence = (
+  { trigger, cadence }: ResearchScheduleDraft,
+  current: ResearchScheduleCadence
+): ResearchScheduleCadence => {
+  if (trigger === 'scheduled') {
+    throw new BadRequestError('One-off scheduled research runs are not supported; set a cadence instead');
   }
-  return 'on_demand';
+  const resolved = cadence ?? current;
+  if (trigger && trigger !== triggerFor(resolved)) {
+    throw new BadRequestError(
+      resolved === 'off'
+        ? 'A periodic research configuration needs a cadence'
+        : 'An on-demand research configuration cannot have a cadence'
+    );
+  }
+  return resolved;
 };
 
 export async function createResearchConfig(
   lake: LakeConfigAuditLakeRef,
   actor: ManageActor,
   grants: readonly LakeGrant[],
-  input: { name: string; trigger?: ResearchRunTrigger } & ResearchLeversDraft,
-  { db, logger }: ResearchConfigAdapters
+  input: { name: string } & ResearchScheduleDraft & ResearchLeversDraft,
+  { db, logger, now = () => new Date() }: ResearchConfigAdapters
 ): Promise<IDataLakeResearchConfigDocument> {
   const existing = await db.dataLakeResearchConfigs.listByLake(lake.id);
   if (existing.length >= RESEARCH_CONFIGS_PER_LAKE_MAX) {
@@ -68,10 +92,16 @@ export async function createResearchConfig(
   }
 
   const name = normalizeName(input.name);
+  const cadence = resolveCadence(input, 'off');
+  const firstRunAt = firstResearchRunAt(cadence, now());
   const created = await db.dataLakeResearchConfigs.createConfig({
     dataLakeId: lake.id,
     name,
-    trigger: assertSupportedTrigger(input.trigger),
+    trigger: triggerFor(cadence),
+    cadence,
+    reviewBacklogLimit: normalizeReviewBacklogLimit(input.reviewBacklogLimit),
+    nextRunAt: firstRunAt,
+    scheduleAnchorAt: firstRunAt,
     createdByUserId: actor.userId,
     ...normalizeResearchLevers(input),
   });
@@ -99,11 +129,28 @@ export async function updateResearchConfig(
   lake: LakeConfigAuditLakeRef,
   actor: ManageActor,
   grants: readonly LakeGrant[],
-  input: { name?: string } & ResearchLeversDraft,
-  { db, logger }: ResearchConfigAdapters
+  input: { name?: string } & ResearchScheduleDraft & ResearchLeversDraft,
+  { db, logger, now = () => new Date() }: ResearchConfigAdapters
 ): Promise<IDataLakeResearchConfigDocument> {
   const existing = await db.dataLakeResearchConfigs.findByIdInLake(configId, lake.id);
   if (!existing) throw new NotFoundError('Research configuration not found');
+
+  // A config saved before scheduling existed has no stored cadence; it reads as `off`.
+  const currentCadence = existing.cadence ?? 'off';
+  const cadence = resolveCadence(input, currentCadence);
+  // The next slot is only reset when the cadence CHANGES, so editing a query does not push a
+  // config's upcoming run a whole period out. The last outcome belonged to the old schedule.
+  const firstRunAt = firstResearchRunAt(cadence, now());
+  const schedule =
+    cadence !== currentCadence
+      ? {
+          cadence,
+          trigger: triggerFor(cadence),
+          nextRunAt: firstRunAt,
+          scheduleAnchorAt: firstRunAt,
+          lastScheduledOutcome: null,
+        }
+      : {};
 
   // Normalized over the MERGE of stored and incoming, not over the patch alone: normalization needs
   // the whole lever set (an absent `query` in a patch is "unchanged", but to the normalizer an
@@ -141,6 +188,10 @@ export async function updateResearchConfig(
     recencyDays: merged.recencyDays ?? null,
     model: merged.model ?? null,
     ...(input.name !== undefined ? { name: nextName } : {}),
+    ...schedule,
+    ...(input.reviewBacklogLimit !== undefined
+      ? { reviewBacklogLimit: normalizeReviewBacklogLimit(input.reviewBacklogLimit) }
+      : {}),
     lastUpdatedByUserId: actor.userId,
   });
 
