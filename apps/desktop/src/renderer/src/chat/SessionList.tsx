@@ -123,8 +123,10 @@ function SessionRow({ session, activeId, statuses, onSelect, onDelete, onToggleP
         <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center', minWidth: 0, width: '100%' }}>
           <SessionBadge status={status} />
           {/* Between Joy's body-sm and body-xs: at body-xs the row matches its own group header,
-              which is bold, so the header outweighs the content it labels. */}
-          <Typography level="body-xs" noWrap sx={{ minWidth: 0, fontSize: '0.8125rem' }}>
+              which is bold, so the header outweighs the content it labels. The weight is spelled
+              out because Joy's body-xs level carries fontWeight md, which drew every title
+              heavier than the rest of the sidebar - a title is content, not a heading. */}
+          <Typography level="body-xs" noWrap sx={{ minWidth: 0, fontSize: '0.8125rem', fontWeight: 'normal' }}>
             {session.title}
           </Typography>
           {/* A session the agent started is marked, because the user did not open it and will

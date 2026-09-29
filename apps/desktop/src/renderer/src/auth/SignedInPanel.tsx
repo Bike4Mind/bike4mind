@@ -6,7 +6,7 @@ import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
-import { ChevronIcon, GearIcon } from '../chat/icons';
+import { ChevronIcon } from '../chat/icons';
 import { RuntimeInfo } from '../components/RuntimeInfo';
 
 /** Two letters for the avatar. Falls back to one, then to nothing, rather than to a stray '?'. */
@@ -20,11 +20,10 @@ function initials(name: string): string {
 /**
  * The account strip at the foot of the sidebar: who is signed in, where, and the way out.
  *
- * Laid out like Claude Code desktop's - avatar, name over organization, a chevron for the
- * account menu and a settings control on the right. "Organization" is the b4m ENVIRONMENT
- * here, which is the nearest true thing: the desktop identity has no org field, and where the
- * account lives (hosted, or a self-hosted stack) is what a user actually needs to see to know
- * which deployment a reply came from.
+ * Laid out like Claude Code desktop's - avatar, name over organization, and a chevron for the
+ * account menu. "Organization" is the b4m ENVIRONMENT here, which is the nearest true thing:
+ * the desktop identity has no org field, and where the account lives (hosted, or a self-hosted
+ * stack) is what a user actually needs to see to know which deployment a reply came from.
  *
  * The blocked states still surface here, because nothing else in the chat UI would explain why
  * replies suddenly stop working.
@@ -86,16 +85,6 @@ export function SignedInPanel({ state }: { state: AuthState }) {
           data-testid="account-menu-btn"
         >
           <ChevronIcon open={open} />
-        </IconButton>
-        <IconButton
-          size="sm"
-          variant="plain"
-          color="neutral"
-          aria-label="Account settings"
-          onClick={() => void window.b4m.auth.openAccountPage('verification')}
-          data-testid="account-settings-btn"
-        >
-          <GearIcon />
         </IconButton>
       </Stack>
 

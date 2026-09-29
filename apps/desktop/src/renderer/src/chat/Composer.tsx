@@ -316,7 +316,10 @@ export function Composer({
           // out and positioned over the text, so the width they need is subtracted from the
           // text's by the layout itself - which is what keeps text off them when Stop appears
           // mid-reply and the cluster abruptly gets wider.
-          sx={{ flexDirection: 'row', alignItems: 'flex-end' }}
+          // fontSize rather than size="sm": the smaller size would also shrink the padding and
+          // the min-height, and it is only the text that reads too large here. The inner
+          // textarea inherits it, so this sets the placeholder and the suggestion hint too.
+          sx={{ flexDirection: 'row', alignItems: 'flex-end', fontSize: 'sm' }}
           endDecorator={
             /* Both at once while a reply runs: stopping this turn and queueing the next one are
                different intentions, and swapping one control for the other made the second
