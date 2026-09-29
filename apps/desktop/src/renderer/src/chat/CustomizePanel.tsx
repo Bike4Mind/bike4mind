@@ -4,9 +4,11 @@ import Button from '@mui/joy/Button';
 import Chip from '@mui/joy/Chip';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { ChevronIcon, GearIcon, ServerIcon } from './icons';
+import { useColorScheme, useTheme } from '@mui/joy/styles';
+import { ChevronIcon, ContrastIcon, GearIcon, ServerIcon } from './icons';
 import { McpServersDialog } from './McpServersDialog';
 import { NavItem } from './SessionList';
+import { nextThemeMode, themeModeSummary, type ResolvedThemeMode, type ThemeMode } from './themeMode';
 import { useMcpServers, type McpServersController } from './useMcpServers';
 
 /**
@@ -48,6 +50,32 @@ function mcpEntry(controller: McpServersController, onOpen: () => void): Customi
     summary,
     ...(failed > 0 ? { attention: `${failed} failed` } : {}),
     onOpen,
+  };
+}
+
+/**
+ * Light, dark or follow the OS - cycled in place rather than opened.
+ *
+ * Every other entry here opens a dialog, but a three-way choice with immediate, whole-window
+ * feedback does not need one: the click repaints the app and rewrites this row's own summary,
+ * which says what the setting now is more plainly than a dialog would. It sits in Customize
+ * rather than on a logo because a logo that silently changes a setting is not a control -
+ * nothing about it says it can be clicked, or what clicking it would do.
+ *
+ * `useColorScheme` is used for `setMode` only. The scheme being PAINTED comes from the theme,
+ * because `useColorScheme().mode` can be the string 'system', which is not a scheme.
+ */
+function appearanceEntry(
+  mode: string | undefined,
+  setMode: (mode: ThemeMode) => void,
+  resolved: ResolvedThemeMode
+): CustomizeEntry {
+  return {
+    id: 'appearance',
+    icon: <ContrastIcon />,
+    label: 'Appearance',
+    summary: themeModeSummary(mode, resolved),
+    onOpen: () => setMode(nextThemeMode(mode)),
   };
 }
 
@@ -97,8 +125,13 @@ export function CustomizePanel() {
   const [open, setOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const mcp = useMcpServers();
+  const { mode, setMode } = useColorScheme();
+  const theme = useTheme();
 
-  const entries: CustomizeEntry[] = [mcpEntry(mcp, () => setMcpOpen(true))];
+  const entries: CustomizeEntry[] = [
+    appearanceEntry(mode, setMode, theme.palette.mode),
+    mcpEntry(mcp, () => setMcpOpen(true)),
+  ];
   const attention = entries.find(entry => entry.attention)?.attention;
 
   return (
