@@ -7,10 +7,10 @@ import { requireString, type HostContext, type HostSessionView, type ToolContext
  * start and remove conversations inside the calling session's own project and can address
  * nothing outside it. A Chat session has no project, so the family is not declared for one.
  *
- * Two of them change what the user sees and are held at the approval gate. `session_spawn` is
- * gated on cost and autonomy together - it starts a conversation that will call models and
- * tools with nobody typing - and `session_delete` is gated as irreversible, which additionally
- * means no "always" answer can ever cover it.
+ * Three of them change what the user sees and are held at the approval gate. `session_spawn`
+ * and `session_send` are gated on cost and autonomy together - each makes a conversation call
+ * models and tools with nobody typing - and `session_delete` is gated as irreversible, which
+ * additionally means no "always" answer can ever cover it.
  */
 
 /** Nothing here works without a Code session's project binding behind it. */
@@ -128,6 +128,67 @@ export const sessionSpawn: ToolDefinition = {
       'It is running now. You will be told in this conversation WHEN it finishes, but not what',
       'it said - read it with session_read then if you need that. Do not wait for it in this',
       'turn, and do not start another one for the same work.',
+    ].join('\n');
+  },
+};
+
+export const sessionSend: ToolDefinition = {
+  schema: {
+    name: 'session_send',
+    description:
+      'Send a message to a conversation that ALREADY EXISTS in this project, and have it run ' +
+      'that message as a turn. Ids come from session_list. Use it to answer a session that has ' +
+      'asked you something, to correct one you started, or to give a running one more detail - ' +
+      'anything where starting a fresh conversation would throw away what that one has already ' +
+      'worked out. If it is mid-reply your message runs as its next turn instead. It does NOT ' +
+      'reply to you in this turn: finish your answer without waiting for it, and use ' +
+      'session_read on its id later if you need what it said. It spends the user credits in ' +
+      'that conversation and they approve every message, so send one message saying the whole ' +
+      'thing rather than several.',
+    parameters: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', description: 'The existing conversation to send to.' },
+        message: {
+          type: 'string',
+          description:
+            'What to say to it. It can see its own history but nothing said here, so carry the ' +
+            'context it needs rather than referring to this conversation.',
+        },
+      },
+      required: ['session_id', 'message'],
+      additionalProperties: false,
+    },
+  },
+  async approval(input, context) {
+    const sessionId = requireString(input, 'session_id');
+    const message = requireString(input, 'message');
+    const name = (await requireHost(context).describeSession(sessionId)) ?? sessionId;
+    return {
+      detail: [`Send this to "${name}", and let it run?`, '', message].join('\n'),
+      // Target and message together, for session_spawn's reason: approving one message must
+      // never cover the next, and the same words to a different conversation are a different act.
+      key: `session_send:${sessionId}:${message}`,
+    };
+  },
+  async run(input, context) {
+    const host = requireHost(context);
+    const sessionId = requireString(input, 'session_id');
+    const message = requireString(input, 'message');
+
+    const outcome = await host.sendTo(sessionId, message);
+    if (!outcome.ok) throw new Error(outcome.message);
+
+    // The row has to name the conversation, and the id the model passed is a uuid: this call is
+    // the only place the title is known.
+    context.report?.label(`Messaged @${outcome.title}: ${message}`);
+    return [
+      `Delivered your message to ${outcome.sessionId} ("${outcome.title}").`,
+      outcome.queued
+        ? 'It is mid-reply, so your message runs as its next turn once that reply finishes.'
+        : 'It is running your message now.',
+      'It does NOT answer into this turn. Carry on without it, and use session_read on that id',
+      'later if you need what it said. Do not send the same thing again because no reply came.',
     ].join('\n');
   },
 };

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -9,8 +9,10 @@ import Typography from '@mui/joy/Typography';
 import { isTurnBudgetStop, type ChatMessage } from '@shared/chat';
 import { ArtifactList } from './ArtifactCard';
 import { AttachmentRow } from './Attachments';
+import { ChevronIcon } from './icons';
 import { contentColumnSx } from './layout';
 import { ReplyMarkdown } from './markdown/ReplyMarkdown';
+import { relaySummary } from './relayRows';
 import { callsIn, roundsOf } from './replyRounds';
 import { ToolCallList, type RespondToApproval } from './ToolCallList';
 
@@ -193,6 +195,64 @@ function SystemTurn({ message }: { message: ChatMessage }) {
   );
 }
 
+/**
+ * A message another conversation sent here with session_send.
+ *
+ * Drawn as a collapsed row rather than as a turn, for the reason a tool call is: it is how this
+ * conversation got somewhere, not part of what was said in it. The distinction that matters is
+ * from a USER message - these words were written by a model in another session, and a bubble on
+ * the user's side of the thread would be a straightforward lie about who said them. So it sits
+ * behind the same left rule the tool rows use, names the sender in the summary, and keeps the
+ * full text one click away.
+ */
+function RelayTurn({ message }: { message: ChatMessage }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <Box sx={{ borderLeft: '2px solid', borderColor: 'divider', pl: 1.25 }}>
+      <Box
+        component="details"
+        open={open}
+        onToggle={event => setOpen(event.currentTarget.open)}
+        data-testid="chat-message-relay"
+        data-from={message.relay?.fromSessionId}
+      >
+        <Stack
+          component="summary"
+          direction="row"
+          spacing={0.75}
+          alignItems="center"
+          sx={{
+            cursor: 'pointer',
+            listStyle: 'none',
+            py: 0.25,
+            color: 'text.tertiary',
+            '&::-webkit-details-marker': { display: 'none' },
+            '&:hover': { color: 'text.secondary' },
+          }}
+          data-testid="chat-message-relay-summary"
+        >
+          <Typography level="body-xs" textColor="inherit" noWrap sx={{ minWidth: 0 }}>
+            {relaySummary(message)}
+          </Typography>
+          <Box sx={{ display: 'flex', opacity: 0.6 }}>
+            <ChevronIcon open={open} />
+          </Box>
+        </Stack>
+
+        <Typography
+          level="body-sm"
+          sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', pt: 0.5, pb: 0.5 }}
+          textColor="text.secondary"
+          data-testid="chat-message-relay-body"
+        >
+          {message.content}
+        </Typography>
+      </Box>
+    </Box>
+  );
+}
+
 export function MessageThread({
   messages,
   sessionId,
@@ -242,7 +302,9 @@ export function MessageThread({
     <Box sx={{ flex: 1, overflowY: 'auto' }} data-testid="chat-thread">
       <Stack spacing={3} sx={{ ...contentColumnSx, py: 3 }}>
         {messages.map((message, index) =>
-          message.system ? (
+          message.relay ? (
+            <RelayTurn key={message.id} message={message} />
+          ) : message.system ? (
             <SystemTurn key={message.id} message={message} />
           ) : message.role === 'user' ? (
             <UserTurn key={message.id} message={message} sessionId={sessionId} />

@@ -137,6 +137,12 @@ const PHRASES: Record<string, ToolPhrases> = {
     many: n => `Started ${n} sessions`,
     active: 'Starting a session...',
   },
+  session_send: {
+    didAlone: 'Messaged a session',
+    toAlone: 'message a session',
+    many: n => `Sent ${n} messages to other sessions`,
+    active: 'Sending a message...',
+  },
   session_archive: {
     didAlone: 'Archived a session',
     toAlone: 'archive a session',
@@ -239,6 +245,10 @@ export function toolRowLabel(call: ChatToolCall): string {
     const attempt = phrases.to && argument ? `${phrases.to} ${argument}` : phrases.toAlone;
     return call.status === 'denied' ? `Did not ${attempt}` : `Failed to ${attempt}`;
   }
+
+  // Only on a call that succeeded: the tool writes it in the past tense as the thing it did, so
+  // on a failure it would say the opposite of what happened. The failure paths above run first.
+  if (call.label) return shortenArgument(call.label);
 
   return phrases.did && argument ? `${phrases.did} ${argument}` : phrases.didAlone;
 }

@@ -19,6 +19,7 @@ function isGeneration(name: string): boolean {
 /** The question each app-control tool asks, named for what it does rather than "allow this". */
 const HOST_QUESTION: Record<string, string> = {
   session_spawn: 'Start this session working? It runs on its own and costs credits.',
+  session_send: 'Send this to that conversation? It runs there on its own and costs credits.',
   session_archive: 'Archive this conversation?',
   session_delete: 'Delete this conversation for good?',
 };

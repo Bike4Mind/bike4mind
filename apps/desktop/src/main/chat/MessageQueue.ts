@@ -5,21 +5,27 @@ import type {
   ChatQueueEvent,
   ChatQueueReturnReason,
   ChatQueuedMessage,
+  ChatRelayOrigin,
 } from '@shared/chat';
 
 /**
  * What the user has typed during a live turn, waiting to be sent when it ends.
  *
- * At most ONE pending message per session: a second send while something is already waiting
- * appends to it rather than lining up behind it, so the whole wait produces a single next turn
- * carrying everything the user said. The list shape is kept because a release can hand back
- * more than one entry - the refused-flush path returns the head alongside anything requeued
- * behind it - but the queue itself never grows past one by normal use.
+ * At most ONE pending TYPED message per session: a second send while something is already
+ * waiting appends to it rather than lining up behind it, so the whole wait produces a single
+ * next turn carrying everything the user said.
  *
- * Every message that leaves without being sent is handed BACK rather than dropped: cancelling,
- * a stopped reply, a failed reply and a refused turn all take the same exit, so there is
- * exactly one way a queued message can disappear from the UI and it always ends with the text
- * in the composer again.
+ * A message relayed from another conversation (session_send) is the exception, and the reason
+ * the list is a list. It never merges: merging would put another agent's words inside a message
+ * the user is composing, and the two then go out as one turn with no way to tell which half
+ * came from where. Each relay is its own entry and becomes its own turn, in arrival order.
+ *
+ * Every TYPED message that leaves without being sent is handed BACK rather than dropped:
+ * cancelling, a stopped reply, a failed reply and a refused turn all take the same exit, so
+ * there is exactly one way a queued message can disappear from the UI and it always ends with
+ * the text in the composer again. A relay leaving the queue is handed back to the CALLER
+ * instead - see releaseAll - because another conversation's words have no business appearing
+ * in this user's composer as though they had written them.
  *
  * Nothing is persisted, matching SessionActivity: a queue entry is only meaningful while the
  * reply it is waiting behind is open, and replies are anchored to in-memory AbortControllers.
@@ -68,7 +74,11 @@ export class MessageQueue {
    * replaced, and one cancel still takes back everything typed during this turn.
    */
   enqueue(sessionId: string, text: string, attachments: readonly ChatAttachment[] = []): ChatQueuedMessage {
-    const pending = this.list(sessionId)[0];
+    const messages = this.list(sessionId);
+    // The tail, and only if it is the user's own: a relay is never merged into, so typing
+    // behind one starts a fresh entry rather than appending to another agent's words.
+    const last = messages[messages.length - 1];
+    const pending = last && !last.relay ? last : undefined;
     const merged: ChatQueuedMessage = pending
       ? {
           ...pending,
@@ -83,9 +93,28 @@ export class MessageQueue {
           ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
         };
 
-    this.queues.set(sessionId, [merged]);
+    this.replace(sessionId, pending ? [...messages.slice(0, -1), merged] : [...messages, merged]);
     this.announce(sessionId);
     return merged;
+  }
+
+  /**
+   * Line up a message another conversation sent, behind whatever is already waiting.
+   *
+   * Always its own entry, and always appended: arrival order is what the target's transcript
+   * will show, and two senders' messages must not be run together as one turn.
+   */
+  enqueueRelay(sessionId: string, text: string, relay: ChatRelayOrigin): ChatQueuedMessage {
+    const message: ChatQueuedMessage = {
+      id: randomUUID(),
+      sessionId,
+      text,
+      queuedAt: new Date().toISOString(),
+      relay,
+    };
+    this.replace(sessionId, [...this.list(sessionId), message]);
+    this.announce(sessionId);
+    return message;
   }
 
   /** Take the head, to send it. Nothing is announced: the caller may still have to hand it back. */
@@ -113,7 +142,11 @@ export class MessageQueue {
     this.onChange({ sessionId, queued: this.list(sessionId), sent: { queuedId, message } });
   }
 
-  /** One message the user took back. Unknown ids are ignored, so a double click cannot cancel the next one. */
+  /**
+   * One message the user took back. Unknown ids are ignored, so a double click cannot cancel
+   * the next one. Returns it whether it was theirs or a relay; the caller decides where a
+   * cancelled relay goes, since the composer is not an answer for one.
+   */
   cancel(sessionId: string, queuedId: string): ChatQueuedMessage | undefined {
     const messages = this.list(sessionId);
     const message = messages.find(entry => entry.id === queuedId);
@@ -122,32 +155,36 @@ export class MessageQueue {
       sessionId,
       messages.filter(entry => entry.id !== queuedId)
     );
-    this.announce(sessionId, { messages: [message], reason: 'cancelled' });
+    this.returned(sessionId, [message], 'cancelled');
     return message;
   }
 
-  /** Empty the queue and hand all of it back - the stopped and failed paths. */
+  /**
+   * Empty the queue - the stopped and failed paths. Typed messages go back to the composer;
+   * the RELAYS are returned here for the caller to strand in the transcript instead.
+   */
   releaseAll(sessionId: string, reason: ChatQueueReturnReason, detail?: string): ChatQueuedMessage[] {
     const messages = this.drain(sessionId);
     if (messages.length === 0) return [];
-    this.announce(sessionId, { messages, reason, ...(detail ? { detail } : {}) });
-    return messages;
+    this.returned(sessionId, messages, reason, detail);
+    return messages.filter(message => message.relay);
   }
 
   /**
    * Hand back messages already taken out, ahead of whatever is still queued. Used when a
    * released message's turn is refused: the head is no longer in the queue, but it is exactly
-   * the text the user must not lose.
+   * the text the user must not lose. Relays come back to the caller, as in releaseAll.
    */
   giveBack(
     sessionId: string,
     taken: readonly ChatQueuedMessage[],
     reason: ChatQueueReturnReason,
     detail?: string
-  ): void {
+  ): ChatQueuedMessage[] {
     const messages = [...taken, ...this.drain(sessionId)];
-    if (messages.length === 0) return;
-    this.announce(sessionId, { messages, reason, ...(detail ? { detail } : {}) });
+    if (messages.length === 0) return [];
+    this.returned(sessionId, messages, reason, detail);
+    return messages.filter(message => message.relay);
   }
 
   /**
@@ -165,5 +202,25 @@ export class MessageQueue {
 
   private announce(sessionId: string, returned?: ChatQueueEvent['returned']): void {
     this.onChange({ sessionId, queued: this.list(sessionId), ...(returned ? { returned } : {}) });
+  }
+
+  /**
+   * Announce messages leaving the queue unsent, with the relays filtered out of what the
+   * composer is asked to take back. The event still fires when everything leaving was a relay:
+   * `queued` is authoritative, so a renderer that heard nothing would keep drawing rows for
+   * messages that are no longer there.
+   */
+  private returned(
+    sessionId: string,
+    messages: readonly ChatQueuedMessage[],
+    reason: ChatQueueReturnReason,
+    detail?: string
+  ): void {
+    const typed = messages.filter(message => !message.relay);
+    if (typed.length === 0) {
+      this.announce(sessionId);
+      return;
+    }
+    this.announce(sessionId, { messages: typed, reason, ...(detail ? { detail } : {}) });
   }
 }
