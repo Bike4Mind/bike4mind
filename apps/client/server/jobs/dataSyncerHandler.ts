@@ -60,7 +60,9 @@ const SYNC_MARKER_KEY = 'staging-config-sync';
 // Staging MongoDB URI is provided via environment variable (from GitHub secret)
 // This allows staging and preview to be on different clusters
 
-async function syncPreviewSettingsFromStaging(): Promise<number> {
+// `skipped` names why nothing was copied, so the deploy log (which only sees the response) can tell
+// an already-synced preview from a misconfigured one.
+async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipped?: string }> {
   console.log('=== Syncing Preview Settings from Staging ===');
 
   const stage = process.env.SEED_STAGE_NAME || 'unknown';
@@ -70,7 +72,7 @@ async function syncPreviewSettingsFromStaging(): Promise<number> {
     console.error(
       `✗ Error: Target stage "${stage}" is not a valid preview environment (must match pr<number>). Sync aborted for safety.`
     );
-    return 0;
+    return { synced: 0, skipped: `target stage "${stage}" is not a preview (pr<number>)` };
   }
 
   const stagingUri = process.env.STAGING_MONGODB_URI;
@@ -78,13 +80,13 @@ async function syncPreviewSettingsFromStaging(): Promise<number> {
 
   if (!stagingUri) {
     console.log('⏭️  STAGING_MONGODB_URI not configured. Skipping preview settings sync.');
-    return 0;
+    return { synced: 0, skipped: 'STAGING_MONGODB_URI not configured' };
   }
 
   // Safety check: abort if source and target are the same database
   if (stagingUri === previewUri) {
     console.error('✗ Error: Source and target MongoDB URIs are identical. Sync aborted to prevent data loss.');
-    return 0;
+    return { synced: 0, skipped: 'source and target URIs are identical' };
   }
 
   console.log(`  Source: staging (from STAGING_MONGODB_URI)`);
@@ -106,7 +108,7 @@ async function syncPreviewSettingsFromStaging(): Promise<number> {
       const markerDoc = existingMarker as { syncedAt?: Date };
       console.log(`✓ Staging configs already synced at ${markerDoc.syncedAt?.toISOString()}, skipping`);
       console.log('  (To force re-sync, delete the marker from the syncmarkers collection)');
-      return 0;
+      return { synced: 0, skipped: `already synced at ${markerDoc.syncedAt?.toISOString()}` };
     }
 
     await sourceClient.connect();
@@ -207,6 +209,9 @@ async function syncPreviewSettingsFromStaging(): Promise<number> {
         if (backupCount > 0) {
           console.log(`  - Attempting rollback from backup (${backupCount} documents)...`);
           try {
+            // Clear partial inserts first: they are not in the backup and can collide with it on
+            // unique indexes (e.g. rapidreplymappings.mainModelId), failing the upserts below.
+            await targetCollection.deleteMany({});
             const backupDocs = await backupCollection.find({}).toArray();
             const bulkOps = backupDocs.map(doc => ({
               replaceOne: {
@@ -249,7 +254,7 @@ async function syncPreviewSettingsFromStaging(): Promise<number> {
     console.log('✓ MongoDB connections closed');
   }
 
-  return totalSynced;
+  return { synced: totalSynced };
 }
 
 export const handler: Handler<DataSyncerEvent, DataSyncerResponse> = async event => {
@@ -279,9 +284,14 @@ export const handler: Handler<DataSyncerEvent, DataSyncerResponse> = async event
     // Sync preview settings from staging (only on initial PR deploy when SYNC_PREVIEW_SETTINGS=true)
     if (shouldSyncPreviewSettings) {
       try {
-        previewSettingsSyncedCount = await syncPreviewSettingsFromStaging();
+        const { synced, skipped } = await syncPreviewSettingsFromStaging();
+        previewSettingsSyncedCount = synced;
         const collectionsStr = COLLECTIONS_TO_SYNC.join(', ');
-        messages.push(`Synced ${previewSettingsSyncedCount} documents from staging (collections: ${collectionsStr})`);
+        messages.push(
+          skipped
+            ? `Skipped staging sync: ${skipped}`
+            : `Synced ${synced} documents from staging (collections: ${collectionsStr})`
+        );
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
         console.error('Error syncing preview settings from staging:', error);
