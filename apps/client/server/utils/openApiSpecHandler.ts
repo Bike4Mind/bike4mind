@@ -46,12 +46,12 @@ function setCorsHeaders(res: NextApiResponse): void {
  * CORS is fully permissive: a spec carries no secrets, so any browser tool or SDK
  * generator can fetch it cross-origin.
  */
-export function createOpenApiSpecHandler(spec: object) {
+export function createOpenApiSpecHandler(spec: { servers?: ReadonlyArray<{ url?: string }> }) {
   // Serialized once; each request only swaps the placeholder host. The prod
   // server URL is also baked into the code samples and contact URL, so
   // replacing it everywhere is sufficient.
   const specJson = JSON.stringify(spec);
-  const placeholderUrl = (spec as { servers?: Array<{ url?: string }> }).servers?.[0]?.url ?? '';
+  const placeholderUrl = spec.servers?.[0]?.url ?? '';
 
   return function handler(req: NextApiRequest, res: NextApiResponse) {
     setCorsHeaders(res);

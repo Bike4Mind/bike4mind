@@ -1,3 +1,7 @@
+import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+import { extendZodWithOpenApi } from '@asteasolutions/zod-to-openapi';
 import type { EndpointContract } from '../api-contract/types';
 import { buildOpenApiDocument } from './document';
 import { registerContracts } from './operations';
@@ -29,4 +33,18 @@ export function buildDeploymentOpenApiDocument(
   }
   doc.tags = tags;
   return doc;
+}
+
+/**
+ * Load the add-on contract list the premium glue codegen emits. A missing file (an
+ * install-only checkout, or no add-on declares contractsExport) means none.
+ */
+export async function loadDeploymentContracts(contractsPath: string): Promise<readonly EndpointContract[]> {
+  if (!existsSync(contractsPath)) return [];
+  // The list loads as CommonJS (apps/client is not an ES module package), so add-on
+  // schemas come from zod's CJS build, a separate class hierarchy from the ESM one
+  // registry.ts extends. Unextended, registering them fails on `.openapi()`.
+  extendZodWithOpenApi(createRequire(contractsPath)('zod'));
+  const mod = (await import(pathToFileURL(contractsPath).href)) as { premiumContracts: readonly EndpointContract[] };
+  return mod.premiumContracts;
 }
