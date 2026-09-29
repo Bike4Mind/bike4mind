@@ -7,6 +7,7 @@ const { mocks } = vi.hoisted(() => ({
     select: vi.fn(),
     lean: vi.fn(),
     stamp: vi.fn(() => Promise.resolve()),
+    parse: vi.fn(),
   },
 }));
 
@@ -48,10 +49,12 @@ vi.mock('@bike4mind/database', () => ({
     },
   },
   gearStampRepository: { stamp: (...a: unknown[]) => mocks.stamp(...a) },
+  shareTokenFilter: (token: string) => ({ __shareFilterFor: token }),
 }));
 vi.mock('@server/services/publish/parsePublishPath', () => ({
   segmentsFromViewerPathname: () => ['u', 'scope', 'slug'],
-  parsePublishPath: () => ({ kind: 'bundle', tier: 'user', scopeId: 'scope', slug: 'slug', assetPath: null }),
+  parsePublishPath: (...a: unknown[]) =>
+    mocks.parse(...a) ?? { kind: 'bundle', tier: 'user', scopeId: 'scope', slug: 'slug', assetPath: null },
 }));
 vi.mock('@server/services/publish/publishGateToken', () => ({ setGateProofCookie: () => true }));
 vi.mock('@server/services/publish/passphraseLockout', () => lockout);
@@ -106,6 +109,17 @@ describe('POST /api/publish/gate/passphrase - projection safety (regression: Mon
     const { res, promise } = run({ path: '/p/u/scope/slug', passphrase: 'wrongpassword' });
     await promise;
     expect(res._getStatusCode()).toBe(403);
+  });
+
+  it('resolves a share link through the shared shareTokenFilter', async () => {
+    mocks.parse.mockReturnValue({ kind: 'share', shareToken: 'tok123', assetPath: null });
+    gated();
+
+    const { res, promise } = run({ path: '/a/tok123', passphrase: 'hunter2secret' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(204);
+    expect(mocks.findOne.mock.calls[0][0]).toEqual({ __shareFilterFor: 'tok123', deletedAt: null });
   });
 });
 
