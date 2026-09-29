@@ -291,12 +291,13 @@ test.describe('Notebook - Inline location map', () => {
 
         // At this viewport the map's top sits under the header. Leaflet's keyboard handler used to
         // focus the map on mousedown, scrolling the chat mid-click so the click missed the pin.
+        // Measure the map, not the pin: selecting a pin animates panTo, which moves the pin inside a
+        // still map, while the focus scroll moved the whole map with the chat.
         await page.mouse.move(0, 0);
-        const pinBefore = await pins.nth(0).boundingBox();
+        const mapBefore = await map.boundingBox();
         await pins.nth(0).click();
         await expect(rows.nth(1)).toHaveAttribute('data-active', 'true');
-        // The active pin scales up slightly; the old focus scroll moved it by a whole pin height.
-        expect(Math.abs((await pins.nth(0).boundingBox())!.y - pinBefore!.y)).toBeLessThan(5);
+        expect(Math.abs((await map.boundingBox())!.y - mapBefore!.y)).toBeLessThan(1);
       });
 
       await test.step('the map sits between the prose around it, with no raw fence text', async () => {
