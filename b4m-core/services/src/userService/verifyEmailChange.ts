@@ -49,7 +49,7 @@ export const verifyEmailChange = async (
 
   await db.users.update({
     id: user.id,
-    // Mark token as used FIRST (prevents race conditions)
+    // Single-use: burned in the same write that applies the change
     pendingEmailUsed: true,
     email: user.pendingEmail,
     // Clear pending email fields

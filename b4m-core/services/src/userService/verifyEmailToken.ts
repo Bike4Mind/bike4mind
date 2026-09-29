@@ -47,7 +47,7 @@ export const verifyEmailToken = async (
 
   await db.users.update({
     id: user.id,
-    // Mark token as used FIRST (prevents race conditions)
+    // Single-use: burned in the same write that applies the change
     emailVerificationUsed: true,
     emailVerified: true,
     emailVerifiedAt: new Date(),

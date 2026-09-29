@@ -409,7 +409,14 @@ describe('registerViaOTC', () => {
     expect(result.emailVerifiedAt).toBeInstanceOf(Date);
     expect(result.tags).toContain('Customer');
     expect(result.tags).not.toContain(PENDING_FREE_CREDITS_TAG);
-    expect(mockAdapters.db.users.update).toHaveBeenCalledWith(expect.objectContaining({ emailVerified: true }));
+    // Exact partial: currentCredits was already $inc-ed by addCredits and must not be rewritten.
+    expect(mockAdapters.db.users.update).toHaveBeenCalledWith({
+      id: 'newUserId',
+      emailVerified: true,
+      emailVerifiedAt: expect.any(Date),
+      tags: ['Customer'],
+      pendingCreditGrant: null,
+    });
   });
 
   it('keeps the pending tag (still verifies) when the credit grant throws', async () => {
@@ -462,6 +469,12 @@ describe('registerViaOTC', () => {
     expect(result.emailVerified).toBe(true);
     expect(result.tags).not.toContain(PENDING_FREE_CREDITS_TAG);
     // The pending amount must be cleared so it can never be re-granted.
-    expect(mockAdapters.db.users.update).toHaveBeenCalledWith(expect.objectContaining({ pendingCreditGrant: null }));
+    expect(mockAdapters.db.users.update).toHaveBeenCalledWith({
+      id: 'newUserId',
+      emailVerified: true,
+      emailVerifiedAt: expect.any(Date),
+      tags: ['Customer'],
+      pendingCreditGrant: null,
+    });
   });
 });

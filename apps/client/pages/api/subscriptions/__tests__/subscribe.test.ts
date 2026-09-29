@@ -78,13 +78,14 @@ vi.mock('@server/integrations/stripe/stripe', () => ({
   },
 }));
 
+import Stripe from 'stripe';
 import handler from '../subscribe';
 
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
 
 const CALLBACK_URL = 'https://app.example.com/cb';
 
-function makeReq(priceId: string, callbackUrl = CALLBACK_URL) {
+function makeReq(priceId: string, callbackUrl = CALLBACK_URL, userOverrides: Record<string, unknown> = {}) {
   const { req, res } = createMocks({ method: 'POST' });
   (req as Record<string, unknown>).body = { priceId, callbackUrl };
   (req as Record<string, unknown>).user = {
@@ -92,6 +93,7 @@ function makeReq(priceId: string, callbackUrl = CALLBACK_URL) {
     email: 'buyer@example.com',
     name: 'Buyer',
     stripeCustomerId: 'cus_existing',
+    ...userOverrides,
   };
   return { req, res };
 }
@@ -223,6 +225,42 @@ describe('POST /api/subscriptions/subscribe - callbackUrl origin guard', () => {
 
     expect(mockIsAllowedCallbackOrigin).toHaveBeenCalledWith(CALLBACK_URL);
     expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+describe('POST /api/subscriptions/subscribe - Stripe customer writes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockFindUserSubByPrice.mockResolvedValue(null);
+    mockPricesRetrieve.mockResolvedValue({ id: 'price_open', active: true });
+    mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
+    mockCreateCustomer.mockResolvedValue({ id: 'cus_new' });
+  });
+
+  it('writes only the new stripeCustomerId when the user has no customer', async () => {
+    const { req, res } = makeReq('price_open', CALLBACK_URL, { stripeCustomerId: null });
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockCustomersRetrieve).not.toHaveBeenCalled();
+    expect(mockUserUpdate).toHaveBeenCalledTimes(1);
+    expect(mockUserUpdate).toHaveBeenCalledWith({ id: 'user_1', stripeCustomerId: 'cus_new' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('writes only the recreated stripeCustomerId when the stored customer is missing from Stripe', async () => {
+    mockCustomersRetrieve.mockRejectedValue(
+      Stripe.errors.StripeError.generate({ type: 'invalid_request_error', code: 'resource_missing', message: 'gone' })
+    );
+    const { req, res } = makeReq('price_open');
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockCustomersRetrieve).toHaveBeenCalledWith('cus_existing');
+    expect(mockUserUpdate).toHaveBeenCalledTimes(1);
+    expect(mockUserUpdate).toHaveBeenCalledWith({ id: 'user_1', stripeCustomerId: 'cus_new' });
     expect(res.statusCode).toBe(200);
   });
 });

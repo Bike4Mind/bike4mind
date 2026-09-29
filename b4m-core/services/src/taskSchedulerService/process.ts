@@ -58,7 +58,7 @@ export const process = async ({ db, logger, handlers }: SchedulerProcessAdapters
       }
       claimedCount += 1;
 
-      let changes: Partial<ITaskSchedule>;
+      let changes: Partial<ITaskSchedule> = {};
       try {
         const handler = handlers[taskSchedule.handler];
 

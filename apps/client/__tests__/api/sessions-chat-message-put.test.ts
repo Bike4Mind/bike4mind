@@ -91,6 +91,6 @@ describe('PUT /api/sessions/[id]/chat/[messageId] authorization', () => {
     );
 
     expect(response.out.statusCode).toBe(200);
-    expect(questRepository.update).toHaveBeenCalled();
+    expect(questRepository.update).toHaveBeenCalledWith({ id: 'msg-1', reply: 'fixed' });
   });
 });
