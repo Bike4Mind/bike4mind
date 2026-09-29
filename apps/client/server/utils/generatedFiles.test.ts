@@ -33,6 +33,13 @@ describe('toGeneratedFiles', () => {
     ]);
   });
 
+  it('lists a rendered video (.mp4) as a plain download: neither isImage nor isAudio', () => {
+    process.env.NEXT_PUBLIC_CDN_URL = 'https://cdn.example.com';
+    expect(toGeneratedFiles(['clip.mp4'])).toEqual([
+      { name: 'clip.mp4', url: 'https://cdn.example.com/generated/clip.mp4', isImage: false, isAudio: false },
+    ]);
+  });
+
   it('normalizes a trailing slash on the CDN URL so paths never double-slash', () => {
     process.env.NEXT_PUBLIC_CDN_URL = 'https://cdn.example.com/';
     expect(toGeneratedFiles(['a.png'])[0].url).toBe('https://cdn.example.com/generated/a.png');

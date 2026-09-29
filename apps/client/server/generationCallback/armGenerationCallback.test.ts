@@ -139,4 +139,17 @@ describe('armGenerationCallback', () => {
     expect(h.dispatchQuestCallback).toHaveBeenCalledWith('quest-1', logger);
     expect(callOrder).toEqual(['armCallback', 'dispatchQuestCallback']);
   });
+
+  it('logs and resolves without dispatching when armCallback throws, so the queued render is not failed', async () => {
+    const boom = new Error('mongo down');
+    h.armCallback.mockRejectedValue(boom);
+    const logger = makeLogger();
+
+    await expect(
+      armGenerationCallback('quest-1', { url: 'https://example.com/hook', apiKeyId: 'key-42' }, logger)
+    ).resolves.toBeUndefined();
+
+    expect(logger.error).toHaveBeenCalledWith(expect.any(String), { questId: 'quest-1', error: boom });
+    expect(h.dispatchQuestCallback).not.toHaveBeenCalled();
+  });
 });

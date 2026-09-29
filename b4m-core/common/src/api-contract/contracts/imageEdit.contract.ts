@@ -5,7 +5,10 @@ import { EditImageRequestBodySchema } from '../../llm';
 import { ApiErrorSchema } from '../../schemas/chat';
 import { ImageQuestSchema } from '../../schemas/imageApi';
 import { imageQuestPollResult } from './imageGeneration.contract';
-import { GENERATION_CALLBACK_DESCRIPTION } from '../../schemas/generationCallback';
+import {
+  GENERATION_CALLBACK_DESCRIPTION,
+  GENERATION_CALLBACK_REJECTED_DESCRIPTION,
+} from '../../schemas/generationCallback';
 
 /**
  * Contract for POST /api/v1/image-edits. `/api/ai/edit-image` serves the same
@@ -52,7 +55,7 @@ export const editImageContract = defineEndpoint({
       pollResult: imageQuestPollResult,
     },
     400: {
-      description: '`fabFileIds` is empty.',
+      description: `\`fabFileIds\` is empty, or the ${GENERATION_CALLBACK_REJECTED_DESCRIPTION}`,
       schema: ApiErrorSchema,
     },
     404: {

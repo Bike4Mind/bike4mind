@@ -18,6 +18,7 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { KEY_PREFIX_LENGTH } from './constants';
 import { API_KEY_RATE_LIMIT_DEFAULTS, apiKeyRateLimitSchema } from './rateLimit';
+import { assertNoScopeEscalation } from './assertNoScopeEscalation';
 import { generateCallbackSigningSecret } from './callbackSigningSecret';
 
 // Sanity ceiling for a per-embed-key spend cap, in whole credits - a guard against
@@ -149,15 +150,12 @@ export const createUserApiKey = async (
   const params = secureParameters(parameters, createUserApiKeySchema);
 
   // No escalation by minting: otherwise a leaked narrow key bootstraps a broad one for
-  // the same owner. Literal containment, mirroring rotate - `admin:*` is not a superset,
-  // and an empty `callerScopes` denies rather than meaning "unrestricted".
-  if (adapters.callerScopes) {
-    const callerScopes = adapters.callerScopes;
-    const escalating = params.scopes.filter(scope => !callerScopes.includes(scope));
-    if (escalating.length > 0) {
-      throw new ForbiddenError('Cannot create a key with scopes the calling key does not have');
-    }
-  }
+  // the same owner.
+  assertNoScopeEscalation(
+    adapters.callerScopes,
+    params.scopes,
+    'Cannot create a key with scopes the calling key does not have'
+  );
 
   // Same containment rule, applied to time: a key may not mint a child that
   // outlives it. A caller key with no expiry sets no bound (and a JWT caller,

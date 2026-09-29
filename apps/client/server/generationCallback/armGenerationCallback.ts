@@ -55,6 +55,10 @@ export async function resolveGenerationCallback(
  * Arm the callback on a quest the generation service just created, then try to dispatch it
  * in case the job already settled (a fast failure, or the synchronous dev/BYPASS_QUEUE path)
  * before it was armed; the settle site's own dispatch would have found nothing to claim.
+ *
+ * Never throws, like dispatchQuestCallback: the render is already queued, so failing the request
+ * would only invite a retry that queues (and bills) it twice. A failed arm is logged and the
+ * caller falls back to polling.
  */
 export async function armGenerationCallback(
   questId: string,
@@ -62,6 +66,11 @@ export async function armGenerationCallback(
   logger: Logger
 ): Promise<void> {
   if (!target) return;
-  await questRepository.armCallback(questId, target);
+  try {
+    await questRepository.armCallback(questId, target);
+  } catch (error) {
+    logger.error('Failed to arm generation callback; the quest is still pollable', { questId, error });
+    return;
+  }
   await dispatchQuestCallback(questId, logger);
 }

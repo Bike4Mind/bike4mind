@@ -4,7 +4,10 @@ import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 import { GenerateVideoRequestBodySchema } from '../../schemas/sora';
 import { ApiErrorSchema } from '../../schemas/chat';
 import { GenerateVideoResponseSchema, VideoQuestSchema } from '../../schemas/videoApi';
-import { GENERATION_CALLBACK_DESCRIPTION } from '../../schemas/generationCallback';
+import {
+  GENERATION_CALLBACK_DESCRIPTION,
+  GENERATION_CALLBACK_REJECTED_DESCRIPTION,
+} from '../../schemas/generationCallback';
 
 /** The quest polled at `GET /api/v1/quests/{id}` after this endpoint's ACK. */
 export const videoQuestPollResult = {
@@ -55,11 +58,12 @@ export const generateVideoContract = defineEndpoint({
       schema: GenerateVideoResponseSchema,
       pollResult: videoQuestPollResult,
     },
-    400: { description: '`organizationId` is not a valid organization id.', schema: ApiErrorSchema },
+    400: { description: `The ${GENERATION_CALLBACK_REJECTED_DESCRIPTION}`, schema: ApiErrorSchema },
     404: {
       description:
-        'The session, the quest being retried, or the billing organization does not exist or is not ' +
-        'accessible to the caller.',
+        'The session, or the quest being retried, does not exist or is not accessible to the caller. A ' +
+        'nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an ' +
+        'invalid or inaccessible `organizationId` is `403` instead.',
       schema: ApiErrorSchema,
     },
   },

@@ -106,6 +106,7 @@ describe('generationCallback dispatch', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it('records delivered and sends a genuinely-verifiable signed POST on a 2xx response', async () => {
@@ -171,6 +172,46 @@ describe('generationCallback dispatch', () => {
       statusCode: 404,
       error: expect.any(String),
     });
+  });
+
+  it.each([405, 409, 422])('records failed without throwing on any other 4xx (%i) at attempt 1', async status => {
+    stubFetch(vi.fn().mockResolvedValue({ ok: false, status }));
+
+    await expect(dispatch(makeEvent(MESSAGE, '1'), {} as never, logger)).resolves.toBeUndefined();
+
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', {
+      state: 'failed',
+      statusCode: status,
+      error: expect.any(String),
+    });
+  });
+
+  it.each([408, 429])('treats a %i as retryable and throws for SQS redelivery', async status => {
+    stubFetch(vi.fn().mockResolvedValue({ ok: false, status }));
+
+    await expect(dispatch(makeEvent(MESSAGE, '1'), {} as never, logger)).rejects.toThrow();
+
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', {
+      state: 'dispatched',
+      statusCode: status,
+      error: expect.any(String),
+    });
+  });
+
+  it('carries CDN-qualified files in the body when NEXT_PUBLIC_CDN_URL is set', async () => {
+    vi.stubEnv('NEXT_PUBLIC_CDN_URL', 'https://cdn.example.com');
+    h.findById.mockResolvedValue(makeQuest({ images: ['render.png', 'clip.mp4'] }));
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    stubFetch(fetchMock);
+
+    await dispatch(makeEvent(MESSAGE), {} as never, logger);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as { files: unknown };
+    expect(body.files).toEqual([
+      { name: 'render.png', url: 'https://cdn.example.com/generated/render.png', isImage: true, isAudio: false },
+      { name: 'clip.mp4', url: 'https://cdn.example.com/generated/clip.mp4', isImage: false, isAudio: false },
+    ]);
   });
 
   it('treats a 3xx as permanent (redirects are not followed) and calls fetch with redirect: manual', async () => {

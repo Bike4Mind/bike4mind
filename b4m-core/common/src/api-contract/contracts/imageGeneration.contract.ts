@@ -5,7 +5,10 @@ import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 import { GenerateImageRequestBodySchema } from '../../llm';
 import { ApiErrorSchema } from '../../schemas/chat';
 import { GenerateImageResponseSchema, ImageQuestSchema } from '../../schemas/imageApi';
-import { GENERATION_CALLBACK_DESCRIPTION } from '../../schemas/generationCallback';
+import {
+  GENERATION_CALLBACK_DESCRIPTION,
+  GENERATION_CALLBACK_REJECTED_DESCRIPTION,
+} from '../../schemas/generationCallback';
 
 /** Shared by generateImage and editImage: both hand off to the same quest poll. */
 export const imageQuestPollResult = {
@@ -61,6 +64,7 @@ export const generateImageContract = defineEndpoint({
       schema: GenerateImageResponseSchema,
       pollResult: imageQuestPollResult,
     },
+    400: { description: `The ${GENERATION_CALLBACK_REJECTED_DESCRIPTION}`, schema: ApiErrorSchema },
     404: {
       description:
         'The session, or the quest being retried, does not exist or is not accessible to the caller. A ' +

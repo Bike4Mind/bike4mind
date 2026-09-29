@@ -319,6 +319,8 @@ const generationCallbackQueueSubscription = generationCallbackQueue.subscribe(
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      // The callback body mirrors GET /api/quests/{id}, whose `files[].url` needs the CDN base.
+      NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
     },
     permissions: [
       {

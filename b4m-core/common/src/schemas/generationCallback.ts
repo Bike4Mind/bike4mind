@@ -62,10 +62,18 @@ export const GENERATION_CALLBACK_DESCRIPTION =
   'a new one), `X-Webhook-Delivery-ID` (unique per attempt), `X-Webhook-Timestamp` (unix seconds), ' +
   '`X-Webhook-Signature-256` (`sha256=` + hex HMAC-SHA256 of `<timestamp>.<raw body>` keyed with the ' +
   "API key's callback signing secret), and `X-Event-Type: quest.settled`. Delivery makes up to 5 " +
-  'attempts, retrying on a 5xx, 429, timeout or network error - never on a 4xx, and redirects are not ' +
+  'attempts, retrying on a 5xx, 408, 429, timeout or network error - never on any other 4xx, and redirects are not ' +
   'followed; your endpoint must answer 2xx within 10 seconds. Requires API-key authentication and a ' +
   'signing secret on that key (returned once at key creation, or via ' +
   '`POST /api/user-api-keys/{id}/callback-secret`). A `callbackUrl` is rejected with a 400 when the ' +
-  'request is not API-key authenticated, the key has no signing secret, the URL is not https or ' +
-  'resolves to a private address, or the deployment does not deliver callbacks. Polling still works ' +
-  'whether or not `callbackUrl` is set.';
+  'request is not API-key authenticated, the key has no signing secret, the URL resolves to a private ' +
+  'address, or the deployment does not deliver callbacks; a URL that is not https fails request ' +
+  'validation with a 422. Polling still works whether or not `callbackUrl` is set.';
+
+/**
+ * The 400 clause every queued-generation contract declares for a rejected `callbackUrl`; must stay
+ * in sync with the rejections in apps/client/server/generationCallback/armGenerationCallback.ts.
+ */
+export const GENERATION_CALLBACK_REJECTED_DESCRIPTION =
+  '`callbackUrl` was rejected: the request is not API-key authenticated, the key has no callback ' +
+  'signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks.';

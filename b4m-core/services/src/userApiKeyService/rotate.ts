@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { KEY_PREFIX_LENGTH } from './constants';
 import { resolveOwnedApiKey } from './resolveOwnedApiKey';
+import { assertNoScopeEscalation } from './assertNoScopeEscalation';
 import { generateCallbackSigningSecret } from './callbackSigningSecret';
 
 const rotateUserApiKeySchema = z.object({
@@ -90,21 +91,11 @@ export const rotateUserApiKey = async (
   // an API-key caller may only rotate a key whose scopes it already holds - otherwise a
   // deliberately narrow key could name its owner's admin:* key and be answered with one.
   // A browser/JWT caller is unrestricted: they already hold the whole account.
-  //
-  // Containment is LITERAL and deliberately does not treat `admin:*` as a superset of
-  // other scopes (unlike hearthWire's grant check): rotation mints a credential, so a
-  // caller must prove it literally holds every scope on the target, not merely a wildcard
-  // that would expand to them. `callerScopes` present (even the empty array) means an
-  // API-key caller and enters the check; an empty array therefore DENIES every scoped key
-  // rather than being read as "unrestricted". Only an absent `callerScopes` (browser/JWT)
-  // skips it.
-  if (adapters.callerScopes) {
-    const callerScopes = adapters.callerScopes;
-    const escalating = (apiKey.scopes ?? []).filter(scope => !callerScopes.includes(scope));
-    if (escalating.length > 0) {
-      throw new ForbiddenError('Cannot rotate a key holding scopes the calling key does not have');
-    }
-  }
+  assertNoScopeEscalation(
+    adapters.callerScopes,
+    apiKey.scopes ?? [],
+    'Cannot rotate a key holding scopes the calling key does not have'
+  );
 
   const previousOwnerUserId = apiKey.userId?.toString();
   const reOwned = !!previousOwnerUserId && previousOwnerUserId !== userId;

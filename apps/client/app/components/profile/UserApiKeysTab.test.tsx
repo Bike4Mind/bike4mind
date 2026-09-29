@@ -178,6 +178,9 @@ describe('UserApiKeysTab - callback signing secret', () => {
 
     expect(screen.getByText('Callback Signing Secret')).toBeInTheDocument();
     expect(screen.getByText(/X-Webhook-Signature-256/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('project-api-keys-created-signing-secret-visibility-btn'));
+    expect(screen.getByDisplayValue('whsec_fresh123')).toBeInTheDocument();
   });
 
   it('does not render a signing secret block when the create response lacks one', () => {
@@ -212,6 +215,9 @@ describe('UserApiKeysTab - callback signing secret', () => {
 
     expect(h.signingSecretMutate).toHaveBeenCalledWith('key-1');
     expect(screen.getByText('Signing secret ready for CI key')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('project-api-keys-signing-secret-visibility-btn'));
+    expect(screen.getByDisplayValue('whsec_rotated999')).toBeInTheDocument();
   });
 
   it('requires confirmation before rotating an existing signing secret', () => {

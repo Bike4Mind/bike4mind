@@ -8,22 +8,23 @@ import { getDeliveryAttempt, isFinalDeliveryAttempt } from '@server/queueHandler
 import { GenerationCallbackMessageSchema } from '@server/generationCallback/messages';
 import { toQuestPollBody } from '@server/utils/questPollBody';
 import { assertUrlAllowed, SsrfError } from '@server/utils/ssrfProtection';
-import {
-  buildSignedWebhookHeaders,
-  PERMANENT_FAILURE_CODES,
-  RetryableError,
-  WEBHOOK_HTTP_TIMEOUT_MS,
-} from '@server/webhooks/signedWebhook';
+import { buildSignedWebhookHeaders, RetryableError, WEBHOOK_HTTP_TIMEOUT_MS } from '@server/webhooks/signedWebhook';
 
 /** Mirrors generationCallbackQueue's `dlq.retry` in infra/queues.ts; keep the two in sync. */
 export const GENERATION_CALLBACK_MAX_RECEIVE_COUNT = 5;
+
+/**
+ * The only 4xx worth another attempt. Every other 4xx is permanent, as GENERATION_CALLBACK_DESCRIPTION
+ * promises - stricter than webhookDelivery's PERMANENT_FAILURE_CODES list.
+ */
+const RETRYABLE_CLIENT_ERROR_CODES: readonly number[] = [408, 429];
 
 /** Key states that may still sign: a revoked or expired key's callbacks are dropped, not sent. */
 const SIGNING_KEY_STATUSES: readonly ApiKeyStatus[] = [ApiKeyStatus.ACTIVE, ApiKeyStatus.RATE_LIMITED];
 
 type AttemptResult =
   | { kind: 'delivered'; statusCode: number }
-  /** Worth another SQS attempt (timeout, network error, 5xx, 429). */
+  /** Worth another SQS attempt (timeout, network error, 5xx, 408, 429). */
   | { kind: 'retryable'; statusCode?: number; error: string }
   /** Retrying cannot fix it (receiver 4xx, revoked key, blocked target). */
   | { kind: 'permanent'; statusCode?: number; error: string };
@@ -134,7 +135,8 @@ async function attemptDelivery(
       error: `HTTP ${response.status}: redirects are not followed`,
     };
   }
-  if (PERMANENT_FAILURE_CODES.includes(response.status)) {
+  const isClientError = response.status >= 400 && response.status < 500;
+  if (isClientError && !RETRYABLE_CLIENT_ERROR_CODES.includes(response.status)) {
     return { kind: 'permanent', statusCode: response.status, error: `HTTP ${response.status}: permanent failure` };
   }
   return { kind: 'retryable', statusCode: response.status, error: `HTTP ${response.status}` };

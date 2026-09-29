@@ -476,6 +476,7 @@ function OneTimeSecretField({ label, value, idPrefix }: OneTimeSecretFieldProps)
           onClick={() => setShow(!show)}
           size="sm"
           className={`${idPrefix}-visibility-button`}
+          data-testid={`${idPrefix}-visibility-btn`}
         >
           {show ? <VisibilityOffIcon /> : <VisibilityIcon />}
         </IconButton>

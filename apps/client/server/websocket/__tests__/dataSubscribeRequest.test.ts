@@ -213,6 +213,8 @@ describe('dataSubscribeRequest WS handler - quest field scoping', () => {
     const scopedFields = collection.find.mock.calls[0][1];
     expect(scopedFields).not.toHaveProperty('promptMeta.functionCalls.returnValue');
     expect(scopedFields).not.toHaveProperty('promptMeta.functionCalls.error');
+    // The callback belongs to whichever API key armed it, possibly a collaborator's.
+    expect(scopedFields).toEqual({ callback: false });
   });
 
   it('still excludes returnValue/error when the caller only has a share on the requested session', async () => {

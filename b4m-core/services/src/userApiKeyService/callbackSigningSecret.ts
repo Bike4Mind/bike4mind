@@ -1,7 +1,8 @@
 import { ApiKeyScope, IOrganizationRepository, IUserApiKeyRepository } from '@bike4mind/common';
-import { ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
+import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { randomBytes } from 'crypto';
 import { z } from 'zod';
+import { assertNoScopeEscalation } from './assertNoScopeEscalation';
 import { resolveOwnedApiKey } from './resolveOwnedApiKey';
 
 const CALLBACK_SIGNING_SECRET_PREFIX = 'whsec_';
@@ -35,7 +36,7 @@ export interface RotateCallbackSigningSecretResult {
 
 /**
  * Mint (or replace) a key's callback signing secret. Same authority as rotating the key itself
- * (resolveOwnedApiKey plus rotateUserApiKey's literal no-escalation rule for API-key callers),
+ * (resolveOwnedApiKey plus the literal no-escalation rule in assertNoScopeEscalation),
  * because it hands back a secret a receiver will trust. Replacing it takes effect on the next
  * delivery attempt, including retries of callbacks already queued.
  */
@@ -52,15 +53,11 @@ export const rotateCallbackSigningSecret = async (
     throw new NotFoundError('API key not found');
   }
 
-  if (adapters.callerScopes) {
-    const callerScopes = adapters.callerScopes;
-    const escalating = (apiKey.scopes ?? []).filter(scope => !callerScopes.includes(scope));
-    if (escalating.length > 0) {
-      throw new ForbiddenError(
-        'Cannot rotate the signing secret of a key holding scopes the calling key does not have'
-      );
-    }
-  }
+  assertNoScopeEscalation(
+    adapters.callerScopes,
+    apiKey.scopes ?? [],
+    'Cannot rotate the signing secret of a key holding scopes the calling key does not have'
+  );
 
   const callbackSigningSecret = generateCallbackSigningSecret();
   const callbackSigningSecretCreatedAt = new Date();
