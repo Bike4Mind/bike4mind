@@ -1,4 +1,17 @@
-import { Box, Button, Card, Chip, chipClasses, Stack, TabList, TabPanel, Tabs, Tooltip, Typography } from '@mui/joy';
+import {
+  Box,
+  Button,
+  Card,
+  Chip,
+  chipClasses,
+  Divider,
+  Stack,
+  TabList,
+  TabPanel,
+  Tabs,
+  Tooltip,
+  Typography,
+} from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import { cloneElement, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -306,6 +319,90 @@ const RewardChip = ({
 };
 
 /**
+ * The button that pays a claimable reward out. The chip beside a card's title
+ * is the status, this is the action.
+ *
+ * On a desktop it is a line under the card's copy; on a phone it is a real
+ * button, in a footer under the CTA and at the top of the open card. The claim
+ * is a line of its own rather than a wider chip: the top row has no room to spare
+ * beside a long title.
+ */
+const ClaimButton = ({
+  gear,
+  onClaim,
+  mt = '16px',
+  testId,
+}: {
+  gear: GearStatus;
+  onClaim: () => void;
+  mt?: string;
+  testId?: string;
+}) => {
+  const isMobile = useIsMobile();
+  return (
+    <Typography
+      level="body-xs"
+      component="button"
+      data-testid={testId ?? `gear-claim-${gear.key}`}
+      onClick={event => {
+        event.stopPropagation();
+        onClaim();
+      }}
+      onKeyDown={event => event.stopPropagation()}
+      sx={theme => {
+        const green = rewardGreen(theme);
+        const base = {
+          mt,
+          font: 'inherit',
+          fontSize: '13px',
+          fontWeight: 500,
+          color: green.ink,
+          cursor: 'pointer',
+          '&:focus-visible': {
+            outline: `2px solid ${theme.palette.primary[500]}`,
+            outlineOffset: '2px',
+          },
+        };
+        // Branches on isMobile, the same test that decides where the button goes,
+        // rather than on breakpoint keys: a breakpoint key for the hover is also
+        // the media query Joy files the `sm` values under, and replaces them.
+        // A phone has no hover to say this line is a control, and a miss lands on
+        // the card, which acts or navigates away - so there it is a button in the
+        // chip's green, big enough for a thumb.
+        return isMobile
+          ? {
+              ...base,
+              // A button shrinks to its label outside a flex column, so the width is set
+              // outright; the card footer and the open card's strip both want it full.
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              minHeight: '40px',
+              px: '12px',
+              py: 0,
+              border: `1px solid ${green.stroke}`,
+              borderRadius: '6px',
+              backgroundColor: green.fill,
+              '&:active': { backgroundColor: green.activeFill },
+            }
+          : {
+              ...base,
+              alignSelf: 'flex-start',
+              p: 0,
+              border: 0,
+              borderRadius: '4px',
+              background: 'none',
+              '&:hover': { textDecoration: 'underline' },
+            };
+      }}
+    >
+      Claim {creditText(gear)}
+    </Typography>
+  );
+};
+
+/**
  * Each glyph's own bounds inside MUI's 24x24 box, measured with getBBox and
  * squared off, used as the icon's viewBox.
  *
@@ -369,6 +466,16 @@ const GENERATOR_KEYS: GearKey[] = ['image', 'video', 'music', 'sound'];
 /** Skills that connect Bike4Mind to something outside it. Slack is the only
  *  one broken out so far; MCP and the chat imports are the obvious next. */
 const INTEGRATION_KEYS: GearKey[] = ['slack'];
+
+const panelSx = {
+  px: 0,
+  pt: { xs: '8px', sm: '24px' },
+  pb: 0,
+  // Its own stacking context, so nothing in a card can paint over the sticky
+  // strip: a clickable Chip lifts its icon and label to z-index 1 to clear its
+  // action button, which would otherwise tie with the strip and win on order.
+  isolation: 'isolate',
+} as const;
 
 const GearsPage = () => {
   const [tab, setTab] = useState<GearsTabKey>('getting-started');
@@ -499,6 +606,7 @@ const GearsPage = () => {
       >
         {cards.map(gear => {
           const reward = rewardState(gear);
+          const claimButton = reward === 'claimable' && <ClaimButton gear={gear} onClaim={() => claim(gear)} />;
           return (
             // Every card looks the same whether or not its gear is earned: the page is
             // a place to read about features, and a checkmark grid turns it into a
@@ -600,41 +708,7 @@ const GearsPage = () => {
                   {creditText(gear)} will be claimed once someone else opens your artifact link.
                 </Typography>
               )}
-              {/* The claim is a line of its own rather than a wider chip: the top row
-                has no room to spare beside a long title, and this is where the eye
-                lands after reading the card. */}
-              {reward === 'claimable' && (
-                <Typography
-                  level="body-xs"
-                  component="button"
-                  data-testid={`gear-claim-${gear.key}`}
-                  onClick={event => {
-                    event.stopPropagation();
-                    claim(gear);
-                  }}
-                  onKeyDown={event => event.stopPropagation()}
-                  sx={theme => ({
-                    alignSelf: 'flex-start',
-                    mt: '16px',
-                    p: 0,
-                    border: 0,
-                    background: 'none',
-                    font: 'inherit',
-                    fontSize: '13px',
-                    fontWeight: 500,
-                    color: rewardGreen(theme).ink,
-                    cursor: 'pointer',
-                    '&:hover': { textDecoration: 'underline' },
-                    '&:focus-visible': {
-                      outline: `2px solid ${theme.palette.primary[500]}`,
-                      outlineOffset: '2px',
-                      borderRadius: '4px',
-                    },
-                  })}
-                >
-                  Claim {creditText(gear)}
-                </Typography>
-              )}
+              {!isMobile && claimButton}
               {/* Pinned to the bottom so the CTAs line up across a row of uneven cards. */}
               <Typography
                 level="body-sm"
@@ -648,6 +722,12 @@ const GearsPage = () => {
                   &rarr;
                 </Box>
               </Typography>
+              {isMobile && claimButton && (
+                <>
+                  <Divider inset="context" sx={{ mt: '16px' }} />
+                  {claimButton}
+                </>
+              )}
             </Card>
           );
         })}
@@ -667,6 +747,13 @@ const GearsPage = () => {
         onBack={closeCard}
         testIdPrefix="gear-detail"
         aside={<RewardChip gear={open} reward={rewardState(open)} onClaim={() => claim(open)} labeled />}
+        // A phone's header has room for the chip alone, and the copy below is long,
+        // so the claim goes right under the header rather than after it.
+        banner={
+          isMobile && rewardState(open) === 'claimable' ? (
+            <ClaimButton gear={open} onClaim={() => claim(open)} mt="0px" testId={`gear-detail-claim-${open.key}`} />
+          ) : undefined
+        }
         cta={
           <Button
             size="sm"
@@ -813,19 +900,19 @@ const GearsPage = () => {
             </TabList>
           </Box>
 
-          <TabPanel value="getting-started" sx={{ px: 0, pt: { xs: '8px', sm: '24px' }, pb: 0 }}>
+          <TabPanel value="getting-started" sx={panelSx}>
             {renderPanel(tabCards['getting-started'], 'getting-started')}
           </TabPanel>
 
-          <TabPanel value="features" sx={{ px: 0, pt: { xs: '8px', sm: '24px' }, pb: 0 }}>
+          <TabPanel value="features" sx={panelSx}>
             {renderPanel(tabCards.features, 'features')}
           </TabPanel>
 
-          <TabPanel value="generators" sx={{ px: 0, pt: { xs: '8px', sm: '24px' }, pb: 0 }}>
+          <TabPanel value="generators" sx={panelSx}>
             {renderPanel(tabCards.generators, 'generators')}
           </TabPanel>
 
-          <TabPanel value="integrations" sx={{ px: 0, pt: { xs: '8px', sm: '24px' }, pb: 0 }}>
+          <TabPanel value="integrations" sx={panelSx}>
             {renderPanel(tabCards.integrations, 'integrations')}
           </TabPanel>
         </Tabs>

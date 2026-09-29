@@ -66,6 +66,25 @@ describe('FeatureDetailView', () => {
     expect(screen.getByTestId('detail-aside')).toHaveTextContent('100');
   });
 
+  it('renders the banner it is given between the header and the copy', () => {
+    const item = itemFor('mementos');
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <FeatureDetailView
+          item={item}
+          onBack={vi.fn()}
+          testIdPrefix="gear-detail"
+          cta={null}
+          banner={<button data-testid="detail-banner">Claim</button>}
+        />
+      </CssVarsProvider>
+    );
+    const banner = screen.getByTestId('detail-banner');
+    expect(
+      banner.compareDocumentPosition(screen.getByText('What it does')) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
   it('calls onBack when Back is clicked', async () => {
     const { onBack } = renderDetail('mementos');
     await userEvent.click(screen.getByTestId('gear-detail-back-btn'));

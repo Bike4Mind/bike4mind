@@ -36,6 +36,7 @@ const FeatureDetailView = ({
   item,
   cta,
   aside,
+  banner,
   onBack,
   testIdPrefix,
 }: {
@@ -43,6 +44,9 @@ const FeatureDetailView = ({
   cta: ReactNode;
   /** Pinned to the header's right edge, e.g. the Gears reward marker. */
   aside?: ReactNode;
+  /** A strip of its own under the header, above the copy - for what should be
+   *  seen on opening rather than after scrolling past every section. */
+  banner?: ReactNode;
   onBack: () => void;
   /** Namespaces this view's test ids, e.g. `gear-detail`. */
   testIdPrefix: string;
@@ -86,6 +90,12 @@ const FeatureDetailView = ({
         </Typography>
         {aside && <Box sx={{ ml: 'auto', display: 'flex', flexShrink: 0 }}>{aside}</Box>}
       </Box>
+
+      {banner && (
+        <Box sx={theme => ({ px: '20px', py: '16px', borderBottom: `1px solid ${theme.palette.divider}` })}>
+          {banner}
+        </Box>
+      )}
 
       <Box sx={{ p: '24px 20px 28px' }}>
         <Section heading="What it does" body={detail.whatItDoes} />
