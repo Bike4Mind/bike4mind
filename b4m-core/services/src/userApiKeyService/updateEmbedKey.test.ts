@@ -52,7 +52,7 @@ describe('userApiKeyService - updateEmbedKey', () => {
     expect(result.agentId).toBe('agent-2');
     expect(result.allowedOrigins).toEqual(['https://example.com']);
     expect(result.branding).toEqual({ displayName: 'Acme Assistant' });
-    expect(repo.update).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'agent-2' }));
+    expect(repo.update).toHaveBeenCalledWith({ id: 'key-1', agentId: 'agent-2' });
     // Lazy resolution: a minter-owned hit never consults the org-admin path.
     expect(orgs.findIdsAdministeredBy).not.toHaveBeenCalled();
     expect(repo.findByOrganizationIdsAndId).not.toHaveBeenCalled();
@@ -76,7 +76,7 @@ describe('userApiKeyService - updateEmbedKey', () => {
     const result = await updateEmbedKey('user1', { keyId: 'key-1', allowedOrigins: [] }, deps(repo));
 
     expect(result.allowedOrigins).toEqual([]);
-    expect(repo.update).toHaveBeenCalledWith(expect.objectContaining({ allowedOrigins: [] }));
+    expect(repo.update).toHaveBeenCalledWith({ id: 'key-1', allowedOrigins: [] });
   });
 
   it('replaces the branding fields', async () => {

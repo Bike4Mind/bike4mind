@@ -123,7 +123,7 @@ export const validateUserApiKey = async (
   // Prefix-specific to this path, so it stays here, not in the shared finalize helper.
   if (foundViaLegacyPrefix && result.isValid) {
     apiKey.keyPrefix = keyPrefix;
-    db.userApiKeys.update(apiKey).catch(err => {
+    db.userApiKeys.update({ id: apiKey.id, keyPrefix }).catch(err => {
       Logger.globalInstance.warn('Failed to self-heal legacy API key prefix:', err);
     });
   }
