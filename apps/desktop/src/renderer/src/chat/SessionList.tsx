@@ -22,7 +22,7 @@ import { SessionBadge } from './SessionBadge';
 export const SIDEBAR_WIDTH = 280;
 
 /** A primary nav entry: leading icon, label, and whatever trailing affordance it needs. */
-function NavItem({
+export function NavItem({
   icon,
   label,
   onClick,
@@ -214,7 +214,8 @@ function ProjectHeader({
  *
  * Adapted from Claude Code desktop's layout, with its nav entries dropped rather than shipped
  * as dead links: "Customize" and "More" were removed on the user's instruction. "Artifacts"
- * came back once replies started producing them. New behaves identically in both modes.
+ * came back once replies started producing them, and "Customize" once there was an app setting
+ * to put in it. New behaves identically in both modes.
  */
 export function SessionList({
   sessions,
@@ -232,6 +233,7 @@ export function SessionList({
   onDelete,
   onTogglePin,
   onToggleArchived,
+  customize,
   card,
   footer,
 }: {
@@ -251,6 +253,8 @@ export function SessionList({
   onDelete: (sessionId: string) => void;
   onTogglePin: (session: ChatSessionSummary) => void;
   onToggleArchived: (session: ChatSessionSummary) => void;
+  /** The app-settings slot under the nav entries, which owns its own expanded state. */
+  customize?: ReactNode;
   /** The dismissible card slot above the account strip. */
   card?: ReactNode;
   footer?: ReactNode;
@@ -377,6 +381,7 @@ export function SessionList({
         {/* Not scoped to the open session: the list is the server's, so it spans machines and
             outlives the local session files. */}
         <NavItem icon={<ArtifactIcon />} label="Artifacts" onClick={onOpenArtifacts} testId="chat-artifacts-btn" />
+        {customize}
         <Box sx={{ px: 0.5, pt: 0.5 }}>
           <Input
             size="sm"
