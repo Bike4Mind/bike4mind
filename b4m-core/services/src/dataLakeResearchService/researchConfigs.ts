@@ -1,6 +1,7 @@
 import type {
   IDataLakeResearchConfigDocument,
   IDataLakeResearchConfigRepository,
+  ResearchRunLevers,
   ResearchRunTrigger,
   ResearchScheduleCadence,
 } from '@bike4mind/common';
@@ -117,6 +118,39 @@ export async function createResearchConfig(
   return created;
 }
 
+const sameValue = <T>(a: T, b: T) => a === b;
+// `recencyDays`/`model` are coerced to `null` on both sides, matching how each is stored on update.
+const sameNullable = <T>(a: T | undefined, b: T | undefined) => (a ?? null) === (b ?? null);
+// Set semantics: a reordered resubmit of the same domains/tags is not an edit.
+const sameStringSet = (a: readonly string[], b: readonly string[]) => {
+  const setA = new Set(a);
+  const setB = new Set(b);
+  return setA.size === setB.size && [...setA].every(value => setB.has(value));
+};
+
+// Derived from ResearchRunLevers so a new lever without a comparer is a compile error, not a
+// silently-ignored edit that records no History event.
+const LEVER_EQUALITY: {
+  [K in keyof ResearchRunLevers]-?: (a: ResearchRunLevers[K], b: ResearchRunLevers[K]) => boolean;
+} = {
+  query: sameValue,
+  model: sameNullable,
+  maxResults: sameValue,
+  maxProposals: sameValue,
+  recencyDays: sameNullable,
+  allowedDomains: sameStringSet,
+  blockedDomains: sameStringSet,
+  minRelevance: sameValue,
+  costCeilingMicroUsd: sameValue,
+  proposedTags: sameStringSet,
+};
+
+const leversMoved = (next: ResearchRunLevers, current: ResearchRunLevers) =>
+  (Object.keys(LEVER_EQUALITY) as (keyof ResearchRunLevers)[]).some(
+    // The union of per-key comparers cannot be called with a union key; each pair is type-matched by the map above.
+    key => !(LEVER_EQUALITY[key] as (a: unknown, b: unknown) => boolean)(next[key], current[key])
+  );
+
 export function listResearchConfigs(
   dataLakeId: string,
   { db }: ResearchConfigAdapters
@@ -157,28 +191,11 @@ export async function updateResearchConfig(
   // absent query is a refusal), and re-normalizing the merge is also what re-clamps a stored value
   // that a tightened bound has since put out of range.
   const merged = normalizeResearchLevers({ ...existing, ...input });
-  // Field-by-field, not a JSON.stringify of two object literals: `merged` and a hand-written
-  // comparison object build their keys in different orders whenever `model`/`recencyDays` are
-  // unset (the default config) - `normalizeResearchLevers` omits them entirely rather than
-  // inserting them in their "natural" position, so JSON.stringify would compare differently
-  // ordered strings and report a byte-identical default-config resubmit as changed. `recencyDays`/
-  // `model` are coerced to `null` on both sides, matching how each is actually stored below, so a
-  // merely-absent field is never mistaken for a change from a previously-cleared one.
+  // Compared per lever via LEVER_EQUALITY, not a JSON.stringify of two object literals:
+  // `normalizeResearchLevers` omits `model`/`recencyDays` when unset, so key order differs between
+  // `merged` and a hand-built object and a byte-identical default-config resubmit would read as changed.
   const nextName = input.name !== undefined ? normalizeName(input.name) : existing.name;
-  const sameStringArray = (a: readonly string[], b: readonly string[]) =>
-    a.length === b.length && a.every((value, i) => value === b[i]);
-  const nothingMoved =
-    nextName === existing.name &&
-    merged.query === existing.query &&
-    (merged.model ?? null) === (existing.model ?? null) &&
-    merged.maxResults === existing.maxResults &&
-    merged.maxProposals === existing.maxProposals &&
-    (merged.recencyDays ?? null) === (existing.recencyDays ?? null) &&
-    sameStringArray(merged.allowedDomains, existing.allowedDomains) &&
-    sameStringArray(merged.blockedDomains, existing.blockedDomains) &&
-    merged.minRelevance === existing.minRelevance &&
-    merged.costCeilingMicroUsd === existing.costCeilingMicroUsd &&
-    sameStringArray(merged.proposedTags, existing.proposedTags);
+  const nothingMoved = nextName === existing.name && !leversMoved(merged, existing);
 
   const updated = await db.dataLakeResearchConfigs.updateConfig(configId, lake.id, {
     ...merged,
