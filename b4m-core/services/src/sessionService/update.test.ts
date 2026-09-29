@@ -20,6 +20,9 @@ import { updateShareableFiles } from '../projectService';
 import { IUserDocument } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 
+/** Every id is readable: these suites are not about the added-id access filter. */
+const allowAllFiles = vi.fn(async (ids: string[]) => ids.map(id => ({ id })));
+
 // ObjectId-shaped: updateSession drops knowledgeIds that cannot address a row, and the lake
 // derivation reads them through `_id: { $in: ... }`.
 const LAKE_FILE_ID = '507f1f77bcf86cd799439001';
@@ -63,6 +66,7 @@ describe('updateSession — signed-URL cache pre-warm gate', () => {
         findAllBySessionId: vi.fn().mockResolvedValue([]),
       },
       fabFiles: {
+        findAccessibleInIds: allowAllFiles,
         findAllByIds: vi.fn().mockResolvedValue(files),
         shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue(files) },
       },
@@ -129,7 +133,7 @@ describe('updateSession - forceKnowledgeRetrieval passthrough', () => {
             updateWithUpdateAccess: update,
           },
           projects: { findAllBySessionId: vi.fn().mockResolvedValue([]) },
-          fabFiles: { findAllByIds: vi.fn().mockResolvedValue([]) },
+          fabFiles: { findAccessibleInIds: allowAllFiles, findAllByIds: vi.fn().mockResolvedValue([]) },
           caches: {},
           // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape for this unit test
         } as any,
@@ -233,6 +237,7 @@ describe('updateSession - project propagation opt-out', () => {
             update: vi.fn(),
           },
           fabFiles: {
+            findAccessibleInIds: allowAllFiles,
             findAllByIds: vi.fn().mockResolvedValue(unrestrictedFiles),
             shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue(accessibleFiles) },
           },
@@ -417,6 +422,7 @@ describe('updateSession - lake-scope derivation on attach', () => {
           },
           projects: { findAllBySessionId: vi.fn().mockResolvedValue([]) },
           fabFiles: {
+            findAccessibleInIds: allowAllFiles,
             findAllByIds: vi.fn().mockResolvedValue([]),
             shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue(lakeFiles) },
           },
@@ -610,5 +616,75 @@ describe('updateSession - lake-scope derivation on attach', () => {
 
       expect(update.mock.calls[0][1]).toMatchObject({ retrievalTags: [], lakeScopeExplicit: false });
     });
+  });
+});
+
+describe('updateSession - added knowledge ids are access-checked', () => {
+  const user = { id: 'user-1' } as IUserDocument;
+  const project = { id: 'project-1', fileIds: [] as string[] };
+
+  // Resolves only NEW_FILE: OTHERS_FILE is someone else's, KEPT_PRIVATE is already stored (and
+  // would not resolve either - a revoked share, say - which is exactly what a rename must survive).
+  const makeAdapters = (storedIds: string[]) => {
+    const findAccessibleInIds = vi.fn(async (ids: string[]) => ids.filter(id => id === NEW_FILE).map(id => ({ id })));
+    return {
+      findAccessibleInIds,
+      adapters: {
+        db: {
+          sessions: {
+            shareable: {
+              findUpdateAccessById: vi.fn().mockResolvedValue({
+                id: 'session-1',
+                knowledgeIds: storedIds,
+                artifactIds: [],
+                tags: [],
+                name: 'Session',
+              }),
+            },
+            updateWithUpdateAccess: vi.fn((_user: unknown, data: unknown) => Promise.resolve(data)),
+          },
+          projects: { findAllBySessionId: vi.fn().mockResolvedValue([project]), update: vi.fn() },
+          fabFiles: {
+            findAccessibleInIds,
+            shareable: { findAllAccessibleByIds: vi.fn(async (_u: unknown, ids: string[]) => ids.map(id => ({ id }))) },
+          },
+          caches: {},
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape for this unit test
+        } as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- storage isn't exercised; getCachedSignedUrl is mocked above
+        storage: {} as any,
+      },
+    };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    project.fileIds = [];
+  });
+
+  it('drops a foreign added id and keeps an accessible one', async () => {
+    const { adapters } = makeAdapters([]);
+    await updateSession(user, { id: 'session-1', knowledgeIds: [OTHERS_FILE, NEW_FILE] }, adapters);
+
+    expect(adapters.db.sessions.updateWithUpdateAccess.mock.calls[0][1].knowledgeIds).toEqual([NEW_FILE]);
+    expect(adapters.db.fabFiles.shareable.findAllAccessibleByIds).toHaveBeenCalledWith(user, [NEW_FILE]);
+    expect(project.fileIds).toEqual([NEW_FILE]);
+  });
+
+  it('keeps every stored id on a rename-shaped PUT without re-checking them', async () => {
+    const { adapters, findAccessibleInIds } = makeAdapters([KEPT_PRIVATE]);
+    await updateSession(user, { id: 'session-1', name: 'Renamed', knowledgeIds: [KEPT_PRIVATE] }, adapters);
+
+    expect(adapters.db.sessions.updateWithUpdateAccess.mock.calls[0][1].knowledgeIds).toEqual([KEPT_PRIVATE]);
+    expect(findAccessibleInIds).not.toHaveBeenCalled();
+  });
+
+  it('checks only the delta when a stored list gains a foreign id', async () => {
+    const { adapters, findAccessibleInIds } = makeAdapters([KEPT_PRIVATE]);
+    await updateSession(user, { id: 'session-1', knowledgeIds: [KEPT_PRIVATE, OTHERS_FILE] }, adapters);
+
+    expect(findAccessibleInIds.mock.calls[0][0]).toEqual([OTHERS_FILE]);
+    expect(adapters.db.sessions.updateWithUpdateAccess.mock.calls[0][1].knowledgeIds).toEqual([KEPT_PRIVATE]);
+    expect(adapters.db.projects.update).not.toHaveBeenCalled();
   });
 });

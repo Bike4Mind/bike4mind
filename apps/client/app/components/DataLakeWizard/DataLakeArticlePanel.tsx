@@ -12,6 +12,7 @@ import { citedPassageForFile } from '@client/app/components/Knowledge/citedPassa
 import MembershipArmBadge from '@client/app/components/datalake/MembershipArmBadge';
 import PurgeLakeDocumentAction from '@client/app/components/DataLakeWizard/PurgeLakeDocumentAction';
 import RemoveFileFromLakeDialog from './RemoveFileFromLakeDialog';
+import AdmittedSourceDetails from './AdmittedSourceDetails';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { describePipelineStall } from '@bike4mind/common';
 
@@ -195,6 +196,7 @@ export default function DataLakeArticlePanel({
             {file.notes}
           </Typography>
         )}
+        <AdmittedSourceDetails file={file} />
         {(tags.length > 0 || file.membershipArm) && (
           <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
             <MembershipArmBadge arm={file.membershipArm} />

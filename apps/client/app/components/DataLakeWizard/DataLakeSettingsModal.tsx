@@ -281,6 +281,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const [confirmPublicOpen, setConfirmPublicOpen] = useState(false);
   const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
   const [researchDirty, setResearchDirty] = useState(false);
+  const [proposalsDirty, setProposalsDirty] = useState(false);
   // Snapshotted with the form, not rebuilt from the live `lake`: a background refetch that brings in
   // someone else's rename would otherwise count as an edit here.
   const [seed, setSeed] = useState<ReturnType<typeof formSeed> | null>(null);
@@ -371,7 +372,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   // Escape, the backdrop and the close button all come through here; Cancel and a successful save
   // close directly, since both are the user deciding what happens to the edits.
   const requestClose = () => {
-    if (settingsDirty || researchDirty) setConfirmDiscardOpen(true);
+    if (settingsDirty || researchDirty || proposalsDirty) setConfirmDiscardOpen(true);
     else onClose();
   };
   const discardAndClose = () => {
@@ -789,53 +790,70 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     error={history.isForbidden ? null : history.error}
                   />
                 </TabPanel>
-                <TabPanel value="proposals" sx={{ p: 0 }}>
-                  <DataLakeProposalsPanel
-                    view={proposalsView}
-                    onViewChange={view => {
-                      if (lake?.id) setProposalsViewFor({ lakeId: lake.id, view });
-                    }}
-                    proposals={shownProposals.data}
-                    isLoading={shownProposals.isLoading}
-                    error={shownProposals.isForbidden ? null : shownProposals.error}
-                    pendingProposalId={reviewProposal.isPending ? reviewProposal.variables?.proposalId : undefined}
-                    // Survives the toast: which source failed, and why, stays on its own card until
-                    // the next attempt on it.
-                    failure={
-                      reviewProposal.isError && reviewProposal.variables?.proposalId
-                        ? {
-                            proposalId: reviewProposal.variables.proposalId,
-                            message: reviewProposalFailureMessage(reviewProposal.error),
-                          }
-                        : undefined
-                    }
-                    onApprove={proposalId => reviewProposal.mutate({ proposalId, decision: 'approve' })}
-                    onDecline={(proposalId, reason) =>
-                      reviewProposal.mutate({ proposalId, decision: 'decline', reason })
-                    }
-                    onRestore={proposalId => reviewProposal.mutate({ proposalId, decision: 'restore' })}
-                    pendingCanonicalSourceKeys={pendingCanonicalSourceKeys}
-                  />
-                </TabPanel>
-                <TabPanel value="research" sx={{ p: 0 }}>
-                  <DataLakeResearchPanel
-                    configs={researchConfigs.data}
-                    runs={researchRuns.data}
-                    isLoading={researchConfigs.isLoading}
-                    error={researchConfigs.isForbidden ? null : (researchConfigs.error ?? researchRuns.error)}
-                    modelOptions={researchModelOptions}
-                    defaultModelLabel={researchDefaultModel}
-                    isCreating={createResearchConfig.isPending}
-                    savingConfigId={updateResearchConfig.isPending ? updateResearchConfig.variables?.configId : null}
-                    deletingConfigId={deleteResearchConfig.isPending ? deleteResearchConfig.variables : null}
-                    startingConfigId={startResearchRun.isPending ? startResearchRun.variables : null}
-                    onCreate={input => createResearchConfig.mutate(input)}
-                    onUpdate={(configId, input) => updateResearchConfig.mutate({ configId, ...input })}
-                    onDelete={confirmDeleteResearchConfig}
-                    onStartRun={configId => startResearchRun.mutate(configId)}
-                    onDirtyChange={setResearchDirty}
-                  />
-                </TabPanel>
+                {/* Kept mounted, guarded and keyed like the Research panel below, because a
+                    half-typed decline reason is this panel's own state too. It reports that
+                    reason as dirty state, and an unmount here would lose the text. */}
+                {showProposalsTab && (
+                  <TabPanel value="proposals" sx={{ p: 0 }} keepMounted>
+                    <DataLakeProposalsPanel
+                      key={lake?.id}
+                      onDirtyChange={setProposalsDirty}
+                      view={proposalsView}
+                      onViewChange={view => {
+                        if (lake?.id) setProposalsViewFor({ lakeId: lake.id, view });
+                      }}
+                      proposals={shownProposals.data}
+                      isLoading={shownProposals.isLoading}
+                      error={shownProposals.isForbidden ? null : shownProposals.error}
+                      pendingProposalId={reviewProposal.isPending ? reviewProposal.variables?.proposalId : undefined}
+                      // Survives the toast: which source failed, and why, stays on its own card until
+                      // the next attempt on it.
+                      failure={
+                        reviewProposal.isError && reviewProposal.variables?.proposalId
+                          ? {
+                              proposalId: reviewProposal.variables.proposalId,
+                              message: reviewProposalFailureMessage(reviewProposal.error),
+                            }
+                          : undefined
+                      }
+                      onApprove={proposalId => reviewProposal.mutate({ proposalId, decision: 'approve' })}
+                      onDecline={(proposalId, reason) =>
+                        reviewProposal.mutate({ proposalId, decision: 'decline', reason })
+                      }
+                      onRestore={proposalId => reviewProposal.mutate({ proposalId, decision: 'restore' })}
+                      pendingCanonicalSourceKeys={pendingCanonicalSourceKeys}
+                    />
+                  </TabPanel>
+                )}
+                {/* keepMounted: a tab switch would otherwise unmount the panel, silently dropping the
+                    configuration draft AND resetting researchDirty, so the close confirm would not
+                    fire either. A kept-mounted panel then needs two guards the unmounting ones do
+                    not: rendered only when its tab is offered, so a reader cannot carry a hidden
+                    copy, and keyed on the lake, so a draft cannot outlive the lake it belongs to -
+                    the same seed-once-per-lake rule the settings form above uses. */}
+                {showResearchTab && (
+                  <TabPanel value="research" sx={{ p: 0 }} keepMounted>
+                    <DataLakeResearchPanel
+                      key={lake?.id}
+                      configs={researchConfigs.data}
+                      runs={researchRuns.data}
+                      isLoading={researchConfigs.isLoading}
+                      error={researchConfigs.isForbidden ? null : (researchConfigs.error ?? researchRuns.error)}
+                      pendingProposals={researchConfigs.pendingProposals}
+                      modelOptions={researchModelOptions}
+                      defaultModelLabel={researchDefaultModel}
+                      isCreating={createResearchConfig.isPending}
+                      savingConfigId={updateResearchConfig.isPending ? updateResearchConfig.variables?.configId : null}
+                      deletingConfigId={deleteResearchConfig.isPending ? deleteResearchConfig.variables : null}
+                      startingConfigId={startResearchRun.isPending ? startResearchRun.variables : null}
+                      onCreate={input => createResearchConfig.mutateAsync(input)}
+                      onUpdate={(configId, input) => updateResearchConfig.mutateAsync({ configId, ...input })}
+                      onDelete={confirmDeleteResearchConfig}
+                      onStartRun={configId => startResearchRun.mutate(configId)}
+                      onDirtyChange={setResearchDirty}
+                    />
+                  </TabPanel>
+                )}
               </Tabs>
             ) : (
               settingsFields

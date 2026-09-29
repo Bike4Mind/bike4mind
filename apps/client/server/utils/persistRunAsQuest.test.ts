@@ -332,3 +332,33 @@ describe('persistRunAsQuest agent artifact persistence', () => {
     expect(summarizePublishMock).toHaveBeenCalled();
   });
 });
+
+describe('persistRunAsQuest tool echoes', () => {
+  const PAGE =
+    '<!DOCTYPE html>\n<html><head><title>Fetched</title></head><body><p>Quoted verbatim from the fetched web page.</p></body></html>';
+
+  it('marks web tool output the reply quoted back, from the persisted observation steps', async () => {
+    stubExecution({
+      result: { steps: [{ type: 'observation', content: PAGE, metadata: { toolName: 'web_fetch' } }] },
+    });
+    findOneAndUpdateMock.mockResolvedValue({ _id: 'q1' });
+
+    await persistRunAsQuest(EXECUTION_ID, `Here it is:\n\`\`\`html\n${PAGE}\n\`\`\`\n`, logger);
+
+    const [reply] = findOneAndUpdateMock.mock.calls[0][1].$set.replies;
+    expect(reply).toMatch(/^~~~html b4m-tool-output$/m);
+    expect(persistAgentArtifactsMock.mock.calls[0][0].replyText).toBe(reply);
+  });
+
+  it('falls back to checkpoint steps and leaves non-web tool output promotable', async () => {
+    const reply = `Here it is:\n\`\`\`html\n${PAGE}\n\`\`\`\n`;
+    stubExecution({
+      checkpoint: { steps: [{ type: 'observation', content: PAGE, metadata: { toolName: 'file_read' } }] },
+    });
+    findOneAndUpdateMock.mockResolvedValue({ _id: 'q1' });
+
+    await persistRunAsQuest(EXECUTION_ID, reply, logger);
+
+    expect(findOneAndUpdateMock.mock.calls[0][1].$set.replies).toEqual([reply]);
+  });
+});

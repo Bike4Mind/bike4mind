@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -46,6 +46,8 @@ export interface DataLakeProposalsPanelProps {
    * server remains the guard for the later-approved case; this only prevents the guaranteed error.
    */
   pendingCanonicalSourceKeys?: ReadonlySet<string>;
+  /** Whether a typed decline reason is not yet submitted, so the host can confirm before closing. */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 /** Past this, an excerpt is collapsed until the reviewer asks for the rest. */
@@ -130,9 +132,20 @@ export function DataLakeProposalsPanel({
   onViewChange,
   onRestore,
   pendingCanonicalSourceKeys,
+  onDirtyChange,
 }: DataLakeProposalsPanelProps) {
   const [decliningId, setDecliningId] = useState<string | null>(null);
   const [reason, setReason] = useState('');
+  // A settled decline drops its row but leaves decliningId and reason set, so the row must still be
+  // listed for the reason to count as unsubmitted.
+  const isDirty = decliningId !== null && reason.trim() !== '' && !!proposals?.some(p => p.id === decliningId);
+  // Cleanup reports clean so a dismissed panel cannot leave the host confirming a reason that no
+  // longer exists. Must stay in sync with DataLakeSettingsModal: it passes `keepMounted` on this
+  // panel's TabPanel, because an unmount takes the reason with it.
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+    return () => onDirtyChange?.(false);
+  }, [isDirty, onDirtyChange]);
   const [sort, setSort] = useState<ProposalSort>('relevance');
   const declinedView = view === 'declined';
   // The declined list is newest first, so a later occurrence of a source is a superseded tombstone
@@ -164,7 +177,14 @@ export function DataLakeProposalsPanel({
           <ToggleButtonGroup
             size="sm"
             value={view}
-            onChange={(_e, value) => value && onViewChange(value as ProposalsView)}
+            onChange={(_e, value) => {
+              if (!value) return;
+              // The draft belongs to a pending row, which the other view does not list, so it would
+              // otherwise outlive its row unreported.
+              setDecliningId(null);
+              setReason('');
+              onViewChange(value as ProposalsView);
+            }}
             data-testid="datalake-proposals-view-toggle"
           >
             <Button value="pending" data-testid="datalake-proposals-view-pending">

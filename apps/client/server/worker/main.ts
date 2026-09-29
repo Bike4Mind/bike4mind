@@ -17,6 +17,7 @@ import { dispatch as imageEditDispatch } from '@server/queueHandlers/imageEdit';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
 import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
+import { runResearchScheduleTick } from '@server/cron/dataLakeResearchSchedule';
 import { SelfHostWorker } from './selfHostWorker';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
@@ -54,6 +55,8 @@ const FAB_FILE_VISIBILITY_TIMEOUT_SEC = 300;
 const IMAGE_VISIBILITY_TIMEOUT_SEC = 660;
 /** Scheduler cadence (hosted cron runs on a schedule; self-host polls the schedule table). */
 const SCHEDULER_INTERVAL_MS = 5 * 60_000;
+/** Research schedule tick, matching the hosted dataLakeResearchScheduleCron's rate. */
+const RESEARCH_SCHEDULE_INTERVAL_MS = 15 * 60_000;
 /** Safety-net scan cadence: catches uploads whose MinIO webhook never arrived. */
 const CHUNK_SCAN_INTERVAL_MS = 60_000;
 /** Grace period on SIGTERM/SIGINT for in-flight message handling to finish before exit. */
@@ -233,6 +236,11 @@ async function main() {
     },
     { runOnStartup: true }
   );
+
+  // Self-host counterpart of the hosted dataLakeResearchScheduleCron (infra/cron.ts), same tick.
+  worker.registerScheduledTask('dataLakeResearchSchedule', RESEARCH_SCHEDULE_INTERVAL_MS, async () => {
+    await runResearchScheduleTick(bootLogger);
+  });
 
   // Remote-provider catalog freshness (sec 6.2). The enableModelDiscovery gate,
   // the lease and the per-source minimum interval all live inside the service,

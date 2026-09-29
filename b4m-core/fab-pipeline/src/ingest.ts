@@ -3,6 +3,7 @@ import axios from 'axios';
 import type { Cheerio, CheerioAPI } from 'cheerio';
 import mime from 'mime-types';
 import { ssrfSafeHttpAgent, ssrfSafeHttpsAgent, validateUrlForFetch } from './ssrfProtection';
+import { readPageTitle } from './pageTitle';
 
 // Centralized URL regex - handles ports, query params, fragments
 export const URL_REGEX =
@@ -707,7 +708,7 @@ export async function fetchAndParseURL(url: string, { logger }: { logger: Logger
       const $ = cheerio.load(htmlContent);
       // Fallback names the page from the FINAL url rather than the pasted one - after a redirect the
       // caller's last path segment describes a different document than the one actually fetched.
-      title = $('title').text() || lastPathSegment(currentUrl);
+      title = readPageTitle($, currentUrl) || lastPathSegment(currentUrl);
       urlContent = extractReadableText($);
     }
 

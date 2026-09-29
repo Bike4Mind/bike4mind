@@ -1815,6 +1815,37 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => d.toJSON());
   }
 
+  async findAllByDriveConnectionIdInDataLake(
+    driveConnectionId: string,
+    datalakeTag: string
+  ): Promise<IFabFileDocument[]> {
+    // Deliberately WITHOUT archivedAt/deletedAt filters, unlike findByDriveConnectionIdInDataLake:
+    // the purge must reach every file this connection ever ingested, including one archived
+    // alongside its lake or soft-deleted, mirroring hardDeleteByDataLakeTag's own treatment for the
+    // whole-lake purge - includeDeleted bypasses the soft-delete plugin's default deletedAt filter.
+    const docs = await this.fabFileModel
+      .find({
+        driveConnectionId,
+        tags: { $elemMatch: { name: datalakeTag } },
+        status: { $ne: 'pending' },
+      })
+      .setOptions({ includeDeleted: true });
+    return docs.map(d => d.toJSON());
+  }
+
+  async countByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<number> {
+    // Same predicate as findAllByDriveConnectionIdInDataLake (the purge's own finder, not the
+    // reconcile-scoped findByDriveConnectionIdInDataLake) so the disconnect-confirmation dialog's
+    // count never disagrees with what the purge will actually reach - including an archived lake's
+    // files. countDocuments is not soft-delete-plugin-filtered in the first place (only find/findOne
+    // are), so no archivedAt/deletedAt term here already means "every matching row".
+    return this.fabFileModel.countDocuments({
+      driveConnectionId,
+      tags: { $elemMatch: { name: datalakeTag } },
+      status: { $ne: 'pending' },
+    });
+  }
+
   async findDriveFileIdsByBatchId(batchId: string): Promise<string[]> {
     // Excludes 'pending' - a row this slice's own createFabFile minted but whose storage.upload
     // never confirmed (see the interface docs and markUploaded). `distinct` keeps this a projection

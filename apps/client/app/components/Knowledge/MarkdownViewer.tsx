@@ -112,10 +112,14 @@ const MarkdownViewer: React.FC<Props> = ({ content, citedPassage }) => {
   // the PROMOTED source - locating it in `content` would shift every offset by whatever that
   // transform inserted and mark the wrong blocks.
   const promotedContent = useMemo(() => promoteInlineLatexDollars(content), [content]);
-  const citedRange = useMemo(
-    () => (citedPassage ? locateCitedPassage(promotedContent, citedPassage) : null),
-    [promotedContent, citedPassage]
-  );
+  const citedRange = useMemo(() => {
+    if (!citedPassage) return null;
+    // Preserve literal matches inside code; otherwise apply the document's math transform.
+    return (
+      locateCitedPassage(promotedContent, citedPassage) ??
+      locateCitedPassage(promotedContent, promoteInlineLatexDollars(citedPassage))
+    );
+  }, [promotedContent, citedPassage]);
 
   // True when the passage WAS located in the source but no rendered block carries it - the cited
   // text sits in an element type this viewer does not override, a table cell being the common one.

@@ -15,9 +15,16 @@ export enum HttpStatus {
   TooManyRequests = 429,
   InternalServerError = 500,
   BadGateway = 502,
+  GatewayTimeout = 504,
 }
 
 export class HTTPError extends Error {
+  /**
+   * Set on a 5xx that reports a third party's failure the server handled correctly (a source site
+   * timing out), so `errorHandler` logs it at warn rather than paging as a server fault.
+   */
+  public expected?: boolean;
+
   constructor(
     public statusCode: number,
     message?: string,
@@ -130,6 +137,17 @@ export class BadGatewayError extends HTTPError {
   ) {
     super(HttpStatus.BadGateway, message, additionalInfo);
     this.name = 'BadGatewayError';
+  }
+}
+
+/** 504: an upstream we depend on did not answer in time. Retrying later may succeed. */
+export class GatewayTimeoutError extends HTTPError {
+  constructor(
+    message?: string,
+    public additionalInfo?: Record<string, unknown>
+  ) {
+    super(HttpStatus.GatewayTimeout, message, additionalInfo);
+    this.name = 'GatewayTimeoutError';
   }
 }
 

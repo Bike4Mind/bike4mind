@@ -1,5 +1,15 @@
 # @bike4mind/resource
 
+## 0.8.0
+
+### Minor Changes
+
+- [#3134](https://github.com/Bike4Mind/bike4mind/pull/3134) [`e4b4032`](https://github.com/Bike4Mind/bike4mind/commit/e4b40325c25d79379755d074379f4f6de2a47d64) Thanks [@onoya](https://github.com/onoya)! - add a model-driven contradiction detection pass
+
+- [#3359](https://github.com/Bike4Mind/bike4mind/pull/3359) [`41d7f2e`](https://github.com/Bike4Mind/bike4mind/commit/41d7f2ec3c2e6dcc5d121c3dc31214e7f97a0229) Thanks [@TRAP-RCG](https://github.com/TRAP-RCG)! - let the Overwatch emitter post for other products
+
+- [#3393](https://github.com/Bike4Mind/bike4mind/pull/3393) [`dd940f7`](https://github.com/Bike4Mind/bike4mind/commit/dd940f709ea10a20393cdaeb6f5a1b35b5d942b6) Thanks [@onoya](https://github.com/onoya)! - connect one GitHub repository to a data lake, read-only
+
 ## 0.7.1
 
 ### Patch Changes

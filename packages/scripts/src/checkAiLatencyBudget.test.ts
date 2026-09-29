@@ -61,6 +61,35 @@ describe('module boundary', () => {
     expect(block).toMatch(/\n\s+throw err;/);
   });
 
+  it('keeps each spec on one writer at a time', () => {
+    // persistResults' unlocked read-modify-write is safe only while no two workers write the same
+    // results file (see the invariants listed above persistResults). Breaking one still produces
+    // well-formed results files, just with a row silently lost, so they are pinned as text here.
+    // The one-project-per-spec invariant is not: playwright.config.ts's regex lists resist a text pin.
+    const factory = fs.readFileSync(FACTORY, 'utf8');
+    expect(factory.match(/describe\.configure\(\{[^}]*\}\)/g)).toEqual(["describe.configure({ mode: 'default' })"]);
+
+    const e2eDir = path.dirname(FACTORY);
+    const specs = fs.readdirSync(e2eDir).filter(f => /^ai-latency-.*\.spec\.ts$/.test(f));
+    const filenames: string[] = [];
+    for (const spec of specs) {
+      const source = fs.readFileSync(path.join(e2eDir, spec), 'utf8');
+      expect(source, spec).not.toMatch(/configure\(\s*\{[^}]*mode\s*:/);
+      if (spec === 'ai-latency-discover.spec.ts') continue;
+      const names = [...source.matchAll(/resultsFilename:\s*'([^']+)'/g)].map(m => m[1]);
+      expect(names, spec).toHaveLength(1);
+      filenames.push(...names);
+    }
+    expect(filenames.length).toBeGreaterThan(0);
+    expect(new Set(filenames).size).toBe(filenames.length);
+
+    // Each repeat gets its own worker hash, so it runs as a separate job writing the same file.
+    const workflow = fs.readFileSync(path.resolve(e2eDir, '../../../.github/workflows/e2e-ai-latency.yml'), 'utf8');
+    expect(workflow).not.toMatch(/repeat-each/);
+    const config = fs.readFileSync(path.resolve(e2eDir, '../playwright.config.ts'), 'utf8');
+    expect(config).not.toMatch(/repeatEach/);
+  });
+
   it('imports nothing that would drag in a Playwright runner', () => {
     // The load-bearing property of this module: it is importable from here. `@playwright/test`
     // added to it would typecheck and would even resolve under vitest, so the only thing standing

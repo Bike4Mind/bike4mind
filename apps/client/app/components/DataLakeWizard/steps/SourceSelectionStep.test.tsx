@@ -247,8 +247,8 @@ describe('SourceSelectionStep - optional step opt-ins', () => {
   describe('the Drive connect control is gated the way its sibling is', () => {
     // Connecting Drive is an org-lake, owner/manager capability server-side: a personal lake has no
     // org to hold a connection, and the status route 404s for a non-manager. This render site was
-    // ungated, so opening Add files on a personal lake fired a pointless GET /drive-connection and
-    // rendered a permanently disabled Connect button. SelectedLakeHeader already gates on this.
+    // ungated, so opening Add files on a personal lake fired a pointless GET /drive-connection. A
+    // personal lake now gets a static disabled control with the reason, which fetches nothing.
     const appendTo = (over: Partial<WizardTargetLake> = {}) =>
       useDataLakeWizardStore.setState({
         targetLake: {
@@ -262,10 +262,11 @@ describe('SourceSelectionStep - optional step opt-ins', () => {
         },
       });
 
-    it('renders NO connect control on a personal lake', () => {
+    it('offers Drive disabled on a personal lake, without mounting the live connect control', () => {
       appendTo({ organizationId: null });
       renderStep();
 
+      expect(screen.getByTestId('drive-connect-personal-lake-btn')).toBeDisabled();
       expect(screen.queryByTestId('drive-connect-action')).toBeNull();
       // And not the create-mode fallback either - there IS a target lake, it just cannot connect.
       expect(screen.queryByTestId('drive-pending-connect-action')).toBeNull();
@@ -278,6 +279,7 @@ describe('SourceSelectionStep - optional step opt-ins', () => {
       renderStep();
 
       expect(screen.queryByTestId('drive-connect-action')).toBeNull();
+      expect(screen.queryByTestId('drive-connect-personal-lake-btn')).toBeNull();
     });
 
     it('renders the connect control for a manager on an org lake', () => {

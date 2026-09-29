@@ -1,4 +1,4 @@
-import mongoose, { Schema, model, Document, Model } from 'mongoose';
+import mongoose, { Schema, model, Document, Model, Types } from 'mongoose';
 import type { PublishedArtifact as PublishedArtifactData } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
@@ -88,7 +88,9 @@ const AccessGateSubSchema = new Schema(
  * `viewCount` is per LINK and is deliberately not the artifact's `viewCount`/`externalViewCount`:
  * those count every serve, and `externalViewCount` requires the viewer to be signed in, which a
  * share viewer essentially never is. Bumped by the serve route (#3255 step 2) for any
- * non-owner, non-crawler view that resolved through that entry, signed in or not.
+ * non-crawler view that resolved through that entry, signed in or not - owner-excluded only
+ * when the owner is AUTHENTICATED, since an anonymous request carries nothing to tell the
+ * owner apart from a stranger.
  */
 const ShareTokenSubSchema = new Schema({
   token: { type: String, required: true },
@@ -318,7 +320,7 @@ PublishedArtifactSchema.methods.restore = function () {
 
 /** One entry of `shareTokens`, as a lean read returns it. */
 export interface PublishedArtifactShareToken {
-  _id?: unknown;
+  _id?: Types.ObjectId;
   token?: string;
   createdAt?: Date;
   revokedAt?: Date | null;
@@ -330,6 +332,26 @@ export interface PublishedArtifactShareToken {
 export interface ShareTokenBearing {
   shareToken?: string | null;
   shareTokens?: PublishedArtifactShareToken[] | null;
+}
+
+/**
+ * The query filter that resolves a live artifact by share token, across BOTH storage shapes.
+ *
+ * The single definition every share-token reader must use - the serve route, the gate POST
+ * handlers and `findByShareToken` below all build their query from here, so the rollout
+ * tolerance and the revocation semantics cannot drift between them. A token minted before the
+ * backfill lives in the scalar, one minted after lives in both.
+ *
+ * The `$elemMatch` is load-bearing: token and `revokedAt: null` must be pinned to the SAME
+ * entry, or a revoked link would resolve on the strength of a still-live sibling. The legacy
+ * branch needs no such guard - revoking unsets the scalar outright.
+ *
+ * Callers still add their own `deletedAt: null`, since this is only the token half.
+ */
+export function shareTokenFilter(shareToken: string): Record<string, unknown> {
+  return {
+    $or: [{ shareToken }, { shareTokens: { $elemMatch: { token: shareToken, revokedAt: null } } }],
+  };
 }
 
 /**
@@ -365,19 +387,12 @@ export class PublishedArtifactRepository extends BaseRepository<IPublishedArtifa
 
   /**
    * Resolve a live artifact by its no-sign-in share token, in either storage shape.
-   *
-   * The `$or` is the rollout tolerance: a token minted before the backfill lives in the
-   * scalar, one minted after lives in both. A REVOKED array entry must not resolve, hence
-   * `$elemMatch` pinning token and `revokedAt: null` on the SAME entry - two separate
-   * conditions would let a revoked link through by matching a different, still-live one.
-   * The legacy branch needs no such guard: revoking unsets the scalar outright.
+   * The matching rules (and why they are what they are) live on `shareTokenFilter`.
+   * Callers needing a lean read build the same filter from it directly.
    */
   async findByShareToken(shareToken: string) {
     if (!shareToken) return null;
-    return this.findOne({
-      deletedAt: null,
-      $or: [{ shareToken }, { shareTokens: { $elemMatch: { token: shareToken, revokedAt: null } } }],
-    });
+    return this.findOne({ deletedAt: null, ...shareTokenFilter(shareToken) });
   }
 
   /** Look up by the compound key, non-deleted only. */
