@@ -20,7 +20,7 @@ export const chatContract = defineEndpoint({
   summary: 'Send a chat message',
   description:
     'Sends a message to the AI and creates a quest to process it. By default (async) the call ' +
-    'returns immediately with a quest id; poll `GET /api/quests/{id}` for the reply. Send ' +
+    'returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send ' +
     '`wait: true` to block until the reply is ready and receive it inline. A tool that produced ' +
     'machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` ' +
     'entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` ' +
@@ -50,12 +50,12 @@ export const chatContract = defineEndpoint({
     200: {
       description:
         'Message accepted - NOT a completed turn. The default (async) path returns this queued ' +
-        'ACK; the outcome arrives on `GET /api/quests/{id}` (see the `sendChatMessage200PollResult` ' +
+        'ACK; the outcome arrives on `GET /api/v1/quests/{id}` (see the `sendChatMessage200PollResult` ' +
         'schema). With `wait: true` the ' +
         'body additionally carries the completed reply (`response`/`responses`), `toolPayloads`, ' +
         '`createdAt`, and `performance` timings - fields not modelled here yet; the synchronous ' +
         'response shape is a follow-up. A turn that FAILS still resolves with `200`, never a 4xx, on ' +
-        'both that `wait: true` body and the polled quest (`GET /api/quests/{id}`) - the prose ' +
+        'both that `wait: true` body and the polled quest (`GET /api/v1/quests/{id}`) - the prose ' +
         'explaining why lands in `reply`/`response` like any other answer, so the reply text alone ' +
         'cannot tell a failure from an answer. `type` is the field that can: both surfaces carry it ' +
         'unconditionally, so match on `type: "error"` first - it covers credit exhaustion, a ' +
@@ -74,7 +74,7 @@ export const chatContract = defineEndpoint({
       pollResult: {
         schema: ChatQuestPollResultSchema,
         description:
-          'Outcome fields of the quest polled at `GET /api/quests/{id}` after this ACK. A finished ' +
+          'Outcome fields of the quest polled at `GET /api/v1/quests/{id}` after this ACK. A finished ' +
           'turn that failed is `status: "done"` with `type: "error"` and the failure text in ' +
           '`reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check ' +
           '`type` first, and also treat a terminal `status: "stopped"` (a missing session, a ' +
