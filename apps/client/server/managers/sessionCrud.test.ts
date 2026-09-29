@@ -15,6 +15,7 @@ const {
   favoriteRepoFind,
   userRepoFindById,
   defineAbilitiesForSpy,
+  createAttachmentLakeAccessSpy,
 } = vi.hoisted(() => {
   const sessionSave = vi.fn().mockResolvedValue(undefined);
   // any: a Mongoose model mock that is both newable (regular function so it works with
@@ -53,6 +54,7 @@ const {
     favoriteRepoFind: vi.fn(),
     userRepoFindById: vi.fn(),
     defineAbilitiesForSpy: vi.fn(),
+    createAttachmentLakeAccessSpy: vi.fn(),
   };
 });
 
@@ -98,6 +100,10 @@ vi.mock('@bike4mind/common', () => ({
 
 vi.mock('@bike4mind/observability', () => ({
   Logger: { log: vi.fn(), info: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock('@server/queueHandlers/agentExecutor.attachmentLakeAccess', () => ({
+  createAttachmentLakeAccess: createAttachmentLakeAccessSpy,
 }));
 
 vi.mock('@casl/mongoose', () => ({
@@ -197,6 +203,20 @@ describe('sessionCrud', () => {
       // asyncPromises holds the deferred work (analytics + user update)
       expect(result.asyncPromises.length).toBeGreaterThanOrEqual(2);
       await Promise.all(result.asyncPromises);
+    });
+
+    it("hands createSession the attachment-door lake resolver for the caller's supplied files", async () => {
+      const lakeAccess = { lakeMemberships: [], dataLakeTags: ['lake:x'], dataLakeTagPrefixes: [] };
+      createAttachmentLakeAccessSpy.mockReturnValueOnce(async () => lakeAccess);
+      createSessionService.mockResolvedValueOnce({ id: 'sess-new', name: 'New Notebook' });
+
+      const result = await getOrCreateSession({ fabFileIds: ['f1'], user, ability: allowAbility, logger });
+      await Promise.all(result.asyncPromises);
+
+      const [, params, adapters] = createSessionService.mock.calls.at(-1)!;
+      expect(params).toEqual(expect.objectContaining({ knowledgeIds: ['f1'] }));
+      await expect(adapters.resolveAttachmentLakeAccess()).resolves.toBe(lakeAccess);
+      expect(createAttachmentLakeAccessSpy).toHaveBeenCalledWith(user, logger);
     });
 
     it('also logs project add + activity when created within a project', async () => {
