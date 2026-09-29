@@ -22,9 +22,9 @@ import * as addFilesModule from './addFiles';
  * `addSessions.test.ts` suite is skipped, so without this the behaviour changes on this path are
  * untested. Both writes must persist what RESOLVED, never the raw list handed in.
  *
- * The set pushed is what `findAllByIds` RESOLVED, which is narrower than "the castable ids":
- * `softDeletePlugin` adds `deletedAt: null` to every `find`, so a soft-deleted row is missing
- * from the result too. Both exclusions are asserted below so a future change to either one is
+ * The set pushed is what `shareable.findAllAccessibleByIds` RESOLVED, which is narrower than "the
+ * castable ids": `softDeletePlugin` adds `deletedAt: null` to every `find`, so a soft-deleted row
+ * is missing from the result too, and so is a file the caller cannot read. Both exclusions are asserted below so a future change to either one is
  * a failing test rather than a silent change in what a project inherits.
  */
 
@@ -35,10 +35,12 @@ const PROJECT_ID = 'project-1';
 const SESSION_ID = '67dbe18a7f9cf1fa5d9686aa';
 
 const LIVE_ID = '67dbe18a7f9cf1fa5d968600';
-// Castable, but its row is soft-deleted, so findAllByIds does not return it.
+// Castable, but its row is soft-deleted, so the reader does not return it.
 const SOFT_DELETED_ID = '67dbe18a7f9cf1fa5d968601';
 // Not castable at all: the shape a session row written before the id filtering can still hold.
 const JUNK_ID = 'legacy-uuid-not-an-objectid';
+// Live, but another user's file the caller has no share on, so the access-scoped reader omits it.
+const FOREIGN_ID = '67dbe18a7f9cf1fa5d968602';
 
 let projects: IProjectRepository;
 let sessions: ISessionRepository;
@@ -66,7 +68,7 @@ beforeEach(() => {
   session = {
     id: SESSION_ID,
     userId: USER_ID,
-    knowledgeIds: [JUNK_ID, LIVE_ID, SOFT_DELETED_ID],
+    knowledgeIds: [JUNK_ID, LIVE_ID, SOFT_DELETED_ID, FOREIGN_ID],
     users: [],
   } as unknown as ISessionDocument;
 
@@ -75,8 +77,9 @@ beforeEach(() => {
   (sessions.update as ReturnType<typeof vi.fn>).mockResolvedValue(session);
   (projects.update as ReturnType<typeof vi.fn>).mockResolvedValue(project);
   // What the guarded repository actually returns: the junk id is dropped by usableObjectIds and
-  // the soft-deleted row is dropped by softDeletePlugin, leaving only the live file.
-  (fabFiles.findAllByIds as ReturnType<typeof vi.fn>).mockResolvedValue([
+  // the soft-deleted row is dropped by softDeletePlugin and the foreign one by the access
+  // predicate, leaving only the live file.
+  (fabFiles.shareable.findAllAccessibleByIds as ReturnType<typeof vi.fn>).mockResolvedValue([
     { id: LIVE_ID } as unknown as IFabFileDocument,
   ]);
 });
@@ -142,11 +145,29 @@ describe('addSessions - which ids reach the project', () => {
     expect(project.sessionIds).toEqual([SESSION_ID]);
   });
 
-  it('queries the repository with the session raw list, leaving the filtering to the guard', async () => {
+  it('queries the access-scoped reader with the session raw list, leaving the filtering to it', async () => {
     await addSessions(user, { projectId: PROJECT_ID, sessionIds: [SESSION_ID] }, {
       db: { projects, sessions, fabFiles },
     } as never);
 
-    expect(fabFiles.findAllByIds).toHaveBeenCalledWith([JUNK_ID, LIVE_ID, SOFT_DELETED_ID]);
+    expect(fabFiles.shareable.findAllAccessibleByIds).toHaveBeenCalledWith(user, [
+      JUNK_ID,
+      LIVE_ID,
+      SOFT_DELETED_ID,
+      FOREIGN_ID,
+    ]);
+    expect(fabFiles.findAllByIds).not.toHaveBeenCalled();
+  });
+
+  it('neither copies nor share-grants a stored file the caller cannot read', async () => {
+    // The spy is re-installed per test but keeps earlier tests' calls; only this run's grants count.
+    vi.mocked(addFilesModule.updateShareableFiles).mockClear();
+    await addSessions(user, { projectId: PROJECT_ID, sessionIds: [SESSION_ID] }, {
+      db: { projects, sessions, fabFiles },
+    } as never);
+
+    expect(project.fileIds).not.toContain(FOREIGN_ID);
+    const granted = vi.mocked(addFilesModule.updateShareableFiles).mock.calls.flatMap(([, { files }]) => files);
+    expect(granted.map(f => f.id)).toEqual([LIVE_ID]);
   });
 });

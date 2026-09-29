@@ -98,7 +98,9 @@ export const cloneSession = async (
   // CreateSessionAdapters and clone previously dropped them here, so a non-owner's derivation ran
   // with no lake arm and - crucially - no intersection, persisting a tag for a lake they may not
   // reach. fork/snip already forwarded; this brings clone in line.
-  const clonedSession = await createSession(user, buildCloneSession, adapters);
+  const clonedSession = await createSession(user, buildCloneSession, adapters, {
+    knowledgeIdsFromSourceSession: true,
+  });
 
   const messagesToClone = await db.chatHistories.findAllBySessionId(id);
 
