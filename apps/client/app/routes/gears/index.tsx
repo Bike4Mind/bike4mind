@@ -142,10 +142,10 @@ const RewardChip = ({
   gear: GearStatus;
   reward: RewardState;
   onClaim: () => void;
-  /** Spell the claim out beside the chip, for the long-form header, which has
-   *  the width a card's top row does not. */
+  /** For the long-form header, which has the width a card's top row does not. */
   labeled?: boolean;
 }) => {
+  const isMobile = useIsMobile();
   const amount = (clickable: boolean) => (
     <Chip
       size="sm"
@@ -195,54 +195,18 @@ const RewardChip = ({
     </Chip>
   );
 
-  // Text and chip are one button rather than two targets for the same action:
-  // one hit area, one tab stop, and the label reads as the button it is.
-  if (labeled && reward === 'claimable') {
-    return (
-      <Box
-        component="button"
-        data-testid={`gear-claim-${gear.key}`}
-        // The label is hidden on a phone, so the name cannot come from it.
-        aria-label={`Claim ${creditText(gear)}`}
-        onClick={onClaim}
-        sx={theme => ({
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: '10px',
-          p: 0,
-          border: 0,
-          background: 'none',
-          font: 'inherit',
-          fontSize: '13px',
-          fontWeight: 500,
-          color: rewardGreen(theme).ink,
-          cursor: 'pointer',
-          // The chip inside is not clickable itself, so it gets the hover and press
-          // of the clickable one from here.
-          '&:hover > span': { textDecoration: 'underline' },
-          [`&:hover .${chipClasses.root}`]: { backgroundColor: rewardGreen(theme).hoverFill },
-          [`&:active .${chipClasses.root}`]: { backgroundColor: rewardGreen(theme).activeFill },
-          '&:focus-visible': {
-            outline: `2px solid ${theme.palette.primary[500]}`,
-            outlineOffset: '2px',
-            borderRadius: '6px',
-          },
-        })}
-      >
-        {/* A phone's header has no room beside the title, so there it is the chip
-            alone - still the same button. */}
-        <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
-          Claim {creditText(gear)}
-        </Box>
-        {amount(false)}
-      </Box>
-    );
+  // The long-form header has the width a card's top row lacks, so on a desktop
+  // a claimable reward is the claim button itself: its label carries the amount,
+  // so a chip beside it would only repeat it. A phone's header keeps the chip, with
+  // the button in a strip under the header instead (see renderPanel).
+  if (labeled && reward === 'claimable' && !isMobile) {
+    return <ClaimButton gear={gear} onClaim={onClaim} compact />;
   }
 
   return (
     <>
       {reward === 'pending' && (
-        <Tooltip title="Reward not claimed yet">
+        <Tooltip title="Not claimable yet">
           <Chip
             size="sm"
             variant="soft"
@@ -319,24 +283,26 @@ const RewardChip = ({
 };
 
 /**
- * The button that pays a claimable reward out. The chip beside a card's title
- * is the status, this is the action.
- *
- * On a desktop it is a line under the card's copy; on a phone it is a real
- * button, in a footer under the CTA and at the top of the open card. The claim
- * is a line of its own rather than a wider chip: the top row has no room to spare
- * beside a long title.
+ * The button that pays a claimable reward out, in a footer under a card's CTA
+ * and, on a phone, at the top of the open card. The chip beside the title is the
+ * status, this is the action. A button rather than a line of text: a text line
+ * read as a caption, and on a phone, with no hover to say otherwise, a thumb that
+ * missed it landed on the card, which acts or navigates away.
  */
 const ClaimButton = ({
   gear,
   onClaim,
   mt = '16px',
   testId,
+  compact = false,
 }: {
   gear: GearStatus;
   onClaim: () => void;
   mt?: string;
   testId?: string;
+  /** Sized to its label and as tall as the back button beside it, for the open
+   *  card's header, so the header does not change height when the reward is claimed. */
+  compact?: boolean;
 }) => {
   const isMobile = useIsMobile();
   return (
@@ -351,50 +317,33 @@ const ClaimButton = ({
       onKeyDown={event => event.stopPropagation()}
       sx={theme => {
         const green = rewardGreen(theme);
-        const base = {
-          mt,
+        return {
+          mt: compact ? 0 : mt,
+          // A button shrinks to its label outside a flex column, so the width is set
+          // outright; the card footer and the open card's strip both want it full.
+          width: compact ? 'auto' : '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          // Taller on a phone, for a thumb; a mouse does not need the extra height.
+          minHeight: compact ? '32px' : isMobile ? '40px' : '36px',
+          px: '12px',
+          py: 0,
+          border: `1px solid ${green.stroke}`,
+          borderRadius: '6px',
+          backgroundColor: green.fill,
           font: 'inherit',
           fontSize: '13px',
           fontWeight: 500,
           color: green.ink,
           cursor: 'pointer',
+          '@media (hover: hover)': { '&:hover': { backgroundColor: green.hoverFill } },
+          '&:active': { backgroundColor: green.activeFill },
           '&:focus-visible': {
             outline: `2px solid ${theme.palette.primary[500]}`,
             outlineOffset: '2px',
           },
         };
-        // Branches on isMobile, the same test that decides where the button goes,
-        // rather than on breakpoint keys: a breakpoint key for the hover is also
-        // the media query Joy files the `sm` values under, and replaces them.
-        // A phone has no hover to say this line is a control, and a miss lands on
-        // the card, which acts or navigates away - so there it is a button in the
-        // chip's green, big enough for a thumb.
-        return isMobile
-          ? {
-              ...base,
-              // A button shrinks to its label outside a flex column, so the width is set
-              // outright; the card footer and the open card's strip both want it full.
-              width: '100%',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              minHeight: '40px',
-              px: '12px',
-              py: 0,
-              border: `1px solid ${green.stroke}`,
-              borderRadius: '6px',
-              backgroundColor: green.fill,
-              '&:active': { backgroundColor: green.activeFill },
-            }
-          : {
-              ...base,
-              alignSelf: 'flex-start',
-              p: 0,
-              border: 0,
-              borderRadius: '4px',
-              background: 'none',
-              '&:hover': { textDecoration: 'underline' },
-            };
       }}
     >
       Claim {creditText(gear)}
@@ -705,10 +654,9 @@ const GearsPage = () => {
                   // The same token the soft chip paints its own text with.
                   sx={{ mt: '16px', fontSize: '13px', color: 'warning.softColor' }}
                 >
-                  {creditText(gear)} will be claimed once someone else opens your artifact link.
+                  Once someone else opens your artifact link, you can claim {creditText(gear)}.
                 </Typography>
               )}
-              {!isMobile && claimButton}
               {/* Pinned to the bottom so the CTAs line up across a row of uneven cards. */}
               <Typography
                 level="body-sm"
@@ -722,7 +670,11 @@ const GearsPage = () => {
                   &rarr;
                 </Box>
               </Typography>
-              {isMobile && claimButton && (
+              {/* A footer of its own under the CTA, split off by a divider, rather than a
+                  line between the copy and the CTA, where it was squeezed. The CTAs in a
+                  row stop lining up while a card has one - accepted, the state is brief
+                  and the misalignment points at the card that pays. */}
+              {claimButton && (
                 <>
                   <Divider inset="context" sx={{ mt: '16px' }} />
                   {claimButton}
