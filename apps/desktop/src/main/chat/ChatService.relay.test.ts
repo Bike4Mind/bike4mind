@@ -39,16 +39,24 @@ describe('ChatService session_send', () => {
   beforeEach(async () => {
     project = await realpath(await mkdtemp(join(tmpdir(), 'b4m-relay-')));
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-relay-sessions-')), 'test-model');
-    events = [];
-    queueEvents = [];
-    streams = [];
-    post = vi.fn().mockImplementation(() => {
+    // Each test's service writes into arrays captured HERE rather than reached through the
+    // bindings below. dispose() stops a service streaming, but a turn it had already started can
+    // still run a continuation afterwards, and that continuation would otherwise open a stream
+    // into the NEXT test's array - where the next test would answer it against the wrong store.
+    const ownEvents: ChatStreamEvent[] = [];
+    const ownQueueEvents: ChatQueueEvent[] = [];
+    const ownStreams: PassThrough[] = [];
+    const ownPost = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      ownStreams.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
+    events = ownEvents;
+    queueEvents = ownQueueEvents;
+    streams = ownStreams;
+    post = ownPost;
 
-    queue = new MessageQueue(event => queueEvents.push(event));
+    queue = new MessageQueue(event => ownQueueEvents.push(event));
     service = new ChatService({
       store,
       access: { list: async () => [] } as unknown as AccessStore,
@@ -57,10 +65,10 @@ describe('ChatService session_send', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
-          getAxiosInstance: () => ({ post }),
+          getAxiosInstance: () => ({ post: ownPost }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => ownEvents.push(event),
     });
   });
 
@@ -207,6 +215,15 @@ describe('ChatService session_send', () => {
     expect(call?.status).toBe('done');
     expect(call?.preview).toMatch(/running your message now/);
     expect(call?.label).toBe('Messaged @Target: have a look at the config');
+
+    // Waited for rather than read straight off, because sending is fire and forget BY DESIGN:
+    // the tool settles as soon as the message is queued, and the target's own turn - which is
+    // what writes this - starts on a later tick that nothing here awaits. Reading immediately
+    // asserted on whichever side of that gap the machine happened to land on.
+    await vi.waitUntil(async () => ((await store.get(target.id))?.messages.length ?? 0) > 0, {
+      timeout: 5000,
+      interval: 10,
+    });
 
     // It reached the target as a message of its own, marked as a relay rather than as the user.
     const stored = await store.get(target.id);

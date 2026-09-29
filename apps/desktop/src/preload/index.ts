@@ -7,6 +7,7 @@ import type {
   ChatPendingApproval,
   ChatQueueEvent,
   ChatSessionStatusEvent,
+  ChatSessionSummary,
   ChatStreamEvent,
   CreateCodeSessionRequest,
   SendMessageRequest,
@@ -98,6 +99,11 @@ const api: DesktopApi = {
       const handler = (_event: unknown, event: ChatSessionStatusEvent) => listener(event);
       ipcRenderer.on(IPC_CHANNELS.chatSessionStatus, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.chatSessionStatus, handler);
+    },
+    onSessionSummary: listener => {
+      const handler = (_event: unknown, summary: ChatSessionSummary) => listener(summary);
+      ipcRenderer.on(IPC_CHANNELS.chatSessionSummary, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatSessionSummary, handler);
     },
     getPendingApprovals: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetPendingApprovals),
     onPendingApprovals: listener => {

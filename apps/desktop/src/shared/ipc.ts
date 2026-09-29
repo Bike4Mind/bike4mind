@@ -87,6 +87,13 @@ export const IPC_CHANNELS = {
   chatStopBackground: 'chat:stop-background',
   /** main -> renderer push; reply tokens as they arrive. */
   chatStreamEvent: 'chat:stream-event',
+  /**
+   * main -> renderer push; one session's stored summary changed with no reply involved.
+   *
+   * Today only its generated title, which lands moments after the first prompt and long after
+   * the IPC call that sent it has resolved - so there is nothing left to return it on.
+   */
+  chatSessionSummary: 'chat:session-summary',
   chatGetSessionStatuses: 'chat:get-session-statuses',
   /** main -> renderer push; one session started or stopped being busy. */
   chatSessionStatus: 'chat:session-status',
@@ -258,6 +265,13 @@ export interface DesktopApi {
     getSessionStatuses(): Promise<ChatSessionStatusEvent[]>;
     /** Subscribe to per-session status changes; returns the unsubscribe. */
     onSessionStatus(listener: (event: ChatSessionStatusEvent) => void): () => void;
+    /**
+     * Subscribe to summary changes main made on its own - a generated title. Returns the
+     * unsubscribe. Not seeded on mount the way the statuses are: main only ever generates a
+     * title for a session whose first prompt it is watching, so a window that missed the push
+     * reads the stored title on its next list.
+     */
+    onSessionSummary(listener: (summary: ChatSessionSummary) => void): () => void;
     /**
      * Every tool call waiting on the user, in any conversation.
      *
