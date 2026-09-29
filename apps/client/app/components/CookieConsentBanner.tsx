@@ -72,10 +72,12 @@ export function CookieConsentBanner() {
   // With nothing in force yet there is nothing to manage, so a reopen shows the first-run ask.
   const current = resolveConsent();
   const managing = settingsOpen && current !== 'unset';
-  const cookieKinds =
-    process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID || process.env.NEXT_PUBLIC_META_PIXEL_ID
-      ? 'analytics and advertising'
-      : 'analytics';
+  const kinds = [
+    process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID && 'analytics',
+    (process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID || process.env.NEXT_PUBLIC_META_PIXEL_ID) && 'advertising',
+    'campaign attribution',
+  ].filter(Boolean) as string[];
+  const cookieKinds = kinds.length > 1 ? `${kinds.slice(0, -1).join(', ')} and ${kinds[kinds.length - 1]}` : kinds[0];
 
   const choose = (value: Consent) => {
     applyConsent(value);

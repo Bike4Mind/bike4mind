@@ -471,7 +471,7 @@ describe('CookieConsentBanner', () => {
 
       expect(screen.getByText('Cookie settings.')).toBeInTheDocument();
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent(
-        'You are currently allowing analytics cookies.'
+        'You are currently allowing campaign attribution cookies.'
       );
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent('Declining reloads the page');
       expect(screen.getByTestId('cookie-consent-cancel-btn')).toBeInTheDocument();
@@ -521,7 +521,7 @@ describe('CookieConsentBanner', () => {
       renderAndReopen();
 
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent(
-        'You are currently declining analytics cookies.'
+        'You are currently declining campaign attribution cookies.'
       );
       expect(screen.getByTestId('cookie-consent-banner')).not.toHaveTextContent('reloads the page');
 
