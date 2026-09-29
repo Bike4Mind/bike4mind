@@ -14,6 +14,7 @@ import type {
 import {
   DATA_LAKES,
   DATA_LAKE_TRANSITIONAL_STATUSES,
+  LAKE_ATTACHABLE_STATUSES,
   DEFAULT_DATA_LAKE_ORIGIN,
   strandedCutoffMsFor,
   resolveRetryAction,
@@ -459,7 +460,7 @@ export const listDataLakes = async (
     // failed narrowing costs the caller their dynamic lakes rather than handing them back unnarrowed.
     const supersededOwnLakeIds = await supersededOwnLakeIdsFor(ctx, db.dataLakes, db.dataLakeAccessGrants);
     dynamicLakes = await db.dataLakes.findAccessible(ctx, {
-      statuses: ['draft', 'active'],
+      statuses: [...LAKE_ATTACHABLE_STATUSES],
       grantedLakeIds,
       orgGrantedLakes,
       supersededOwnLakeIds,
@@ -533,7 +534,7 @@ export const listAllDataLakes = async (
 ): Promise<ManageableDataLakeConfig[]> => {
   let dynamicLakes: IDataLakeDocument[] = [];
   try {
-    dynamicLakes = await db.dataLakes.find({ status: { $in: ['draft', 'active'] } });
+    dynamicLakes = await db.dataLakes.find({ status: { $in: [...LAKE_ATTACHABLE_STATUSES] } });
   } catch {
     // Fall through to hardcoded
   }
