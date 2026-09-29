@@ -43,7 +43,7 @@ self-hosted deployment.
 Bike4Mind ships its own MCP server over stdio or loopback HTTP:
 
 ```
-npx @bike4mind/cli mcp serve
+npx -y @bike4mind/cli@latest mcp serve
 ```
 
 It exposes the Bike4Mind tools plus the resources `b4m://notebook/{id}`,
