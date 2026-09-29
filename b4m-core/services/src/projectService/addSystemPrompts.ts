@@ -88,7 +88,9 @@ export const addSystemPrompts = async (
 
     try {
       // Write only the fields this cleanup path touches, not the whole stale project: the success
-      // path above may have already advanced the doc, and a whole-doc write would clobber it.
+      // path above may have already advanced the doc, and a whole-doc write would clobber it. Gated
+      // like every write here: a caller revoked meanwhile leaves the prompts for a current member to
+      // remove rather than writing as someone who no longer can.
       await db.projects.updateWithUpdateAccess(user, { id: project.id, systemPrompts: project.systemPrompts });
     } catch (cleanupError) {
       Logger.globalInstance.error('Failed to cleanup after error:', cleanupError);

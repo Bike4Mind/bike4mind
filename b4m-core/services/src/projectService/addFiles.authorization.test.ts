@@ -79,7 +79,11 @@ describe('addFiles grant cap', () => {
   const ADDER = 'user-adder';
   const MEMBER = 'user-member';
 
-  const run = async (adderId: string, file: { id: string; userId: string; users: never[] | object[] }) => {
+  const run = async (
+    adderId: string,
+    file: { id: string; userId: string; users: never[] | object[]; groups?: object[] },
+    adderGroups: string[] = []
+  ) => {
     const project = {
       id: 'project-1',
       userId: OWNER,
@@ -101,7 +105,7 @@ describe('addFiles grant cap', () => {
       },
     };
     await addFiles(
-      { id: adderId, groups: [] } as unknown as IUserDocument,
+      { id: adderId, groups: adderGroups } as unknown as IUserDocument,
       {
         projectId: 'project-1',
         fileIds: [file.id],
@@ -131,5 +135,18 @@ describe('addFiles grant cap', () => {
 
     expect(grantsFor(MEMBER)).toEqual([Permission.read, Permission.update]);
     expect(grantsFor(OWNER)).toEqual([Permission.read, Permission.update]);
+  });
+
+  it('counts an update grant the adder holds through a group', async () => {
+    const file = {
+      id: 'file-1',
+      userId: 'someone-else',
+      users: [],
+      groups: [{ groupId: 'group-1', permissions: [Permission.read, Permission.update] }],
+    };
+
+    const grantsFor = await run(ADDER, file, ['group-1']);
+
+    expect(grantsFor(MEMBER)).toEqual([Permission.read, Permission.update]);
   });
 });

@@ -62,4 +62,48 @@ describe('addSystemPrompts authorization', () => {
     expect(project.systemPrompts).toEqual([{ fileId: 'file-1', enabled: true }]);
     expect(projectUpdate).toHaveBeenCalled();
   });
+
+  it('answers 404 and pushes no grant when the gated project write matches nothing', async () => {
+    // A revoke or delete landing between the update-access read and the write.
+    const { adapters, projectUpdate, fabFileUpdate } = setup([Permission.read, Permission.update]);
+    projectUpdate.mockResolvedValue(null);
+
+    await expect(
+      addSystemPrompts(
+        { id: SHAREE } as IUserDocument,
+        { projectId: 'project-1', fileIds: ['file-1'] },
+        adapters as any
+      )
+    ).rejects.toThrow(NotFoundError);
+
+    expect(fabFileUpdate).not.toHaveBeenCalled();
+  });
+
+  it('lets a read-only adder pass on only read on the prompt file', async () => {
+    const MEMBER = 'user-member';
+    const { adapters, project } = setup([Permission.read, Permission.update]);
+    project.users.push({ userId: MEMBER, permissions: [Permission.read, Permission.update] });
+    const file = {
+      id: 'file-2',
+      userId: 'someone-else',
+      users: [{ userId: SHAREE, permissions: [Permission.read] }] as {
+        userId: string;
+        permissions: Permission[];
+        projectId?: string;
+      }[],
+      groups: [],
+    };
+    adapters.db.fabFiles.shareable = createShareableFake([file as never]);
+
+    await addSystemPrompts(
+      { id: SHAREE, groups: [] } as unknown as IUserDocument,
+      { projectId: 'project-1', fileIds: ['file-2'] },
+      adapters as any
+    );
+
+    const grantsFor = (userId: string) =>
+      file.users.find(u => u.userId === userId && u.projectId === 'project-1')?.permissions;
+    expect(grantsFor(MEMBER)).toEqual([Permission.read]);
+    expect(grantsFor(OWNER)).toEqual([Permission.read]);
+  });
 });
