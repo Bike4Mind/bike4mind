@@ -344,6 +344,12 @@ export function Composer({
             // between text and buttons is the textarea's own paddingInlineEnd.
             endDecorator: { sx: { marginBlockStart: 0, marginInlineStart: 0 } },
             textarea: {
+              // Joy stretches the textarea to the flex line, and Send's 28px min-height makes
+              // that line taller than one line of text - so the text rendered at the top of the
+              // band and every spare pixel fell underneath it (6px above, 13px below). Centring
+              // splits them. Only bites while the box is one row; once the text is the tallest
+              // item it drives the height itself and this does nothing.
+              sx: { alignSelf: 'center' },
               'data-testid': 'chat-composer-input',
               onPaste,
               // Held so selecting a skill can put focus back where the arguments get typed.
