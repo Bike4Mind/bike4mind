@@ -48,7 +48,8 @@ export type { GearKey, GearKind };
  * reconciles against wrong numbers).
  */
 export const GEAR_CREDITS_SCALE = (() => {
-  const raw = Number(process.env.GEAR_CREDITS_SCALE ?? 1);
+  const env = process.env.GEAR_CREDITS_SCALE?.trim();
+  const raw = env ? Number(env) : 1;
   // A malformed value (e.g. '2x') is NaN, and Math.round(NaN) silently zeroes
   // EVERY reward (`credits > 0` becomes false). Fall back to 1 (unscaled).
   return Number.isFinite(raw) && raw >= 0 ? raw : 1;

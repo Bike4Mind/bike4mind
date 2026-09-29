@@ -64,6 +64,8 @@ export function useClaimGear() {
         ['gears', 'status'],
         prev => prev && { ...prev, gears: prev.gears.map(g => (g.key === key ? { ...g, claimable: false } : g)) }
       );
+    },
+    onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ['gears', 'status'] });
     },
   });

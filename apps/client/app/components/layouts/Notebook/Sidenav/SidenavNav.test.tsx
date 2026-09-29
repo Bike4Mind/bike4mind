@@ -37,10 +37,6 @@ vi.mock('@client/app/components/Files/Browser', () => ({
   useFileBrowser: () => ({ open: false, setOpen: vi.fn() }),
 }));
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
-vi.mock('@client/app/hooks/useHelpPanel', () => ({
-  useHelpPanel: () => false,
-  openHelpPanel: vi.fn(),
-}));
 vi.mock('@client/app/premium-generated/premiumRoutes.generated', () => ({ premiumRoutes: [] }));
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => vi.fn(),
