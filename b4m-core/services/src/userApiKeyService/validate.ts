@@ -25,6 +25,7 @@ export interface ValidationResult {
     requestsPerMinute: number;
     requestsPerDay: number;
   };
+  expiresAt?: Date;
   productId?: string;
   /** Billing target of the key. Organization -> usage bills `organizationId`'s pool. */
   billingOwnerType?: ApiKeyBillingOwnerType;
@@ -71,6 +72,7 @@ function finalizeApiKeyValidation(apiKey: IUserApiKeyDocument, db: ValidateUserA
     keyId: apiKey.id,
     scopes: apiKey.scopes,
     rateLimit: apiKey.rateLimit,
+    expiresAt: apiKey.expiresAt,
     productId: apiKey.productId,
     billingOwnerType: apiKey.billingOwnerType,
     organizationId: apiKey.organizationId,

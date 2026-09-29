@@ -217,6 +217,7 @@ const handler = baseApi()
           agents: agentRepository,
         },
         callerScopes: req.apiKeyInfo ? (req.apiKeyInfo.scopes ?? []) : undefined,
+        callerExpiresAt: req.apiKeyInfo?.expiresAt,
       }
     );
 

@@ -89,6 +89,8 @@ interface CreateUserApiKeyAdapters {
    * (see rotate.ts): a key may only mint scopes it literally holds.
    */
   callerScopes?: ApiKeyScope[];
+  /** Expiry of the calling API key, when it has one. A key may not mint a child that outlives it. */
+  callerExpiresAt?: Date;
 }
 
 export interface CreateUserApiKeyResult {
@@ -151,6 +153,13 @@ export const createUserApiKey = async (
     if (escalating.length > 0) {
       throw new ForbiddenError('Cannot create a key with scopes the calling key does not have');
     }
+  }
+
+  // Same containment rule, applied to time: a key may not mint a child that
+  // outlives it. A caller key with no expiry sets no bound (and a JWT caller,
+  // which has no callerExpiresAt at all, is unaffected).
+  if (adapters.callerExpiresAt && (!params.expiresAt || params.expiresAt > adapters.callerExpiresAt)) {
+    throw new ForbiddenError('Cannot create a key that outlives the calling key');
   }
 
   // OVERWATCH_INGEST_WRITE requires a productId

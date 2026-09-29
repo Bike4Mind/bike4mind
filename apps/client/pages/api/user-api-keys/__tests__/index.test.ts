@@ -532,4 +532,17 @@ describe('POST /api/user-api-keys - caller key scopes forwarded for containment'
       expect.objectContaining({ callerScopes: [] })
     );
   });
+
+  it("forwards the authenticating key's expiresAt as callerExpiresAt", async () => {
+    const expiresAt = new Date('2027-01-01');
+    const { req, res } = post({ name: 'k', scopes: ['files:write'] });
+    (req as any).apiKeyInfo = { scopes: ['ai:generate'], expiresAt };
+    await mockRefs.postHandler!(req, res);
+
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ callerExpiresAt: expiresAt })
+    );
+  });
 });

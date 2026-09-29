@@ -215,4 +215,34 @@ describe('userApiKeyService - createUserApiKey no escalation by minting', () => 
     );
     expect(repo.create).toHaveBeenCalled();
   });
+
+  it('refuses a non-expiring child key when the caller key expires', async () => {
+    await expect(
+      createUserApiKey('user1', baseParams, {
+        db: { userApiKeys: repo },
+        callerExpiresAt: new Date('2027-01-01'),
+      })
+    ).rejects.toThrow(/outlives the calling key/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a child key whose expiry is later than the caller key', async () => {
+    await expect(
+      createUserApiKey(
+        'user1',
+        { ...baseParams, expiresAt: new Date('2027-06-01') },
+        { db: { userApiKeys: repo }, callerExpiresAt: new Date('2027-01-01') }
+      )
+    ).rejects.toThrow(/outlives the calling key/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('allows a child key whose expiry is on or before the caller key', async () => {
+    await createUserApiKey(
+      'user1',
+      { ...baseParams, expiresAt: new Date('2027-01-01') },
+      { db: { userApiKeys: repo }, callerExpiresAt: new Date('2027-01-01') }
+    );
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ expiresAt: new Date('2027-01-01') }));
+  });
 });
