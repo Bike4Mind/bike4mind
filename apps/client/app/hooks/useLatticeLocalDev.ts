@@ -22,7 +22,7 @@ import type {
   PrimitiveValue,
 } from '@bike4mind/common';
 import { isForbiddenObjectKey } from '@bike4mind/utils/safeObjectKey';
-import { splitEquals } from '@client/app/utils/splitEquals';
+import { splitEquals } from '@bike4mind/common';
 
 // TYPES
 
