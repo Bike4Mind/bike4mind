@@ -2722,12 +2722,13 @@
             "description": "Adds the new session to this project."
           },
           "dataLakeId": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Seeds retrieval defaults from this data lake."
           },
           "preauthorizedLakeIds": {
-            "type": "array",
-            "items": {},
             "description": "Data lakes the caller manages, armed for this session. At most 10; requires management rights."
           },
           "knowledgeIds": {

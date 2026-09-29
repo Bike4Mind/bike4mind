@@ -54,16 +54,16 @@ const handler = nextRouteForContract(createSessionContract).post(async (req, res
   // session, if they manage it. Authorize here - never let it ride through createSession's own
   // input, so no other caller of that service (fork/snip/clone, the Slack handlers, ...) can ever
   // pass it through by construction. Written onto the session as a separate call AFTER creation.
-  const requestedPreauthorizedLakeIds = body.preauthorizedLakeIds
+  const requestedPreauthorizedLakeIds = Array.isArray(body.preauthorizedLakeIds)
     ? Array.from(new Set(body.preauthorizedLakeIds.filter((id): id is string => typeof id === 'string')))
     : undefined;
   delete body.preauthorizedLakeIds;
 
   // Bound the authorization loop below: it is SEQUENTIAL and costs two indexed reads per id
   // (findById + the grant read), so an unbounded list turns one request into thousands of
-  // round-trips. Capped here rather than in the zod request schema, which keeps the array loose
-  // (a typed array would newly reject mixed arrays this route filters). The real admission is one lake ("test this lake"); the headroom is for a
-  // maintainer arming a handful at once.
+  // round-trips. Capped here rather than in the zod request schema, which keeps the field loose.
+  // The real admission is one lake ("test this lake"); the headroom is for a maintainer arming a
+  // handful at once.
   if (requestedPreauthorizedLakeIds && requestedPreauthorizedLakeIds.length > MAX_PREAUTHORIZED_LAKES) {
     throw new BadRequestError(`At most ${MAX_PREAUTHORIZED_LAKES} pre-authorized data lakes per session`);
   }

@@ -131,11 +131,11 @@ export type SessionResponse = z.infer<typeof SessionResponseSchema>;
 export const CreateSessionRequestSchema = z.object({
   name: z.string(),
   projectId: z.string().optional().describe('Adds the new session to this project.'),
-  dataLakeId: z.string().optional().describe('Seeds retrieval defaults from this data lake.'),
-  // Loose on purpose: the route filters non-string entries itself, and a typed array would newly
-  // reject mixed arrays it accepts today.
+  dataLakeId: z.string().nullish().describe('Seeds retrieval defaults from this data lake.'),
+  // Loose on purpose: the route ignores a non-array and filters non-string entries itself, so a
+  // typed array would newly reject bodies it accepts today.
   preauthorizedLakeIds: z
-    .array(z.unknown())
+    .unknown()
     .optional()
     .describe('Data lakes the caller manages, armed for this session. At most 10; requires management rights.'),
   knowledgeIds: z.array(z.string()).optional(),

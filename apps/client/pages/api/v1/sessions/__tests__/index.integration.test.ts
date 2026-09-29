@@ -136,6 +136,17 @@ describe('POST /api/v1/sessions (integration - contract validation and scope enf
     expect(mockCreateSession.mock.calls[0][1]).not.toHaveProperty('notAField');
   });
 
+  it.each([
+    ['a null dataLakeId', { dataLakeId: null }],
+    ['a non-array preauthorizedLakeIds', { preauthorizedLakeIds: 'lake-1' }],
+  ])('accepts %s, as the pre-contract route did', async (_label, extra) => {
+    validateWithScopes([ApiKeyScope.WRITE_NOTEBOOKS]);
+    const { req, res } = fire({ name: 'N', ...extra });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockCreateSession.mock.calls[0][1]).not.toHaveProperty('preauthorizedLakeIds');
+  });
+
   it('answers 422 on a wrong type', async () => {
     validateWithScopes([ApiKeyScope.WRITE_NOTEBOOKS]);
     const { req, res } = fire({ name: 'N', knowledgeIds: 'not-an-array' });

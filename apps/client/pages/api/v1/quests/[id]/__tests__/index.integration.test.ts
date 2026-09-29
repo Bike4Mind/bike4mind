@@ -244,9 +244,9 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getJSONData()).toMatchObject({ type: 'error', errorCode: 'insufficient_credits' });
     });
 
-    // ChatQuestPollResultSchema (b4m-core/common/src/schemas/chat.ts) is hand-maintained
-    // against this handler's res.json shape rather than imported by it - nothing else
-    // catches the two drifting apart, so parse the real response through it here.
+    // QuestPollResponseSchema (b4m-core/common/src/schemas/quest.ts) is hand-maintained against
+    // this handler's res.json shape, and the route only warns on drift outside production, so
+    // parse the real response through it here.
     it('parses against the published QuestPollResponseSchema', async () => {
       mockQuestFindById.mockResolvedValue({
         id: 'quest-1',
