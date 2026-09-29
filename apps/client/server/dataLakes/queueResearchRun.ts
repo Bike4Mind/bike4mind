@@ -16,6 +16,7 @@ import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
  * (`running`), not this call. `settleQueuedRun` matches ONLY `queued`, so that race is a no-op here
  * instead of clobbering the executor's outcome. When it does settle, the failure also needs its own
  * `complete-research-run` History row - `runLakeResearch.ts` never gets a message to record one.
+ * A `settleQueuedRun` that itself rejects is treated as ownership unknown, so no outcome is recorded.
  */
 export async function queueResearchRun(
   run: IDataLakeResearchRunDocument,
@@ -26,7 +27,9 @@ export async function queueResearchRun(
   try {
     await sendToQueue(queueUrl, { runId: run.id, dataLakeId: run.dataLakeId });
   } catch (error) {
-    let alreadySettledElsewhere = false;
+    // Only a confirmed settle lets this call record the outcome: a settle that rejected leaves
+    // ownership unknown (the write may or may not have landed, the executor may hold the row).
+    let settledHere = false;
     await dataLakeResearchRunRepository
       .settleQueuedRun(run.id, {
         status: 'failed',
@@ -36,10 +39,10 @@ export async function queueResearchRun(
         error: 'The run could not be queued for execution. Try again shortly.',
       })
       .then(settled => {
-        alreadySettledElsewhere = !settled;
+        settledHere = settled;
       })
       .catch(err => logger.warn(`[queueResearchRun] settle failed: ${err}`));
-    if (!alreadySettledElsewhere) {
+    if (settledHere) {
       await dataLakeResearchService
         .recordResearchRunOutcome(lake, run.levers.query, 'failed', run.id, {
           db: { ...lakeConfigAuditDb },
