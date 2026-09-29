@@ -65,7 +65,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     lakeScopeExplicit: { type: Boolean, required: false },
     // default: undefined (not []) - keeps "field present" a meaningful marker of manage-but-not-
     // member admission, distinct from an ordinary session that never went through it. Written ONLY
-    // by pages/api/sessions/create.ts, as a separate authorized write AFTER its own canManageLake
+    // by pages/api/v1/sessions/index.ts, as a separate authorized write AFTER its own canManageLake
     // check - never part of session creation's own input, so fork/clone/snip cannot copy it.
     preauthorizedLakeIds: { type: [String], default: undefined },
     // Resolved from the lake at create time (resolveLakeSessionDefaults). DELIBERATELY no default -

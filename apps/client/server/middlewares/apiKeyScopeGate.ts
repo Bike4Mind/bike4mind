@@ -12,8 +12,8 @@ import { ApiKeyScope, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
  * docs/architecture/api-key-scope-rollout.md.
  *
  * Scoped deliberately to the `baseApi`/`apiKeyAuth` gate. The other scope check -
- * `verifyApiKey` (server/cli/auth.ts), which backs public contract routes, the
- * cc-bridge, and embed keys - has no staging path and needs none: every gate it
+ * `verifyApiKey` (server/cli/auth.ts), which backs the cc-bridge and embed
+ * keys - has no staging path and needs none: every gate it
  * runs is either bound to a credential minted with that exact scope or belongs to
  * an endpoint that shipped with its scope from day one, so there is no
  * grandfathered population there to protect. Adding a second fail-open path would

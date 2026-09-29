@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { ChatQuestPollResultSchema } from './chat';
-import { PromptMetaZodSchema } from './promptMeta';
 
 export const QuestIdParamSchema = z.object({
   id: z.string().min(1).describe('The quest id returned by POST /api/chat or another async start.'),
@@ -27,7 +26,8 @@ export const QuestPollResponseSchema = ChatQuestPollResultSchema.extend({
   toolPayloads: z.array(z.unknown()),
   createdAt: z.coerce.date().optional(),
   updatedAt: z.coerce.date().optional(),
-  promptMeta: PromptMetaZodSchema.optional(),
+  // Loose: PromptMetaZodSchema unions in a z.map, which OpenAPI cannot represent. Redacted for sharees.
+  promptMeta: z.record(z.string(), z.unknown()).optional(),
   attachmentNotices: z.array(z.string()).optional(),
   // Loose: mirrors IAttachmentDelivery (requested, delivered, fullyDelivered, dropped, droppedIds).
   attachmentDelivery: z.record(z.string(), z.unknown()).optional(),

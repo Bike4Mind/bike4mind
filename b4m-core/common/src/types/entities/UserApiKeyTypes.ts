@@ -252,7 +252,7 @@ export interface IUserApiKey {
   /**
    * Lake ids this key is bound to for the manage-but-not-member session admission (see
    * `preauthorizedLakeIds` on the session, and its containment check at
-   * pages/api/sessions/create.ts). Admin-minted only; a key's presence in this list is not itself
+   * pages/api/v1/sessions/index.ts). Admin-minted only; a key's presence in this list is not itself
    * authority to admit a lake - the caller must still pass the live canManageLake check on every
    * request, this only narrows which lakes that authority may be exercised for.
    */

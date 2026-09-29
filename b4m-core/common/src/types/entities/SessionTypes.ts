@@ -647,7 +647,7 @@ export interface ISession {
   lakeScopeExplicit?: boolean;
   /**
    * Lake ids a manager was admitted to for THIS session even though they are not a member of the
-   * lake (manage-but-not-member admission) - set ONLY by pages/api/sessions/create.ts, AFTER its
+   * lake (manage-but-not-member admission) - set ONLY by pages/api/v1/sessions/index.ts, AFTER its
    * own canManageLake check, as a write separate from session creation. Never part of
    * createSession's input type (fork/clone/snip cannot copy it - a type error, not a runtime
    * check) and never part of SessionUpdateRequestSchema (no session can grant itself this after

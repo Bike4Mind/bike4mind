@@ -330,7 +330,7 @@ async function getSessionId(requestedSessionId: string | undefined, userId: stri
     return mostRecentSession.id;
   }
 
-  throw new NotFoundError('No notebook found. Please create a notebook first using POST /api/sessions/create');
+  throw new NotFoundError('No notebook found. Please create a notebook first using POST /api/v1/sessions');
 }
 
 function transformToInternalFormat(
