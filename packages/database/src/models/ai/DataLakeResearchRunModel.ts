@@ -187,9 +187,12 @@ class DataLakeResearchRunRepository
     id: string,
     spentMicroUsd: number,
     totals: ResearchRunTotals,
-    judgeModel: string
+    judgeModel?: string
   ): Promise<void> {
-    await this.runModel.updateOne({ _id: id }, { $set: { spentMicroUsd, totals, judgeModel } });
+    await this.runModel.updateOne(
+      { _id: id },
+      { $set: { spentMicroUsd, totals, ...(judgeModel ? { judgeModel } : {}) } }
+    );
   }
 
   async countStartedSince(dataLakeId: string, since: Date): Promise<number> {

@@ -293,6 +293,17 @@ describe('DataLakeResearchRunRepository', () => {
     expect(mid?.totals.proposed).toBe(1);
   });
 
+  it('leaves the judge model alone when a progress write omits it', async () => {
+    const created = await repo.createRun(input());
+    await repo.claimForExecution(created.id, new Date());
+    await repo.recordProgress(created.id, 100, emptyResearchRunTotals(), 'gpt-4.1-mini');
+
+    await repo.recordProgress(created.id, 200, emptyResearchRunTotals());
+
+    const mid = await repo.findByIdInLake(created.id, LAKE);
+    expect(mid).toMatchObject({ spentMicroUsd: 200, judgeModel: 'gpt-4.1-mini' });
+  });
+
   describe('the guards a start checks', () => {
     it('counts queued and running as active, and nothing else', async () => {
       const queued = await repo.createRun(input());
