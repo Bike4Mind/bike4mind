@@ -199,6 +199,78 @@ describe('createRecursiveArtifactGuard: one shared buffer/flush pipe for a whole
     expect(received[0].text).toEqual(['Hello.']);
   });
 
+  it('a concurrent second flush() does not resolve until the single underlying cb() call finishes', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const cb = vi.fn(async () => {
+      await gate;
+    });
+    const guard = createRecursiveArtifactGuard(cb);
+
+    const settled = [false, false];
+    const first = guard.flush().then(() => {
+      settled[0] = true;
+    });
+    const second = guard.flush().then(() => {
+      settled[1] = true;
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(settled).toEqual([false, false]);
+    expect(cb).toHaveBeenCalledTimes(1);
+
+    release();
+    await Promise.all([first, second]);
+
+    expect(settled).toEqual([true, true]);
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('concurrent flush() callers share the rejection of the single cb() call', async () => {
+    const error = new Error('delivery failed');
+    const cb = vi.fn(async () => {
+      throw error;
+    });
+    const guard = createRecursiveArtifactGuard(cb);
+
+    const results = await Promise.allSettled([guard.flush(), guard.flush()]);
+
+    expect(results).toEqual([
+      { status: 'rejected', reason: error },
+      { status: 'rejected', reason: error },
+    ]);
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('a flush() after cb() has rejected re-throws the same error without retrying cb()', async () => {
+    const error = new Error('delivery failed');
+    const cb = vi.fn(async () => {
+      throw error;
+    });
+    const guard = createRecursiveArtifactGuard(cb);
+
+    await expect(guard.flush()).rejects.toBe(error);
+    await expect(guard.flush()).rejects.toBe(error);
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('a flush() re-entered synchronously from inside cb() does not call cb() again', async () => {
+    let inner: Promise<void> | undefined;
+    const cb = vi.fn((): Promise<void> => {
+      inner = guard.flush();
+      return Promise.resolve();
+    });
+    const guard = createRecursiveArtifactGuard(cb);
+
+    const outer = guard.flush();
+    await outer;
+
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(inner).toBe(outer);
+  });
+
   it('a later echo of a chained artifact is also stripped on the final flush', async () => {
     const received: Array<{ text: (string | null | undefined)[]; info: unknown }> = [];
     const cb = async (text: (string | null | undefined)[], info: unknown) => {
