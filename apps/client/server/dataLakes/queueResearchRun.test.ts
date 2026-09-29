@@ -90,7 +90,9 @@ describe('queueResearchRun', () => {
     );
   });
 
-  it('still records the outcome when settleQueuedRun itself fails, not just when it returns false', async () => {
+  // A rejected settle leaves ownership unknown: the write may have landed, or the executor may hold
+  // the row. Recording a failed outcome on that guess could contradict the run's real one.
+  it('skips the outcome record when settleQueuedRun itself rejects, since ownership is unknown', async () => {
     h.sendToQueue.mockRejectedValue(new Error('sqs is down'));
     h.settleQueuedRun.mockRejectedValue(new Error('replica set stepped down'));
 
@@ -98,12 +100,7 @@ describe('queueResearchRun', () => {
       'sqs is down'
     );
 
-    expect(h.recordResearchRunOutcome).toHaveBeenCalledWith(
-      LAKE,
-      'coastal erosion',
-      'failed',
-      'run-1',
-      expect.anything()
-    );
+    expect(h.recordResearchRunOutcome).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('settle failed'));
   });
 });
