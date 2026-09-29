@@ -126,11 +126,24 @@ export interface IOrgGoogleDriveConnection {
   lastFullWalkAt?: Date;
 
   /**
-   * Set when a disconnect was accepted and its file purge queued (driveDisconnectPurge consumer).
-   * While set the connection stays disabled and cannot be re-enabled or re-credentialed; the row is
-   * hard-deleted once the purge finishes.
+   * Set when a disconnect was accepted and its file purge queued (driveDisconnectPurge consumer),
+   * and refreshed by every purge run, so its age is how long the purge has gone without progress
+   * (see DRIVE_DISCONNECT_STALL_MS). While set the connection stays disabled and cannot be
+   * re-enabled or re-credentialed; the row is hard-deleted once the purge finishes.
    */
   disconnectRequestedAt?: Date;
+}
+
+/**
+ * How long a pending disconnect may go without a purge run before it counts as stalled and a retry
+ * may enqueue a fresh purge. Above the purge queue's 12-minute visibility timeout (infra/queues.ts),
+ * so a retry never races a delivery SQS is still going to redeliver.
+ */
+export const DRIVE_DISCONNECT_STALL_MS = 15 * 60 * 1000;
+
+/** Whether a pending disconnect has gone DRIVE_DISCONNECT_STALL_MS without a purge run. */
+export function isDriveDisconnectStalled(disconnectRequestedAt: Date, now: Date = new Date()): boolean {
+  return now.getTime() - new Date(disconnectRequestedAt).getTime() >= DRIVE_DISCONNECT_STALL_MS;
 }
 
 export interface IOrgGoogleDriveConnectionDocument extends IOrgGoogleDriveConnection, IMongoDocument {}
@@ -300,20 +313,34 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
 
   /**
    * Route-side half of the disconnect/claimForSync race: atomically disables the connection and
-   * stamps `disconnectRequestedAt` (keeping an earlier stamp) only if it is not currently 'syncing',
-   * instead of a snapshot-read-then-unconditional-disable that a concurrent claimForSync could land
-   * inside of. Returns whether it took effect; false means a sync is in flight and the caller should
-   * refuse the disconnect (409) rather than proceed. The purge consumer re-runs it before each slice.
+   * (re)stamps `disconnectRequestedAt` to now only if it is not currently 'syncing', instead of a
+   * snapshot-read-then-unconditional-disable that a concurrent claimForSync could land inside of.
+   * Null means a sync is in flight and the caller should refuse the disconnect (409) rather than
+   * proceed. Otherwise returns the stamp written, whether this call created it (no disconnect was
+   * pending before) - only a creator may roll it back via cancelDisconnect - and the `enabled`
+   * value the row had just before. The purge consumer
+   * re-runs it before each slice, which is what keeps the stamp fresh while the purge progresses.
    * organizationId is REQUIRED, matching `updateCredential`/`release`, so this cannot disable a
    * connection outside the caller's own org even if a route ever forgot its own gate.
    */
-  markDisconnecting(id: string, organizationId: string): Promise<boolean>;
+  markDisconnecting(
+    id: string,
+    organizationId: string
+  ): Promise<{ stamp: Date; created: boolean; previousEnabled: boolean } | null>;
 
   /**
-   * Undo markDisconnecting when the purge could not be enqueued: clears `disconnectRequestedAt` and
-   * restores `enabled` to what it was before the disconnect was attempted.
+   * Undo markDisconnecting when the purge could not be enqueued: compare-and-set on the exact
+   * `stamp` that call wrote, so a concurrent DELETE or purge run that re-stamped the row since is
+   * left alone. On a match clears the stamp and restores `enabled`; returns whether it matched.
    */
-  cancelDisconnect(id: string, organizationId: string, enabled: boolean): Promise<void>;
+  cancelDisconnect(id: string, organizationId: string, stamp: Date, enabled: boolean): Promise<boolean>;
+
+  /**
+   * Re-enable a connection (lake unarchive/restore) unless a disconnect is pending, in one atomic
+   * update so a disconnect marked between a read and this write cannot be undone. Returns whether
+   * it matched.
+   */
+  enableUnlessDisconnecting(id: string): Promise<boolean>;
 
   /**
    * Continuation-only claim take-over: refreshes `syncClaimedAt` iff the connection is still 'syncing'

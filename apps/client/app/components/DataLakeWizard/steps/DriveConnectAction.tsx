@@ -104,7 +104,9 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
         )}
         {connection.disconnecting && (
           <Typography level="body-xs" data-testid="drive-disconnecting-note" sx={{ flexBasis: '100%' }}>
-            Removing {connection.fileCount} remaining file{connection.fileCount === 1 ? '' : 's'} in the background.
+            {connection.fileCount === 0
+              ? 'Finishing disconnect...'
+              : `Removing ${connection.fileCount} remaining file${connection.fileCount === 1 ? '' : 's'} in the background.`}
           </Typography>
         )}
         {confirmingDisconnect ? (
@@ -158,9 +160,16 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
             variant="plain"
             color="danger"
             startDecorator={<LinkOffIcon />}
+            // The route declines to re-queue a purge that is still progressing, so only offer a retry
+            // once it looks stalled.
+            disabled={connection.disconnecting && !connection.disconnectStalled}
             onClick={() => setConfirmingDisconnect(true)}
           >
-            {connection.disconnecting ? 'Retry disconnect' : 'Disconnect'}
+            {!connection.disconnecting
+              ? 'Disconnect'
+              : connection.disconnectStalled
+                ? 'Retry disconnect'
+                : 'Disconnecting'}
           </Button>
         )}
         {connection.lastError && (
