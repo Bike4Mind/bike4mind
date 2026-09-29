@@ -8,6 +8,7 @@ import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
 import type { ChatQueuedMessage } from '@shared/chat';
 import { AttachmentRow } from './Attachments';
+import { composerKeyAction, composerPlaceholder, shownSuggestion } from './composerInput';
 import { contentColumnSx } from './layout';
 import { QueuedMessageList } from './QueuedMessageList';
 import { mergeIntoDraft } from './queuedMessages';
@@ -89,14 +90,8 @@ export function Composer({
   const hasContent = text.trim().length > 0 || attachments.attachments.length > 0;
   const blocked = !!blockedReason || !!notReady;
 
-  /**
-   * Whether the hint is on screen. Keyed on the RAW text, not on `hasContent`: a draft of
-   * nothing but spaces is still something the user typed, and drawing a hint under it would
-   * read as the app having eaten it. `disabled` outranks it outright - "Pick a conversation to
-   * start typing" is the answer to a question the user is about to ask, and a hint about a
-   * conversation they cannot type in is not.
-   */
-  const shownSuggestion = suggestion && text.length === 0 && !disabled ? suggestion : null;
+  // See composerInput.ts for what wins here and why.
+  const shown = shownSuggestion({ disabled, text, suggestion });
   // `streaming` is NOT here: a send during a live turn is queued, not dropped. It used to be
   // the first condition, which is why pressing Enter mid-reply did nothing at all.
   const canSubmit = hasContent && !disabled && !attachments.busy && !blocked;
@@ -119,25 +114,22 @@ export function Composer({
     onReturnedConsumed?.();
   }, [returned, onReturnedConsumed]);
 
-  // Enter sends, Shift+Enter breaks the line - the convention every chat client here shares.
-  //
-  // Tab takes the hint, which is the convention for ghost text, and is a SEPARATE key from the
-  // one that sends on purpose: accepting fills the input and returns, so the user reads and
-  // edits what the model wrote before any of it goes anywhere. Enter is left alone entirely -
-  // on an empty box with a hint showing it still means "send what is in the box", which is
-  // nothing, so it does nothing.
+  // Enter sends, Shift+Enter breaks the line, Tab takes the hint. Which is which lives in
+  // composerInput.ts, where the rule that accepting is not sending is stated and tested.
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Tab' && shownSuggestion) {
-      // Only claimed while the hint is up. Tab is otherwise how the keyboard leaves the input,
-      // and a composer that traps it would be the app's worst accessibility bug.
-      event.preventDefault();
-      setText(shownSuggestion);
-      onSuggestionDismissed?.();
+    const action = composerKeyAction(event.key, event.shiftKey, !!shown);
+    if (action === 'default') return;
+    event.preventDefault();
+    if (action === 'submit') {
+      submit();
       return;
     }
-    if (event.key !== 'Enter' || event.shiftKey) return;
-    event.preventDefault();
-    submit();
+    // Fills the draft and stops. The user still has to press Enter, on text they can now read
+    // and edit - which is the whole reason this is a different key from the one that sends.
+    if (shown) {
+      setText(shown);
+      onSuggestionDismissed?.();
+    }
   };
 
   /**
@@ -216,7 +208,7 @@ export function Composer({
           value={text}
           onChange={event => onTextChange(event.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={disabled ? 'Pick a conversation to start typing' : (shownSuggestion ?? placeholder)}
+          placeholder={composerPlaceholder({ disabled, text, suggestion, placeholder })}
           disabled={disabled}
           minRows={1}
           maxRows={8}
@@ -243,7 +235,7 @@ export function Composer({
               onPaste,
               // So the hint is distinguishable from the ordinary placeholder without reading
               // the text, and so a screen reader is told Tab does something here.
-              ...(shownSuggestion ? { 'data-suggested-prompt': shownSuggestion, 'aria-keyshortcuts': 'Tab' } : {}),
+              ...(shown ? { 'data-suggested-prompt': shown, 'aria-keyshortcuts': 'Tab' } : {}),
             },
           }}
         />
