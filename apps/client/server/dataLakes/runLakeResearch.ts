@@ -308,7 +308,7 @@ export async function runLakeResearch(
         spentMicroUsd = spent;
         totals = running;
         return dataLakeResearchRunRepository
-          .recordProgress(runId, spent, running)
+          .recordProgress(runId, spent, running, model)
           .catch(error => logger.warn('[lakeResearch] progress write failed; run continues', { runId, error }));
       },
       now: () => new Date(),
