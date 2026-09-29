@@ -310,11 +310,18 @@ export function Composer({
           disabled={disabled}
           minRows={1}
           maxRows={8}
+          // Joy lays a Textarea's root out as a COLUMN, which is what put Send on a second line
+          // inside the border. A row puts it on the text's line, and flex-end keeps it against
+          // the last one as the box grows. The buttons stay flex items rather than being lifted
+          // out and positioned over the text, so the width they need is subtracted from the
+          // text's by the layout itself - which is what keeps text off them when Stop appears
+          // mid-reply and the cluster abruptly gets wider.
+          sx={{ flexDirection: 'row', alignItems: 'flex-end' }}
           endDecorator={
             /* Both at once while a reply runs: stopping this turn and queueing the next one are
                different intentions, and swapping one control for the other made the second
                unreachable. Send is labelled for what the click actually does. */
-            <Stack direction="row" spacing={1} sx={{ ml: 'auto' }}>
+            <Stack direction="row" spacing={1}>
               {streaming && (
                 <Button size="sm" variant="soft" color="neutral" onClick={onStop} data-testid="chat-stop-btn">
                   Stop
@@ -328,6 +335,11 @@ export function Composer({
           // onPaste goes on the inner textarea, not Joy's root: the root is a div, and typing
           // the handler for it would lose the element the paste actually happened in.
           slotProps={{
+            // Joy's own decorator margins assume the column: a gap ABOVE, and an inline-start
+            // pulled back by the difference between the two paddings. In a row that gap is the
+            // wrong axis and the negative start would drag the buttons over the text. The gap
+            // between text and buttons is the textarea's own paddingInlineEnd.
+            endDecorator: { sx: { marginBlockStart: 0, marginInlineStart: 0 } },
             textarea: {
               'data-testid': 'chat-composer-input',
               onPaste,
