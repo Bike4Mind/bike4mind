@@ -129,6 +129,12 @@ export interface ChatToolCall {
   media?: ChatMedia[];
   /** A cost or provider outcome worth its own line; see ChatToolNotice. */
   notice?: ChatToolNotice;
+  /**
+   * The collapsed row's text, when the tool knows something its arguments do not say. Today
+   * only session_send, whose only readable argument is a uuid: the row has to name the
+   * conversation, and only the call that resolved the id knows its title.
+   */
+  label?: string;
 }
 
 /**
@@ -266,6 +272,23 @@ export interface ChatArtifactSave {
   reason?: string;
 }
 
+/**
+ * Where a relayed message came from, and how far down an agent-to-agent chain it is.
+ *
+ * `hops` is the whole cycle bound. Messaging makes the session graph cyclic - A can message B
+ * and B can message A - so neither of the spawn caps applies: nothing about that exchange is a
+ * tree, and no parent is left to stop it. Each relay starts a turn one hop deeper than the turn
+ * that sent it, and a turn at the limit cannot send at all, so any chain of relayed messages is
+ * finite by construction. A turn the USER typed is hop 0 again: a person spending their own
+ * attention is not a runaway, which is the same line MAX_CONCURRENT_SPAWNED draws.
+ */
+export interface ChatRelayOrigin {
+  fromSessionId: string;
+  /** The sending conversation's title as it was at send time, for the row that names it. */
+  fromTitle: string;
+  hops: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
@@ -310,6 +333,12 @@ export interface ChatMessage {
    * notice rather than as their words.
    */
   system?: boolean;
+  /**
+   * Set with `system` when the text came from another conversation via session_send, naming
+   * which one. It is what stops a relayed message reading as the user's own words, in the
+   * thread and on the wire alike.
+   */
+  relay?: ChatRelayOrigin;
   /**
    * Artifacts parsed out of this reply. Their markup is NOT in `content`, which holds the prose
    * around them; the wire rebuilds it from here (restoreArtifactMarkup) so the model still sees
@@ -629,6 +658,12 @@ export interface ChatQueuedMessage {
   /** Descriptors whose bytes are already on disk; they are held back from pruning while queued. */
   attachments?: ChatAttachment[];
   queuedAt: string;
+  /**
+   * Set when another conversation sent this rather than the user typing it. A relay never
+   * merges with what the user is typing and never goes back to their composer; see
+   * ChatQueueEvent.returned.
+   */
+  relay?: ChatRelayOrigin;
 }
 
 /**
@@ -672,6 +707,11 @@ export interface ChatQueueEvent {
    * prompt at all. Emitted BEFORE the reply's 'start', so the prompt lands above it.
    */
   sent?: { queuedId: string; message: ChatMessage };
+  /**
+   * Messages the user must take back. RELAYS ARE NEVER HERE: another conversation's words
+   * belong in this one's transcript, not in the user's composer waiting to be re-sent as
+   * though they had written them. Main strands those into the thread instead.
+   */
   returned?: {
     messages: ChatQueuedMessage[];
     reason: ChatQueueReturnReason;
@@ -796,6 +836,15 @@ export type UpdateProjectResult =
  * 'concurrency' clears on its own and waiting is a real option.
  */
 export type SpawnRefusal = 'depth' | 'concurrency' | 'no-project' | 'empty-prompt';
+
+/**
+ * A session_send that did not happen, and which bound or precondition stopped it.
+ *
+ * 'hops' and 'fan-out' are the two halves of the cycle bound - chain length and branching -
+ * and are told apart because only one of them is worth waiting out: a turn that has run out of
+ * hops will never get more, and saying so stops the model retrying.
+ */
+export type RelayRefusal = 'hops' | 'fan-out' | 'no-target' | 'archived' | 'self' | 'empty-message' | 'unavailable';
 
 /**
  * A tool call parked at the approval gate, as the cross-session inbox lists it.

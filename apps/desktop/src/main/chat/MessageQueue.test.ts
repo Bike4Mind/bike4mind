@@ -106,6 +106,54 @@ describe('MessageQueue', () => {
     expect(queue.attachmentIds('a')).toEqual(['att1', 'att2']);
   });
 
+  describe('relayed messages', () => {
+    const from = { fromSessionId: 'sender', fromTitle: 'Sender', hops: 1 };
+
+    it('keeps a relay as its own entry rather than merging it into what the user is typing', () => {
+      queue.enqueue('a', 'my own message');
+      queue.enqueueRelay('a', 'from elsewhere', from);
+      queue.enqueue('a', 'still mine');
+
+      // Three entries, in arrival order, with the user's second message starting a NEW one:
+      // appending it to the relay would have put their words inside another session's message.
+      expect(queue.list('a').map(message => message.text)).toEqual(['my own message', 'from elsewhere', 'still mine']);
+      expect(queue.list('a').map(message => Boolean(message.relay))).toEqual([false, true, false]);
+    });
+
+    it('hands a released relay to the caller and never to the composer', () => {
+      queue.enqueue('a', 'mine');
+      queue.enqueueRelay('a', 'theirs', from);
+      events.length = 0;
+
+      const stranded = queue.releaseAll('a', 'stopped');
+
+      expect(stranded.map(message => message.text)).toEqual(['theirs']);
+      // Only the user's own text is offered back to them.
+      expect(events[0]?.returned?.messages.map(message => message.text)).toEqual(['mine']);
+      expect(queue.list('a')).toEqual([]);
+    });
+
+    it('still announces the empty queue when everything released was a relay', () => {
+      queue.enqueueRelay('a', 'theirs', from);
+      events.length = 0;
+
+      expect(queue.releaseAll('a', 'failed').map(message => message.text)).toEqual(['theirs']);
+      // No `returned` - there is nothing for the composer to take - but the list has changed, and
+      // a renderer that heard nothing would keep drawing a row for a message that is gone.
+      expect(events).toHaveLength(1);
+      expect(events[0]?.queued).toEqual([]);
+      expect(events[0]?.returned).toBeUndefined();
+    });
+
+    it('returns a cancelled relay to the caller too', () => {
+      const relayed = queue.enqueueRelay('a', 'theirs', from);
+      events.length = 0;
+
+      expect(queue.cancel('a', relayed.id)?.relay).toEqual(from);
+      expect(events[0]?.returned).toBeUndefined();
+    });
+  });
+
   it('forgets a deleted conversation silently', () => {
     queue.enqueue('a', 'one');
     events.length = 0;

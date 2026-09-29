@@ -32,6 +32,23 @@ describe('toolRowLabel', () => {
     expect(toolRowLabel(call('1', 'generate_image', { prompt: 'a red bicycle at dusk' }))).toBe('Generated an image');
   });
 
+  // session_send is the case this exists for: its only nameable argument is a uuid, so the row
+  // would name nothing a reader recognises without the tool supplying the target's title.
+  it('prefers a label the tool supplied over anything its arguments could say', () => {
+    const sent = call('1', 'session_send', { session_id: 'b4e1', message: 'move MCP under Customize' });
+    expect(toolRowLabel({ ...sent, label: 'Messaged @T27: move MCP under Customize' })).toBe(
+      'Messaged @T27: move MCP under Customize'
+    );
+  });
+
+  it('does not let a supplied label claim a call that failed or was refused', () => {
+    const sent = call('1', 'session_send', { session_id: 'b4e1', message: 'hello' }, 'denied');
+    expect(toolRowLabel({ ...sent, label: 'Messaged @T27: hello' })).toBe('Did not message a session');
+    expect(toolRowLabel({ ...sent, status: 'error', label: 'Messaged @T27: hello' })).toBe(
+      'Failed to message a session'
+    );
+  });
+
   it('says plainly that it does not know an unregistered tool', () => {
     expect(toolRowLabel(call('1', 'future_tool', { path: 'x.ts' }))).toBe('Ran future_tool x.ts');
   });
