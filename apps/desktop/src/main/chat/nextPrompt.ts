@@ -63,17 +63,27 @@ function tail(text: string, limit: number): string {
 }
 
 /**
- * The whole request: an instruction and the tail of one exchange.
+ * The whole request: an instruction and the tail of one exchange, quoted inside one user turn.
  *
- * Not the transcript, not the agent's system prompt, and no tool schemas. The reply is handed
- * over as an assistant turn rather than pasted into the user turn, so the model reads it as
- * something said rather than as something asked of it.
+ * Not the transcript, not the agent's system prompt, and no tool schemas. Both halves are
+ * labelled text in the user turn rather than replayed under their own roles, because a request
+ * that ENDS on an assistant turn is a prefill: the model continues that turn instead of writing
+ * the user's next message, and answers with a few tokens of nothing. The request has to end on
+ * the user, which is also the shape sessionTitle.ts has always had.
  */
 export function suggestionRequestMessages(prompt: string, reply: string): CompletionMessage[] {
+  const exchange = [
+    'Their message:',
+    tail(prompt, PROMPT_EXCERPT_CHARS),
+    '',
+    'The reply they got:',
+    tail(reply, REPLY_EXCERPT_CHARS),
+    '',
+    'Write their next message.',
+  ].join('\n');
   return [
     { role: 'system', content: SUGGESTION_INSTRUCTION },
-    { role: 'user', content: tail(prompt, PROMPT_EXCERPT_CHARS) },
-    { role: 'assistant', content: tail(reply, REPLY_EXCERPT_CHARS) },
+    { role: 'user', content: exchange },
   ];
 }
 
@@ -110,6 +120,13 @@ const DECORATION = /[`*_#~[\]"'\u2018\u2019\u201c\u201d]/g;
 const LEADING_LIST_MARKER = /^(?:[-*\u2022]|\d+[.)])\s+/;
 
 /**
+ * A horizontal rule the model opened with. Stripped before every other rule, because a run of
+ * dashes survives the decoration pass AND the list-marker pass, and lands in the input box as
+ * "--- show me how to mount a unicycle".
+ */
+const LEADING_RULE = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*/;
+
+/**
  * Turn a model's reply into something safe to offer as a draft, or null to show the ordinary
  * placeholder.
  *
@@ -126,7 +143,8 @@ const LEADING_LIST_MARKER = /^(?:[-*\u2022]|\d+[.)])\s+/;
  */
 export function sanitizeSuggestion(raw: string): string | null {
   const collapsed = raw
-    // Control bytes first: a model that emits one would otherwise survive the whitespace pass.
+    .replace(LEADING_RULE, '')
+    // Control bytes ahead of the whitespace pass, which would otherwise leave them intact.
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
     .replace(DECORATION, '')

@@ -27,21 +27,32 @@ describe('pickSuggestionModel', () => {
 });
 
 describe('suggestionRequestMessages', () => {
-  it('sends the instruction, the prompt and the reply, and nothing else', () => {
+  // The regression guard, and the whole point of the fix. A request that ends on an assistant
+  // turn is a prefill: the model continues that turn instead of writing the user's next
+  // message, and this feature shipped answering with a few tokens of nothing on nearly every
+  // call. Whatever else changes here, the last message stays the user's.
+  it('ends on a user message, never on an assistant prefill', () => {
     const messages = suggestionRequestMessages('should I keep the card?', 'You could keep it for now.');
-    expect(messages).toHaveLength(3);
+    expect(messages[messages.length - 1].role).toBe('user');
+    expect(messages.some(message => message.role === 'assistant')).toBe(false);
+  });
+
+  it('sends the instruction and one turn carrying both halves of the exchange, and nothing else', () => {
+    const messages = suggestionRequestMessages('should I keep the card?', 'You could keep it for now.');
+    expect(messages).toHaveLength(2);
     expect(messages[0].role).toBe('system');
-    expect(messages[1]).toEqual({ role: 'user', content: 'should I keep the card?' });
-    // Handed over as an assistant turn, so the model reads it as something SAID rather than as
-    // something asked of it.
-    expect(messages[2]).toEqual({ role: 'assistant', content: 'You could keep it for now.' });
+    expect(messages[1].role).toBe('user');
+    expect(String(messages[1].content)).toContain('should I keep the card?');
+    expect(String(messages[1].content)).toContain('You could keep it for now.');
   });
 
   // The thing a user answers is whatever the reply ENDED on, so both excerpts are tails.
   it('excerpts a long turn from its end, not its start', () => {
     const messages = suggestionRequestMessages('x'.repeat(50_000), `${'y'.repeat(50_000)}so which one?`);
-    expect(String(messages[2].content).length).toBeLessThan(2000);
-    expect(String(messages[2].content).endsWith('so which one?')).toBe(true);
+    const content = String(messages[1].content);
+    expect(content.length).toBeLessThan(3000);
+    expect(content).toContain('so which one?');
+    expect(content).not.toContain('y'.repeat(2000));
   });
 });
 
@@ -61,6 +72,18 @@ describe('sanitizeSuggestion', () => {
 
   it('drops a bullet the model put in front of its one answer', () => {
     expect(sanitizeSuggestion('- Add a test for the empty case')).toBe('Add a test for the empty case');
+  });
+
+  // A rule is what a model reaches for when it thinks it is continuing a document rather than
+  // writing a line, and three dashes are neither decoration nor a list marker, so nothing else
+  // here catches them.
+  it.each([
+    ['dashes', '\n\n---\n\nAdd a test for the empty case'],
+    ['asterisks', '***\nAdd a test for the empty case'],
+    ['underscores', '___\nAdd a test for the empty case'],
+    ['a rule on the same line as the answer', '--- Add a test for the empty case'],
+  ])('strips a leading horizontal rule written with %s', (_label, reply) => {
+    expect(sanitizeSuggestion(reply)).toBe('Add a test for the empty case');
   });
 
   it('collapses a multi-line reply onto one line', () => {
