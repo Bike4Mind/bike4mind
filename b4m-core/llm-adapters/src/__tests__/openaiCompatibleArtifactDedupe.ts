@@ -92,15 +92,17 @@ async function runToolTurn(
   (backend as unknown as { _api: unknown })._api = { chat: { completions: { create } } };
 
   let lastInfo: CompletionInfo | undefined;
+  const frames: { results: (string | null | undefined)[]; info?: CompletionInfo }[] = [];
   await backend.complete(
     model,
     [{ role: 'user', content: 'a simple process flow diagram' } as IMessage],
     { stream, tools: [toolDef] },
-    async (_results, info) => {
+    async (results, info) => {
+      frames.push({ results: [...results], info });
       if (info) lastInfo = info;
     }
   );
-  return { requests, toolsUsed: lastInfo?.toolsUsed };
+  return { requests, toolsUsed: lastInfo?.toolsUsed, frames };
 }
 
 export function describeOpenAICompatibleArtifactDedupe(
@@ -124,6 +126,17 @@ export function describeOpenAICompatibleArtifactDedupe(
         expect(requests[1]).not.toContain('<artifact');
         expect(requests[1]).toContain(ARTIFACT_DELIVERED_PLACEHOLDER);
         expect(toolsUsed?.[0]?.returnValue).toBe(ARTIFACT_DELIVERED_PLACEHOLDER);
+      });
+
+      it(`streams an emitter's artifact live on the tool-artifact channel (${mode})`, async () => {
+        const { frames } = await runToolTurn(makeBackend(), model, tool('mermaid_chart', MERMAID_ARTIFACT), stream);
+
+        // Without this, stripping the tag from history (above) is the only thing that happens -
+        // the model never echoes it, and none of these backends had another delivery path, so the
+        // client never rendered a card at all (see kimiBackend.ts/xaiBackend.ts/deepseekBackend.ts).
+        const artifactFrames = frames.filter(f => f.info?.channel === 'tool-artifact');
+        expect(artifactFrames).toHaveLength(1);
+        expect(artifactFrames[0].results.join('')).toBe(MERMAID_ARTIFACT);
       });
 
       it(`replaces a non-emitter's artifact markup with the removed placeholder (${mode})`, async () => {

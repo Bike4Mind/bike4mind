@@ -18,7 +18,11 @@ import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
-import { stripUnstreamedToolResult } from './toolStreamingHelper';
+import {
+  createRecursiveArtifactGuard,
+  handleToolResultStreaming,
+  stripUnstreamedToolResult,
+} from './toolStreamingHelper';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -492,9 +496,21 @@ export class XAIBackend implements ICompletionBackend {
                   }
             );
 
+            // The single shared guard for this whole recursive chain - see
+            // createRecursiveArtifactGuard. Only the level that creates it flushes it.
+            const inheritedArtifactGuard = options._internal?.artifactGuard;
+            let artifactGuard = inheritedArtifactGuard;
+
             // Inject results in original order
             for (const outcome of outcomes) {
               if (outcome.ok) {
+                // For tools that return artifacts (like recharts), stream the result directly -
+                // xAI never echoes the tool result verbatim once it is stripped below, so
+                // without this the client never sees the artifact at all.
+                await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
+                  if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+                  await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
+                });
                 const resultStr = stripUnstreamedToolResult(outcome.name, outcome.result.toString());
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
                 this.pushToolMessages(
@@ -531,11 +547,17 @@ export class XAIBackend implements ICompletionBackend {
                   toolCallCount: toolCallCount + 1,
                   accumInputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
                   accumOutputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+                  artifactGuard,
                 },
               },
-              callback,
+              artifactGuard?.callback ?? callback,
               toolsUsed
             );
+
+            // Only the level that created the guard (none inherited on entry) flushes it - an
+            // inherited guard belongs to an ancestor, which flushes it after this whole subtree
+            // (including this call) has fully resolved.
+            if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
             return; // Exit after handling all tools
           } else {
             // New behavior: just pass tool calls through callback, don't execute.
@@ -771,9 +793,19 @@ export class XAIBackend implements ICompletionBackend {
               }
         );
 
+        const inheritedArtifactGuard = options._internal?.artifactGuard;
+        let artifactGuard = inheritedArtifactGuard;
+
         // Inject results in original order
         for (const outcome of outcomes) {
           if (outcome.ok) {
+            // For tools that return artifacts (like recharts), stream the result directly -
+            // xAI never echoes the tool result verbatim once it is stripped below, so
+            // without this the client never sees the artifact at all.
+            await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
+              if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+              await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
+            });
             const resultStr = stripUnstreamedToolResult(outcome.name, outcome.result.toString());
             recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
             this.pushToolMessages(
@@ -811,11 +843,14 @@ export class XAIBackend implements ICompletionBackend {
               toolCallCount: toolCallCount + 1,
               accumInputTokens: accumInputTokens + inputTokens,
               accumOutputTokens: accumOutputTokens + outputTokens,
+              artifactGuard,
             },
           },
-          callback,
+          artifactGuard?.callback ?? callback,
           toolsUsed
         );
+
+        if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
       } else {
         // New behavior: just pass tool calls through callback, don't execute.
         // Terminal leaf - emit accumulated total plus this turn's tokens.

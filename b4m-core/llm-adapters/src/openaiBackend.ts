@@ -2191,13 +2191,14 @@ export class OpenAIBackend implements ICompletionBackend {
       const r = resolved[i];
       if (outcome.ok) {
         const rawResult = outcome.result.result.toString();
-        if (hasDeliverablePinnedArtifact(r.name, rawResult)) {
+        const delivered = hasDeliverablePinnedArtifact(r.name, rawResult);
+        if (delivered) {
           if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
           artifactGuard.markDelivered(rawResult);
         }
         // This path never streams, but an emitter's artifact still reaches the user via tool_result
         // extraction in services sharedToolBuilder; strip it so GPT cannot echo a second copy.
-        const resultStr = stripUnstreamedToolResult(r.name, rawResult);
+        const resultStr = stripUnstreamedToolResult(r.name, rawResult, delivered);
         recordToolResult(toolsUsed, { id: r.callId, name: r.name }, resultStr, true);
         this.pushToolMessages(messages, { id: r.callId, name: r.name, parameters: r.args }, resultStr);
       } else {

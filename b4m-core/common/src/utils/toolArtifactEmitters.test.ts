@@ -250,6 +250,16 @@ describe('hasDeliverablePinnedArtifact: must agree with what sharedToolBuilder a
   it('is false for a tool that is not a registered emitter', () => {
     expect(hasDeliverablePinnedArtifact('not_a_tool', MERMAID_ARTIFACT)).toBe(false);
   });
+
+  it('follows parseToolArtifactAttributes: a repeated type= attribute keeps its last value', () => {
+    const lastWinsToMermaid =
+      '<artifact identifier="dup" type="text/html" type="application/vnd.ant.mermaid" title="Flow">graph TD; A-->B</artifact>';
+    expect(hasDeliverablePinnedArtifact('mermaid_chart', lastWinsToMermaid)).toBe(true);
+
+    const lastWinsAwayFromMermaid =
+      '<artifact identifier="dup" type="application/vnd.ant.mermaid" type="text/html" title="Flow">graph TD; A-->B</artifact>';
+    expect(hasDeliverablePinnedArtifact('mermaid_chart', lastWinsAwayFromMermaid)).toBe(false);
+  });
 });
 
 describe('stripDeliveredArtifactBlocks: the recursive-reply guard only removes an echo of an already-delivered artifact', () => {

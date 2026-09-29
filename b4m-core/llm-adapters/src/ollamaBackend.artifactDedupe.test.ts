@@ -28,6 +28,7 @@ async function runToolTurn(toolName: string, toolFn: ICompletionOptionTools['too
   (backend as unknown as { _api: unknown })._api = { chat };
 
   let toolsUsed: CompletionInfo['toolsUsed'];
+  const frames: { texts: (string | null | undefined)[]; info?: CompletionInfo }[] = [];
   await backend.complete(
     'qwen2.5-coder:3b',
     [{ role: 'user', content: 'a simple process flow diagram' } as IMessage],
@@ -35,11 +36,12 @@ async function runToolTurn(toolName: string, toolFn: ICompletionOptionTools['too
       stream: false,
       tools: [{ toolSchema: { name: toolName, description: toolName, parameters: { type: 'object' } }, toolFn }],
     },
-    async (_texts, info) => {
+    async (texts, info) => {
+      frames.push({ texts: [...texts], info });
       if (info?.toolsUsed) toolsUsed = info.toolsUsed;
     }
   );
-  return { requests, toolsUsed };
+  return { requests, toolsUsed, frames };
 }
 
 describe('OllamaBackend does not feed tool artifact markup back to the model', () => {
@@ -50,6 +52,16 @@ describe('OllamaBackend does not feed tool artifact markup back to the model', (
     expect(requests[1]).not.toContain('<artifact');
     expect(requests[1]).toContain(ARTIFACT_DELIVERED_PLACEHOLDER);
     expect(toolsUsed?.[0]?.returnValue).toBe(ARTIFACT_DELIVERED_PLACEHOLDER);
+  });
+
+  it("streams an emitter's artifact live on the tool-artifact channel", async () => {
+    const { frames } = await runToolTurn('mermaid_chart', async () => MERMAID_ARTIFACT);
+
+    // Without this, stripping the tag from history (above) is the only thing that happens - Ollama
+    // never echoes the tag, and had no other delivery path, so the client never rendered a card.
+    const artifactFrames = frames.filter(f => f.info?.channel === 'tool-artifact');
+    expect(artifactFrames).toHaveLength(1);
+    expect(artifactFrames[0].texts.join('')).toBe(MERMAID_ARTIFACT);
   });
 
   it("replaces a non-emitter's artifact markup with the removed placeholder", async () => {

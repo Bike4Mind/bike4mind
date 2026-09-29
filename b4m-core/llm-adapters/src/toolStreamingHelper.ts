@@ -37,11 +37,21 @@ export async function handleToolResultStreaming(
  * streams tool artifacts live. An emitter's artifact still reaches the user through the services
  * sharedToolBuilder tool_result extraction, so the model is told it was delivered rather than
  * shown markup it could echo into a second card.
+ *
+ * The delivered/removed choice is made once per result and stamped on every block it contains, not
+ * decided per block - latent today because every emitter's own result carries exactly one pinned
+ * block (extraction always delivers the whole result or none of it), but a result mixing a foreign-
+ * type block alongside a pinned one would label both DELIVERED even though only the pinned one is.
+ *
+ * `delivered` lets a caller that already computed `hasDeliverablePinnedArtifact` (e.g. to gate
+ * `artifactGuard.markDelivered`) pass the answer in rather than have this re-scan the same result.
  */
-export function stripUnstreamedToolResult(toolName: string, result: string): string {
+export function stripUnstreamedToolResult(toolName: string, result: string, delivered?: boolean): string {
   return stripToolArtifactMarkup(
     result,
-    hasDeliverablePinnedArtifact(toolName, result) ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
+    (delivered ?? hasDeliverablePinnedArtifact(toolName, result))
+      ? ARTIFACT_DELIVERED_PLACEHOLDER
+      : ARTIFACT_REMOVED_PLACEHOLDER
   );
 }
 
