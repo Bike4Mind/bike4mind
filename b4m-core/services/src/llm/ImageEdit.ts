@@ -843,15 +843,20 @@ export class ImageEditService {
       // Always stop the running-status heartbeat, on success or error. The terminal write above
       // owns the final status.
       stopHeartbeat?.();
-      // Clean up the mask fab files in finally block to ensure they're always deleted
+      // Clean up the mask fab files in finally block to ensure they're always deleted.
+      // Awaited, not fire-and-forget: this runs in a queue Lambda, which freezes as soon as process()
+      // resolves, so a dropped delete never finishes and the mask stays in the user's files.
       Logger.globalInstance.debug('[DEBUG] Deleting mask fab files:');
-      await Promise.allSettled(
-        fabFiles
-          .filter(file => file.fileName.startsWith('image_mask'))
-          .map(async file => {
-            this.deleteFabFile(userId, file.id);
-          })
-      );
+      const maskFiles = fabFiles.filter(file => file.fileName.startsWith('image_mask'));
+      const deletions = await Promise.allSettled(maskFiles.map(file => this.deleteFabFile(userId, file.id)));
+      deletions.forEach((result, i) => {
+        if (result.status === 'rejected') {
+          logger.warn('[ImageEdit] Failed to delete temporary mask file', {
+            fileId: maskFiles[i].id,
+            error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+          });
+        }
+      });
     }
   }
 }

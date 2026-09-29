@@ -570,6 +570,35 @@ describe('ImageEditService.process mask access (#3069)', () => {
     expect(foreignRun.deleteFabFile).not.toHaveBeenCalled();
   });
 
+  it('finishes deleting the mask before process() resolves', async () => {
+    // The queue Lambda freezes once process() resolves, so a cleanup that is merely started, not
+    // awaited, never completes and the mask outlives a finished edit.
+    let deleted = false;
+    await run({
+      deleteFabFile: async () => {
+        await new Promise(resolve => setTimeout(resolve, 0));
+        deleted = true;
+      },
+    });
+
+    expect(deleted).toBe(true);
+  });
+
+  it('logs a failed mask delete instead of letting it escape the finished edit', async () => {
+    const { quest } = await run({
+      deleteFabFile: async () => {
+        throw new Error('storage-outage');
+      },
+    });
+
+    // The provider stub's rejection is still the quest's outcome; the cleanup failure does not replace it.
+    expect(quest.reply).toBe('stop-after-dispatch');
+    expect(silentLogger.warn).toHaveBeenCalledWith(
+      '[ImageEdit] Failed to delete temporary mask file',
+      expect.objectContaining({ fileId: 'mask1', error: 'storage-outage' })
+    );
+  });
+
   it('degrades to owner/share/global-read when no lake resolver is wired, rather than failing', async () => {
     const { findAccessibleInIds, getSignedUrl } = await run({ withResolver: false });
 
