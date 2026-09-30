@@ -207,6 +207,10 @@ await loginPage.fillOtc(code);
 await loginPage.submit();
 ```
 
+The endpoint returns the last code sent to the address, and specs run in parallel. Give each
+OTC test its own user (`apiCreateThrowawayUser` in `helpers/api.ts`), or a parallel test's send
+hands this one a code its pending token does not match.
+
 **MFA** needs no extra infra: the MFA setup endpoint returns the `totpSecret`, so a test
 can enroll, then generate valid codes in-test with `otplib`/`speakeasy`.
 
