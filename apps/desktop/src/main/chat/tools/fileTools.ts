@@ -2,7 +2,6 @@ import { glob, lstat, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, join, matchesGlob, relative } from 'node:path';
 import { git } from '../project/git';
 import { resolveWithinRoots } from './paths';
-import { ripgrepSearch, type RipgrepFile } from './ripgrep';
 import {
   capOutput,
   MAX_TOOL_OUTPUT_CHARS,
@@ -130,24 +129,6 @@ async function gitListing(base: string): Promise<string[] | null> {
     return files.length > 0 ? files : null;
   } catch {
     return null;
-  }
-}
-
-/** Files git tracks that .gitignore also matches: rg skips them, the git listing does not. */
-async function trackedButIgnored(base: string): Promise<string[]> {
-  try {
-    const output = await git(base, [
-      '-c',
-      'core.fsmonitor=false',
-      'ls-files',
-      '-z',
-      '--cached',
-      '--ignored',
-      '--exclude-standard',
-    ]);
-    return output.split('\0').filter(path => path && !path.endsWith('/'));
-  } catch {
-    return [];
   }
 }
 
@@ -378,7 +359,6 @@ async function scanFile(absolute: string, expression: RegExp): Promise<{ lines: 
     const buffer = await readFile(absolute);
     if (isBinary(buffer)) return null;
     const lines = buffer.toString('utf8').split('\n');
-    if (lines.at(-1) === '') lines.pop();
     const hits: number[] = [];
     lines.forEach((line, index) => {
       if (expression.test(line)) hits.push(index);
@@ -407,74 +387,11 @@ function formatHits(lines: readonly string[], hits: readonly number[], around: n
   return out;
 }
 
-/** What the search has gathered so far, shared by the ripgrep and the JavaScript engines. */
-function createTally(filesOnly: boolean, maxResults: number) {
-  const tally = {
-    body: [] as string[],
-    size: 0,
-    shownMatches: 0,
-    totalMatches: 0,
-    matchingFiles: 0,
-    truncated: false,
-    /** `render(n)` yields the file's first n hits with context; false means the output is full. */
-    add(path: string, hitCount: number, render: (shown: number) => string[]): boolean {
-      tally.matchingFiles += 1;
-      tally.totalMatches += hitCount;
-
-      if (filesOnly) {
-        if (tally.body.length < MAX_LISTED_MATCHING_FILES) tally.body.push(`${path} (${hitCount})`);
-        return true;
-      }
-
-      const shown = Math.min(maxResults - tally.shownMatches, hitCount);
-      const block = [path, ...render(shown)];
-      const blockSize = block.reduce((sum, line) => sum + line.length + 1, 0);
-      if (tally.size + blockSize > OUTPUT_BUDGET && tally.body.length > 0) {
-        tally.truncated = true;
-        return false;
-      }
-      tally.body.push(...block);
-      tally.size += blockSize;
-      tally.shownMatches += shown;
-      if (shown < hitCount || tally.shownMatches >= maxResults) {
-        tally.truncated = true;
-        return false;
-      }
-      return true;
-    },
-  };
-  return tally;
-}
-
-/** The first `shown` hits of a ripgrep file, formatted as formatHits does for the JavaScript scan. */
-function renderRipgrepFile(file: RipgrepFile, shown: number, around: number, expression: RegExp): string[] {
-  let seen = 0;
-  let lastNumber = Infinity;
-  for (const line of file.lines) {
-    if (line.match && (seen += 1) === shown) lastNumber = line.number + around;
-  }
-
-  const out: string[] = [];
-  let counted = 0;
-  let previous = 0;
-  for (const line of file.lines) {
-    if (line.number > lastNumber) break;
-    if (line.match) counted += 1;
-    if (previous > 0 && line.number > previous + 1) out.push('  --');
-    out.push(
-      `  ${line.number}${line.match && counted <= shown ? ':' : '-'} ${clipLine(line.text, expression, around > 0)}`
-    );
-    previous = line.number;
-  }
-  return out;
-}
-
 export const grepSearch: ToolDefinition = {
   schema: {
     name: 'grep_search',
     description:
-      'Search file contents with a regular expression (JavaScript syntax; \\d, \\w and \\s also match ' +
-      'non-ASCII characters). Skips files ignored by ' +
+      'Search file contents with a JavaScript regular expression. Skips files ignored by ' +
       '.gitignore, binary files and dependency folders. Returns matching lines grouped by file ' +
       'with line numbers, and says when there are more than it shows. Use outputMode "files" ' +
       'to see only which files match and how often, and "include" to limit it to some files. ' +
@@ -529,73 +446,55 @@ export const grepSearch: ToolDefinition = {
     // A file path is a one-file search; listing it as a folder found nothing and read as "No matches".
     const single = (await stat(base).catch(() => undefined))?.isFile() === true;
     const directory = single ? dirname(base) : base;
+    const listing: FileListing = single ? { files: [basename(base)], complete: true } : await listFiles(base, context);
+    const candidates = include && !single ? listing.files.filter(file => matchesInclude(file, include)) : listing.files;
 
-    const tally = createTally(filesOnly, maxResults);
+    const body: string[] = [];
+    let size = 0;
+    let shownMatches = 0;
+    let totalMatches = 0;
+    let matchingFiles = 0;
+    let truncated = false;
 
-    const viaRipgrep =
-      !single &&
-      (await ripgrepSearch({
-        pattern: requireString(input, 'pattern'),
-        cwd: directory,
-        ignoreCase: input.ignoreCase === true,
-        context: around,
-        exclude: [...IGNORED].flatMap(name => [name, `**/${name}`]),
-        maxFileBytes: MAX_SEARCH_FILE_BYTES,
-        signal: context.signal,
-        // Filtered here rather than with rg --glob, which would also override .gitignore.
-        onFile: file =>
-          (include !== undefined && !matchesInclude(file.path, include)) ||
-          tally.add(file.path, file.matches, shown => renderRipgrepFile(file, shown, around, expression)),
-      }));
+    // Batches, in listing order, so the output is deterministic while reads still overlap. In
+    // content mode the scan stops once the output is full: a broad pattern on a large tree
+    // should come back quickly with "narrow it", not after reading every file.
+    for (let start = 0; start < candidates.length && !truncated; start += SCAN_BATCH) {
+      if (context.signal.aborted) break;
+      const batch = candidates.slice(start, start + SCAN_BATCH);
+      const scanned = await Promise.all(batch.map(file => scanFile(join(directory, file), expression)));
 
-    // rg lists files itself with no walk cap, so a search it ran leaves nothing unsearched.
-    let complete = true;
-    const ranRipgrep = viaRipgrep === 'done' || viaRipgrep === 'stopped' || viaRipgrep === 'timed-out';
-    if (ranRipgrep && viaRipgrep === 'done') {
-      // rg honours .gitignore even for a file git tracks; the JavaScript listing does not.
-      for (const file of await trackedButIgnored(directory)) {
-        if (tally.truncated || context.signal.aborted) break;
-        if (include && !matchesInclude(file, include)) continue;
-        const result = await scanFile(join(directory, file), expression);
-        if (result) {
-          tally.add(file, result.hits.length, shown =>
-            formatHits(result.lines, result.hits.slice(0, shown), around, expression)
-          );
+      for (let index = 0; index < batch.length; index += 1) {
+        const result = scanned[index];
+        if (!result) continue;
+        matchingFiles += 1;
+        totalMatches += result.hits.length;
+
+        if (filesOnly) {
+          if (body.length < MAX_LISTED_MATCHING_FILES) body.push(`${batch[index]} (${result.hits.length})`);
+          continue;
         }
-      }
-    }
-    if (!ranRipgrep) {
-      const listing: FileListing = single
-        ? { files: [basename(base)], complete: true }
-        : await listFiles(base, context);
-      complete = listing.complete;
-      const candidates =
-        include && !single ? listing.files.filter(file => matchesInclude(file, include)) : listing.files;
 
-      // Batches, in listing order, so the output is deterministic while reads still overlap. In
-      // content mode the scan stops once the output is full: a broad pattern on a large tree
-      // should come back quickly with "narrow it", not after reading every file.
-      for (let start = 0; start < candidates.length && !tally.truncated; start += SCAN_BATCH) {
-        if (context.signal.aborted) break;
-        const batch = candidates.slice(start, start + SCAN_BATCH);
-        const scanned = await Promise.all(batch.map(file => scanFile(join(directory, file), expression)));
-
-        for (let index = 0; index < batch.length; index += 1) {
-          const result = scanned[index];
-          if (!result) continue;
-          const keepGoing = tally.add(batch[index], result.hits.length, shown =>
-            formatHits(result.lines, result.hits.slice(0, shown), around, expression)
-          );
-          if (!keepGoing) break;
+        const room = maxResults - shownMatches;
+        const hits = result.hits.slice(0, room);
+        const block = [batch[index], ...formatHits(result.lines, hits, around, expression)];
+        const blockSize = block.reduce((sum, line) => sum + line.length + 1, 0);
+        if (size + blockSize > OUTPUT_BUDGET && body.length > 0) {
+          truncated = true;
+          break;
+        }
+        body.push(...block);
+        size += blockSize;
+        shownMatches += hits.length;
+        if (hits.length < result.hits.length || shownMatches >= maxResults) {
+          truncated = true;
+          break;
         }
       }
     }
 
-    const { body, matchingFiles, totalMatches, shownMatches, truncated } = tally;
     const scope = include ? ` in files matching ${include}` : '';
-    const timedOut = viaRipgrep === 'timed-out' ? ' The search timed out, so these results are partial.' : '';
-    const partial =
-      timedOut || (complete ? '' : ` Only the first ${MAX_WALKED_FILES} files under ${base} were searched.`);
+    const partial = listing.complete ? '' : ` Only the first ${MAX_WALKED_FILES} files under ${base} were searched.`;
     if (matchingFiles === 0) return `No matches for ${expression} under ${base}${scope}.${partial}`;
 
     let header: string;
