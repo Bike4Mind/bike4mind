@@ -14,7 +14,7 @@ import path from 'node:path';
  * `db.quests.update(quest)`, so this scan is the only guard.
  *
  * Flags a repository-shaped receiver (`db.<coll>`, `...Repository`) whose `.update(` first argument
- * is a bare identifier / member expression, or an object literal that opens with a spread of one
+ * (or `.updateMany(` second argument) is a bare identifier / member expression, or an object literal that opens with a spread of one
  * (`{ ...doc, x }`) or spreads the doc it takes its id from (`{ id: doc.id, ...doc }`), the same
  * hazard. Object literals naming their fields (`{ id, status }`, `{ id, ...changes }`) pass.
  *
@@ -25,8 +25,8 @@ import path from 'node:path';
  * ALLOWED is keyed by `relpath::argText` (not line number, so edits do not churn it). Each entry
  * must match exactly its expected number of sites (1 unless SITE_COUNT says otherwise), so a stale
  * entry fails and so does a NEW same-shaped write in an allow-listed file. ALLOWED_ENTRIES pins the
- * list's size, so adding an entry means raising it in the same diff, where review sees it; lower it
- * whenever an entry is converted.
+ * list's size and TOTAL_SITES the hit count, so adding an entry or a site means raising them in the
+ * same diff, where review sees it; lower them whenever a site is converted.
  */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SCAN_ROOTS = ['apps', 'b4m-core', 'packages'];
@@ -69,16 +69,21 @@ const ALLOWED = new Map<string, string>([
   ['packages/scripts/generateAgentSystemPrompts.ts::updateData', PARTIAL],
 ]);
 const ALLOWED_ENTRIES = 26;
+// Sum of the per-entry SITE_COUNTs; pinned so a new site under an existing key is not absorbed silently.
+const TOTAL_SITES = 28;
 const SITE_COUNT = new Map<string, number>([
   ['b4m-core/services/src/latticeService/latticeModelService.ts::updatedModel', 3],
 ]);
 
-const RECEIVER = /(?:^|[^\w$.])((?:[\w$]+[?!]?\.)*[\w$]+)[?!]?\s*\.update(?:<(?:[^<>()]|<[^<>()]*>)*>)?\(/g;
+const RECEIVER =
+  /(?:^|[^\w$.])((?:[\w$]+[?!]?\.)*[\w$]+)[?!]?\s*\.(update|updateMany)(?:<(?:[^<>()]|<[^<>()]*>)*>)?\(/g;
 const isRepositoryReceiver = (r: string) => /Repository$/.test(r) || /(?:^|\.)db\.[\w$]+$/.test(r);
 
-/** Returns the first-argument text of the call whose `(` is at `open`, or null when unbalanced. */
-function firstArg(src: string, open: number): string | null {
+/** Returns the text of argument `index` of the call whose `(` is at `open`, or null when unbalanced or absent. */
+function nthArg(src: string, open: number, index: number): string | null {
   let depth = 0;
+  let argIndex = 0;
+  let start = open + 1;
   let quote: string | null = null;
   for (let i = open; i < src.length; i++) {
     const ch = src[i];
@@ -91,8 +96,12 @@ function firstArg(src: string, open: number): string | null {
     else if (ch === '(' || ch === '{' || ch === '[') depth++;
     else if (ch === ')' || ch === '}' || ch === ']') {
       depth--;
-      if (depth === 0) return src.slice(open + 1, i).trim();
-    } else if (ch === ',' && depth === 1) return src.slice(open + 1, i).trim();
+      if (depth === 0) return argIndex === index ? src.slice(start, i).trim() : null;
+    } else if (ch === ',' && depth === 1) {
+      if (argIndex === index) return src.slice(start, i).trim();
+      argIndex++;
+      start = i + 1;
+    }
   }
   return null;
 }
@@ -183,7 +192,8 @@ function scan() {
       for (const m of src.matchAll(RECEIVER)) {
         if (!isRepositoryReceiver(m[1])) continue;
         const open = m.index! + m[0].length - 1;
-        const arg = firstArg(src, open);
+        // `updateMany(filter, data)` takes the document second.
+        const arg = nthArg(src, open, m[2] === 'updateMany' ? 1 : 0);
         if (arg === null || !isWholeDoc(arg)) continue;
         hits.push({ key: `${rel}::${arg}`, line: src.slice(0, open).split('\n').length });
       }
@@ -204,6 +214,10 @@ describe('repository whole-document update guard', () => {
 
   it('keeps ALLOWED at its pinned size', () => {
     expect(ALLOWED.size, 'convert the new site instead, or raise ALLOWED_ENTRIES deliberately').toBe(ALLOWED_ENTRIES);
+  });
+
+  it('keeps the total number of whole-document sites at its pinned count', () => {
+    expect(hits.length, 'convert the new site instead of raising TOTAL_SITES').toBe(TOTAL_SITES);
   });
 
   it('matches each ALLOWED entry to exactly its expected number of sites', () => {
@@ -240,5 +254,15 @@ describe('repository whole-document update guard', () => {
     const receivers = (src: string) => [...src.matchAll(RECEIVER)].map(m => m[1]);
     expect(receivers('userRepository.update<IUser>(user)')).toEqual(['userRepository']);
     expect(receivers('userRepository.update<Partial<IUser>>(user)')).toEqual(['userRepository']);
+    expect(receivers('tagRepository.updateMany({ userId }, tag)')).toEqual(['tagRepository']);
+  });
+
+  it('reads the argument at the requested index', () => {
+    const src = 'repo.updateMany({ userId, a: [1, 2] }, tag, opts)';
+    const open = src.indexOf('(');
+    expect(nthArg(src, open, 0)).toBe('{ userId, a: [1, 2] }');
+    expect(nthArg(src, open, 1)).toBe('tag');
+    expect(nthArg(src, open, 2)).toBe('opts');
+    expect(nthArg(src, open, 3)).toBeNull();
   });
 });

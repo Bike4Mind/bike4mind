@@ -140,8 +140,11 @@ describe('BaseRepository.update whole-document hazard (via userRepository)', () 
         throw new Error('charge failed');
       });
 
-    await expect(userRepository.recordReferrals(id, 1, [invite])).rejects.toThrow('charge failed');
-    spy.mockRestore();
+    try {
+      await expect(userRepository.recordReferrals(id, 1, [invite])).rejects.toThrow('charge failed');
+    } finally {
+      spy.mockRestore();
+    }
 
     const after = await User.findById(id);
     expect(after!.regInvites.map(String)).toEqual([invite]);

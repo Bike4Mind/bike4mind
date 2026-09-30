@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { sessionRepository, agentRepository, sessionAgentConfigRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertSessionAccess } from '@server/utils/sessionAccess';
+import type { ISessionAgentConfigDocument, RepositoryPatch } from '@bike4mind/common';
 import { z } from 'zod';
 
 const proactiveMessagingSchema = z.object({
@@ -100,7 +101,7 @@ const handler = baseApi()
       // Leaf paths, so the worker's concurrent `proactiveMessaging.lastProactiveMessageAt` stamp is not
       // rewound to the read-time value; omitted optionals are cleared, as a whole-object write would.
       const proactive = validatedData.proactiveMessaging;
-      const patch: Parameters<typeof sessionAgentConfigRepository.update>[0] = {
+      const patch: RepositoryPatch<ISessionAgentConfigDocument> = {
         id: existingConfig.id,
         userId: req.user!.id,
       };

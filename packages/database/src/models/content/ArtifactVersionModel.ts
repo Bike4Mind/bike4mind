@@ -1,6 +1,6 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
-import type { RepositoryUpdateOptions } from '@bike4mind/common';
+import type { RepositoryPatch, RepositoryUpdateOptions } from '@bike4mind/common';
 
 // mongoose 8.24 defaults Document's _id to ObjectId; this model keys on a
 // string _id, so parametrize Document<string> to keep the interface assignable.
@@ -112,6 +112,14 @@ export class ArtifactVersionRepository extends BaseRepository<IArtifactVersionDo
 
   // Override update to accept `id` or `_id`. Last-writer-wins like BaseRepository.update; no guarded
   // variant is exposed (no artifact-version caller opts in).
+  update(
+    data: Partial<IArtifactVersionDocument>,
+    options?: RepositoryUpdateOptions<IArtifactVersionDocument>
+  ): Promise<IArtifactVersionDocument | null>;
+  update(
+    data: RepositoryPatch<IArtifactVersionDocument>,
+    options?: RepositoryUpdateOptions<IArtifactVersionDocument>
+  ): Promise<IArtifactVersionDocument | null>;
   async update(
     data: Partial<IArtifactVersionDocument>,
     options?: RepositoryUpdateOptions<IArtifactVersionDocument>

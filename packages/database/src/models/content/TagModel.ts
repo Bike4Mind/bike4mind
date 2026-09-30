@@ -5,6 +5,7 @@ import {
   IFileTagRepository,
   ITag,
   ITagRepository,
+  RepositoryPatch,
   RepositoryUpdateOptions,
   TagType,
 } from '@bike4mind/common';
@@ -79,6 +80,8 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
 
   // Strips the `type` discriminator key. Last-writer-wins like BaseRepository.update. Returns the
   // post-update doc (`_plainUpdate` uses `new: true`); the sole caller (tagService/update) discards it.
+  update(data: Partial<IFileTag>, options?: RepositoryUpdateOptions<IFileTag>): Promise<IFileTag | null>;
+  update(data: RepositoryPatch<IFileTag>, options?: RepositoryUpdateOptions<IFileTag>): Promise<IFileTag | null>;
   async update({ type: _, ...data }: Partial<IFileTag>, options?: RepositoryUpdateOptions<IFileTag>) {
     return this._plainUpdate<IFileTag>({ _id: data.id }, data as Record<string, unknown>, options);
   }
@@ -86,9 +89,9 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
   async updateMany(
     filter: Record<string, unknown>,
     { type: _, ...data }: Partial<IFileTag>,
-    options?: Record<string, unknown>
+    options?: RepositoryUpdateOptions<IFileTag>
   ) {
-    return this.fileTagModel.updateMany(filter, { $set: data }, options);
+    return super.updateMany(filter, data, options);
   }
 
   async findAllByUserId(userId: string) {
