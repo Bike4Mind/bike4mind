@@ -306,7 +306,7 @@ const noWorkersImportInClient = [
 
 // apps/workers has no react/next/mui dependency (see apps/workers/package.json) and must stay that
 // way - it runs EventBridge Lambda handlers and a self-host job runner, neither of which renders
-// anything. Scoped to @client/app/* specifically (not @client/* broadly), since apps/workers
+// anything. Scoped to apps/client/app specifically (not @client/* broadly), since apps/workers
 // legitimately imports non-UI apps/client code (e.g. @client/lib/entitlements/registry) through the
 // same bridge described above.
 const WORKERS_NO_UI_MESSAGE =
@@ -318,10 +318,25 @@ const noUiImportsInWorkers = {
     { name: 'react-dom', message: WORKERS_NO_UI_MESSAGE },
     { name: 'next', message: WORKERS_NO_UI_MESSAGE },
   ],
-  // @/app/* and @pages/* too: apps/workers/tsconfig.json maps @/* and @pages/* into apps/client.
+  // @/app and @pages too: apps/workers/tsconfig.json maps @/* and @pages/* into apps/client. The
+  // **/client/app entries catch the same UI code reached by a relative path; each alias is listed
+  // bare as well as with /*, since a gitignore-style `x/*` does not match `x` itself.
   patterns: [
     {
-      group: ['@client/app/*', '@/app/*', '@pages/*', 'react/*', 'react-dom/*', 'next/*', '@mui/*'],
+      group: [
+        '@client/app',
+        '@client/app/*',
+        '@/app',
+        '@/app/*',
+        '@pages',
+        '@pages/*',
+        '**/client/app',
+        '**/client/app/**',
+        'react/*',
+        'react-dom/*',
+        'next/*',
+        '@mui/*',
+      ],
       message: WORKERS_NO_UI_MESSAGE,
     },
   ],
@@ -591,6 +606,25 @@ export default defineConfig([
         },
       ],
     },
+  },
+
+  // The apps/workers import boundary for apps/client config and script files, which neither block
+  // above matches (see noWorkersImportInClient). No other block sets no-restricted-imports for
+  // these extensions, so last-rule-wins drops nothing here. The rule sees ESM imports only, not a
+  // CommonJS require().
+  {
+    files: ['apps/client/**/*.{mjs,mts,cjs,cts}'],
+    rules: {
+      'no-restricted-imports': ['error', { patterns: [...noWorkersImportInClient] }],
+    },
+  },
+  // Matching .mts/.cts above opts them into linting, and no other block parses them, so supply the
+  // TypeScript parser. no-undef is off for the reason typescript-eslint turns it off for .ts: tsc
+  // already checks undefined names, and the rule does not know Node's globals.
+  {
+    files: ['apps/client/**/*.{mts,cts}'],
+    languageOptions: { parser: tseslint.parser },
+    rules: { 'no-undef': 'off' },
   },
 
   // b4m-core/utils - restrict database imports
