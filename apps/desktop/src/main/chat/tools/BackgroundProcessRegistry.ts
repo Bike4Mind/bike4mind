@@ -15,6 +15,15 @@ const SIGKILL_DELAY_MS = 3_000;
 /** How long `shutdown` gives every group to exit on SIGTERM before it stops being polite. */
 const SHUTDOWN_GRACE_MS = 2_000;
 
+/**
+ * How long a command's pipes get to drain after it has exited, before the record is finished
+ * without them.
+ *
+ * When the whole group goes down together the two arrive in the same millisecond, so this is
+ * only ever spent on a command that left something holding its output. See the 'exit' handler.
+ */
+const STDIO_DRAIN_MS = 500;
+
 /** Live output is coalesced into one IPC push per process per tick; a watcher can emit constantly. */
 const EMIT_INTERVAL_MS = 100;
 
@@ -157,13 +166,31 @@ export class BackgroundProcessRegistry {
     };
 
     tracked.closed = new Promise<void>(resolve => {
-      child.on('error', error => {
-        this.finish(tracked, 'failed', null, null, error.message);
+      const settle = (
+        status: BackgroundProcessStatus,
+        code: number | null,
+        signal: NodeJS.Signals | null,
+        error?: string
+      ): void => {
+        this.finish(tracked, status, code, signal, error);
         resolve();
-      });
-      child.on('close', (code, signal) => {
-        this.finish(tracked, tracked.info.status === 'killed' ? 'killed' : 'exited', code, signal);
-        resolve();
+      };
+      const ended = (): BackgroundProcessStatus => (tracked.info.status === 'killed' ? 'killed' : 'exited');
+
+      child.on('error', error => settle('failed', null, null, error.message));
+
+      // The better of the two when it comes: 'close' means the output has drained as well.
+      child.on('close', (code, signal) => settle(ended(), code, signal));
+
+      // ...but it only fires once EVERY holder of the pipes has let go, and a descendant that
+      // escaped the process group is still a holder - `npm run dev &`, or anything that calls
+      // setsid. The command itself is over at 'exit'. Waiting past that for pipes nobody is
+      // going to close is what left a stopped task sitting under Running with its clock
+      // ticking for the rest of the app's life, which is what made Stop look broken.
+      child.on('exit', (code, signal) => {
+        if (tracked.info.endedAt) return;
+        const drain = setTimeout(() => settle(ended(), code, signal), STDIO_DRAIN_MS);
+        drain.unref?.();
       });
     });
 
