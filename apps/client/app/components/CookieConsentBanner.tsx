@@ -58,6 +58,7 @@ export function CookieConsentBanner() {
   const settingsOpen = useCookieSettings(s => s.isOpen);
   const closeSettings = useCookieSettings(s => s.close);
   const firstActionRef = useRef<HTMLButtonElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     const consent = resolveConsent();
@@ -68,11 +69,20 @@ export function CookieConsentBanner() {
     activateConsent(consent);
   }, []);
 
-  // Both triggers sit after the banner in the tab order, so opening it on purpose has to move
-  // focus into it. Keyed on the request, not the mount, so the unprompted first-run ask never
-  // takes focus.
+  // Both triggers sit after the banner in the tab order, so opening it on purpose moves focus
+  // into it and closing it hands focus back. Keyed on the request, not the mount, so the
+  // unprompted first-run ask never takes focus.
   useEffect(() => {
-    if (settingsOpen) firstActionRef.current?.focus();
+    if (settingsOpen) {
+      // From the profile menu this is body: the menu has already unmounted its row.
+      returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      firstActionRef.current?.focus();
+      return;
+    }
+    const trigger = returnFocusRef.current;
+    returnFocusRef.current = null;
+    // Only when focus went down with the banner's buttons; never pull it off something else.
+    if (trigger && document.activeElement === document.body) trigger.focus();
   }, [settingsOpen]);
 
   if (!asking && !settingsOpen) return null;

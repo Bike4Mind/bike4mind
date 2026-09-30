@@ -622,5 +622,57 @@ describe('CookieConsentBanner', () => {
 
       expect(screen.getByTestId('cookie-consent-decline-btn')).toHaveFocus();
     });
+
+    describe('handing focus back on close', () => {
+      // Stands in for either real trigger: it holds focus, then opens settings.
+      const renderWithTrigger = () => {
+        render(
+          <TestWrapper>
+            <button data-testid="trigger" onClick={() => useCookieSettings.getState().open()}>
+              Cookie settings
+            </button>
+            <input data-testid="elsewhere" />
+            <CookieConsentBanner />
+          </TestWrapper>
+        );
+        const trigger = screen.getByTestId('trigger');
+        trigger.focus();
+        fireEvent.click(trigger);
+        return trigger;
+      };
+
+      it('returns focus to the trigger when the manage screen is cancelled', () => {
+        localStorageMock.setItem('cookie_consent', 'granted');
+        const trigger = renderWithTrigger();
+        expect(screen.getByTestId('cookie-consent-cancel-btn')).toHaveFocus();
+
+        fireEvent.click(screen.getByTestId('cookie-consent-cancel-btn'));
+
+        expect(screen.queryByTestId('cookie-consent-banner')).not.toBeInTheDocument();
+        expect(trigger).toHaveFocus();
+      });
+
+      it('returns focus to the trigger after a choice made from the first-run ask', () => {
+        const trigger = renderWithTrigger();
+        expect(screen.getByTestId('cookie-consent-decline-btn')).toHaveFocus();
+
+        fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+        expect(screen.queryByTestId('cookie-consent-banner')).not.toBeInTheDocument();
+        expect(trigger).toHaveFocus();
+      });
+
+      // A browser that does not focus a button on click (Safari) leaves focus where it was.
+      it('does not pull focus off an element that already holds it', () => {
+        localStorageMock.setItem('cookie_consent', 'granted');
+        renderWithTrigger();
+        const elsewhere = screen.getByTestId('elsewhere');
+        elsewhere.focus();
+
+        fireEvent.click(screen.getByTestId('cookie-consent-cancel-btn'));
+
+        expect(elsewhere).toHaveFocus();
+      });
+    });
   });
 });
