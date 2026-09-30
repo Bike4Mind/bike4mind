@@ -3328,10 +3328,12 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // reports modifiedCount 1. Callers that mint a durable fact from a removal (the lake
     // membership audit trail) read this count to tell a real removal from the losing half of
     // two concurrent removals, so an unmatched pull has to report 0.
-    const result = await this.fabFileModel.updateOne(
-      { _id: fabFileId, 'tags.name': { $in: tagNames } },
-      { $pull: { tags: { name: { $in: tagNames } } } }
-    );
+    //
+    // includeDeleted on both writes: pushTagsByFabFileId's bulkWrite reaches tombstones, so a removal
+    // that skipped them would let an undelete bring back a tag the user removed.
+    const result = await this.fabFileModel
+      .updateOne({ _id: fabFileId, 'tags.name': { $in: tagNames } }, { $pull: { tags: { name: { $in: tagNames } } } })
+      .setOptions({ includeDeleted: true });
     // A primaryTag naming a tag the file no longer carries later fails the data-lake write
     // gate on PUT /api/files/[id], which round-trips the stale value. Separate filtered write
     // because a plain update can't clear a field conditionally on its own value; it is a
@@ -3348,10 +3350,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // "removal partially failed" state, only for "removal did not happen." A stale primaryTag
     // is self-correcting the next time the file's tags are written through setDataLakeFileTags.
     try {
-      await this.fabFileModel.updateOne(
-        { _id: fabFileId, primaryTag: { $in: tagNames } },
-        { $unset: { primaryTag: '' } }
-      );
+      await this.fabFileModel
+        .updateOne({ _id: fabFileId, primaryTag: { $in: tagNames } }, { $unset: { primaryTag: '' } })
+        .setOptions({ includeDeleted: true });
     } catch {
       // swallowed - see the best-effort note above.
     }

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import mongoose from 'mongoose';
 import { FabFile, fabFileRepository } from '../models/content/FabFileModel';
 import { setupMongoTest } from '../__test__/utils';
 import { KnowledgeType } from '@bike4mind/common';
@@ -155,7 +156,7 @@ describe('FabFileRepository.pullTagsByFabFileId', () => {
     let call = 0;
     vi.spyOn(FabFile, 'updateOne').mockImplementation((...args: Parameters<typeof FabFile.updateOne>) => {
       call += 1;
-      if (call === 2) return Promise.reject(new Error('primaryTag write boom')) as any;
+      if (call === 2) return { setOptions: () => Promise.reject(new Error('primaryTag write boom')) } as any;
       return realUpdateOne(...args);
     });
 
@@ -168,6 +169,20 @@ describe('FabFileRepository.pullTagsByFabFileId', () => {
     // The committed $pull is not undone by the rejected second write; the stale primaryTag is
     // left in place rather than the whole removal being thrown away.
     expect((await FabFile.findById(id))?.primaryTag).toBe('mylake:invoices');
+  });
+
+  // pushTagsByFabFileId's bulkWrite reaches tombstones, so the pull must too, or a delete racing a
+  // tag removal leaves the tag to come back on undelete.
+  it('removes the tag and clears primaryTag on a soft-deleted file', async () => {
+    const id = await seed({ primaryTag: 'mylake:invoices' });
+    await FabFile.deleteOne({ _id: id });
+
+    expect(await fabFileRepository.pullTagsByFabFileId(id, ['mylake:invoices'])).toBe(1);
+
+    const raw = await FabFile.collection.findOne({ _id: new mongoose.Types.ObjectId(id) });
+    expect(raw?.deletedAt).toBeInstanceOf(Date);
+    expect((raw?.tags as { name: string }[]).map(t => t.name)).not.toContain('mylake:invoices');
+    expect(raw).not.toHaveProperty('primaryTag');
   });
 
   it('does not throw for an id that matches no document', async () => {
