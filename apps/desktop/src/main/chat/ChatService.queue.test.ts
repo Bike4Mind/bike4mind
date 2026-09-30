@@ -41,6 +41,13 @@ describe('ChatService queued messages', () => {
   const waitForEvent = (type: ChatStreamEvent['type'], after = 0) =>
     vi.waitUntil(() => events.filter(event => event.type === type).length > after, { timeout: 2000, interval: 5 });
 
+  /**
+   * A turn is announced before its request goes out, and the instruction files are read in
+   * between, so "one request is in flight" is something to wait for rather than assume.
+   */
+  const waitForPost = (count: number) =>
+    vi.waitUntil(() => post.mock.calls.length === count, { timeout: 2000, interval: 5 });
+
   const finishReply = async (index: number, text = 'reply') => {
     const stream = streamFor(index);
     stream.write(frame({ type: 'content', text, stopReason: 'end_turn' }));
@@ -77,6 +84,7 @@ describe('ChatService queued messages', () => {
     const { id } = await service.createSession();
     await service.send(id, 'first');
     await waitForEvent('start');
+    await waitForPost(1);
 
     const result = await service.send(id, 'typed ahead');
 
@@ -110,6 +118,7 @@ describe('ChatService queued messages', () => {
     const { id } = await service.createSession();
     await service.send(id, 'first');
     await waitForEvent('start');
+    await waitForPost(1);
     await service.send(id, 'typed ahead');
 
     service.stop(id);
@@ -133,6 +142,7 @@ describe('ChatService queued messages', () => {
     const { id } = await service.createSession();
     await service.send(id, 'first');
     await waitForEvent('start');
+    await waitForPost(1);
     await service.send(id, 'typed ahead');
 
     streamFor(0).destroy(new Error('connection reset'));

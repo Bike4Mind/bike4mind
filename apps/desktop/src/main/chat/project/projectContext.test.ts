@@ -24,46 +24,67 @@ async function gitRepo(): Promise<string> {
 
 describe('loadProjectContext instructions', () => {
   let dir: string;
+  // Never the real ~/.claude: these assertions must not depend on the instructions of whoever
+  // runs the suite, and the suite must not read their files either.
+  let userRoot: string;
   beforeEach(async () => {
     dir = await scratch();
+    userRoot = await scratch();
   });
 
   it('prefers CLAUDE.md over AGENTS.md', async () => {
     await writeFile(join(dir, 'CLAUDE.md'), 'claude rules', 'utf8');
     await writeFile(join(dir, 'AGENTS.md'), 'agents rules', 'utf8');
-    const block = await loadProjectContext(dir, dir);
+    const block = await loadProjectContext(dir, dir, userRoot);
     expect(block).toContain('claude rules');
     expect(block).not.toContain('agents rules');
   });
 
   it('falls back to AGENTS.md', async () => {
     await writeFile(join(dir, 'AGENTS.md'), 'agents rules', 'utf8');
-    expect(await loadProjectContext(dir, dir)).toContain('agents rules');
+    expect(await loadProjectContext(dir, dir, userRoot)).toContain('agents rules');
   });
 
   it('falls back to the project directory when the worktree has none', async () => {
     const worktree = await scratch();
     await writeFile(join(dir, 'CLAUDE.md'), 'main rules', 'utf8');
-    expect(await loadProjectContext(worktree, dir)).toContain('main rules');
+    expect(await loadProjectContext(worktree, dir, userRoot)).toContain('main rules');
   });
 
   it('prefers the worktree copy over the project directory copy', async () => {
     const worktree = await scratch();
     await writeFile(join(dir, 'CLAUDE.md'), 'main rules', 'utf8');
     await writeFile(join(worktree, 'CLAUDE.md'), 'branch rules', 'utf8');
-    const block = await loadProjectContext(worktree, dir);
+    const block = await loadProjectContext(worktree, dir, userRoot);
     expect(block).toContain('branch rules');
     expect(block).not.toContain('main rules');
   });
 
+  it('labels each level with the file it came from, user first', async () => {
+    await writeFile(join(userRoot, 'CLAUDE.md'), 'user rules', 'utf8');
+    await writeFile(join(dir, 'CLAUDE.md'), 'project rules', 'utf8');
+    const block = await loadProjectContext(dir, dir, userRoot);
+    expect(block).toContain(join(userRoot, 'CLAUDE.md'));
+    expect(block).toContain(join(dir, 'CLAUDE.md'));
+    expect(block.indexOf('user rules')).toBeLessThan(block.indexOf('project rules'));
+    expect(block).toContain('most general first');
+  });
+
+  it('gives a session with no working directory the user instructions and no tree', async () => {
+    await writeFile(join(userRoot, 'CLAUDE.md'), 'answer in haiku', 'utf8');
+    const block = await loadProjectContext(undefined, undefined, userRoot);
+    expect(block).toContain('answer in haiku');
+    expect(block).not.toContain('Files in');
+  });
+
   it('omits everything for an empty directory', async () => {
-    expect(await loadProjectContext(dir, dir)).toBe('');
+    expect(await loadProjectContext(dir, dir, userRoot)).toBe('');
   });
 
   it('truncates a large file on a line boundary and says how to read the rest', async () => {
     const lines = Array.from({ length: 4000 }, (_, i) => `line ${i + 1} ${'x'.repeat(20)}`);
     await writeFile(join(dir, 'CLAUDE.md'), lines.join('\n'), 'utf8');
-    const block = await loadProjectContext(dir, dir);
+    const block = await loadProjectContext(dir, dir, userRoot);
     expect(block.length).toBeLessThan(MAX_INSTRUCTIONS_BYTES + 2_000);
     const shown = /first (\d+) lines/.exec(block);
     expect(shown).not.toBeNull();
@@ -124,7 +145,7 @@ describe('loadProjectContext tree', () => {
     await writeFile(join(dir, 'keep.ts'), 'x', 'utf8');
     await mkdir(join(dir, 'out'));
     await writeFile(join(dir, 'out', 'bundle.js'), 'x', 'utf8');
-    const block = await loadProjectContext(dir, dir);
+    const block = await loadProjectContext(dir, dir, await scratch());
     expect(block).toContain('keep.ts');
     expect(block).not.toContain('secret.log');
     expect(block).not.toContain('bundle.js');
@@ -138,14 +159,16 @@ describe('loadProjectContext tree', () => {
     }
     await mkdir(join(dir, 'src'));
     await writeFile(join(dir, 'src', 'main.ts'), 'x', 'utf8');
-    const block = await loadProjectContext(dir, dir);
+    const block = await loadProjectContext(dir, dir, await scratch());
     expect(block).toContain('src/ (1 file)');
     expect(block).toContain('main.ts');
     expect(block).not.toMatch(/node_modules|dist\/|build\/|\.git\//);
   });
 
   it('omits the tree for a directory that does not exist', async () => {
-    expect(await loadProjectContext(join(tmpdir(), 'b4m-nope-does-not-exist'), '/nonexistent')).toBe('');
+    expect(await loadProjectContext(join(tmpdir(), 'b4m-nope-does-not-exist'), '/nonexistent', await scratch())).toBe(
+      ''
+    );
   });
 });
 
@@ -155,7 +178,7 @@ describe('ProjectContextCache', () => {
     const other = await scratch();
     await writeFile(join(dir, 'first.ts'), 'x', 'utf8');
     await writeFile(join(other, 'other.ts'), 'x', 'utf8');
-    const cache = new ProjectContextCache();
+    const cache = new ProjectContextCache(await scratch());
 
     const before = await cache.get('s1', dir, dir);
     await writeFile(join(dir, 'created-later.ts'), 'x', 'utf8');
@@ -171,7 +194,7 @@ describe('ProjectContextCache', () => {
 
   it('keeps sessions apart', async () => {
     const dir = await scratch();
-    const cache = new ProjectContextCache();
+    const cache = new ProjectContextCache(await scratch());
     await writeFile(join(dir, 'a.ts'), 'x', 'utf8');
     const a = await cache.get('a', dir, dir);
     await writeFile(join(dir, 'b.ts'), 'x', 'utf8');

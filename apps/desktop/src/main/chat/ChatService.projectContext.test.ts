@@ -19,9 +19,11 @@ describe('ChatService project context', () => {
   let post: ReturnType<typeof vi.fn>;
   let streams: PassThrough[];
   let project: string;
+  let userRoot: string;
 
   beforeEach(async () => {
     project = await realpath(await mkdtemp(join(tmpdir(), 'b4m-projctx-')));
+    userRoot = await realpath(await mkdtemp(join(tmpdir(), 'b4m-projctx-user-')));
     await writeFile(join(project, 'CLAUDE.md'), 'Always update the nav map.', 'utf8');
     await writeFile(join(project, 'first.ts'), 'x', 'utf8');
 
@@ -42,6 +44,7 @@ describe('ChatService project context', () => {
           getAxiosInstance: () => ({ post }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
+      userInstructionsRoot: userRoot,
       emit: event => events.push(event),
     });
   });
@@ -79,10 +82,30 @@ describe('ChatService project context', () => {
     expect(first.content).not.toContain('created-mid-session.ts');
   });
 
-  it('leaves a session with no project untouched', async () => {
+  it('leaves a session with no project and no user file untouched', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'hi');
     await vi.waitUntil(() => post.mock.calls.length === 1, { timeout: 3000, interval: 5 });
-    expect(post.mock.calls[0][1].messages[0].content).not.toContain('project instructions');
+    expect(post.mock.calls[0][1].messages[0].content).not.toContain('instructions that apply');
+  });
+
+  it('gives a Chat session with no project the user instructions, which it had none of before', async () => {
+    await writeFile(join(userRoot, 'CLAUDE.md'), 'Sign off every reply with a tilde.', 'utf8');
+    const { id } = await service.createSession();
+    await service.send(id, 'hi');
+    await vi.waitUntil(() => post.mock.calls.length === 1, { timeout: 3000, interval: 5 });
+    const system = post.mock.calls[0][1].messages[0].content;
+    expect(system).toContain('Sign off every reply with a tilde.');
+    expect(system).toContain(join(userRoot, 'CLAUDE.md'));
+  });
+
+  it('puts the user instructions above the project ones in a Code session', async () => {
+    await writeFile(join(userRoot, 'CLAUDE.md'), 'User standing rule.', 'utf8');
+    const created = await service.createCodeSession({ directory: project, branch: '', workspace: false });
+    if (!created.ok) throw new Error(created.error);
+
+    await reply(created.session.id, 'first', 1);
+    const system: string = post.mock.calls[0][1].messages[0].content;
+    expect(system.indexOf('User standing rule.')).toBeLessThan(system.indexOf('Always update the nav map.'));
   });
 });

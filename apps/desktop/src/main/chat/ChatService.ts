@@ -258,6 +258,11 @@ export interface ChatServiceDeps {
   /** Paths kept out of reach of shell commands whatever the user granted. Enforced by the file tools, and by the shell only when SANDBOX_SHELL_COMMANDS is on. */
   protectedPaths?: readonly string[];
   /**
+   * Where the user's own CLAUDE.md lives. Overridden only by tests, which must not read - or
+   * depend on the contents of - the real ~/.claude of whoever runs them.
+   */
+  userInstructionsRoot?: string;
+  /**
    * Per-session status for the sidebar. Fed from here because this is where a reply's lifetime
    * is known; the approval gate feeds it the other half.
    */
@@ -383,14 +388,16 @@ export class ChatService {
   private readonly turnRelay = new Map<string, { hops: number; sends: number }>();
 
   /** Instructions and file tree per session, frozen so the cached system prompt never moves. */
-  private readonly projectContext = new ProjectContextCache();
+  private readonly projectContext: ProjectContextCache;
   /** Images a running call reported for the model, keyed by call id until its round is sent. */
   private readonly pendingImages = new Map<string, { mediaType: string; data: string }[]>();
 
   /** Resolved serverConfig fields, cached per environment URL (it is one round trip). */
   private serverConfigCache: { environmentUrl: string; config: ResolvedServerConfig } | null = null;
 
-  constructor(private readonly deps: ChatServiceDeps) {}
+  constructor(private readonly deps: ChatServiceDeps) {
+    this.projectContext = new ProjectContextCache(deps.userInstructionsRoot);
+  }
 
   listSessions(): Promise<ChatSessionSummary[]> {
     return this.deps.store.list();
@@ -1181,14 +1188,15 @@ export class ChatService {
         browser: !!browser,
         mcp: mcpTools.map(binding => binding.definition.schema),
       });
+      const project = session.mode === 'code' ? session.project : undefined;
+      // Started before the wire messages are built so the instruction files are read alongside
+      // them rather than adding a hop of their own; every later turn takes it from the cache.
+      const contextBlock = this.projectContext.get(session.id, project?.workingDirectory, project?.directory);
       const wire = await toCompletionMessages(
         session,
         (attachment: ChatAttachment) => this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null)
       );
-      const project = session.mode === 'code' ? session.project : undefined;
-      const projectContext = project
-        ? await this.projectContext.get(session.id, project.workingDirectory, project.directory)
-        : '';
+      const projectContext = await contextBlock;
       wire.unshift(
         buildSystemMessage(
           roots,
@@ -2572,6 +2580,7 @@ function buildSystemMessage(
         ...mcpGuidance(mcpServers),
         '',
         DESKTOP_ARTIFACT_PROMPT,
+        ...(projectContext ? ['', projectContext] : []),
       ].join('\n'),
     };
   }
@@ -2593,8 +2602,9 @@ function buildSystemMessage(
       'on authentication, report the command error; do not conclude the user is logged out.',
       ...(projectContext
         ? [
-            'The project instructions and file tree are already below: do not list the root or re-read',
-            'CLAUDE.md or AGENTS.md; use glob_files for anything deeper than the tree shows.',
+            'The instruction files that apply here are already below in full, each labelled with its',
+            'path, and so is the file tree: do not list the root, and do not re-read those files or',
+            'anything they import. Use glob_files for anything deeper than the tree shows.',
           ]
         : []),
       'Explore with grep_search and glob_files, not grep, find or ls through bash_execute: they need',
