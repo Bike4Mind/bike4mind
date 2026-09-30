@@ -7,13 +7,14 @@ import Tab from '@mui/joy/Tab';
  * Radius, the hidden indicator and the transparent Tabs background all arrive from the theme
  * (themes/customizations/navigation.tsx), so they are not repeated here.
  *
- * Named ink rather than the opacity the profile page's own copy still uses. Opacity fades a
- * tab toward whatever it sits on, so the same rule lands on a different colour per surface;
- * the text tokens are the recession the rest of the app is built from.
+ * Named ink rather than opacity. Opacity fades a tab toward whatever it sits on, so the same
+ * rule lands on a different colour per surface; the text tokens are the recession the rest
+ * of the app is built from. The page-level tabs (/profile, Gears) are the exception and use
+ * the opacity PageTab in components/common/pageTabs: in ink they read too dim for tabs that
+ * head a whole page.
  *
- * Shared because this block was being hand-copied per surface - `/profile`, the tutorials
- * explorer and the profile sub-tabs each carry their own near-identical version, and the
- * sub-tabs copy had already drifted (it lost the flat bottom corners). Pair it with
+ * Shared because this block was being hand-copied per surface, and the profile sub-tabs
+ * copy had already drifted (it lost the flat bottom corners). Pair it with
  * `profileTabListSx` on the TabList.
  *
  * The colour rules target Typography and SvgIcon rather than the tab itself, so a label

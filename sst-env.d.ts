@@ -430,6 +430,14 @@ declare module "sst" {
       "type": "sst.aws.Queue"
       "url": string
     }
+    "driveDisconnectPurgeQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "githubLakeIngestQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
     "dataLakeTaxonomyQueueDLQ": {
       "type": "sst.aws.Queue"
       "url": string

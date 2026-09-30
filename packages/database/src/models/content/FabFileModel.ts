@@ -1808,10 +1808,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return results;
   }
 
-  /** Shared by the Drive-connection finder and count so the disconnect dialog and the purge agree. */
-  private driveConnectionInDataLakeFilter(driveConnectionId: string, datalakeTag: string) {
+  /** Shared by a connector's finder and count so the disconnect dialog and the purge agree. */
+  private connectorInDataLakeFilter(connectorFilter: Record<string, string>, datalakeTag: string) {
     return {
-      driveConnectionId,
+      ...connectorFilter,
       tags: { $elemMatch: { name: datalakeTag } },
       // Exclude in-flight rows: a 'pending' file from a sync still mid-upload is not yet a
       // durable member, so it must not be mistaken for a delete (absent from the fresh walk it
@@ -1820,22 +1820,50 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     };
   }
 
+  /**
+   * Every file a given connector connection (Drive or GitHub) has ingested into a lake. The basis
+   * a re-sync diffs its fresh walk/tree against: a stored file absent from the fresh read was
+   * DELETED, and one whose content moved was EDITED - neither detectable from the walk alone.
+   *
+   * `includeDeleted` drops the archivedAt/deletedAt filters for the disconnect purge, which must
+   * reach an archived lake's members (every member is archivedAt-stamped when its lake archives)
+   * and soft-deleted rows, mirroring `hardDeleteByDataLakeTag`. `status: 'pending'` rows are
+   * excluded either way.
+   */
+  private async findByConnectorInDataLake(
+    connectorFilter: Record<string, string>,
+    datalakeTag: string,
+    options?: { includeDeleted?: boolean; limit?: number }
+  ): Promise<IFabFileDocument[]> {
+    const filter = this.connectorInDataLakeFilter(connectorFilter, datalakeTag);
+    const query = options?.includeDeleted
+      ? this.fabFileModel.find(filter).setOptions({ includeDeleted: true })
+      : this.fabFileModel.find({ ...filter, deletedAt: null, archivedAt: null });
+    if (options?.limit !== undefined) query.limit(options.limit);
+    const docs = await query;
+    return docs.map(d => d.toJSON());
+  }
+
   async findByDriveConnectionIdInDataLake(
     driveConnectionId: string,
     datalakeTag: string,
-    options?: { includeDeleted?: boolean }
+    options?: { includeDeleted?: boolean; limit?: number }
   ): Promise<IFabFileDocument[]> {
-    const filter = this.driveConnectionInDataLakeFilter(driveConnectionId, datalakeTag);
-    const docs = options?.includeDeleted
-      ? await this.fabFileModel.find(filter).setOptions({ includeDeleted: true })
-      : await this.fabFileModel.find({ ...filter, deletedAt: null, archivedAt: null });
-    return docs.map(d => d.toJSON());
+    return this.findByConnectorInDataLake({ driveConnectionId }, datalakeTag, options);
   }
 
   async countByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<number> {
     // countDocuments is not soft-delete-plugin-filtered, so this counts the includeDeleted set the
     // disconnect purge reaches, archived and soft-deleted rows included.
-    return this.fabFileModel.countDocuments(this.driveConnectionInDataLakeFilter(driveConnectionId, datalakeTag));
+    return this.fabFileModel.countDocuments(this.connectorInDataLakeFilter({ driveConnectionId }, datalakeTag));
+  }
+
+  async findByGitHubConnectionIdInDataLake(
+    githubConnectionId: string,
+    datalakeTag: string,
+    options?: { includeDeleted?: boolean; limit?: number }
+  ): Promise<IFabFileDocument[]> {
+    return this.findByConnectorInDataLake({ githubConnectionId }, datalakeTag, options);
   }
 
   async findDriveFileIdsByBatchId(batchId: string): Promise<string[]> {
@@ -3544,6 +3572,10 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     driveMd5Checksum: { type: String },
     sourceLakeId: { type: String },
     driveConnectionId: { type: String },
+    // GitHub repository ingest provenance. Populated when sourceType === GITHUB.
+    githubConnectionId: { type: String },
+    githubPath: { type: String },
+    githubBlobSha: { type: String },
     // Curator supersession rulings, one per lake - see IFabFile.supersededInLakes. `default:
     // undefined` so an unruled file stores no empty array, matching `versions` above.
     // `select: false`: this is control-plane data (who ruled, when, which lake), never something a
@@ -3660,6 +3692,9 @@ FabFileSchema.index({ driveFileId: 1 });
 // three equality keys the query also carries bound it to the live rows in the index itself
 // (archivedAt and tags.name stay post-filters; a multikey array key here would not help).
 FabFileSchema.index({ driveConnectionId: 1, deletedAt: 1, status: 1 });
+
+// GitHub re-sync reconcile (findByGitHubConnectionIdInDataLake), same shape and reason as the Drive one above.
+FabFileSchema.index({ githubConnectionId: 1, deletedAt: 1, status: 1 });
 
 // Un-chunked rescue sweep (buildFabFileChunkScanFilter: self-host worker scan + the hosted
 // dataLakeBatchReconcile cron). Equality prefix, createdAt range last; without it the daily

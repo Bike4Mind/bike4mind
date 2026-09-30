@@ -34,6 +34,19 @@ describe('buildToolUsageEvent', () => {
     });
   });
 
+  it('takes a media feature in place of tool when the caller names one', () => {
+    const event = buildToolUsageEvent({
+      quest,
+      user,
+      provider: 'elevenlabs',
+      model: 'eleven_music_v1',
+      costUsd: 0.5,
+      creditsCharged: 100,
+      feature: 'music_generation',
+    });
+    expect(event.feature).toBe('music_generation');
+  });
+
   it('attributes the charge to the organization when one is present', () => {
     const event = buildToolUsageEvent({
       quest,

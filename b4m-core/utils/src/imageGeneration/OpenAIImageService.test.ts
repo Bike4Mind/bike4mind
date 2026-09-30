@@ -455,6 +455,23 @@ describe('OpenAIImageService.generate legacy dall-e sizing', () => {
       expect(params.size).toBe(size);
     }
   );
+
+  const legacyModels = [
+    ['dall-e-2', ImageModels.DALL_E_2],
+    ['the legacy dall-e-3 model ID', LEGACY_DALL_E_3_MODEL_ID],
+  ];
+
+  it.each(legacyModels)('sends no size for %s when none is supplied', async (_label, model) => {
+    const params = await generateParams({ model });
+
+    expect(params.size).toBeUndefined();
+  });
+
+  it.each(legacyModels)('coerces a size it cannot parse to 1024x1024 for %s', async (_label, model) => {
+    const params = await generateParams({ model, size: 'wide' });
+
+    expect(params.size).toBe('1024x1024');
+  });
 });
 
 describe('OpenAIImageService.generate gpt-image quality forwarding (#2742)', () => {

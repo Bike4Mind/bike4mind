@@ -1,4 +1,12 @@
-import { filterToolArtifactMarkup, stripDeliveredArtifactBlocks, type StreamChannel } from '@bike4mind/common';
+import {
+  ARTIFACT_DELIVERED_PLACEHOLDER,
+  ARTIFACT_REMOVED_PLACEHOLDER,
+  filterToolArtifactMarkup,
+  hasDeliverablePinnedArtifact,
+  stripDeliveredArtifactBlocks,
+  stripToolArtifactMarkup,
+  type StreamChannel,
+} from '@bike4mind/common';
 import type { CompletionInfo } from './backend';
 
 /**
@@ -22,6 +30,25 @@ export async function handleToolResultStreaming(
   if (filtered !== null) {
     await streamCallback([filtered], { channel: 'tool-artifact' });
   }
+}
+
+/**
+ * Strips artifact markup from a tool result before it re-enters history, so the model cannot echo
+ * it into a second card. Live-emitting backends pass `delivered` = whether their tool-artifact
+ * emit fired. The `hasDeliverablePinnedArtifact` fallback is for the OpenAI Responses path, whose
+ * artifact reaches the client through sharedToolBuilder extraction instead.
+ *
+ * The delivered/removed choice is made once per result and stamped on every block it contains.
+ * That holds because each emitter emits one pinned block; a result mixing a foreign-type block
+ * with a pinned one would label both DELIVERED.
+ */
+export function stripUnstreamedToolResult(toolName: string, result: string, delivered?: boolean): string {
+  return stripToolArtifactMarkup(
+    result,
+    (delivered ?? hasDeliverablePinnedArtifact(toolName, result))
+      ? ARTIFACT_DELIVERED_PLACEHOLDER
+      : ARTIFACT_REMOVED_PLACEHOLDER
+  );
 }
 
 // The four backends' own completion-callback types differ only in whether `info` is required

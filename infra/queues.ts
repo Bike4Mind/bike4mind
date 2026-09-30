@@ -86,6 +86,17 @@ const driveLakeIngestQueue = new sst.aws.Queue('driveLakeIngestQueue', {
   },
 });
 
+// GitHub repository -> data lake ingest. Same shape as driveLakeIngestQueue: long ingest, self re-enqueue.
+const githubLakeIngestQueueDLQ = new sst.aws.Queue('githubLakeIngestQueueDLQ', {});
+const githubLakeIngestQueue = new sst.aws.Queue('githubLakeIngestQueue', {
+  // Must exceed the handler's 10-minute timeout (below) or SQS redelivers mid-run.
+  visibilityTimeout: '12 minutes',
+  dlq: {
+    queue: githubLakeIngestQueueDLQ.arn,
+    retry: 2,
+  },
+});
+
 // FabFile Vectorize Queue
 const fabFileVectorizeQueueDLQ = new sst.aws.Queue('fabFileVectorizeQueueDLQ', {});
 const fabFileVectorizeQueue = new sst.aws.Queue('fabFileVectorizeQueue', {
@@ -855,6 +866,52 @@ const driveLakeIngestQueueSubscription = driveLakeIngestQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
+// Drive disconnect purge: deletes the files a disconnected Drive connection ingested, one bounded
+// slice per run, then releases the connection. Links fabFileBucket for the stored-object deletes and
+// its own queue because each slice re-enqueues the remainder.
+const driveDisconnectPurgeQueueDLQ = new sst.aws.Queue('driveDisconnectPurgeQueueDLQ', {});
+const driveDisconnectPurgeQueue = new sst.aws.Queue('driveDisconnectPurgeQueue', {
+  visibilityTimeout: '12 minutes', // > the 10-minute handler timeout + margin
+  dlq: {
+    queue: driveDisconnectPurgeQueueDLQ.arn,
+    retry: 3,
+  },
+});
+const driveDisconnectPurgeQueueSubscription = driveDisconnectPurgeQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/driveDisconnectPurge.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, fabFileBucket, driveDisconnectPurgeQueue],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
+const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/githubLakeIngest.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    // fabFileBucket for the uploads; the queue itself for deadline, rate-limit and claim-loser re-enqueues.
+    link: [...allSecrets, fabFileBucket, githubLakeIngestQueue],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
 // What's New Highlights Queue
 // Generates weekly highlights summary from What's New modals and posts to Slack
 const whatsNewHighlightsQueueDLQ = new sst.aws.Queue('whatsNewHighlightsQueueDLQ', {
@@ -1488,6 +1545,8 @@ export {
   lakeMemoryQueue,
   lakeInconsistencyModelQueue,
   driveLakeIngestQueue,
+  driveDisconnectPurgeQueue,
+  githubLakeIngestQueue,
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
@@ -1519,6 +1578,8 @@ export {
   lakeMemoryQueueDLQ,
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueueDLQ,
+  driveDisconnectPurgeQueueDLQ,
+  githubLakeIngestQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -1552,6 +1613,8 @@ export {
   lakeMemoryQueueSubscription,
   lakeInconsistencyModelQueueSubscription,
   driveLakeIngestQueueSubscription,
+  driveDisconnectPurgeQueueSubscription,
+  githubLakeIngestQueueSubscription,
   liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,
