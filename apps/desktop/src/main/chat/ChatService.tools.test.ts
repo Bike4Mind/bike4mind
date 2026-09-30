@@ -154,7 +154,7 @@ describe('ChatService tool loop', () => {
     await firstRequest();
 
     const preamble = post.mock.calls[0][1].messages[0];
-    expect(preamble.content).toMatch(/say in one short line what you are after/);
+    expect(preamble.content).toMatch(/say in one short sentence what you are after/);
     expect(preamble.content).toMatch(/first batch of the turn/);
   });
 
