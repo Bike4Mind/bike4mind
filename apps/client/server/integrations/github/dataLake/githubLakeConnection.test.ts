@@ -408,6 +408,19 @@ describe('releaseGitHubLakeConnection', () => {
     expect(result).toEqual({ installationRetained: true });
   });
 
+  it('still uninstalls when a concurrent release took the sibling binding first (no binding remains after ours)', async () => {
+    const calls: string[] = [];
+    h.ghConnFindByInstallationId
+      .mockResolvedValueOnce([CONNECTION, { id: 'sibling', repositoryId: 999 }])
+      .mockResolvedValueOnce([]);
+    h.ghConnRelease.mockImplementation(async () => (calls.push('release'), true));
+    h.deleteInstallation.mockImplementation(async () => void calls.push('uninstall'));
+    const result = await releaseGitHubLakeConnection(CONNECTION, CONFIG);
+    expect(calls).toEqual(['release', 'uninstall']);
+    expect(h.deleteInstallation).toHaveBeenCalledWith(CONFIG, CONNECTION.installationId);
+    expect(result).toEqual({ installationRetained: false });
+  });
+
   it('keeps the row for retry when the uninstall fails', async () => {
     h.ghConnFindByInstallationId.mockResolvedValue([CONNECTION]);
     h.deleteInstallation.mockRejectedValue(new Error('GitHub is down'));
@@ -526,6 +539,13 @@ describe('revokeGitHubLakeConnection', () => {
       expect.objectContaining({ connectionId: 'conn1', logger })
     );
     expect(h.ghConnRelease).toHaveBeenCalledWith(CONNECTION.id, CONNECTION.organizationId);
+  });
+
+  it('does not re-enable the connection when the purge fails, since the App has lost access', async () => {
+    h.purgeConnectionIngestedFiles.mockRejectedValue(new Error('storage blip'));
+    await expect(revokeGitHubLakeConnection('conn1', logger)).rejects.toThrow('storage blip');
+    expect(h.purgeConnectionIngestedFiles.mock.calls[0][2].restore).toBeUndefined();
+    expect(h.ghConnRelease).not.toHaveBeenCalled();
   });
 
   it('propagates the 409 a live sync raises, so the caller lets SQS retry the message', async () => {

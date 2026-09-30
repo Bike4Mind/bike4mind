@@ -34,6 +34,11 @@ describe('githubLakeRevoke', () => {
     expect(h.revokeGitHubLakeConnection).not.toHaveBeenCalled();
   });
 
+  it('skips an event with no records instead of throwing a TypeError', async () => {
+    await expect(dispatch({ Records: [] } as never, {} as never, logger)).resolves.toBeUndefined();
+    expect(h.revokeGitHubLakeConnection).not.toHaveBeenCalled();
+  });
+
   it('swallows invalid JSON', async () => {
     await expect(dispatch({ Records: [{ body: '{not json' }] } as never, {} as never, logger)).resolves.toBeUndefined();
     expect(h.revokeGitHubLakeConnection).not.toHaveBeenCalled();

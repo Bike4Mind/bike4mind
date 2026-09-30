@@ -277,12 +277,19 @@ export async function releaseGitHubLakeConnection(
   config: GitHubLakeAppConfig | null
 ): Promise<{ installationRetained: boolean }> {
   const bindings = await orgGitHubLakeConnectionRepository.findByInstallationId(connection.installationId);
-  const installationRetained = bindings.some(binding => binding.id !== connection.id);
-  if (!installationRetained) {
+  if (!bindings.some(binding => binding.id !== connection.id)) {
     await deleteInstallation(requireGitHubLakeAppConfig(config), connection.installationId);
+    await orgGitHubLakeConnectionRepository.release(connection.id, connection.organizationId);
+    return { installationRetained: false };
   }
   await orgGitHubLakeConnectionRepository.release(connection.id, connection.organizationId);
-  return { installationRetained };
+  // Concurrent releases of an installation's last bindings (the revoke queue's installation.deleted
+  // fan-out) each see the other and skip the uninstall, so recount after our own delete: the last one
+  // out still uninstalls. deleteInstallation treats GitHub's 404 as success, so a double call is safe.
+  const remaining = await orgGitHubLakeConnectionRepository.findByInstallationId(connection.installationId);
+  if (remaining.length > 0) return { installationRetained: true };
+  await deleteInstallation(requireGitHubLakeAppConfig(config), connection.installationId);
+  return { installationRetained: false };
 }
 
 /**
@@ -295,7 +302,8 @@ export async function releaseGitHubLakeConnection(
 export async function disconnectGitHubLakeConnection(
   lake: IDataLakeDocument,
   connection: IOrgGitHubLakeConnectionDocument,
-  logger: PurgeConnectionLogger
+  logger: PurgeConnectionLogger,
+  { reenableOnPurgeFailure = true }: { reenableOnPurgeFailure?: boolean } = {}
 ): Promise<{ installationRetained: boolean }> {
   // Paired with claimForSync's `enabled` guard: a live sync would keep minting files past the purge.
   const disabled = await orgGitHubLakeConnectionRepository.disableIfNoLiveSyncClaim(
@@ -314,7 +322,7 @@ export async function disconnectGitHubLakeConnection(
       label: 'GitHub lake disconnect',
       logger,
       // Restore, don't force: an archived lake's connection was already disabled and must stay so.
-      restore: disabled.wasEnabled ? () => enableGitHubConnectionForLake(lake.id) : undefined,
+      restore: reenableOnPurgeFailure && disabled.wasEnabled ? () => enableGitHubConnectionForLake(lake.id) : undefined,
     }
   );
   // The App config is only needed to uninstall; a retained installation releases without it.
@@ -339,7 +347,9 @@ export async function revokeGitHubLakeConnection(connectionId: string, logger: P
     await releaseGitHubLakeConnection(connection, getGitHubLakeAppConfig());
     return;
   }
-  await disconnectGitHubLakeConnection(lake, connection, logger);
+  // No re-enable on a failed purge: the App has lost access, so a sync could only fail; the disabled
+  // row stays for the SQS retry, and disableIfNoLiveSyncClaim accepts an already-disabled row.
+  await disconnectGitHubLakeConnection(lake, connection, logger, { reenableOnPurgeFailure: false });
 }
 
 /**

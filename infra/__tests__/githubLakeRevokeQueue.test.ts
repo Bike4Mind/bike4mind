@@ -26,6 +26,23 @@ describe('githubLakeRevokeQueue', () => {
     expect(queue).toMatch(/retry:\s*6\b/);
   });
 
+  it('keeps the retry window past the longest sync claim and the visibility above the handler timeout', () => {
+    const minutes = (source: string, key: string) => {
+      const match = source.match(new RegExp(`${key}:\\s*'(\\d+) minutes'`));
+      expect(match, `${key} in minutes`).not.toBeNull();
+      return Number(match?.[1]);
+    };
+    const queue = cut(QUEUES, "const githubLakeRevokeQueue = new sst.aws.Queue('githubLakeRevokeQueue'", '\n});');
+    const sub = cut(QUEUES, 'const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(', '\n);');
+    const retry = Number(queue.match(/retry:\s*(\d+)/)?.[1]);
+    const claim = read('packages/database/src/models/infra/integrations/OrgGitHubLakeConnectionModel.ts').match(
+      /CHAINED_SYNC_CLAIM_STALE_MS = (\d+) \* 60 \* 1000/
+    );
+    expect(claim, 'CHAINED_SYNC_CLAIM_STALE_MS in minutes').not.toBeNull();
+    expect(retry * minutes(queue, 'visibilityTimeout')).toBeGreaterThan(Number(claim?.[1]));
+    expect(minutes(queue, 'visibilityTimeout')).toBeGreaterThan(minutes(sub, 'timeout'));
+  });
+
   it('subscribes the handler with a 10-minute timeout, the VPC and the bucket, one record at a time, without linking its own queue', () => {
     const sub = cut(QUEUES, 'const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(', '\n);');
     expect(sub).toMatch(/handler:\s*'apps\/client\/server\/queueHandlers\/githubLakeRevoke\.dispatch'/);

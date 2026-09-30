@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   webhookSecret: 'test-webhook-secret',
   findByInstallationId: vi.fn(),
   sendToQueue: vi.fn(),
+  baseApiOptions: [] as unknown[],
   capturedHandler: null as ((req: NextApiRequest, res: NextApiResponse) => Promise<void>) | null,
 }));
 
@@ -14,11 +15,14 @@ const h = vi.hoisted(() => ({
 // Lives on the vi.hoisted object (not a plain `let`) because vi.mock factories run before top-level
 // `let`/`const` statements execute, so a plain module-scoped variable would still be in its TDZ.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: vi.fn().mockReturnValue({
-    post: vi.fn().mockImplementation((handler: (req: NextApiRequest, res: NextApiResponse) => Promise<void>) => {
-      h.capturedHandler = handler;
-      return handler;
-    }),
+  baseApi: vi.fn((options: unknown) => {
+    h.baseApiOptions.push(options);
+    return {
+      post: vi.fn().mockImplementation((handler: (req: NextApiRequest, res: NextApiResponse) => Promise<void>) => {
+        h.capturedHandler = handler;
+        return handler;
+      }),
+    };
   }),
 }));
 
@@ -76,8 +80,11 @@ describe('/api/webhooks/github-lake-app', () => {
     h.webhookSecret = 'test-webhook-secret';
     h.findByInstallationId.mockResolvedValue([]);
     h.sendToQueue.mockResolvedValue(undefined);
-    // Re-registered because vi.clearAllMocks() above clears the mock implementation captured at import time.
     expect(h.capturedHandler).toBeTruthy();
+  });
+
+  it('is registered unauthenticated, since GitHub signs the delivery instead of sending a session', () => {
+    expect(h.baseApiOptions).toEqual([{ auth: false }]);
   });
 
   it('503s and processes nothing when the webhook secret is not configured', async () => {
@@ -160,6 +167,36 @@ describe('/api/webhooks/github-lake-app', () => {
     const { run, status } = post({ action: 'deleted' }, 'installation');
     await run;
     expect(status).toHaveBeenCalledWith(400);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('400s a removed delivery that names no repository, rather than acknowledging it as queued: 0', async () => {
+    const { run, status } = post(
+      { action: 'removed', installation: { id: 42 }, repositories_removed: [] },
+      'installation_repositories'
+    );
+    await run;
+    expect(status).toHaveBeenCalledWith(400);
+    expect(h.findByInstallationId).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('400s a correctly signed body that is not JSON', async () => {
+    const body = '{not json';
+    const req = makeReq(body, { 'x-github-event': 'installation', 'x-hub-signature-256': sign(h.webhookSecret, body) });
+    const { res, status, json } = makeRes();
+    await (handler as unknown as (req: NextApiRequest, res: NextApiResponse) => Promise<void>)(req, res);
+    expect(status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith({ error: 'Invalid JSON payload' });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('413s a body over the size cap before checking its signature', async () => {
+    const body = 'x'.repeat(1024 * 1024 + 1);
+    const req = makeReq(body, { 'x-github-event': 'installation', 'x-hub-signature-256': sign(h.webhookSecret, body) });
+    const { res, status } = makeRes();
+    await (handler as unknown as (req: NextApiRequest, res: NextApiResponse) => Promise<void>)(req, res);
+    expect(status).toHaveBeenCalledWith(413);
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
