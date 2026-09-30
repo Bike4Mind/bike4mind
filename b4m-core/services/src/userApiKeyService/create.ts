@@ -175,7 +175,7 @@ export const createUserApiKey = async (
   // agentId. Same constant the runtime gate reads, so mint and runtime state one rule.
   if (params.scopes.length > 1 && params.scopes.some(scope => CONFINED_API_KEY_SCOPES.includes(scope))) {
     throw new BadRequestError(
-      'A confined scope (embed:chat, overwatch-ingest:write, cc-bridge:connect) must be the only scope on a key'
+      `A confined scope (${CONFINED_API_KEY_SCOPES.join(', ')}) must be the only scope on a key`
     );
   }
 

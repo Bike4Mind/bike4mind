@@ -29,4 +29,5 @@ export * from './contextTelemetry';
 export * from './dataLake';
 export * from './briefcasePrompt';
 export * from './imageGenerationTemplate';
+export * from './qa';
 export * from './imageApi';
