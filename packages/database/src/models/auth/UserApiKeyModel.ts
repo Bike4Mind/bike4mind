@@ -137,7 +137,13 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
   }
 
   async countActiveByUserId(userId: string): Promise<number> {
-    return this.model.countDocuments({ userId, status: ApiKeyStatus.ACTIVE });
+    // Mirror findActiveByKeyPrefix: an expired key cannot authenticate, so it must
+    // not consume a per-user slot. `expiresAt: null` also matches rows with no expiry.
+    return this.model.countDocuments({
+      userId,
+      status: ApiKeyStatus.ACTIVE,
+      $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }],
+    });
   }
 
   findByProductId(productId: string) {

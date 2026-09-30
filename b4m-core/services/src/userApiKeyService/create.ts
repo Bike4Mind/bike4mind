@@ -26,6 +26,13 @@ import { generateCallbackSigningSecret } from './callbackSigningSecret';
 // path (setEmbedKeySpendCap).
 export const EMBED_SPEND_CAP_MAX_CREDITS = 100_000_000;
 
+/**
+ * Machine-readable tag on the per-user active-key cap rejection. Callers that must
+ * present that refusal in their own protocol shape (the OAuth ai-token exchange)
+ * match on this code rather than the human message, which is free to change.
+ */
+export const API_KEY_USER_CAP_ERROR_CODE = 'API_KEY_USER_CAP';
+
 const createUserApiKeySchema = z.object({
   name: z.string().min(1).max(100),
   scopes: z.array(z.enum(ApiKeyScope)).min(1),
@@ -249,7 +256,9 @@ export const createUserApiKey = async (
   if (!isSystemUser) {
     const activeCount = await db.userApiKeys.countActiveByUserId(userId);
     if (activeCount >= MAX_ACTIVE_KEYS_PER_USER) {
-      throw new BadRequestError(`Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`);
+      throw new BadRequestError(`Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`, {
+        code: API_KEY_USER_CAP_ERROR_CODE,
+      });
     }
   }
 

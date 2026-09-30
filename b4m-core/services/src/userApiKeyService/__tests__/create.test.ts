@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createUserApiKey, EMBED_SPEND_CAP_MAX_CREDITS } from '../create';
-import { ApiKeyScope, ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
+import { createUserApiKey, EMBED_SPEND_CAP_MAX_CREDITS, API_KEY_USER_CAP_ERROR_CODE } from '../create';
+import { ApiKeyScope, ApiKeyStatus, BadRequestError, CreditHolderType } from '@bike4mind/common';
 
 vi.mock('bcryptjs', async () => {
   const { bcryptMockFactory } = await import('./helpers/bcryptMock');
@@ -91,11 +91,21 @@ describe('createUserApiKey — overwatch ingest scope', () => {
     ).resolves.toBeDefined();
   });
 
-  it('rogue-admin scenario: non-system user hits 10-key cap', async () => {
+  it('rogue-admin scenario: non-system user hits 10-key cap, tagged with a stable code', async () => {
     repo = makeRepo({ countActiveByUserId: vi.fn().mockResolvedValue(10) });
-    await expect(
-      createUserApiKey('admin-1', baseParams, { db: { userApiKeys: repo as any }, systemUserId: 'sys-1' })
-    ).rejects.toThrow('Maximum 10 active API keys allowed per user');
+    const error = await createUserApiKey('admin-1', baseParams, {
+      db: { userApiKeys: repo as any },
+      systemUserId: 'sys-1',
+    }).then(
+      () => null,
+      (err: unknown) => err
+    );
+
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect((error as BadRequestError).message).toBe('Maximum 10 active API keys allowed per user');
+    // The tag is the contract the OAuth ai-token route matches on; the message is not.
+    expect((error as BadRequestError).additionalInfo?.code).toBe(API_KEY_USER_CAP_ERROR_CODE);
+    expect(repo.create).not.toHaveBeenCalled();
   });
 
   it('stores createdByUserId in metadata', async () => {

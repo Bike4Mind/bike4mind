@@ -14,9 +14,20 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 
 // Minimal enum surface the handler reads (avoids loading real @bike4mind/common).
+// BadRequestError is included (and constructed by the tests) so the handler's
+// `instanceof` check sees the same class identity as the rejection it inspects.
 vi.mock('@bike4mind/common', () => ({
   ApiKeyScope: { AI_GENERATE: 'ai:generate', ME_READ: 'me:read' },
   ApiKeyStatus: { ACTIVE: 'active', RATE_LIMITED: 'rate_limited', DISABLED: 'disabled', EXPIRED: 'expired' },
+  BadRequestError: class BadRequestError extends Error {
+    constructor(
+      message?: string,
+      public additionalInfo?: Record<string, unknown>
+    ) {
+      super(message);
+      this.name = 'BadRequestError';
+    }
+  },
 }));
 
 const mockTryIncrement = vi.fn();
@@ -47,6 +58,7 @@ vi.mock('@bike4mind/database/auth', () => ({
 const mockCreateUserApiKey = vi.fn();
 const mockRevokeUserApiKey = vi.fn();
 vi.mock('@bike4mind/services', () => ({
+  API_KEY_USER_CAP_ERROR_CODE: 'API_KEY_USER_CAP',
   userApiKeyService: {
     createUserApiKey: (...a: any[]) => mockCreateUserApiKey(...a),
     revokeUserApiKey: (...a: any[]) => mockRevokeUserApiKey(...a),
@@ -70,6 +82,8 @@ vi.mock('@server/auth/verifyFederatedIdToken', () => ({
 
 import handler from '../../../pages/api/oauth/ai-token';
 import { FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
+import { BadRequestError } from '@bike4mind/common';
+import { API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/services';
 
 const FEDERATED_CLIENT = {
   name: 'VibesWire',
@@ -358,6 +372,37 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     expect(mockRevokeUserApiKey.mock.invocationCallOrder[0]).toBeLessThan(
       mockCreateUserApiKey.mock.invocationCallOrder[0]
     );
+  });
+
+  it('per-user key cap → 400 invalid_request, OAuth-shaped, no audit', async () => {
+    // The service tags the cap refusal so the exchange answers in OAuth shape instead
+    // of letting baseApi render a bare 400 the client cannot parse.
+    mockCreateUserApiKey.mockRejectedValue(
+      new BadRequestError('Maximum 10 active API keys allowed per user', { code: API_KEY_USER_CAP_ERROR_CODE })
+    );
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData()).toEqual({
+      error: 'invalid_request',
+      error_description: 'Maximum 10 active API keys allowed per user',
+    });
+    expect(mockAuditCreate).not.toHaveBeenCalled();
+    expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('cap reached'));
+  });
+
+  it('a non-cap error from mint still propagates unchanged (not relabeled)', async () => {
+    // Only the tagged cap refusal may be rewritten; an untagged BadRequestError or a
+    // generic failure stays the generic handler's to render (500/its own shape).
+    mockCreateUserApiKey.mockRejectedValue(new BadRequestError('something else went wrong'));
+    const first = makeReq();
+    await expect(handler(first.req as any, first.res as any)).rejects.toThrow('something else went wrong');
+
+    mockCreateUserApiKey.mockRejectedValue(new Error('mongo down'));
+    const second = makeReq();
+    await expect(handler(second.req as any, second.res as any)).rejects.toThrow('mongo down');
+    expect(mockAuditCreate).not.toHaveBeenCalled();
   });
 
   it('AC8: per-client rate limit exceeded → 429', async () => {

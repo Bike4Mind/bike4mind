@@ -2,6 +2,9 @@ export * as referService from './referService';
 export * as userService from './userService';
 export * as authSessionService from './authSessionService';
 export * as userApiKeyService from './userApiKeyService';
+// Flat export: callers outside the service (the OAuth ai-token route) must recognize
+// this refusal, and the namespace form would make the machine code easy to miss.
+export { API_KEY_USER_CAP_ERROR_CODE } from './userApiKeyService/create';
 export * as counterService from './countersService';
 export * as importHistoryService from './importHistoryService';
 export * as sessionService from './sessionService';
