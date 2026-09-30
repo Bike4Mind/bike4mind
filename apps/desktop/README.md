@@ -1,8 +1,7 @@
 # @bike4mind/desktop
 
 Electron desktop client for Bike4Mind. It signs in against a Bike4Mind backend, holds local
-conversations in two modes, and runs local tools behind an approval gate. No
-packaging/installer yet.
+conversations in two modes, and runs local tools behind an approval gate.
 
 The web SPA (`apps/client`) cannot be wrapped: it is a Next.js server-rendered shell that
 hydrates Tanstack Router, not a static bundle. So this app has its own lean renderer
@@ -27,6 +26,107 @@ Electron against it with HMR.
 | `pnpm typecheck` | `tsc` over both tsconfig projects |
 | `pnpm typecheck:fast` | `tsgo`, falling back to `tsc` |
 | `pnpm test` | vitest |
+| `pnpm package` | Installers for the host platform, into `release/` |
+
+## Packaging
+
+`electron-builder` assembles what `electron-vite build` put in `out/`; its config is
+[`electron-builder.yml`](./electron-builder.yml). Artifacts land in `release/`, which is
+gitignored.
+
+| Command | Produces |
+| --- | --- |
+| `pnpm package` | everything the host platform can build |
+| `pnpm package:mac` | `dmg` and `zip`, both for arm64 and x64 |
+| `pnpm package:win` | `nsis` installer, x64 |
+| `pnpm package:dir` | an unpacked `.app`/directory, no installer - the fast loop |
+
+The macOS `zip` is not redundant with the `dmg`. The dmg is the human-facing installer;
+the zip is the format a Squirrel.Mac auto-updater consumes, so it has to exist before
+auto-update (T44) can.
+
+### Baking the backend URL
+
+`B4M_DEFAULT_API_URL` is substituted into the main bundle at build time and is what makes
+**Production** selectable in the environment picker - `hostedAvailable()` in
+`src/main/auth/environment.ts` is false whenever it is empty, and the picker then reads
+"Production (not set in this build)". A packaged app inherits no shell environment, so
+there is nothing to read at runtime.
+
+**There is deliberately no fallback URL in source.** This repo is public and open-core;
+committing a hostname here would put it in every fork's bundle. The CLI has the same rule
+and the same shape (`packages/cli/tsdown.config.ts`, injected in `release.yaml` from a repo
+variable), so the two clients are branded the same way.
+
+Supply it per build, highest precedence first:
+
+```bash
+B4M_DEFAULT_API_URL=https://your-backend.example pnpm package:mac
+```
+
+or, to stop retyping it, put it in `apps/desktop/.env.local` - which `.gitignore` already
+covers, at the root, for `.env` and `.env*.local` alike:
+
+```
+B4M_DEFAULT_API_URL=https://your-backend.example
+```
+
+Build with neither and the app ships with no hosted option at all, which is the correct
+state for an unbranded fork: Local Dev and a self-hosted URL still work.
+
+### Signing
+
+Nothing in `electron-builder.yml` names a certificate, and an unsigned build is the
+supported default - it produces a working dmg on a machine with no credentials at all.
+electron-builder logs `skipped macOS application code signing` and ad-hoc signs instead,
+which is the minimum macOS needs to run an arm64 build locally. An unsigned app is still
+quarantined on another machine: Gatekeeper needs a right-click -> Open, or
+`xattr -d com.apple.quarantine`.
+
+Signing turns itself on once credentials are in the environment:
+
+| Variable | Effect |
+| --- | --- |
+| `CSC_LINK` + `CSC_KEY_PASSWORD` | base64 `.p12` (or a file path) used on both platforms |
+| `WIN_CSC_LINK` + `WIN_CSC_KEY_PASSWORD` | Windows-only certificate, for a combined build |
+| `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | notarization credentials |
+
+A "Developer ID Application" identity already in the login keychain is picked up with no
+variables at all. `hardenedRuntime` and `build/entitlements.mac.plist` are always on: they
+are inert while unsigned and are what notarization will require, and the entitlements are
+the ones this app actually needs (JIT, and spawning unsigned child processes for shell
+commands and MCP servers).
+
+Notarization is the one thing not enabled by default, because `notarize: true` without
+credentials is a hard build failure rather than a warning. Turn it on per invocation:
+
+```bash
+pnpm package:mac -c.mac.notarize=true
+```
+
+**Still blocked on certificates:** a Developer ID Application certificate (macOS) and an
+EV or OV code-signing certificate (Windows). Until then a macOS user has to clear
+quarantine by hand and a Windows user gets a SmartScreen warning. The config does not
+change when they arrive - only the environment does.
+
+### What ships, and what does not
+
+`dependencies` in this package's `package.json` is the *unbundled runtime* closure, not
+everything the app imports. Vite bundles the renderer, so React, MUI Joy, Tanstack Router
+and the markdown stack are build-time only and live in `devDependencies`; electron-builder
+computes the packaged `node_modules` from `dependencies` alone, so leaving them there
+shipped every one of them twice.
+
+The same rule is why `@bike4mind/utils` is bundled into main rather than externalized (see
+the `exclude` on `externalizeDepsPlugin` in `electron.vite.config.ts`). Main uses one
+subpath of it; the package *declares* six AWS SDK clients, openai, jimp, tiktoken, xlsx
+and mammoth, and electron-builder ships what is declared. Bundling that one subpath took
+`app.asar` from 257 MB to 42 MB.
+
+`@bike4mind/mcp` is the remaining example of the same shape - it declares
+`@anthropic-ai/sdk` and `@octokit/rest` alongside the MCP SDK that main actually uses, and
+those still ship. Fixing that is a change to `b4m-core/mcp`'s entry points, not to this
+config.
 
 ## Layout
 
