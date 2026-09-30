@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { BadRequestError, getDataLakeTags, TagType } from '@bike4mind/common';
+import { ApiKeyScope, BadRequestError, getDataLakeTags, TagType } from '@bike4mind/common';
 
 /**
  * Route-layer coverage for /api/files/tags. The service decides how to fold counts into tags and
@@ -225,5 +225,33 @@ describe('GET /api/files/tags', () => {
     await expect(mockRefs.getHandler!(req, res)).rejects.toThrow(/files:read is required/);
 
     expect(mockRefs.listArgs).toBeUndefined();
+  });
+
+  describe('data-lake read scope', () => {
+    it('drops the lake tags for a files:read-only API key caller', async () => {
+      const { req, res } = invokeGet({ id: 'user-1', groups: ['group-a'], tags: USER_TAGS });
+      (req as any).apiKeyInfo = { keyId: 'k', scopes: [ApiKeyScope.READ_FILES] };
+
+      await mockRefs.getHandler!(req, res);
+
+      expect((mockRefs.listArgs?.[1] as { dataLakeTags: string[] }).dataLakeTags).toEqual([]);
+    });
+
+    it('keeps the lake tags for a key holding datalake:read', async () => {
+      const { req, res } = invokeGet({ id: 'user-1', groups: ['group-a'], tags: USER_TAGS });
+      (req as any).apiKeyInfo = { keyId: 'k', scopes: [ApiKeyScope.READ_FILES, ApiKeyScope.DATALAKE_READ] };
+
+      await mockRefs.getHandler!(req, res);
+
+      expect((mockRefs.listArgs?.[1] as { dataLakeTags: string[] }).dataLakeTags).toEqual(getDataLakeTags(USER_TAGS));
+    });
+
+    it('keeps the lake tags for a JWT/browser caller (no apiKeyInfo)', async () => {
+      const { req, res } = invokeGet({ id: 'user-1', groups: ['group-a'], tags: USER_TAGS });
+
+      await mockRefs.getHandler!(req, res);
+
+      expect((mockRefs.listArgs?.[1] as { dataLakeTags: string[] }).dataLakeTags).toEqual(getDataLakeTags(USER_TAGS));
+    });
   });
 });

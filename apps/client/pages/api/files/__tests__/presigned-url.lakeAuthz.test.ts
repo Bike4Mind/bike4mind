@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ApiKeyScope } from '@bike4mind/common';
+import { FILES_READ_SCOPES } from '@server/files/fileScopes';
 
 /**
  * The real handler's `isAccessible` closure, end to end - presigned-url.moderation.test.ts only
@@ -90,5 +91,9 @@ describe('GET /api/files/presigned-url - data-lake read scope', () => {
     await handler(makeReq(['lake-file.pdf']), res);
 
     expect(json).toHaveBeenCalledWith({ urls: ['https://s3.test/signed'] });
+  });
+
+  it('requires files:read at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: FILES_READ_SCOPES });
   });
 });

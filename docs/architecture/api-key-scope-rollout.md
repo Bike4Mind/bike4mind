@@ -78,8 +78,12 @@ and can refuse on its own.
 ## Gating a route that serves both a read and a write
 
 `requiredScopes` is per ROUTE, not per method, so a file with a `.get` and a `.post`
-cannot ask for two different scopes at the door. Declare the weaker (read) gate there
-and assert the stronger one at the top of the mutating handler -
+cannot ask for two different scopes at the door. The route gate must admit every scope
+any method needs, and the per-method asserts narrow. Where the write scope implies read
+(data lakes) that means declaring the read gate; where it does not (`/api/files`, where
+write does not imply read) declare the read-or-write gate (`FILES_READ_OR_WRITE_SCOPES`),
+or a write-only key is refused at the door before its write assert runs. Assert at the top
+of each handler -
 `assertDataLakeWriteScope` / `assertDataLakeShareScope`
 (`apps/client/server/dataLakes/dataLakeScopes.ts`) for data lakes,
 `assertFilesReadScope` / `assertFilesWriteScope` (`apps/client/server/files/fileScopes.ts`)

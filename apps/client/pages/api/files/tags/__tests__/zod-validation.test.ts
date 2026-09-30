@@ -36,7 +36,10 @@ vi.mock('@bike4mind/common', () => ({
 vi.mock('@server/utils/errors', () => ({
   ForbiddenError: class extends Error {},
 }));
-vi.mock('@server/utils/userFileScope', () => ({ buildUserFileScope: vi.fn(() => ({})) }));
+vi.mock('@server/utils/userFileScope', () => ({
+  buildUserFileScope: vi.fn(() => ({})),
+  buildRequestFileScope: vi.fn(() => ({})),
+}));
 
 import '@pages/api/files/tags/index';
 

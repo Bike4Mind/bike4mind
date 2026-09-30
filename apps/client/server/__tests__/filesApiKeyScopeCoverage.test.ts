@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'fs';
 import path from 'path';
+import { methodBlocks } from './scopeCoverageHelpers';
 
 /**
  * Every `/api/files` door gates API keys on a files scope (server/files/fileScopes.ts). Before
@@ -48,65 +49,56 @@ function tsFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) return entry.name === '__tests__' ? [] : tsFiles(full);
-    return entry.name.endsWith('.ts') ? [full] : [];
+    return /\.tsx?$/.test(entry.name) ? [full] : [];
   });
 }
 
+// Normalized to forward slashes like the sibling coverage tests (adminApiKeyScopeCoverage.test.ts,
+// apiKeyScopePostureCoverage.test.ts), so EXPECTED_GATES keys don't drift by platform path.sep.
+const rel = (f: string) => path.relative(FILES_API_DIR, f).split(path.sep).join('/');
+
 /**
- * Splits a handler chain into [method, body] pairs - body runs to the next `.method(` or EOF.
- * Only a `.method(` at bracket depth 0 (i.e. chained directly off the `baseApi(...)` call, not
- * nested inside a handler body) opens a new block - tracked by walking the source and counting
- * `([{`/`)]}`. Without this, a route method's OWN body calling something that happens to end in
- * `.delete(`/`.get(` (e.g. `await getFilesStorage().delete(filePath)` inside the real DELETE
- * handler in files/index.ts) is mistaken for a second top-level route method, and the real assert
- * that already covers it gets diluted into a body that doesn't contain it.
+ * Strips both comment forms before the gate regex runs, so a commented-out
+ * `requiredScopes` mention - line or block - never counts as a real gate.
  */
-function methodBlocks(source: string): Array<{ method: string; body: string }> {
-  const opener = /\.(get|post|put|patch|delete)(?:<[^<>]*>)?\(/y;
-  const starts: Array<{ method: string; index: number }> = [];
-  let depth = 0;
-  for (let i = 0; i < source.length; i++) {
-    const ch = source[i];
-    if (depth === 0 && ch === '.') {
-      opener.lastIndex = i;
-      const match = opener.exec(source);
-      if (match) starts.push({ method: match[1], index: i });
-    }
-    if (ch === '(' || ch === '{' || ch === '[') depth++;
-    else if (ch === ')' || ch === '}' || ch === ']') depth--;
-  }
-  return starts.map(({ method, index }, i) => ({
-    method,
-    body: source.slice(index, starts[i + 1]?.index ?? source.length),
-  }));
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 }
 
-const routes = tsFiles(FILES_API_DIR).map(file => [path.relative(FILES_API_DIR, file), file] as const);
+/**
+ * Anchors to the `baseApi(...)` call itself so a mention anywhere else in the file (e.g. a
+ * sibling constant reference, or one living only in a comment) cannot satisfy the gate.
+ */
+function extractRequiredScopesGate(source: string): string | undefined {
+  return stripComments(source).match(
+    /baseApi\(\{[^}]*requiredScopes:\s*(FILES_(?:READ|WRITE|READ_OR_WRITE)_SCOPES)\b[^}]*\}\)/
+  )?.[1];
+}
+
+const routes = tsFiles(FILES_API_DIR).map(file => [rel(file), file] as const);
 
 describe('every /api/files door gates API keys on a files scope', () => {
   it('finds the doors', () => {
     expect(routes.length).toBeGreaterThan(0);
   });
 
-  it.each(routes)('%s', (rel, file) => {
-    // Strip line comments first so a commented-out `// requiredScopes: ...` does not count, and
-    // anchor to the baseApi(...) call itself so a mention anywhere else in the file (e.g. a
-    // sibling constant reference) cannot satisfy the gate.
-    const source = readFileSync(file, 'utf8').replace(/\/\/[^\n]*/g, '');
-    const gate = source.match(
-      /baseApi\(\{[^}]*requiredScopes:\s*(FILES_(?:READ|WRITE|READ_OR_WRITE)_SCOPES)\b[^}]*\}\)/
-    )?.[1];
+  it.each(routes)('%s', (relPath, file) => {
+    const rawSource = readFileSync(file, 'utf8');
+    const gate = extractRequiredScopesGate(rawSource);
     expect(gate, 'declare baseApi({ requiredScopes: FILES_*_SCOPES }) from @server/files/fileScopes').toBeDefined();
 
-    const expectedGate = EXPECTED_GATES[rel];
-    expect(expectedGate, `${rel} has no EXPECTED_GATES entry - add one so this route's scope is pinned`).toBeDefined();
-    expect(gate, `${rel} must stay pinned to ${expectedGate}`).toBe(expectedGate);
+    const expectedGate = EXPECTED_GATES[relPath];
+    expect(
+      expectedGate,
+      `${relPath} has no EXPECTED_GATES entry - add one so this route's scope is pinned`
+    ).toBeDefined();
+    expect(gate, `${relPath} must stay pinned to ${expectedGate}`).toBe(expectedGate);
 
     if (gate !== 'FILES_READ_OR_WRITE_SCOPES') return;
     // The route gate admits either scope, so each method must narrow to its own - a
     // presence-only check ("assertFilesWriteScope appears somewhere in the file") would still
     // pass a route where a later mutating method forgot its own assert.
-    for (const { method, body } of methodBlocks(source)) {
+    for (const { method, body } of methodBlocks(stripComments(rawSource))) {
       if (method === 'get') {
         expect(body, '.get on a read-or-write route must assert files:read in-handler').toMatch(
           /assertFilesReadScope\(/
@@ -170,26 +162,25 @@ describe('methodBlocks splitter', () => {
 describe('the gate regex actually rejects a bad door', () => {
   it('fails a route with no requiredScopes at all', () => {
     const source = 'const handler = baseApi({}).get(async (req, res) => {});\nexport default handler;';
-    const gate = source.match(
-      /baseApi\(\{[^}]*requiredScopes:\s*(FILES_(?:READ|WRITE|READ_OR_WRITE)_SCOPES)\b[^}]*\}\)/
-    )?.[1];
-    expect(gate).toBeUndefined();
+    expect(extractRequiredScopesGate(source)).toBeUndefined();
   });
 
-  it('ignores a requiredScopes mention living only in a comment', () => {
+  it('ignores a requiredScopes mention living only in a line comment', () => {
     const source = [
       '// requiredScopes: FILES_READ_SCOPES',
       'const handler = baseApi({}).get(async (req, res) => {});',
     ].join('\n');
-    const stripped = source.replace(/\/\/[^\n]*/g, '');
-    const gate = stripped.match(
-      /baseApi\(\{[^}]*requiredScopes:\s*(FILES_(?:READ|WRITE|READ_OR_WRITE)_SCOPES)\b[^}]*\}\)/
-    )?.[1];
-    expect(gate).toBeUndefined();
+    expect(extractRequiredScopesGate(source)).toBeUndefined();
   });
 
-  it('does not confuse a write door misclassified as FILES_READ_SCOPES with a correct one', () => {
-    const gate = 'FILES_READ_SCOPES';
-    expect(gate).not.toBe(EXPECTED_GATES['bulk-delete.ts']);
+  // A bare `baseApi({})` alongside a block-commented gate must not be recognized as gated - the
+  // extractor has to strip `/* ... */` the same way it strips `//`, or a route could ship with its
+  // real gate commented out and still pass every check above.
+  it('ignores a requiredScopes mention living only in a block comment, and does not gate a bare baseApi({})', () => {
+    const source = [
+      '/* baseApi({ requiredScopes: FILES_READ_SCOPES }) */',
+      'const handler = baseApi({}).get(async (req, res) => {});',
+    ].join('\n');
+    expect(extractRequiredScopesGate(source)).toBeUndefined();
   });
 });

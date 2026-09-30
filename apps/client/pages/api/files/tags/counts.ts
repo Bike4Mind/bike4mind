@@ -1,7 +1,7 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
-import { buildUserFileScope } from '@server/utils/userFileScope';
+import { buildRequestFileScope } from '@server/utils/userFileScope';
 import { fabFileRepository } from '@bike4mind/database';
 import { FILES_READ_SCOPES } from '@server/files/fileScopes';
 
@@ -23,7 +23,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
     // in the Tags view (which reads the unnarrowed tagCounts). This is the partial-count sibling
     // of the whole-row-disappears case (all N+M files personally shared, so the WORKSPACES row
     // vanishes entirely) - both follow from the same personal-share exclusion.
-    const scope = buildUserFileScope(req.user);
+    const scope = buildRequestFileScope(req, req.user);
     const workspaceScope = { ...scope, excludePersonalShares: true };
 
     const [tagCounts, workspaceTagCounts, namespaceCounts] = await Promise.all([

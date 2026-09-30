@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { getDataLakeTags } from '@bike4mind/common';
+import { ApiKeyScope, getDataLakeTags } from '@bike4mind/common';
 
 /**
  * Route-layer coverage for GET /api/files/search. This route decides the scope the file list is
@@ -196,5 +196,33 @@ describe('GET /api/files/search', () => {
 
   it('requires files:read at the baseApi route gate', () => {
     expect(mockRefs.baseApiOptions).toEqual({ requiredScopes: ['files:read'] });
+  });
+
+  describe('data-lake read scope', () => {
+    it('drops the lake tags for a files:read-only API key caller', async () => {
+      const { req, res } = invokeGet();
+      (req as any).apiKeyInfo = { scopes: [ApiKeyScope.READ_FILES] };
+
+      await mockRefs.getHandler!(req, res);
+
+      expect(scopeArg()?.dataLakeTags).toEqual([]);
+    });
+
+    it('keeps the lake tags for a key holding datalake:read', async () => {
+      const { req, res } = invokeGet();
+      (req as any).apiKeyInfo = { scopes: [ApiKeyScope.READ_FILES, ApiKeyScope.DATALAKE_READ] };
+
+      await mockRefs.getHandler!(req, res);
+
+      expect(scopeArg()?.dataLakeTags).toEqual(getDataLakeTags(USER_TAGS));
+    });
+
+    it('keeps the lake tags for a JWT/browser caller (no apiKeyInfo)', async () => {
+      const { req, res } = invokeGet();
+
+      await mockRefs.getHandler!(req, res);
+
+      expect(scopeArg()?.dataLakeTags).toEqual(getDataLakeTags(USER_TAGS));
+    });
   });
 });

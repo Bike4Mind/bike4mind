@@ -12,6 +12,10 @@ import { assertApiKeyScope, type ScopedRequest } from '@server/middlewares/apiKe
  * per method. So a preflight for these scopes is sized over `/api/files` plus the public
  * `/api/v1/files` doors (docs/architecture/api-key-scope-rollout.md).
  *
+ * `files:read` alone never reaches data-lake content: every read door with a lake fallback or lake
+ * arm drops it for a key without datalake:read (loadAccessibleFabFile, byIds, presigned-url, and
+ * the search/tags doors via buildRequestFileScope in server/utils/userFileScope.ts).
+ *
  * `files/generate-smart-name.ts` spends LLM budget yet gates on `files:write`: it exists only
  * inside the paste-to-upload flow, and gating it on `ai:generate` would mean staging that scope
  * too, which re-opens every `ai:generate` door for the window.

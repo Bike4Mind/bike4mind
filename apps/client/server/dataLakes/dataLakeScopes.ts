@@ -62,7 +62,8 @@ export const DATA_LAKE_READ_OR_SHARE_SCOPES: ApiKeyScope[] = [...DATA_LAKE_READ_
 
 /**
  * Non-throwing read-scope check for a door whose data-lake reach is a fallback rather than its
- * purpose (loadAccessibleFabFile): a key without datalake:read keeps the door but not the lake.
+ * purpose: a key without datalake:read keeps the door but not the lake. Call sites:
+ * loadAccessibleFabFile, files/byIds, files/presigned-url, and buildRequestFileScope.
  */
 export function holdsDataLakeReadScope(req: ScopedRequest): boolean {
   return holdsApiKeyScope(req, DATA_LAKE_READ_SCOPES);

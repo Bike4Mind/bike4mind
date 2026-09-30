@@ -2,7 +2,7 @@ import { Permission } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
-import { buildUserFileScope } from '@server/utils/userFileScope';
+import { buildRequestFileScope } from '@server/utils/userFileScope';
 import { fabFilesService } from '@bike4mind/services';
 import qs from 'qs';
 import {
@@ -35,7 +35,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
     // user can access, not just owned files. The shared and curated views carry their own
     // ownership predicate, so widening them would be wrong as well as pointless.
     const scope =
-      !isSharedView && !isCuratedView ? { includeShared: true, ...buildUserFileScope(req.user) } : undefined;
+      !isSharedView && !isCuratedView ? { includeShared: true, ...buildRequestFileScope(req, req.user) } : undefined;
 
     const result = await fabFilesService.search(
       req.user.id,
