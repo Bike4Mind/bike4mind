@@ -251,9 +251,12 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       // Same account: write leaf paths so metadata.webhooks.github (the routing token baked into the
       // webhook URL registered on GitHub) and metadata.selectedRepositories survive, including a
       // concurrent lastDeliveryAt stamp. A different account starts clean: those belong to the old
-      // account's repos. A stored `metadata: null` can't take a dotted $set, so it falls through too.
+      // account's repos. A stored `metadata: null` can't take a dotted $set, so it falls through too,
+      // as does a missing login (a failed /user lookup must not match a doc that never stored one).
       const sameAccount =
-        recentConnection.metadata != null && recentConnection.metadata.githubLogin === githubUser.login;
+        typeof githubUser.login === 'string' &&
+        recentConnection.metadata != null &&
+        recentConnection.metadata.githubLogin === githubUser.login;
       githubServer = sameAccount
         ? await mcpServerRepository.update(
             {

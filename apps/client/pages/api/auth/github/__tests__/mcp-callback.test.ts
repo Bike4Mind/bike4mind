@@ -71,7 +71,7 @@ function makeReqRes() {
   return { req, res };
 }
 
-function stubGitHub(login: string) {
+function stubGitHub(login: string | undefined) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) =>
@@ -155,5 +155,18 @@ describe('/api/auth/github/mcp-callback reconnect', () => {
     expect(res._getRedirectUrl()).toContain('github_oauth=success');
     const [data] = mockUpdate.mock.calls[0];
     expect(data).toMatchObject({ metadata: { githubLogin: 'octocat' } });
+  });
+
+  it('missing GitHub login never counts as the same account, even when none was stored', async () => {
+    mockFindOne.mockResolvedValue(existingServer({ scope: 'repo', webhooks: { github: WEBHOOK } }));
+    stubGitHub(undefined);
+
+    const { req, res } = makeReqRes();
+    await handler(req, res);
+
+    const [data, options] = mockUpdate.mock.calls[0];
+    expect(data).toHaveProperty('metadata');
+    expect(data).not.toHaveProperty(['metadata.githubLogin']);
+    expect(options).toBeUndefined();
   });
 });
