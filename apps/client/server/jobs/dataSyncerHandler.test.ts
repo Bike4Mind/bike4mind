@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
   marker: null as { syncedAt: Date } | null,
   failInsertInto: undefined as string | undefined,
   emptyTarget: false,
+  failFirstDeleteOn: undefined as string | undefined,
   ops: [] as string[],
 }));
 
@@ -33,6 +34,10 @@ vi.mock('mongodb', () => {
       }),
       deleteMany: vi.fn(async () => {
         state.ops.push(`${name}.deleteMany`);
+        if (name === state.failFirstDeleteOn) {
+          state.failFirstDeleteOn = undefined;
+          throw new Error(`deleteMany on ${name} failed partway`);
+        }
         return { deletedCount: 0 };
       }),
       bulkWrite: vi.fn(async () => {
@@ -65,6 +70,7 @@ describe('dataSyncerHandler', () => {
     state.marker = null;
     state.failInsertInto = undefined;
     state.emptyTarget = false;
+    state.failFirstDeleteOn = undefined;
     state.ops = [];
     fetchSpy.mockReset();
     vi.stubGlobal('fetch', fetchSpy);
@@ -142,6 +148,19 @@ describe('dataSyncerHandler', () => {
     expect(state.ops.filter(op => op.startsWith('rapidreplymappings.'))).toEqual([
       'rapidreplymappings.deleteMany',
       'rapidreplymappings.deleteMany',
+    ]);
+  });
+
+  it('restores the complete backup when clearing the target fails partway', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+    state.failFirstDeleteOn = 'rapidreplymappings';
+
+    await invoke();
+
+    expect(state.ops.filter(op => op.startsWith('rapidreplymappings.'))).toEqual([
+      'rapidreplymappings.deleteMany',
+      'rapidreplymappings.deleteMany',
+      'rapidreplymappings.bulkWrite',
     ]);
   });
 });

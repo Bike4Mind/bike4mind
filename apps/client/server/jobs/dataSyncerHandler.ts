@@ -142,9 +142,10 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
 
       console.log(`  - Found ${totalDocs} documents in source.`);
 
-      // Rollback touches the target only once it has been cleared: before that the target is
-      // intact (and the backup may be partial); after it the backup is complete.
-      let targetCleared = false;
+      // Rollback touches the target only once its backup is complete, i.e. from the clear on:
+      // before that the target is intact and the backup may be partial. Set before the clear
+      // because deleteMany is not atomic and can fail with the target half-deleted.
+      let backupComplete = false;
       try {
         // Drop any stale backup from a previous failed run
         await backupCollection.drop().catch((err: Error) => {
@@ -172,8 +173,8 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
           console.log(`  - Backup created in ${backupCollectionName}`);
         }
 
+        backupComplete = true;
         const deleteResult = await targetCollection.deleteMany({});
-        targetCleared = true;
         console.log(`  - Cleared ${deleteResult.deletedCount} existing documents in target.`);
 
         // Stream documents from source and insert into target in batches
@@ -208,7 +209,7 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
       } catch (error) {
         console.error(`  ✗ Error syncing ${collectionName}:`, error instanceof Error ? error.message : error);
 
-        if (targetCleared) {
+        if (backupComplete) {
           try {
             // Clear partial inserts first: they are not in the backup and can collide with it on
             // unique indexes (e.g. rapidreplymappings.mainModelId), failing the upserts below.
@@ -239,7 +240,7 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
             );
           }
         } else {
-          console.log('  - Target was not cleared yet; leaving it untouched.');
+          console.log('  - Target was not modified yet; leaving it untouched.');
         }
 
         throw error;
