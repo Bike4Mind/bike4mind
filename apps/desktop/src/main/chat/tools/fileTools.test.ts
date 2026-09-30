@@ -29,7 +29,7 @@ describe('file tools', () => {
 
     it('slices with offset and limit', async () => {
       const result = await fileRead.run({ path: join(root, 'notes.md'), offset: 2, limit: 1 }, context);
-      expect(result).toBe('2\tbeta gamma\n\n[Lines 2-2 of 3. Continue with offset 3.]');
+      expect(result).toMatch(/^2\tbeta gamma\n\n\[Lines 2-2 of 3\. Continue with offset 3\. grep_search/);
     });
 
     it('numbers every line and adds no range note when the whole file fits', async () => {
