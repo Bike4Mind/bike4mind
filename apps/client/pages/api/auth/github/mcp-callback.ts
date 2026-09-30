@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { mcpServerRepository, userRepository } from '@bike4mind/database';
 import { Config } from '@server/utils/config';
 import { InternalServerError } from '@server/utils/errors';
-import { McpServerName } from '@bike4mind/common';
+import { McpServerName, type IMcpServerDocument } from '@bike4mind/common';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import { readStateNonceHash, clearStateNonce } from '@server/auth/oauthFlowCookie';
@@ -237,17 +237,34 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     // Initially save with empty tools array - we'll discover tools dynamically next
     let githubServer;
     if (recentConnection) {
-      githubServer = await mcpServerRepository.update({
+      const connectionFields = {
         id: recentConnection.id,
         enabled: true,
         envVariables: encryptedEnvVariables,
         tools: [], // Will be populated by dynamic discovery
-        metadata: {
-          githubLogin: githubUser.login,
-          connectedAt: new Date().toISOString(),
-          scope: grantedScopes.join(','),
-        },
-      });
+      };
+      const connectionMetadata = {
+        githubLogin: githubUser.login,
+        connectedAt: new Date().toISOString(),
+        scope: grantedScopes.join(','),
+      };
+      // Same account: write leaf paths so metadata.webhooks.github (the routing token baked into the
+      // webhook URL registered on GitHub) and metadata.selectedRepositories survive, including a
+      // concurrent lastDeliveryAt stamp. A different account starts clean: those belong to the old
+      // account's repos. A stored `metadata: null` can't take a dotted $set, so it falls through too.
+      const sameAccount =
+        recentConnection.metadata != null && recentConnection.metadata.githubLogin === githubUser.login;
+      githubServer = sameAccount
+        ? await mcpServerRepository.update(
+            {
+              ...connectionFields,
+              'metadata.githubLogin': connectionMetadata.githubLogin,
+              'metadata.connectedAt': connectionMetadata.connectedAt,
+              'metadata.scope': connectionMetadata.scope,
+            } as Partial<IMcpServerDocument>, // dotted paths aren't expressible in Partial<T>; update() $sets keys as given
+            { unset: ['metadata.disconnectedAt'] }
+          )
+        : await mcpServerRepository.update({ ...connectionFields, metadata: connectionMetadata });
       req.logger.info('[GitHub OAuth] Updated GitHub MCP server config', {
         userId,
         githubLogin: githubUser.login,
