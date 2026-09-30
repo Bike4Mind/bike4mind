@@ -58,6 +58,17 @@ class MockIntersectionObserver {
   }
 }
 
+// jsdom does not implement media playback, and HelpVideo calls play()/pause() as a demo enters
+// and leaves view; stub both so unrelated tests don't log "Not implemented".
+beforeEach(() => {
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe('resolveHelpMediaSrc', () => {
   it('resolves ./ and bare relative paths against the article directory', () => {
     expect(resolveHelpMediaSrc('./media/x.gif', 'features/notebooks.md')).toBe('/help-content/features/media/x.gif');
@@ -97,7 +108,6 @@ describe('resolveHelpMediaSrc', () => {
 describe('help media rendering (public)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
-    vi.restoreAllMocks();
     MockIntersectionObserver.reset();
   });
 
@@ -154,8 +164,8 @@ describe('help media rendering (public)', () => {
   });
 
   it('plays a demo only while it is near the viewport and pauses it once scrolled away', async () => {
-    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
-    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    const pause = vi.mocked(HTMLMediaElement.prototype.pause);
     vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
     renderMarkdown('![Slack setup demo](./media/slack-setup.mp4)');
 
