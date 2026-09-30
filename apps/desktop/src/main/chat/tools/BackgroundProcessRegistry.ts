@@ -4,7 +4,8 @@ import { StringDecoder } from 'node:string_decoder';
 import type { BackgroundProcessInfo, BackgroundProcessStatus } from '@shared/chat';
 import { PARENT_WATCH_FD, wrapWithParentWatchdog } from './backgroundScript';
 import { OutputBuffer, type OutputStream } from './outputBuffer';
-import { sandboxCommand, type SandboxedCommand } from './sandbox';
+import { commandEnv, launchCommand } from './commandLaunch';
+import type { SandboxedCommand } from './sandbox';
 
 /** Retained per process. The tail is what matters for a watcher; see OutputBuffer. */
 const MAX_BUFFERED_CHARS = 200_000;
@@ -43,12 +44,6 @@ export interface StartRequest {
   cwd: string;
   roots: readonly string[];
   protectedPaths: readonly string[];
-  /**
-   * Run outside the Seatbelt profile, with these environment overrides. For work the APP
-   * starts on its own initiative (a dependency install), never for anything the model asked
-   * for: the sandbox is what confines model-authored commands.
-   */
-  unsandboxed?: { env?: NodeJS.ProcessEnv };
 }
 
 export interface ReadResult {
@@ -66,7 +61,7 @@ interface Tracked {
   buffer: OutputBuffer;
   /** Where the MODEL has read to. The UI streams live and keeps no cursor. */
   modelCursor: number;
-  sandbox: SandboxedCommand;
+  launch: SandboxedCommand;
   decoders: Record<OutputStream, StringDecoder>;
   pendingEmit: { stream: OutputStream; text: string }[];
   emitTimer: NodeJS.Timeout | null;
@@ -102,8 +97,8 @@ export class BackgroundProcessLimit extends Error {
  * launch the list is empty rather than showing handles for processes that no longer exist - a
  * stale handle the model could call `bash_output` on is worse than no handle at all.
  *
- * Signals go to the process GROUP (`-pgid`), never the bare pid: signalling sandbox-exec alone
- * would leave the bash it spawned, and whatever that spawned, running.
+ * Signals go to the process GROUP (`-pgid`), never the bare pid: signalling the shell alone
+ * would leave whatever it spawned running.
  */
 export class BackgroundProcessRegistry {
   private readonly processes = new Map<string, Tracked>();
@@ -116,9 +111,7 @@ export class BackgroundProcessRegistry {
     this.enforceLimits(request.sessionId);
 
     const wrapped = wrapWithParentWatchdog(request.command);
-    const sandboxed: SandboxedCommand = request.unsandboxed
-      ? { executable: '/bin/bash', args: ['-c', wrapped], cleanup: async () => undefined }
-      : await sandboxCommand(wrapped, request.roots, request.protectedPaths);
+    const launch = await launchCommand(wrapped, request.roots, request.protectedPaths);
 
     const id = randomUUID().slice(0, 8);
     const info: BackgroundProcessInfo = {
@@ -134,20 +127,19 @@ export class BackgroundProcessRegistry {
 
     let child: ChildProcess;
     try {
-      child = spawn(sandboxed.executable, sandboxed.args, {
+      const env = await commandEnv({ B4M_DESKTOP_BACKGROUND: '1' });
+      child = spawn(launch.executable, launch.args, {
         cwd: request.cwd,
         // Detached so the child leads its own process group: that is what makes one signal
-        // reach the command's whole tree rather than just the sandbox wrapper.
+        // reach the command's whole tree rather than just the shell.
         detached: true,
         // fd 3 is the watch pipe the child blocks on. Its write end stays open in this process
         // for exactly as long as this process lives, which is the entire mechanism.
         stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
-        env: request.unsandboxed
-          ? { ...process.env, ...request.unsandboxed.env, B4M_DESKTOP_BACKGROUND: '1' }
-          : { ...process.env, B4M_DESKTOP_SANDBOX: '1', B4M_DESKTOP_BACKGROUND: '1' },
+        env,
       });
     } catch (err) {
-      await sandboxed.cleanup();
+      await launch.cleanup();
       throw err;
     }
 
@@ -157,7 +149,7 @@ export class BackgroundProcessRegistry {
       pgid: child.pid ?? null,
       buffer: new OutputBuffer(MAX_BUFFERED_CHARS),
       modelCursor: 0,
-      sandbox: sandboxed,
+      launch,
       decoders: { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8') },
       pendingEmit: [],
       emitTimer: null,
@@ -404,7 +396,7 @@ export class BackgroundProcessRegistry {
     tracked.info.droppedChars = tracked.buffer.droppedChars;
     if (error) tracked.info.error = error;
 
-    void tracked.sandbox.cleanup();
+    void tracked.launch.cleanup();
     this.pruneFinished(tracked.info.sessionId);
     this.events.status(tracked.info.sessionId, { ...tracked.info });
   }

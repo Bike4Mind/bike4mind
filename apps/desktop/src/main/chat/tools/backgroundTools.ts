@@ -1,5 +1,4 @@
 import type { BackgroundProcessInfo } from '@shared/chat';
-import { sandboxAvailable } from './sandbox';
 import { refusalReason, resolveCwd } from './shellTools';
 import {
   capOutput,
@@ -62,8 +61,8 @@ export const bashBackground: ToolDefinition = {
       'backgrounding those just makes you poll for an answer you could have had directly.',
       '',
       'The user is shown the exact command and must approve it, exactly as with bash_execute,',
-      'and they are told it will keep running. The same sandbox applies: it can read the machine',
-      'but write only inside the shared folders.',
+      'and they are told it will keep running. It runs as the user with their full environment, like',
+      'bash_execute.',
       '',
       `The call waits about ${SETTLE_MS / 1000}s and returns whatever the command printed in that`,
       'time, so a process that dies immediately is reported as dead rather than as a handle. Read',
@@ -112,10 +111,6 @@ export const bashBackground: ToolDefinition = {
 
     const refused = refusalReason(command);
     if (refused) throw new Error(`Refused: this command ${refused}. It was not run.`);
-
-    if (!sandboxAvailable()) {
-      throw new Error('Commands cannot be run on this machine: the macOS sandbox is unavailable.');
-    }
 
     const cwd = await resolveCwd(input, context.roots, context.workingDirectory);
     const started = await registry.start({

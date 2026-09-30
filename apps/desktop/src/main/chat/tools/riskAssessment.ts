@@ -131,8 +131,8 @@ const INERT_COMMANDS: Readonly<Record<string, InertCommand>> = {
  *
  * Writing one of these is not the change the user thinks they are approving in bulk: it is a
  * way to have arbitrary code run under their own hands the next time they commit, open a
- * shell, install a package or push a branch. The sandbox does not help - these paths are
- * inside the folders they granted - so the only thing that can catch it is asking.
+ * shell, install a package or push a branch. These paths are inside the folders they granted,
+ * so the only thing that can catch it is asking.
  */
 const EXECUTED_LATER: readonly RegExp[] = [
   /(^|\/)\.git\/hooks\//,

@@ -87,8 +87,8 @@ function normalizeMime(mimeType: string): string {
  *
  * Lives beside the session files in userData rather than anywhere the user chose: these bytes
  * are the app's own, they are addressed only through {@link MEDIA_SCHEME}, and a conversation
- * that is deleted takes them with it. userData is also in the shell sandbox's protected set, so
- * a granted home folder does not make generated media reachable from a bash tool.
+ * that is deleted takes them with it. A granted home folder does not make generated media
+ * reachable from the file tools, which honour the protected paths.
  */
 export class MediaStore {
   constructor(private readonly baseDirectory: string) {}

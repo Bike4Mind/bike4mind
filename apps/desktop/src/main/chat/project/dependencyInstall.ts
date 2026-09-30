@@ -1,6 +1,5 @@
-import { execFile } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
-import { delimiter, join } from 'node:path';
+import { join } from 'node:path';
 import type { BackgroundProcessInfo } from '@shared/chat';
 import type { BackgroundProcessRegistry } from '../tools/BackgroundProcessRegistry';
 import type { WorkspaceOutcome } from './workspace';
@@ -15,10 +14,6 @@ export interface InstallPlan {
 /** How long a finished install keeps announcing itself, so the prompt settles back afterwards. */
 const DONE_NOTE_MS = 10 * 60_000;
 const FAILURE_TAIL_CHARS = 1_500;
-const SHELL_PATH_TIMEOUT_MS = 5_000;
-const PATH_MARKER = '__B4M_PATH__';
-/** A Finder launch gets /usr/bin:/bin:/usr/sbin:/sbin, which has neither node nor a package manager. */
-const COMMON_BIN_DIRS = ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin'];
 
 async function exists(path: string): Promise<boolean> {
   try {
@@ -83,31 +78,6 @@ export async function planInstall(directory: string): Promise<InstallPlan | null
   }
 }
 
-/**
- * The PATH a terminal would have. Electron launched from Finder inherits a minimal one, so a
- * bare `pnpm` would not resolve. Asked of the user's own login shell once, and cached: it is the
- * only place version-manager shims (nvm, fnm, volta) are put on PATH.
- */
-export function resolveUserPath(): Promise<string> {
-  cachedPath ??= new Promise<string>(resolve => {
-    const fallback = [...(process.env.PATH ?? '').split(delimiter), ...COMMON_BIN_DIRS]
-      .filter(Boolean)
-      .filter((entry, index, all) => all.indexOf(entry) === index)
-      .join(delimiter);
-    execFile(
-      process.env.SHELL || '/bin/zsh',
-      ['-ilc', `printf '%s' "${PATH_MARKER}$PATH${PATH_MARKER}"`],
-      { timeout: SHELL_PATH_TIMEOUT_MS, env: { ...process.env, TERM: 'dumb' } },
-      (error, stdout) => {
-        const found = error ? undefined : new RegExp(`${PATH_MARKER}(.*)${PATH_MARKER}`).exec(stdout)?.[1];
-        resolve(found ? `${found}${delimiter}${fallback}` : fallback);
-      }
-    );
-  });
-  return cachedPath;
-}
-let cachedPath: Promise<string> | undefined;
-
 interface Install {
   processId: string;
   command: string;
@@ -120,12 +90,10 @@ export interface InstallRequest {
 }
 
 /**
- * Installs a freshly created worktree's dependencies, outside the tool sandbox.
+ * Installs a freshly created worktree's dependencies.
  *
- * The sandbox cannot write the package manager's cache in the home folder, so an install run by
- * the model leaves a store inside the project and tools like npx fail outright. The app's main
- * process is not sandboxed, and doing it here also moves the wait to the start of the session
- * instead of whenever the model happens to trip over the missing node_modules.
+ * Doing it here moves the wait to the start of the session instead of whenever the model
+ * happens to trip over the missing node_modules.
  *
  * Only ever after the app created the worktree itself: install scripts run arbitrary code, so
  * merely opening a folder must not trigger one.
@@ -135,7 +103,6 @@ export class DependencyInstaller {
 
   constructor(
     private readonly registry: Pick<BackgroundProcessRegistry, 'start' | 'get' | 'tail'>,
-    private readonly resolvePath: () => Promise<string> = resolveUserPath,
     private readonly now: () => number = Date.now
   ) {}
 
@@ -148,9 +115,8 @@ export class DependencyInstaller {
       sessionId: request.sessionId,
       command: plan.command,
       cwd: request.workingDirectory,
-      roots: [],
+      roots: [request.workingDirectory],
       protectedPaths: [],
-      unsandboxed: { env: { PATH: await this.resolvePath() } },
     });
     this.installs.set(request.sessionId, { processId: info.id, command: plan.command });
   }

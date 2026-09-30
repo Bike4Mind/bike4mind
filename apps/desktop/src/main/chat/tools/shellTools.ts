@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { resolveWithinRoots } from './paths';
-import { sandboxAvailable, sandboxCommand } from './sandbox';
+import { commandEnv, launchCommand } from './commandLaunch';
 import { capOutput, optionalNumber, requireString, type ApprovalPrompt, type ToolDefinition } from './types';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -14,7 +14,7 @@ const MAX_STREAM_BYTES = 40_000;
 const SIGKILL_DELAY_MS = 3_000;
 
 /**
- * Commands refused before the sandbox ever sees them.
+ * Commands refused before they are run.
  *
  * Defence in depth, not the defence: the approval gate is what the user actually relies on, and
  * a pattern list over shell text is easy to slip past. These are here because a user skimming an
@@ -83,6 +83,7 @@ function runCommand(
   executable: string,
   args: readonly string[],
   cwd: string,
+  env: NodeJS.ProcessEnv,
   timeoutMs: number,
   signal: AbortSignal
 ): Promise<CommandOutcome> {
@@ -90,10 +91,10 @@ function runCommand(
     const child = spawn(executable, [...args], {
       cwd,
       // Its own process group, so the timeout reaches the command's children too: signalling
-      // sandbox-exec alone would leave the bash it spawned, and whatever that spawned, running.
+      // the shell alone would leave whatever it spawned running.
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, B4M_DESKTOP_SANDBOX: '1' },
+      env,
     });
 
     const stdout = new CappedOutput();
@@ -176,8 +177,8 @@ function formatOutcome(command: string, cwd: string, timeoutMs: number, outcome:
 
 /**
  * Where the command runs. The model may name a directory, but only one inside a granted root:
- * the sandbox lets it WRITE nowhere else, and starting it somewhere unrelated would just be a
- * confusing way to fail.
+ * the granted folders are what the session is about, and starting somewhere unrelated would
+ * just be a confusing way to work.
  *
  * The default is the session's working directory when it has one. Falling back to `roots[0]`
  * for a Code session would run the command in whichever folder was granted first - for a
@@ -206,8 +207,9 @@ export const bashExecute: ToolDefinition = {
       'what you are about to do and why. A denial is an answer, not an error to work around: do',
       'not rephrase the same command to get past it.',
       '',
-      'The command runs sandboxed. It can read the machine, but it can only WRITE inside the',
-      'folders the user has shared. Credential stores (~/.ssh, ~/.aws, keychains) are unreadable.',
+      'The command runs as the user, with their full environment: their PATH, git credentials,',
+      'gh login and keychain all work, and it can read and write anywhere they can. Only the',
+      'working directory must be inside a shared folder.',
       '',
       'Use it for git, builds, tests, package managers and system inspection. It blocks until the',
       `command exits or the timeout elapses (default ${DEFAULT_TIMEOUT_MS / 1000}s, max`,
@@ -253,22 +255,17 @@ export const bashExecute: ToolDefinition = {
     const refused = refusalReason(command);
     if (refused) throw new Error(`Refused: this command ${refused}. It was not run.`);
 
-    // No unsandboxed fallback. A desktop client that quietly ran the command anyway when
-    // confinement was unavailable would be offering a guarantee it is not keeping.
-    if (!sandboxAvailable()) {
-      throw new Error('Commands cannot be run on this machine: the macOS sandbox is unavailable.');
-    }
-
     const cwd = await resolveCwd(input, context.roots, context.workingDirectory);
     const requestedTimeout = optionalNumber(input, 'timeout');
     const timeoutMs = Math.min(Math.max(requestedTimeout ?? DEFAULT_TIMEOUT_MS, 1_000), MAX_TIMEOUT_MS);
 
-    const sandboxed = await sandboxCommand(command, context.roots, context.protectedPaths ?? []);
+    const launch = await launchCommand(command, context.roots, context.protectedPaths ?? []);
     try {
-      const outcome = await runCommand(sandboxed.executable, sandboxed.args, cwd, timeoutMs, context.signal);
+      const env = await commandEnv();
+      const outcome = await runCommand(launch.executable, launch.args, cwd, env, timeoutMs, context.signal);
       return capOutput(formatOutcome(command, cwd, timeoutMs, outcome));
     } finally {
-      await sandboxed.cleanup();
+      await launch.cleanup();
     }
   },
 };

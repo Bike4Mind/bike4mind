@@ -1,13 +1,16 @@
-import { mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { bashExecute } from './shellTools';
+import { resolveUserPath } from './userPath';
+
+vi.mock('./userPath', () => ({ resolveUserPath: vi.fn(async () => process.env.PATH ?? '') }));
 
 /**
- * These run REAL commands under the real macOS sandbox. Nothing here is mocked, because the
- * thing being checked is whether Seatbelt actually confines the command - a stubbed spawn
- * would assert only that we built the argv we meant to build.
+ * These run REAL commands as the user. Only the PATH lookup is mocked, because the thing being
+ * checked is what a spawned shell can actually do - a stubbed spawn would assert only that we
+ * built the argv we meant to build.
  */
 describe('bash_execute', () => {
   let root: string;
@@ -19,8 +22,8 @@ describe('bash_execute', () => {
   });
 
   it('runs the command and reports its output and exit code', async () => {
-    const result = await bashExecute.run({ command: 'echo hello from the sandbox' }, context);
-    expect(result).toContain('hello from the sandbox');
+    const result = await bashExecute.run({ command: 'echo hello from the shell' }, context);
+    expect(result).toContain('hello from the shell');
     expect(result).toContain('[exit 0]');
   });
 
@@ -31,58 +34,42 @@ describe('bash_execute', () => {
     expect(result).toContain('[exit 3]');
   });
 
-  /**
-   * Regression: the blanket write denial covers /dev/null too, so before this every command
-   * using `2>/dev/null` came back littered with "Operation not permitted".
-   */
-  it('redirects to /dev/null without tripping the write denial', async () => {
-    const result = await bashExecute.run({ command: 'echo visible; echo hidden 2>/dev/null' }, context);
-    expect(result).not.toMatch(/Operation not permitted/i);
-    expect(result).toContain('visible');
-  });
-
   it('writes inside a granted root', async () => {
     await bashExecute.run({ command: 'echo written > allowed.txt' }, context);
     await expect(readFile(join(root, 'allowed.txt'), 'utf8')).resolves.toContain('written');
   });
 
-  it('cannot write outside every granted root', async () => {
-    // Not under tmpdir(): the profile leaves the temp folder writable for every command.
-    const cache = join(process.cwd(), 'node_modules', '.cache');
-    await mkdir(cache, { recursive: true });
-    const outside = await realpath(await mkdtemp(join(cache, 'b4m-outside-')));
+  it('writes outside every granted root, because it runs as the user', async () => {
+    const outside = await realpath(await mkdtemp(join(tmpdir(), 'b4m-outside-')));
     const target = join(outside, 'escaped.txt');
 
     try {
       const result = await bashExecute.run({ command: `echo escaped > ${target}` }, context);
 
-      expect(result).toMatch(/not permitted|Operation not permitted/i);
-      await expect(readFile(target, 'utf8')).rejects.toThrow();
+      expect(result).toContain('[exit 0]');
+      await expect(readFile(target, 'utf8')).resolves.toContain('escaped');
     } finally {
       await rm(outside, { recursive: true, force: true });
     }
   });
 
-  it('writes to the temp folder, as test runners and compilers need to', async () => {
-    const result = await bashExecute.run({ command: 'mkdir "$(mktemp -d)/probe" && echo made' }, context);
-
-    expect(result).not.toMatch(/Operation not permitted/i);
-    expect(result).toContain('made');
-  });
-
-  it('cannot read a path the app protects, even when its parent is granted', async () => {
-    const guarded = join(root, 'vault');
+  it('reads a path the app protects, since the shell is not confined', async () => {
     await bashExecute.run({ command: 'mkdir -p vault && echo token > vault/auth.json' }, context);
 
-    const result = await bashExecute.run({ command: 'cat vault/auth.json' }, { ...context, protectedPaths: [guarded] });
+    const result = await bashExecute.run(
+      { command: 'cat vault/auth.json' },
+      { ...context, protectedPaths: [join(root, 'vault')] }
+    );
 
-    expect(result).not.toContain('token');
-    expect(result).toMatch(/No such file|not permitted|Operation not permitted/i);
+    expect(result).toContain('token');
   });
 
-  it('cannot read the user ssh keys even though reads are otherwise open', async () => {
-    const result = await bashExecute.run({ command: `ls -la ${join(homedir(), '.ssh')}` }, context);
-    expect(result).not.toMatch(/id_(rsa|ed25519)\b/);
+  it('runs with the PATH resolved from the user shell', async () => {
+    vi.mocked(resolveUserPath).mockResolvedValueOnce('/b4m-test/bin:/usr/bin:/bin');
+
+    const result = await bashExecute.run({ command: 'echo "path=$PATH"' }, context);
+
+    expect(result).toContain('path=/b4m-test/bin:/usr/bin:/bin');
   });
 
   it('refuses a command that escalates privileges, without running it', async () => {

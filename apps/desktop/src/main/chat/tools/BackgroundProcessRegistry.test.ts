@@ -1,11 +1,14 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, realpath } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BackgroundProcessInfo } from '@shared/chat';
 import { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
+import { resolveUserPath } from './userPath';
+
+vi.mock('./userPath', () => ({ resolveUserPath: vi.fn(async () => process.env.PATH ?? '') }));
 
 const run = promisify(execFile);
 
@@ -25,7 +28,7 @@ async function waitUntilGone(marker: string, timeoutMs = 8_000): Promise<boolean
 }
 
 /**
- * These start REAL processes under the real sandbox and then check with `ps` that they are
+ * These start REAL processes and then check with `ps` that they are
  * actually gone. That is the whole point: a mocked spawn would assert we called kill, and the
  * failure this feature exists to prevent is a process group that survives the call.
  */
@@ -66,19 +69,19 @@ describe('BackgroundProcessRegistry', () => {
     expect(output.join('')).toContain(marker);
   }, 20_000);
 
-  it('runs an unsandboxed command with the env overrides', async () => {
-    const info = await registry.start({
-      sessionId: 'session-a',
-      command: 'echo "$B4M_TEST_VALUE"',
-      cwd: root,
-      roots: [],
-      protectedPaths: [],
-      unsandboxed: { env: { B4M_TEST_VALUE: 'from-override' } },
-    });
-    await registry.settle(info.id, 3_000);
-    const read = registry.readForModel(info.id, 'session-a', 5_000);
-    expect(read?.text).toContain('from-override');
-    expect(read?.info.status).toBe('exited');
+  it('runs outside the granted roots with the PATH from the user shell', async () => {
+    vi.mocked(resolveUserPath).mockResolvedValueOnce('/b4m-test/bin:/usr/bin:/bin');
+    const outside = await realpath(await mkdtemp(join(tmpdir(), 'b4m-bg-outside-')));
+    try {
+      const info = await start(`echo "path=$PATH"; echo wrote > ${join(outside, 'out.txt')}`);
+      await registry.settle(info.id, 3_000);
+      const read = registry.readForModel(info.id, 'session-a', 5_000);
+      expect(read?.text).toContain('path=/b4m-test/bin:/usr/bin:/bin');
+      expect(read?.info.status).toBe('exited');
+      await expect(readFile(join(outside, 'out.txt'), 'utf8')).resolves.toContain('wrote');
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
   }, 20_000);
 
   it('hands the model only new output on a second read', async () => {

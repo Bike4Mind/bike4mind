@@ -18,10 +18,9 @@ export interface ApprovalModeOption {
 /**
  * The three options, in the order they are offered: safest first.
  *
- * The wording of 'full' is deliberately blunt and is not softened anywhere in the UI. The
- * sandbox confines WRITES to the shared folders, but reads inside it are open - a command
- * needs /usr, /bin and the dynamic linker to run at all - so a mode that stops asking really
- * does mean any file this user can read may be read and handed to the model. A description
+ * The wording of 'full' is deliberately blunt and is not softened anywhere in the UI. Commands
+ * run as the user with nothing confining them, so a mode that stops asking really does mean
+ * any file this user can read may be read and handed to the model. A description
  * that implied otherwise would be the most dangerous string in the app.
  */
 export const APPROVAL_MODE_OPTIONS: readonly ApprovalModeOption[] = [
@@ -53,7 +52,7 @@ export const APPROVAL_MODE_OPTIONS: readonly ApprovalModeOption[] = [
  * attached to the one option that has none to offer.
  */
 export const APPROVAL_MODE_FOOTNOTES: readonly string[] = [
-  'In every mode, commands can only WRITE inside the folders you have shared, and credential stores (~/.ssh, ~/.aws, keychains) stay unreadable.',
+  'In every mode, commands run as you and are not confined to the folders you have shared; file edits are.',
   'Image, speech and music generation always ask, in every mode, because they spend credits.',
   'Deleting a conversation always asks, in every mode, because it cannot be undone.',
   'Full access lasts until you quit: a conversation left on it reopens on "Ask for approval".',

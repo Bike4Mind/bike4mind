@@ -36,7 +36,7 @@ export const PARENT_WATCH_FD = 3;
  *    shell blocked on the pipe for the rest of the app's life.
  *
  * This is lifecycle, not security. The command is arbitrary approved bash and can of course
- * dismantle the guard; the sandbox and the approval gate are what confine it.
+ * dismantle the guard; the approval gate is what confines it.
  */
 export function wrapWithParentWatchdog(command: string): string {
   return [

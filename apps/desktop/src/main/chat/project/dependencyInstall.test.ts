@@ -99,11 +99,11 @@ describe('DependencyInstaller', () => {
     await pkg();
     await file('pnpm-lock.yaml');
     const registry = fakeRegistry();
-    const installer = new DependencyInstaller(registry, async () => '/x/bin');
+    const installer = new DependencyInstaller(registry);
     return { registry, installer };
   };
 
-  it('registers an unsandboxed install under the session', async () => {
+  it('registers an install under the session', async () => {
     const { registry, installer } = await setup();
     await installer.maybeStart({ sessionId: 's1', workingDirectory: dir, outcome: 'created' });
     expect(registry.start).toHaveBeenCalledWith(
@@ -111,7 +111,6 @@ describe('DependencyInstaller', () => {
         sessionId: 's1',
         command: 'pnpm install --frozen-lockfile',
         cwd: dir,
-        unsandboxed: { env: { PATH: '/x/bin' } },
       })
     );
   });

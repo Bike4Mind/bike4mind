@@ -246,7 +246,7 @@ export interface ChatServiceDeps {
    * MCP tools at all - the same "an undeclared tool is a cleaner no" rule the local tools follow.
    */
   mcp?: McpManager;
-  /** Paths kept out of reach of shell commands whatever the user granted. See tools/sandbox.ts. */
+  /** Paths kept out of reach of shell commands whatever the user granted. Enforced by the file tools, and by the shell only when SANDBOX_SHELL_COMMANDS is on. */
   protectedPaths?: readonly string[];
   /**
    * Per-session status for the sidebar. Fed from here because this is where a reply's lifetime
@@ -2404,9 +2404,12 @@ function buildSystemMessage(
       ...dependencyLines,
       'These folders are shared with you, including everything beneath them:',
       ...roots.map(root => `  ${root}`),
-      'Always pass absolute paths. Any path outside those folders is denied;',
+      'Always pass absolute paths. The file tools deny any path outside those folders;',
       'if you need one, ask the user to share it - from the chip row above the message box in a',
       'Code session, or the sidebar card in any conversation.',
+      'Bash commands run as the user with their full environment, not inside those folders: git,',
+      'gh, pnpm, the keychain and git credentials work as in their terminal. If a command fails',
+      'on authentication, report the command error; do not conclude the user is logged out.',
       ...(projectContext
         ? [
             'The project instructions and file tree are already below: do not list the root or re-read',

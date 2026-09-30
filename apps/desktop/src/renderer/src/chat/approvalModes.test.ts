@@ -13,8 +13,8 @@ describe('approval mode copy', () => {
   });
 
   /**
-   * The honesty requirement. The sandbox confines writes, not reads, so a mode that stops
-   * asking really does let a command read any file this user can read. Wording that implied
+   * The honesty requirement. Commands are not confined, so a mode that stops asking
+   * really does let a command read any file this user can read. Wording that implied
    * otherwise would be the most dangerous string in the app, so it is asserted rather than
    * left to whoever edits the copy next.
    */

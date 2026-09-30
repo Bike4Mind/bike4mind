@@ -11,7 +11,6 @@ import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { toolsForRequest } from './tools/registry';
 import { assessApprovalRisk } from './tools/riskAssessment';
-import { sandboxAvailable } from './tools/sandbox';
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -109,7 +108,7 @@ describe('ChatService approval modes', () => {
   });
 
   describe('approve for me', () => {
-    it.runIf(sandboxAvailable())('runs a confined read-only command without asking', async () => {
+    it('runs a confined read-only command without asking', async () => {
       await startTurn('auto');
       streams[0].write(toolTurn('c1', 'bash_execute', { command: 'cat notes.txt', cwd: root }));
       streams[0].write(frame('[DONE]'));
@@ -181,7 +180,7 @@ describe('ChatService approval modes', () => {
   });
 
   describe('full access', () => {
-    it.runIf(sandboxAvailable())('runs a command that reads outside the granted folders', async () => {
+    it('runs a command that reads outside the granted folders', async () => {
       await startTurn('full');
       streams[0].write(toolTurn('c1', 'bash_execute', { command: 'cat /etc/hosts', cwd: root }));
       streams[0].write(frame('[DONE]'));

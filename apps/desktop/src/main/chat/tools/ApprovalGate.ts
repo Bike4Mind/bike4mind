@@ -49,10 +49,9 @@ export interface ApprovalGateListener {
 /**
  * The user's consent for tool calls that change something or run code.
  *
- * This is the whole boundary for shell execution. The sandbox confines WRITES to the granted
- * folders, but reads inside it are open (a command needs /usr, /bin and the dynamic linker to
- * run at all), so the thing standing between a crafted prompt and `cat` of some unrelated file
- * is the user reading the command here before it runs. Auto-approving is deliberately not an
+ * This is the whole boundary for shell execution. Commands run as the user with nothing
+ * confining them, so the thing standing between a crafted prompt and `cat` of some unrelated
+ * file is the user reading the command here before it runs. Auto-approving is deliberately not an
  * option: 'always' is scoped to one exact request in one conversation and dies with the process.
  */
 export class ApprovalGate {
