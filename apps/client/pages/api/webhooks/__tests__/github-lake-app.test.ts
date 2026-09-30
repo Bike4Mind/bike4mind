@@ -113,8 +113,14 @@ describe('/api/webhooks/github-lake-app', () => {
     const { run, status, json } = post({ action: 'deleted', installation: { id: 42 } }, 'installation');
     await run;
     expect(h.findByInstallationId).toHaveBeenCalledWith(42);
-    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', { connectionId: 'conn1' });
-    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', { connectionId: 'conn2' });
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', {
+      connectionId: 'conn1',
+      installationId: 42,
+    });
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', {
+      connectionId: 'conn2',
+      installationId: 42,
+    });
     expect(status).toHaveBeenCalledWith(202);
     expect(json).toHaveBeenCalledWith({ queued: 2 });
   });
@@ -130,7 +136,10 @@ describe('/api/webhooks/github-lake-app', () => {
     );
     await run;
     expect(h.sendToQueue).toHaveBeenCalledTimes(1);
-    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', { connectionId: 'conn1' });
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', {
+      connectionId: 'conn1',
+      installationId: 42,
+    });
     expect(status).toHaveBeenCalledWith(202);
     expect(json).toHaveBeenCalledWith({ queued: 1 });
   });
@@ -192,11 +201,35 @@ describe('/api/webhooks/github-lake-app', () => {
   });
 
   it('413s a body over the size cap before checking its signature', async () => {
+    // No valid signature is sent: an oversized body cannot be signed correctly by this test's
+    // secret without also proving the cap runs before verification, which this asserts directly.
     const body = 'x'.repeat(1024 * 1024 + 1);
-    const req = makeReq(body, { 'x-github-event': 'installation', 'x-hub-signature-256': sign(h.webhookSecret, body) });
+    const req = makeReq(body, { 'x-github-event': 'installation', 'x-hub-signature-256': 'sha256=deadbeef' });
     const { res, status } = makeRes();
     await (handler as unknown as (req: NextApiRequest, res: NextApiResponse) => Promise<void>)(req, res);
     expect(status).toHaveBeenCalledWith(413);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('401s a missing signature header', async () => {
+    const body = JSON.stringify({ action: 'deleted', installation: { id: 1 } });
+    const req = makeReq(body, { 'x-github-event': 'installation' });
+    const { res, status, json } = makeRes();
+    await (handler as unknown as (req: NextApiRequest, res: NextApiResponse) => Promise<void>)(req, res);
+    expect(status).toHaveBeenCalledWith(401);
+    expect(json).toHaveBeenCalledWith({ error: 'Missing X-Hub-Signature-256 header' });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('202s with queued: 0 and enqueues nothing when a handled event matches no binding', async () => {
+    h.findByInstallationId.mockResolvedValue([{ id: 'conn1', repositoryId: 999 }]);
+    const { run, status, json } = post(
+      { action: 'removed', installation: { id: 42 }, repositories_removed: [{ id: 100 }] },
+      'installation_repositories'
+    );
+    await run;
+    expect(status).toHaveBeenCalledWith(202);
+    expect(json).toHaveBeenCalledWith({ queued: 0 });
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 

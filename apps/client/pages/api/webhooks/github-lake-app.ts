@@ -74,7 +74,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
   const { installationId, connectionIds } = resolved;
   // A failed enqueue 500s so the delivery shows failed for a manual redeliver; revokes are idempotent.
   await Promise.all(
-    connectionIds.map(connectionId => sendToQueue(Resource.githubLakeRevokeQueue.url, { connectionId }))
+    connectionIds.map(connectionId => sendToQueue(Resource.githubLakeRevokeQueue.url, { connectionId, installationId }))
   );
 
   req.logger.info('GitHub lake app webhook: queued revoke for the affected connections', {

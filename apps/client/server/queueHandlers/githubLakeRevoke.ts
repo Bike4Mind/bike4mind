@@ -3,7 +3,8 @@ import { revokeGitHubLakeConnection } from '@server/integrations/github/dataLake
 import { ConflictError } from '@server/utils/errors';
 import { z, ZodError } from 'zod';
 
-const Payload = z.object({ connectionId: z.string() });
+// installationId lets a retry finish an uninstall whose connection row is already gone.
+const Payload = z.object({ connectionId: z.string(), installationId: z.number() });
 
 /**
  * Purges what one GitHub lake connection ingested once the data-lake App loses access to it
@@ -20,9 +21,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   }
   let connectionId: string | undefined;
   try {
-    ({ connectionId } = Payload.parse(JSON.parse(record.body)));
+    const payload = Payload.parse(JSON.parse(record.body));
+    connectionId = payload.connectionId;
     logger.updateMetadata({ handler: 'githubLakeRevoke', connectionId });
-    await revokeGitHubLakeConnection(connectionId, logger);
+    await revokeGitHubLakeConnection(payload, logger);
   } catch (err) {
     if (err instanceof ZodError || err instanceof SyntaxError) {
       logger.warn(`Skipping github-lake-revoke message: ${err.message}`);

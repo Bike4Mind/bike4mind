@@ -101,12 +101,15 @@ const githubLakeIngestQueue = new sst.aws.Queue('githubLakeIngestQueue', {
 // SQS is the retry: GitHub never redelivers on its own, and a live sync makes the purge 409.
 const githubLakeRevokeQueueDLQ = new sst.aws.Queue('githubLakeRevokeQueueDLQ', {});
 const githubLakeRevokeQueue = new sst.aws.Queue('githubLakeRevokeQueue', {
-  // Must exceed the handler's 10-minute timeout (below) or SQS redelivers mid-run.
+  // Must exceed the handler's 10-minute timeout (below) or SQS redelivers mid-run. The purge is not
+  // sliced like driveDisconnectPurge, but a run cut off by the timeout resumes on the next receive:
+  // the connection stays disabled and the purge re-finds only the files still left.
   visibilityTimeout: '12 minutes',
   dlq: {
     queue: githubLakeRevokeQueueDLQ.arn,
-    // 6 x 12 min outlasts CHAINED_SYNC_CLAIM_STALE_MS (60 min, OrgGitHubLakeConnectionModel.ts),
-    // the longest a sync claim can block the purge; keep them in step.
+    // 6 x 12 min outlasts a stale sync claim (CHAINED_SYNC_CLAIM_STALE_MS, 60 min,
+    // OrgGitHubLakeConnectionModel.ts), but not a live sync that keeps renewing its claim: that one
+    // dead-letters unpurged, and the DLQ alarm (dlqAlarms.ts) is the prompt to redrive it.
     retry: 6,
   },
 });

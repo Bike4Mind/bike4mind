@@ -24,13 +24,18 @@ beforeEach(() => {
 });
 
 describe('githubLakeRevoke', () => {
-  it('delegates to revokeGitHubLakeConnection with the parsed connectionId', async () => {
-    await run({ connectionId: 'conn1' });
-    expect(h.revokeGitHubLakeConnection).toHaveBeenCalledWith('conn1', logger);
+  it('delegates to revokeGitHubLakeConnection with the parsed connectionId and installationId', async () => {
+    await run({ connectionId: 'conn1', installationId: 42 });
+    expect(h.revokeGitHubLakeConnection).toHaveBeenCalledWith({ connectionId: 'conn1', installationId: 42 }, logger);
   });
 
   it('swallows a malformed payload instead of retrying it forever', async () => {
     await expect(run({ nope: true })).resolves.toBeUndefined();
+    expect(h.revokeGitHubLakeConnection).not.toHaveBeenCalled();
+  });
+
+  it('skips a message missing installationId instead of retrying it forever', async () => {
+    await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
     expect(h.revokeGitHubLakeConnection).not.toHaveBeenCalled();
   });
 
@@ -46,7 +51,7 @@ describe('githubLakeRevoke', () => {
 
   it('logs a warning and rethrows on a live-sync conflict, so SQS retries the message', async () => {
     h.revokeGitHubLakeConnection.mockRejectedValue(new ConflictError('A sync is in progress'));
-    await expect(run({ connectionId: 'conn1' })).rejects.toThrow(ConflictError);
+    await expect(run({ connectionId: 'conn1', installationId: 42 })).rejects.toThrow(ConflictError);
     expect(logger.warn).toHaveBeenCalledWith(
       '[githubLakeRevoke] sync in progress; message will retry',
       expect.objectContaining({ connectionId: 'conn1' })
@@ -55,7 +60,7 @@ describe('githubLakeRevoke', () => {
 
   it('rethrows any other failure for SQS retry/DLQ, without the conflict-specific warning', async () => {
     h.revokeGitHubLakeConnection.mockRejectedValue(new Error('mongo down'));
-    await expect(run({ connectionId: 'conn1' })).rejects.toThrow('mongo down');
+    await expect(run({ connectionId: 'conn1', installationId: 42 })).rejects.toThrow('mongo down');
     expect(logger.warn).not.toHaveBeenCalled();
   });
 });
