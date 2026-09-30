@@ -1,0 +1,96 @@
+{
+  "config": {},
+  "suites": [
+    {
+      "title": "core.setup.ts",
+      "file": "core.setup.ts",
+      "specs": [
+        {
+          "title": "create admin",
+          "ok": true,
+          "tests": [
+            { "projectName": "setup-core", "status": "expected", "results": [{ "status": "passed", "duration": 500, "retry": 0, "errors": [], "attachments": [] }] }
+          ]
+        }
+      ],
+      "suites": []
+    },
+    {
+      "title": "notebook.spec.ts",
+      "file": "notebook.spec.ts",
+      "specs": [],
+      "suites": [
+        {
+          "title": "Notebook",
+          "file": "notebook.spec.ts",
+          "specs": [
+            {
+              "title": "creates",
+              "ok": true,
+              "tests": [
+                { "projectName": "notebook", "status": "expected", "results": [{ "status": "passed", "duration": 1200, "retry": 0, "errors": [], "attachments": [] }] }
+              ]
+            },
+            {
+              "title": "saves",
+              "ok": false,
+              "tests": [
+                {
+                  "projectName": "notebook",
+                  "status": "unexpected",
+                  "results": [
+                    { "status": "failed", "duration": 3000, "retry": 0, "errors": [{ "message": "\u001b[31mTimeout 1\u001b[39m" }], "attachments": [] },
+                    { "status": "failed", "duration": 3000, "retry": 1, "errors": [{ "message": "\u001b[31mTimeout 2\u001b[39m" }], "attachments": [] },
+                    {
+                      "status": "failed",
+                      "duration": 3000,
+                      "retry": 2,
+                      "errors": [{ "message": "\u001b[31mexpect(locator).toBeVisible() failed\u001b[39m" }],
+                      "attachments": [
+                        { "name": "screenshot", "contentType": "image/png", "path": "__ATTACH__/shot.png" },
+                        { "name": "video", "contentType": "video/webm", "path": "__ATTACH__/video.webm" },
+                        { "name": "trace", "contentType": "application/zip", "path": "__ATTACH__/trace.zip" },
+                        { "name": "error-context", "contentType": "text/markdown", "path": "__ATTACH__/error.md" }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "renames",
+              "ok": true,
+              "tests": [
+                {
+                  "projectName": "notebook",
+                  "status": "flaky",
+                  "results": [
+                    { "status": "failed", "duration": 800, "retry": 0, "errors": [{ "message": "flaked once" }], "attachments": [] },
+                    { "status": "passed", "duration": 700, "retry": 1, "errors": [], "attachments": [] }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "archives",
+              "ok": true,
+              "tests": [
+                { "projectName": "notebook", "status": "skipped", "results": [{ "status": "skipped", "duration": 0, "retry": 0, "errors": [], "attachments": [] }] }
+              ]
+            }
+          ],
+          "suites": []
+        }
+      ]
+    },
+    {
+      "title": "data-lake.spec.ts",
+      "file": "data-lake.spec.ts",
+      "specs": [
+        { "title": "imports", "ok": true, "tests": [{ "projectName": "data-lake", "status": "skipped", "results": [] }] }
+      ],
+      "suites": []
+    }
+  ],
+  "stats": { "startTime": "2026-09-28T09:00:00.000Z", "duration": 252000, "expected": 3, "unexpected": 1, "flaky": 1, "skipped": 1 }
+}

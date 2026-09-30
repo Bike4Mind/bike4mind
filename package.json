@@ -48,6 +48,7 @@
     "test:e2e:headed": "pnpm --filter client test:e2e:headed",
     "test:e2e:report": "pnpm --filter client test:e2e:report",
     "test:email-ingestion": "pnpm --filter scripts test:email-ingestion",
+    "test:scripts": "vitest run --root . --dir scripts/__tests__",
     "typecheck": "tsc --noEmit",
     "typecheck:infra": "tsc -p infra/tsconfig.json --noEmit",
     "typecheck:infra:local": "if [ -f .sst/platform/config.d.ts ]; then pnpm run typecheck:infra; else echo '⏭️  Skipping infra typecheck — run sst install to enable it locally (CI still gates it)'; fi",

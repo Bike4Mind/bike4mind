@@ -151,6 +151,8 @@ export default defineConfig({
     baseURL: process.env.API_URL || 'http://localhost:3000',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    // Kept only for failing attempts; scripts/qa-report.mjs uploads it for /status.
+    video: 'retain-on-failure',
   },
 
   projects: [

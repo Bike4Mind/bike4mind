@@ -235,4 +235,10 @@ export const ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     description: 'Server-to-server event ingestion for Overwatch analytics',
     endpoints: ['POST /api/overwatch/v1/events'],
   },
+  {
+    value: ApiKeyScope.QA_INGEST,
+    label: 'QA: Ingest',
+    description: 'CI ingest of end-to-end test runs for the admin status page',
+    endpoints: ['POST /api/qa/uploads', 'POST /api/qa/runs'],
+  },
 ];
