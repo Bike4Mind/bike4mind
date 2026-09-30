@@ -14,6 +14,14 @@ import { createFileUploadContract, getFileContract } from './files.contract';
 import { createEmbeddingsContract } from './embeddings.contract';
 import { getQuestContract } from './quest.contract';
 import { createSessionContract } from './sessionCreate.contract';
+import {
+  listDataLakesContract,
+  getDataLakeContract,
+  getDataLakeFileContract,
+  addDataLakeFileContract,
+  removeDataLakeFileContract,
+  searchDataLakeContract,
+} from './dataLakes.contract';
 
 /**
  * Every public endpoint, as a contract. The OpenAPI generator registers each of
@@ -39,4 +47,10 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createEmbeddingsContract,
   getQuestContract,
   createSessionContract,
+  listDataLakesContract,
+  getDataLakeContract,
+  getDataLakeFileContract,
+  addDataLakeFileContract,
+  removeDataLakeFileContract,
+  searchDataLakeContract,
 ];

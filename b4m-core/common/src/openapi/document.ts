@@ -282,6 +282,12 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     { name: 'Audio', description: 'Speech, music, and sound-effect generation.' },
     { name: 'Images', description: 'Image generation and editing, queued and polled as quests.' },
     { name: 'Account', description: "The caller's own identity, plan tier, credit balance, and entitlements." },
+    {
+      name: 'Data Lakes',
+      description:
+        'Curated document collections: list and inspect the lakes you can reach, manage which files belong ' +
+        "to one, check each file's ingestion status, and run semantic search over a single lake.",
+    },
   ];
 
   // Attach per-operation vendor extensions + headers by operationId. Restrict to
