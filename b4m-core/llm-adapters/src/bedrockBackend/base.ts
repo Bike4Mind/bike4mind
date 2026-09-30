@@ -860,6 +860,9 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           } else {
             // New behavior: just pass tool calls through callback, don't execute
             Logger.globalInstance.log('[BaseBedrockBackend] executeTools=false, passing tool calls to callback');
+            // Same as the executing branch above: the text-only send below is never reached, so
+            // intro text sharing this chunk with the reported tool call goes out here.
+            if (streamedText.some(Boolean)) await callback(streamedText, buildCompletionInfo());
             await callback([null], buildCompletionInfo());
             return; // Exit after passing tools
           }
