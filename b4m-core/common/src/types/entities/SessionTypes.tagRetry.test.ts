@@ -3,7 +3,7 @@ import { isTagAttemptDue, tagAttemptDueFilter, TAG_RETRY_BACKOFF_MS } from './Se
 
 /**
  * These two express one rule in two languages: `isTagAttemptDue` gates what the spider dispatches
- * (apps/client/server/events/spider.ts) and `tagAttemptDueFilter` gates what the credit pre-flight
+ * (apps/workers/src/events/spider.ts) and `tagAttemptDueFilter` gates what the credit pre-flight
  * prices (sessionRepository.countTaggableNotebooks). A disagreement between them re-opens the
  * dispatch-vs-settlement gap the counter exists to close.
  *

@@ -51,7 +51,7 @@ import { CONVERGENCE_PAUSE_SETTING_KEY } from '@server/queueHandlers/convergence
 import { CONVERGENCE_ORIGIN, WorkOrigin } from '@server/queueHandlers/convergenceProvenance';
 // Type-only, so this does NOT pull the sweep's filter module into anyone's runtime graph. Imported
 // rather than restated so the compiler holds the produced shape and the consumed shape together.
-import type { ChunkScanConvergencePause } from '@server/worker/chunkScan';
+import type { ChunkScanConvergencePause } from '@server/s3/chunkScan';
 
 /**
  * The lake fields the grading and the membership predicate need, and NOTHING else: `scopeForLake`

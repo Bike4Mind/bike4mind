@@ -28,7 +28,13 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
 /** Directories swept for FabFile serve/distribution call sites. */
-const SCAN_ROOTS = ['apps/client/pages', 'apps/client/server', 'b4m-core/services/src', 'b4m-core/slack/src'];
+const SCAN_ROOTS = [
+  'apps/client/pages',
+  'apps/client/server',
+  'apps/workers/src',
+  'b4m-core/services/src',
+  'b4m-core/slack/src',
+];
 
 const EXCLUDED_DIR_NAMES = new Set(['__tests__', 'dist', '.next', 'node_modules']);
 const isTestFileName = (name: string): boolean => /\.test\.tsx?$/.test(name);
@@ -164,7 +170,7 @@ const ALLOWLIST: Record<string, string> = {
     'DI passthrough — storage adapter consumed by already-gated researchTaskService.process/downloadRelevantLinks (routes through findOrUpdateExistingResearchData, gated commit 63cc8f9d3e, and createFabFile)',
   'apps/client/server/queueHandlers/notebookCuration.ts':
     'DI passthrough — storage adapter consumed by NotebookCurationService.storeFile, which calls the already-gated fabFileService.createFabFile with a converter-produced mimeType that is always markdown/txt/html, never an image',
-  'apps/client/server/events/sessionSummarization.ts':
+  'apps/workers/src/events/sessionSummarization.ts':
     'text-only mime (session summary is always SupportedFabFileMimeTypes.TXT_PLAIN) — DI passthrough to already-gated fabFileService.update/create',
   'apps/client/server/emailIngestion/emailParser.ts':
     'DI passthrough — storage adapter consumed by the email-ingestion pipeline (processAttachments/processEmailBody), which creates FabFiles via the already-gated fabFileService.create',

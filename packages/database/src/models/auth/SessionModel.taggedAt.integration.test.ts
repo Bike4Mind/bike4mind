@@ -6,7 +6,7 @@ import { Session, sessionRepository } from './SessionModel';
 /**
  * `taggedAt` is the companion of `tags`, the way `summaryAt` is the companion of `summary`, and
  * the ONLY thing that stops the spider re-tagging a notebook it already paid an operations-model
- * completion to tag (apps/client/server/events/spider.ts gates on `!session.taggedAt`).
+ * completion to tag (apps/workers/src/events/spider.ts gates on `!session.taggedAt`).
  *
  * The Session schema is strict (Mongoose default, not overridden in its options), so WITHOUT the
  * declared path the field is dropped from the `$set` that `sessionRepository.update` builds -

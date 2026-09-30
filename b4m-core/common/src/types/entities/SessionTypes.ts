@@ -805,7 +805,7 @@ function tagRetryCutoff(now: number): Date {
  *
  * MUST agree with `tagAttemptDueFilter` below. The gate decides what is dispatched and the filter
  * decides what the credit pre-flight prices; the two disagreeing is exactly the defect
- * `apps/client/server/events/sessionTaggingGate.e2e.test.ts` exists to catch, which is why both
+ * `apps/workers/src/events/sessionTaggingGate.e2e.test.ts` exists to catch, which is why both
  * forms live here rather than one beside each caller.
  */
 export function isTagAttemptDue(session: Pick<ISession, 'tagLastAttemptAt'>, now: number = Date.now()): boolean {

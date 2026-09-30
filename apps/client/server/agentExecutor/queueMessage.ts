@@ -5,7 +5,7 @@ import type { Logger } from '@bike4mind/observability';
 /**
  * ElasticMQ has no dead-letter queue, so the cap lives here: a message received more than this many
  * times is deleted instead of run again. Matches the hosted queue's redrive `retry: 3`
- * (infra/queues.ts) and the self-host worker's default (worker/selfHostWorker.ts).
+ * (infra/queues.ts) and the self-host worker's default (apps/workers/src/selfhost/selfHostWorker.ts).
  */
 export const MAX_RECEIVE_COUNT = 3;
 

@@ -72,7 +72,7 @@ const createSessionParametersSchema = z.object({
   // holds one loses the provenance instead of failing the copy.
   summaryTrigger: z.enum(PERSISTED_SESSION_SUMMARY_TRIGGERS).optional(),
   // Companion of `tags` the way `summaryAt` is of `summary`, so clone/fork must carry it or the
-  // spider gate at apps/client/server/events/spider.ts pays to re-tag every copy; snip deliberately
+  // spider gate at apps/workers/src/events/spider.ts pays to re-tag every copy; snip deliberately
   // does not. Declared here because secureParameters strips unknown keys; still not a client input,
   // since z.date() rejects the string a JSON body would carry.
   taggedAt: z.date().optional(),
