@@ -1056,6 +1056,38 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
+   * Set only `promptMeta.performance.clientFirstTokenTime`. The client posts it while the quest is
+   * still streaming, so a read-modify-write of the whole `promptMeta` would clobber whatever the
+   * pipeline saved in between. Returns whether a quest matched.
+   *
+   * Goes through an update pipeline, not a dotted `$set`, for the same reason as `settleIfUnfinished`:
+   * a null `promptMeta` (or `performance`) makes the dotted path error, while `$mergeObjects` treats
+   * a null or missing operand as empty.
+   */
+  async setClientFirstTokenTime(id: string, clientFirstTokenTime: number): Promise<boolean> {
+    const result = await this.model.updateOne({ _id: id }, [
+      {
+        $set: {
+          promptMeta: {
+            $mergeObjects: [
+              '$promptMeta',
+              {
+                performance: {
+                  $mergeObjects: [
+                    '$promptMeta.performance',
+                    { clientFirstTokenTime: { $literal: clientFirstTokenTime } },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      },
+    ]);
+    return result.matchedCount > 0;
+  }
+
+  /**
    * Record one agent run's attachment outcome on the quest it is linked to.
    *
    * The agent path builds the same notices the chat path does but had nowhere to put them, so an
