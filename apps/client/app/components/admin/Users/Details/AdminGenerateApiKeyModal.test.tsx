@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { ApiKeyScope } from '@bike4mind/common';
+import { ADMIN_ONLY_API_KEY_SCOPES, GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
 import AdminGenerateApiKeyModal from './AdminGenerateApiKeyModal';
 
 const h = vi.hoisted(() => ({
@@ -131,5 +133,36 @@ describe('AdminGenerateApiKeyModal - pre-authorized lakes', () => {
 
     fireEvent.click(screen.getByTestId('admin-generate-key-lake-checkbox-lakeA').querySelector('input')!);
     expect(screen.getByTestId('admin-generate-key-lakes-count').textContent).toContain('1 selected');
+  });
+});
+
+describe('AdminGenerateApiKeyModal - ingest scopes', () => {
+  const GENERIC = GENERIC_MODAL_API_KEY_SCOPES[0].value;
+  const scopeInput = (value: string) => screen.getByTestId(`admin-generate-key-scope-${value}`).querySelector('input')!;
+
+  const submitScopes = () => {
+    fireEvent.change(screen.getByPlaceholderText(/Data Lake Upload/i), { target: { value: 'ci ingest' } });
+    fireEvent.click(screen.getByText('Generate API Key'));
+    return h.mutate.mock.calls[0][0].data.scopes;
+  };
+
+  it('offers every admin-only ingest scope', () => {
+    renderModal();
+    for (const scope of ADMIN_ONLY_API_KEY_SCOPES) expect(screen.getByText(scope.label)).toBeTruthy();
+    expect(screen.getByText('QA: Ingest')).toBeTruthy();
+  });
+
+  it('an ingest scope replaces the selection, since it must be the only scope', () => {
+    renderModal();
+    fireEvent.click(scopeInput(GENERIC));
+    fireEvent.click(scopeInput(ApiKeyScope.QA_INGEST));
+    expect(submitScopes()).toEqual([ApiKeyScope.QA_INGEST]);
+  });
+
+  it('a generic scope drops a selected ingest scope', () => {
+    renderModal();
+    fireEvent.click(scopeInput(ApiKeyScope.QA_INGEST));
+    fireEvent.click(scopeInput(GENERIC));
+    expect(submitScopes()).toEqual([GENERIC]);
   });
 });

@@ -1,8 +1,13 @@
+import type { ApiKeyScope } from '@bike4mind/common';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useAdminGenerateApiKey, AdminCreateUserApiKeyRequest } from '@client/app/hooks/data/userApiKeys';
 import { useGetPreauthorizableDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
-import { GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
+import {
+  ADMIN_ONLY_API_KEY_SCOPES,
+  type ApiKeyScopeOption,
+  GENERIC_MODAL_API_KEY_SCOPES,
+} from '@client/app/constants/apiKeyScopes';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import WarningIcon from '@mui/icons-material/Warning';
 import {
@@ -35,6 +40,9 @@ interface AdminGenerateApiKeyModalProps {
 // this generic modal, so embed:chat is excluded from the offered scopes.
 const scopeOptions = GENERIC_MODAL_API_KEY_SCOPES;
 const scopeValues = scopeOptions.map(s => s.value);
+// Ingest scopes are confined (createUserApiKey refuses a key that mixes one with anything
+// else), so picking one replaces the selection and picking a generic scope drops it.
+const ingestScopeValues = new Set<ApiKeyScope>(ADMIN_ONLY_API_KEY_SCOPES.map(s => s.value));
 
 export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminGenerateApiKeyModalProps) {
   const [formData, setFormData] = useState<AdminCreateUserApiKeyRequest>({
@@ -100,6 +108,29 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
   };
 
   const allScopesSelected = scopeOptions.every(s => formData.scopes.includes(s.value));
+  const genericSelectedCount = formData.scopes.filter(s => !ingestScopeValues.has(s)).length;
+
+  const toggleScope = (value: ApiKeyScope, checked: boolean) => {
+    let scopes: ApiKeyScope[];
+    if (!checked) scopes = formData.scopes.filter(s => s !== value);
+    else if (ingestScopeValues.has(value)) scopes = [value];
+    else scopes = [...formData.scopes.filter(s => !ingestScopeValues.has(s)), value];
+    setFormData({ ...formData, scopes });
+  };
+
+  const renderScope = (scope: ApiKeyScopeOption) => (
+    <Box key={scope.value} sx={{ mb: 1 }}>
+      <Checkbox
+        label={scope.label}
+        checked={formData.scopes.includes(scope.value)}
+        onChange={e => toggleScope(scope.value, e.target.checked)}
+        data-testid={`admin-generate-key-scope-${scope.value}`}
+      />
+      <Typography level="body-xs" color="neutral" sx={{ ml: 4 }}>
+        {scope.description}
+      </Typography>
+    </Box>
+  );
 
   const toggleAllScopes = () => {
     setFormData({ ...formData, scopes: allScopesSelected ? [] : [...scopeValues] });
@@ -170,7 +201,7 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
           <FormControl required>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
               <FormLabel sx={{ mb: 0 }}>
-                Scopes ({formData.scopes.length}/{scopeOptions.length} selected)
+                Scopes ({genericSelectedCount}/{scopeOptions.length} selected)
               </FormLabel>
               <Button size="sm" variant="plain" onClick={toggleAllScopes}>
                 {allScopesSelected ? 'Clear All' : 'Select All'}
@@ -186,24 +217,17 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
                 p: 1,
               }}
             >
-              {scopeOptions.map(scope => (
-                <Box key={scope.value} sx={{ mb: 1 }}>
-                  <Checkbox
-                    label={scope.label}
-                    checked={formData.scopes.includes(scope.value)}
-                    onChange={e => {
-                      if (e.target.checked) {
-                        setFormData({ ...formData, scopes: [...formData.scopes, scope.value] });
-                      } else {
-                        setFormData({ ...formData, scopes: formData.scopes.filter(s => s !== scope.value) });
-                      }
-                    }}
-                  />
-                  <Typography level="body-xs" color="neutral" sx={{ ml: 4 }}>
-                    {scope.description}
-                  </Typography>
-                </Box>
-              ))}
+              {scopeOptions.map(renderScope)}
+            </Box>
+          </FormControl>
+
+          <FormControl>
+            <FormLabel sx={{ mb: 0.5 }}>Service ingest key</FormLabel>
+            <Typography level="body-xs" color="neutral" sx={{ mb: 1 }}>
+              Admin-only. An ingest scope must be the key&apos;s only scope, so selecting one clears the scopes above.
+            </Typography>
+            <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'sm', p: 1 }}>
+              {ADMIN_ONLY_API_KEY_SCOPES.map(renderScope)}
             </Box>
           </FormControl>
 
