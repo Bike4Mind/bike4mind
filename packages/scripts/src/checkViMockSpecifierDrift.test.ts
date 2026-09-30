@@ -91,7 +91,8 @@ function loadEntries(): Map<string, PackageEntry> {
 function loadMockFiles(): { path: string; text: string }[] {
   const listed = execSync(
     `grep -rl "vi\\.mock(" --include="*.ts" --include="*.tsx" ${EXCLUDES} ${SEARCH_DIRS} || true`,
-    { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }
+    // timeout: a sync call blocks the event loop, so the test's own timeout could never interrupt it (ms).
+    { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 60_000 }
   );
   return listed
     .split('\n')
