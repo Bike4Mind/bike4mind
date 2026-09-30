@@ -61,7 +61,8 @@ describe('sharingService - cancelInvite authority', () => {
 
     expect(db.projects.shareable.findShareAccessById).toHaveBeenCalledWith(asUser(), DOC_ID);
     expect(result[0].remaining).toBe(0);
-    expect(db.invites.update).toHaveBeenCalled();
+    expect(db.invites.update).toHaveBeenCalledTimes(1);
+    expect(db.invites.update.mock.calls[0][0]).toStrictEqual({ id: 'invite-1', remaining: 0 });
   });
 
   it('cancelling one email only touches the invite it was actually pending on', async () => {
@@ -84,7 +85,11 @@ describe('sharingService - cancelInvite authority', () => {
     // The link invite wasn't touched, so it must not be written - avoids churning its
     // updatedAt (and a redundant write) on every unrelated cancel for the document.
     expect(db.invites.update).toHaveBeenCalledTimes(1);
-    expect(db.invites.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'invite-1' }));
+    expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
+      id: 'invite-1',
+      recipients: { pending: [], accepted: [], refused: [] },
+      remaining: 0,
+    });
   });
 
   it('leaves the other recipients their slots when several are named', async () => {
@@ -105,6 +110,11 @@ describe('sharingService - cancelInvite authority', () => {
     // The clamp is a ceiling, not a reset: two named recipients still hold a slot each.
     expect(result[0].remaining).toBe(2);
     expect(result[0].recipients.pending).toEqual(['a@example.com', 'c@example.com']);
+    expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
+      id: 'invite-3',
+      recipients: { pending: ['a@example.com', 'c@example.com'], accepted: [], refused: [] },
+      remaining: 2,
+    });
   });
 
   it('does not leave a cancelled named invite redeemable as a share link', async () => {
