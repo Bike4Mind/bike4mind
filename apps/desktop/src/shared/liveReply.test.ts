@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatMessage, ChatStreamEvent, ChatToolCall } from './chat';
-import { applyLiveEvent, startReply } from './liveReply';
+import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } from './liveReply';
 
 const ids = { sessionId: 's', messageId: 'r' };
 const call = (status: ChatToolCall['status']): ChatToolCall =>
@@ -76,5 +76,35 @@ describe('live reply', () => {
       { text: 'Found it.', toolCallIds: [], reasoning: 'next' },
     ]);
     expect(reply.content).toBe('Looking.Found it.');
+  });
+
+  describe('coalesceLiveEvents', () => {
+    const events: LiveReplyEvent[] = [
+      { type: 'delta', ...ids, text: 'Look' },
+      { type: 'delta', ...ids, text: 'ing.' },
+      { type: 'tool-start', ...ids, call: call('running') },
+      { type: 'tool-end', ...ids, call: call('done') },
+      { type: 'delta', ...ids, text: '\n\nFound' },
+      { type: 'delta', ...ids, text: ' it.' },
+    ];
+
+    it('merges only adjacent deltas, keeping tool events where they fell', () => {
+      expect(coalesceLiveEvents(events).map(event => (event.type === 'delta' ? event.text : event.type))).toEqual([
+        'Looking.',
+        'tool-start',
+        'tool-end',
+        '\n\nFound it.',
+      ]);
+    });
+
+    it('folds to the same reply as applying every event one at a time', () => {
+      const start: ChatStreamEvent = { type: 'start', ...ids };
+      expect(fold([start, ...coalesceLiveEvents(events)])).toEqual(fold([start, ...events]));
+    });
+
+    it('does not merge deltas of different messages', () => {
+      const other: LiveReplyEvent = { type: 'delta', sessionId: 's', messageId: 'q', text: 'x' };
+      expect(coalesceLiveEvents([events[0], other])).toHaveLength(2);
+    });
   });
 });

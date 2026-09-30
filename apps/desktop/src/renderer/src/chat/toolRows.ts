@@ -51,6 +51,12 @@ const PHRASES: Record<string, ToolPhrases> = {
     many: n => `Ran ${n} searches`,
     active: 'Searching...',
   },
+  todo_write: {
+    didAlone: 'Updated the plan',
+    toAlone: 'update the plan',
+    many: n => `Updated the plan ${n} times`,
+    active: 'Updating the plan...',
+  },
   explore: {
     did: 'Explored',
     didAlone: 'Explored the project',

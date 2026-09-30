@@ -100,6 +100,7 @@ describe('ChatService tool loop', () => {
       'bash_output',
       'bash_list',
       'bash_kill',
+      'todo_write',
       'explore',
     ]);
   });
@@ -364,6 +365,44 @@ describe('ChatService tool loop', () => {
         { text: 'Now reading it.', toolCallIds: ['c2'] },
         // The round that ends the turn ran nothing, and is still a round: it carries the answer.
         { text: 'Here is what I found.', toolCallIds: [] },
+      ],
+    });
+  });
+
+  // The round the model spent in silence still arrives as a delta, because "silent" in practice
+  // means a stray newline rather than nothing at all. Stored untrimmed it would read as prose
+  // and draw a tool run of its own, which is the shape the thread shows while it streams.
+  it('stores a round the model spent on whitespace as wordless, and keeps the reply spaced', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'go');
+    await firstRequest();
+
+    streams[0].write(frame({ type: 'content', text: 'Reading the config.' }));
+    streams[0].write(
+      frame({ type: 'tool_use', tools: [{ id: 'c0', name: 'glob_files', arguments: '{"pattern":"*.json"}' }] })
+    );
+    streams[0].write(frame('[DONE]'));
+    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+
+    streams[1].write(frame({ type: 'content', text: '\n' }));
+    streams[1].write(
+      frame({ type: 'tool_use', tools: [{ id: 'c1', name: 'glob_files', arguments: '{"pattern":"*.ts"}' }] })
+    );
+    streams[1].write(frame('[DONE]'));
+    await vi.waitUntil(() => streams.length === 3, { timeout: 3000, interval: 5 });
+
+    streams[2].write(frame({ type: 'content', text: 'Done.\n\n' }));
+    streams[2].write(frame('[DONE]'));
+
+    const done = await waitFor(events, 'done');
+    expect(done).toMatchObject({
+      // One blank line between the two rounds that said something, and no gap under the last:
+      // the silent round adds neither, exactly as an empty one would not.
+      content: 'Reading the config.\n\nDone.',
+      rounds: [
+        { text: 'Reading the config.', toolCallIds: ['c0'] },
+        { text: '', toolCallIds: ['c1'] },
+        { text: 'Done.', toolCallIds: [] },
       ],
     });
   });
