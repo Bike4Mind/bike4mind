@@ -34,7 +34,11 @@ const CleanupPayload = z.object({
     isAdmin: z.boolean(),
     administeredOrgIds: z.array(z.string()).optional(),
   }),
+  // The claim the lifecycle route accepted this message under, so a guard refusal releases only
+  // that claim. Optional for messages enqueued before this field existed.
+  purgeClaimId: z.string().optional(),
 });
+export type DataLakeCleanupMessage = z.input<typeof CleanupPayload>;
 
 /**
  * Background consumer for the phase-2 data-lake hard-delete sweep, offloaded off the request path
@@ -45,11 +49,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   // Hoisted so the catch can name the lake it is releasing. Stays undefined when parsing itself
   // failed, which is exactly the case that has no purge to release.
   let parsedLakeId: string | undefined;
+  let parsedClaimId: string | undefined;
   try {
     // Parse INSIDE the try: a malformed body (bad JSON / wrong shape) is permanently invalid, so
     // it must be swallowed like the other permanent errors below, not retried into the DLQ.
-    const { dataLakeId, actor } = CleanupPayload.parse(JSON.parse(event.Records[0].body));
+    const { dataLakeId, actor, purgeClaimId } = CleanupPayload.parse(JSON.parse(event.Records[0].body));
     parsedLakeId = dataLakeId;
+    parsedClaimId = purgeClaimId;
     logger.updateMetadata({ handler: 'dataLakeCleanup', dataLakeId, userId: actor.userId });
 
     await dataLakeService.cleanupDeletedDataLake(actor, dataLakeId, {
@@ -138,12 +144,18 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // deeper in the sweep would make this advertise a half-purged lake as restorable. Every other
     // failure (DB/network) rethrows below and is recovered by DLQ replay, which must NOT release -
     // that lake may be partly swept.
+    //
+    // Keyed by the message's claim id: SQS is at-least-once, so a redelivered message can be refused
+    // after a NEWER purge claimed the lake, and an anonymous release would reopen that purge's lake
+    // for restore while its sweep is queued. Only a legacy message with no id falls back to releasing
+    // a claim that has no id either.
     if (err instanceof BadRequestError) {
       logger.error('[dataLakes] cleanup sweep refused by its own guard; releasing the accepted purge', {
         dataLakeId: parsedLakeId,
+        purgeClaimId: parsedClaimId,
         reason: err.message,
       });
-      if (parsedLakeId) await dataLakeRepository.releasePurgingToDeleted(parsedLakeId);
+      if (parsedLakeId) await dataLakeRepository.releasePurgingToDeleted(parsedLakeId, parsedClaimId);
       return;
     }
     // Malformed payload (SyntaxError/ZodError): permanently invalid and unattributable - there is no
