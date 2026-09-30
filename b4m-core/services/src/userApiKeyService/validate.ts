@@ -25,6 +25,7 @@ export interface ValidationResult {
     requestsPerMinute: number;
     requestsPerDay: number;
   };
+  expiresAt?: Date;
   productId?: string;
   /** Billing target of the key. Organization -> usage bills `organizationId`'s pool. */
   billingOwnerType?: ApiKeyBillingOwnerType;
@@ -71,6 +72,7 @@ function finalizeApiKeyValidation(apiKey: IUserApiKeyDocument, db: ValidateUserA
     keyId: apiKey.id,
     scopes: apiKey.scopes,
     rateLimit: apiKey.rateLimit,
+    expiresAt: apiKey.expiresAt,
     productId: apiKey.productId,
     billingOwnerType: apiKey.billingOwnerType,
     organizationId: apiKey.organizationId,
@@ -123,7 +125,7 @@ export const validateUserApiKey = async (
   // Prefix-specific to this path, so it stays here, not in the shared finalize helper.
   if (foundViaLegacyPrefix && result.isValid) {
     apiKey.keyPrefix = keyPrefix;
-    db.userApiKeys.update(apiKey).catch(err => {
+    db.userApiKeys.update({ id: apiKey.id, keyPrefix }).catch(err => {
       Logger.globalInstance.warn('Failed to self-heal legacy API key prefix:', err);
     });
   }

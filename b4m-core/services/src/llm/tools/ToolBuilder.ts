@@ -5,6 +5,7 @@ import {
   IUserDocument,
   IOrganizationDocument,
   IUsageEventInput,
+  UsageEventFeature,
   ModelInfo,
   MusicGenerationVendor,
   materializePromptMetaSession,
@@ -49,6 +50,12 @@ export function buildToolUsageEvent(params: {
   cacheWriteTokens?: number;
   /** Provider stop reason of the underlying completion, when the tool wraps one (e.g. delegate_to_agent). */
   finishReason?: string;
+  /**
+   * Defaults to 'tool'. The music and audio tools pass the feature their direct endpoint
+   * writes (music_generation, sound_effects, text_to_speech), so a track counts as a track
+   * whichever path made it - the Gears status reads these features to unlock its gears.
+   */
+  feature?: UsageEventFeature;
 }): IUsageEventInput {
   const { quest, user, organization } = params;
   return {
@@ -57,7 +64,7 @@ export function buildToolUsageEvent(params: {
     ownerId: organization ? organization.id : user.id,
     ownerType: organization ? CreditHolderType.Organization : CreditHolderType.User,
     sessionId: quest.sessionId,
-    feature: 'tool',
+    feature: params.feature ?? 'tool',
     provider: params.provider,
     model: params.model,
     inputTokens: params.inputTokens ?? 0,
@@ -111,6 +118,8 @@ export interface ToolBuilderConfig {
   suppressLakeArms?: ToolContext['suppressLakeArms'];
   /** Session lake scope, forwarded to the tool context (see ToolContext.sessionRetrievalTags). */
   sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
+  /** Reader opt-in consent, forwarded to the tool context (see ToolContext.sessionReaderConsentDatalakeTags). */
+  sessionReaderConsentDatalakeTags?: ToolContext['sessionReaderConsentDatalakeTags'];
   /** Lake-scope sidecar, forwarded to the tool context (see ToolContext.sessionLakeScopeExplicit). */
   sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
   /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
@@ -507,6 +516,7 @@ export class ToolBuilder {
           costUsd: usdCost,
           creditsCharged: creditsUsed,
           units: billedSeconds,
+          feature: 'music_generation',
         })
       );
     }
@@ -583,6 +593,7 @@ export class ToolBuilder {
           costUsd: usdCost,
           creditsCharged: creditsUsed,
           units,
+          feature: data.kind === 'sound_effect' ? 'sound_effects' : 'text_to_speech',
         })
       );
     }
@@ -809,6 +820,7 @@ export class ToolBuilder {
         fullyInlinedAttachmentIds: this.deps.fullyInlinedAttachmentIds,
         suppressLakeArms: this.deps.suppressLakeArms,
         sessionRetrievalTags: this.deps.sessionRetrievalTags,
+        sessionReaderConsentDatalakeTags: this.deps.sessionReaderConsentDatalakeTags,
         sessionLakeScopeExplicit: this.deps.sessionLakeScopeExplicit,
         sessionPreauthorizedLakeIds: this.deps.sessionPreauthorizedLakeIds,
         sessionRepository: this.deps.db.sessions,

@@ -5,7 +5,8 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { agentExecutionRepository, questRepository, Quest, type AgentExecutionStatus } from '@bike4mind/database';
 import { settleStrandedQuests } from './settleStrandedQuests';
-import { ABANDONED_REPLY } from '@server/chatCompletion/questTimeoutRecovery';
+import { RUN_ABANDONED_FINISH_REASON } from '@bike4mind/common';
+import { ABANDONED_REPLY, UNFINISHED_REPLY_NOTICE } from '@server/chatCompletion/questTimeoutRecovery';
 
 /**
  * The one test that spans the seam this whole path is built on: a real execution
@@ -173,9 +174,10 @@ describe('stranded-quest settling, end to end', () => {
 
     const after = await questById(quest.id);
     expect(after?.status).toBe('done');
-    expect(after?.reply).toBe('here is half an answer');
-    // Only `status` flipped: the bubble is not an error, it is a short answer.
+    expect(after?.reply).toBe(`here is half an answer\n\n${UNFINISHED_REPLY_NOTICE}`);
+    // Not an error bubble, but marked cut off so no reader takes it for a finished answer.
     expect(after?.type).toBe('message');
+    expect(after?.promptMeta?.finishReason).toBe(RUN_ABANDONED_FINISH_REASON);
   });
 
   it('leaves a run that finished naturally alone, whichever way the race went', async () => {

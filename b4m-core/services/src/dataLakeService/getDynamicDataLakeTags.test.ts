@@ -357,6 +357,65 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
   });
 });
 
+// The ATTACHMENT scope. `includeDraftLakes` is a per-CALL option rather than a context
+// field precisely so a caller can resolve it off the SAME context object the retrieval pass used -
+// the per-turn membership/grant/supersession memos key on that object's IDENTITY - so these tests
+// assert the flag reaches the repo and nothing else about the resolution moves with it.
+describe('getDynamicDataLakeAccess - the attachment scope', () => {
+  it('leaves includeDraftLakes unset by default, so every retrieval surface stays active-only', async () => {
+    const findActive = vi.fn().mockResolvedValue([]);
+    const context = ctx([], { user: { id: 'u1', tags: [] } });
+    (
+      context.db.dataLakes as never as { findActiveByUserTagsAndEntitlements: typeof findActive }
+    ).findActiveByUserTagsAndEntitlements = findActive;
+
+    await getDynamicDataLakeAccess(context);
+
+    expect(findActive.mock.calls[0][4]).not.toHaveProperty('includeDraftLakes', true);
+  });
+
+  it('forwards includeDraftLakes to the repo when the attachment doors ask for it', async () => {
+    const findActive = vi.fn().mockResolvedValue([]);
+    const context = ctx([], { user: { id: 'u1', tags: [] } });
+    (
+      context.db.dataLakes as never as { findActiveByUserTagsAndEntitlements: typeof findActive }
+    ).findActiveByUserTagsAndEntitlements = findActive;
+
+    await getDynamicDataLakeAccess(context, { includeDraftLakes: true });
+
+    expect(findActive.mock.calls[0][4]).toMatchObject({ includeDraftLakes: true });
+  });
+
+  it('resolves a draft lake the repo returns exactly as it resolves an active one', async () => {
+    // The repo owns the status filter, so the resolver's job is only to not re-narrow or otherwise
+    // treat a draft-sourced lake differently once it is in the candidate set.
+    const lakes = [dbLake({ id: 'unpublished', requiredUserTag: 'reader' })];
+
+    const res = await getDynamicDataLakeAccess(ctx(lakes, { user: { tags: ['reader'] } }), {
+      includeDraftLakes: true,
+    });
+
+    expect(res.dataLakeTags).toEqual(['datalake:unpublished']);
+    expect(res.scopedTagPrefixes).toEqual(['unpublished:']);
+  });
+
+  it('skips the gate-excluded count, which no attachment consumer reads', async () => {
+    // The attachment pass is a SECOND resolution in the same turn and the count is unaffected by
+    // the status widening, so running it again would spend a whole-account query recomputing the
+    // identical number. Absent means "not measured" - the field's own contract - never a false 0.
+    const countGateExcludedLakes = vi.fn().mockResolvedValue(3);
+    const context = ctx([], { user: { id: 'u1', tags: [] } });
+    (
+      context.db.dataLakes as never as { countGateExcludedLakes: typeof countGateExcludedLakes }
+    ).countGateExcludedLakes = countGateExcludedLakes;
+
+    const res = await getDynamicDataLakeAccess(context, { includeDraftLakes: true });
+
+    expect(countGateExcludedLakes).not.toHaveBeenCalled();
+    expect(res.excludedByAccessCount).toBeUndefined();
+  });
+});
+
 // #3055: excludedByAccessCount comes from a SEPARATE count-only query (countGateExcludedLakes),
 // not from anything findActiveByUserTagsAndEntitlements returns - that candidate set already has
 // the gate enforced datastore-side (see the file's own requirementConstraint), so it cannot see

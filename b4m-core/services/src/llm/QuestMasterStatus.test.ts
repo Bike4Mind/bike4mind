@@ -143,6 +143,7 @@ describe('QuestMasterFeature - Status State Machine', () => {
       expect(result.shouldContinue).toBe(true);
       expect(mockDb.questMasterPlans.updateTaskStatus).toHaveBeenCalledWith(
         'plan1',
+        'user1',
         'quest1',
         'subquest1',
         'in_progress'
@@ -171,6 +172,7 @@ describe('QuestMasterFeature - Status State Machine', () => {
       expect(mockLogger.log).toHaveBeenCalledWith(expect.stringContaining('is already in_progress. Re-processing.'));
       expect(mockDb.questMasterPlans.updateTaskStatus).toHaveBeenCalledWith(
         'plan1',
+        'user1',
         'quest1',
         'subquest1',
         'in_progress'
@@ -203,6 +205,7 @@ describe('QuestMasterFeature - Status State Machine', () => {
       expect(result.shouldContinue).toBe(true);
       expect(mockDb.questMasterPlans.updateTaskStatus).toHaveBeenCalledWith(
         'plan1',
+        'user1',
         'quest1',
         'subquest1',
         'in_progress'

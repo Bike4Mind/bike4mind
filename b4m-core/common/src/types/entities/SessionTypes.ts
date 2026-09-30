@@ -647,7 +647,7 @@ export interface ISession {
   lakeScopeExplicit?: boolean;
   /**
    * Lake ids a manager was admitted to for THIS session even though they are not a member of the
-   * lake (manage-but-not-member admission) - set ONLY by pages/api/sessions/create.ts, AFTER its
+   * lake (manage-but-not-member admission) - set ONLY by pages/api/v1/sessions/index.ts, AFTER its
    * own canManageLake check, as a write separate from session creation. Never part of
    * createSession's input type (fork/clone/snip cannot copy it - a type error, not a runtime
    * check) and never part of SessionUpdateRequestSchema (no session can grant itself this after
@@ -906,6 +906,12 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * @returns The sessions
    */
   findAllWithKnowledgeId: (knowledgeId: string) => Promise<ISessionDocument[]>;
+
+  /**
+   * Atomically remove the given file ids from every session's `knowledgeIds` (a `$pull`, so
+   * concurrent callers cannot overwrite each other's removals). Resolves to the sessions modified.
+   */
+  pullKnowledgeIds: (fabFileIds: string[]) => Promise<number>;
 
   /**
    * Search for sessions by user ID

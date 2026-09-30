@@ -197,7 +197,7 @@ The reply fields (`response`/`responses` synchronously, `reply`/`replies` when p
 }
 ```
 
-- Present on both read paths: the `wait: true` response above, and `GET /api/quests/{id}` when polling (which is also how you read an agent run's structured output).
+- Present on both read paths: the `wait: true` response above, and `GET /api/v1/quests/{id}` when polling (which is also how you read an agent run's structured output).
 - Always an array, `[]` when the turn fired no such tool. No opt-in flag.
 - `type` tells you how to read `payload`; treat an unfamiliar `type` as "newer server than my client" and skip that entry.
 - Entries are in emission order, which matters for a multi-step turn.

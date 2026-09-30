@@ -3,7 +3,7 @@
  * Also served at the legacy `/api/ai/generate-image` (pages/api/ai/generate-image.ts re-exports this).
  *
  * Auth mode, the `ai:generate` scope and body validation all come from `generateImageContract`.
- * The scope lets a least-privilege image-only key drive the whole POST -> poll GET /api/quests/{id}
+ * The scope lets a least-privilege image-only key drive the whole POST -> poll GET /api/v1/quests/{id}
  * flow (the poll endpoint already accepts ai:generate).
  */
 

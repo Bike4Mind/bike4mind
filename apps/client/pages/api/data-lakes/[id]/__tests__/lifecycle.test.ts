@@ -26,6 +26,8 @@ const h = vi.hoisted(() => ({
   selfHostOpenSearchEnabled: vi.fn(() => false),
   disableDriveConnectionForLake: vi.fn(),
   enableDriveConnectionForLake: vi.fn(),
+  disableGitHubConnectionForLake: vi.fn(),
+  enableGitHubConnectionForLake: vi.fn(),
   inTransaction: [] as string[],
 }));
 
@@ -99,6 +101,10 @@ vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueu
 vi.mock('@server/integrations/google/drive/common', () => ({
   disableDriveConnectionForLake: h.disableDriveConnectionForLake,
   enableDriveConnectionForLake: h.enableDriveConnectionForLake,
+}));
+vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
+  disableGitHubConnectionForLake: h.disableGitHubConnectionForLake,
+  enableGitHubConnectionForLake: h.enableGitHubConnectionForLake,
 }));
 
 import handler from '../lifecycle';
@@ -353,6 +359,20 @@ describe('POST /api/data-lakes/[id]/lifecycle - retrievalIndex wiring (archive/d
 
     // Indexed by the expected KEY, not `disable ?? enable`: a port wired under the other key would
     // satisfy the fallback while the service it was handed never calls it.
+    const call = h[serviceName].mock.calls[0][2] as Record<string, unknown>;
+    const port = call[portKey] as (args: { dataLakeId: string }) => Promise<void>;
+    await port({ dataLakeId: 'lake1' });
+    expect(h[portName]).toHaveBeenCalledWith('lake1');
+  });
+
+  it.each([
+    ['archive', 'archiveDataLake', 'disableGitHubConnection', 'disableGitHubConnectionForLake'],
+    ['delete', 'deleteDataLake', 'disableGitHubConnection', 'disableGitHubConnectionForLake'],
+    ['unarchive', 'unarchiveDataLake', 'enableGitHubConnection', 'enableGitHubConnectionForLake'],
+    ['restore', 'restoreDeletedDataLake', 'enableGitHubConnection', 'enableGitHubConnectionForLake'],
+  ] as const)('%s wires the GitHub connection %s port', async (action, serviceName, portKey, portName) => {
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
     const call = h[serviceName].mock.calls[0][2] as Record<string, unknown>;
     const port = call[portKey] as (args: { dataLakeId: string }) => Promise<void>;
     await port({ dataLakeId: 'lake1' });

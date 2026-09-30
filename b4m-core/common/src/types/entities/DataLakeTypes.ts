@@ -197,6 +197,20 @@ export interface TransitionalDataLakeSummary {
  */
 export const LAKE_INGESTABLE_STATUSES = ['draft', 'active'] as const satisfies readonly DataLakeStatus[];
 
+/**
+ * The statuses whose files the product actually puts in front of a user: browse (`listDataLakes`
+ * and `listAllDataLakes`, and so `GET /api/files/byIds`, plus `buildAccessibleQuery`'s default)
+ * admits both, which is what lets a draft lake's file be attached in the workbench.
+ *
+ * Every one of those reads this constant, as does the ATTACHMENT door's opt-in
+ * (`findActiveByUserTagsAndEntitlements`'s `includeDraftLakes`), so the two cannot drift: an
+ * attachment lookup narrower than the door that admitted the file silently drops it. Do not
+ * restate the list as a literal at a browse site.
+ * Retrieval/semantic search is deliberately NOT in this set - it stays `active`-only, because an
+ * unpublished lake must not become ground truth for a question the user never pointed at it.
+ */
+export const LAKE_ATTACHABLE_STATUSES = ['draft', 'active'] as const satisfies readonly DataLakeStatus[];
+
 type LakeIngestableStatus = (typeof LAKE_INGESTABLE_STATUSES)[number];
 
 /**
@@ -291,13 +305,28 @@ export interface IDataLake {
    * #1674 governance path - see isTrustedForInjection), the holder of an owner/curator GRANT on it
    * (#2495), or a manager admitted to a scoped session via `preauthorizedLakeIds`. A user who
    * reaches the lake only by a tag, an entitlement, or a `reader` grant reads it WITHOUT this
-   * prompt. Note the org arm is membership, not manage rights - so "trusted" is deliberately
+   * prompt, unless the lake opts in via `injectPromptForReaders` AND that user's session explicitly
+   * scopes to the lake. Note the org arm is membership, not manage rights - so "trusted" is deliberately
    * curator-or-above for the GRANT arm specifically, not a property of the whole rule. The org
    * prompt stays authoritative on conflict. Editable
    * only via canManageLake and withheld from non-managers by the server; uncapped, matching
    * the other system prompts in the codebase. Absent/empty = no per-lake prompt.
    */
   systemPrompt?: string;
+  /**
+   * Manager-set opt-in: `systemPrompt` also steers a READER who reaches the lake by its
+   * `requiredUserTag` / `requiredEntitlement`, but only on a session scoped to this lake
+   * (`session.retrievalTags`). That scope is produced any of several ways: the `lakeScope` picker
+   * or a `dataLakeId` create seed at session creation, a direct write of `retrievalTags` (session
+   * update), or derivation from a lake file attached to an otherwise-unscoped session - attaching
+   * one of the lake's files counts as consent too. It is always the session OWNER's scope, honored
+   * only on the owner's own turns (never a share's or a teammate's) - so an opted-in lake can never
+   * steer a turn that merely happened to retrieve from it, or a turn acting on someone else's
+   * session - see the READER OPT-IN arm in getAccessibleDataLakePrompts. Reader-visible, so a
+   * reader can see a prompt is active. Has no effect on a lake with no tag/entitlement gate.
+   * Absent = false.
+   */
+  injectPromptForReaders?: boolean;
   /**
    * Optional preferred registry system prompt for this lake, by `promptId` (e.g. 'triage_router').
    * When a session is created FOR this lake (see resolveLakeSessionDefaults), this seeds the
@@ -655,6 +684,19 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
        * over-matches once ownership has moved.
        */
       supersededOwnLakeIds?: string[];
+      /**
+       * Widens the status filter from `active` alone to `LAKE_ATTACHABLE_STATUSES` (draft +
+       * active) - the set browse already admits. Opt-in and OFF by default, because it is an
+       * access widening that only ONE caller class is entitled to: the ATTACHMENT doors, where
+       * the user has explicitly named a file the product already showed them and let them attach.
+       * Retrieval and semantic search must leave it unset - an unpublished lake is not
+       * ground truth for a question the user never pointed at it.
+       *
+       * Widens ONLY the status filter. Every other arm - org prerequisite, requirement gate,
+       * grants, owner bypass - applies unchanged, so this can never surface a draft lake the
+       * caller could not have reached had it been published.
+       */
+      includeDraftLakes?: boolean;
     }
   ): Promise<IDataLakeDocument[]>;
   /**

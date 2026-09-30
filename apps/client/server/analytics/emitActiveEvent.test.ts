@@ -253,9 +253,13 @@ describe('emitVisitEvent', () => {
 describe('emitProductEvent', () => {
   const mockFetch = vi.fn();
   const sent = () =>
-    (JSON.parse((mockFetch.mock.calls[0] as [string, RequestInit])[1].body as string) as { event: Record<string, unknown> })
-      .event;
-  const headerKey = () => ((mockFetch.mock.calls[0] as [string, RequestInit])[1].headers as Record<string, string>)['x-api-key'];
+    (
+      JSON.parse((mockFetch.mock.calls[0] as [string, RequestInit])[1].body as string) as {
+        event: Record<string, unknown>;
+      }
+    ).event;
+  const headerKey = () =>
+    ((mockFetch.mock.calls[0] as [string, RequestInit])[1].headers as Record<string, string>)['x-api-key'];
 
   beforeEach(() => {
     mockFetch.mockClear();
@@ -263,9 +267,37 @@ describe('emitProductEvent', () => {
     mockFetch.mockResolvedValue({ status: 200 });
   });
 
-  it('posts under the given product with that product\'s own key', async () => {
+  it('preserves a caller-chosen eventId through the HTTP transport on retries', async () => {
     resetConfig();
-    await emitProductEvent({ productId: 'widgets', event: 'report_generated', userId: 'user-1', metadata: { status: 'ok' } });
+    const eventId = 'a9c3e930-1d8e-4bb0-84be-758d04f14c2e';
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await emitProductEvent({ productId: 'widgets', event: 'report_generated', userId: 'u1', eventId });
+    }
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    for (const [, options] of mockFetch.mock.calls as [string, RequestInit][]) {
+      const payload: unknown = JSON.parse(String(options.body));
+      expect(payload).toMatchObject({ event: { eventId, productId: 'widgets' } });
+    }
+  });
+
+  it('generates different event IDs when the caller does not supply one', async () => {
+    resetConfig();
+    await emitProductEvent({ productId: 'widgets', event: 'report_generated' });
+    const firstId = sent().eventId;
+    mockFetch.mockClear();
+    await emitProductEvent({ productId: 'widgets', event: 'report_generated' });
+    expect(sent().eventId).toEqual(expect.any(String));
+    expect(sent().eventId).not.toBe(firstId);
+  });
+
+  it("posts under the given product with that product's own key", async () => {
+    resetConfig();
+    await emitProductEvent({
+      productId: 'widgets',
+      event: 'report_generated',
+      userId: 'user-1',
+      metadata: { status: 'ok' },
+    });
 
     expect(mockFetch).toHaveBeenCalledOnce();
     expect(headerKey()).toBe(WIDGETS_KEY);
@@ -288,9 +320,15 @@ describe('emitProductEvent', () => {
     expect('metadata' in sent()).toBe(false);
   });
 
-  it('carries userType in metadata alongside the caller\'s fields', async () => {
+  it("carries userType in metadata alongside the caller's fields", async () => {
     resetConfig();
-    await emitProductEvent({ productId: 'widgets', event: 'active', userId: 'u', userType: 'free', metadata: { runs: 2 } });
+    await emitProductEvent({
+      productId: 'widgets',
+      event: 'active',
+      userId: 'u',
+      userType: 'free',
+      metadata: { runs: 2 },
+    });
 
     expect(sent().metadata).toEqual({ runs: 2, userType: 'free' });
   });
@@ -340,5 +378,13 @@ describe('ingestKeyFor', () => {
     expect(ingestKeyFor('bike4mind')).toBe(CONFIGURED.OVERWATCH_INGEST_KEY);
     expect(ingestKeyFor('widgets')).toBe(WIDGETS_KEY);
     expect(ingestKeyFor('unregistered')).toBeUndefined();
+  });
+
+  it('does not resolve a key via inherited Object.prototype properties', async () => {
+    const { ingestKeyFor } = await import('./emitActiveEvent');
+    resetConfig();
+    expect(ingestKeyFor('constructor')).toBeUndefined();
+    expect(ingestKeyFor('toString')).toBeUndefined();
+    expect(ingestKeyFor('__proto__')).toBeUndefined();
   });
 });

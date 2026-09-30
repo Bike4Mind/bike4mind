@@ -57,6 +57,15 @@ describe('ToolBuilder audio credit branches', () => {
     expect(record).toHaveBeenCalledTimes(1);
   });
 
+  it('tags each clip with the feature its direct endpoint writes: sound_effects or text_to_speech', () => {
+    // The Gears status unlocks its sound gear from sound_effects; a 'tool' row would not count.
+    const { builder, record } = makeBuilder();
+    builder.settleAudioCredits(quest(), sfxFinish('b.mp3'), true);
+    builder.settleAudioCredits(quest(), speechFinish('a.mp3'), true);
+    expect(record).toHaveBeenNthCalledWith(1, expect.objectContaining({ feature: 'sound_effects' }));
+    expect(record).toHaveBeenNthCalledWith(2, expect.objectContaining({ feature: 'text_to_speech' }));
+  });
+
   it('settle reserves each call independently so speech + sfx sum, not double the later cost', () => {
     const { builder, toolCreditsMap } = makeBuilder();
     const q = quest();

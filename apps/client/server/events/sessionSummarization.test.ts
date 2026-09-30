@@ -16,6 +16,8 @@ const h = vi.hoisted(() => ({
   updateFabFile: vi.fn(),
   createFabFile: vi.fn(),
   sessionUpdate: vi.fn(),
+  sessionUpdateWithUpdateAccess: vi.fn(async (_writer: unknown, data: Record<string, unknown>) => data),
+  findUpdateAccessById: vi.fn(async () => ({ id: 'session-1' }) as unknown),
   publishTag: vi.fn(),
   recordSessionOperationalUsage: vi.fn(),
   logEvent: vi.fn(),
@@ -50,7 +52,11 @@ vi.mock('@bike4mind/database', () => ({
       sort: () => ({ limit: async () => [{ _id: 'q1', prompt: 'hello', reply: 'world' }] }),
     })),
   },
-  sessionRepository: { update: h.sessionUpdate },
+  sessionRepository: {
+    update: h.sessionUpdate,
+    updateWithUpdateAccess: h.sessionUpdateWithUpdateAccess,
+    shareable: { findUpdateAccessById: h.findUpdateAccessById },
+  },
   fabFileRepository: { findOne: h.findOne },
   dataLakeRepository: { find: vi.fn(), findByDatalakeTag: h.findByDatalakeTag },
   adminSettingsRepository: {},
@@ -433,13 +439,15 @@ describe('sessionSummarization provenance', () => {
   it.each([...PERSISTED_SESSION_SUMMARY_TRIGGERS])('writes the %s trigger alongside the summary', async trigger => {
     await run({ trigger });
 
-    expect(h.sessionUpdate).toHaveBeenCalledWith(
+    expect(h.sessionUpdateWithUpdateAccess).toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({
         id: SESSION_ID,
         summary: 'A summary of the session.',
         summaryAt: expect.any(Date),
         summaryTrigger: trigger,
-      })
+      }),
+      undefined
     );
   });
 
@@ -451,8 +459,94 @@ describe('sessionSummarization provenance', () => {
   it('sends the key as undefined rather than inventing a trigger when the event omits it', async () => {
     await run({ trigger: undefined });
 
-    const [update] = h.sessionUpdate.mock.calls[0] as [Record<string, unknown>];
+    const [, update] = h.sessionUpdateWithUpdateAccess.mock.calls[0] as [unknown, Record<string, unknown>];
     expect(update).toHaveProperty('summaryTrigger');
     expect(update.summaryTrigger).toBeUndefined();
+  });
+});
+
+describe('sessionSummarization requester write-time re-check', () => {
+  const SHAREE = 'user-sharee';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.sessionUpdateWithUpdateAccess.mockImplementation(async (_writer, data) => data);
+    h.findUpdateAccessById.mockResolvedValue({ id: SESSION_ID });
+    h.userFindById.mockImplementation(async (id: string) => ({ id, isAdmin: false }));
+    h.assertLakeAdmission.mockReset();
+    h.fabFileStore.length = 0;
+    h.session = { id: SESSION_ID, _id: SESSION_ID, userId: OWNER, name: 'Notebook', tags: [] };
+    h.findOne.mockResolvedValue(null);
+    h.createFabFile.mockResolvedValue({ filePath: 'summary.txt', mimeType: 'text/plain' });
+  });
+
+  it('writes the summary through the requester-gated update and forwards the requester to tagging', async () => {
+    h.sessionUpdateWithUpdateAccess.mockResolvedValue({ id: SESSION_ID });
+
+    await run({ requesterId: SHAREE, callTagging: true });
+
+    expect(h.sessionUpdateWithUpdateAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ id: SHAREE }),
+      expect.objectContaining({ id: SESSION_ID, summary: 'A summary of the session.', summaryTrigger: 'manual' }),
+      { includeGlobalWrite: true }
+    );
+    expect(h.publishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: SHAREE });
+  });
+
+  it('stops before the FabFile, upload and tag job when the requester lost access mid-run', async () => {
+    h.sessionUpdateWithUpdateAccess.mockResolvedValue(null);
+
+    await run({ requesterId: SHAREE, callTagging: true });
+
+    expect(h.sessionUpdate).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(h.updateFabFile).not.toHaveBeenCalled();
+    expect(h.upload).not.toHaveBeenCalled();
+    expect(h.publishTag).not.toHaveBeenCalled();
+    expect(h.logEvent).not.toHaveBeenCalled();
+  });
+
+  it('writes as the owner, still gated on not-deleted, for a run with no requester', async () => {
+    await run();
+
+    expect(h.sessionUpdateWithUpdateAccess).toHaveBeenCalledWith(
+      { id: OWNER, groups: [] },
+      expect.objectContaining({ id: SESSION_ID }),
+      undefined
+    );
+    expect(h.findUpdateAccessById).not.toHaveBeenCalled();
+    expect(h.sessionUpdate).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing and creates no FabFile when a requester-less run finds the session deleted', async () => {
+    h.sessionUpdateWithUpdateAccess.mockResolvedValue(null);
+
+    await run({ callTagging: true });
+
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(h.updateFabFile).not.toHaveBeenCalled();
+    expect(h.upload).not.toHaveBeenCalled();
+    expect(h.publishTag).not.toHaveBeenCalled();
+  });
+
+  it('skips the LLM call and its billing when the requester was revoked while the job was queued', async () => {
+    h.findUpdateAccessById.mockResolvedValue(null);
+
+    await run({ requesterId: SHAREE, callTagging: true });
+
+    expect(h.findUpdateAccessById).toHaveBeenCalledWith(expect.objectContaining({ id: SHAREE }), SESSION_ID, {
+      includeGlobalWrite: true,
+    });
+    expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
+    expect(h.sessionUpdateWithUpdateAccess).not.toHaveBeenCalled();
+  });
+
+  it('skips the run when the requester no longer exists', async () => {
+    h.userFindById.mockImplementation(async (id: string) => (id === SHAREE ? null : { id, isAdmin: false }) as never);
+
+    await run({ requesterId: SHAREE });
+
+    expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
+    expect(h.sessionUpdateWithUpdateAccess).not.toHaveBeenCalled();
   });
 });

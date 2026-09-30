@@ -1,10 +1,19 @@
 import { IBaseRepository } from './BaseTypes';
 import { IShareableDocument, IShareableStaticMethods } from './ShareableDocumentTypes';
+import type { IUserDocument } from './UserTypes';
 
 export interface IProjectMethods {}
 
 export interface IProjectRepository extends IBaseRepository<IProjectDocument> {
   shareable: IShareableStaticMethods<IProjectDocument>;
+  /**
+   * Partial update that re-checks update access and not-deleted in the write filter; null when the
+   * project is gone, deleted, or no longer writable by `user`.
+   */
+  updateWithUpdateAccess: (
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    data: Partial<IProjectDocument> & { id: string }
+  ) => Promise<IProjectDocument | null>;
   /**
    * Find a project by ID and user ID
    *

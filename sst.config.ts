@@ -141,6 +141,15 @@ export default $config({
       slackErrorWebhookUrl: secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL,
     });
 
+    // Bob premium infra. Same generated-glue pattern as the overlays above: a no-op when the
+    // overlay is absent.
+    const { contributeInfra: contributeBobInfra } = await import('./infra/premium-generated/bob-infra.generated');
+    contributeBobInfra({
+      lambdaVpc,
+      allSecrets,
+      defaultLambdaEnvironment: DEFAULT_LAMBDA_ENVIRONMENT,
+    });
+
     const { contributeInfra: contributePiInfra } = await import('./infra/premium-generated/pi-infra.generated');
     contributePiInfra({
       lambdaVpc,

@@ -46,6 +46,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
         dataLakeId,
         installationId,
         code,
+        logger: req.logger,
       });
       return res.status(201).json({ connection: toGitHubLakeConnectionResponse(conn) });
     } finally {

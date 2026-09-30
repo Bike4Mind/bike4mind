@@ -10,6 +10,8 @@ import {
   FabFileChunk,
   fabFileChunkRepository,
   fabFileRepository,
+  Session,
+  sessionRepository,
   userRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
@@ -43,6 +45,7 @@ afterEach(async () => {
   await FabFile.deleteMany({}, { hardDelete: true } as Record<string, unknown>);
   await FabFileChunk.deleteMany({});
   await DataLakeModel.deleteMany({});
+  await Session.deleteMany({}, { hardDelete: true } as Record<string, unknown>);
   vi.clearAllMocks();
 });
 
@@ -89,21 +92,16 @@ const fakeStorage = () => {
   return { deleted, storage: { delete: async (path: string) => void deleted.push(path) } };
 };
 
-/** In-memory stand-in for the session repository: tracks knowledgeIds unlink calls. */
-const fakeSessions = (initial: { id: string; knowledgeIds: string[] }[]) => {
-  const state = new Map(initial.map(s => [s.id, { ...s }]));
-  return {
-    state,
-    sessions: {
-      findAllWithKnowledgeId: async (knowledgeId: string) =>
-        [...state.values()].filter(s => s.knowledgeIds.includes(knowledgeId)),
-      update: async ({ id, knowledgeIds }: { id: string; knowledgeIds: string[] }) => {
-        const existing = state.get(id);
-        if (existing) state.set(id, { ...existing, knowledgeIds });
-      },
-    },
-  };
-};
+const seedSession = (knowledgeIds: string[]) =>
+  Session.create({
+    userId: OWNER,
+    name: `chat-${Math.random().toString(36).slice(2)}`,
+    firstCreated: new Date(),
+    lastUpdated: new Date(),
+    knowledgeIds,
+  });
+
+const knowledgeIdsOf = async (sessionId: string) => (await Session.findById(sessionId).lean())?.knowledgeIds;
 
 const purgeConnection = (
   lake: { datalakeTag: string; fileTagPrefix: string; createdByUserId: string },
@@ -176,8 +174,8 @@ describe('data lake purge Drive teardown - ingested content (real repos + Mongo)
   it('reaches an archived-lake file that the reconcile-scoped finder would miss (F1)', async () => {
     // Archiving a lake stamps archivedAt on every member (archiveDataLake.ts), so
     // findByDriveConnectionIdInDataLake - tuned for sync-reconcile, which must exclude archived
-    // members - returns nothing for it. The route's purge must use the archivedAt-blind sibling
-    // instead, or an archived lake's disconnect silently purges nothing while still revoking the
+    // members - returns nothing for it. The route's purge must pass includeDeleted,
+    // or an archived lake's disconnect silently purges nothing while still revoking the
     // connection, reproducing #3374's exact orphan state.
     const lake = await seedLake();
     const connectionId = new mongoose.Types.ObjectId().toHexString();
@@ -185,7 +183,9 @@ describe('data lake purge Drive teardown - ingested content (real repos + Mongo)
     await FabFile.updateOne({ _id: archivedFile.id }, { $set: { archivedAt: new Date() } });
 
     expect(await fabFileRepository.findByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag)).toHaveLength(0);
-    const files = await fabFileRepository.findAllByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag);
+    const files = await fabFileRepository.findByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag, {
+      includeDeleted: true,
+    });
     expect(files.map(f => f.id)).toEqual([archivedFile.id]);
 
     const result = await purgeConnection(lake, files);
@@ -200,7 +200,9 @@ describe('data lake purge Drive teardown - ingested content (real repos + Mongo)
     await FabFile.updateOne({ _id: softDeletedFile.id }, { $set: { deletedAt: new Date() } });
 
     expect(await fabFileRepository.findByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag)).toHaveLength(0);
-    const files = await fabFileRepository.findAllByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag);
+    const files = await fabFileRepository.findByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag, {
+      includeDeleted: true,
+    });
     expect(files.map(f => f.id)).toEqual([softDeletedFile.id]);
 
     const result = await purgeConnection(lake, files);
@@ -214,7 +216,9 @@ describe('data lake purge Drive teardown - ingested content (real repos + Mongo)
     await FabFile.updateOne({ _id: archivedFile.id }, { $set: { archivedAt: new Date() } });
 
     const count = await fabFileRepository.countByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag);
-    const files = await fabFileRepository.findAllByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag);
+    const files = await fabFileRepository.findByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag, {
+      includeDeleted: true,
+    });
     expect(count).toBe(files.length);
   });
 
@@ -223,18 +227,42 @@ describe('data lake purge Drive teardown - ingested content (real repos + Mongo)
     const connectionId = new mongoose.Types.ObjectId().toHexString();
     const fileA = await seedFile({ datalakeTag: lake.datalakeTag, driveConnectionId: connectionId });
 
-    const { sessions, state } = fakeSessions([
-      { id: 'session-1', knowledgeIds: [fileA.id, 'other-file'] },
-      { id: 'session-2', knowledgeIds: ['unrelated-file'] },
-    ]);
+    const session1 = await seedSession([fileA.id, 'other-file']);
+    const session2 = await seedSession(['unrelated-file']);
 
     const files = await fabFileRepository.findByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag);
     await dataLakeService.purgeDataLakeConnectionFiles(dataLakeService.lakeMembershipScope(lake), files, {
-      db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository, users: userRepository, sessions },
+      db: {
+        fabFiles: fabFileRepository,
+        fabFileChunks: fabFileChunkRepository,
+        users: userRepository,
+        sessions: sessionRepository,
+      },
     });
 
-    expect(state.get('session-1')?.knowledgeIds).toEqual(['other-file']);
-    expect(state.get('session-2')?.knowledgeIds).toEqual(['unrelated-file']);
+    expect(await knowledgeIdsOf(session1.id)).toEqual(['other-file']);
+    expect(await knowledgeIdsOf(session2.id)).toEqual(['unrelated-file']);
+  });
+
+  it('unlinks two purged files attached to the SAME session, even though they are deleted concurrently', async () => {
+    const lake = await seedLake();
+    const connectionId = new mongoose.Types.ObjectId().toHexString();
+    const fileA = await seedFile({ datalakeTag: lake.datalakeTag, driveConnectionId: connectionId });
+    const fileB = await seedFile({ datalakeTag: lake.datalakeTag, driveConnectionId: connectionId });
+    const session = await seedSession([fileA.id, 'other-file', fileB.id]);
+
+    const files = await fabFileRepository.findByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag);
+    expect(files).toHaveLength(2);
+    await dataLakeService.purgeDataLakeConnectionFiles(dataLakeService.lakeMembershipScope(lake), files, {
+      db: {
+        fabFiles: fabFileRepository,
+        fabFileChunks: fabFileChunkRepository,
+        users: userRepository,
+        sessions: sessionRepository,
+      },
+    });
+
+    expect(await knowledgeIdsOf(session.id)).toEqual(['other-file']);
   });
 
   it('is a no-op when the connection ingested no files', async () => {
@@ -299,5 +327,79 @@ describe('data lake purge Drive teardown - ingested content (real repos + Mongo)
 
     expect(increment).toHaveBeenCalledWith(OWNER, -500);
     expect(increment).toHaveBeenCalledWith(CONTRIBUTOR, -300);
+  });
+
+  it('refunds each chunk as it settles, so a run killed partway keeps the refunds already earned', async () => {
+    const lake = await seedLake();
+    const connectionId = new mongoose.Types.ObjectId().toHexString();
+    const first = await seedFile({ datalakeTag: lake.datalakeTag, driveConnectionId: connectionId, fileSize: 500 });
+    const second = await seedFile({
+      datalakeTag: lake.datalakeTag,
+      driveConnectionId: connectionId,
+      userId: CONTRIBUTOR,
+      fileSize: 300,
+    });
+    const increment = vi.spyOn(userRepository, 'incrementCurrentStorage').mockResolvedValue(undefined);
+    let refundedBeforeSecondChunk = false;
+    const storage = {
+      delete: async (path: string) => {
+        if (path === second.filePath) {
+          refundedBeforeSecondChunk = increment.mock.calls.some(([userId]) => userId === OWNER);
+          // Stands in for the run dying mid-sweep: nothing after this chunk's start completes.
+          throw new Error('killed');
+        }
+      },
+    };
+    const files = [first, second].map(f => ({ ...f.toJSON(), id: f.id }));
+
+    await expect(
+      dataLakeService.purgeDataLakeConnectionFiles(
+        dataLakeService.lakeMembershipScope(lake),
+        files as Parameters<typeof dataLakeService.purgeDataLakeConnectionFiles>[1],
+        {
+          db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository, users: userRepository },
+          storage,
+          chunkSize: 1,
+        }
+      )
+    ).rejects.toThrow('killed');
+
+    expect(refundedBeforeSecondChunk).toBe(true);
+    expect(increment).toHaveBeenCalledTimes(1);
+    expect(increment).toHaveBeenCalledWith(OWNER, -500);
+    expect(await FabFile.countDocuments({ _id: second.id })).toBe(1);
+  });
+
+  it('waits for every file in a failing chunk before refunding it', async () => {
+    const lake = await seedLake();
+    const connectionId = new mongoose.Types.ObjectId().toHexString();
+    const failing = await seedFile({ datalakeTag: lake.datalakeTag, driveConnectionId: connectionId, fileSize: 500 });
+    const slow = await seedFile({
+      datalakeTag: lake.datalakeTag,
+      driveConnectionId: connectionId,
+      userId: CONTRIBUTOR,
+      fileSize: 300,
+    });
+    const increment = vi.spyOn(userRepository, 'incrementCurrentStorage').mockResolvedValue(undefined);
+    const storage = {
+      delete: async (path: string) => {
+        if (path === failing.filePath) throw new Error('storage.delete blip');
+        await new Promise(resolve => setTimeout(resolve, 50));
+      },
+    };
+    const files = [failing, slow].map(f => ({ ...f.toJSON(), id: f.id }));
+
+    await expect(
+      dataLakeService.purgeDataLakeConnectionFiles(
+        dataLakeService.lakeMembershipScope(lake),
+        files as Parameters<typeof dataLakeService.purgeDataLakeConnectionFiles>[1],
+        { db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository, users: userRepository }, storage }
+      )
+    ).rejects.toThrow('storage.delete blip');
+
+    // The slow sibling finished its hard delete after the failure; its refund must not be lost.
+    expect(await FabFile.countDocuments({ _id: slow.id })).toBe(0);
+    expect(increment).toHaveBeenCalledWith(CONTRIBUTOR, -300);
+    expect(increment).not.toHaveBeenCalledWith(OWNER, expect.anything());
   });
 });

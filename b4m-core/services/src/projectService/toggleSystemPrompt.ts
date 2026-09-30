@@ -1,5 +1,5 @@
 import { IFabFileRepository, IProjectRepository, IUserDocument } from '@bike4mind/common';
-import { secureParameters } from '@bike4mind/utils';
+import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 
 const toggleSystemPromptSchema = z.object({
@@ -24,8 +24,10 @@ export const toggleSystemPrompt = async (
   const { db } = adapters;
   const { projectId, fileId } = secureParameters(params, toggleSystemPromptSchema);
 
-  const project = await db.projects.shareable.findAccessibleById(user, projectId);
-  if (!project) throw new Error('Project not found');
+  // Update-level, not read-level: toggling a prompt mutates the project. 404 like the other doors
+  // in this service, so a caller cannot tell whether a project they cannot update exists.
+  const project = await db.projects.shareable.findUpdateAccessById(user, projectId);
+  if (!project) throw new NotFoundError('Project not found');
 
   const promptIndex = project.systemPrompts.findIndex(prompt => prompt.fileId === fileId);
   if (promptIndex === -1) {
@@ -35,7 +37,12 @@ export const toggleSystemPrompt = async (
   project.systemPrompts[promptIndex].enabled = !project.systemPrompts[promptIndex].enabled;
   project.updatedAt = new Date();
 
-  await db.projects.update(project);
+  const written = await db.projects.updateWithUpdateAccess(user, {
+    id: project.id,
+    systemPrompts: project.systemPrompts,
+    updatedAt: project.updatedAt,
+  });
+  if (!written) throw new NotFoundError('Project not found');
 
   return project;
 };

@@ -38,6 +38,7 @@ export enum FabFileSourceType {
   SLACK = 'slack',
   /** Admitted by a human approving an acquisition proposal (#1671), never by the producer itself. */
   PROPOSAL_APPROVAL = 'proposal_approval',
+  GITHUB = 'github',
 }
 
 /**
@@ -62,7 +63,7 @@ export enum DocumentDateSource {
    * Drive at that moment. Never taken for a binary uploaded to Drive: there `createdTime` is the
    * upload time, which is the same ingestion-time-as-document-date mistake #3047 removed.
    *
-   * This value is pinned once set - see the precedence rule in `prepareFabFileChunks`. An Editors
+   * This value is pinned once set - see the precedence rule in `resolveDocumentDate`. An Editors
    * file has no bytes of its own, so what the chunker reads is a rendition Drive generated at
    * fetch time, and that rendition's embedded metadata dates the export rather than the document.
    */
@@ -528,6 +529,14 @@ export interface IFabFile {
   /** The OrgGoogleDriveConnection that ingested this file (provenance). */
   driveConnectionId?: string;
 
+  // GitHub repository ingest provenance. Populated when sourceType === GITHUB.
+  /** The OrgGitHubLakeConnection that ingested this file; the purge-by-source key. */
+  githubConnectionId?: string;
+  /** Repository-relative path at ingest: the re-sync identity key. */
+  githubPath?: string;
+  /** Git blob SHA at ingest: exact change detection on re-sync. */
+  githubBlobSha?: string;
+
   /**
    * Curator rulings that this file is an older generation of some sibling, one per lake.
    *
@@ -769,12 +778,15 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
     limit?: number;
     afterChunkId?: string;
   }): Promise<Array<{ id: string; fabFileId: string; vectorLength: number }>>;
-  /** Atlas `$vectorSearch` over a bounded, already-eligibility-checked file subset for one embedding model. */
+  /**
+   * Atlas `$vectorSearch` over a bounded, already-eligibility-checked file subset for one embedding model.
+   * `includeText: false` skips the chunk body (returned as '') for callers that only rank by score.
+   */
   vectorSearch(
     fileIds: string[],
     queryVector: number[],
     model: string,
-    options?: { limit?: number }
+    options?: { limit?: number; includeText?: boolean }
   ): Promise<Array<{ id: string; fabFileId: string; text: string; score: number }>>;
   /** Whether `model`'s Atlas vector index exists and is queryable (cached; see atlasSearchIndex.ts). */
   getAtlasIndexStatus(model: string): Promise<{ queryable: boolean; status: string } | null>;
@@ -1543,26 +1555,37 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * a stored file whose driveFileId is absent from the walk was DELETED from the folder, and one
    * whose driveMd5Checksum/driveModifiedTime moved was EDITED - neither detectable from the walk
    * alone. Scoped to the connection so a re-sync only reconciles the files it owns.
+   *
+   * `includeDeleted` drops the archivedAt/deletedAt filters for the disconnect purge, which must
+   * reach an archived lake's members (every member is archivedAt-stamped when its lake archives)
+   * and soft-deleted rows, mirroring `hardDeleteByDataLakeTag`. `status: 'pending'` rows are
+   * excluded either way. `limit` caps the rows returned, so the queued disconnect purge can work
+   * through a large connection one bounded slice per invocation.
    */
-  findByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]>;
+  findByDriveConnectionIdInDataLake(
+    driveConnectionId: string,
+    datalakeTag: string,
+    options?: { includeDeleted?: boolean; limit?: number }
+  ): Promise<IFabFileDocument[]>;
   /**
-   * Every file a Drive connection ever ingested into a lake, INCLUDING an archived lake's members
-   * and soft-deleted rows - unlike `findByDriveConnectionIdInDataLake`, which filters both out for
-   * its sync-reconcile caller and must keep doing so. This is the disconnect purge's OWN finder:
-   * borrowing the reconcile one made an archived lake's disconnect silently purge nothing (every
-   * member is `archivedAt`-stamped when its lake archives) while still revoking the grant and
-   * hard-deleting the connection row, reproducing the exact orphan state #3374 reports. Mirrors
-   * `hardDeleteByDataLakeTag`'s own archivedAt/deletedAt-blind treatment for the whole-lake purge.
-   * Still excludes `status: 'pending'` (an unconfirmed in-flight upload, not yet a real member).
-   */
-  findAllByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]>;
-  /**
-   * Lightweight count of the same set `findAllByDriveConnectionIdInDataLake` resolves (not the
-   * narrower `findByDriveConnectionIdInDataLake`) - the disconnect-confirmation dialog needs a
-   * number, not every file's body, to warn how many documents a disconnect will actually delete,
-   * and that number must stay honest for an archived lake too.
+   * Lightweight count of the `includeDeleted` set `findByDriveConnectionIdInDataLake` resolves -
+   * the disconnect-confirmation dialog needs a number, not every file's body, to warn how many
+   * documents a disconnect will actually delete, and that number must stay honest for an
+   * archived lake too.
    */
   countByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<number>;
+  /**
+   * Every live, uploaded file a GitHub connection has ingested into a lake (META-TAG ONLY, same filter as
+   * findByDriveConnectionIdInDataLake). The set a re-sync diffs the repository tree against.
+   *
+   * `includeDeleted` mirrors findByDriveConnectionIdInDataLake's own option - the disconnect purge's
+   * finder, reaching an archived lake's members and soft-deleted rows.
+   */
+  findByGitHubConnectionIdInDataLake(
+    githubConnectionId: string,
+    datalakeTag: string,
+    options?: { includeDeleted?: boolean }
+  ): Promise<IFabFileDocument[]>;
   /**
    * The Drive file ids a given ingest batch has already UPLOADED a FabFile for. This is what a
    * resumed ingest slice subtracts from its fresh walk, so it must exclude a row whose bytes never

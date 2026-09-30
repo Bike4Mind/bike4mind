@@ -27,10 +27,6 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
-    "B4M_PROD_API_KEY": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
     "CliToolHandler": {
       "name": string
       "type": "sst.aws.Function"
@@ -241,6 +237,10 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "QA_ALARM_SLACK_WEBHOOKS": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "RATE_LIMIT_INGEST_TOKEN": {
       "type": "sst.sst.Secret"
       "value": string
@@ -430,6 +430,14 @@ declare module "sst" {
       "type": "sst.aws.Queue"
       "url": string
     }
+    "driveDisconnectPurgeQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "githubLakeIngestQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
     "dataLakeTaxonomyQueueDLQ": {
       "type": "sst.aws.Queue"
       "url": string
@@ -609,6 +617,10 @@ declare module "sst" {
       "url": string
     }
     "publishedArtifactsBucket": {
+      "name": string
+      "type": "sst.aws.Bucket"
+    }
+    "qaArtifactsBucket": {
       "name": string
       "type": "sst.aws.Bucket"
     }
