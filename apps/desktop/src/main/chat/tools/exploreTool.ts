@@ -6,7 +6,14 @@ import { addUsage, foldUsage } from '../streamEvents';
 import { createThinkFilter } from '../thinkFilter';
 import { fileRead, globFiles, grepSearch } from './fileTools';
 import { createLoopTally } from '../turnTiming';
-import { capOutput, MAX_EXPLORE_REPORT_CHARS, requireString, type ToolContext, type ToolDefinition } from './types';
+import {
+  capOutput,
+  MAX_EXPLORE_REPORT_CHARS,
+  requireString,
+  type ExploreTarget,
+  type ToolContext,
+  type ToolDefinition,
+} from './types';
 
 /**
  * Requests one exploration may make, the last of which is told to stop and report. Enough for a
@@ -93,6 +100,7 @@ export const exploreTool: ToolDefinition = {
       return report;
     };
 
+    let target: ExploreTarget = explore;
     for (let round = 1; round <= MAX_EXPLORE_ROUNDS; round++) {
       const requested: NestedRequest[] = [];
       const filter = createThinkFilter();
@@ -100,13 +108,13 @@ export const exploreTool: ToolDefinition = {
       let thinking: unknown[] | undefined;
       let usage: ChatUsage | undefined;
 
-      await tally.model(() =>
+      const request = (on: ExploreTarget) =>
         explore.complete(
           {
-            model: explore.model,
-            messages: explore.cache ? withCacheBreakpoints(messages) : messages,
+            model: on.model,
+            messages: on.cache ? withCacheBreakpoints(messages) : messages,
             tools,
-            ...(explore.maxTokens ? { maxTokens: explore.maxTokens } : {}),
+            ...(on.maxTokens ? { maxTokens: on.maxTokens } : {}),
           },
           event => {
             if (event.type === 'error' || event.type === 'meta') return;
@@ -118,8 +126,24 @@ export const exploreTool: ToolDefinition = {
             usage = foldUsage(usage, event);
           },
           context.signal
-        )
-      );
+        );
+
+      await tally.model(async () => {
+        try {
+          await request(target);
+        } catch (error) {
+          // Round one only: later rounds carry this model's thinking blocks, which another
+          // model would reject.
+          const fallback = explore.fallback;
+          if (round > 1 || !fallback || fallback.model === target.model || context.signal.aborted) throw error;
+          target = fallback;
+          text = '';
+          requested.length = 0;
+          thinking = undefined;
+          usage = undefined;
+          await request(target);
+        }
+      });
       text += filter.flush().text;
       // Within one request the counts are cumulative, so only the last report is billed.
       if (usage) {
