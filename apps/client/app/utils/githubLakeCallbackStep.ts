@@ -16,7 +16,7 @@ export type GitHubLakeCallbackStep =
   | { kind: 'authorize'; authorizeUrl: string; handoff: GitHubLakeConnectHandoff }
   | { kind: 'complete'; dataLakeId: string; state: string; code: string; installationId: number };
 
-const RESTART_MESSAGE = 'The GitHub connection could not be completed. Start it again from the data lake.';
+export const RESTART_MESSAGE = 'The GitHub connection could not be completed. Start it again from the data lake.';
 const APPROVAL_PENDING_MESSAGE =
   'GitHub sent the install to an owner of that organization for approval. Connect the repository again once they approve it.';
 

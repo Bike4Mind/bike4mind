@@ -1,6 +1,7 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { DriveConnectionStatus } from '@client/app/hooks/data/driveConnectionDisplay';
+import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import { invalidateLakeFileQueries } from '@client/app/hooks/data/invalidateLakeFileQueries';
 
 /** Safe, credential-free view returned by GET /api/data-lakes/:id/drive-connection. */
@@ -22,8 +23,6 @@ export type LakeDriveConnection = {
   /** The pending purge has made no progress for DRIVE_DISCONNECT_STALL_MS, so a retry may re-queue it. */
   disconnectStalled: boolean;
 };
-
-const lakeDriveConnectionKey = (dataLakeId?: string) => ['lake-drive-connection', dataLakeId];
 
 /** Start the personal Google Drive OAuth flow by sending the browser to Google's consent screen. */
 export async function startGoogleDriveConnect(): Promise<void> {
@@ -51,7 +50,7 @@ export function useDisconnectGoogleDrive() {
       await queryClient.invalidateQueries({ queryKey: ['users'] });
       // The lake wizard/panel read connection status from their own query; the revoke just flipped
       // those rows to credential_error server-side, so a cached 'connected' badge would be a lie.
-      await queryClient.invalidateQueries({ queryKey: ['lake-drive-connection'] });
+      await queryClient.invalidateQueries({ queryKey: dataLakeKeys.driveConnectionRoot });
     },
   });
 }
@@ -85,7 +84,7 @@ export function driveConnectionPollInterval(connection: LakeDriveConnection | nu
 export function useLakeDriveConnection(dataLakeId?: string, enabled = true) {
   const queryClient = useQueryClient();
   return useQuery({
-    queryKey: lakeDriveConnectionKey(dataLakeId),
+    queryKey: dataLakeKeys.driveConnection(dataLakeId),
     // `enabled` lets a caller skip a request it already knows the answer to: a lake with no
     // `organizationId` always resolves `connection: null`, so a caller that already has that field
     // can skip the round trip entirely rather than firing it for a known answer.
@@ -97,7 +96,7 @@ export function useLakeDriveConnection(dataLakeId?: string, enabled = true) {
       const next = response.data.connection;
       // The purge runs in the background after a disconnect, so the lake's file lists only go
       // stale as it progresses; refresh them whenever a disconnecting read shows files removed.
-      const previous = queryClient.getQueryData<LakeDriveConnection | null>(lakeDriveConnectionKey(dataLakeId));
+      const previous = queryClient.getQueryData<LakeDriveConnection | null>(dataLakeKeys.driveConnection(dataLakeId));
       if (dataLakeId && previous?.disconnecting && (!next || next.fileCount !== previous.fileCount)) {
         void invalidateLakeFileQueries(queryClient, dataLakeId);
       }
@@ -116,7 +115,7 @@ export function useConnectDriveFolderToLake() {
       return response.data;
     },
     onSuccess: async (_data, { dataLakeId }) => {
-      await queryClient.invalidateQueries({ queryKey: lakeDriveConnectionKey(dataLakeId) });
+      await queryClient.invalidateQueries({ queryKey: dataLakeKeys.driveConnection(dataLakeId) });
     },
   });
 }
@@ -135,7 +134,7 @@ export function useDisconnectLakeDrive() {
     },
     onSuccess: async (_data, dataLakeId) => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: lakeDriveConnectionKey(dataLakeId) }),
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.driveConnection(dataLakeId) }),
         invalidateLakeFileQueries(queryClient, dataLakeId),
       ]);
     },

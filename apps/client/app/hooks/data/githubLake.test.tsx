@@ -31,6 +31,11 @@ const wrapperFor = (queryClient: QueryClient) => {
   return Wrapper;
 };
 
+const axiosError = (status: number) =>
+  Object.assign(new Error(`Request failed with status code ${status}`), {
+    response: { status },
+  });
+
 const renderLakeGitHubConnection = (dataLakeId?: string, enabled = true) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return renderHook(() => useLakeGitHubConnection(dataLakeId, enabled), { wrapper: wrapperFor(queryClient) });
@@ -83,6 +88,14 @@ describe('useLakeGitHubConnection', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(get).toHaveBeenCalledWith('/api/data-lakes/lake1/github-connection');
     expect(result.current.data).toEqual(connection);
+  });
+
+  it('errors on a genuine failure (lake not found, or caller lacks org access)', async () => {
+    get.mockRejectedValue(axiosError(404));
+
+    const { result } = renderLakeGitHubConnection('other_org_lake');
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
   });
 
   it('does not fetch when disabled', () => {

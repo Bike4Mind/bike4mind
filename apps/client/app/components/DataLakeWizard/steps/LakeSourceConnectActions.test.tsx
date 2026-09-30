@@ -24,7 +24,8 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
 vi.mock('@client/app/hooks/data/githubLake', () => ({
   useLakeGitHubConnection: (_id: string, enabled: boolean) => {
     h.gitHubQueryEnabled(enabled);
-    return { data: enabled ? h.gitHubConnection.current : undefined };
+    // A disabled query still serves its cache, which is the stale case the flag guard exists for.
+    return { data: h.gitHubConnection.current };
   },
 }));
 vi.mock('./DriveConnectAction', () => ({ default: () => <div data-testid="drive-connect-action" /> }));
@@ -51,6 +52,7 @@ describe('LakeSourceConnectActions', () => {
 
   it('shows only Drive, and never reads the GitHub routes, while EnableDataLakeGitHub is off', () => {
     h.gitHubFlag.current = false;
+    h.gitHubConnection.current = { id: 'gh1' };
     wrap(<LakeSourceConnectActions lake={{ id: 'lake1' }} />);
     expect(screen.getByTestId('drive-connect-action')).toBeInTheDocument();
     expect(screen.queryByTestId('github-connect-action')).toBeNull();

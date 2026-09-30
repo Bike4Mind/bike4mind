@@ -37,7 +37,9 @@ function handleAxiosError(error: AxiosError<ErrorResponse>) {
  * Unlike getErrorMessage there is no generic fallback, so a caller supplies its own: `|| fallback`.
  */
 export function getServerErrorField(error: unknown): string | undefined {
-  return (error as { response?: { data?: { error?: string } } } | null)?.response?.data?.error;
+  if (!isAxiosError<ErrorResponse>(error)) return undefined;
+  const serverError: unknown = error.response?.data?.error;
+  return typeof serverError === 'string' ? serverError : undefined;
 }
 
 /**

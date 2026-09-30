@@ -1,10 +1,13 @@
 import type { ColorPaletteProp } from '@mui/joy/styles';
-import type { LakeGitHubConnection } from '@client/app/hooks/data/githubLake';
+import type { GitHubLakeConnectionStatus } from '@bike4mind/common';
 
-type DescribableGitHubConnection = Pick<
-  LakeGitHubConnection,
-  'status' | 'enabled' | 'lastError' | 'repositoryFullName'
->;
+// API-free on purpose, like driveConnectionDisplay.ts: a structural subset of LakeGitHubConnection.
+type DescribableGitHubConnection = {
+  status: GitHubLakeConnectionStatus;
+  enabled: boolean;
+  lastError: string | null;
+  repositoryFullName: string;
+};
 
 /**
  * Chip wording for a lake's GitHub connection. Labels match describeDriveConnection's
@@ -19,8 +22,13 @@ export function describeGitHubConnection(connection: DescribableGitHubConnection
   const repo = connection.repositoryFullName;
   const detail = connection.lastError ? ` - ${connection.lastError}` : '';
 
+  // 'error' stays re-syncable (claimForSync admits it), so the copy offers a retry before a reconnect.
   if (connection.status === 'error') {
-    return { label: 'Needs reconnect', title: `GitHub repository ${repo} lost access${detail}`, color: 'danger' };
+    return {
+      label: 'Sync failed',
+      title: `GitHub repository ${repo}: sync failed${detail}. Re-sync to retry, or reconnect if access was removed.`,
+      color: 'danger',
+    };
   }
   if (!connection.enabled) {
     return { label: 'Paused', title: `Syncing ${repo} is paused while the lake is archived`, color: 'neutral' };

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveGitHubLakeCallbackStep } from './githubLakeCallbackStep';
+import { RESTART_MESSAGE, resolveGitHubLakeCallbackStep } from './githubLakeCallbackStep';
 
 const AUTHORIZE_URL = 'https://github.com/login/oauth/authorize?client_id=c&state=s1';
 const fresh = { dataLakeId: 'lake1', authorizeUrl: AUTHORIZE_URL };
@@ -33,7 +33,10 @@ describe('resolveGitHubLakeCallbackStep', () => {
   });
 
   it('never bounces twice: an authorize return with no code fails', () => {
-    expect(resolveGitHubLakeCallbackStep({ state: 's1' }, bounced)).toMatchObject({ kind: 'failed' });
+    expect(resolveGitHubLakeCallbackStep({ state: 's1' }, bounced)).toEqual({
+      kind: 'failed',
+      message: RESTART_MESSAGE,
+    });
   });
 
   it('explains an install that is waiting on a GitHub org owner, rather than asking for a restart', () => {
@@ -57,6 +60,6 @@ describe('resolveGitHubLakeCallbackStep', () => {
     ['a non-numeric installation id', { installation_id: '42abc', code: 'c1', state: 's1' }, fresh],
     ['a zero installation id', { installation_id: '0', code: 'c1', state: 's1' }, fresh],
   ])('fails with %s', (_name, search, handoff) => {
-    expect(resolveGitHubLakeCallbackStep(search, handoff)).toMatchObject({ kind: 'failed' });
+    expect(resolveGitHubLakeCallbackStep(search, handoff)).toEqual({ kind: 'failed', message: RESTART_MESSAGE });
   });
 });

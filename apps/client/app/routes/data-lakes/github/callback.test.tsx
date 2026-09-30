@@ -1,6 +1,8 @@
 import { StrictMode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render } from '@testing-library/react';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes';
 
 const h = vi.hoisted(() => ({
   search: { current: {} as Record<string, string> },
@@ -35,6 +37,15 @@ import { readGitHubLakeConnectHandoff, saveGitHubLakeConnectHandoff } from '@cli
 
 const AUTHORIZE_URL = 'https://github.com/login/oauth/authorize?client_id=c&state=s1';
 const assign = vi.fn();
+const RESTART_NOTICE = 'The GitHub connection could not be completed. Start it again from the data lake.';
+
+const appTheme = extendTheme({ ...getThemeConfig() });
+const renderPage = () =>
+  render(
+    <CssVarsProvider theme={appTheme}>
+      <GitHubLakeCallbackPage />
+    </CssVarsProvider>
+  );
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -51,7 +62,9 @@ describe('GitHubLakeCallbackPage', () => {
     h.search.current = { installation_id: '42', code: 'c1', state: 's1' };
     render(
       <StrictMode>
-        <GitHubLakeCallbackPage />
+        <CssVarsProvider theme={appTheme}>
+          <GitHubLakeCallbackPage />
+        </CssVarsProvider>
       </StrictMode>
     );
     expect(h.completeMutate).toHaveBeenCalledTimes(1);
@@ -60,13 +73,13 @@ describe('GitHubLakeCallbackPage', () => {
 
   it('lands on the lake in the manager and clears the handoff once the connect settles', () => {
     h.search.current = { installation_id: '42', code: 'c1', state: 's1' };
-    render(<GitHubLakeCallbackPage />);
+    renderPage();
 
     const [, options] = h.completeMutate.mock.calls[0];
     options.onSuccess({ repositoryFullName: 'acme/docs' });
     options.onSettled();
 
-    expect(h.toastSuccess).toHaveBeenCalledWith(expect.stringContaining('acme/docs'));
+    expect(h.toastSuccess).toHaveBeenCalledWith('Connected acme/docs. Its first sync is queued.');
     expect(h.navigate).toHaveBeenCalledWith({ to: '/' });
     expect(h.openManager).toHaveBeenCalledWith('mine', 'lake1');
     expect(readGitHubLakeConnectHandoff()).toBeNull();
@@ -74,16 +87,50 @@ describe('GitHubLakeCallbackPage', () => {
 
   it("shows the server's reason when binding fails", () => {
     h.search.current = { installation_id: '42', code: 'c1', state: 's1' };
-    render(<GitHubLakeCallbackPage />);
+    renderPage();
 
     const [, options] = h.completeMutate.mock.calls[0];
-    options.onError({ response: { data: { error: 'The GitHub App was installed on all repositories.' } } });
+    options.onError({
+      isAxiosError: true,
+      response: { data: { error: 'The GitHub App was installed on all repositories.' } },
+    });
     expect(h.toastError).toHaveBeenCalledWith('The GitHub App was installed on all repositories.');
+  });
+
+  it('falls back to a generic notice when the server gives no reason', () => {
+    h.search.current = { installation_id: '42', code: 'c1', state: 's1' };
+    renderPage();
+
+    const [, options] = h.completeMutate.mock.calls[0];
+    options.onError(new Error('Network Error'));
+    expect(h.toastError).toHaveBeenCalledWith('Could not connect the GitHub repository.');
+  });
+
+  it('asks for a restart and returns to the lake when GitHub sends back no state', () => {
+    h.search.current = {};
+    renderPage();
+
+    expect(h.toastError).toHaveBeenCalledWith(RESTART_NOTICE);
+    expect(h.navigate).toHaveBeenCalledWith({ to: '/' });
+    expect(h.openManager).toHaveBeenCalledWith('mine', 'lake1');
+    expect(h.completeMutate).not.toHaveBeenCalled();
+    expect(readGitHubLakeConnectHandoff()).toBeNull();
+  });
+
+  it('asks for a restart without opening a lake when the handoff is gone', () => {
+    sessionStorage.clear();
+    h.search.current = { installation_id: '42', code: 'c1', state: 's1' };
+    renderPage();
+
+    expect(h.toastError).toHaveBeenCalledWith(RESTART_NOTICE);
+    expect(h.navigate).toHaveBeenCalledWith({ to: '/' });
+    expect(h.openManager).not.toHaveBeenCalled();
+    expect(h.completeMutate).not.toHaveBeenCalled();
   });
 
   it('bounces an install with no code through authorize, keeping the installation id', () => {
     h.search.current = { installation_id: '42', state: 's1' };
-    render(<GitHubLakeCallbackPage />);
+    renderPage();
 
     expect(assign).toHaveBeenCalledWith(AUTHORIZE_URL);
     expect(readGitHubLakeConnectHandoff()).toMatchObject({ installationId: 42 });
@@ -93,7 +140,7 @@ describe('GitHubLakeCallbackPage', () => {
 
   it('returns to the lake with a cancel notice when the user declines on GitHub', () => {
     h.search.current = { error: 'access_denied', state: 's1' };
-    render(<GitHubLakeCallbackPage />);
+    renderPage();
 
     expect(h.toastError).toHaveBeenCalledWith('GitHub connection cancelled.');
     expect(h.openManager).toHaveBeenCalledWith('mine', 'lake1');
@@ -102,7 +149,7 @@ describe('GitHubLakeCallbackPage', () => {
 
   it('shows a failure notice and returns to the lake when the install needs org-owner approval', () => {
     h.search.current = { setup_action: 'request', state: 's1' };
-    render(<GitHubLakeCallbackPage />);
+    renderPage();
 
     expect(h.toastError).toHaveBeenCalledWith(
       'GitHub sent the install to an owner of that organization for approval. Connect the repository again once they approve it.'
@@ -118,7 +165,7 @@ describe('GitHubLakeCallbackPage', () => {
     vi.mocked(saveGitHubLakeConnectHandoff).mockImplementationOnce(() => {
       throw new Error('blocked');
     });
-    render(<GitHubLakeCallbackPage />);
+    renderPage();
 
     expect(h.toastError).toHaveBeenCalledWith(
       'Could not continue the GitHub connection: this browser blocked session storage.'

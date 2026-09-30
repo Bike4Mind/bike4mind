@@ -103,7 +103,7 @@ describe('GitHubConnectAction', () => {
     fireEvent.click(screen.getByTestId('github-connect-btn'));
 
     const [, options] = h.startMutate.mock.calls[0];
-    options.onError({ response: { data: { error: '"Lake" is curated.' } } });
+    options.onError({ isAxiosError: true, response: { data: { error: '"Lake" is curated.' } } });
     expect(h.toastError).toHaveBeenCalledWith('"Lake" is curated.');
     expect(assign).not.toHaveBeenCalled();
   });
@@ -133,7 +133,10 @@ describe('GitHubConnectAction', () => {
     fireEvent.click(screen.getByTestId('github-resync-btn'));
 
     const [, options] = h.resyncMutate.mock.calls[0];
-    options.onError({ response: { data: { error: 'A sync is already running for this repository' } } });
+    options.onError({
+      isAxiosError: true,
+      response: { data: { error: 'A sync is already running for this repository' } },
+    });
     expect(h.toastError).toHaveBeenCalledWith('A sync is already running for this repository');
 
     options.onError({});
@@ -163,7 +166,7 @@ describe('GitHubConnectAction', () => {
   it('keeps re-sync available after the App lost access, so restoring access can recover', () => {
     h.connection.current = connected({ status: 'error', lastError: 'Repository access was removed' });
     wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
-    expect(screen.getByTestId('github-connection-status-chip')).toHaveTextContent('Needs reconnect');
+    expect(screen.getByTestId('github-connection-status-chip')).toHaveTextContent('Sync failed');
     expect(screen.getByTestId('github-resync-btn')).toBeEnabled();
   });
 
@@ -209,7 +212,10 @@ describe('GitHubConnectAction', () => {
     fireEvent.click(screen.getByTestId('github-disconnect-confirm-btn'));
 
     const [, options] = h.disconnectMutate.mock.calls[0];
-    options.onError({ response: { data: { error: 'A sync is already running for this repository' } } });
+    options.onError({
+      isAxiosError: true,
+      response: { data: { error: 'A sync is already running for this repository' } },
+    });
     expect(h.toastError).toHaveBeenCalledWith('A sync is already running for this repository');
 
     options.onError({});
