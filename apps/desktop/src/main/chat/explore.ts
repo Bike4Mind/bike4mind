@@ -27,6 +27,19 @@ export function pickExploreModel(available: readonly ChatModelOption[], sessionM
   return EXPLORE_MODELS.find(candidate => available.some(model => model.id === candidate)) ?? sessionModel;
 }
 
+/**
+ * An explicit pattern on the model id, so a new Opus release is covered without a list edit; widen
+ * or narrow it here. Opus re-read every file an explore report quoted, so the sub-agent only
+ * added its own time, cost and report tokens, which stay in the context and are re-read each round.
+ */
+const SKIP_EXPLORE_SESSIONS = /opus/i;
+
+/** A same-model sub-loop would only add cost, so the tool also needs a different model to run on. */
+export function shouldOfferExplore(available: readonly ChatModelOption[], sessionModel: string): boolean {
+  if (SKIP_EXPLORE_SESSIONS.test(sessionModel)) return false;
+  return pickExploreModel(available, sessionModel) !== sessionModel;
+}
+
 export function buildExploreContext(options: {
   axios: AxiosInstance;
   endpoint: string;

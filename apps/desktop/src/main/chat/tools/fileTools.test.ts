@@ -38,13 +38,22 @@ describe('file tools', () => {
       );
     });
 
-    it('stops a long file at the default page and says where to continue', async () => {
-      const lines = Array.from({ length: 2500 }, (_, index) => `line ${index + 1}`).join('\n');
-      await writeFile(join(root, 'long.txt'), lines, 'utf8');
+    const numbered = (count: number) => Array.from({ length: count }, (_, index) => `line ${index + 1}`).join('\n');
+
+    it('stops a long file at the default page and says how to get the rest', async () => {
+      await writeFile(join(root, 'long.txt'), numbered(1000), 'utf8');
       const result = await fileRead.run({ path: join(root, 'long.txt') }, context);
-      expect(result).toContain('2000\tline 2000');
-      expect(result).not.toContain('line 2001');
-      expect(result).toContain('[Lines 1-2000 of 2500. Continue with offset 2001.]');
+      expect(result).toContain('400\tline 400');
+      expect(result).not.toContain('line 401');
+      expect(result).toMatch(/\[Lines 1-400 of 1000\. Continue with offset 401\. grep_search with context .*\]$/);
+    });
+
+    it('honours an explicit limit, up to the maximum', async () => {
+      await writeFile(join(root, 'long.txt'), numbered(3000), 'utf8');
+      const some = await fileRead.run({ path: join(root, 'long.txt'), limit: 900 }, context);
+      expect(some).toContain('[Lines 1-900 of 3000. Continue with offset 901.');
+      const capped = await fileRead.run({ path: join(root, 'long.txt'), limit: 5000 }, context);
+      expect(capped).toContain('[Lines 1-2000 of 3000. Continue with offset 2001.');
     });
 
     it('describes a binary file instead of dumping it', async () => {

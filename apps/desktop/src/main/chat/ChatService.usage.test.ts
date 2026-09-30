@@ -1,3 +1,4 @@
+import { ChatModels } from '@bike4mind/common';
 import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -54,7 +55,12 @@ describe('ChatService usage reporting', () => {
     service = new ChatService({
       store,
       models: {
-        list: async () => ({ models: [{ id: 'test-model', name: 'Test', backend }] }),
+        list: async () => ({
+          models: [
+            { id: 'test-model', name: 'Test', backend },
+            { id: ChatModels.CLAUDE_5_SONNET, name: 'Sonnet', backend },
+          ],
+        }),
         cached: () => [],
       } as unknown as ModelCatalog,
       access: { list: async () => [root] } as unknown as AccessStore,

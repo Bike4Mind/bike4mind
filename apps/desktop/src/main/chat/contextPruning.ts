@@ -166,7 +166,7 @@ function pathOf(call: ChatToolCall): string | null {
  */
 function shownRange(call: ChatToolCall): LineRange | null {
   const text = call.preview ?? '';
-  const trailer = /\[Lines (\d+)-(\d+) of \d+\.(?: Continue with offset \d+\.)?\]$/.exec(text);
+  const trailer = /\[Lines (\d+)-(\d+) of \d+\.(?: Continue with offset \d+\.[^\]]*)?\]$/.exec(text);
   if (trailer) return { first: Number(trailer[1]), last: Number(trailer[2]) };
   return /^ *1\t/.test(text) ? WHOLE_FILE : null;
 }

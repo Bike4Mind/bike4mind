@@ -45,7 +45,8 @@ const MAX_GREP_CONTEXT = 10;
 const MAX_GREP_LINE_CHARS = 240;
 const MAX_LISTED_MATCHING_FILES = 500;
 
-const DEFAULT_READ_LINES = 2000;
+const DEFAULT_READ_LINES = 400;
+const MAX_READ_LINES = 2000;
 const MAX_READ_LINE_CHARS = 2000;
 /** Leaves room under the shared cap for the trailing "Lines a-b of n" note. */
 const OUTPUT_BUDGET = MAX_TOOL_OUTPUT_CHARS - 500;
@@ -167,14 +168,18 @@ export const fileRead: ToolDefinition = {
       'Read a text file from the local filesystem. Only files inside folders the user has ' +
       'granted are readable. Each line is prefixed with its line number and a tab; those ' +
       'prefixes are not part of the file, so never copy them into file_edit. Returns at most ' +
-      `${DEFAULT_READ_LINES} lines per call and says where to continue. For a large file, find ` +
-      'what you need with grep_search first and read just that range with offset/limit.',
+      `${DEFAULT_READ_LINES} lines per call unless you pass a limit (up to ${MAX_READ_LINES}), and ` +
+      'says where to continue. For a large file, find what you need with grep_search first ' +
+      '(with context lines) and read just that range with offset/limit.',
     parameters: {
       type: 'object',
       properties: {
         path: { type: 'string', description: 'Absolute path to the file.' },
         offset: { type: 'number', description: 'First line to return (1-based).' },
-        limit: { type: 'number', description: `Maximum number of lines to return (default ${DEFAULT_READ_LINES}).` },
+        limit: {
+          type: 'number',
+          description: `Maximum number of lines to return (default ${DEFAULT_READ_LINES}, at most ${MAX_READ_LINES}).`,
+        },
       },
       required: ['path'],
     },
@@ -194,7 +199,10 @@ export const fileRead: ToolDefinition = {
 
     const first = Math.max(1, Math.floor(optionalNumber(input, 'offset') ?? 1));
     if (first > total) return `${target} has ${total} line${total === 1 ? '' : 's'}; offset ${first} is past the end.`;
-    const wanted = Math.max(1, Math.floor(optionalNumber(input, 'limit') ?? DEFAULT_READ_LINES));
+    const wanted = Math.min(
+      MAX_READ_LINES,
+      Math.max(1, Math.floor(optionalNumber(input, 'limit') ?? DEFAULT_READ_LINES))
+    );
     const last = Math.min(total, first + wanted - 1);
 
     const width = String(last).length;
@@ -215,7 +223,10 @@ export const fileRead: ToolDefinition = {
     }
 
     if (first > 1 || shownTo < total) {
-      const next = shownTo < total ? ` Continue with offset ${shownTo + 1}.` : '';
+      const next =
+        shownTo < total
+          ? ` Continue with offset ${shownTo + 1}. grep_search with context is usually cheaper than paging to find a spot.`
+          : '';
       rows.push('', `[Lines ${first}-${shownTo} of ${total}.${next}]`);
     }
     return rows.join('\n');
