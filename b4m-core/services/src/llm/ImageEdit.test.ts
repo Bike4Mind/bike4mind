@@ -795,3 +795,136 @@ describe('ImageEditService.invoke (retry quest bound to its session)', () => {
     expect(update).toHaveBeenCalled();
   });
 });
+
+describe('ImageEditService quest partial writes', () => {
+  const editSpy = vi.fn();
+  const promptMeta = { marker: 'meta' };
+
+  const makeService = (questSessionId = 'session1') => {
+    const quest: Record<string, unknown> = {
+      id: 'quest1',
+      sessionId: questSessionId,
+      prompt: 'make it blue',
+      type: 'message',
+      replies: ['stale'],
+      images: ['stale.png'],
+      promptMeta,
+    };
+    const update = vi.fn(async () => quest);
+    const startImageEditProcess = vi.fn(async () => undefined);
+    const service = new ImageEditService({
+      db: {
+        sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
+        quests: { findById: vi.fn(async () => quest), update },
+        users: { findById: vi.fn(async () => richUser) },
+        organizations: { findById: vi.fn(async () => null) },
+        fabFiles: { findAccessibleInIds: vi.fn(async () => []) },
+      },
+      startImageEditProcess,
+      deleteFabFile: vi.fn(),
+      wsHttpsUrl: 'wss://example.invalid',
+      abilityGetter: vi.fn(),
+      logEvent: vi.fn(),
+      storage: { upload: vi.fn(async () => 'stored/out.png') } as never,
+      fabFileStorage: { getSignedUrl: vi.fn(async () => 'https://example.invalid/x.png') } as never,
+    } as never);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).tokenizer = {
+      encodeTokens: vi.fn(async () => [1, 2, 3]),
+      decodeTokens: vi.fn(async () => 'make it blue'),
+    };
+    return { service, quest, update, startImageEditProcess };
+  };
+
+  const process = (service: ImageEditService) =>
+    service.process({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        userId: 'user1',
+        prompt: 'make it blue',
+        model: ImageModels.GPT_IMAGE_1_5,
+        image: 'https://example.invalid/source.png',
+        fabFileIds: [],
+      } as never,
+      logger: silentLogger,
+    });
+
+  const invoke = (service: ImageEditService) =>
+    service.invoke({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        prompt: 'make it blue',
+        model: 'gpt-image-1',
+        image: 'https://example.invalid/source.png',
+        fabFileIds: ['mask1'],
+      } as never,
+      userId: 'user1',
+    });
+
+  beforeEach(() => {
+    editSpy.mockReset();
+    vi.mocked(aiImageService).mockReturnValue({ edit: editSpy } as never);
+    vi.mocked(getAvailableModels).mockResolvedValue([gptImage]);
+  });
+
+  afterEach(() => {
+    vi.mocked(getSettingsValue).mockImplementation(() => undefined);
+  });
+
+  it('invoke retry writes exactly images, replies and promptMeta', async () => {
+    const { service, update } = makeService();
+    await invoke(service);
+
+    expect(update.mock.calls[0][0]).toStrictEqual({
+      id: 'quest1',
+      images: [],
+      replies: [],
+      promptMeta: expect.any(Object),
+    });
+  });
+
+  it('invoke catch writes exactly type and reply', async () => {
+    const { service, update, startImageEditProcess } = makeService();
+    startImageEditProcess.mockRejectedValue(new Error('queue down'));
+    await invoke(service);
+
+    const errorCall = update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.type === 'error');
+    expect(errorCall).toStrictEqual({ id: 'quest1', type: 'error', reply: 'queue down' });
+  });
+
+  it('process success writes exactly reply, replies, images, status and creditsUsed (no promptMeta)', async () => {
+    editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/out.png' });
+    vi.mocked(getSettingsValue).mockImplementation(key => (key === 'ImageModerationEnabled' ? false : undefined));
+    const { service, update } = makeService();
+    await process(service);
+
+    const doneCall = update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.status === 'done');
+    expect(doneCall).toStrictEqual({
+      id: 'quest1',
+      reply: '',
+      replies: [],
+      images: ['stored/out.png'],
+      status: 'done',
+      creditsUsed: undefined,
+    });
+  });
+
+  it('process error writes exactly the seven error fields', async () => {
+    editSpy.mockRejectedValue(new Error('provider down'));
+    const { service, update } = makeService();
+    await process(service);
+
+    const errorCall = update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.type === 'error');
+    expect(errorCall).toStrictEqual({
+      id: 'quest1',
+      prompt: 'make it blue',
+      reply: 'provider down',
+      type: 'error',
+      status: 'done',
+      errorCode: undefined,
+      promptMeta,
+    });
+  });
+});
