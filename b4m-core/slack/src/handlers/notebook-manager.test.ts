@@ -83,6 +83,16 @@ describe('getOrCreateNotebookForSlackUser saved notebook ids', () => {
     expect(await resolve('bot')).toBe(OWNED_2);
   });
 
+  it('returns a keyword-routed notebook shared with update permission', async () => {
+    withUser({ keywordRouting: [{ keywords: ['hello'], notebookId: SHARED_UPDATE }], defaultNotebookId: OWNED });
+    expect(await resolve()).toBe(SHARED_UPDATE);
+  });
+
+  it('falls through a foreign keyword-routed notebook to the default notebook', async () => {
+    withUser({ keywordRouting: [{ keywords: ['hello'], notebookId: FOREIGN }], defaultNotebookId: OWNED });
+    expect(await resolve()).toBe(OWNED);
+  });
+
   it('falls through a foreign defaultNotebookId to lastNotebookId', async () => {
     withUser({ defaultNotebookId: FOREIGN }, OWNED);
     expect(await resolve()).toBe(OWNED);

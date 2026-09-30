@@ -34,7 +34,7 @@ function findMatchingKeywordRule(text: string, rules: IKeywordRoutingRule[]): st
 }
 
 /**
- * Resolves a saved notebook id (agent routing, slack default, web last notebook) to one the
+ * Resolves a saved notebook id (agent/keyword routing, slack default, web last notebook) to one the
  * user can still write to: it must exist, not be deleted, and be owned by or update-shared
  * with the user. Returns null otherwise so the caller falls through; never throws.
  */
@@ -112,18 +112,8 @@ export async function getOrCreateNotebookForSlackUser(
   if (slackSettings.keywordRouting && slackSettings.keywordRouting.length > 0) {
     const matchedNotebookId = findMatchingKeywordRule(text || '', slackSettings.keywordRouting);
 
-    if (matchedNotebookId) {
-      // Verify the notebook still exists and belongs to user
-      const notebook = await (Session as any).findOne({
-        _id: matchedNotebookId,
-        userId: userId,
-        deletedAt: { $exists: false },
-      });
-
-      if (notebook) {
-        return notebook.id;
-      }
-    }
+    const accessibleId = await resolveAccessibleNotebookId(Session, matchedNotebookId, userId);
+    if (accessibleId) return accessibleId;
   }
 
   // PRIORITY 2 & 3: find-or-create with retry. If a concurrent request creates the
