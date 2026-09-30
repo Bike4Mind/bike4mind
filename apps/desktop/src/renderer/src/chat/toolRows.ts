@@ -51,6 +51,14 @@ const PHRASES: Record<string, ToolPhrases> = {
     many: n => `Ran ${n} searches`,
     active: 'Searching...',
   },
+  explore: {
+    did: 'Explored',
+    didAlone: 'Explored the project',
+    to: 'explore',
+    toAlone: 'explore the project',
+    many: n => `Ran ${n} explorations`,
+    active: 'Exploring...',
+  },
   bash_execute: {
     did: 'Ran',
     didAlone: 'Ran a command',
@@ -191,6 +199,7 @@ function phrasesFor(name: string): ToolPhrases {
 const ARGUMENT_PRIORITY: Record<string, readonly string[]> = {
   grep_search: ['pattern', 'path'],
   glob_files: ['pattern', 'path'],
+  explore: ['question'],
   // The title if it was given one, never the seed prompt: that is a paragraph, and a row
   // showing its first 56 characters names the task less well than "Started a session" does.
   session_spawn: ['title'],

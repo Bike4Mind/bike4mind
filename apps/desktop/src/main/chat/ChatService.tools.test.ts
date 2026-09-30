@@ -87,6 +87,7 @@ describe('ChatService tool loop', () => {
       'bash_output',
       'bash_list',
       'bash_kill',
+      'explore',
     ]);
   });
 
@@ -262,7 +263,10 @@ describe('ChatService tool loop', () => {
     streams[1].write(frame('[DONE]'));
 
     const finished = await waitFor(events, 'done');
-    expect(finished).toMatchObject({ messageId: resumed.ok && !resumed.queued ? resumed.messageId : '', stopReason: undefined });
+    expect(finished).toMatchObject({
+      messageId: resumed.ok && !resumed.queued ? resumed.messageId : '',
+      stopReason: undefined,
+    });
     // One message, both rounds, one blank line between them - and the budget stop cleared.
     expect(finished).toMatchObject({ content: 'Reading the config.\n\nDone.' });
 

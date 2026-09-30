@@ -39,6 +39,7 @@ import { resolveWorkspace } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
 import { DEFAULT_COMPLETIONS_PATH, streamCompletion, type CompletionMessage } from './completions';
+import { buildExploreContext } from './explore';
 import { MediaApiClient } from './media/MediaApiClient';
 import type { MediaStore } from './media/MediaStore';
 import type { MessageQueue } from './MessageQueue';
@@ -59,6 +60,7 @@ import { assessApprovalRisk, spendsCredits } from './tools/riskAssessment';
 import {
   capOutput,
   type ApprovalPrompt,
+  type ExploreContext,
   type HostContext,
   type HostSessionView,
   type MediaContext,
@@ -1101,10 +1103,26 @@ export class ChatService {
       // one. A server that fails to come up is marked failed and the turn goes on without it.
       await this.deps.mcp?.ensureConnected();
       const mcpTools = this.deps.mcp?.tools() ?? [];
+      const catalog = await this.deps.models?.list();
+      const maxTokens = catalog?.models.find(option => option.id === session.model)?.maxOutputTokens;
+      const explore =
+        roots.length > 0
+          ? buildExploreContext({
+              axios: api.getAxiosInstance(),
+              endpoint: serverConfig.endpoint,
+              models: catalog?.models ?? [],
+              sessionModel: session.model,
+              onUsage: spent => {
+                usage = addUsage(usage, spent);
+                if (usage) this.emit({ type: 'usage', sessionId, messageId: replyId, usage });
+              },
+            })
+          : undefined;
       const tools = toolsForRequest({
         roots,
         media: !!media,
         host: !!host,
+        explore: !!explore,
         mcp: mcpTools.map(binding => binding.definition.schema),
       });
       const wire = await toCompletionMessages(
@@ -1114,8 +1132,6 @@ export class ChatService {
       wire.unshift(
         buildSystemMessage(roots, !!media, !!host, this.deps.mcp?.connectedServerNames() ?? [], session.project)
       );
-      const catalog = await this.deps.models?.list();
-      const maxTokens = catalog?.models.find(option => option.id === session.model)?.maxOutputTokens;
 
       for (let roundIndex = 0; roundIndex < limits.rounds; roundIndex++) {
         const requested: RequestedTool[] = [];
@@ -1202,7 +1218,7 @@ export class ChatService {
         thinking = turnThinking;
         const settled = await this.runTools(
           requested,
-          { roots, workingDirectory, media, host, title: session.title },
+          { roots, workingDirectory, media, host, explore, title: session.title },
           sessionId,
           replyId,
           controller.signal
@@ -1417,6 +1433,7 @@ export class ChatService {
       workingDirectory: string | undefined;
       media: MediaContext | undefined;
       host: HostContext | undefined;
+      explore: ExploreContext | undefined;
       /** The conversation's title, so a cross-session approval names it rather than its id. */
       title: string;
     },
@@ -1424,7 +1441,7 @@ export class ChatService {
     messageId: string,
     signal: AbortSignal
   ): Promise<ChatToolCall[]> {
-    const { roots, workingDirectory, media, host } = scope;
+    const { roots, workingDirectory, media, host, explore } = scope;
     return Promise.all(
       requested.map(async request => {
         const call: ChatToolCall = {
@@ -1486,6 +1503,7 @@ export class ChatService {
           background: this.deps.background,
           ...(media ? { media } : {}),
           ...(host ? { host } : {}),
+          ...(explore ? { explore } : {}),
           report,
         };
 
@@ -2255,6 +2273,9 @@ function buildSystemMessage(
       'symbol with grep_search, then read only the lines around it with file_read offset and limit.',
       'Tool calls made together in one reply run in parallel, so batch independent searches and',
       'reads into one reply instead of one per turn, and do not re-read lines you already have.',
+      'For open-ended exploration across many files, call explore instead - a faster read-only',
+      'sub-agent that returns a report - several in parallel for separate questions. When you',
+      'already know the file or symbol, use grep_search and file_read directly.',
       'Running a command needs the user to approve it first, and they see the exact command, so',
       'prefer one clear command over several speculative ones. If they decline, accept it and ask',
       'what they would like instead rather than trying a variation of the same command.',

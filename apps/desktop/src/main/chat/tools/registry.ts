@@ -1,4 +1,5 @@
 import { bashBackground, bashKill, bashList, bashOutput } from './backgroundTools';
+import { exploreTool } from './exploreTool';
 import { fileRead, globFiles, grepSearch } from './fileTools';
 import { sessionArchive, sessionDelete, sessionList, sessionRead, sessionSend, sessionSpawn } from './hostTools';
 import { generateImageTool, generateMusicTool, generateSoundEffectTool, generateSpeechTool } from './mediaTools';
@@ -62,7 +63,9 @@ const HOST_TOOLS: readonly ToolDefinition[] = [
   sessionDelete,
 ];
 
-const BY_NAME = new Map([...LOCAL_TOOLS, ...MEDIA_TOOLS, ...HOST_TOOLS].map(tool => [tool.schema.name, tool]));
+const BY_NAME = new Map(
+  [...LOCAL_TOOLS, exploreTool, ...MEDIA_TOOLS, ...HOST_TOOLS].map(tool => [tool.schema.name, tool])
+);
 
 export function findTool(name: string): ToolDefinition | undefined {
   return BY_NAME.get(name);
@@ -85,6 +88,11 @@ export function toolsForRequest(options: {
   /** A Code session's project binding. Without one the host tools have nothing to scope to. */
   host: boolean;
   /**
+   * A transport for the `explore` sub-agent. Offered only beside the local tools, since the
+   * files it would read are exactly the ones they can.
+   */
+  explore?: boolean;
+  /**
    * Schemas contributed by the user's connected MCP servers, already namespaced and framed
    * (see chat/mcp/names.ts). They are appended rather than merged into a family above because
    * a name collision with a built-in must be impossible, not resolved here.
@@ -93,6 +101,7 @@ export function toolsForRequest(options: {
 }): { toolSchema: ToolSchema }[] {
   const available = [
     ...(options.roots.length > 0 ? LOCAL_TOOLS : []),
+    ...(options.roots.length > 0 && options.explore ? [exploreTool] : []),
     ...(options.media ? MEDIA_TOOLS : []),
     ...(options.host ? HOST_TOOLS : []),
   ];

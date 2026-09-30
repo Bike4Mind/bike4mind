@@ -43,6 +43,13 @@ describe('toolsForRequest', () => {
     expect(names({ roots: ['/tmp'], media: true, host: true })).not.toContain('mcp__notion_search');
   });
 
+  it('offers explore only beside the local tools', () => {
+    expect(names({ roots: ['/tmp'], media: false, host: false, explore: true })).toContain('explore');
+    expect(names({ roots: [], media: false, host: false, explore: true })).not.toContain('explore');
+    expect(names({ roots: ['/tmp'], media: false, host: false })).not.toContain('explore');
+    expect(findTool('explore')).toBeDefined();
+  });
+
   it('declares no tool twice, whatever a server contributed', () => {
     const declared = names({ roots: ['/tmp'], media: true, host: true, mcp: [mcpSchema] });
     expect(new Set(declared).size).toBe(declared.length);

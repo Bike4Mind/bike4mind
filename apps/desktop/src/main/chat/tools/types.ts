@@ -1,4 +1,15 @@
-import type { ChatDiff, ChatMedia, ChatSessionSummary, ChatToolNotice, RelayRefusal, SpawnRefusal } from '@shared/chat';
+import type {
+  ChatDiff,
+  ChatMedia,
+  ChatSessionSummary,
+  ChatToolNotice,
+  ChatUsage,
+  RelayRefusal,
+  SpawnRefusal,
+} from '@shared/chat';
+
+import type { CompletionRequest } from '../completions';
+import type { CompletionStreamEvent } from '../streamEvents';
 
 import type { MediaApiClient } from '../media/MediaApiClient';
 import type { MediaStore } from '../media/MediaStore';
@@ -24,6 +35,25 @@ export interface MediaContext {
   listImageModels(): Promise<string[]>;
   getRemoteSessionId(): string | undefined;
   setRemoteSessionId(remoteSessionId: string): Promise<void>;
+}
+
+/**
+ * What the `explore` tool needs to run its own completion loop: the turn's transport, a model
+ * cheaper than the turn's, and somewhere to bill what it spends.
+ *
+ * Handed over as a narrow transport rather than an api client, for the same reason MediaContext
+ * is the only other network door: every other tool here stays off the network.
+ */
+export interface ExploreContext {
+  model: string;
+  maxTokens?: number;
+  complete(
+    request: CompletionRequest,
+    onEvent: (event: CompletionStreamEvent) => void,
+    signal: AbortSignal
+  ): Promise<void>;
+  /** Folded into the turn's total, so the status line counts what exploring cost. */
+  addUsage(usage: ChatUsage): void;
 }
 
 /**
@@ -82,6 +112,8 @@ export interface ToolContext {
   media?: MediaContext;
   /** Absent outside a Code session; the host-control tools are then not declared at all. */
   host?: HostContext;
+  /** Absent in tests and when signed out; `explore` then refuses rather than runs. */
+  explore?: ExploreContext;
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
 }

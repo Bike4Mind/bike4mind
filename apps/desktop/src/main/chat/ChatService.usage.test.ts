@@ -94,6 +94,40 @@ describe('ChatService usage reporting', () => {
     expect(totals).toHaveLength(2);
   });
 
+  it('bills an explore sub-agent to the turn that called it', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'how is this laid out?');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+
+    streams[0].write(
+      frame({
+        type: 'tool_use',
+        tools: [{ id: 'call_1', name: 'explore', arguments: JSON.stringify({ question: 'what files exist?' }) }],
+        usage: { inputTokens: 900, outputTokens: 100 },
+      })
+    );
+    streams[0].write(frame('[DONE]'));
+
+    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+    const nested = post.mock.calls[1][1] as { options: { tools: { toolSchema: { name: string } }[] } };
+    expect(nested.options.tools.map(tool => tool.toolSchema.name).sort()).toEqual([
+      'file_read',
+      'glob_files',
+      'grep_search',
+    ]);
+    streams[1].write(frame({ type: 'content', text: 'tiny.txt only.', usage: { inputTokens: 300, outputTokens: 20 } }));
+    streams[1].write(frame('[DONE]'));
+
+    await vi.waitUntil(() => streams.length === 3, { timeout: 3000, interval: 5 });
+    const resumed = post.mock.calls[2][1] as { messages: { content: unknown }[] };
+    expect(JSON.stringify(resumed.messages.at(-1)?.content)).toContain('tiny.txt only.');
+    streams[2].write(frame({ type: 'content', text: 'one file.', usage: { inputTokens: 1200, outputTokens: 40 } }));
+    streams[2].write(frame('[DONE]'));
+
+    const done = await vi.waitUntil(() => events.find(event => event.type === 'done'), { timeout: 3000, interval: 5 });
+    expect(done).toMatchObject({ usage: { inputTokens: 2400, outputTokens: 160 } });
+  });
+
   it('says nothing about tokens when the server reported none', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'hello');
