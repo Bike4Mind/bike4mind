@@ -59,8 +59,8 @@ describe('dispatchQuestCallback', () => {
     h.unprovisioned = false;
   });
 
-  it('does not send when the claim returns false', async () => {
-    h.claimCallbackDispatch.mockResolvedValue(false);
+  it('does not send when the claim returns null', async () => {
+    h.claimCallbackDispatch.mockResolvedValue(null);
     const logger = makeLogger();
 
     await dispatchQuestCallback('quest-1', logger);
@@ -70,7 +70,7 @@ describe('dispatchQuestCallback', () => {
   });
 
   it('sends {questId} to the linked generationCallbackQueue url when the claim succeeds', async () => {
-    h.claimCallbackDispatch.mockResolvedValue(true);
+    h.claimCallbackDispatch.mockResolvedValue('quest_quest-1_event');
     h.sendMessage.mockResolvedValue('message-id-1');
     const logger = makeLogger();
 
@@ -84,14 +84,14 @@ describe('dispatchQuestCallback', () => {
   });
 
   it('releases the claim and resolves (never throws) when the send fails', async () => {
-    h.claimCallbackDispatch.mockResolvedValue(true);
+    h.claimCallbackDispatch.mockResolvedValue('quest_quest-1_event');
     h.sendMessage.mockRejectedValue(new Error('SQS is down'));
     h.releaseCallbackDispatch.mockResolvedValue(undefined);
     const logger = makeLogger();
 
     await expect(dispatchQuestCallback('quest-1', logger)).resolves.toBeUndefined();
 
-    expect(h.releaseCallbackDispatch).toHaveBeenCalledWith('quest-1');
+    expect(h.releaseCallbackDispatch).toHaveBeenCalledWith('quest-1', 'quest_quest-1_event');
   });
 
   it('resolves without releasing when the claim call itself throws', async () => {
@@ -127,7 +127,7 @@ describe('dispatchQuestCallback', () => {
   });
 
   it('does not throw even when releasing the claim also fails', async () => {
-    h.claimCallbackDispatch.mockResolvedValue(true);
+    h.claimCallbackDispatch.mockResolvedValue('quest_quest-1_event');
     h.sendMessage.mockRejectedValue(new Error('SQS is down'));
     h.releaseCallbackDispatch.mockRejectedValue(new Error('Mongo is down too'));
     const logger = makeLogger();

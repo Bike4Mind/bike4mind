@@ -177,7 +177,7 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
     mockResolveBillingOrgId.mockImplementation(async (_req: unknown, id: string | null | undefined) => id ?? null);
     mockAssertUrlAllowed.mockResolvedValue(undefined);
     mockFindCallbackSigningSecret.mockResolvedValue(null);
-    mockClaimCallbackDispatch.mockResolvedValue(false);
+    mockClaimCallbackDispatch.mockResolvedValue(null);
     mockArmCallback.mockResolvedValue(undefined);
     mockFindCallbackById.mockResolvedValue(null);
   });

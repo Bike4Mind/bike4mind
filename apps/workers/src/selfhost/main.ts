@@ -12,10 +12,7 @@ import { dispatch as dataLakeResearchRunDispatch } from '@server/queueHandlers/d
 import { dispatch as driveDisconnectPurgeDispatch } from '@server/queueHandlers/driveDisconnectPurge';
 import { dispatch as imageGenerationDispatch } from '@server/queueHandlers/imageGeneration';
 import { dispatch as imageEditDispatch } from '@server/queueHandlers/imageEdit';
-import {
-  dispatch as generationCallbackDispatch,
-  GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
-} from '@server/queueHandlers/generationCallback';
+import { dispatch as generationCallbackDispatch } from '@server/queueHandlers/generationCallback';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
 import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
@@ -34,6 +31,7 @@ import { CHUNK_SCAN_BATCH } from '@server/s3/chunkScan';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
+  GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
 } from '@server/queueHandlers/sqsDelivery';
 
 /**

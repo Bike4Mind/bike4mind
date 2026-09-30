@@ -236,6 +236,7 @@ describe('questTimeoutSweep cron', () => {
     expect(mockDispatchQuestCallback).toHaveBeenCalledTimes(2);
     expect(mockDispatchQuestCallback).toHaveBeenCalledWith('q-x', expect.anything());
     expect(mockDispatchQuestCallback).toHaveBeenCalledWith('q-y', expect.anything());
+    expect(metricValue('TimeoutSweepCallbacksRedispatched')).toBe(2);
   });
 
   it('does not fail the sweep when the callback backstop read fails', async () => {

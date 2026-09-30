@@ -56,7 +56,17 @@ describe('VideoGenerationService.invoke (retry quest bound to its session)', () 
     const service = new VideoGenerationService({
       db: {
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
-        quests: { findById: vi.fn(async () => ({ id: 'quest1', sessionId: questSessionId })), update },
+        quests: {
+          findById: vi.fn(async () => ({
+            id: 'quest1',
+            sessionId: questSessionId,
+            // The prior run failed; the retry must not inherit its error state.
+            status: 'done',
+            type: 'error',
+            errorCode: 'insufficient_credits',
+          })),
+          update,
+        },
       },
       startVideoGenerationProcess,
     } as never);
@@ -78,7 +88,11 @@ describe('VideoGenerationService.invoke (retry quest bound to its session)', () 
   it('retries a quest from the same session', async () => {
     const { invoke, update } = makeInvokeService('session1');
     await invoke();
-    expect(update).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'quest1' }), { unset: ['status'] });
+    expect(update).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ id: 'quest1', type: 'message', errorCode: undefined }),
+      { unset: ['status', 'errorCode'] }
+    );
   });
 
   it('writes only the reset fields when retrying a quest', async () => {

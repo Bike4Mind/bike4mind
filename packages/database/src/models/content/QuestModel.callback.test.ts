@@ -42,7 +42,7 @@ describe('questRepository.claimCallbackDispatch', () => {
     const id = quest._id.toString();
     await questRepository.armCallback(id, CALLBACK);
 
-    await expect(questRepository.claimCallbackDispatch(id)).resolves.toBe(false);
+    await expect(questRepository.claimCallbackDispatch(id)).resolves.toBeNull();
   });
 
   it('returns false while the status field is absent entirely', async () => {
@@ -50,7 +50,7 @@ describe('questRepository.claimCallbackDispatch', () => {
     const id = quest._id.toString();
     await questRepository.armCallback(id, CALLBACK);
 
-    await expect(questRepository.claimCallbackDispatch(id)).resolves.toBe(false);
+    await expect(questRepository.claimCallbackDispatch(id)).resolves.toBeNull();
   });
 
   it('returns true once status is done and callback.state is pending; a second claim returns false', async () => {
@@ -58,8 +58,8 @@ describe('questRepository.claimCallbackDispatch', () => {
     const id = quest._id.toString();
     await questRepository.armCallback(id, CALLBACK);
 
-    await expect(questRepository.claimCallbackDispatch(id)).resolves.toBe(true);
-    await expect(questRepository.claimCallbackDispatch(id)).resolves.toBe(false);
+    await expect(questRepository.claimCallbackDispatch(id)).resolves.toMatch(/^quest_/);
+    await expect(questRepository.claimCallbackDispatch(id)).resolves.toBeNull();
   });
 
   it('also claims a stopped quest (the other terminal status)', async () => {
@@ -67,7 +67,7 @@ describe('questRepository.claimCallbackDispatch', () => {
     const id = quest._id.toString();
     await questRepository.armCallback(id, CALLBACK);
 
-    await expect(questRepository.claimCallbackDispatch(id)).resolves.toBe(true);
+    await expect(questRepository.claimCallbackDispatch(id)).resolves.toMatch(/^quest_/);
   });
 
   it('under 5 concurrent claims on one done quest, exactly one succeeds', async () => {
@@ -113,12 +113,12 @@ describe('re-arming a retried quest', () => {
   }
 
   it('does not claim against the previous run once status is unset', async () => {
-    await expect(retryThenArm({ unset: ['status'] })).resolves.toBe(false);
+    await expect(retryThenArm({ unset: ['status'] })).resolves.toBeNull();
   });
 
   it('would claim against the previous run if status were only set to undefined', async () => {
     // Pins why the services pass `unset`: an undefined in $set is dropped and the old status survives.
-    await expect(retryThenArm()).resolves.toBe(true);
+    await expect(retryThenArm()).resolves.toMatch(/^quest_/);
   });
 });
 
@@ -169,30 +169,51 @@ describe('questRepository.releaseCallbackDispatch', () => {
     const quest = await Quest.create(seed({ status: 'done' }));
     const id = quest._id.toString();
     await questRepository.armCallback(id, CALLBACK);
-    await questRepository.claimCallbackDispatch(id);
+    const eventId = await questRepository.claimCallbackDispatch(id);
+    if (!eventId) throw new Error('claim failed');
 
     let callback = await questRepository.findCallbackById(id);
     expect(callback?.state).toBe('dispatched');
     expect(callback?.dispatchedAt).toBeInstanceOf(Date);
+    expect(callback?.eventId).toBe(eventId);
 
-    await questRepository.releaseCallbackDispatch(id);
+    await questRepository.releaseCallbackDispatch(id, eventId);
 
     callback = await questRepository.findCallbackById(id);
     expect(callback?.state).toBe('pending');
     expect(callback?.dispatchedAt).toBeUndefined();
 
-    await expect(questRepository.claimCallbackDispatch(id)).resolves.toBe(true);
+    await expect(questRepository.claimCallbackDispatch(id)).resolves.toMatch(/^quest_/);
   });
 
   it('is a no-op against a callback that is still pending (nothing to release)', async () => {
     const quest = await Quest.create(seed({ status: 'done' }));
     const id = quest._id.toString();
     await questRepository.armCallback(id, CALLBACK);
+    const armed = await questRepository.findCallbackById(id);
+    if (!armed) throw new Error('arm failed');
 
-    await questRepository.releaseCallbackDispatch(id);
+    await questRepository.releaseCallbackDispatch(id, armed.eventId);
 
     const callback = await questRepository.findCallbackById(id);
     expect(callback?.state).toBe('pending');
+  });
+
+  it('does not rewind a newer claim made after a re-arm (a slow, stale enqueue failure)', async () => {
+    const quest = await Quest.create(seed({ status: 'done' }));
+    const id = quest._id.toString();
+    await questRepository.armCallback(id, CALLBACK);
+    const staleEventId = await questRepository.claimCallbackDispatch(id);
+    if (!staleEventId) throw new Error('first claim failed');
+    await questRepository.armCallback(id, CALLBACK);
+    const freshEventId = await questRepository.claimCallbackDispatch(id);
+    expect(freshEventId).not.toBe(staleEventId);
+
+    await questRepository.releaseCallbackDispatch(id, staleEventId);
+
+    const callback = await questRepository.findCallbackById(id);
+    expect(callback?.state).toBe('dispatched');
+    expect(callback?.eventId).toBe(freshEventId);
   });
 });
 
@@ -218,6 +239,7 @@ describe('questRepository.recordCallbackAttempt', () => {
     expect(callback?.state).toBe('delivered');
     expect(callback?.lastStatusCode).toBe(200);
     expect(callback?.completedAt).toBeInstanceOf(Date);
+    expect(callback?.lastError).toBeUndefined();
   });
 
   it('does nothing while the callback is still pending (no dispatched/failed to match)', async () => {

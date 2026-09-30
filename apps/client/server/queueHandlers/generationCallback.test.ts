@@ -38,7 +38,8 @@ vi.mock('@server/utils/ssrfProtection', async importOriginal => {
   };
 });
 
-import { dispatch, GENERATION_CALLBACK_MAX_RECEIVE_COUNT } from './generationCallback';
+import { dispatch } from './generationCallback';
+import { GENERATION_CALLBACK_MAX_RECEIVE_COUNT } from './sqsDelivery';
 import { SsrfError } from '@server/utils/ssrfProtection';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() } as never;
@@ -148,12 +149,12 @@ describe('generationCallback dispatch', () => {
     });
   });
 
-  it('records failed without throwing on a retryable failure at the final delivery attempt', async () => {
+  it('records failed AND throws on a retryable failure at the final attempt, so SQS routes it to the DLQ', async () => {
     stubFetch(vi.fn().mockResolvedValue({ ok: false, status: 503 }));
 
     await expect(
       dispatch(makeEvent(MESSAGE, String(GENERATION_CALLBACK_MAX_RECEIVE_COUNT)), {} as never, logger)
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow();
 
     expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', {
       state: 'failed',
@@ -209,8 +210,20 @@ describe('generationCallback dispatch', () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(init.body as string) as { files: unknown };
     expect(body.files).toEqual([
-      { name: 'render.png', url: 'https://cdn.example.com/generated/render.png', isImage: true, isAudio: false },
-      { name: 'clip.mp4', url: 'https://cdn.example.com/generated/clip.mp4', isImage: false, isAudio: false },
+      {
+        name: 'render.png',
+        url: 'https://cdn.example.com/generated/render.png',
+        isImage: true,
+        isAudio: false,
+        isVideo: false,
+      },
+      {
+        name: 'clip.mp4',
+        url: 'https://cdn.example.com/generated/clip.mp4',
+        isImage: false,
+        isAudio: false,
+        isVideo: true,
+      },
     ]);
   });
 

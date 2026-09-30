@@ -1072,7 +1072,17 @@ describe('ImageGenerationService.invoke (retry quest bound to its session)', () 
         quests: {
           update,
           getMostRecentChatHistory: vi.fn(async () => []),
-          findById: vi.fn(async () => ({ id: 'quest1', sessionId: questSessionId }) as any),
+          findById: vi.fn(
+            async () =>
+              ({
+                id: 'quest1',
+                sessionId: questSessionId,
+                // The prior run failed; the retry must not inherit its error state.
+                status: 'done',
+                type: 'error',
+                errorCode: 'insufficient_credits',
+              }) as any
+          ),
         },
       },
       startImageGenerationProcess,
@@ -1101,7 +1111,11 @@ describe('ImageGenerationService.invoke (retry quest bound to its session)', () 
   it('retries a quest from the same session', async () => {
     const { invoke, update } = makeInvokeService('session1');
     await invoke();
-    expect(update).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'quest1' }), { unset: ['status'] });
+    expect(update).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ id: 'quest1', type: 'message', errorCode: undefined }),
+      { unset: ['status', 'errorCode'] }
+    );
   });
 
   it('settles the quest as a done error when the process fails to start', async () => {

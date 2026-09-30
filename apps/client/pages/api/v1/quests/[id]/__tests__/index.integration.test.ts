@@ -249,7 +249,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     expect(body).toMatchObject({
       images: [],
       videos: ['clip.mp4'],
-      files: [{ name: 'clip.mp4', url: 'https://cdn.example.com/generated/clip.mp4', isImage: false }],
+      files: [{ name: 'clip.mp4', url: 'https://cdn.example.com/generated/clip.mp4', isImage: false, isVideo: true }],
     });
     const { QuestPollResponseSchema } = await import('@bike4mind/common');
     expect(QuestPollResponseSchema.parse(body).videos).toEqual(['clip.mp4']);

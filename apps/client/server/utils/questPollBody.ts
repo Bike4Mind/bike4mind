@@ -14,7 +14,7 @@ export function toQuestPollBody(quest: IChatHistoryItemDocument, { isOwner }: { 
   // music_generation, or a `.xlsx` from excel_generation - not everything here is an image).
   // Programmatic pollers shouldn't have to know the CDN path convention, so we resolve each into
   // a typed descriptor with a ready-to-use URL server-side (the single source of truth). `images`
-  // (raw basenames) is kept for parity with the WebSocket payload; `files[].isImage`/`isAudio`
+  // (raw basenames) is kept for parity with the WebSocket payload; `files[].isImage`/`isAudio`/`isVideo`
   // let a caller pick out renderable media.
   const images = quest.images ?? [];
   // Rendered videos are basenames under the same `generated/` prefix (PromptReplies builds the

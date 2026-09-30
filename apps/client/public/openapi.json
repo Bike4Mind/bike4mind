@@ -3083,13 +3083,17 @@
                 },
                 "isAudio": {
                   "type": "boolean"
+                },
+                "isVideo": {
+                  "type": "boolean"
                 }
               },
               "required": [
                 "name",
                 "url",
                 "isImage",
-                "isAudio"
+                "isAudio",
+                "isVideo"
               ]
             }
           },

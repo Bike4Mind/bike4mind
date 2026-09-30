@@ -29,7 +29,7 @@ export function getGenerationCallbackQueueUrl(): string | undefined {
  * logged and the claim released, which leaves the callback `pending` for the sweep backstop.
  */
 export async function dispatchQuestCallback(questId: string, logger: Logger): Promise<void> {
-  let claimed = false;
+  let claimedEventId: string | null = null;
   try {
     const queueUrl = getGenerationCallbackQueueUrl();
     // Nothing is armed without a queue (see getGenerationCallbackQueueUrl), so this only fires on
@@ -38,17 +38,17 @@ export async function dispatchQuestCallback(questId: string, logger: Logger): Pr
       logger.warn('generationCallbackQueue not configured; leaving callback pending', { questId });
       return;
     }
-    claimed = await questRepository.claimCallbackDispatch(questId);
-    if (!claimed) return;
+    claimedEventId = await questRepository.claimCallbackDispatch(questId);
+    if (!claimedEventId) return;
 
     const message: GenerationCallbackMessage = { questId };
     await new SQSService().sendMessage(queueUrl, message);
     logger.info('Generation callback dispatched', { questId });
   } catch (error) {
     logger.error('Failed to dispatch generation callback; the sweep will retry it', { questId, error });
-    if (!claimed) return;
+    if (!claimedEventId) return;
     await questRepository
-      .releaseCallbackDispatch(questId)
+      .releaseCallbackDispatch(questId, claimedEventId)
       .catch(releaseError =>
         logger.error('Failed to release generation callback claim', { questId, error: releaseError })
       );

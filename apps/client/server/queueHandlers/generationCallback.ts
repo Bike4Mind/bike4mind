@@ -4,14 +4,15 @@ import { questRepository, sessionRepository, userApiKeyRepository } from '@bike4
 import { ApiKeyStatus, GENERATION_CALLBACK_EVENT_TYPE, type IQuestCallback } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { getDeliveryAttempt, isFinalDeliveryAttempt } from '@server/queueHandlers/sqsDelivery';
+import {
+  GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
+  getDeliveryAttempt,
+  isFinalDeliveryAttempt,
+} from '@server/queueHandlers/sqsDelivery';
 import { GenerationCallbackMessageSchema } from '@server/generationCallback/messages';
 import { toQuestPollBody } from '@server/utils/questPollBody';
 import { assertUrlAllowed, SsrfError } from '@server/utils/ssrfProtection';
 import { buildSignedWebhookHeaders, RetryableError, WEBHOOK_HTTP_TIMEOUT_MS } from '@server/webhooks/signedWebhook';
-
-/** Mirrors generationCallbackQueue's `dlq.retry` in infra/queues.ts; keep the two in sync. */
-export const GENERATION_CALLBACK_MAX_RECEIVE_COUNT = 5;
 
 /**
  * The only 4xx worth another attempt. Every other 4xx is permanent, as GENERATION_CALLBACK_DESCRIPTION
@@ -35,8 +36,10 @@ type AttemptResult =
  * server/generationCallback/dispatchQuestCallback.ts.
  *
  * Everything is re-read per attempt, so a retry signs with the key's current secret and a
- * key revoked mid-retry stops the delivery. A retryable failure throws for SQS redelivery; the
- * last attempt records `failed` instead, so the quest never reads as still in flight.
+ * key revoked mid-retry stops the delivery. A retryable failure throws for SQS redelivery, and so
+ * does the last one after recording `failed` (so the quest never reads as still in flight): only a
+ * throw lets SQS redrive the message to the DLQ (see queueHandlers/utils.ts). A permanent failure
+ * records `failed` and returns, since a DLQ replay could not fix it either.
  */
 export const dispatch = dispatchWithLogger(async (event: SQSEvent, _context, logger) => {
   const message = GenerationCallbackMessageSchema.parse(JSON.parse(event.Records[0].body));
@@ -58,13 +61,15 @@ export const dispatch = dispatchWithLogger(async (event: SQSEvent, _context, log
     return;
   }
 
-  if (result.kind === 'retryable' && !isFinalDeliveryAttempt(event, GENERATION_CALLBACK_MAX_RECEIVE_COUNT)) {
+  if (result.kind === 'retryable') {
+    const isFinal = isFinalDeliveryAttempt(event, GENERATION_CALLBACK_MAX_RECEIVE_COUNT);
     await questRepository.recordCallbackAttempt(message.questId, {
-      state: 'dispatched',
+      state: isFinal ? 'failed' : 'dispatched',
       statusCode: result.statusCode,
       error: result.error,
     });
-    logger.warn('Generation callback attempt failed; SQS will retry', { error: result.error });
+    const outcome = isFinal ? 'retries exhausted; routing to DLQ' : 'attempt failed; SQS will retry';
+    logger.warn(`Generation callback ${outcome}`, { statusCode: result.statusCode, error: result.error });
     throw new RetryableError(result.error);
   }
 

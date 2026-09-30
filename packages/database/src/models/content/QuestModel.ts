@@ -1231,20 +1231,28 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   /**
    * The single `pending -> dispatched` transition, and the only thing that makes delivery
    * exactly-once: every settle site may call it, and only the first caller on a settled quest
-   * gets true. Conditional on a terminal status so arming before the job settles is safe.
+   * gets the claimed event id (null for everyone else). Conditional on a terminal status so
+   * arming before the job settles is safe.
    */
-  async claimCallbackDispatch(id: string): Promise<boolean> {
-    const result = await this.model.updateOne(
-      { _id: id, 'callback.state': 'pending', status: { $in: TERMINAL_QUEST_STATUSES } },
-      { $set: { 'callback.state': 'dispatched', 'callback.dispatchedAt': new Date() } }
-    );
-    return result.modifiedCount > 0;
+  async claimCallbackDispatch(id: string): Promise<string | null> {
+    const doc = await this.model
+      .findOneAndUpdate(
+        { _id: id, 'callback.state': 'pending', status: { $in: TERMINAL_QUEST_STATUSES } },
+        { $set: { 'callback.state': 'dispatched', 'callback.dispatchedAt': new Date() } },
+        { projection: { 'callback.eventId': 1 } }
+      )
+      .lean<{ callback?: Pick<IQuestCallback, 'eventId'> }>()
+      .exec();
+    return doc?.callback?.eventId ?? null;
   }
 
-  /** Undo a claim whose enqueue failed, so the sweep backstop retries it. */
-  async releaseCallbackDispatch(id: string): Promise<void> {
+  /**
+   * Undo a claim whose enqueue failed, so the sweep backstop retries it. Scoped to the claimed
+   * `eventId`: a slow failure must not rewind a newer claim made after a re-arm.
+   */
+  async releaseCallbackDispatch(id: string, eventId: string): Promise<void> {
     await this.model.updateOne(
-      { _id: id, 'callback.state': 'dispatched' },
+      { _id: id, 'callback.state': 'dispatched', 'callback.eventId': eventId },
       { $set: { 'callback.state': 'pending' }, $unset: { 'callback.dispatchedAt': 1 } }
     );
   }
@@ -1277,6 +1285,8 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
           ...(attempt.statusCode !== undefined && { 'callback.lastStatusCode': attempt.statusCode }),
           ...(attempt.error !== undefined && { 'callback.lastError': attempt.error.slice(0, 500) }),
         },
+        // A success after failed attempts must not keep reporting the last failure.
+        ...(attempt.state === 'delivered' && { $unset: { 'callback.lastError': 1 } }),
       }
     );
   }

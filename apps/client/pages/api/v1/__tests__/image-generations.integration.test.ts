@@ -180,7 +180,7 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     mockInvoke.mockResolvedValue({ id: 'quest-1', sessionId: 'sess-1', type: 'message' });
     mockAssertUrlAllowed.mockResolvedValue(undefined);
     mockFindCallbackSigningSecret.mockResolvedValue(null);
-    mockClaimCallbackDispatch.mockResolvedValue(false);
+    mockClaimCallbackDispatch.mockResolvedValue(null);
     mockArmCallback.mockResolvedValue(undefined);
     mockFindCallbackById.mockResolvedValue(null);
   });

@@ -10,6 +10,7 @@ const GeneratedFileSchema = z.object({
   url: z.string(),
   isImage: z.boolean(),
   isAudio: z.boolean(),
+  isVideo: z.boolean(),
 });
 
 /**

@@ -9,6 +9,10 @@
  * Uses the same pure decision function (`resolveQuestTimeoutRecovery`) as the
  * read path so the recovery semantics are defined in exactly one place.
  *
+ * Also the backstop for generation completion callbacks: every run re-dispatches
+ * settled quests whose callback is still `pending` (a settle site that died before
+ * its claim, or an enqueue that failed), whether or not any quest was stuck.
+ *
  * Schedule: every 5 minutes
  * Enabled: production + dev
  * Self-host: the worker runs `runQuestTimeoutSweep` on the same cadence (apps/workers/src/selfhost/questTimeoutSweep.ts).
@@ -92,14 +96,6 @@ export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
     });
   }
 
-  if (staleQuests.length === 0) {
-    logger.info('[QuestTimeoutSweep] No stuck quests found');
-    await metric('TimeoutSweepRecovered', 0);
-    // Not gated on having stuck quests: a missed callback is independent of timeout recovery.
-    await redispatchMissedCallbacks(nowMs);
-    return { status: 'OK', recovered: 0 };
-  }
-
   let recovered = 0;
 
   for (const quest of staleQuests) {
@@ -123,6 +119,7 @@ export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
     }
   }
 
+  // Not gated on having stuck quests: a missed callback is independent of timeout recovery.
   const callbacksRedispatched = await redispatchMissedCallbacks(nowMs);
 
   logger.info('[QuestTimeoutSweep] Sweep complete', {
@@ -131,6 +128,7 @@ export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
     callbacksRedispatched,
   });
   await metric('TimeoutSweepRecovered', recovered);
+  await metric('TimeoutSweepCallbacksRedispatched', callbacksRedispatched);
 
   return { status: 'OK', recovered };
 }
