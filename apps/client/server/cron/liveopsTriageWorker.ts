@@ -31,7 +31,7 @@ import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { dispatchWithLogger } from '../queueHandlers/utils';
 import { Resource } from 'sst';
 import { z } from 'zod';
-import type { LiveOpsTriageJobMessage } from './liveopsTriageDispatcher';
+import type { LiveOpsTriageJobMessage } from '@server/utils/liveopsTriageJobMessage';
 
 // Register global handlers to absorb transient network errors (TypeError: terminated)
 // that escape try/catch via orphaned undici promises.
