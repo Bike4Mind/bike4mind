@@ -22,9 +22,8 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useFileBrowser } from '@client/app/components/Files/fileBrowserStore';
 import {
   StorageLimitExceededError,
-  attachUploadBytes,
-  checkStorageForUpload,
-  checkStorageForUploadFresh,
+  checkAttachStorage,
+  checkAttachStorageFresh,
   getStorageQuota,
   serverStorageLimitMessage,
   storageNearLimitMessage,
@@ -124,8 +123,7 @@ export function SessionFilePond({
           ) => {
             // Each file is judged alone; files of one drop that only overflow together are
             // refused by the server, whose message the catch below surfaces.
-            const uploadBytes = attachUploadBytes(file);
-            const storageCheck = checkStorageForUpload(getStorageQuota(useUser.getState().currentUser), uploadBytes);
+            const storageCheck = checkAttachStorage(getStorageQuota(useUser.getState().currentUser), file);
             if (storageCheck.status === 'near') {
               toast.warning(storageNearLimitMessage(storageCheck), { id: 'storage-near-limit' });
             }
@@ -168,7 +166,7 @@ export function SessionFilePond({
                   throw new DOMException('Upload cancelled', 'AbortError');
                 }
 
-                const freshCheck = await checkStorageForUploadFresh(uploadBytes);
+                const freshCheck = await checkAttachStorageFresh(file);
                 if (freshCheck.status === 'exceeds') throw new StorageLimitExceededError(freshCheck);
 
                 // Determine proper MIME type for markdown files

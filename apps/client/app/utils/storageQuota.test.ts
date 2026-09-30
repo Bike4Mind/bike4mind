@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   attachUploadBytes,
+  checkAttachStorage,
   checkStorageForUpload,
   getStorageQuota,
   serverStorageLimitMessage,
@@ -61,6 +62,12 @@ describe('serverStorageLimitMessage', () => {
     );
   });
 
+  it('also matches the organization refusal (checkOrganizationStorageLimit)', () => {
+    expect(serverStorageLimitMessage(axiosError(400, { error: 'Organization storage limit exceeded' }))).toBe(
+      'Organization storage limit exceeded'
+    );
+  });
+
   it('ignores other errors', () => {
     expect(serverStorageLimitMessage(axiosError(400, { error: 'No file size provided' }))).toBeUndefined();
     expect(serverStorageLimitMessage(axiosError(500, { error: 'File size exceeds storage limit' }))).toBeUndefined();
@@ -82,5 +89,33 @@ describe('attachUploadBytes', () => {
 
   it('counts any other file at its full size', () => {
     expect(attachUploadBytes(sized(12 * MB, 'application/pdf'))).toBe(12 * MB);
+  });
+});
+
+describe('checkAttachStorage', () => {
+  const sized = (size: number, type: string) => {
+    const file = new File([], 'f', { type });
+    Object.defineProperty(file, 'size', { value: size });
+    return file;
+  };
+
+  // The exact repro from review: the flat resize-cap estimate (3 MB) exceeds, but the true
+  // post-resize size (as low as 85% of that cap) does not - so this must not block.
+  it('does not block an oversized image whose true resized size would still fit', () => {
+    const quota = { usedBytes: 1 * MB, limitBytes: 4 * MB };
+    const check = checkAttachStorage(quota, sized(4_000_000, 'image/jpeg'));
+    expect(check.status).not.toBe('exceeds');
+  });
+
+  it('still blocks when even the best-case resized size would exceed', () => {
+    const quota = { usedBytes: 0, limitBytes: 1 * MB };
+    const check = checkAttachStorage(quota, sized(12 * MB, 'image/jpeg'));
+    expect(check.status).toBe('exceeds');
+  });
+
+  it('judges a non-image at its real size, with no resize margin', () => {
+    const quota = { usedBytes: 0, limitBytes: 4 * MB };
+    const check = checkAttachStorage(quota, sized(5 * MB, 'application/pdf'));
+    expect(check.status).toBe('exceeds');
   });
 });

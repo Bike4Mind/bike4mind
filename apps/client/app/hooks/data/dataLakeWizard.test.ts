@@ -789,7 +789,8 @@ describe('useBatchUpload storage limit', () => {
     await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
     expect(apiPost).not.toHaveBeenCalled();
     const progress = useDataLakeWizardStore.getState().uploadProgress;
-    expect(progress.errorKind).toBe('validation');
+    // Not 'validation': a storage refusal is not about the Name/Tag Prefix fields.
+    expect(progress.errorKind).toBe('server');
     expect(progress.errorMessage).toMatch(/Free up at least 8 B/);
     expect(refreshUser).toHaveBeenCalled();
   });

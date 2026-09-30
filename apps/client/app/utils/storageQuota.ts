@@ -8,10 +8,12 @@ import { isImageFile } from './imageResizer';
 // MB, converted with 1e6, and defaults to 1000 when unset.
 const DEFAULT_STORAGE_LIMIT_MB = 1000;
 const BYTES_PER_MB = 1_000_000;
-export const STORAGE_WARNING_PERCENT = 90;
+const STORAGE_WARNING_PERCENT = 90;
 
-/** The server's refusal text from checkStorageLimit, matched to surface it verbatim. */
-export const SERVER_STORAGE_LIMIT_MESSAGE = 'File size exceeds storage limit';
+/** Substring common to both of the server's storage refusals - checkStorageLimit's "File size
+ * exceeds storage limit" and checkOrganizationStorageLimit's "Organization storage limit exceeded"
+ * (b4m-core/utils/src/user.ts) - matched to surface either verbatim. */
+const SERVER_STORAGE_LIMIT_MESSAGE = 'storage limit';
 
 export interface StorageQuota {
   usedBytes: number;
@@ -47,25 +49,70 @@ export function checkStorageForUpload(quota: StorageQuota | null, uploadBytes: n
   return { status: 'ok' };
 }
 
-/**
- * checkStorageForUpload against the current user, but an "exceeds" verdict is re-judged on a
- * fresh /api/identify first: the cached usage is not refreshed when files are deleted, and a
- * stale figure must not block an upload the server would accept.
- */
-export async function checkStorageForUploadFresh(uploadBytes: number): Promise<StorageCheck> {
-  const check = checkStorageForUpload(getStorageQuota(useUser.getState().currentUser), uploadBytes);
+const defaultRefreshUser = () => useUser.getState().refreshUser();
+
+/** Re-judges `compute` on a fresh /api/identify once, if it first refuses. The cached usage is not
+ * refreshed when files are deleted, so a stale figure must not block an upload the server would
+ * accept. `refresh` is injectable so a caller that must not import a store write action directly
+ * (e.g. dataLakeUploadPipeline's getState-only contract) can supply its own. */
+async function checkStorageFresh(compute: () => StorageCheck, refresh: () => Promise<void>): Promise<StorageCheck> {
+  const check = compute();
   if (check.status !== 'exceeds') return check;
-  await useUser.getState().refreshUser();
-  return checkStorageForUpload(getStorageQuota(useUser.getState().currentUser), uploadBytes);
+  await refresh();
+  return compute();
+}
+
+/** checkStorageForUpload against the current user, re-judged fresh on an initial refusal. */
+export async function checkStorageForUploadFresh(
+  uploadBytes: number,
+  refresh: () => Promise<void> = defaultRefreshUser
+): Promise<StorageCheck> {
+  return checkStorageFresh(
+    () => checkStorageForUpload(getStorageQuota(useUser.getState().currentUser), uploadBytes),
+    refresh
+  );
 }
 
 // Must stay in sync with createFabFileOnServerWithUpload (utils/filesAPICalls.ts), which resizes
 // images above this size down to it before the server measures them.
 const ATTACH_IMAGE_RESIZE_BYTES = 3 * 1024 * 1024;
 
+// The resizer (imageResizer.ts) accepts any result between 85% and 100% of that cap, so the true
+// post-resize size of an oversized image is not the cap itself, only bounded by it.
+const ATTACH_IMAGE_RESIZE_MIN_RATIO = 0.85;
+
 /** The most bytes a single attached file will count against storage once it reaches the server. */
 export function attachUploadBytes(file: File): number {
   return isImageFile(file) ? Math.min(file.size, ATTACH_IMAGE_RESIZE_BYTES) : file.size;
+}
+
+/** The fewest bytes an oversized image could count once resized - the low end of the range the
+ * flat resize cap only approximates. */
+function attachUploadBytesLowerBound(file: File): number {
+  return isImageFile(file) && file.size > ATTACH_IMAGE_RESIZE_BYTES
+    ? Math.round(ATTACH_IMAGE_RESIZE_BYTES * ATTACH_IMAGE_RESIZE_MIN_RATIO)
+    : attachUploadBytes(file);
+}
+
+/**
+ * checkStorageForUpload for an attached file, but an oversized image's cap estimate is a worst
+ * case, not its true post-resize size: when only that worst case would exceed the limit, this
+ * downgrades to whatever the best-case (post-resize) size would yield instead of refusing an
+ * upload the server might still accept.
+ */
+export function checkAttachStorage(quota: StorageQuota | null, file: File): StorageCheck {
+  const worstCase = checkStorageForUpload(quota, attachUploadBytes(file));
+  if (worstCase.status !== 'exceeds') return worstCase;
+  const bestCase = checkStorageForUpload(quota, attachUploadBytesLowerBound(file));
+  return bestCase.status === 'exceeds' ? worstCase : bestCase;
+}
+
+/** checkAttachStorage against the current user, re-judged fresh on an initial refusal. */
+export async function checkAttachStorageFresh(file: File): Promise<StorageCheck> {
+  return checkStorageFresh(
+    () => checkAttachStorage(getStorageQuota(useUser.getState().currentUser), file),
+    defaultRefreshUser
+  );
 }
 
 export function storageExceededMessage(check: Extract<StorageCheck, { status: 'exceeds' }>): string {

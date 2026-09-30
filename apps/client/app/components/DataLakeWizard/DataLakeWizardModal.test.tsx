@@ -432,6 +432,22 @@ describe('DataLakeWizardModal - Drive-only create', () => {
 
   afterEach(() => {
     useDataLakeWizardStore.getState().resetWizard();
+    useUser.setState({ currentUser: null });
+  });
+
+  // Nothing uploads on this path (uploadBytes is 0), so a user already over quota must still be
+  // able to create-and-sync - the block exists to stop bytes the server would refuse, and this
+  // commit sends none.
+  it('is not blocked by a storage limit the commit sends no bytes against', () => {
+    useUser.setState({ currentUser: { currentStorageSize: 1_000_000, storageLimit: 1 } as IUserDocument });
+    seedDriveOnly({ step: 'config' });
+
+    renderModal();
+    const commitBtn = screen.getByTestId('wizard-start-upload-btn');
+
+    expect(commitBtn).toBeEnabled();
+    commitBtn.click();
+    expect(driveCommitMutate).toHaveBeenCalledTimes(1);
   });
 
   it('advances past the source step on a Drive folder alone, with no files', () => {

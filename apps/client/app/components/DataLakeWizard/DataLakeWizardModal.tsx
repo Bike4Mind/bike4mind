@@ -114,7 +114,9 @@ export default function DataLakeWizardModal() {
         // bare "a" is the legal "a:" (accepted). Sizing the field got both of those wrong.
         return (
           hasSource &&
-          !exceedsStorage &&
+          // Nothing is uploaded on the Drive-only path (uploadBytes is 0 there), so a user
+          // already over quota must not be blocked from a commit that sends no bytes.
+          (isDriveOnlyCommit || !exceedsStorage) &&
           (!!targetLake || isValidDataLakeSlug(config.name)) &&
           effectivePrefix.length >= MIN_TAG_PREFIX_LENGTH &&
           !isReservedTagPrefix(effectivePrefix) &&

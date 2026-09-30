@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import { useFileBrowserInstance } from './instanceContext';
-import { useFileBrowser } from '../Browser';
+import { useFileBrowser } from '../fileBrowserStore';
 
 // The load-bearing seam of the refactor: with no provider mounted (the global singleton
 // path), useFileBrowserInstance() must fall back to the module-level useFileBrowser store
