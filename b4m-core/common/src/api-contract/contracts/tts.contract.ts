@@ -72,7 +72,9 @@ export const synthesizeSpeechContract = defineEndpoint({
       },
     },
     401: {
-      description: 'Missing/invalid credentials, or no provider has a usable key (`provider_not_configured`).',
+      description:
+        'Missing/invalid credentials, no provider has a usable key (`provider_not_configured`), or the ' +
+        'provider refused the key we sent and no alternate could stand in (`provider_rejected`).',
       schema: ttsErrorResponseSchema,
     },
     413: {
@@ -84,7 +86,8 @@ export const synthesizeSpeechContract = defineEndpoint({
     422: {
       description:
         'Request body failed validation, the text exceeds the provider character limit, the provider ' +
-        'cannot produce the requested `format`, or the caller cannot afford the synthesis - the last of ' +
+        'cannot produce the requested `format`, the provider rejected the request (e.g. an unknown voice), ' +
+        'or the caller cannot afford the synthesis - the last of ' +
         'those is the only one tagged `errorCode: "insufficient_credits"`, so match on the classifier ' +
         'rather than the status to tell a billing failure from a bad request.',
       schema: ttsErrorResponseSchema,

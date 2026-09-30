@@ -4633,7 +4633,7 @@
       "post": {
         "operationId": "executeTool",
         "summary": "Execute a server-side tool",
-        "description": "Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`) and returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT accepted on this endpoint. Rate-limited to 100 requests/hour. `request_id` echoes the X-Request-ID response header.",
+        "description": "Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`) and returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT accepted on this endpoint. Rate-limited to 100 requests/hour per user, counted separately from other endpoints. `request_id` echoes the X-Request-ID response header.",
         "tags": [
           "AI"
         ],
@@ -4726,7 +4726,7 @@
             }
           },
           "429": {
-            "description": "Rate limit exceeded (100 requests/hour).",
+            "description": "Rate limit exceeded (100 requests/hour per user for this endpoint).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5010,7 +5010,7 @@
             }
           },
           "401": {
-            "description": "Missing/invalid credentials, or no provider has a usable key (`provider_not_configured`).",
+            "description": "Missing/invalid credentials, no provider has a usable key (`provider_not_configured`), or the provider refused the key we sent and no alternate could stand in (`provider_rejected`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5136,7 +5136,7 @@
             }
           },
           "422": {
-            "description": "Request body failed validation, the text exceeds the provider character limit, the provider cannot produce the requested `format`, or the caller cannot afford the synthesis - the last of those is the only one tagged `errorCode: \"insufficient_credits\"`, so match on the classifier rather than the status to tell a billing failure from a bad request.",
+            "description": "Request body failed validation, the text exceeds the provider character limit, the provider cannot produce the requested `format`, the provider rejected the request (e.g. an unknown voice), or the caller cannot afford the synthesis - the last of those is the only one tagged `errorCode: \"insufficient_credits\"`, so match on the classifier rather than the status to tell a billing failure from a bad request.",
             "content": {
               "application/json": {
                 "schema": {
