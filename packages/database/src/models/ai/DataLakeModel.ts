@@ -140,6 +140,9 @@ const DataLakeSchema = new mongoose.Schema(
     // Archive batch key (see IDataLake.filesArchivedAt): mirrors filesDeletedAt but on the
     // archive axis. Set only through claimFilesArchivedAt; cleared by unarchive and by restore.
     filesArchivedAt: { type: Date },
+    // Identifies which request's claimPurging put the lake in 'purging', so a request that failed
+    // after its own attempt can release only that claim, never a concurrent one. Unset on release.
+    purgeClaimId: { type: String },
     // Per-lake opt-in to lake memory (see IDataLake.lakeMemoryEnabled). Gates both extraction-on-ingest
     // and recall injection for this lake; `EnableLakeMemory` gates availability of the option at all. No
     // dedicated index - same rationale as isPublic/auditQueryTextEnabled (tiny collection).
@@ -983,13 +986,16 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return holder?.filesDeletedAt ?? null;
   }
 
-  async claimPurging(id: string): Promise<boolean> {
+  async claimPurging(id: string, claimId: string): Promise<boolean> {
     // Conditional on 'deleted' in the FILTER, never on a status the caller read earlier: the
     // lifecycle route pre-checks a lake document it fetched before this call, so a restore landing
     // in that gap must make this claim LOSE rather than be overwritten by it. A plain $set here
     // would reintroduce #1744 - the restore's terminal 'active' write would clobber 'purging', the
     // sweep would fail its guard, and the consumer would swallow the purge with a WARN.
-    const res = await this.dataLakeModel.updateOne({ _id: id, status: 'deleted' }, { $set: { status: 'purging' } });
+    const res = await this.dataLakeModel.updateOne(
+      { _id: id, status: 'deleted' },
+      { $set: { status: 'purging', purgeClaimId: claimId } }
+    );
     return res.modifiedCount === 1;
   }
 
@@ -1065,10 +1071,14 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return this.dataLakeModel.findOneAndUpdate({ _id: id, status: from }, { $set: set }, { new: true });
   }
 
-  async releasePurgingToDeleted(id: string): Promise<boolean> {
+  async releasePurgingToDeleted(id: string, claimId?: string): Promise<boolean> {
     // Mirror of claimPurging, and conditional for the same reason: only a lake still sitting in
     // 'purging' may be released, so this can never resurrect one another transition has moved on.
-    const res = await this.dataLakeModel.updateOne({ _id: id, status: 'purging' }, { $set: { status: 'deleted' } });
+    // With a claimId, only that claim: the anonymous release could undo a concurrent purge's.
+    const res = await this.dataLakeModel.updateOne(
+      { _id: id, status: 'purging', ...(claimId !== undefined && { purgeClaimId: claimId }) },
+      { $set: { status: 'deleted' }, $unset: { purgeClaimId: 1 } }
+    );
     return res.modifiedCount === 1;
   }
 

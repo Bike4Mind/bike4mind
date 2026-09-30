@@ -124,6 +124,14 @@ const makeRes = () => {
 };
 const req = (body: unknown) => ({ method: 'POST', query: { id: 'lake1' }, body }) as never;
 
+// The route must release with the very claim id it handed the service, so the release can only
+// match a claim this request took.
+const expectReleasedOwnClaim = () => {
+  const claimId = h.acceptDataLakePurge.mock.calls[0][2];
+  expect(claimId).toEqual(expect.any(String));
+  expect(h.releasePurgingToDeleted).toHaveBeenCalledWith('lake1', claimId);
+};
+
 describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -156,7 +164,12 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
     // Ordering is the fix, not an implementation detail: enqueue-first leaves the accept window
     // this issue is about wide open, because the sweep can complete before the status ever moves.
     expect(order).toEqual(['accept', 'enqueue']);
-    expect(h.acceptDataLakePurge).toHaveBeenCalledWith({ userId: 'u1', isAdmin: false }, 'lake1', expect.anything());
+    expect(h.acceptDataLakePurge).toHaveBeenCalledWith(
+      { userId: 'u1', isAdmin: false },
+      'lake1',
+      expect.any(String),
+      expect.anything()
+    );
   });
 
   it('releases the claim when the enqueue fails, so the lake cannot strand in purging', async () => {
@@ -169,7 +182,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
       (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res)
     ).rejects.toThrow(/sqs unavailable/);
 
-    expect(h.releasePurgingToDeleted).toHaveBeenCalledWith('lake1');
+    expectReleasedOwnClaim();
     expect(res.status).not.toHaveBeenCalledWith(202);
   });
 
@@ -185,13 +198,14 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
       h.commitError = undefined;
     }
 
-    expect(h.releasePurgingToDeleted).toHaveBeenCalledWith('lake1');
+    expectReleasedOwnClaim();
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
-  it('does NOT release when a retry loses the claim its aborted first attempt had taken', async () => {
+  it('releases only its own claim id when a retry loses the claim its aborted first attempt had taken', async () => {
     // Attempt 1 claimed and was then aborted (rolled back); attempt 2 finds a concurrent purge holds
-    // the claim. Releasing here would put THAT purge's lake back in the deleted list mid-sweep.
+    // the claim. An anonymous release would put THAT purge's lake back in the deleted list mid-sweep;
+    // keyed to our id it matches nothing.
     h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
     h.acceptDataLakePurge
       .mockResolvedValueOnce(undefined)
@@ -207,8 +221,25 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
     }
 
     expect(h.acceptDataLakePurge).toHaveBeenCalledTimes(2);
-    expect(h.releasePurgingToDeleted).not.toHaveBeenCalled();
+    expect(h.acceptDataLakePurge.mock.calls[0][2]).toBe(h.acceptDataLakePurge.mock.calls[1][2]);
+    expectReleasedOwnClaim();
     expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('enqueues once and releases nothing when an aborted first attempt is retried successfully', async () => {
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.retryAfterAbort = true;
+    const { res } = makeRes();
+    try {
+      await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res);
+    } finally {
+      h.retryAfterAbort = false;
+    }
+
+    expect(h.acceptDataLakePurge).toHaveBeenCalledTimes(2);
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+    expect(h.releasePurgingToDeleted).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(202);
   });
 
   it('does NOT release on a successful enqueue', async () => {
@@ -227,9 +258,9 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
     await expect(
       (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res)
     ).rejects.toThrow(/soft-deleted/i);
-    // The callback threw, so the transaction rolled the claim back; releasing could only undo a
-    // concurrent purge that won it.
-    expect(h.releasePurgingToDeleted).not.toHaveBeenCalled();
+    // The callback threw, so the transaction rolled the claim back; the release is keyed to our own
+    // claim id, so it cannot undo a concurrent purge that won it.
+    expectReleasedOwnClaim();
 
     expect(h.sendToQueue).not.toHaveBeenCalled();
     expect(res.status).not.toHaveBeenCalledWith(202);

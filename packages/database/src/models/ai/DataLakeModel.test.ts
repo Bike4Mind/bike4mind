@@ -2722,17 +2722,17 @@ describe('DataLakeRepository purge-accept claims (#1744)', () => {
   it('claims deleted -> purging exactly once', async () => {
     const created = await dataLakeRepository.create(baseLake({ slug: 'purge-once', status: 'deleted' }));
 
-    expect(await dataLakeRepository.claimPurging(created.id)).toBe(true);
+    expect(await dataLakeRepository.claimPurging(created.id, 'claim-a')).toBe(true);
     expect((await dataLakeRepository.findById(created.id))?.status).toBe('purging');
     // A second accept (another tab, a duplicate request) must lose rather than re-accept.
-    expect(await dataLakeRepository.claimPurging(created.id)).toBe(false);
+    expect(await dataLakeRepository.claimPurging(created.id, 'claim-a')).toBe(false);
   });
 
   it.each(['active', 'archived', 'restoring', 'draft'] as const)(
     'refuses to claim a lake in %s status',
     async status => {
       const created = await dataLakeRepository.create(baseLake({ slug: `purge-from-${status}`, status }));
-      expect(await dataLakeRepository.claimPurging(created.id)).toBe(false);
+      expect(await dataLakeRepository.claimPurging(created.id, 'claim-a')).toBe(false);
       expect((await dataLakeRepository.findById(created.id))?.status).toBe(status);
     }
   );
@@ -2744,13 +2744,13 @@ describe('DataLakeRepository purge-accept claims (#1744)', () => {
     const created = await dataLakeRepository.create(baseLake({ slug: 'purge-loses', status: 'deleted' }));
     expect(await dataLakeRepository.claimRestoring(created.id)).toBe(true);
 
-    expect(await dataLakeRepository.claimPurging(created.id)).toBe(false);
+    expect(await dataLakeRepository.claimPurging(created.id, 'claim-a')).toBe(false);
     expect((await dataLakeRepository.findById(created.id))?.status).toBe('restoring');
   });
 
   it('claimRestoring loses to a purge that got there first', async () => {
     const created = await dataLakeRepository.create(baseLake({ slug: 'restore-loses', status: 'deleted' }));
-    expect(await dataLakeRepository.claimPurging(created.id)).toBe(true);
+    expect(await dataLakeRepository.claimPurging(created.id, 'claim-a')).toBe(true);
 
     expect(await dataLakeRepository.claimRestoring(created.id)).toBe(false);
     expect((await dataLakeRepository.findById(created.id))?.status).toBe('purging');
@@ -2802,10 +2802,24 @@ describe('DataLakeRepository purge-accept claims (#1744)', () => {
 
   it('releases purging -> deleted so a refused sweep leaves a visible, retryable lake', async () => {
     const created = await dataLakeRepository.create(baseLake({ slug: 'purge-release', status: 'deleted' }));
-    await dataLakeRepository.claimPurging(created.id);
+    await dataLakeRepository.claimPurging(created.id, 'claim-a');
 
     expect(await dataLakeRepository.releasePurgingToDeleted(created.id)).toBe(true);
     expect((await dataLakeRepository.findById(created.id))?.status).toBe('deleted');
+  });
+
+  it('releases by claim id only the claim that id took, never a concurrent one', async () => {
+    // A request whose commit failed must not undo a purge another request claimed and enqueued.
+    const created = await dataLakeRepository.create(baseLake({ slug: 'purge-release-owned', status: 'deleted' }));
+    await dataLakeRepository.claimPurging(created.id, 'claim-a');
+
+    expect(await dataLakeRepository.releasePurgingToDeleted(created.id, 'claim-b')).toBe(false);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('purging');
+
+    expect(await dataLakeRepository.releasePurgingToDeleted(created.id, 'claim-a')).toBe(true);
+    const released = await DataLakeModel.findById(created.id).lean();
+    expect(released?.status).toBe('deleted');
+    expect(released).not.toHaveProperty('purgeClaimId');
   });
 
   it('releases nothing when the lake is not purging, so it can never resurrect another transition', async () => {
@@ -2825,7 +2839,7 @@ describe('DataLakeRepository purge-accept claims (#1744)', () => {
     const purging = await dataLakeRepository.create(
       baseLake({ slug: 'accepted-purge', status: 'deleted', createdByUserId: 'alice' })
     );
-    await dataLakeRepository.claimPurging(purging.id);
+    await dataLakeRepository.claimPurging(purging.id, 'claim-a');
 
     const listed = await dataLakeRepository.findAccessible(owner, { statuses: ['deleted'], includePublic: false });
     expect(listed.map(l => l.slug)).toEqual(['still-deleted']);
