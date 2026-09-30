@@ -4618,11 +4618,12 @@ export const settingsMap = {
   SimulatorComputeCreditsPerRound: makeNumberSetting({
     key: 'SimulatorComputeCreditsPerRound',
     name: 'Simulator Compute: Credits per round',
-    // One round is one container run, so it defaults to the flat per-run price of a classical
-    // compute job on the same backend.
     defaultValue: 50,
     min: 0,
     max: 10_000,
+    // Credits are whole numbers; reject a fractional price at the write boundary rather than
+    // leaving the reservation (price x round count) to be rounded by whichever reader bills it.
+    int: true,
     description:
       'Credits charged per round of a multi-round hybrid compute job on the simulator. Each round is a ' +
       'separate container run: the whole run is reserved up front at this price times its round count, and ' +
@@ -4630,7 +4631,10 @@ export const settingsMap = {
       'only affects later submissions. Set to 0 to make simulator rounds free.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 90,
+    // 89.5, not 90: the admin tab sorts by this field, and 90 ties EnableDataLakeSlackAdd and
+    // EnableQuestMaster, which would render this row after them instead of beside the Hardware
+    // Compute settings.
+    order: 89.5,
     dependsOn: 'EnableComputeSubmission',
   }),
   optiMaxToolCalls: makeNumberSetting({
