@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, realpath } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -112,6 +112,40 @@ describe('BackgroundProcessRegistry', () => {
 
     expect(await waitUntilGone(marker)).toBe(true);
     expect(registry.get(info.id, 'session-a')?.status).toBe('killed');
+  }, 30_000);
+
+  /**
+   * The Stop button's real failure mode, and the reason it looked broken.
+   *
+   * Node reports 'close' only once EVERY holder of the child's pipes has let go, and a
+   * descendant that escaped the process group is still a holder. The command itself has ended
+   * - 'exit' fired - but waiting on 'close' meant the record never finished, no status event
+   * went out, and the panel showed the task under Running with its clock ticking for the rest
+   * of the app's life.
+   */
+  it('reports a stopped command as stopped even when a descendant holds its output pipe open', async () => {
+    const pidFile = join(root, 'escapee.pid');
+    // setpgrp puts the descendant in a group of its own, so the group signal never reaches it,
+    // and it keeps the stdout it inherited.
+    const info = await start(`perl -e 'setpgrp; open(F,">","${pidFile}"); print F $$; close F; sleep 60;' & sleep 60`);
+    await registry.settle(info.id, 1_500);
+    const escapee = Number((await readFile(pidFile, 'utf8')).trim());
+    expect(Number.isInteger(escapee)).toBe(true);
+
+    // Raced rather than awaited: before the fix this never resolves, and a hung await would
+    // report as a timeout rather than as the assertion below.
+    await Promise.race([registry.kill(info.id, 'session-a'), new Promise(resolve => setTimeout(resolve, 8_000))]);
+
+    expect(statuses.filter(entry => entry.id === info.id).map(entry => entry.status)).toEqual(['running', 'killed']);
+    expect(registry.get(info.id, 'session-a')?.status).toBe('killed');
+    expect(registry.get(info.id, 'session-a')?.endedAt).toBeTruthy();
+
+    // A process that left its group is beyond a group signal; it is still not ours to leak.
+    try {
+      process.kill(escapee, 'SIGKILL');
+    } catch {
+      // Already gone.
+    }
   }, 30_000);
 
   it('kills everything on shutdown, which is what app quit calls', async () => {
