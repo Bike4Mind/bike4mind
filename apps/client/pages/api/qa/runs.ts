@@ -22,15 +22,21 @@ const handler = baseApi({ maxBodySize: MAX_BODY_BYTES, requiredScopes: [ApiKeySc
       `[QA] ingest ${input.product}/${input.suite}/${input.env}@${input.branch} run=${result.runId} status=${result.status} created=${result.created}`
     );
     // Every ingest may alarm: evaluateAlarm's persisted claim posts once per run, and a retry
-    // after a failed or interrupted attempt still gets its turn.
+    // after a failed or interrupted attempt still gets its turn. A failed alarm returns 503 so
+    // the reporter retries; the run is already stored and ingest is idempotent.
     try {
       await evaluateAlarm(
         result.runId,
         defaultAlarmDeps(msg => req.logger?.info(msg))
       );
     } catch (err) {
-      // The run is already stored; a Slack or lookup failure must not fail ingest.
       req.logger?.error(`[QA] alarm failed for run=${result.runId}: ${(err as Error)?.message}`);
+      return res.status(503).json({
+        run_id: result.runId,
+        status: result.status,
+        created: result.created,
+        error: 'alarm evaluation failed; retry',
+      });
     }
     return res.status(200).json({ run_id: result.runId, status: result.status, created: result.created });
   }

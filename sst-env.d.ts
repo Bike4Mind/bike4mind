@@ -27,10 +27,6 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
-    "B4M_PROD_API_KEY": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
     "CliToolHandler": {
       "name": string
       "type": "sst.aws.Function"

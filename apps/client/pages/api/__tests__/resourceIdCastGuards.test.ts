@@ -19,6 +19,8 @@ import { isObjectIdOrHexString } from 'mongoose';
  *   $in filter  - one uncastable id rejects the WHOLE `$in` (pinned in
  *                 FabFileModel.objectIdCasting.integration.test.ts), so the route drops the
  *                 unusable entries and keeps the valid ones instead of failing the request.
+ *   body id     - a malformed id in the request BODY answers 400, not 404 (CONVENTIONS.md), so
+ *                 the guard feeds the route's existing 400 and the lookup never runs.
  */
 
 const JUNK_ID = 'not-an-objectid';
@@ -30,25 +32,34 @@ const handlers = vi.hoisted(() => ({
   post: null as null | ((req: any, res: any) => unknown),
 }));
 
+// A contract route registers its param/body parsers ahead of the handler, so run the whole chain.
+const runChain = (fns: Array<(req: any, res: any, next: () => void) => unknown>) => async (req: any, res: any) => {
+  for (const fn of fns) await fn(req, res, () => undefined);
+};
+
 vi.mock('@server/middlewares/baseApi', () => {
-  const chain: any = {
-    use: () => chain,
-    put: () => chain,
-    patch: () => chain,
-    get: (fn: any) => {
-      handlers.get = fn;
-      return chain;
-    },
-    delete: (fn: any) => {
-      handlers.delete = fn;
-      return chain;
-    },
-    post: (fn: any) => {
-      handlers.post = fn;
-      return chain;
-    },
+  // Fresh per call: nextRouteForContract rewrites the verb registrars it is handed.
+  const makeChain = () => {
+    const chain: any = {
+      use: () => chain,
+      put: () => chain,
+      patch: () => chain,
+      get: (...fns: any[]) => {
+        handlers.get = runChain(fns);
+        return chain;
+      },
+      delete: (...fns: any[]) => {
+        handlers.delete = runChain(fns);
+        return chain;
+      },
+      post: (...fns: any[]) => {
+        handlers.post = runChain(fns);
+        return chain;
+      },
+    };
+    return chain;
   };
-  return { baseApi: () => chain };
+  return { baseApi: () => makeChain() };
 });
 
 const spies = vi.hoisted(() => ({
@@ -58,6 +69,11 @@ const spies = vi.hoisted(() => ({
   mementoFind: vi.fn(),
   questFindById: vi.fn(),
   sessionFindById: vi.fn(),
+  questModelFindById: vi.fn(),
+  questModelUpdateOne: vi.fn(),
+  modalFind: vi.fn(),
+  annotationFindOne: vi.fn(),
+  annotationCreate: vi.fn(),
 }));
 
 /**
@@ -82,6 +98,18 @@ vi.mock('@bike4mind/database', () => ({
   Voice: { findOneAndDelete: spies.voiceFindOneAndDelete, updateMany: vi.fn() },
   // The list route imports Memento from the package root; the [id] routes from /content.
   Memento: { find: spies.mementoFind, findById: spies.mementoFindById },
+  Quest: { findById: spies.questModelFindById, updateOne: spies.questModelUpdateOne },
+  telemetryAuditLogRepository: { createLog: vi.fn(async () => undefined) },
+  adminSettingsRepository: {},
+  ModalModel: { find: spies.modalFind },
+  Annotation: { findOne: spies.annotationFindOne, create: spies.annotationCreate, countDocuments: async () => 0 },
+  PublishedArtifact: {
+    findOne: () => ({
+      select: () => ({
+        lean: async () => ({ publicId: 'pub1', visibility: 'public', commentPolicy: 'anyone', sha256Index: 'sha' }),
+      }),
+    }),
+  },
 }));
 
 vi.mock('@bike4mind/database/content', () => ({
@@ -103,10 +131,26 @@ vi.mock('@server/security/tokenEncryption', () => ({
   decryptEnvVariables: (v: unknown) => v,
 }));
 vi.mock('@server/utils/mcpEnvValidation', () => ({ assertNoForbiddenMcpEnvKeys: () => undefined }));
+vi.mock('@server/utils/telemetryAnalysis', () => ({ DEFAULT_SLOS: {} }));
+vi.mock('@bike4mind/services', () => ({ MODAL_SAFE_DEFAULT_KEY: 'customer' }));
+vi.mock('@server/middlewares/optionalAuth', () => ({ optionalAuth: () => undefined }));
+vi.mock('@server/services/publish', () => ({
+  checkVisibility: async () => ({ ok: true }),
+  canAnnotate: () => true,
+  toPublishUser: () => ({}),
+  authorDisplayName: () => 'u1',
+  toAnnotationDto: () => ({}),
+  requestHasGateProof: () => false,
+}));
 
 type Verb = 'get' | 'delete' | 'post';
 
-const run = async (verb: Verb, load: () => Promise<unknown>, query: Record<string, unknown>) => {
+const run = async (
+  verb: Verb,
+  load: () => Promise<unknown>,
+  query: Record<string, unknown>,
+  { body = {}, isAdmin = false }: { body?: Record<string, unknown>; isAdmin?: boolean } = {}
+) => {
   handlers.get = null;
   handlers.delete = null;
   handlers.post = null;
@@ -122,8 +166,9 @@ const run = async (verb: Verb, load: () => Promise<unknown>, query: Record<strin
     method: verb.toUpperCase(),
     url: '/api/test',
     query,
-    body: {},
-    user: { id: 'u1', isAdmin: false, email: 'u1@example.test' },
+    body,
+    headers: {},
+    user: { id: 'u1', isAdmin, email: 'u1@example.test' },
     ability: { can: () => true },
     logger: { updateMetadata: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), info: vi.fn() },
   } as any;
@@ -140,7 +185,7 @@ const answered404 = (thrown: unknown, status: ReturnType<typeof vi.fn>) =>
   (thrown !== null && (thrown as { statusCode?: number }).statusCode === 404) ||
   status.mock.calls.some(call => call[0] === 404);
 
-describe('resource-id cast guards - a junk path id gets a 404 from the route, not the middleware', () => {
+describe('resource-id cast guards - a junk caller id is answered by the route, not the middleware', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
@@ -212,6 +257,63 @@ describe('resource-id cast guards - a junk path id gets a 404 from the route, no
 
       expect(spies.mcpServerFindOne).toHaveBeenCalledWith({ _id: VALID_ID, userId: 'u1' });
     });
+
+    /** Resolves null whether the route awaits the query directly or chains `.select().lean()`. */
+    const missingQuest = () => {
+      const query = {
+        select: () => query,
+        lean: async () => null,
+        then: (resolve: (v: null) => unknown) => resolve(null),
+      };
+      return query;
+    };
+
+    for (const verb of ['get', 'delete'] as const) {
+      it(`admin/context-telemetry/[id] ${verb} answers 404 and never touches Quest`, async () => {
+        const { thrown, status } = await run(
+          verb,
+          () => import('@pages/api/admin/context-telemetry/[id]'),
+          { id: JUNK_ID },
+          { isAdmin: true }
+        );
+
+        expect(answered404(thrown, status)).toBe(true);
+        expect(spies.questModelFindById).not.toHaveBeenCalled();
+        expect(spies.questModelUpdateOne).not.toHaveBeenCalled();
+      });
+
+      it(`admin/context-telemetry/[id] ${verb} still queries for a well-formed id`, async () => {
+        spies.questModelFindById.mockImplementation(missingQuest);
+        await run(verb, () => import('@pages/api/admin/context-telemetry/[id]'), { id: VALID_ID }, { isAdmin: true });
+
+        expect(spies.questModelFindById).toHaveBeenCalledWith(VALID_ID);
+      });
+    }
+
+    it('admin/context-telemetry/[id]/analyze answers 404 and never touches Quest', async () => {
+      const { thrown, status } = await run(
+        'post',
+        () => import('@pages/api/admin/context-telemetry/[id]/analyze'),
+        { id: JUNK_ID },
+        { isAdmin: true }
+      );
+
+      expect(answered404(thrown, status)).toBe(true);
+      expect(spies.questModelFindById).not.toHaveBeenCalled();
+      expect(spies.questModelUpdateOne).not.toHaveBeenCalled();
+    });
+
+    it('admin/context-telemetry/[id]/analyze still queries for a well-formed id', async () => {
+      spies.questModelFindById.mockImplementation(missingQuest);
+      await run(
+        'post',
+        () => import('@pages/api/admin/context-telemetry/[id]/analyze'),
+        { id: VALID_ID },
+        { isAdmin: true }
+      );
+
+      expect(spies.questModelFindById).toHaveBeenCalledWith(VALID_ID);
+    });
   });
 
   describe('$in shape - unusable ids are dropped, not fatal to the whole query', () => {
@@ -236,6 +338,54 @@ describe('resource-id cast guards - a junk path id gets a 404 from the route, no
       await run('get', () => import('@pages/api/mementos/index'), { ids: JUNK_ID });
 
       expect(spies.mementoFind).toHaveBeenCalledWith(expect.objectContaining({ _id: { $in: [] } }));
+    });
+
+    const modalQuery = () => ({ sort: () => ({ lean: async () => [] }) });
+
+    it('admin/email/whats-new-content keeps the castable ids and drops the rest', async () => {
+      spies.modalFind.mockImplementation(modalQuery);
+      await run(
+        'get',
+        () => import('@pages/api/admin/email/whats-new-content'),
+        { ids: `${VALID_ID}, ${JUNK_ID}` },
+        { isAdmin: true }
+      );
+
+      expect(spies.modalFind).toHaveBeenCalledWith(expect.objectContaining({ _id: { $in: [VALID_ID] } }));
+    });
+
+    it('admin/email/whats-new-content matches nothing when no id is castable', async () => {
+      spies.modalFind.mockImplementation(modalQuery);
+      await run('get', () => import('@pages/api/admin/email/whats-new-content'), { ids: JUNK_ID }, { isAdmin: true });
+
+      expect(spies.modalFind).toHaveBeenCalledWith(expect.objectContaining({ _id: { $in: [] } }));
+    });
+  });
+
+  describe("body id - the guard feeds the route's existing 400 and the lookup never runs", () => {
+    const postAnnotation = (threadRootId: string) =>
+      run(
+        'post',
+        () => import('@pages/api/publish/annotations/[publicId]'),
+        { publicId: 'pub1' },
+        { body: { body: 'hi', threadRootId } }
+      );
+
+    it('publish/annotations/[publicId] answers 400 for a junk threadRootId and never calls findOne', async () => {
+      const { thrown, status } = await postAnnotation(JUNK_ID);
+
+      expect(thrown).toBeNull();
+      expect(status).toHaveBeenCalledWith(400);
+      expect(spies.annotationFindOne).not.toHaveBeenCalled();
+      expect(spies.annotationCreate).not.toHaveBeenCalled();
+    });
+
+    it('publish/annotations/[publicId] still looks up a well-formed threadRootId', async () => {
+      spies.annotationFindOne.mockReturnValue({ select: () => ({ lean: async () => null }) });
+      const { status } = await postAnnotation(VALID_ID);
+
+      expect(spies.annotationFindOne).toHaveBeenCalledWith({ _id: VALID_ID, publicId: 'pub1', deletedAt: null });
+      expect(status).toHaveBeenCalledWith(400);
     });
   });
 });

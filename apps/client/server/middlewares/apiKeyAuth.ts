@@ -134,6 +134,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
         keyId: validation.keyId!,
         scopes: validation.scopes!,
         rateLimit: validation.rateLimit!,
+        expiresAt: validation.expiresAt,
         productId: validation.productId,
         billingOwnerType: validation.billingOwnerType,
         organizationId: validation.organizationId,

@@ -380,6 +380,17 @@ That repo secret is a mirror of the value the deployer seeds onto every stage, a
 
 If you see any of these, the fix is to set the repo secret, not to debug the suite.
 
+### QA ingest (/status)
+
+Each stage that reports to `/status` needs:
+
+1. A non-admin service user tagged `qa-ingest`.
+2. An API key for that user with only the `qa:ingest` scope, stored as repo secret `QA_INGEST_KEY`.
+3. Repo variables `QA_INGEST_URL` (origin only) and `QA_PRODUCT`.
+4. SST secret `QA_ALARM_SLACK_WEBHOOKS` for state-change alarms.
+
+The ingest step is best-effort. With the variables unset it logs a `::warning::` and skips, and the job never fails.
+
 ## Debugging
 
 ### Playwright UI Mode

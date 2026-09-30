@@ -398,6 +398,7 @@ jobs:
           QA_PRODUCT: ${{ vars.QA_PRODUCT }}
           QA_SUITE: ${{ inputs.suite_name || 'Full' }}
           QA_ENV: ${{ steps.config.outputs.env_label }}
+          QA_BRANCH: ${{ inputs.pr_number && format('pr-{0}', inputs.pr_number) || github.ref_name }}
           QA_TRIGGER: ${{ inputs.trigger_label }}
           QA_SHA: ${{ steps.tested_sha.outputs.sha || github.sha }}
           SHOW_CREDITS: ${{ inputs.show_credits }}

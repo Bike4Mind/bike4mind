@@ -140,6 +140,23 @@ describe('findByDriveConnectionIdInDataLake', () => {
     const result = await fabFileRepository.findByDriveConnectionIdInDataLake(connId, datalakeTag);
     expect(result).toHaveLength(0);
   });
+
+  it('includeDeleted reaches deleted and archived rows, still excluding pending and other-lake ones', async () => {
+    // Own connection id: beforeEach's deleteMany is a soft delete, so earlier tests' rows linger.
+    const purgeConnId = 'conn-purge';
+    const purgeFile = (over: Record<string, unknown>) => makeFile({ driveConnectionId: purgeConnId, ...over });
+    await FabFile.create(purgeFile({ driveFileId: 'd-live' }));
+    await FabFile.create(purgeFile({ driveFileId: 'd-del', deletedAt: new Date() }));
+    await FabFile.create(purgeFile({ driveFileId: 'd-arch', archivedAt: new Date() }));
+    await FabFile.create(purgeFile({ driveFileId: 'd-pending', status: 'pending' }));
+    await FabFile.create(purgeFile({ driveFileId: 'd-other', tags: [{ name: 'datalake:other', strength: 1.0 }] }));
+
+    const result = await fabFileRepository.findByDriveConnectionIdInDataLake(purgeConnId, datalakeTag, {
+      includeDeleted: true,
+    });
+    expect(result.map(f => f.driveFileId).sort()).toEqual(['d-arch', 'd-del', 'd-live']);
+    expect(await fabFileRepository.countByDriveConnectionIdInDataLake(purgeConnId, datalakeTag)).toBe(3);
+  });
 });
 
 // The resume key for a Drive ingest that spans several runs. It excludes `pending` - unlike every

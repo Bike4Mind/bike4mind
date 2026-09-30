@@ -83,11 +83,16 @@ describe('POST /api/qa/runs alarm wiring', () => {
     expect((await call(makeIngestRequest())).status).toBe(200);
     expect(mockEvaluate).toHaveBeenCalledWith('r1', { deps: 'default' });
   });
-  it('still returns 200 and logs when the alarm throws', async () => {
+  it('returns 503 and logs when the alarm throws', async () => {
     mockEvaluate.mockRejectedValueOnce(new Error('slack down'));
     const { status, json } = await call(makeIngestRequest());
-    expect(status).toBe(200);
-    expect(json).toEqual({ run_id: 'r1', status: 'passed', created: true });
+    expect(status).toBe(503);
+    expect(json).toEqual({
+      run_id: 'r1',
+      status: 'passed',
+      created: true,
+      error: 'alarm evaluation failed; retry',
+    });
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('alarm failed for run=r1: slack down'));
   });
   it('never evaluates a rejected payload', async () => {

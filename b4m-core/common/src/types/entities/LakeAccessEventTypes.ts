@@ -158,8 +158,12 @@ export interface ILakeAccessEvent {
    * this cannot be derived from them.
    *
    * Tri-state, and the third state carries meaning:
-   * - `true`  - the listing hit the cap, so part of the readable corpus was never scored at all;
-   * - `false` - the surface considered its whole candidate set;
+   * - `true`  - part of the readable corpus was never scored at all, cut by file name: either the
+   *   listing hit its cap, or (forced retrieval) more servable files remained than the candidate
+   *   cap and no relevance pick ran, so they were trimmed alphabetically. The row does not say which;
+   * - `false` - the surface considered its whole candidate set. For forced retrieval that includes
+   *   a turn whose ANN pick ranked the whole listing down to the cap: every listed file was scored
+   *   by the index, even though only the top ones had their chunks re-scored exactly;
    * - ABSENT  - the surface does not report this (every surface but forced retrieval today), or
    *   the row predates the field. NEVER read absent as `false`; that would claim full candidate
    *   coverage for a surface that never measured it. Consumers count presence separately from

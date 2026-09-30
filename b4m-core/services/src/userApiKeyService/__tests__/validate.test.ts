@@ -80,7 +80,7 @@ describe('validateUserApiKey — legacy 12-char prefix fallback', () => {
 
     await validateUserApiKey(key, adapters);
 
-    expect(repo.update).toHaveBeenCalled();
+    expect(repo.update).toHaveBeenCalledWith({ id: 'key-1', keyPrefix: key.substring(0, KEY_PREFIX_LENGTH) });
     expect(getStored()!.keyPrefix).toBe(key.substring(0, KEY_PREFIX_LENGTH));
   });
 

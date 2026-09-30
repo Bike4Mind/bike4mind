@@ -261,7 +261,7 @@ export interface IUserApiKey {
   /**
    * Lake ids this key is bound to for the manage-but-not-member session admission (see
    * `preauthorizedLakeIds` on the session, and its containment check at
-   * pages/api/sessions/create.ts). Admin-minted only; a key's presence in this list is not itself
+   * pages/api/v1/sessions/index.ts). Admin-minted only; a key's presence in this list is not itself
    * authority to admit a lake - the caller must still pass the live canManageLake check on every
    * request, this only narrows which lakes that authority may be exercised for.
    */
@@ -308,6 +308,11 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   updateLastUsed: (id: string) => Promise<void>;
   findActiveByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   deactivateAllByUserId: (userId: string) => Promise<void>;
+  /**
+   * Disables the key and stamps revokedAt/revokedBy/revokedReason, only if it is not already DISABLED.
+   * Optional so adding it stays additive: an external implementer of this interface is not broken by the new member.
+   */
+  revokeIfNotDisabled?: (id: string, revokedBy: string, revokedReason?: string) => Promise<void>;
   findExpiredKeys: () => Promise<IUserApiKeyDocument[]>;
   countActiveByUserId: (userId: string) => Promise<number>;
   findByProductId: (productId: string) => Promise<IUserApiKeyDocument[]>;

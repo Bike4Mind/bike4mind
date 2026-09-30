@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import { htmlBodyInner, htmlErrorTitle, htmlFirstH1, replaceHtmlTags } from './htmlErrorTitle.js';
 import { isValidSessionId, SESSION_ID_PATTERN } from './validateSessionId.js';
 
 export class Logger {
@@ -265,24 +266,21 @@ export class Logger {
    */
   private parseHtmlError(html: string): string | null {
     // Try to extract error from common patterns
-    const titleMatch = html.match(/<title>(.*?)<\/title>/i);
-    const h1Match = html.match(/<h1>(.*?)<\/h1>/i);
-    const bodyMatch = html.match(/<body[^>]*>(.*?)<\/body>/is);
+    const title = htmlErrorTitle(html);
+    const h1 = htmlFirstH1(html);
+    const body = htmlBodyInner(html);
 
-    if (titleMatch && titleMatch[1] !== 'Error') {
-      return titleMatch[1].trim();
+    if (title !== null) {
+      return title;
     }
 
-    if (h1Match) {
-      return h1Match[1].trim();
+    if (h1 !== null) {
+      return h1.trim();
     }
 
-    if (bodyMatch) {
+    if (body !== null) {
       // Strip HTML tags and get first meaningful line
-      const text = bodyMatch[1]
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
+      const text = replaceHtmlTags(body).replace(/\s+/g, ' ').trim();
       return text.substring(0, 200);
     }
 

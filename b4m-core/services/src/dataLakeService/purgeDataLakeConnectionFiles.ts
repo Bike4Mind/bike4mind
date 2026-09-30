@@ -17,9 +17,9 @@ import {
 
 /**
  * The subset of a FabFile row this sweep needs. Callers resolve the connection-scoped list
- * themselves (Drive's caller uses `findAllByDriveConnectionIdInDataLake` - archivedAt/deletedAt-
- * blind, unlike the sync-reconcile-scoped `findByDriveConnectionIdInDataLake` - so a disconnected
- * archived lake's members are still reached; a future connector - the GitHub connector this helper
+ * themselves (Drive's caller uses `findByDriveConnectionIdInDataLake` with `includeDeleted` -
+ * archivedAt/deletedAt-blind, unlike its sync-reconcile default - so a disconnected archived
+ * lake's members are still reached; a future connector - the GitHub connector this helper
  * is deliberately shaped for - supplies its own equivalent finder), so this stays uncoupled from
  * any one connector's lookup predicate.
  */
@@ -43,12 +43,14 @@ export interface PurgeDataLakeConnectionFilesAdapters {
     dataLakeFindings?: Pick<IDataLakeFindingRepository, 'deleteForPurgedDocuments'>;
     /**
      * Unlink each deleted file from every chat session's `knowledgeIds` - the same unlink
-     * `purgeDataLakeDocument` performs and calls "Same unlink `deleteFabFile` performs". Optional
+     * `purgeDataLakeDocument` performs, but as an atomic `$pull`: this sweep deletes files
+     * concurrently, and a read-modify-write per file would let two files attached to the same
+     * session overwrite each other's removal. Optional
      * because a host with no reason to exercise it (a script, a test) simply skips the unlink;
      * omitting it in production leaves every chat that had one of these files attached pointing at
      * a row that no longer exists (a stale attachment chip, an unclassifiable session).
      */
-    sessions?: Pick<ISessionRepository, 'findAllWithKnowledgeId' | 'update'>;
+    sessions?: Pick<ISessionRepository, 'pullKnowledgeIds'>;
   };
   retrievalIndex?: RetrievalIndexPort;
   /** The object store holding each file's bytes. Optional for the same reason as cleanupDeletedDataLake's `storage`: a host that never wires it is unaffected structurally, but every purged file's bytes are then orphaned and still billed - see the unwired warning below. */
@@ -67,7 +69,7 @@ export interface PurgeDataLakeConnectionFilesAdapters {
    * skip or block another file's shred in the same `Promise.all`.
    */
   shredDocumentMemory?: (args: { tagNames: string[]; fabFileId: string; ownerUserId: string }) => Promise<void>;
-  logger?: { warn: (msg: string, ...args: unknown[]) => void; error?: (msg: string, ...args: unknown[]) => void };
+  logger?: { warn: (msg: string, ...args: unknown[]) => void; error: (msg: string, ...args: unknown[]) => void };
   /** Bounds peak concurrency of the per-file delete fan-out, mirroring cleanupDeletedDataLake's chunked sweep. */
   chunkSize?: number;
 }
@@ -182,15 +184,9 @@ export const purgeDataLakeConnectionFiles = async (
             // another file in the same chunk its shred or its refund, and the file is gone either way
             // (there is no retry door left for the unlink specifically once the row has hard-deleted).
             try {
-              const linkedSessions = await db.sessions?.findAllWithKnowledgeId(file.id);
-              for (const session of linkedSessions ?? []) {
-                await db.sessions?.update({
-                  id: session.id,
-                  knowledgeIds: (session.knowledgeIds ?? []).filter(knowledgeId => knowledgeId !== file.id),
-                });
-              }
+              await db.sessions?.pullKnowledgeIds([file.id]);
             } catch (error) {
-              logger?.error?.('[dataLake] connection purge removed a file but could not unlink it from sessions', {
+              logger?.error('[dataLake] connection purge removed a file but could not unlink it from sessions', {
                 fabFileId: file.id,
                 error: error instanceof Error ? error.message : 'Unknown error',
               });

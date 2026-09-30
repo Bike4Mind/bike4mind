@@ -216,6 +216,51 @@ describe('DataLakeResearchRunRepository', () => {
       expect(settled).toBe(true);
       expect(await repo.findByIdInLake(created.id, LAKE)).toMatchObject({ status: 'failed' });
     });
+
+    it.each(['completed', 'failed'] as const)('is a no-op against a row already %s', async terminal => {
+      const created = await repo.createRun(input());
+      await repo.settleRun(created.id, {
+        status: terminal,
+        completedAt: new Date(),
+        spentMicroUsd: 100,
+        totals: emptyResearchRunTotals(),
+      });
+
+      const settled = await repo.settleQueuedRun(created.id, {
+        status: 'failed',
+        completedAt: new Date(),
+        spentMicroUsd: 0,
+        totals: emptyResearchRunTotals(),
+        error: 'a late enqueue-failure settle',
+      });
+
+      expect(settled).toBe(false);
+      expect(await repo.findByIdInLake(created.id, LAKE)).toMatchObject({ status: terminal, spentMicroUsd: 100 });
+    });
+
+    // Seeded straight through the driver: createRun always writes the schema default (null), so only
+    // a pre-populated row can show the settle actually nulls an omitted stopReason and judgeModel.
+    it('nulls a pre-populated stopReason and judgeModel when the settle omits them', async () => {
+      const created = await repo.createRun(input());
+      await mongoose
+        .model('DataLakeResearchRun')
+        .collection.updateOne(
+          { _id: new mongoose.Types.ObjectId(created.id) },
+          { $set: { stopReason: 'proposal_limit', judgeModel: 'gpt-4.1-mini' } }
+        );
+
+      await repo.settleQueuedRun(created.id, {
+        status: 'failed',
+        completedAt: new Date(),
+        spentMicroUsd: 0,
+        totals: emptyResearchRunTotals(),
+        error: 'the enqueue could not be confirmed',
+      });
+
+      const reread = await repo.findByIdInLake(created.id, LAKE);
+      expect(reread?.stopReason).toBeNull();
+      expect(reread?.judgeModel).toBeNull();
+    });
   });
 
   it('settles a failure with its message and no stop reason', async () => {
@@ -240,11 +285,23 @@ describe('DataLakeResearchRunRepository', () => {
     const created = await repo.createRun(input());
     await repo.claimForExecution(created.id, new Date());
 
-    await repo.recordProgress(created.id, 500, { ...emptyResearchRunTotals(), proposed: 1 });
+    await repo.recordProgress(created.id, 500, { ...emptyResearchRunTotals(), proposed: 1 }, 'gpt-4.1-mini');
 
     const mid = await repo.findByIdInLake(created.id, LAKE);
-    expect(mid).toMatchObject({ status: 'running', spentMicroUsd: 500 });
+    // judgeModel read back from the row: the in-flight card names its judge from this write.
+    expect(mid).toMatchObject({ status: 'running', spentMicroUsd: 500, judgeModel: 'gpt-4.1-mini' });
     expect(mid?.totals.proposed).toBe(1);
+  });
+
+  it('leaves the judge model alone when a progress write omits it', async () => {
+    const created = await repo.createRun(input());
+    await repo.claimForExecution(created.id, new Date());
+    await repo.recordProgress(created.id, 100, emptyResearchRunTotals(), 'gpt-4.1-mini');
+
+    await repo.recordProgress(created.id, 200, emptyResearchRunTotals());
+
+    const mid = await repo.findByIdInLake(created.id, LAKE);
+    expect(mid).toMatchObject({ spentMicroUsd: 200, judgeModel: 'gpt-4.1-mini' });
   });
 
   describe('the guards a start checks', () => {

@@ -187,9 +187,3 @@ export const secrets = {
 };
 
 export const allSecrets = Object.values(secrets);
-
-// Deliberately outside `secrets`, and therefore outside both `allSecrets` and the
-// `Object.values(secrets)` spread in web.ts - either one links a secret into every
-// Lambda and service on every stage. DataSyncer is the only consumer and links this
-// export directly (infra/dataSyncer.ts); keep it that way when adding a consumer.
-export const b4mProdApiKey = new sst.Secret('B4M_PROD_API_KEY', 'not-configured');

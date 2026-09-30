@@ -172,6 +172,7 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   slug: 'audited',
   description: 'audited',
   systemPrompt: 'audited',
+  injectPromptForReaders: 'audited',
   preferredSystemPromptId: 'audited',
   groundingMode: 'audited',
   requiredPassageTokenTarget: 'audited',

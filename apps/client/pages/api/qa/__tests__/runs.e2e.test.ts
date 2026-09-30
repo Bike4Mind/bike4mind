@@ -104,7 +104,9 @@ describe('POST /api/qa/runs alarm (real ingest)', () => {
 
   it('alarms on the re-ingest that follows a failed Slack post, then never again', async () => {
     mockSlackPost.mockRejectedValueOnce(new Error('slack down'));
-    expect((await call(run('1-1', 1, [TEST_B]))).json).toMatchObject({ created: true });
+    const first = await call(run('1-1', 1, [TEST_B]));
+    expect(first.status).toBe(503);
+    expect(first.json).toMatchObject({ created: true });
     expect(mockSlackPost).toHaveBeenCalledTimes(1);
     expect((await call(run('1-1', 1, [TEST_B]))).json).toMatchObject({ created: false });
     expect(mockSlackPost).toHaveBeenCalledTimes(2);
@@ -116,7 +118,7 @@ describe('POST /api/qa/runs alarm (real ingest)', () => {
     const find = vi.spyOn(QaTestResult, 'find').mockImplementationOnce(() => {
       throw new Error('lookup failed');
     });
-    expect((await call(run('1-1', 1, [TEST_B]))).status).toBe(200);
+    expect((await call(run('1-1', 1, [TEST_B]))).status).toBe(503);
     find.mockRestore();
     expect(mockSlackPost).not.toHaveBeenCalled();
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('lookup failed'));
@@ -143,10 +145,10 @@ describe('POST /api/qa/runs alarm (real ingest)', () => {
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('no webhook for product-b'));
   });
 
-  it('keeps the run and returns 200 when Slack fails', async () => {
+  it('keeps the run and returns 503 when Slack fails', async () => {
     mockSlackPost.mockRejectedValueOnce(new Error('slack down'));
     const res = await call(run('1-1', 1, [TEST_B]));
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
     expect(res.json).toMatchObject({ status: 'failed', created: true });
     expect(await QaRun.countDocuments({})).toBe(1);
     expect(await QaTestResult.countDocuments({ runId: res.json.run_id })).toBe(2);

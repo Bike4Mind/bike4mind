@@ -29,6 +29,7 @@ import {
   normalizeEntitlementKey,
   DATA_LAKE_GROUNDING_MODES,
   DATA_LAKE_STATUSES,
+  LAKE_ATTACHABLE_STATUSES,
   DATA_LAKE_ORIGINS,
   DEFAULT_DATA_LAKE_GROUNDING_MODE,
 } from '@bike4mind/common';
@@ -47,6 +48,8 @@ const DataLakeSchema = new mongoose.Schema(
     // IDataLake.systemPrompt for the full contract). Stored uncapped, matching the other
     // system-prompt fields.
     systemPrompt: { type: String },
+    // Reader opt-in for systemPrompt on explicitly scoped sessions (see IDataLake.injectPromptForReaders).
+    injectPromptForReaders: { type: Boolean, default: false },
     // Preferred registry system-prompt id for sessions created for this lake (see
     // IDataLake.preferredSystemPromptId). Validated against the session-activatable allowlist at
     // the write boundary; resolved to session.systemPromptId once at create time.
@@ -427,7 +430,9 @@ export const buildAccessibleQuery = (
     supersededOwnLakeIds?: string[];
   }
 ): { filter: Record<string, unknown>; arms: FindAccessibleArm[] } => {
-  const statuses = opts?.statuses ?? (['draft', 'active'] as DataLakeStatus[]);
+  // Same list the attachment door opts into, read from one constant so browse cannot widen
+  // or narrow without the attachment lookup following it.
+  const statuses = opts?.statuses ?? [...LAKE_ATTACHABLE_STATUSES];
 
   // The isAdmin bypass replaces the whole $or rather than adding a disjunct to it, so it labels
   // no arm.
@@ -666,6 +671,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       grantedLakeIds?: string[];
       orgGrantedLakes?: Record<string, string[]>;
       supersededOwnLakeIds?: string[];
+      includeDraftLakes?: boolean;
     }
   ): Promise<IDataLakeDocument[]> {
     const normalizedTags = userTags.map(t => t.toLowerCase());
@@ -741,7 +747,12 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       );
     }
 
-    const results = await this.dataLakeModel.find({ status: 'active', $or: accessArms }).select(LIST_PROJECTION);
+    // `active` alone for retrieval; draft + active for the ATTACHMENT doors, which must track the
+    // browse door that admitted the file to the workbench in the first place (see the
+    // interface's `includeDraftLakes` doc). Only the status filter moves: every arm above still
+    // applies, so a draft lake surfaces here only for a caller who could have reached it published.
+    const status = opts?.includeDraftLakes ? { $in: [...LAKE_ATTACHABLE_STATUSES] } : 'active';
+    const results = await this.dataLakeModel.find({ status, $or: accessArms }).select(LIST_PROJECTION);
     return results.map(r => r.toJSON() as IDataLakeDocument);
   }
 

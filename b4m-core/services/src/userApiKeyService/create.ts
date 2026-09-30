@@ -11,7 +11,7 @@ import {
   isAgentOwnedByEmbedKey,
   IUserApiKeyRepository,
 } from '@bike4mind/common';
-import { secureParameters, BadRequestError } from '@bike4mind/utils';
+import { secureParameters, BadRequestError, ForbiddenError } from '@bike4mind/utils';
 import { randomBytes } from 'crypto';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
@@ -56,7 +56,7 @@ const createUserApiKeySchema = z.object({
   // by the route; the service only enforces the field-shape invariant below.
   billingOwnerType: z.enum(CreditHolderType).optional(),
   organizationId: z.string().optional(),
-  // Manage-but-not-member session admission (see pages/api/sessions/create.ts): the lakes this
+  // Manage-but-not-member session admission (see pages/api/v1/sessions/index.ts): the lakes this
   // key may bind a session to. No existence/manage check at THIS layer - session-create
   // independently re-verifies the ACTING user's live manage rights against the lake on every
   // request, so a stale or made-up id reaching the document is inert, never a privilege. That is
@@ -83,6 +83,14 @@ interface CreateUserApiKeyAdapters {
     agents: Pick<IAgentRepository, 'findById'>;
   };
   systemUserId?: string;
+  /**
+   * Scopes of the API key making the request, when the caller authenticated with one.
+   * Undefined for a browser/JWT caller. Same no-escalation contract as rotate
+   * (see rotate.ts): a key may only mint scopes it literally holds.
+   */
+  callerScopes?: ApiKeyScope[];
+  /** Expiry of the calling API key, when it has one. A key may not mint a child that outlives it. */
+  callerExpiresAt?: Date;
 }
 
 export interface CreateUserApiKeyResult {
@@ -135,6 +143,24 @@ export const createUserApiKey = async (
 ): Promise<CreateUserApiKeyResult> => {
   const { db, systemUserId } = adapters;
   const params = secureParameters(parameters, createUserApiKeySchema);
+
+  // No escalation by minting: otherwise a leaked narrow key bootstraps a broad one for
+  // the same owner. Literal containment, mirroring rotate - `admin:*` is not a superset,
+  // and an empty `callerScopes` denies rather than meaning "unrestricted".
+  if (adapters.callerScopes) {
+    const callerScopes = adapters.callerScopes;
+    const escalating = params.scopes.filter(scope => !callerScopes.includes(scope));
+    if (escalating.length > 0) {
+      throw new ForbiddenError('Cannot create a key with scopes the calling key does not have');
+    }
+  }
+
+  // Same containment rule, applied to time: a key may not mint a child that
+  // outlives it. A caller key with no expiry sets no bound (and a JWT caller,
+  // which has no callerExpiresAt at all, is unaffected).
+  if (adapters.callerExpiresAt && (!params.expiresAt || params.expiresAt > adapters.callerExpiresAt)) {
+    throw new ForbiddenError('Cannot create a key that outlives the calling key');
+  }
 
   // OVERWATCH_INGEST_WRITE requires a productId
   if (params.scopes.includes(ApiKeyScope.OVERWATCH_INGEST_WRITE) && !params.productId) {

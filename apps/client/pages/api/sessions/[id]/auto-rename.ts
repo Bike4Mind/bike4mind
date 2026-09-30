@@ -1,7 +1,7 @@
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import { redactSessionForClient } from '@bike4mind/common';
 import { sessionService } from '@bike4mind/services';
-import { InternalServerError } from '@bike4mind/utils';
+import { InternalServerError, NotFoundError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertSessionAccess } from '@server/utils/sessionAccess';
 import { OperationsModelService } from '@client/services/operationsModelService';
@@ -41,11 +41,14 @@ const handler = baseApi().post<Request<unknown, unknown, unknown, { id: string }
           return title;
         },
         logger: req.logger,
-      }
+      },
+      req.user!
     );
 
     return res.json(redactSessionForClient(updatedSession));
   } catch (error) {
+    // Revoked or deleted during the LLM call: the gated write refused it.
+    if (error instanceof NotFoundError) throw error;
     req.logger.error('Error in auto-rename:', error);
     throw new InternalServerError('Failed to auto-rename session');
   }
