@@ -39,9 +39,10 @@ export const handleToolRequest = defineLambdaRoute(
     // result path too (header/body parity).
     return { statusCode: result.success ? 200 : 500, body: { ...result, request_id: requestId } };
   },
-  // Per-user rate limit (100/hour for the api surface). Runs before validation so a
-  // flood of malformed bodies still counts against the limit (429 on exceed).
-  { rateLimit: ({ auth }) => checkRateLimit(auth!.userId) }
+  // Per-user rate limit (100/hour) in its own bucket, so agent/CLI traffic on the
+  // same account cannot spend it (tools.contract.ts documents it as dedicated).
+  // Runs before validation so a flood of malformed bodies still counts (429 on exceed).
+  { rateLimit: ({ auth }) => checkRateLimit(auth!.userId, undefined, { bucket: 'tools' }) }
 );
 
 // Export as 'handler' for Lambda (SST expects this name)
