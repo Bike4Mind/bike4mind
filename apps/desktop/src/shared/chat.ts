@@ -382,6 +382,19 @@ export interface ChatMessage {
    */
   relay?: ChatRelayOrigin;
   /**
+   * What the THREAD shows in place of `content`, on messages the app wrote rather than either
+   * speaker.
+   *
+   * `content` stays the model's copy, for the same reason `skill` leaves it alone: the transcript
+   * is what the next request replays, and a spawned session's report is only useful to the model
+   * if it still carries the id that session_read needs. That id and that tool name are exactly
+   * what the user does not want to read, so the two audiences get two strings.
+   *
+   * Absent on messages stored before this field existed, and on every message nobody writes a
+   * user-facing wording for. A reader that finds it missing falls back to `content`.
+   */
+  display?: string;
+  /**
    * Artifacts parsed out of this reply. Their markup is NOT in `content`, which holds the prose
    * around them; the wire rebuilds it from here (restoreArtifactMarkup) so the model still sees
    * its own artifact on a follow-up while the body is stored exactly once.

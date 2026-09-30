@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { relaySummary } from './relayRows';
+import { displayText, relaySummary } from './relayRows';
 
 const from = { fromSessionId: 'abc', fromTitle: 'T25', hops: 1 };
 
@@ -29,5 +29,29 @@ describe('relaySummary', () => {
 
   it('is just the header when the message is empty', () => {
     expect(relaySummary({ content: '   ', relay: from })).toBe('Received message from T25');
+  });
+
+  it('summarises the user-facing wording, not the model-facing one', () => {
+    const summary = relaySummary({
+      content: 'The session you started, "T4" (e8d8981c-5829-4e70-a20a-8e82370ac565), has finished.',
+      display: 'The session "T4" has finished.',
+      relay: from,
+    });
+    expect(summary).toBe('Received message from T25: The session "T4" has finished.');
+  });
+});
+
+describe('displayText', () => {
+  it('prefers the user-facing wording when there is one', () => {
+    expect(displayText({ content: 'read it with session_read (abc)', display: 'It has finished.' })).toBe(
+      'It has finished.'
+    );
+  });
+
+  // Messages stored before `display` existed have only the model's copy. Showing it is worse
+  // than showing the new wording and far better than an empty row.
+  it('falls back to the stored content when no wording was recorded', () => {
+    expect(displayText({ content: 'an older report' })).toBe('an older report');
+    expect(displayText({ content: 'an older report', display: '   ' })).toBe('an older report');
   });
 });

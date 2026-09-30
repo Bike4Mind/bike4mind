@@ -13,7 +13,7 @@ import { AttachmentRow } from './Attachments';
 import { ChevronIcon } from './icons';
 import { contentColumnSx, scrollingColumnHostSx } from './layout';
 import { ReplyMarkdown } from './markdown/ReplyMarkdown';
-import { relaySummary } from './relayRows';
+import { displayText, relaySummary } from './relayRows';
 import { callsIn, roundsOf } from './replyRounds';
 import { ToolCallList, type RespondToApproval } from './ToolCallList';
 
@@ -239,7 +239,7 @@ function SystemTurn({ message }: { message: ChatMessage }) {
         From a session you started
       </Typography>
       <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-        {message.content}
+        {displayText(message)}
       </Typography>
     </Sheet>
   );
@@ -296,7 +296,7 @@ function RelayTurn({ message }: { message: ChatMessage }) {
           textColor="text.secondary"
           data-testid="chat-message-relay-body"
         >
-          {message.content}
+          {displayText(message)}
         </Typography>
       </Box>
     </Box>

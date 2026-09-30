@@ -298,8 +298,13 @@ describe('ChatService queued messages', () => {
     // Reached through a cast rather than by running a real spawn: the delivery path is what
     // this pins, and widening ChatService's API for a test would be the worse trade. A report
     // arriving mid-turn is held until the turn ends - the same moment the queue is released.
-    const internals = service as unknown as { deliverChildReport(sessionId: string, text: string): Promise<void> };
-    await internals.deliverChildReport(id, 'a spawned session finished');
+    const internals = service as unknown as {
+      deliverChildReport(sessionId: string, report: { content: string; display: string }): Promise<void>;
+    };
+    await internals.deliverChildReport(id, {
+      content: 'a spawned session finished',
+      display: 'The session has finished.',
+    });
 
     await finishReply(0);
     await waitForEvent('start', 1);

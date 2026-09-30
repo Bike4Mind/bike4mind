@@ -42,6 +42,7 @@ import { ProjectContextCache } from './project/projectContext';
 import { resolveWorkspace, type WorkspaceOutcome } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
+import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
 import { startRoundTimer } from './turnTiming';
 import {
   DEFAULT_COMPLETIONS_PATH,
@@ -361,7 +362,7 @@ export class ChatService {
   private spawnReservations = 0;
 
   /** Finished children waiting for their parent to be idle, so a report never splits a turn. */
-  private readonly childReports = new Map<string, string[]>();
+  private readonly childReports = new Map<string, ChildReport[]>();
 
   /**
    * Per session, the hop depth of the turn running there and how many messages it has sent.
@@ -1957,7 +1958,10 @@ export class ChatService {
 
     const child = await this.deps.store.get(sessionId);
     if (!child) return;
-    await this.deliverChildReport(watch.parentSessionId, describeChildOutcome(child));
+    await this.deliverChildReport(watch.parentSessionId, {
+      content: describeChildOutcome(child),
+      display: childOutcomeDisplay(child),
+    });
   }
 
   /**
@@ -1970,9 +1974,9 @@ export class ChatService {
    * Queue first and then check, rather than the reverse - the parent can go idle between the
    * two, and the flush that would have carried this one has already run by then.
    */
-  private async deliverChildReport(parentSessionId: string, text: string): Promise<void> {
+  private async deliverChildReport(parentSessionId: string, report: ChildReport): Promise<void> {
     const queued = this.childReports.get(parentSessionId) ?? [];
-    queued.push(text);
+    queued.push(report);
     this.childReports.set(parentSessionId, queued);
     if (!this.active.has(parentSessionId)) await this.flushChildReports(parentSessionId);
   }
@@ -1982,11 +1986,12 @@ export class ChatService {
     if (!queued || queued.length === 0) return;
     this.childReports.delete(sessionId);
 
-    for (const text of queued) {
+    for (const report of queued) {
       const message: ChatMessage = {
         id: randomUUID(),
         role: 'user',
-        content: text,
+        content: report.content,
+        display: report.display,
         createdAt: new Date().toISOString(),
         system: true,
       };
@@ -2634,6 +2639,18 @@ function renderTranscript(session: ChatSession): string {
 }
 
 /**
+ * One finished-child report, in both the wordings it needs.
+ *
+ * `content` is the model's copy and `display` the user's; see describeChildOutcome and
+ * childOutcomeDisplay. They are composed together and travel together so a report cannot reach
+ * the transcript with only one of them.
+ */
+interface ChildReport {
+  content: string;
+  display: string;
+}
+
+/**
  * What a finished spawned session tells its parent.
  *
  * The child's own output is NOT carried across. A spawned session runs on a prompt the parent
@@ -2650,20 +2667,22 @@ function describeChildOutcome(child: ChatSession): string {
   const header = `The session you started, "${child.title}" (${child.id}), has finished.`;
   const read = `Read it with session_read (${child.id}) if you need what it produced.`;
 
-  if (!last) return `${header}\nIt produced no reply. ${read}`;
-  if (last.error) return `${header}\nIt failed: ${last.error}`;
-
-  const note = isTurnBudgetStop(last.stopReason)
-    ? ' It ran out of its turn budget rather than finishing, so its work may be incomplete.'
-    : last.stopReason === 'context_limit'
-      ? ' It filled the model context and stopped, so its work may be incomplete.'
-      : last.stopReason === 'max_tokens'
-        ? ' Its reply was cut off at the length limit.'
-        : last.stopReason === 'aborted'
-          ? ' It was stopped before it finished.'
-          : '';
-
-  return `${header}${note}\n${read}`;
+  switch (classifyChildOutcome(child)) {
+    case 'no-reply':
+      return `${header}\nIt produced no reply. ${read}`;
+    case 'failed':
+      return `${header}\nIt failed: ${last?.error ?? 'no reason was given'}`;
+    case 'turn-budget':
+      return `${header} It ran out of its turn budget rather than finishing, so its work may be incomplete.\n${read}`;
+    case 'context-limit':
+      return `${header} It filled the model context and stopped, so its work may be incomplete.\n${read}`;
+    case 'max-tokens':
+      return `${header} Its reply was cut off at the length limit.\n${read}`;
+    case 'aborted':
+      return `${header} It was stopped before it finished.\n${read}`;
+    default:
+      return `${header}\n${read}`;
+  }
 }
 
 export { addUsage };
