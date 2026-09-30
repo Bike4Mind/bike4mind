@@ -136,11 +136,12 @@ const PublishedArtifactSchema = new Schema(
     },
     gatedToGroupId: { type: String },
 
-    // LEGACY single-link fields. Still the source of truth for mint/rotate/revoke, and
-    // still the race arbiter (the compare-and-set in share-token.ts pins them). `shareTokens`
-    // below mirrors them; the source of truth moves there once every install has run the
-    // 20260921130000_backfill-share-tokens backfill. Do not add new readers of these two -
-    // use `liveShareTokens()` (or `findByShareToken`) so both shapes are handled.
+    // LEGACY single-link fields. NO LONGER authoritative: `shareTokens` below is the source
+    // of truth and the race arbiter as of #3255 step 3, now that every install has run the
+    // 20260921130000_backfill-share-tokens backfill. These two are still WRITTEN, mirrored to
+    // the newest live entry, purely so a rollback to a build that reads them still serves a
+    // link; retiring them is a follow-up. Do not add readers of these two - use
+    // `liveShareTokens()` (or `findByShareToken`) so both shapes are handled.
     //
     // Unguessable capability token for no-sign-in `/a/<shareToken>` links. Distinct
     // from `publicId` so rotating it revokes outstanding links without touching the

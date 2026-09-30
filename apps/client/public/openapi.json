@@ -2625,6 +2625,272 @@
           "created_at": "2026-09-29T12:00:00.000Z"
         }
       },
+      "createEmbeddingsResponse200": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "list"
+            ]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "object": {
+                  "type": "string",
+                  "enum": [
+                    "embedding"
+                  ]
+                },
+                "index": {
+                  "type": "integer"
+                },
+                "embedding": {
+                  "anyOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      }
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "object",
+                "index",
+                "embedding"
+              ]
+            }
+          },
+          "model": {
+            "type": "string"
+          },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "prompt_tokens": {
+                "type": "integer"
+              },
+              "total_tokens": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "prompt_tokens",
+              "total_tokens"
+            ]
+          }
+        },
+        "required": [
+          "object",
+          "data",
+          "model",
+          "usage"
+        ],
+        "example": {
+          "object": "list",
+          "data": [
+            {
+              "object": "embedding",
+              "index": 0,
+              "embedding": [
+                0.0023,
+                -0.0093,
+                0.0158
+              ]
+            },
+            {
+              "object": "embedding",
+              "index": 1,
+              "embedding": [
+                -0.0112,
+                0.0047,
+                0.0201
+              ]
+            }
+          ],
+          "model": "text-embedding-3-small",
+          "usage": {
+            "prompt_tokens": 9,
+            "total_tokens": 9
+          }
+        }
+      },
+      "createEmbeddingsResponse401": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "provider_not_configured",
+              "provider_rejected"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "createEmbeddingsResponse422": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "provider_not_configured",
+              "provider_rejected"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "createEmbeddingsResponse503": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "provider_not_configured",
+              "provider_rejected"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "createEmbeddingsRequest": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "text-embedding-3-small",
+                  "text-embedding-3-large",
+                  "text-embedding-ada-002"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "voyage-3-large",
+                  "voyage-3",
+                  "voyage-3-lite",
+                  "voyage-code-3",
+                  "voyage-finance-3",
+                  "voyage-law-3"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "amazon.titan-embed-text-v2:0"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "qwen3-embedding:0.6b",
+                  "qwen3-embedding:4b",
+                  "qwen3-embedding:8b",
+                  "nomic-embed-text",
+                  "mxbai-embed-large",
+                  "bge-m3",
+                  "snowflake-arctic-embed"
+                ]
+              }
+            ]
+          },
+          "input": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "maxItems": 2048
+              }
+            ]
+          },
+          "dimensions": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "encoding_format": {
+            "type": "string",
+            "enum": [
+              "float",
+              "base64"
+            ],
+            "default": "float"
+          }
+        },
+        "required": [
+          "model",
+          "input"
+        ],
+        "example": {
+          "model": "text-embedding-3-small",
+          "input": [
+            "The quick brown fox",
+            "jumps over the lazy dog"
+          ],
+          "dimensions": 1024
+        }
+      },
       "getQuestResponse200": {
         "type": "object",
         "properties": {
@@ -7213,6 +7479,452 @@
         ]
       }
     },
+    "/api/v1/embeddings": {
+      "post": {
+        "operationId": "createEmbeddings",
+        "summary": "Create embeddings",
+        "description": "Returns one embedding vector per input string. The request and success bodies follow the OpenAI embeddings API shape; error bodies use the standard B4M error envelope. `model` is any embedding model this deployment supports (OpenAI, Voyage AI, Amazon Bedrock, or a self-hosted Ollama model); `input` is a string or up to 2048 strings, at most 300000 tokens in total and each within the model context window. The input count is further capped so inputs x output width stays within 196608 values (128 inputs at 1536 dimensions) - page larger jobs across requests. Pre-tokenized input (arrays of token ids) is not accepted; clients that send it by default, such as LangChain's Python `OpenAIEmbeddings`, must be set to send strings (`check_embedding_ctx_length=False`). `dimensions` shortens the vector on models that support it (OpenAI `text-embedding-3-*`, and Voyage models with several published widths). Billed in credits per input token from the per-model embedding rate, reserved before the provider call and refunded if it fails. Authenticate with an API key (`b4m_live_`) carrying `ai:generate`, or a JWT.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/createEmbeddingsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "One embedding per input, in input order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/createEmbeddingsResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The billing user or organization could not be resolved, or the API key bills an organization its owner is no longer a member of.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials, or the embedding provider refused the configured key (`errorCode: \"provider_rejected\"`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/createEmbeddingsResponse401"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key does not hold any of the required scopes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request body failed validation, an input exceeds the model context window, the request exceeds the token or response-size ceiling, the model has no published credit rate, the model cannot produce the requested `dimensions`, or the caller cannot afford the request - the last is tagged `errorCode: \"insufficient_credits\"`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/createEmbeddingsResponse422"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-key rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The embedding provider failed; reserved credits are refunded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no credential for the requested model's provider (`errorCode: \"provider_not_configured\"`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/createEmbeddingsResponse503"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:generate"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/embeddings\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"model\": \"text-embedding-3-small\",\n  \"input\": [\n    \"The quick brown fox\",\n    \"jumps over the lazy dog\"\n  ],\n  \"dimensions\": 1024\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/embeddings\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"model\": \"text-embedding-3-small\",\n  \"input\": [\n    \"The quick brown fox\",\n    \"jumps over the lazy dog\"\n  ],\n  \"dimensions\": 1024\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/embeddings\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"model\": \"text-embedding-3-small\",\n        \"input\": [\n            \"The quick brown fox\",\n            \"jumps over the lazy dog\"\n        ],\n        \"dimensions\": 1024\n    },\n)"
+          }
+        ]
+      }
+    },
     "/api/v1/quests/{id}": {
       "get": {
         "operationId": "getQuest",
@@ -7863,7 +8575,7 @@
   "tags": [
     {
       "name": "AI",
-      "description": "Chat, completions, and server-side tool execution."
+      "description": "Chat, completions, embeddings, and server-side tool execution."
     },
     {
       "name": "Sessions",
