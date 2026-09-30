@@ -5,7 +5,7 @@ export interface OAuthGrant {
   clientId: string;
   clientName: string;
   scopes: string[];
-  grantedAt: string;
+  approvedAt: string;
 }
 
 const QUERY_KEY = ['oauth-grants'];

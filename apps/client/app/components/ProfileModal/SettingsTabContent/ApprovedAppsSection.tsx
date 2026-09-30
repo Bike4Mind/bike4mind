@@ -16,13 +16,22 @@ const formatDate = (value: string): string =>
 const ApprovedAppsSection: React.FC = () => {
   const { data: grants, isLoading } = useOAuthGrants();
   const revokeGrant = useRevokeOAuthGrant();
+  // Track each in-flight revoke by clientId so rows don't share a single isPending flag.
+  const [pendingRevokes, setPendingRevokes] = React.useState<Set<string>>(new Set());
 
   const handleRevoke = (clientId: string, clientName: string) => {
+    setPendingRevokes(prev => new Set(prev).add(clientId));
     revokeGrant.mutate(
       { clientId },
       {
         onSuccess: () => toast.success(`Access revoked for ${clientName}`),
         onError: () => toast.error(`Could not revoke access for ${clientName}`),
+        onSettled: () =>
+          setPendingRevokes(prev => {
+            const next = new Set(prev);
+            next.delete(clientId);
+            return next;
+          }),
       }
     );
   };
@@ -60,7 +69,7 @@ const ApprovedAppsSection: React.FC = () => {
                     {grant.clientName}
                   </Typography>
                   <Typography level="body-xs" sx={{ mb: 0.5 }}>
-                    Approved {formatDate(grant.grantedAt)}
+                    Approved {formatDate(grant.approvedAt)}
                   </Typography>
                   <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
                     {scopes.map(scope => (
@@ -76,7 +85,7 @@ const ApprovedAppsSection: React.FC = () => {
                   variant="outlined"
                   sx={{ flexShrink: 0 }}
                   data-testid={`approved-app-revoke-btn-${grant.clientId}`}
-                  loading={revokeGrant.isPending && revokeGrant.variables?.clientId === grant.clientId}
+                  loading={pendingRevokes.has(grant.clientId)}
                   onClick={() => handleRevoke(grant.clientId, grant.clientName)}
                 >
                   Revoke

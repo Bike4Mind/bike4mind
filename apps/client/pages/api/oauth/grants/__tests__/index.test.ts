@@ -26,7 +26,14 @@ vi.mock('@bike4mind/database', () => ({
     listActiveByUser: () => Promise.resolve(mockRefs.grants),
   },
   oauthClientRepository: {
-    findByClientId: () => Promise.resolve({ name: mockRefs.clientName }),
+    findByClientIds: (clientIds: string[]) =>
+      Promise.resolve(
+        new Map(
+          clientIds
+            .filter(() => mockRefs.clientName !== null)
+            .map(id => [id, { name: mockRefs.clientName }])
+        )
+      ),
   },
 }));
 
@@ -46,9 +53,14 @@ describe('GET /api/oauth/grants', () => {
     expect(JSON.parse(res._getData())).toEqual({ grants: [] });
   });
 
-  it('returns enriched grants with clientName and grantedAt', async () => {
+  it('returns enriched grants with clientName and approvedAt', async () => {
     mockRefs.grants = [
-      { clientId: 'client-a', scopes: ['openid', 'profile'], createdAt: new Date('2026-01-01') },
+      {
+        clientId: 'client-a',
+        scopes: ['openid', 'profile'],
+        createdAt: new Date('2026-01-01'),
+        updatedAt: new Date('2026-06-15'),
+      },
     ];
     const { req, res } = createMocks({ method: 'GET' });
     req.user = { id: 'u1' };
@@ -59,11 +71,12 @@ describe('GET /api/oauth/grants', () => {
     expect(body.grants[0].clientName).toBe('TestApp');
     expect(body.grants[0].clientId).toBe('client-a');
     expect(body.grants[0].scopes).toEqual(['openid', 'profile']);
+    expect(body.grants[0].approvedAt).toBe(new Date('2026-06-15').toISOString());
   });
 
-  it('falls back to clientId as name when the client record has a null name', async () => {
+  it('falls back to clientId as name when the client record is missing from the map', async () => {
     mockRefs.grants = [
-      { clientId: 'unknown-client', scopes: ['email'], createdAt: new Date('2026-01-01') },
+      { clientId: 'unknown-client', scopes: ['email'], updatedAt: new Date('2026-01-01') },
     ];
     mockRefs.clientName = null as any;
     const { req, res } = createMocks({ method: 'GET' });

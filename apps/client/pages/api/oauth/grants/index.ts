@@ -13,17 +13,15 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
     const userId = req.user.id;
     const grants = await oauthGrantRepository.listActiveByUser(userId);
 
-    const enriched = await Promise.all(
-      grants.map(async grant => {
-        const client = await oauthClientRepository.findByClientId(grant.clientId);
-        return {
-          clientId: grant.clientId,
-          clientName: client?.name ?? grant.clientId,
-          scopes: grant.scopes,
-          grantedAt: grant.createdAt,
-        };
-      })
-    );
+    const clientMap = await oauthClientRepository.findByClientIds(grants.map(g => g.clientId));
+    const enriched = grants.map(grant => ({
+      clientId: grant.clientId,
+      clientName: clientMap.get(grant.clientId)?.name ?? grant.clientId,
+      scopes: grant.scopes,
+      // updatedAt reflects the most-recent consent (upsertGrant always writes $set, which bumps it),
+      // so after a revoke + re-approve the date shows the latest approval, not the first.
+      approvedAt: grant.updatedAt,
+    }));
 
     return res.status(200).json({ grants: enriched });
   })
