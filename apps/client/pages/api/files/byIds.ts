@@ -7,6 +7,7 @@ import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { getFilesStorage } from '@server/utils/storage';
 import { FILES_READ_SCOPES } from '@server/files/fileScopes';
+import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { Request } from 'express';
 import qs from 'qs';
@@ -59,7 +60,10 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
     // endpoint accepts.
     const found = new Set(results.map((f: IFabFileDocument) => f.id));
     const missing = ids.filter(id => isObjectIdHex(id) && !found.has(id));
-    if (missing.length > 0) {
+    // The same lake read through /api/data-lakes/articles needs datalake:read, so a key scoped to
+    // files alone must not reach lake files through this fallback either - mirrors the identical
+    // gate in loadAccessibleFabFile's single-file fallback (files/[id]).
+    if (missing.length > 0 && holdsDataLakeReadScope(req)) {
       const lakes = await resolveAccessibleLakes(req);
       if (lakes.length > 0) {
         const candidates: IFabFileDocument[] = await fabFileRepository.findAllInIds(missing);
