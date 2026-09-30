@@ -20,17 +20,13 @@ export interface TurnProgress {
 }
 
 /**
- * Everything the model processed: new input, cache reads, cache writes and output. The input
- * count alone stopped being the whole story once caching split it in three, and a headline that
- * leaves out the cached part understates what the turn handled by an order of magnitude.
+ * New input, cache writes and output. Cache reads are left out: a long tool loop re-reads the
+ * same context every round, which inflates the figure into the millions while costing a tenth
+ * of fresh input. They stay in the tooltip split, and the cost figure already prices them.
  */
 export function totalTokens(usage: ChatUsage | undefined): number | null {
   if (!usage) return null;
-  const total =
-    (usage.inputTokens ?? 0) +
-    (usage.cacheReadInputTokens ?? 0) +
-    (usage.cacheCreationInputTokens ?? 0) +
-    (usage.outputTokens ?? 0);
+  const total = (usage.inputTokens ?? 0) + (usage.cacheCreationInputTokens ?? 0) + (usage.outputTokens ?? 0);
   return total > 0 ? total : null;
 }
 

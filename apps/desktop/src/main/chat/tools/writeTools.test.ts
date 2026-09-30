@@ -141,6 +141,101 @@ describe('write tools', () => {
       ).rejects.toThrow(/file_write/);
     });
   });
+  describe('file_edit with edits', () => {
+    const file = () => join(root, 'multi.txt');
+    beforeEach(async () => {
+      await writeFile(file(), 'one\ntwo\nthree\nfour\nfive\n', 'utf8');
+    });
+
+    it('applies edits in sequence and writes once', async () => {
+      const input = {
+        path: file(),
+        edits: [
+          { oldText: 'one', newText: '1' },
+          { oldText: 'five', newText: '5' },
+        ],
+      };
+      await fileEdit.run(input, context);
+      await expect(readFile(file(), 'utf8')).resolves.toBe('1\ntwo\nthree\nfour\n5\n');
+    });
+
+    it('lets an edit depend on the result of an earlier one', async () => {
+      const input = {
+        path: file(),
+        edits: [
+          { oldText: 'two', newText: 'TWO-A' },
+          { oldText: 'TWO-A', newText: 'TWO-B' },
+        ],
+      };
+      await fileEdit.run(input, context);
+      await expect(readFile(file(), 'utf8')).resolves.toBe('one\nTWO-B\nthree\nfour\nfive\n');
+    });
+
+    it('supports replaceAll inside the batch', async () => {
+      await writeFile(file(), 'x\nx\nkeep\n', 'utf8');
+      const input = {
+        path: file(),
+        edits: [
+          { oldText: 'x', newText: 'y', replaceAll: true },
+          { oldText: 'keep', newText: 'kept' },
+        ],
+      };
+      await fileEdit.run(input, context);
+      await expect(readFile(file(), 'utf8')).resolves.toBe('y\ny\nkept\n');
+    });
+
+    it('is atomic: edit 3 of 5 failing writes nothing and names edits[2]', async () => {
+      const input = {
+        path: file(),
+        edits: [
+          { oldText: 'one', newText: '1' },
+          { oldText: 'two', newText: '2' },
+          { oldText: 'absent', newText: 'x' },
+          { oldText: 'four', newText: '4' },
+          { oldText: 'five', newText: '5' },
+        ],
+      };
+      await expect(fileEdit.run(input, context)).rejects.toThrow(/edits\[2\] \(edit 3 of 5.*does not appear/);
+      await expect(readFile(file(), 'utf8')).resolves.toBe('one\ntwo\nthree\nfour\nfive\n');
+    });
+
+    it('names an ambiguous edit by index', async () => {
+      await writeFile(file(), 'a\nb\nb\n', 'utf8');
+      const input = {
+        path: file(),
+        edits: [
+          { oldText: 'a', newText: 'A' },
+          { oldText: 'b', newText: 'B' },
+        ],
+      };
+      await expect(fileEdit.run(input, context)).rejects.toThrow(/edits\[1\].*appears 2 times/);
+    });
+
+    it('rejects mixing the two forms and oversized batches', async () => {
+      await expect(
+        fileEdit.run({ path: file(), oldText: 'one', newText: '1', edits: [{ oldText: 'two', newText: '2' }] }, context)
+      ).rejects.toThrow(/not both/);
+      const many = Array.from({ length: 51 }, () => ({ oldText: 'one', newText: '1' }));
+      await expect(fileEdit.run({ path: file(), edits: many }, context)).rejects.toThrow(/limit is 50/);
+    });
+
+    it('shows one combined diff for approval', async () => {
+      const input = {
+        path: file(),
+        edits: [
+          { oldText: 'one', newText: '1' },
+          { oldText: 'five', newText: '5' },
+        ],
+      };
+      const prompt = await fileEdit.approval?.(input, context);
+      expect(prompt?.diff?.operation).toBe('edit');
+      expect(prompt?.diff?.added).toBe(2);
+      expect(prompt?.diff?.removed).toBe(2);
+      const texts = prompt?.diff?.lines.map(line => line.text);
+      expect(texts).toEqual(expect.arrayContaining(['1', '5', 'one', 'five']));
+    });
+  });
+
   describe('parallel writes to one file', () => {
     const importLine = 'import { formatDuration, sessionElapsedMs } from "x";';
     let big: string;

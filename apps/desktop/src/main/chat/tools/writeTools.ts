@@ -202,11 +202,90 @@ async function planWrite(input: Record<string, unknown>, context: ToolContext): 
   return { target, state, after, diff, key: `file_write\x00${target}\x00${sha(after)}` };
 }
 
+const MAX_BATCH_EDITS = 50;
+
+interface EditSpec {
+  oldText: string;
+  newText: string;
+  replaceAll: boolean;
+}
+
+/** The single-edit form and the `edits` batch, normalised to one list. */
+function readEdits(input: Record<string, unknown>): { edits: EditSpec[]; batch: boolean } {
+  if (input.edits === undefined) {
+    return {
+      edits: [
+        {
+          oldText: requireString(input, 'oldText'),
+          newText: requireText(input, 'newText'),
+          replaceAll: input.replaceAll === true,
+        },
+      ],
+      batch: false,
+    };
+  }
+
+  if (input.oldText !== undefined || input.newText !== undefined || input.replaceAll !== undefined) {
+    throw new Error('Pass either "edits" or the single oldText/newText form, not both.');
+  }
+  const raw = input.edits;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new Error('"edits" must be a non-empty array of { oldText, newText, replaceAll? } objects.');
+  }
+  if (raw.length > MAX_BATCH_EDITS) {
+    throw new Error(`"edits" has ${raw.length} entries; the limit is ${MAX_BATCH_EDITS} per call.`);
+  }
+
+  const edits = raw.map((entry, index) => {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      throw new Error(`edits[${index}] must be an object with "oldText" and "newText".`);
+    }
+    const record = entry as Record<string, unknown>;
+    try {
+      return {
+        oldText: requireString(record, 'oldText'),
+        newText: requireText(record, 'newText'),
+        replaceAll: record.replaceAll === true,
+      };
+    } catch (error) {
+      throw new Error(`edits[${index}]: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+  return { edits, batch: true };
+}
+
+/** Applies one edit to `content`, or throws. `label` names the edit in a batch, empty for a lone edit. */
+function applyEdit(content: string, edit: EditSpec, target: string, label: string): string {
+  const { oldText, newText, replaceAll } = edit;
+  const subject = label ? `${label}: "oldText"` : '"oldText"';
+
+  const occurrences = countOccurrences(content, oldText);
+  if (occurrences === 0) {
+    throw new Error(
+      `${subject} does not appear in ${target}${label ? ' as it stands after the earlier edits' : ''}. ` +
+        'Read the file and copy the exact text to replace, including its indentation and line breaks.'
+    );
+  }
+  if (occurrences > 1 && !replaceAll) {
+    throw new Error(
+      `${subject} appears ${occurrences} times in ${target}, so the edit is ambiguous. Include ` +
+        'enough surrounding lines to make it unique, or pass replaceAll: true to change every one.'
+    );
+  }
+  if (oldText === newText) {
+    throw new Error(
+      `${label ? `${label}: ` : ''}"newText" is identical to "oldText", so this edit would change nothing.`
+    );
+  }
+
+  // A function replacement, because `$&` and friends in a plain replacement string would be
+  // expanded - silently corrupting any edit whose new text contains a dollar sign.
+  return replaceAll ? content.replaceAll(oldText, () => newText) : content.replace(oldText, () => newText);
+}
+
 async function planEdit(input: Record<string, unknown>, context: ToolContext): Promise<WritePlan> {
   const requested = requireString(input, 'path');
-  const oldText = requireString(input, 'oldText');
-  const newText = requireText(input, 'newText');
-  const replaceAll = input.replaceAll === true;
+  const { edits, batch } = readEdits(input);
 
   const target = await resolveWritablePath(requested, context);
   const state = await readTarget(target);
@@ -214,40 +293,23 @@ async function planEdit(input: Record<string, unknown>, context: ToolContext): P
     throw new Error(`${target} does not exist. Use file_write to create it.`);
   }
 
-  const occurrences = countOccurrences(state.content, oldText);
-  if (occurrences === 0) {
-    throw new Error(
-      `"oldText" does not appear in ${target}. Read the file and copy the exact text to replace, ` +
-        'including its indentation and line breaks.'
-    );
-  }
-  if (occurrences > 1 && !replaceAll) {
-    throw new Error(
-      `"oldText" appears ${occurrences} times in ${target}, so the edit is ambiguous. Include ` +
-        'enough surrounding lines to make it unique, or pass replaceAll: true to change every one.'
-    );
-  }
-
-  // A function replacement, because `$&` and friends in a plain replacement string would be
-  // expanded - silently corrupting any edit whose new text contains a dollar sign.
-  const after = replaceAll
-    ? state.content.replaceAll(oldText, () => newText)
-    : state.content.replace(oldText, () => newText);
+  // All in memory and in order, each against the previous result: nothing is written unless
+  // every edit applies, so a failure at edit N leaves the file exactly as it was.
+  let after = state.content;
+  edits.forEach((edit, index) => {
+    const label = batch ? `edits[${index}] (edit ${index + 1} of ${edits.length}, nothing was written)` : '';
+    after = applyEdit(after, edit, target, label);
+  });
   if (after === state.content) {
-    throw new Error('"newText" is identical to "oldText", so this edit would change nothing.');
+    throw new Error('The edits cancel each other out, so this call would change nothing.');
   }
   if (Buffer.byteLength(after, 'utf8') > MAX_WRITE_BYTES) {
     throw new Error(`The result would be larger than the ${MAX_WRITE_BYTES} byte limit for a single write.`);
   }
 
   const diff = buildDiff(target, 'edit', state.content, after);
-  return {
-    target,
-    state,
-    after,
-    diff,
-    key: `file_edit\x00${target}\x00${sha(oldText)}\x00${sha(newText)}\x00${replaceAll}`,
-  };
+  const editsKey = edits.map(e => `${sha(e.oldText)}\x00${sha(e.newText)}\x00${e.replaceAll}`).join('\x01');
+  return { target, state, after, diff, key: `file_edit\x00${target}\x00${editsKey}` };
 }
 
 function countOccurrences(haystack: string, needle: string): number {
@@ -324,7 +386,12 @@ export const fileEdit: ToolDefinition = {
   schema: {
     name: 'file_edit',
     description: [
-      'Replace an exact stretch of text in an existing file, leaving the rest untouched.',
+      'Replace exact stretches of text in an existing file, leaving the rest untouched.',
+      '',
+      'Make every change you have planned for one file in a single call: pass them as "edits",',
+      'applied in order, each against the result of the one before, and all-or-nothing - if any',
+      'edit fails nothing is written and the error names the failing one. Use the top-level',
+      'oldText/newText only for a lone change.',
       '',
       '"oldText" must match the file exactly, including indentation and line breaks, and must',
       'identify one place uniquely - include the surrounding lines if it does not. Read the file',
@@ -337,11 +404,36 @@ export const fileEdit: ToolDefinition = {
       type: 'object',
       properties: {
         path: { type: 'string', description: 'Absolute path to the file to edit.' },
-        oldText: { type: 'string', description: 'Exact text to replace, copied from the file.' },
-        newText: { type: 'string', description: 'Text to put in its place. Empty string deletes it.' },
+        oldText: {
+          type: 'string',
+          description: 'Exact text to replace, copied from the file. Omit when using "edits".',
+        },
+        newText: {
+          type: 'string',
+          description: 'Text to put in its place. Empty string deletes it. Omit when using "edits".',
+        },
         replaceAll: { type: 'boolean', description: 'Replace every occurrence instead of requiring a unique one.' },
+        edits: {
+          type: 'array',
+          maxItems: MAX_BATCH_EDITS,
+          description:
+            "Several edits to this file, applied in order against each other's results, all or nothing. Use instead of oldText/newText.",
+          items: {
+            type: 'object',
+            properties: {
+              oldText: { type: 'string', description: 'Exact text to replace.' },
+              newText: { type: 'string', description: 'Text to put in its place. Empty string deletes it.' },
+              replaceAll: {
+                type: 'boolean',
+                description: 'Replace every occurrence instead of requiring a unique one.',
+              },
+            },
+            required: ['oldText', 'newText'],
+            additionalProperties: false,
+          },
+        },
       },
-      required: ['path', 'oldText', 'newText'],
+      required: ['path'],
       additionalProperties: false,
     },
   },

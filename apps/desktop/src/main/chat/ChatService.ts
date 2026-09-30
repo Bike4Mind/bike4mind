@@ -2387,6 +2387,8 @@ function buildSystemMessage(
       'Changing a file needs the same approval, and the user sees a line-by-line diff of the',
       'change before they answer. Read a file before you edit it, and prefer file_edit over',
       'file_write so the rest of the file is left alone; file_write replaces a file entirely.',
+      'Make all the changes you have planned for one file in a single file_edit call with edits:',
+      'they apply in order and all or nothing, and each round trip costs you the whole context.',
       'Dev servers, watchers and anything else meant to keep running go to bash_background, not',
       'bash_execute. Background processes belong to this conversation, are all killed when the app',
       'quits, and none survive a restart - so check bash_list rather than assuming one from an',

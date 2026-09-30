@@ -46,14 +46,14 @@ describe('totalTokens', () => {
 });
 
 describe('totalTokens with caching', () => {
-  it('counts new input, cache reads, cache writes and output', () => {
+  it('counts new input, cache writes and output but not cache reads', () => {
     expect(
       totalTokens({ inputTokens: 100, cacheReadInputTokens: 5000, cacheCreationInputTokens: 400, outputTokens: 50 })
-    ).toBe(5550);
+    ).toBe(550);
   });
 
-  it('counts a fully cached request as work done', () => {
-    expect(totalTokens({ cacheReadInputTokens: 900 })).toBe(900);
+  it('is null for a request that was only cache reads', () => {
+    expect(totalTokens({ cacheReadInputTokens: 900 })).toBeNull();
   });
 });
 
@@ -88,14 +88,18 @@ describe('describeSplit', () => {
 });
 
 describe('statusFields with usage', () => {
-  it('shows the honest total and the cost when there is one', () => {
+  it('shows the total without cache reads, and the cost, when there is one', () => {
     const usage = { inputTokens: 100, cacheReadInputTokens: 5000, outputTokens: 50, usdCost: 0.5 };
     expect(statusFields({ startedAt: 0, tokens: totalTokens(usage), usage }, 12_000, 'Thinking...')).toEqual([
       '12s',
-      '5.2k tokens',
+      '150 tokens',
       '$0.50',
       'Thinking...',
     ]);
+  });
+
+  it('still lists the cached reads in the tooltip split', () => {
+    expect(describeSplit({ inputTokens: 100, cacheReadInputTokens: 5000, outputTokens: 50 })).toContain('5.0k cached');
   });
 
   it('omits the cost when the server sent none', () => {
