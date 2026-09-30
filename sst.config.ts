@@ -231,7 +231,6 @@ export default $config({
       cliToolHandler: cliToolHandler.name,
       websocket: websocketApi.url,
       websocketEndpoint: websocketApi.managementEndpoint,
-      mongoDbUri: $dev ? secrets.MONGODB_URI.value : undefined,
       subscriberFanout: subscriberFanout.urn,
       scheduleTaskCron: scheduleTaskCron.urn,
     };
