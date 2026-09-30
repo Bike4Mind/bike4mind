@@ -19,6 +19,13 @@ import {
   Tool,
   DataLakeModel,
   DataLakeAccessGrantModel,
+  DataLakeProposalModel,
+  DataLakeResearchConfigModel,
+  DataLakeResearchRunModel,
+  DataLakeFindingModel,
+  LakeMembershipDecisionModel,
+  DataLakeCorpusActionModel,
+  DataLakeOwnershipOfferModel,
 } from '@bike4mind/database';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -109,6 +116,17 @@ const seedChildren = async (userId: mongoose.Types.ObjectId) => {
     role: 'owner',
     grantedByUserId: uid,
   });
+  // One row in every lake-keyed collection the cleanup sweeps. These are the dependents that would
+  // be orphaned if the lake parent were hard-deleted first - cleanupDeletedDataLake cannot collect
+  // them afterwards because it early-returns once the parent is gone.
+  await DataLakeProposalModel.collection.insertOne({ _id: oid(), dataLakeId: lakeId.toString(), status: 'pending' });
+  await mongoose.models.DataLakeBatch.collection.insertOne({ _id: oid(), dataLakeId: lakeId.toString(), userId: uid });
+  await DataLakeResearchConfigModel.collection.insertOne({ _id: oid(), dataLakeId: lakeId.toString() });
+  await DataLakeResearchRunModel.collection.insertOne({ _id: oid(), dataLakeId: lakeId.toString() });
+  await DataLakeFindingModel.collection.insertOne({ _id: oid(), lakeId: lakeId.toString() });
+  await LakeMembershipDecisionModel.collection.insertOne({ _id: oid(), dataLakeId: lakeId.toString() });
+  await DataLakeCorpusActionModel.collection.insertOne({ _id: oid(), lakeId: lakeId.toString() });
+  await DataLakeOwnershipOfferModel.collection.insertOne({ _id: oid(), dataLakeId: lakeId.toString() });
 
   return { sessionId, lakeId };
 };
@@ -142,6 +160,26 @@ describe('DELETE /api/test/cleanup (real DB)', () => {
     expect(await Artifact.collection.countDocuments({ userId: uid })).toBe(0);
   });
 
+  it('deletes quests of soft-deleted sessions, which the session hard-delete also removes', async () => {
+    const sweptUserId = await seedUser(SWEPT_EMAIL, `sweep-${TEST_ID}-12345678-e2e`);
+    const uid = sweptUserId.toString();
+    const softSessionId = oid();
+    // The native session delete bypasses the soft-delete plugin, so this row goes; its quest must
+    // be collected from the same includeDeleted lookup or it is orphaned.
+    await Session.collection.insertOne({ _id: softSessionId, userId: uid, name: `soft-${uid}`, deletedAt: new Date() });
+    await Quest.collection.insertOne({
+      _id: oid(),
+      sessionId: softSessionId.toString(),
+      userId: uid,
+      name: `q-soft-${uid}`,
+    });
+
+    await callCleanup({ testId: TEST_ID });
+
+    expect(await Session.collection.countDocuments({ userId: uid })).toBe(0);
+    expect(await Quest.collection.countDocuments({ sessionId: softSessionId.toString() })).toBe(0);
+  });
+
   it('deletes the ObjectId-keyed Tool row too', async () => {
     const sweptUserId = await seedUser(SWEPT_EMAIL, `sweep-${TEST_ID}-12345678-e2e`);
     await seedChildren(sweptUserId);
@@ -151,7 +189,7 @@ describe('DELETE /api/test/cleanup (real DB)', () => {
     expect(await Tool.collection.countDocuments({ userId: sweptUserId })).toBe(0);
   });
 
-  it('reclaims data lakes owned by the swept user and their access grants', async () => {
+  it('reclaims a swept lake, its access grants, and every lake-keyed dependent', async () => {
     const sweptUserId = await seedUser(SWEPT_EMAIL, `sweep-${TEST_ID}-12345678-e2e`);
     const { lakeId } = await seedChildren(sweptUserId);
     const uid = sweptUserId.toString();
@@ -161,6 +199,14 @@ describe('DELETE /api/test/cleanup (real DB)', () => {
 
     expect(await DataLakeModel.collection.countDocuments({ createdByUserId: uid })).toBe(0);
     expect(await DataLakeAccessGrantModel.collection.countDocuments({ dataLakeId: lakeIdString })).toBe(0);
+    expect(await DataLakeProposalModel.collection.countDocuments({ dataLakeId: lakeIdString })).toBe(0);
+    expect(await mongoose.models.DataLakeBatch.collection.countDocuments({ dataLakeId: lakeIdString })).toBe(0);
+    expect(await DataLakeResearchConfigModel.collection.countDocuments({ dataLakeId: lakeIdString })).toBe(0);
+    expect(await DataLakeResearchRunModel.collection.countDocuments({ dataLakeId: lakeIdString })).toBe(0);
+    expect(await DataLakeFindingModel.collection.countDocuments({ lakeId: lakeIdString })).toBe(0);
+    expect(await LakeMembershipDecisionModel.collection.countDocuments({ dataLakeId: lakeIdString })).toBe(0);
+    expect(await DataLakeCorpusActionModel.collection.countDocuments({ lakeId: lakeIdString })).toBe(0);
+    expect(await DataLakeOwnershipOfferModel.collection.countDocuments({ dataLakeId: lakeIdString })).toBe(0);
     expect((body.cleaned as Record<string, number>).dataLakes).toBe(1);
   });
 
@@ -178,6 +224,8 @@ describe('DELETE /api/test/cleanup (real DB)', () => {
     expect(await FabFile.collection.countDocuments({ userId: cuid })).toBe(1);
     expect(await DataLakeModel.collection.countDocuments({ createdByUserId: cuid })).toBe(1);
     expect(await DataLakeAccessGrantModel.collection.countDocuments({ dataLakeId: controlLakeId.toString() })).toBe(1);
+    expect(await DataLakeProposalModel.collection.countDocuments({ dataLakeId: controlLakeId.toString() })).toBe(1);
+    expect(await DataLakeFindingModel.collection.countDocuments({ lakeId: controlLakeId.toString() })).toBe(1);
   });
 
   it('warns when users were swept but no child rows were deleted', async () => {

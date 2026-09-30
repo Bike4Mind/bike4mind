@@ -23,6 +23,13 @@ import {
   Organization,
   DataLakeModel,
   DataLakeAccessGrantModel,
+  DataLakeProposalModel,
+  DataLakeResearchConfigModel,
+  DataLakeResearchRunModel,
+  DataLakeFindingModel,
+  LakeMembershipDecisionModel,
+  DataLakeCorpusActionModel,
+  DataLakeOwnershipOfferModel,
 } from '@bike4mind/database';
 import mongoose from 'mongoose';
 import {
@@ -98,7 +105,12 @@ const handler = baseApi({ auth: false }).delete(
       return res.json({ success: true, cleaned: { users: 0 }, message: 'No e2e test users found' });
     }
 
-    const sessions = await Session.find({ userId: { $in: userIds } }, { _id: 1 }).lean();
+    // includeDeleted: the session hard-delete below bypasses the soft-delete plugin, so it removes
+    // soft-deleted sessions too. Without this, a quest pointing at one of those String sessionIds
+    // is never collected and is orphaned - the lookup and the delete must scope the same set.
+    const sessions = await Session.find({ userId: { $in: userIds } }, { _id: 1 })
+      .setOptions({ includeDeleted: true })
+      .lean();
     const sessionIds = sessions.map(s => s._id);
     const sessionIdStrings = sessions.map(s => s._id.toString());
 
@@ -115,6 +127,51 @@ const handler = baseApi({ auth: false }).delete(
       const result = await promise;
       counts[label] = result.deletedCount;
     }
+
+    // Data lakes MUST be torn down in order: sweep every lake-keyed child, THEN the lake record.
+    // `cleanupDeletedDataLake` is the canonical sweep but unusable here - it needs an actor, a
+    // 'purging'/'deleted' lake and its full adapter set - and it early-returns once the parent is
+    // gone, so a lake deleted before its children strands them with no path left to collect them.
+    // Children fan out among themselves; the parent is awaited after, so a failed child delete
+    // leaves the lake resolvable for a retry.
+    await Promise.all([
+      deleteFrom(
+        'dataLakeAccessGrants',
+        DataLakeAccessGrantModel.collection.deleteMany({
+          $or: [{ dataLakeId: { $in: lakeIdStrings } }, { principalType: 'user', principalId: { $in: userIdStrings } }],
+        })
+      ),
+      deleteFrom(
+        'dataLakeProposals',
+        DataLakeProposalModel.collection.deleteMany({ dataLakeId: { $in: lakeIdStrings } })
+      ),
+      deleteFrom(
+        'dataLakeBatches',
+        mongoose.models.DataLakeBatch.collection.deleteMany({ dataLakeId: { $in: lakeIdStrings } })
+      ),
+      deleteFrom(
+        'dataLakeResearchConfigs',
+        DataLakeResearchConfigModel.collection.deleteMany({ dataLakeId: { $in: lakeIdStrings } })
+      ),
+      deleteFrom(
+        'dataLakeResearchRuns',
+        DataLakeResearchRunModel.collection.deleteMany({ dataLakeId: { $in: lakeIdStrings } })
+      ),
+      deleteFrom('dataLakeFindings', DataLakeFindingModel.collection.deleteMany({ lakeId: { $in: lakeIdStrings } })),
+      deleteFrom(
+        'lakeMembershipDecisions',
+        LakeMembershipDecisionModel.collection.deleteMany({ dataLakeId: { $in: lakeIdStrings } })
+      ),
+      deleteFrom(
+        'dataLakeCorpusActions',
+        DataLakeCorpusActionModel.collection.deleteMany({ lakeId: { $in: lakeIdStrings } })
+      ),
+      deleteFrom(
+        'dataLakeOwnershipOffers',
+        DataLakeOwnershipOfferModel.collection.deleteMany({ dataLakeId: { $in: lakeIdStrings } })
+      ),
+    ]);
+    await deleteFrom('dataLakes', DataLakeModel.collection.deleteMany({ createdByUserId: { $in: userIdStrings } }));
 
     // Hard-delete across collections using the native driver to bypass the soft-delete plugin.
     // The native driver does NOT cast, so each filter must carry the value type the field stores:
@@ -158,7 +215,7 @@ const handler = baseApi({ auth: false }).delete(
       ),
 
       // Optional collections (may not be registered if never used)
-      ...(['Tag', 'Activity', 'ResearchData', 'ResearchTask', 'ResearchAgent'] as const).flatMap(name => {
+      ...(['Tag', 'ResearchData', 'ResearchTask', 'ResearchAgent'] as const).flatMap(name => {
         const model = mongoose.models[name];
         return model
           ? [
@@ -169,22 +226,22 @@ const handler = baseApi({ auth: false }).delete(
             ]
           : [];
       }),
+      // Activity keys ownership as ownerType/ownerId, not userId, so it needs its own filter - the
+      // generic `userId` form above matched nothing and left user-owned feed rows behind.
+      ...(mongoose.models.Activity
+        ? [
+            deleteFrom(
+              'activities',
+              mongoose.models.Activity.collection.deleteMany({ ownerType: 'User', ownerId: { $in: userIdStrings } })
+            ),
+          ]
+        : []),
 
       // Parent collections
       deleteFrom('files', FabFile.collection.deleteMany({ userId: { $in: userIdStrings } })),
       deleteFrom('agents', Agent.collection.deleteMany({ userId: { $in: userIdStrings } })),
       deleteFrom('projects', Project.collection.deleteMany({ userId: { $in: userIdStrings } })),
       deleteFrom('organizations', Organization.collection.deleteMany({ userId: { $in: userIdStrings } })),
-
-      // Data lakes: grants held on the swept users' lakes plus grants where a swept user is the
-      // principal, then the lakes themselves.
-      deleteFrom(
-        'dataLakeAccessGrants',
-        DataLakeAccessGrantModel.collection.deleteMany({
-          $or: [{ dataLakeId: { $in: lakeIdStrings } }, { principalType: 'user', principalId: { $in: userIdStrings } }],
-        })
-      ),
-      deleteFrom('dataLakes', DataLakeModel.collection.deleteMany({ createdByUserId: { $in: userIdStrings } })),
 
       // Sessions, then users
       deleteFrom('sessions', Session.collection.deleteMany({ userId: { $in: userIdStrings } })),
