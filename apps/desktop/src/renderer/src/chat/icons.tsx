@@ -248,3 +248,16 @@ export function SparkIcon() {
     </Glyph>
   );
 }
+
+/**
+ * What answers the composer: the same upward arrow whether the click sends this turn or queues
+ * it behind a running one. One glyph because it is one direction of travel - what differs is
+ * only whether a reply is already running, which the label and the tooltip say.
+ */
+export function ArrowUpIcon() {
+  return (
+    <Glyph>
+      <path d="M8 12.75V3.75M3.9 7.85 8 3.75l4.1 4.1" />
+    </Glyph>
+  );
+}

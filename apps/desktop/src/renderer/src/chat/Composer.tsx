@@ -1,14 +1,22 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
-import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Textarea from '@mui/joy/Textarea';
+import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatQueuedMessage } from '@shared/chat';
 import { AttachmentRow } from './Attachments';
-import { composerKeyAction, composerPlaceholder, shownSuggestion } from './composerInput';
+import {
+  COMPOSER_BUTTON_LABELS,
+  composerButtonAction,
+  composerEscapeAction,
+  composerKeyAction,
+  composerPlaceholder,
+  shownSuggestion,
+} from './composerInput';
+import { ArrowUpIcon, StopIcon } from './icons';
 import { contentColumnSx } from './layout';
 import { QueuedMessageList } from './QueuedMessageList';
 import { mergeIntoDraft } from './queuedMessages';
@@ -106,6 +114,10 @@ export function Composer({
   // the first condition, which is why pressing Enter mid-reply did nothing at all.
   const canSubmit = hasContent && !disabled && !attachments.busy && !blocked;
 
+  // Which of Send/Stop/Queue the one button is. See composerButtonAction, and
+  // composerEscapeAction for the way to Stop that Queue takes the button away from.
+  const buttonAction = composerButtonAction({ streaming, hasContent });
+
   const submit = () => {
     if (!canSubmit) return;
     const prompt = text.trim();
@@ -168,22 +180,28 @@ export function Composer({
   };
 
   /**
-   * Enter sends, Shift+Enter breaks the line, Tab takes the hint. Which is which lives in
-   * composerInput.ts, where the rule that accepting is not sending is stated and tested.
+   * Enter sends, Shift+Enter breaks the line, Tab takes the hint, Escape closes the menu or
+   * stops the turn. Which is which lives in composerInput.ts, where the rule that accepting is
+   * not sending and the rule that Escape stops a live turn are both stated and tested.
    *
    * The skill menu is asked FIRST, because while it is open it is the list the user is looking
-   * at and Enter/Tab belong to it. The two cannot both want a key in practice - a suggestion is
-   * only offered into an EMPTY input, and the menu only opens once a `/` has been typed - but
-   * the order is stated rather than left to that coincidence, so a later change to either
-   * condition cannot quietly make Tab do the wrong one.
+   * at and Enter/Tab/Escape belong to it. Enter and Tab cannot both be wanted in practice - a
+   * suggestion is only offered into an EMPTY input, and the menu only opens once a `/` has been
+   * typed - but the order is stated rather than left to that coincidence, so a later change to
+   * either condition cannot quietly make Tab do the wrong one. Escape genuinely is contested,
+   * and its precedence is decided in one place rather than by where the branches happen to sit.
    */
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Escape') {
+      const escape = composerEscapeAction({ pickerOpen, streaming });
+      if (escape === 'default') return;
+      event.preventDefault();
+      if (escape === 'dismiss-picker') setDismissed(text);
+      else onStop();
+      return;
+    }
+
     if (pickerOpen) {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        setDismissed(text);
-        return;
-      }
       if (matches.length > 0) {
         if (event.key === 'ArrowDown') {
           event.preventDefault();
@@ -299,8 +317,8 @@ export function Composer({
       )}
 
       <Box sx={{ ...contentColumnSx, pt: 1.5 }}>
-        {/* Send and Stop ride INSIDE the input rather than beside it. As siblings in a row they
-            took their own width out of the column, so the input's right edge stopped ~74px short
+        {/* The button rides INSIDE the input rather than beside it. As a sibling in a row it
+            took its own width out of the column, so the input's right edge stopped ~74px short
             of where the transcript ends while every other composer row reached it. */}
         <Textarea
           value={text}
@@ -312,39 +330,61 @@ export function Composer({
           maxRows={8}
           // Joy lays a Textarea's root out as a COLUMN, which is what put Send on a second line
           // inside the border. A row puts it on the text's line, and flex-end keeps it against
-          // the last one as the box grows. The buttons stay flex items rather than being lifted
-          // out and positioned over the text, so the width they need is subtracted from the
-          // text's by the layout itself - which is what keeps text off them when Stop appears
-          // mid-reply and the cluster abruptly gets wider.
+          // the last one as the box grows. The button stays a flex item rather than being lifted
+          // out and positioned over the text, so the width it needs is subtracted from the
+          // text's by the layout itself - which is what keeps text off it as the button swaps
+          // between states mid-reply. Nothing reserves a fixed width for it, so collapsing the
+          // pair to one control needed no number changed here.
           // fontSize rather than size="sm": the smaller size would also shrink the padding and
           // the min-height, and it is only the text that reads too large here. The inner
           // textarea inherits it, so this sets the placeholder and the suggestion hint too.
           sx={{ flexDirection: 'row', alignItems: 'flex-end', fontSize: 'sm' }}
           endDecorator={
-            /* Both at once while a reply runs: stopping this turn and queueing the next one are
-               different intentions, and swapping one control for the other made the second
-               unreachable. Send is labelled for what the click actually does. */
-            <Stack direction="row" spacing={1}>
-              {streaming && (
-                <Button size="sm" variant="soft" color="neutral" onClick={onStop} data-testid="chat-stop-btn">
-                  Stop
-                </Button>
-              )}
-              <Button size="sm" onClick={submit} disabled={!canSubmit} data-testid="chat-send-btn">
-                {streaming ? 'Queue' : 'Send'}
-              </Button>
-            </Stack>
+            /* One button, never two. Stopping this turn and queueing the next one are still
+               different intentions - that has not stopped being true - but a pair of buttons in
+               the corner the user is already typing in made the common click a choice, and only
+               ever one of the two is the obvious one. So the button is whichever the state makes
+               obvious, and the intention it displaces keeps a way through: Escape stops the
+               running turn whatever is in the draft, which is what makes Queue safe to show in
+               Stop's place. See composerButtonAction and composerEscapeAction.
+
+               The testid stays `chat-send-btn` through all three states rather than changing
+               under a test that thought it was asserting presence; `data-composer-action` is
+               what says which control this is. */
+            <Tooltip
+              title={buttonAction === 'stop' ? 'Stop generating (Esc)' : COMPOSER_BUTTON_LABELS[buttonAction]}
+              size="sm"
+              variant="soft"
+              placement="top"
+            >
+              {/* Wrapped so the tooltip still has an element to hang off while Send is
+                  disabled - a disabled button fires no pointer events of its own. */}
+              <Box component="span" sx={{ display: 'inline-flex' }}>
+                <IconButton
+                  size="sm"
+                  variant={buttonAction === 'stop' ? 'soft' : 'solid'}
+                  color={buttonAction === 'stop' ? 'neutral' : 'primary'}
+                  onClick={buttonAction === 'stop' ? onStop : submit}
+                  disabled={buttonAction !== 'stop' && !canSubmit}
+                  aria-label={COMPOSER_BUTTON_LABELS[buttonAction]}
+                  data-composer-action={buttonAction}
+                  data-testid="chat-send-btn"
+                >
+                  {buttonAction === 'stop' ? <StopIcon /> : <ArrowUpIcon />}
+                </IconButton>
+              </Box>
+            </Tooltip>
           }
           // onPaste goes on the inner textarea, not Joy's root: the root is a div, and typing
           // the handler for it would lose the element the paste actually happened in.
           slotProps={{
             // Joy's own decorator margins assume the column: a gap ABOVE, and an inline-start
             // pulled back by the difference between the two paddings. In a row that gap is the
-            // wrong axis and the negative start would drag the buttons over the text. The gap
-            // between text and buttons is the textarea's own paddingInlineEnd.
+            // wrong axis and the negative start would drag the button over the text. The gap
+            // between text and button is the textarea's own paddingInlineEnd.
             endDecorator: { sx: { marginBlockStart: 0, marginInlineStart: 0 } },
             textarea: {
-              // Joy stretches the textarea to the flex line, and Send's 28px min-height makes
+              // Joy stretches the textarea to the flex line, and the button's min-height makes
               // that line taller than one line of text - so the text rendered at the top of the
               // band and every spare pixel fell underneath it (6px above, 13px below). Centring
               // splits them. Only bites while the box is one row; once the text is the tallest

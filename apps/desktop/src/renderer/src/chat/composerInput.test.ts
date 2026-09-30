@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { composerKeyAction, composerPlaceholder, shownSuggestion } from './composerInput';
+import {
+  COMPOSER_BUTTON_LABELS,
+  composerButtonAction,
+  composerEscapeAction,
+  composerKeyAction,
+  composerPlaceholder,
+  shownSuggestion,
+} from './composerInput';
 
 const KEYS: [string, boolean][] = [
   ['Tab', false],
@@ -51,6 +58,69 @@ describe('composerKeyAction', () => {
   it('only ever accepts a suggestion via Tab', () => {
     const accepting = KEYS.filter(([key, shift]) => composerKeyAction(key, shift, true) === 'accept-suggestion');
     expect(accepting).toEqual([['Tab', false]]);
+  });
+});
+
+describe('composerButtonAction', () => {
+  it('offers Send with no reply running, whether or not anything is typed', () => {
+    expect(composerButtonAction({ streaming: false, hasContent: false })).toBe('send');
+    expect(composerButtonAction({ streaming: false, hasContent: true })).toBe('send');
+  });
+
+  it('offers Stop while a reply runs into an empty box', () => {
+    expect(composerButtonAction({ streaming: true, hasContent: false })).toBe('stop');
+  });
+
+  it('becomes Queue the moment the user types ahead of the running reply', () => {
+    expect(composerButtonAction({ streaming: true, hasContent: true })).toBe('queue');
+  });
+
+  // The rule the icons rest on: exactly one control is on screen, whatever the state.
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])('names exactly one control for streaming=%s hasContent=%s', (streaming, hasContent) => {
+    const action = composerButtonAction({ streaming, hasContent });
+    expect(['send', 'stop', 'queue']).toContain(action);
+    expect(COMPOSER_BUTTON_LABELS[action]).toBeTruthy();
+  });
+
+  // An icon-only button's label IS its name. Pinned because a wrong one is invisible on screen.
+  it('labels each state for what the click does', () => {
+    expect(COMPOSER_BUTTON_LABELS).toEqual({
+      send: 'Send message',
+      stop: 'Stop generating',
+      queue: 'Queue message',
+    });
+  });
+});
+
+describe('composerEscapeAction', () => {
+  /**
+   * The load-bearing case. Queue takes the button away from Stop exactly when the user has typed
+   * ahead, so if Escape did not stop the turn here the only way to stop it would be to delete
+   * the draft first. This test is the reason one button is allowed at all.
+   */
+  it('stops the running turn even with a draft typed ahead of it', () => {
+    expect(composerEscapeAction({ pickerOpen: false, streaming: true })).toBe('stop');
+  });
+
+  // The skill menu keeps Escape while it is up: it is the only way to refuse a mis-typed `/`.
+  it('closes the skill menu instead, while that is showing', () => {
+    expect(composerEscapeAction({ pickerOpen: true, streaming: true })).toBe('dismiss-picker');
+    expect(composerEscapeAction({ pickerOpen: true, streaming: false })).toBe('dismiss-picker');
+  });
+
+  it('never stops a turn while the menu owns the key', () => {
+    for (const streaming of [true, false]) {
+      expect(composerEscapeAction({ pickerOpen: true, streaming })).not.toBe('stop');
+    }
+  });
+
+  it('is left to the browser when nothing is running and no menu is up', () => {
+    expect(composerEscapeAction({ pickerOpen: false, streaming: false })).toBe('default');
   });
 });
 
