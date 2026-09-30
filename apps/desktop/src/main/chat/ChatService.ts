@@ -61,6 +61,7 @@ import { findTool, toolsForRequest } from './tools/registry';
 import { assessApprovalRisk, spendsCredits } from './tools/riskAssessment';
 import {
   capOutput,
+  outputCapFor,
   type ApprovalPrompt,
   type ExploreContext,
   type HostContext,
@@ -1555,7 +1556,7 @@ export class ChatService {
         let settled: ChatToolCall;
         try {
           const result = await tool.run(call.input, context);
-          settled = decorate({ ...call, status: 'done', preview: capOutput(result) });
+          settled = decorate({ ...call, status: 'done', preview: capOutput(result, outputCapFor(request.name)) });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.deps.logger.debug(`CHAT: tool ${request.name} failed: ${message}`);
@@ -2321,8 +2322,11 @@ function buildSystemMessage(
       'Tool calls made together in one reply run in parallel, so batch independent searches and',
       'reads into one reply instead of one per turn, and do not re-read lines you already have.',
       'For open-ended exploration across many files, call explore instead - a faster read-only',
-      'sub-agent that returns a report - several in parallel for separate questions. When you',
-      'already know the file or symbol, use grep_search and file_read directly.',
+      'sub-agent that returns a report - several in parallel for separate questions. Say what you',
+      'mean to build so its report ends with the edit points. When you already know the file or',
+      'symbol, use grep_search and file_read directly.',
+      'Treat an explore report as already read: do not re-read ranges it quotes, read only what it',
+      'lacks, and file_edit can match against its quoted text directly.',
       'Running a command needs the user to approve it first, and they see the exact command, so',
       'prefer one clear command over several speculative ones. If they decline, accept it and ask',
       'what they would like instead rather than trying a variation of the same command.',
