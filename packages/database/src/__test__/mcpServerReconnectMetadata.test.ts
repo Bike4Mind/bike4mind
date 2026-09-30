@@ -38,6 +38,7 @@ describe('McpServer metadata leaf-path update (GitHub reconnect)', () => {
       envVariables: [{ key: 'GITHUB_ACCESS_TOKEN', value: 'new' }],
       tools: [],
       'metadata.githubLogin': 'octocat',
+      'metadata.githubUserId': 583231,
       'metadata.connectedAt': '2026-09-30T00:00:00.000Z',
       'metadata.scope': 'repo,read:user',
     } as Partial<IMcpServerDocument>);
@@ -69,6 +70,7 @@ describe('McpServer metadata leaf-path update (GitHub reconnect)', () => {
     const stored = await McpServer.collection.findOne({ _id: insertedId });
     expect(stored?.metadata).toEqual({
       githubLogin: 'octocat',
+      githubUserId: 583231,
       connectedAt: '2026-09-30T00:00:00.000Z',
       scope: 'repo,read:user',
       selectedRepositories: [{ fullName: 'octo/repo', owner: 'octo', repo: 'repo' }],
@@ -84,6 +86,47 @@ describe('McpServer metadata leaf-path update (GitHub reconnect)', () => {
       },
     });
     expect((await mcpServerRepository.findByGitHubWebhookToken('routing-token-1'))?.id).toBe(id);
+  });
+
+  it('keeps a repo selection saved before any identity was stored', async () => {
+    const { insertedId } = await McpServer.collection.insertOne({
+      ...base,
+      metadata: { selectedRepositories: [{ fullName: 'octo/repo', owner: 'octo', repo: 'repo' }] },
+    });
+
+    await reconnect(insertedId.toString());
+
+    const stored = await McpServer.collection.findOne({ _id: insertedId });
+    expect(stored?.metadata).toMatchObject({
+      githubLogin: 'octocat',
+      githubUserId: 583231,
+      selectedRepositories: [{ fullName: 'octo/repo', owner: 'octo', repo: 'repo' }],
+    });
+  });
+
+  it('a different-account full replace drops the old webhook and repo selection', async () => {
+    const { insertedId } = await McpServer.collection.insertOne({
+      ...base,
+      metadata: {
+        githubLogin: 'octocat',
+        githubUserId: 583231,
+        selectedRepositories: [{ fullName: 'octo/repo', owner: 'octo', repo: 'repo' }],
+        webhooks: { github: { routingToken: 'routing-token-1', secret: 's', subscribedEvents: [], repos: [] } },
+      },
+    });
+    const metadata = {
+      githubLogin: 'someone-else',
+      githubUserId: 42,
+      connectedAt: '2026-09-30T00:00:00.000Z',
+      scope: 'repo',
+    };
+
+    await mcpServerRepository.update({ id: insertedId.toString(), enabled: true, tools: [], metadata });
+
+    const stored = await McpServer.collection.findOne({ _id: insertedId });
+    // Mongoose casts the replacement as a subdoc: it gains an _id and the array default.
+    expect(stored?.metadata).toEqual({ ...metadata, _id: expect.anything(), selectedRepositories: [] });
+    expect(await mcpServerRepository.findByGitHubWebhookToken('routing-token-1')).toBeFalsy();
   });
 
   it('creates metadata when the key is absent', async () => {

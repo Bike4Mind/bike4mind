@@ -220,9 +220,15 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
 
     const githubUser = await userResponse.json();
 
-    // Without a login we can't tell a same-account reconnect from a different one, and the fallback
-    // full replace would drop the stored webhook and repo selection.
-    if (!userResponse.ok || typeof githubUser.login !== 'string') {
+    // The reconnect below keys account identity on these; without them a write could mislabel the
+    // connection or drop the stored webhook and repo selection.
+    if (
+      !userResponse.ok ||
+      !githubUser ||
+      typeof githubUser.login !== 'string' ||
+      !githubUser.login ||
+      typeof githubUser.id !== 'number'
+    ) {
       req.logger.error('[GitHub OAuth] GitHub user lookup failed', { userId, status: userResponse.status });
       auditLogger.failure('github_user_lookup_failed');
       return res.redirect(
@@ -255,20 +261,36 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       };
       const connectionMetadata = {
         githubLogin: githubUser.login,
+        githubUserId: githubUser.id,
         connectedAt: new Date().toISOString(),
         scope: grantedScopes.join(','),
       };
       // Same account: write leaf paths so metadata.webhooks.github (the routing token baked into the
       // webhook URL registered on GitHub) and metadata.selectedRepositories survive, including a
-      // concurrent lastDeliveryAt stamp. A different account starts clean: those belong to the old
-      // account's repos. A stored `metadata: null` can't take a dotted $set, so it falls through too.
-      const sameAccount =
-        recentConnection.metadata != null && recentConnection.metadata.githubLogin === githubUser.login;
+      // concurrent lastDeliveryAt stamp. Only a proven different account starts clean, since those
+      // belong to the old account's repos. A stored `metadata: null` can't take a dotted $set, so it
+      // falls through to the full replace too (nothing is stored there to lose).
+      const stored = recentConnection.metadata;
+      let sameAccount: boolean;
+      if (stored == null) {
+        sameAccount = false;
+      } else if (typeof stored.githubUserId === 'number') {
+        sameAccount = stored.githubUserId === githubUser.id;
+      } else if (typeof stored.githubLogin === 'string' && stored.githubLogin) {
+        // Docs written before the immutable id was stored; logins are case-insensitive.
+        sameAccount = stored.githubLogin.toLowerCase() === githubUser.login.toLowerCase();
+      } else {
+        // No stored identity (e.g. a repo selection saved before the first connect): preserve. This can
+        // carry a previous selection forward, which is cheaper than silently wiping a live webhook.
+        sameAccount = true;
+      }
       // Dotted paths aren't expressible in Partial<T>; update() $sets keys as given.
-      const leafUpdate: Partial<IMcpServerDocument> &
-        Record<'metadata.githubLogin' | 'metadata.connectedAt' | 'metadata.scope', string> = {
+      const leafUpdate: Omit<Partial<IMcpServerDocument>, 'metadata'> &
+        Record<'metadata.githubLogin' | 'metadata.connectedAt' | 'metadata.scope', string> &
+        Record<'metadata.githubUserId', number> = {
         ...connectionFields,
         'metadata.githubLogin': connectionMetadata.githubLogin,
+        'metadata.githubUserId': connectionMetadata.githubUserId,
         'metadata.connectedAt': connectionMetadata.connectedAt,
         'metadata.scope': connectionMetadata.scope,
       };
@@ -289,6 +311,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
         tools: [], // Will be populated by dynamic discovery
         metadata: {
           githubLogin: githubUser.login,
+          githubUserId: githubUser.id,
           connectedAt: new Date().toISOString(),
           scope: grantedScopes.join(','),
         },
