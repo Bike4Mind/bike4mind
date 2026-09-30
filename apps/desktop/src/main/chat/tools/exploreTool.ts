@@ -4,7 +4,8 @@ import type { ChatUsage } from '@shared/chat';
 import type { CompletionMessage } from '../completions';
 import { createThinkFilter } from '../thinkFilter';
 import { fileRead, globFiles, grepSearch } from './fileTools';
-import { capOutput, requireString, type ToolContext, type ToolDefinition } from './types';
+import { createLoopTally } from '../turnTiming';
+import { capOutput, MAX_EXPLORE_REPORT_CHARS, requireString, type ToolContext, type ToolDefinition } from './types';
 
 /**
  * Requests one exploration may make, the last of which is told to stop and report. Enough for a
@@ -38,9 +39,10 @@ export const exploreTool: ToolDefinition = {
     name: 'explore',
     description:
       'Hand an open-ended question about the codebase to a faster read-only sub-agent. It searches ' +
-      'and reads on its own (grep_search, glob_files, file_read only) and returns a concise report: ' +
-      'file paths with line numbers, the relevant snippets and conventions, and what it could not ' +
-      'find. Use it for exploration that would take many searches and reads, and call it several ' +
+      'and reads on its own (grep_search, glob_files, file_read only) and returns a report: file ' +
+      'paths with line numbers, the relevant conventions, what it could not find, and an "Edit ' +
+      'points" section quoting verbatim the code you will need to change or copy a pattern from, ' +
+      'so you can file_edit against it without reading those files again. Use it for exploration that would take many searches and reads, and call it several ' +
       'times in one reply with different questions to explore in parallel. When you already know ' +
       'the file or symbol, use grep_search or file_read directly instead.',
     parameters: {
@@ -50,7 +52,8 @@ export const exploreTool: ToolDefinition = {
           type: 'string',
           description:
             'What to find out, stated fully: the sub-agent sees nothing of this conversation. Say what ' +
-            'you will do with the answer so it knows which details matter.',
+            'you intend to build or change, so it can pick the edit points to quote (the code to ' +
+            'edit, and the tests or fixtures to mirror) and you need not read them again.',
         },
         paths: {
           type: 'array',
@@ -81,6 +84,12 @@ export const exploreTool: ToolDefinition = {
     ];
     const tools = EXPLORE_TOOLS.map(tool => ({ toolSchema: tool.schema }));
     let calls = 0;
+    const tally = createLoopTally();
+    // Also on the round-limit exit, which is the slow one worth explaining.
+    const finish = (report: string): string => {
+      context.report?.detail(tally.summary());
+      return report;
+    };
 
     for (let round = 1; round <= MAX_EXPLORE_ROUNDS; round++) {
       const requested: NestedRequest[] = [];
@@ -89,43 +98,51 @@ export const exploreTool: ToolDefinition = {
       let thinking: unknown[] | undefined;
       let usage: ChatUsage | undefined;
 
-      await explore.complete(
-        {
-          model: explore.model,
-          messages,
-          tools,
-          ...(explore.maxTokens ? { maxTokens: explore.maxTokens } : {}),
-        },
-        event => {
-          if (event.type === 'error' || event.type === 'meta') return;
-          if (event.text) text += filter.push(event.text).text;
-          if (event.type === 'tool_use') {
-            if (event.tools) requested.push(...event.tools);
-            if (event.thinking) thinking = event.thinking;
-          }
-          if (event.usage) usage = event.usage;
-        },
-        context.signal
+      await tally.model(() =>
+        explore.complete(
+          {
+            model: explore.model,
+            messages,
+            tools,
+            ...(explore.maxTokens ? { maxTokens: explore.maxTokens } : {}),
+          },
+          event => {
+            if (event.type === 'error' || event.type === 'meta') return;
+            if (event.text) text += filter.push(event.text).text;
+            if (event.type === 'tool_use') {
+              if (event.tools) requested.push(...event.tools);
+              if (event.thinking) thinking = event.thinking;
+            }
+            if (event.usage) usage = event.usage;
+          },
+          context.signal
+        )
       );
       text += filter.flush().text;
       // Within one request the counts are cumulative, so only the last report is billed.
       if (usage) explore.addUsage(usage);
       if (context.signal.aborted) throw new Error('Exploring was stopped.');
 
-      if (requested.length === 0) return capOutput(text.trim() || 'The explorer finished without a report.');
+      if (requested.length === 0)
+        return finish(capOutput(text.trim() || 'The explorer finished without a report.', MAX_EXPLORE_REPORT_CHARS));
       if (round === MAX_EXPLORE_ROUNDS) {
         const partial = text.trim();
-        return capOutput(
-          `${partial ? `${partial}\n\n` : ''}[The explorer reached its ${MAX_EXPLORE_ROUNDS}-round limit before ` +
-            'writing a full report.]'
+        return finish(
+          capOutput(
+            `${partial ? `${partial}\n\n` : ''}[The explorer reached its ${MAX_EXPLORE_ROUNDS}-round limit before ` +
+              'writing a full report.]',
+            MAX_EXPLORE_REPORT_CHARS
+          )
         );
       }
 
-      const results = await Promise.all(
-        requested.map(request => {
-          const index = ++calls;
-          return runNested(request, readContext, line => context.report?.progress(`${line} (call ${index})`));
-        })
+      const results = await tally.tools(() =>
+        Promise.all(
+          requested.map(request => {
+            const index = ++calls;
+            return runNested(request, readContext, line => context.report?.progress(`${line} (call ${index})`));
+          })
+        )
       );
 
       messages.push({
@@ -233,9 +250,21 @@ export function exploreSystemPrompt(context: Pick<ToolContext, 'roots' | 'workin
     'Tool calls made together in one reply run in parallel, so batch every independent search and',
     'read into one reply. Search before you read, then read only the range you need with offset',
     'and limit rather than whole files, and never re-read lines you already have.',
-    'Stop as soon as you can answer. Finish with a concise report for the agent: the relevant file',
-    'paths with line numbers, the key snippets and conventions it needs to follow, and what you',
-    'looked for and could not find. Report only what the tools showed you - no speculation, and',
-    'never invent a path, symbol or line.',
+    'The agent you work for has NOT seen any file. Anything it would need to read again belongs in',
+    'your report, so it can act on the report alone.',
+    'Stop as soon as you can answer. Finish with a report: a short summary with file paths and line',
+    'numbers, the conventions it needs to follow, and what you looked for and could not find.',
+    'Report only what the tools showed you - no speculation, and never invent a path, symbol or line.',
+    'End the report with a section headed "Edit points". List every place the agent will likely',
+    'need to change or copy a pattern from, including existing tests and fixtures the new code',
+    'should mirror. For each one give:',
+    '  - the absolute path and exact line range',
+    '  - the verbatim current code for that range, in a fenced block',
+    '  - a one-line note on why it matters',
+    'Copy each snippet character for character from file_read output, without the line-number',
+    'prefixes, and never paraphrase or abridge it: the agent will match it exactly in an edit.',
+    'Keep each excerpt tight, roughly under 60 lines, but complete enough to edit against. If the',
+    'question does not say what will be built, infer the most likely change. The report may be',
+    `long, but keep it under about ${Math.round(MAX_EXPLORE_REPORT_CHARS / 1000)}k characters and keep the summary short so the Edit points fit.`,
   ].join('\n');
 }

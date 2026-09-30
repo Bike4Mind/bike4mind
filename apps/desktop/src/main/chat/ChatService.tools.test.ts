@@ -277,8 +277,8 @@ describe('ChatService tool loop', () => {
     // so the thread still draws the tool call where it happened.
     const reply = session?.messages.find(message => message.role === 'assistant');
     expect(reply?.rounds).toEqual([
-      { text: 'Reading the config.', toolCallIds: [expect.any(String)] },
-      { text: 'Done.', toolCallIds: [] },
+      { text: 'Reading the config.', toolCallIds: [expect.any(String)], timing: expect.any(Object) },
+      { text: 'Done.', toolCallIds: [], timing: expect.any(Object) },
     ]);
   });
 
@@ -350,5 +350,47 @@ describe('ChatService tool loop', () => {
     await waitFor(events, 'done');
 
     await expect(service.continueReply(id)).resolves.toMatchObject({ ok: false });
+  });
+
+  it('stamps each round and tool call with when it ran, and keeps the stamps off the wire', async () => {
+    let clock = 1_000;
+    const tick = vi.spyOn(Date, 'now').mockImplementation(() => (clock += 10));
+    try {
+      const { id } = await service.createSession();
+      await service.send(id, 'what is the largest file?');
+      await firstRequest();
+      streams[0].write(
+        frame({
+          type: 'tool_use',
+          tools: [{ id: 'call_1', name: 'glob_files', arguments: JSON.stringify({ pattern: '*' }) }],
+        })
+      );
+      streams[0].write(frame('[DONE]'));
+      await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 3000, interval: 5 });
+      streams[1].write(frame({ type: 'content', text: 'huge.bin.' }));
+      streams[1].write(frame('[DONE]'));
+      await waitFor(events, 'done');
+
+      const stored = (await service.getSession(id))?.messages[1];
+      expect(stored?.rounds).toHaveLength(2);
+      for (const round of stored?.rounds ?? []) {
+        const timing = round.timing;
+        expect(timing?.firstTokenAt).toBeDefined();
+        expect(timing!.startedAt).toBeLessThanOrEqual(timing!.firstTokenAt!);
+        expect(timing!.firstTokenAt!).toBeLessThanOrEqual(timing!.endedAt);
+      }
+      expect(stored!.rounds![0].timing!.endedAt).toBeLessThanOrEqual(stored!.rounds![1].timing!.startedAt);
+      const call = stored?.toolCalls?.[0];
+      expect(call?.startedAt).toBeDefined();
+      expect(call!.startedAt!).toBeLessThan(call!.endedAt!);
+
+      await service.send(id, 'and the smallest?');
+      await vi.waitUntil(() => post.mock.calls.length === 3, { timeout: 3000, interval: 5 });
+      const wire = JSON.stringify(post.mock.calls.map(entry => entry[1].messages));
+      expect(wire).toContain('tool_use');
+      expect(wire).not.toMatch(/startedAt|firstTokenAt|endedAt|"timing"|"detail"/);
+    } finally {
+      tick.mockRestore();
+    }
   });
 });

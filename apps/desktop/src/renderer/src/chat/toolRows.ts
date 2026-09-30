@@ -208,6 +208,13 @@ const ARGUMENT_PRIORITY: Record<string, readonly string[]> = {
 const DEFAULT_ARGUMENT_PRIORITY: readonly string[] = ['path', 'pattern', 'command', 'prompt', 'text', 'id'];
 
 /** The argument worth showing next to the tool name - almost always what it acted on. */
+/** "1.2s" for a call that recorded its start and end; undefined for older sessions. */
+export function toolDuration(call: ChatToolCall): string | undefined {
+  if (call.startedAt === undefined || call.endedAt === undefined) return undefined;
+  const ms = Math.max(0, call.endedAt - call.startedAt);
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
 export function summarizeInput(call: ChatToolCall): string {
   const input = call.input ?? {};
   const keys = [...(ARGUMENT_PRIORITY[call.name] ?? []), ...DEFAULT_ARGUMENT_PRIORITY];

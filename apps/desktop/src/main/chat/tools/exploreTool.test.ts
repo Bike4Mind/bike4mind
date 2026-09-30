@@ -5,7 +5,8 @@ import type { ChatUsage } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CompletionRequest } from '../completions';
 import type { CompletionStreamEvent } from '../streamEvents';
-import { describeNested, exploreTool, MAX_EXPLORE_ROUNDS } from './exploreTool';
+import { describeNested, exploreSystemPrompt, exploreTool, MAX_EXPLORE_ROUNDS } from './exploreTool';
+import { MAX_EXPLORE_REPORT_CHARS, MAX_TOOL_OUTPUT_CHARS, outputCapFor } from './types';
 import type { ExploreContext, ToolContext } from './types';
 
 type Reply = CompletionStreamEvent[] | ((signal: AbortSignal) => CompletionStreamEvent[]);
@@ -57,6 +58,7 @@ describe('explore', () => {
         notice: vi.fn(),
         label: vi.fn(),
         diff: vi.fn(),
+        detail: vi.fn(),
       },
     };
   });
@@ -101,6 +103,24 @@ describe('explore', () => {
     expect(progress).toContain('Reading app.ts (call 2)');
   });
 
+  it('records how many rounds it took and where the time went', async () => {
+    const detail = vi.fn();
+    let clock = 0;
+    const tick = vi.spyOn(Date, 'now').mockImplementation(() => (clock += 5));
+    try {
+      const { explore } = fakeExplore([
+        [toolUse([{ name: 'grep_search', input: { pattern: 'answer' } }])],
+        [{ type: 'content', text: 'done' }],
+      ]);
+      await exploreTool.run({ question: 'q' }, { ...context, explore, report: { ...context.report!, detail } });
+    } finally {
+      tick.mockRestore();
+    }
+    expect(detail).toHaveBeenCalledOnce();
+    expect(detail.mock.calls[0][0]).toMatchObject({ rounds: 2, modelMs: 10 });
+    expect(detail.mock.calls[0][0].toolMs).toBeGreaterThan(0);
+  });
+
   it('asks for the report one round before the cap and stops at it', async () => {
     const searching = toolUse([{ name: 'glob_files', input: { pattern: '*' } }]);
     const { explore, requests } = fakeExplore(
@@ -139,6 +159,35 @@ describe('explore', () => {
 
     expect(requests[0].messages[0].content).toContain(root);
     expect(requests[0].messages[1].content).toBe(`q\n\nStart from:\n  ${join(root, 'app.ts')}`);
+  });
+
+  it('requires an edit-points section of verbatim, fenced, line-ranged code', () => {
+    const prompt = exploreSystemPrompt({ roots: [root], workingDirectory: root });
+
+    expect(prompt).toContain('"Edit points"');
+    expect(prompt).toContain('exact line range');
+    expect(prompt).toContain('verbatim current code');
+    expect(prompt).toContain('fenced');
+    expect(prompt).toContain('NOT seen any file');
+  });
+
+  it('does not truncate a long report below the explore cap', async () => {
+    const long = 'x'.repeat(MAX_TOOL_OUTPUT_CHARS + 20_000);
+    const { explore } = fakeExplore([[{ type: 'content', text: long }]]);
+
+    const report = await exploreTool.run({ question: 'q' }, { ...context, explore });
+
+    expect(report).toBe(long);
+    expect(outputCapFor('explore')).toBe(MAX_EXPLORE_REPORT_CHARS);
+    expect(outputCapFor('file_read')).toBe(MAX_TOOL_OUTPUT_CHARS);
+  });
+
+  it('still caps a report past the explore cap', async () => {
+    const { explore } = fakeExplore([[{ type: 'content', text: 'y'.repeat(MAX_EXPLORE_REPORT_CHARS + 10) }]]);
+
+    const report = await exploreTool.run({ question: 'q' }, { ...context, explore });
+
+    expect(report).toContain('[truncated: 10 more characters]');
   });
 
   it('refuses without a transport', async () => {

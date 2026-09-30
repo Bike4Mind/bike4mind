@@ -1,5 +1,6 @@
 import type {
   ChatDiff,
+  ChatToolDetail,
   ChatMedia,
   ChatSessionSummary,
   ChatToolNotice,
@@ -76,6 +77,8 @@ export interface ToolReporter {
    * other channels here, this one is kept off a call that failed. See ChatToolCall.diff.
    */
   diff(value: ChatDiff): void;
+  /** Record what a sub-loop spent; see ChatToolCall.detail. */
+  detail(value: ChatToolDetail): void;
 }
 
 /**
@@ -259,9 +262,20 @@ export interface ToolDefinition {
  */
 export const MAX_TOOL_OUTPUT_CHARS = 30_000;
 
-export function capOutput(text: string): string {
-  if (text.length <= MAX_TOOL_OUTPUT_CHARS) return text;
-  return `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)}\n\n[truncated: ${text.length - MAX_TOOL_OUTPUT_CHARS} more characters]`;
+export function capOutput(text: string, limit = MAX_TOOL_OUTPUT_CHARS): string {
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit)}\n\n[truncated: ${text.length - limit} more characters]`;
+}
+
+/**
+ * Higher than a file or search result because a report quotes the code the caller would otherwise
+ * read again; cutting its tail would cut the edit points, which come last.
+ */
+export const MAX_EXPLORE_REPORT_CHARS = 60_000;
+
+/** The cap a finished call's result is held to before the model sees it. */
+export function outputCapFor(toolName: string): number {
+  return toolName === 'explore' ? MAX_EXPLORE_REPORT_CHARS : MAX_TOOL_OUTPUT_CHARS;
 }
 
 /** Read a required string argument, failing loudly rather than coercing a wrong type. */

@@ -19,7 +19,9 @@ import type {
   ChatSessionStatusEvent,
   ChatSessionSummary,
   ChatStreamEvent,
+  ChatRoundTiming,
   ChatToolCall,
+  ChatToolDetail,
   ChatToolNotice,
   ChatUsage,
   CreateCodeSessionRequest,
@@ -40,6 +42,7 @@ import { ProjectContextCache } from './project/projectContext';
 import { resolveWorkspace, type WorkspaceOutcome } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
+import { startRoundTimer } from './turnTiming';
 import { DEFAULT_COMPLETIONS_PATH, streamCompletion, type CompletionMessage } from './completions';
 import { buildExploreContext } from './explore';
 import { MediaApiClient } from './media/MediaApiClient';
@@ -61,6 +64,7 @@ import { findTool, toolsForRequest } from './tools/registry';
 import { assessApprovalRisk, spendsCredits } from './tools/riskAssessment';
 import {
   capOutput,
+  outputCapFor,
   type ApprovalPrompt,
   type ExploreContext,
   type HostContext,
@@ -298,6 +302,7 @@ interface RawRound {
   text: string;
   toolCallIds: string[];
   reasoning: string;
+  timing: ChatRoundTiming;
 }
 
 /**
@@ -1178,6 +1183,7 @@ export class ChatService {
         let turnUsage: ChatUsage | undefined;
         let turnReasoning = '';
         const splitThinking = createThinkFilter();
+        const timer = startRoundTimer();
         const append = ({ text: visible, reasoning }: ThinkSplit): void => {
           if (reasoning) {
             turnReasoning += reasoning;
@@ -1200,6 +1206,7 @@ export class ChatService {
           event => {
             // `error` never reaches here (the transport throws on it); `meta` carries no reply.
             if (event.type === 'error' || event.type === 'meta') return;
+            if (event.text || event.type === 'tool_use') timer.firstToken();
             if (event.text) append(splitThinking.push(event.text));
             if (event.type === 'tool_use') {
               if (event.tools) requested.push(...event.tools);
@@ -1211,11 +1218,12 @@ export class ChatService {
           controller.signal
         );
         append(splitThinking.flush());
+        const timing = timer.end();
 
         // Recorded before the exits below, so the round that ENDS a turn - the one carrying the
         // answer, which by definition runs no tools - is part of the structure rather than the
         // one piece of prose the thread has to guess a home for.
-        const round: RawRound = { text: turnText, toolCallIds: [], reasoning: turnReasoning };
+        const round: RawRound = { text: turnText, toolCallIds: [], reasoning: turnReasoning, timing };
         produced.push(round);
 
         // Within one request the server's counts are cumulative, so the last report wins; across
@@ -1322,6 +1330,7 @@ export class ChatService {
           .map(entry => ({
             text: entry.content.trim(),
             toolCallIds: entry.round.toolCallIds,
+            timing: entry.round.timing,
             ...(entry.round.reasoning.trim() ? { reasoning: entry.round.reasoning.trim() } : {}),
           }))
           .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning),
@@ -1506,6 +1515,7 @@ export class ChatService {
         let notice: ChatToolNotice | undefined;
         let label: string | undefined;
         let diff: ChatDiff | undefined;
+        let detail: ChatToolDetail | undefined;
         const report: ToolReporter = {
           progress: text => this.emit({ type: 'tool-progress', sessionId, messageId, callId: call.id, text }),
           media: item => attachments.push(item),
@@ -1518,9 +1528,16 @@ export class ChatService {
           diff: value => {
             diff = value;
           },
+          detail: value => {
+            detail = value;
+          },
         };
+        let startedAt = Date.now();
         const decorate = (settled: ChatToolCall): ChatToolCall => ({
           ...settled,
+          startedAt,
+          endedAt: Date.now(),
+          ...(detail ? { detail } : {}),
           ...(attachments.length > 0 ? { media: attachments } : {}),
           ...(notice ? { notice } : {}),
           ...(label ? { label } : {}),
@@ -1550,12 +1567,13 @@ export class ChatService {
         const denial = await this.awaitApproval(tool, call, context, sessionId, scope.title, messageId, signal);
         if (denial) return denial;
 
+        startedAt = Date.now();
         this.emit({ type: 'tool-start', sessionId, messageId, call });
 
         let settled: ChatToolCall;
         try {
           const result = await tool.run(call.input, context);
-          settled = decorate({ ...call, status: 'done', preview: capOutput(result) });
+          settled = decorate({ ...call, status: 'done', preview: capOutput(result, outputCapFor(request.name)) });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.deps.logger.debug(`CHAT: tool ${request.name} failed: ${message}`);
@@ -2321,8 +2339,11 @@ function buildSystemMessage(
       'Tool calls made together in one reply run in parallel, so batch independent searches and',
       'reads into one reply instead of one per turn, and do not re-read lines you already have.',
       'For open-ended exploration across many files, call explore instead - a faster read-only',
-      'sub-agent that returns a report - several in parallel for separate questions. When you',
-      'already know the file or symbol, use grep_search and file_read directly.',
+      'sub-agent that returns a report - several in parallel for separate questions. Say what you',
+      'mean to build so its report ends with the edit points. When you already know the file or',
+      'symbol, use grep_search and file_read directly.',
+      'Treat an explore report as already read: do not re-read ranges it quotes, read only what it',
+      'lacks, and file_edit can match against its quoted text directly.',
       'Running a command needs the user to approve it first, and they see the exact command, so',
       'prefer one clear command over several speculative ones. If they decline, accept it and ask',
       'what they would like instead rather than trying a variation of the same command.',
