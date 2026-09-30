@@ -162,7 +162,9 @@ class ElectronPage implements BrowserPage {
   async screenshot(): Promise<Buffer> {
     const image = await this.contents.capturePage();
     if (image.isEmpty()) throw new Error('The page rendered nothing to capture yet. Try again once it has loaded.');
-    return image.toPNG();
+    // A Retina capture is twice the viewport; the extra pixels only cost the model image tokens.
+    const { width } = image.getSize();
+    return (width > VIEWPORT.width ? image.resize({ width: VIEWPORT.width, quality: 'best' }) : image).toPNG();
   }
 
   async evaluate(expression: string): Promise<unknown> {
