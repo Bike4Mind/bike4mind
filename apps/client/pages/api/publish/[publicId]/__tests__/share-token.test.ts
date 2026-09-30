@@ -36,16 +36,12 @@ vi.mock('@bike4mind/database', () => ({
     findOneAndUpdate: (...a: unknown[]) => ({ lean: () => Promise.resolve(mockFindOneAndUpdate(...a)) }),
     updateOne: (...a: unknown[]) => Promise.resolve(mockUpdateOne(...a)),
   },
-  // Faithful copy of the model's helper - the real one's behavior (including the legacy-scalar
-  // fold-in) is pinned by PublishedArtifactModel.shareToken.test.ts.
-  liveShareTokens: (artifact: { shareToken?: string; shareTokens?: { token?: string; revokedAt?: Date | null }[] }) => {
-    const live = (artifact.shareTokens ?? []).filter(entry => !!entry?.token && !entry.revokedAt);
-    const legacy = artifact.shareToken;
-    if (legacy && !live.some(entry => entry.token === legacy)) {
-      return [{ token: legacy, revokedAt: null }, ...live];
-    }
-    return live;
-  },
+  // Faithful copy of the model's helper - the real one's behavior is pinned by
+  // PublishedArtifactModel.shareToken.test.ts. The legacy-scalar fold-in this used to carry went
+  // with the scalar in #3523, so `shareToken` on a loaded row is now simply ignored, which is
+  // what the two "leftover scalar" cases below assert the handler does.
+  liveShareTokens: (artifact: { shareTokens?: { token?: string; revokedAt?: Date | null }[] }) =>
+    (artifact.shareTokens ?? []).filter(entry => !!entry?.token && !entry.revokedAt),
 }));
 
 vi.mock('@server/services/publish', () => ({ generateShareToken: () => 'TESTTOKEN' }));
@@ -90,16 +86,14 @@ beforeEach(() => {
 
 type ShareEntry = { _id?: unknown; token?: string; createdAt?: Date; revokedAt?: Date | null; viewCount?: number };
 
-// The pipeline's shareTokens stage, shaped for assertion. $concatArrays is
-// [existing, legacyMirror, [new]]: `existing` is a raw $map stage on a rotate, `legacyMirror`
-// is empty except when `additional` has to rescue a pre-backfill scalar-only link, and the
-// appended entry is a plain object.
+// The pipeline's shareTokens stage, shaped for assertion. $concatArrays is [existing, [new]]:
+// `existing` is a raw $map stage on a rotate and a plain $ifNull otherwise, and the appended
+// entry is a plain object. #3523 removed the scalar-mirror `$set` keys and the middle
+// `legacyMirror` slot, which existed only to rescue a pre-backfill scalar-only link.
 interface SharePipelineStage {
   $set: {
-    shareToken: string;
-    shareTokenUpdatedAt: Date;
     shareTokens: {
-      $concatArrays: [{ $map?: { in: { $cond: unknown[] } } }, ShareEntry[], ShareEntry[]];
+      $concatArrays: [{ $map?: { in: { $cond: unknown[] } } }, ShareEntry[]];
     };
   };
 }
@@ -133,28 +127,30 @@ describe('POST /api/publish/[publicId]/share-token', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ shareToken: 'TESTTOKEN', shareUrl: '/a/TESTTOKEN' });
     expect(mockFindOneAndUpdate).toHaveBeenCalledOnce();
-    // The update is an aggregation PIPELINE (a one-stage array), not an update document, so the
-    // scalar mirror and the shareTokens[] append land in one conflict-free write - see the
-    // handler's comment. Hence [0].$set rather than .$set.
+    // The update is an aggregation PIPELINE (a one-stage array), not an update document: a
+    // rotate revokes the outgoing entries and appends the new one in the same `shareTokens`
+    // path, which a plain update rejects as a conflict. Hence [0].$set rather than .$set.
     const [filter, pipeline] = mockFindOneAndUpdate.mock.calls[0] as [
       Record<string, unknown>,
       { $set: Record<string, unknown> }[],
     ];
-    // #3255 step 3: the ARRAY is the arbiter. "No live entry" is the precondition; the scalar
-    // clause only keeps a pre-backfill row from getting a second live link.
+    // The ARRAY is the arbiter (#3255 step 3), and since #3523 it is the ONLY thing pinned -
+    // the `shareToken: { $exists: false }` clause beside this existed to stop a pre-backfill
+    // row getting a second live link, and no such row survives the migration.
     expect(filter.shareTokens).toEqual({ $not: { $elemMatch: { revokedAt: null } } });
-    expect(filter.shareToken).toEqual({ $exists: false });
-    expect(pipeline[0].$set.shareToken).toBe('TESTTOKEN'); // mirrored, not authoritative
-    expect(pipeline[0].$set.shareTokenUpdatedAt).toBeInstanceOf(Date);
+    expect(filter.shareToken).toBeUndefined();
+    // Nothing mirrors the fact any more: one representation, one write, nothing to keep in step.
+    expect(pipeline[0].$set.shareToken).toBeUndefined();
+    expect(pipeline[0].$set.shareTokenUpdatedAt).toBeUndefined();
   });
 
   it('appends the minted link to shareTokens[] in the SAME write', async () => {
-    // One write, or a crash between two could leave the scalar and the array disagreeing about
-    // which links are live.
+    // One write: on a rotate, a crash between revoking the outgoing entries and appending the
+    // new one would leave a rotated-away token still live - a revoked link that keeps working.
     const { promise } = run();
     await promise;
     const [, pipeline] = mockFindOneAndUpdate.mock.calls[0] as [unknown, SharePipelineStage[]];
-    const appended = pipeline[0].$set.shareTokens.$concatArrays[2][0];
+    const appended = pipeline[0].$set.shareTokens.$concatArrays[1][0];
     expect(appended.token).toBe('TESTTOKEN');
     expect(appended.revokedAt).toBeNull();
     expect(appended.viewCount).toBe(0);
@@ -167,7 +163,7 @@ describe('POST /api/publish/[publicId]/share-token', () => {
     const { res, promise } = run();
     await promise;
     const [, pipeline] = mockFindOneAndUpdate.mock.calls[0] as [unknown, SharePipelineStage[]];
-    expect(res._getJSONData().id).toBe(String(pipeline[0].$set.shareTokens.$concatArrays[2][0]._id));
+    expect(res._getJSONData().id).toBe(String(pipeline[0].$set.shareTokens.$concatArrays[1][0]._id));
   });
 
   it('a rotate revokes EVERY live entry in the same write as the append', async () => {
@@ -178,7 +174,7 @@ describe('POST /api/publish/[publicId]/share-token', () => {
     const { promise } = run({ body: { regenerate: true } });
     await promise;
     const [, pipeline] = mockFindOneAndUpdate.mock.calls[0] as [unknown, SharePipelineStage[]];
-    const [kept, , appended] = pipeline[0].$set.shareTokens.$concatArrays;
+    const [kept, appended] = pipeline[0].$set.shareTokens.$concatArrays;
     // Matched on liveness, not on one token: splitting this into a second write would let a
     // crash leave a rotated-away link live.
     expect(kept.$map?.in.$cond[0]).toEqual({ $eq: [{ $ifNull: ['$$entry.revokedAt', null] }, null] });
@@ -206,13 +202,17 @@ describe('POST /api/publish/[publicId]/share-token', () => {
     expect(filter.shareTokens).toEqual({ $elemMatch: { _id: outgoing._id, revokedAt: null } });
   });
 
-  it('rotates a pre-backfill row by pinning the legacy scalar, which is its only handle', async () => {
+  it('ignores a leftover scalar on the loaded row, which the handler no longer reads', async () => {
+    // #3523 dropped the field, but a row written by a pre-migration build - or a caller passing
+    // one - must not steer the handler. With no live ENTRY this is a plain mint, not a rotate of
+    // the scalar, and nothing in the filter mentions it.
     mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareToken: 'LEGACY', shareTokens: [] });
     const { res, promise } = run({ body: { regenerate: true } });
     await promise;
     expect(res._getStatusCode()).toBe(200);
     const [filter] = mockFindOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
-    expect(filter.shareToken).toBe('LEGACY');
+    expect(filter.shareToken).toBeUndefined();
+    expect(filter.shareTokens).toEqual({ $not: { $elemMatch: { revokedAt: null } } });
   });
 
   it('on a lost race (CAS matched nothing), returns the concurrently-persisted link', async () => {
@@ -281,40 +281,18 @@ describe('POST /api/publish/[publicId]/share-token', () => {
       ]);
     });
 
-    it('folds a stranded legacy link into the array instead of overwriting it', async () => {
-      // The pipeline overwrites the scalar with the new token. On a row the backfill missed,
-      // that is the ONLY copy of the existing link - dropping it would kill a URL the owner
-      // has already shared, in the one call that says "keep what I have and add one".
-      mockLoad.mockResolvedValue({
-        publicId: 'pub1',
-        ownerId: 'owner1',
-        shareToken: 'LEGACY',
-        shareTokenUpdatedAt: new Date('2026-09-10T00:00:00.000Z'),
-        shareTokens: [],
-      });
-      const { promise } = run({ body: { additional: true } });
-      await promise;
-      const [filter, pipeline] = mockFindOneAndUpdate.mock.calls[0] as [Record<string, unknown>, SharePipelineStage[]];
-      // Pinned, so a racer that rotated the legacy token away cannot have it resurrected.
-      expect(filter.shareToken).toBe('LEGACY');
-      const parts = pipeline[0].$set.shareTokens.$concatArrays as unknown as Record<string, unknown>[][];
-      const mirrored = parts[1][0] as { token: string; createdAt: Date; revokedAt: null };
-      expect(mirrored.token).toBe('LEGACY');
-      expect(mirrored.revokedAt).toBeNull();
-      // Not "now": the backfill migration made the same choice, so the owner's list does not
-      // claim an old link was created today.
-      expect(mirrored.createdAt).toEqual(new Date('2026-09-10T00:00:00.000Z'));
-      // ...and the new link still lands after it.
-      expect((parts[2][0] as { token: string }).token).toBe('TESTTOKEN');
-    });
-
-    it('adds no mirror entry when every live link is already in the array', async () => {
+    it('appends exactly one entry, with no legacy-rescue slot to fill (#3523)', async () => {
+      // `additional` used to carry a third $concatArrays slot that folded a stranded
+      // scalar-only link into the array before appending. The migration mirrored every such
+      // link, so the slot is gone - and its absence is worth pinning, because reintroducing it
+      // would mean reintroducing the scalar it read.
       mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareTokens: [entry('EXISTING')] });
       const { promise } = run({ body: { additional: true } });
       await promise;
       const [, pipeline] = mockFindOneAndUpdate.mock.calls[0] as [unknown, SharePipelineStage[]];
       const parts = pipeline[0].$set.shareTokens.$concatArrays as unknown as unknown[][];
-      expect(parts[1]).toEqual([]);
+      expect(parts).toHaveLength(2);
+      expect((parts[1][0] as { token: string }).token).toBe('TESTTOKEN');
     });
 
     it('400s past the live-link ceiling rather than growing the array without bound', async () => {
@@ -372,20 +350,20 @@ describe('DELETE /api/publish/[publicId]/share-token', () => {
     });
   });
 
-  it('re-derives the mirrored scalar from the survivors in the same write', async () => {
-    // The scalar is no longer authoritative, but it is still read by a rolled-back build, so it
-    // must never point at a link this write just revoked.
+  it('revokes in ONE stage, with no mirror to re-derive (#3523)', async () => {
+    // This pipeline used to be four stages: the $map, a $filter into a `__live` scratch field, a
+    // $set re-deriving the mirrored scalar from the survivors, and an $unset to clean up. All
+    // three extra stages existed only to stop the scalar pointing at a link the write had just
+    // revoked. Pinned at one stage because the scratch field is the tell: if `__live` comes back,
+    // so has the second representation.
     const [a, b] = [entry('A'), entry('B')];
     mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareTokens: [a, b] });
     const { promise } = run({ method: 'DELETE', query: { id: String(a._id) } });
     await promise;
     const [, pipeline] = mockUpdateOne.mock.calls[0] as [unknown, Record<string, unknown>[]];
-    const mirror = pipeline[2] as { $set: { shareToken: unknown; shareTokenUpdatedAt: unknown } };
-    expect(mirror.$set.shareToken).toEqual({ $ifNull: [{ $last: '$__live.token' }, '$$REMOVE'] });
-    // From the SAME survivor as the token: carrying the old value over would leave the
-    // timestamp describing the link this write just revoked.
-    expect(mirror.$set.shareTokenUpdatedAt).toEqual({ $ifNull: [{ $last: '$__live.createdAt' }, null] });
-    expect(pipeline[3]).toEqual({ $unset: '__live' }); // the scratch field never persists
+    expect(pipeline).toHaveLength(1);
+    expect(JSON.stringify(pipeline)).not.toContain('__live');
+    expect(Object.keys(pipeline[0].$set as object)).toEqual(['shareTokens']);
   });
 
   it('pins a surviving sibling in the WRITE filter when a gate depends on one', async () => {
@@ -583,14 +561,15 @@ describe('GET /api/publish/[publicId]/share-token', () => {
     expect(mockUpdateOne).not.toHaveBeenCalled();
   });
 
-  it('lists a pre-backfill scalar-only link with a null id, so it still renders', async () => {
-    // Such a link has no entry handle to revoke by; the id-less DELETE still revokes it.
+  it('does not list a leftover scalar-only link, which cannot exist post-migration', async () => {
+    // Through #3488 this listed as `{ id: null, ... }` so it would at least render. #3523's
+    // migration mirrored every such link into the array, which is what lets `ShareLinkView.id`
+    // be a plain string - so a row still holding only a scalar reports nothing shared rather
+    // than a link with no handle to revoke by.
     mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareToken: 'LEGACY', shareTokens: [] });
     const { res, promise } = run({ method: 'GET' });
     await promise;
-    expect(res._getJSONData().shareLinks).toEqual([
-      { id: null, shareToken: 'LEGACY', shareUrl: '/a/LEGACY', createdAt: null, viewCount: 0, lastViewedAt: null },
-    ]);
+    expect(res._getJSONData()).toMatchObject({ hasShareToken: false, shareToken: null, shareLinks: [] });
   });
 
   it('reports no link when none has been minted', async () => {

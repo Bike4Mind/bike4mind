@@ -13,7 +13,7 @@ let server: Awaited<ReturnType<typeof createMongoServer>>;
 beforeAll(async () => {
   server = await createMongoServer();
   await mongoose.connect(server.getUri());
-  // Build indexes (incl. the partial-unique shareToken index) before asserting on them.
+  // Build indexes (incl. the partial-unique shareTokens.token index) before asserting on them.
   await PublishedArtifact.init();
 });
 afterAll(async () => {
@@ -37,20 +37,8 @@ const make = (over: Record<string, unknown> = {}) => {
 };
 
 describe('PublishedArtifact shareToken', () => {
-  it('allows many rows with NO shareToken (partial index does not force uniqueness on absent tokens)', async () => {
-    await make();
-    await make();
-    const untokened = await PublishedArtifact.countDocuments({ shareToken: { $exists: false } });
-    expect(untokened).toBeGreaterThanOrEqual(2);
-  });
-
-  it('rejects two rows sharing the same shareToken', async () => {
-    await make({ shareToken: 'DUPLICATE' });
-    await expect(make({ shareToken: 'DUPLICATE' })).rejects.toThrow();
-  });
-
   it('findByShareToken resolves a live row and skips a soft-deleted one', async () => {
-    const doc = await make({ shareToken: 'LIVE-TOKEN' });
+    const doc = await make({ shareTokens: [{ token: 'LIVE-TOKEN' }] });
     const found = await publishedArtifactRepository.findByShareToken('LIVE-TOKEN');
     expect(found?.publicId).toBe(doc.publicId);
 
@@ -58,21 +46,32 @@ describe('PublishedArtifact shareToken', () => {
     expect(await publishedArtifactRepository.findByShareToken('LIVE-TOKEN')).toBeFalsy();
   });
 
-  it('toJSON never serializes the capability token', async () => {
-    const doc = await make({ shareToken: 'SECRET-TOKEN' });
-    const json = doc.toJSON() as Record<string, unknown>;
-    expect(json.publicId).toBe(doc.publicId); // real fields survive
-    expect(json.shareToken).toBeUndefined();
-    expect(json.shareTokenUpdatedAt).toBeUndefined();
-  });
+  it('no longer carries the legacy scalars at all (#3523)', async () => {
+    // The regression guard for the whole of #3523: the point of that change is that there is ONE
+    // representation of a share link, so a reintroduced `shareToken` field - however well meant -
+    // has to fail here rather than quietly become a second copy of the fact that then drifts.
+    // Asserted against the SCHEMA rather than a document, so it catches the field being added back
+    // even before any write uses it.
+    expect(PublishedArtifact.schema.path('shareToken')).toBeUndefined();
+    expect(PublishedArtifact.schema.path('shareTokenUpdatedAt')).toBeUndefined();
 
-  it('a projected lean read (the management GET) omits the token', async () => {
-    const doc = await make({ shareToken: 'PROJECTED-OUT' });
-    const lean = await PublishedArtifact.findOne({ _id: doc._id })
-      .select('-shareToken -shareTokenUpdatedAt')
-      .lean<Record<string, unknown>>();
-    expect(lean?.publicId).toBe(doc.publicId);
+    // And strict mode drops them on the way in, so an old caller still passing them cannot
+    // resurrect the field as an off-schema key.
+    const doc = await make({ shareToken: 'GONE', shareTokenUpdatedAt: new Date() });
+    const lean = await PublishedArtifact.findOne({ _id: doc._id }).lean<Record<string, unknown>>();
     expect(lean?.shareToken).toBeUndefined();
+    expect(lean?.shareTokenUpdatedAt).toBeUndefined();
+
+    // The index goes with the field. `20260921140000_drop-share-token-scalar` drops it in a
+    // deployed database; here the assertion is that the schema never declares it again.
+    const names = Object.keys(
+      PublishedArtifact.schema.indexes().reduce<Record<string, true>>((acc, [spec]) => {
+        Object.keys(spec).forEach(key => (acc[key] = true));
+        return acc;
+      }, {})
+    );
+    expect(names).not.toContain('shareToken');
+    expect(names).toContain('shareTokens.token');
   });
 
   // --- shareTokens[] (#3255 step 1) -------------------------------------------------------
@@ -120,24 +119,23 @@ describe('PublishedArtifact shareToken', () => {
   });
 
   it('a projected lean read omits entry tokens but keeps the entries', async () => {
+    // The management GET's projection, which lost its `-shareToken -shareTokenUpdatedAt` terms
+    // in #3523 - this is the surviving half, and the half that was always doing the real work.
     const doc = await make({ shareTokens: [{ token: 'PROJECTED-ENTRY', viewCount: 3 }] });
     const lean = await PublishedArtifact.findOne({ _id: doc._id })
-      .select('-shareToken -shareTokenUpdatedAt -shareTokens.token')
+      .select('-shareTokens.token')
       .lean<{ shareTokens: Record<string, unknown>[] }>();
     expect(lean?.shareTokens[0].token).toBeUndefined();
     expect(lean?.shareTokens[0].viewCount).toBe(3);
   });
 
-  it('gives a migrated artifact ONE live link, not one per shape', async () => {
-    // What the backfill leaves behind: scalar and array both holding the same token. Counting
-    // them separately would show the owner two links where they have one.
-    const doc = await make({ shareToken: 'MIRRORED', shareTokens: [{ token: 'MIRRORED', revokedAt: null }] });
-    expect(liveShareTokens(doc)).toHaveLength(1);
-  });
-
-  it('folds an un-mirrored legacy token in, so a pre-backfill row still reports its link', async () => {
-    const doc = await make({ shareToken: 'LEGACY-ONLY' });
-    expect(liveShareTokens(doc).map(e => e.token)).toEqual(['LEGACY-ONLY']);
+  it('reports each live entry once, newest last', async () => {
+    // Order is not cosmetic: the route's single-link response fields all derive from the LAST
+    // element, which is the link the retired scalar used to mirror.
+    const doc = await make({
+      shareTokens: [{ token: 'ORDER-OLDER' }, { token: 'ORDER-DEAD', revokedAt: new Date() }, { token: 'ORDER-NEWER' }],
+    });
+    expect(liveShareTokens(doc).map(e => e.token)).toEqual(['ORDER-OLDER', 'ORDER-NEWER']);
   });
 });
 
@@ -156,10 +154,7 @@ describe('per-entry view counting (#3255 step 2)', () => {
     );
 
   it('increments only the matched entry, leaving its siblings untouched', async () => {
-    const doc = await make({
-      shareToken: 'COUNT-A',
-      shareTokens: [{ token: 'COUNT-A' }, { token: 'COUNT-B' }],
-    });
+    const doc = await make({ shareTokens: [{ token: 'COUNT-A' }, { token: 'COUNT-B' }] });
     const [first, second] = doc.shareTokens!;
 
     await bump(doc.publicId, first._id);
@@ -175,7 +170,7 @@ describe('per-entry view counting (#3255 step 2)', () => {
   });
 
   it('leaves the artifact counter intact when arrayFilters matches nothing', async () => {
-    const doc = await make({ shareToken: 'NO-MATCH', shareTokens: [{ token: 'NO-MATCH' }] });
+    const doc = await make({ shareTokens: [{ token: 'NO-MATCH' }] });
 
     await bump(doc.publicId, new mongoose.Types.ObjectId());
 
@@ -186,16 +181,16 @@ describe('per-entry view counting (#3255 step 2)', () => {
     expect(after!.shareTokens![0].viewCount).toBe(0);
   });
 
-  it('shareTokenFilter resolves both shapes and refuses a revoked entry', async () => {
-    const legacy = await make({ shareToken: 'SCALAR-ONLY' });
+  it('shareTokenFilter resolves a live entry and refuses a revoked one', async () => {
     const arrayed = await make({ shareTokens: [{ token: 'ARRAY-LIVE' }] });
     await make({ shareTokens: [{ token: 'ARRAY-DEAD', revokedAt: new Date() }, { token: 'SIBLING-LIVE' }] });
 
     const find = (token: string) => PublishedArtifact.findOne({ deletedAt: null, ...shareTokenFilter(token) }).lean();
 
-    expect((await find('SCALAR-ONLY'))?.publicId).toBe(legacy.publicId);
     expect((await find('ARRAY-LIVE'))?.publicId).toBe(arrayed.publicId);
-    // The $elemMatch is what stops this one resolving on SIBLING-LIVE's strength.
+    // The $elemMatch is what stops this one resolving on SIBLING-LIVE's strength - still the
+    // load-bearing part now that the filter is the $elemMatch alone (#3523).
     expect(await find('ARRAY-DEAD')).toBeNull();
+    expect(await find('SCALAR-ONLY')).toBeNull();
   });
 });

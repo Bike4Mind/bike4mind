@@ -136,25 +136,19 @@ const PublishedArtifactSchema = new Schema(
     },
     gatedToGroupId: { type: String },
 
-    // LEGACY single-link fields. NO LONGER authoritative: `shareTokens` below is the source
-    // of truth and the race arbiter as of #3255 step 3, now that every install has run the
-    // 20260921130000_backfill-share-tokens backfill. These two are still WRITTEN, mirrored to
-    // the newest live entry, purely so a rollback to a build that reads them still serves a
-    // link; retiring them is a follow-up. Do not add readers of these two - use
-    // `liveShareTokens()` (or `findByShareToken`) so both shapes are handled.
-    //
-    // Unguessable capability token for no-sign-in `/a/<shareToken>` links. Distinct
-    // from `publicId` so rotating it revokes outstanding links without touching the
-    // artifact or its `/p/*` URL. Uniqueness enforced via the partial index below
-    // (not `unique: true` on the field, so token-less rows do not collide).
-    shareToken: { type: String },
-    shareTokenUpdatedAt: { type: Date, default: null },
-
     /** Every share link ever minted for this artifact, revoked ones included (an entry is
      *  retained after revocation so its token can never be re-minted and its view count
      *  survives). Live links are the `revokedAt: null` entries - see `liveShareTokens()`.
      *  Each entry's `_id` is the opaque handle the owner UI revokes by, so unlike the other
-     *  subdocuments here this schema keeps its `_id`. */
+     *  subdocuments here this schema keeps its `_id`.
+     *
+     *  THE single representation of a share link, as of #3523. The `shareToken` /
+     *  `shareTokenUpdatedAt` scalars that preceded it were mirrored from the newest live entry
+     *  through #3255 step 3 as a rollback escape hatch, and `20260921140000_drop-share-token-scalar`
+     *  removed them once no deployed build read them any more. Nothing here may reintroduce a
+     *  second copy of this fact: `shareTokenFilter()` and `liveShareTokens()` below are the
+     *  only sanctioned readers, and the owner-facing `shareTokenUpdatedAt` response field is
+     *  DERIVED from the newest live entry rather than stored. */
     shareTokens: { type: [ShareTokenSubSchema], default: [] },
 
     /** Optional gate on top of open sharing - see PublishedArtifactAccessGate.
@@ -237,7 +231,7 @@ const PublishedArtifactSchema = new Schema(
   {
     timestamps: true,
     collection: 'published_artifacts',
-    // shareToken is an unguessable read capability - strip it from serialized docs so it
+    // A share token is an unguessable read capability - strip it from serialized docs so it
     // can never ride along in a full-doc response. Its value is delivered ONLY by the
     // dedicated /share-token endpoint (which reads it via .lean(), bypassing this transform).
     // NOTE: .lean() queries skip this transform, so lean full-doc responses must still
@@ -245,8 +239,6 @@ const PublishedArtifactSchema = new Schema(
     toJSON: {
       virtuals: true,
       transform: (_doc, ret: Record<string, unknown>) => {
-        delete ret.shareToken;
-        delete ret.shareTokenUpdatedAt;
         // Strip the capability from each entry but KEEP the rest: the owner UI needs the id
         // (to revoke by), the timestamps and the per-link count, and none of those grant read
         // access on their own. Dropping `shareTokens` wholesale instead would leave that UI
@@ -269,17 +261,15 @@ PublishedArtifactSchema.index(
   { unique: true, partialFilterExpression: { deletedAt: null } }
 );
 // Unguessable share-token lookup for `/a/<shareToken>`. Partial-unique on string-typed
-// tokens only, so the many rows without a token do not collide on the unique constraint.
-PublishedArtifactSchema.index(
-  { shareToken: 1 },
-  { unique: true, partialFilterExpression: { shareToken: { $type: 'string' } } }
-);
-// Same guarantee for the array shape. The `$type: 'string'` partial filter still does the
-// job it did on the scalar: a row with no links has an EMPTY array, so the `shareTokens.token`
-// path does not exist on it and it stays out of the index entirely - only rows with at least
-// one real token are constrained. Unique is enforced across documents (a multikey index
-// dedupes entries within one document), and covers revoked entries too, which is what stops a
-// revoked token from ever being handed out again.
+// tokens only: a row with no links has an EMPTY array, so the `shareTokens.token` path does
+// not exist on it and it stays out of the index entirely - the same exemption the filter gave
+// token-less rows back when this was a scalar. Unique is enforced across documents (a multikey
+// index dedupes entries within one document), and covers revoked entries too, which is what
+// stops a revoked token from ever being handed out again.
+//
+// The `{ shareToken: 1 }` index this replaced is dropped by
+// `20260921140000_drop-share-token-scalar`; unsetting the field alone would leave the index
+// behind, holding its keys against rows that no longer have the path.
 PublishedArtifactSchema.index(
   { 'shareTokens.token': 1 },
   { unique: true, partialFilterExpression: { 'shareTokens.token': { $type: 'string' } } }
@@ -331,46 +321,42 @@ export interface PublishedArtifactShareToken {
 
 /** The share-link-bearing shape both readers below accept, lean or hydrated. */
 export interface ShareTokenBearing {
-  shareToken?: string | null;
   shareTokens?: PublishedArtifactShareToken[] | null;
 }
 
 /**
- * The query filter that resolves a live artifact by share token, across BOTH storage shapes.
+ * The query filter that resolves a live artifact by share token.
  *
  * The single definition every share-token reader must use - the serve route, the gate POST
- * handlers and `findByShareToken` below all build their query from here, so the rollout
- * tolerance and the revocation semantics cannot drift between them. A token minted before the
- * backfill lives in the scalar, one minted after lives in both.
+ * handlers and `findByShareToken` below all build their query from here, so the revocation
+ * semantics cannot drift between them.
  *
  * The `$elemMatch` is load-bearing: token and `revokedAt: null` must be pinned to the SAME
- * entry, or a revoked link would resolve on the strength of a still-live sibling. The legacy
- * branch needs no such guard - revoking unsets the scalar outright.
+ * entry, or a revoked link would resolve on the strength of a still-live sibling.
  *
  * Callers still add their own `deletedAt: null`, since this is only the token half.
+ *
+ * #3523 removed the `$or` against the legacy `shareToken` scalar. It is kept as a function
+ * returning a filter object, rather than inlined at the four call sites, for the reason it was
+ * introduced: one definition of "this token resolves" is what stops the serve route and the two
+ * gate handlers from disagreeing about whether a revoked link still opens.
  */
 export function shareTokenFilter(shareToken: string): Record<string, unknown> {
-  return {
-    $or: [{ shareToken }, { shareTokens: { $elemMatch: { token: shareToken, revokedAt: null } } }],
-  };
+  return { shareTokens: { $elemMatch: { token: shareToken, revokedAt: null } } };
 }
 
 /**
- * The live links on an artifact, newest last, across BOTH storage shapes.
+ * The live links on an artifact, newest last.
  *
- * During the rollout an artifact may carry the legacy scalar, the array, or (normally) both,
- * so every reader has to go through here rather than touching either field. The legacy scalar
- * is folded in only when the array does not already carry that same token, which is the state
- * the backfill leaves behind - without that check a migrated artifact would report its one
- * link twice.
+ * Newest LAST is the array's own append order and callers depend on it: the route's single-link
+ * response fields all derive from the last element, which is the link the retired scalar used to
+ * mirror.
+ *
+ * #3523 removed the legacy-scalar fold-in. Every live link is now an array entry, which is what
+ * lets the route's `ShareLinkView.id` be a plain string rather than nullable.
  */
 export function liveShareTokens(artifact: ShareTokenBearing): PublishedArtifactShareToken[] {
-  const live = (artifact.shareTokens ?? []).filter(entry => !!entry?.token && !entry.revokedAt);
-  const legacy = artifact.shareToken;
-  if (legacy && !live.some(entry => entry.token === legacy)) {
-    return [{ token: legacy, revokedAt: null }, ...live];
-  }
-  return live;
+  return (artifact.shareTokens ?? []).filter(entry => !!entry?.token && !entry.revokedAt);
 }
 
 export const PublishedArtifact =
