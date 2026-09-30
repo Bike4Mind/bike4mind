@@ -139,7 +139,12 @@ describe('GET /api/users/counterLogs - per-principal rate limit', () => {
    * then read the resulting 200 as a passing assertion. Inside a single test the window cannot
    * roll before the timeout fires, so a slow run goes red instead of green-for-the-wrong-reason.
    */
-  it('serves the last request inside the window, then 429s that principal only', async () => {
+  // retry: 0: EXHAUSTED_USER is a module-level constant, not re-evaluated between attempts, and
+  // its window lives in real Mongo for the file's whole run - a retried attempt would start from
+  // whatever the failed attempt already charged, not a fresh window, and re-fail on a different,
+  // misleading assertion instead of reproducing the original failure or self-healing past timing
+  // noise.
+  it('serves the last request inside the window, then 429s that principal only', { retry: 0 }, async () => {
     // Read before the first request, so it is never later than the window the limiter opens.
     const windowOpenedAt = Date.now();
     // One short of the limit, so the route's own request is the one that fills it - a limiter
