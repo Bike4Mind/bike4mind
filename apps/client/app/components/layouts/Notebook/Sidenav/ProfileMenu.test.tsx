@@ -1,9 +1,49 @@
 import React from 'react';
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { AccountCard, closeSideNavOnOverlay } from './ProfileMenu';
+import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
+import ProfileMenu, { AccountCard, closeSideNavOnOverlay } from './ProfileMenu';
+
+// Just enough of the menu's data hooks to render it; none of these rows are under test here.
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string, fallback?: string) => fallback ?? key }),
+}));
+vi.mock('@client/app/components/inbox/Badge', () => ({
+  default: ({ children }: { children: React.ReactNode }) => children,
+}));
+vi.mock('@client/app/components/subscription/CreditsModal', () => ({ default: () => null }));
+vi.mock('@client/app/components/subscription/SubscriptionModal', () => ({ default: () => null }));
+vi.mock('@client/app/contexts/InboxContext', () => ({
+  useInbox: { getState: () => ({ setOpen: vi.fn() }) },
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: (select: (s: unknown) => unknown) => select({ currentUser: { id: 'u1', name: 'Jane' }, isAdmin: false }),
+}));
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => vi.fn() }));
+vi.mock('@client/app/hooks/data/settings', () => ({ useGetSettingsValue: () => false }));
+vi.mock('@client/app/hooks/data/user', () => ({
+  useGetFriendRequests: () => ({ data: [] }),
+  useReturnToAdmin: () => vi.fn(),
+  useUserLogout: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+vi.mock('@client/app/hooks/useAccessToken', () => ({
+  useAccessToken: (select: (s: unknown) => unknown) => select({ impersonating: false }),
+}));
+vi.mock('@client/app/hooks/useAppVersion', () => ({ useAppVersion: () => ({ data: undefined }) }));
+vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
+  useFeatureEnabled: () => ({ isFeatureEnabled: () => false }),
+}));
+vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsTablet: () => false }));
+vi.mock('@client/app/hooks/data/entitlements', () => ({ useEntitlements: () => ({ data: undefined }) }));
+vi.mock('@client/app/components/Credits/AccountSelector', () => ({
+  useAccounts: () => ({ accounts: [], selectedAccount: null, setSelectedAccount: vi.fn(), showAccountType: false }),
+}));
+vi.mock('..', () => ({
+  useNotebookLayout: (select: (s: unknown) => unknown) => select({ setOpenSideNav: vi.fn() }),
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -49,5 +89,46 @@ describe('closeSideNavOnOverlay', () => {
     closeSideNavOnOverlay(false, setOpenSideNav);
 
     expect(setOpenSideNav).not.toHaveBeenCalled();
+  });
+});
+
+describe('ProfileMenu - Cookie settings', () => {
+  const TRACKER_ENV = ['NEXT_PUBLIC_GA_MEASUREMENT_ID', 'NEXT_PUBLIC_REDDIT_PIXEL_ID', 'NEXT_PUBLIC_META_PIXEL_ID'];
+
+  beforeEach(() => {
+    for (const name of TRACKER_ENV) vi.stubEnv(name, '');
+    useCookieSettings.setState({ isOpen: false });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const openMoreFlyout = () => {
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('profile-menu-card'));
+    fireEvent.click(screen.getByTestId('profile-menu-more'));
+  };
+
+  it('reopens the consent banner from the More flyout and closes the menu', () => {
+    vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', 'test-id');
+    openMoreFlyout();
+
+    fireEvent.click(screen.getByTestId('profile-more-cookie-settings'));
+
+    expect(useCookieSettings.getState().isOpen).toBe(true);
+    expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+  });
+
+  it('opens settings for attribution consent when no tracker is configured', () => {
+    openMoreFlyout();
+
+    expect(screen.getByTestId('profile-more-terms')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('profile-more-cookie-settings'));
+    expect(useCookieSettings.getState().isOpen).toBe(true);
   });
 });

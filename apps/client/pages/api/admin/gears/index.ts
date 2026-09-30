@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { gearOverrideRepository, GearOverride } from '@bike4mind/database';
 import { GEAR_PRESENTATION } from '@client/lib/gears/presentation';
-import { GEAR_DEFAULTS, GEAR_CREDITS_SCALE } from '../../gears/status';
+import { GEAR_DEFAULTS, GEAR_CREDITS_SCALE } from '@server/services/gears/catalog';
 import { z } from 'zod';
 
 /**

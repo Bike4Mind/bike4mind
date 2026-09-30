@@ -76,6 +76,12 @@ const specProjects = [
     testMatch: /(?:^|\/)skills\.spec\.ts$/,
     auth: './e2e/.auth/skills-user.json',
   },
+  {
+    name: 'credits',
+    setupMatch: /(?:^|\/)credits\.setup\.ts$/,
+    testMatch: /(?:^|\/)credits\.spec\.ts$/,
+    auth: './e2e/.auth/credits-user.json',
+  },
   // Byte-fidelity suite: opt-in via EXPORT_BYTES_RUN. Three tests that each wait out an async S3
   // moderation scan before the export can embed anything, so left in the default set they would
   // eat most of the suite's 30-min globalTimeout on the serial (PW_WORKERS=1) label run and fail
@@ -145,6 +151,8 @@ export default defineConfig({
     baseURL: process.env.API_URL || 'http://localhost:3000',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    // Kept only for failing attempts; scripts/qa-report.mjs uploads it for /status.
+    video: 'retain-on-failure',
   },
 
   projects: [

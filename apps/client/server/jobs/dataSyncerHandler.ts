@@ -1,26 +1,17 @@
 /**
  * DataSyncer Lambda Handler
  *
- * Syncs data from production B4M to the current environment:
- * 1. Rapid reply mappings - always synced when handler is invoked
- * 2. Preview settings - only synced for preview environments (pr* stages)
+ * Seeds a preview environment (pr* stages) with staging's config on its first deploy:
+ * adminsettings (minus sensitive rows) and rapid reply mappings, copied directly between
+ * the two MongoDB databases. A syncmarkers doc makes later deploys of the same preview skip.
  *
- * Triggered during deployment via GitHub Actions workflow when:
- * - vars.SYNC_RAPID_REPLY_MAPPINGS=true (staging/customer staging)
- * - OR it's a preview environment (unless explicitly disabled)
- *
- * Flow:
- * 1. Fetch rapid reply mappings from production B4M API using B4M_PROD_API_KEY
- * 2. Clear existing mappings and insert fresh data from production
- * 3. If preview environment (pr*): Sync adminsettings collection directly from staging MongoDB
+ * Triggered during deployment by scripts/invoke-data-syncer.mjs when SYNC_PREVIEW_SETTINGS=true.
  */
 
 import { Resource } from 'sst';
 import type { Handler } from 'aws-lambda';
-import mongoose from 'mongoose';
 import { MongoClient } from 'mongodb';
-import { isPlaceholderValue, settingsMap } from '@bike4mind/common';
-import { rapidReplyMappingRepository } from '@bike4mind/database/ai';
+import { settingsMap } from '@bike4mind/common';
 
 interface DataSyncerEvent {
   // Whether to sync preview settings from staging (only on initial PR deploy)
@@ -30,19 +21,14 @@ interface DataSyncerEvent {
 interface DataSyncerResponse {
   success: boolean;
   message: string;
-  rapidReplySyncedCount?: number;
   previewSettingsSyncedCount?: number;
   error?: string;
 }
 
-// Production app URL this non-prod job pulls config FROM. Must be the PRODUCTION host (not the
-// deploying stage's SERVER_DOMAIN), so it derives from PROD_SERVER_DOMAIN - the account-tied
-// production domain, available on every stage with no brand fallback. Empty when
-// unconfigured, in which case the sync is skipped/fails fast rather than hitting the wrong host.
-const PRODUCTION_B4M_URL = process.env.PROD_SERVER_DOMAIN ? `https://app.${process.env.PROD_SERVER_DOMAIN}` : '';
-
 // Collections to sync from staging to preview environments
-const COLLECTIONS_TO_SYNC = ['adminsettings'];
+// rapidreplymappings: previews seed their mappings from staging, the curated source (the
+// migration seed alone leaves most models with no mapping, so rapid reply is effectively off).
+const COLLECTIONS_TO_SYNC = ['adminsettings', 'rapidreplymappings'];
 
 // isSensitive admin settings are encrypted at rest under the SOURCE stage's SECRET_ENCRYPTION_KEY.
 // A preview stage does not have that key linked (SST secrets are per-stage), so copying the
@@ -74,93 +60,9 @@ const SYNC_MARKER_KEY = 'staging-config-sync';
 // Staging MongoDB URI is provided via environment variable (from GitHub secret)
 // This allows staging and preview to be on different clusters
 
-async function syncRapidReplyMappings(): Promise<number> {
-  console.log('=== Syncing Rapid Reply Mappings ===');
-  console.log('Connecting to MongoDB via mongoose...');
-
-  // Replace %STAGE% placeholder in MONGODB_URI with actual stage name
-  const stage = process.env.SEED_STAGE_NAME || 'unknown';
-  const mongodbUri = Resource.MONGODB_URI.value.replace('%STAGE%', stage);
-
-  await mongoose.connect(mongodbUri);
-
-  console.log('Fetching rapid reply mappings from production...');
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout for production sync
-
-  let response: Response;
-  try {
-    response = await fetch(`${PRODUCTION_B4M_URL}/api/admin/rapid-reply/mappings`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': Resource.B4M_PROD_API_KEY.value,
-      },
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-  } catch (fetchError) {
-    clearTimeout(timeoutId);
-    if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-      console.warn('WARNING: Fetch from production timed out after 30s');
-      return 0;
-    }
-    throw fetchError;
-  }
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.warn(
-      `WARNING: Failed to fetch rapid reply mappings from production. Status: ${response.status}. Error: ${errorText}`
-    );
-    return 0;
-  }
-
-  const data = (await response.json()) as { mappings: unknown[] };
-
-  if (!data.mappings || !Array.isArray(data.mappings)) {
-    console.warn('WARNING: Production response did not contain mappings array');
-    return 0;
-  }
-
-  console.log(`Fetched ${data.mappings.length} rapid reply mappings from production`);
-
-  if (data.mappings.length === 0) {
-    console.log('No mappings to sync from production');
-    return 0;
-  }
-
-  console.log('Clearing existing rapid reply mappings...');
-  const existingMappings = await rapidReplyMappingRepository.findAll();
-  for (const mapping of existingMappings) {
-    await rapidReplyMappingRepository.deleteMapping(mapping.id);
-  }
-  console.log(`Cleared ${existingMappings.length} existing mappings`);
-
-  console.log('Inserting new mappings from production...');
-  let syncedCount = 0;
-  for (const mapping of data.mappings) {
-    try {
-      const mappingRecord = mapping as Record<string, unknown>;
-      const { _id, id, createdAt, updatedAt, ...mappingData } = mappingRecord;
-
-      await rapidReplyMappingRepository.createMapping({
-        ...(mappingData as Parameters<typeof rapidReplyMappingRepository.createMapping>[0]),
-        createdBy: 'system-sync',
-      });
-      syncedCount++;
-    } catch (error) {
-      const mappingRecord = mapping as Record<string, unknown>;
-      console.error(`Failed to insert mapping for mainModelId ${mappingRecord.mainModelId}:`, error);
-    }
-  }
-
-  console.log(`Successfully synced ${syncedCount} of ${data.mappings.length} rapid reply mappings`);
-  return syncedCount;
-}
-
-async function syncPreviewSettingsFromStaging(): Promise<number> {
+// `skipped` names why nothing was copied, so the deploy log (which only sees the response) can tell
+// an already-synced preview from a misconfigured one.
+async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipped?: string }> {
   console.log('=== Syncing Preview Settings from Staging ===');
 
   const stage = process.env.SEED_STAGE_NAME || 'unknown';
@@ -170,7 +72,7 @@ async function syncPreviewSettingsFromStaging(): Promise<number> {
     console.error(
       `✗ Error: Target stage "${stage}" is not a valid preview environment (must match pr<number>). Sync aborted for safety.`
     );
-    return 0;
+    return { synced: 0, skipped: `target stage "${stage}" is not a preview (pr<number>)` };
   }
 
   const stagingUri = process.env.STAGING_MONGODB_URI;
@@ -178,13 +80,13 @@ async function syncPreviewSettingsFromStaging(): Promise<number> {
 
   if (!stagingUri) {
     console.log('⏭️  STAGING_MONGODB_URI not configured. Skipping preview settings sync.');
-    return 0;
+    return { synced: 0, skipped: 'STAGING_MONGODB_URI not configured' };
   }
 
   // Safety check: abort if source and target are the same database
   if (stagingUri === previewUri) {
     console.error('✗ Error: Source and target MongoDB URIs are identical. Sync aborted to prevent data loss.');
-    return 0;
+    return { synced: 0, skipped: 'source and target URIs are identical' };
   }
 
   console.log(`  Source: staging (from STAGING_MONGODB_URI)`);
@@ -206,7 +108,7 @@ async function syncPreviewSettingsFromStaging(): Promise<number> {
       const markerDoc = existingMarker as { syncedAt?: Date };
       console.log(`✓ Staging configs already synced at ${markerDoc.syncedAt?.toISOString()}, skipping`);
       console.log('  (To force re-sync, delete the marker from the syncmarkers collection)');
-      return 0;
+      return { synced: 0, skipped: `already synced at ${markerDoc.syncedAt?.toISOString()}` };
     }
 
     await sourceClient.connect();
@@ -240,6 +142,10 @@ async function syncPreviewSettingsFromStaging(): Promise<number> {
 
       console.log(`  - Found ${totalDocs} documents in source.`);
 
+      // Rollback touches the target only once its backup is complete, i.e. from the clear on:
+      // before that the target is intact and the backup may be partial. Set before the clear
+      // because deleteMany is not atomic and can fail with the target half-deleted.
+      let backupComplete = false;
       try {
         // Drop any stale backup from a previous failed run
         await backupCollection.drop().catch((err: Error) => {
@@ -267,6 +173,7 @@ async function syncPreviewSettingsFromStaging(): Promise<number> {
           console.log(`  - Backup created in ${backupCollectionName}`);
         }
 
+        backupComplete = true;
         const deleteResult = await targetCollection.deleteMany({});
         console.log(`  - Cleared ${deleteResult.deletedCount} existing documents in target.`);
 
@@ -302,12 +209,14 @@ async function syncPreviewSettingsFromStaging(): Promise<number> {
       } catch (error) {
         console.error(`  ✗ Error syncing ${collectionName}:`, error instanceof Error ? error.message : error);
 
-        // Attempt rollback from backup
-        const backupCount = await backupCollection.countDocuments({});
-        if (backupCount > 0) {
-          console.log(`  - Attempting rollback from backup (${backupCount} documents)...`);
+        if (backupComplete) {
           try {
+            // Clear partial inserts first: they are not in the backup and can collide with it on
+            // unique indexes (e.g. rapidreplymappings.mainModelId), failing the upserts below.
+            await targetCollection.deleteMany({});
             const backupDocs = await backupCollection.find({}).toArray();
+            const backupCount = backupDocs.length;
+            console.log(`  - Attempting rollback from backup (${backupCount} documents)...`);
             const bulkOps = backupDocs.map(doc => ({
               replaceOne: {
                 filter: { _id: doc._id },
@@ -330,6 +239,8 @@ async function syncPreviewSettingsFromStaging(): Promise<number> {
               rollbackError instanceof Error ? rollbackError.message : rollbackError
             );
           }
+        } else {
+          console.log('  - Target was not modified yet; leaving it untouched.');
         }
 
         throw error;
@@ -349,7 +260,7 @@ async function syncPreviewSettingsFromStaging(): Promise<number> {
     console.log('✓ MongoDB connections closed');
   }
 
-  return totalSynced;
+  return { synced: totalSynced };
 }
 
 export const handler: Handler<DataSyncerEvent, DataSyncerResponse> = async event => {
@@ -363,16 +274,10 @@ export const handler: Handler<DataSyncerEvent, DataSyncerResponse> = async event
     `Environment check: SEED_STAGE_NAME=${process.env.SEED_STAGE_NAME}, isPreviewEnvironment=${isPreviewEnvironment}, shouldSyncPreviewSettings=${shouldSyncPreviewSettings}`
   );
 
-  let rapidReplySyncedCount = 0;
   let previewSettingsSyncedCount = 0;
   const messages: string[] = [];
 
   try {
-    // Validate required secrets
-    if (!Resource.B4M_PROD_API_KEY?.value || isPlaceholderValue(Resource.B4M_PROD_API_KEY.value)) {
-      throw new Error('B4M_PROD_API_KEY secret is not configured');
-    }
-
     if (!Resource.MONGODB_URI?.value) {
       throw new Error('MONGODB_URI secret is not configured');
     }
@@ -382,28 +287,17 @@ export const handler: Handler<DataSyncerEvent, DataSyncerResponse> = async event
       throw new Error('SEED_STAGE_NAME environment variable is not set - required for MONGODB_URI stage replacement');
     }
 
-    // Always sync rapid reply mappings (when handler is invoked)
-    try {
-      rapidReplySyncedCount = await syncRapidReplyMappings();
-      messages.push(`Synced ${rapidReplySyncedCount} rapid reply mappings`);
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-      console.error('Error syncing rapid reply mappings:', error);
-      messages.push(`Rapid reply sync failed: ${errorMsg}`);
-    } finally {
-      // Clean up mongoose connection
-      if (mongoose.connection.readyState === 1) {
-        await mongoose.connection.close();
-        console.log('Mongoose connection closed');
-      }
-    }
-
     // Sync preview settings from staging (only on initial PR deploy when SYNC_PREVIEW_SETTINGS=true)
     if (shouldSyncPreviewSettings) {
       try {
-        previewSettingsSyncedCount = await syncPreviewSettingsFromStaging();
+        const { synced, skipped } = await syncPreviewSettingsFromStaging();
+        previewSettingsSyncedCount = synced;
         const collectionsStr = COLLECTIONS_TO_SYNC.join(', ');
-        messages.push(`Synced ${previewSettingsSyncedCount} documents from staging (collections: ${collectionsStr})`);
+        messages.push(
+          skipped
+            ? `Skipped staging sync: ${skipped}`
+            : `Synced ${synced} documents from staging (collections: ${collectionsStr})`
+        );
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
         console.error('Error syncing preview settings from staging:', error);
@@ -417,7 +311,6 @@ export const handler: Handler<DataSyncerEvent, DataSyncerResponse> = async event
     return {
       success: true,
       message: messages.length > 0 ? messages.join('; ') : 'No sync operations performed',
-      rapidReplySyncedCount,
       previewSettingsSyncedCount,
     };
   } catch (error) {
@@ -431,13 +324,7 @@ export const handler: Handler<DataSyncerEvent, DataSyncerResponse> = async event
       success: true, // Return success to not block deployment
       message: `Warning: Sync failed but deployment will continue. Error: ${errorMessage}`,
       error: errorMessage,
-      rapidReplySyncedCount,
       previewSettingsSyncedCount,
     };
-  } finally {
-    if (mongoose.connection.readyState === 1) {
-      await mongoose.connection.close();
-      console.log('Final cleanup: Mongoose connection closed');
-    }
   }
 };

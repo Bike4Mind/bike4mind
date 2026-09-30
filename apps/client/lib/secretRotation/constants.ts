@@ -161,12 +161,6 @@ export const SECRET_ROTATION_CONFIG: {
   },
 
   // ── Application Keys ───────────────────────────────────────────────────────
-  B4M_PROD_API_KEY: {
-    description: 'Production API key',
-    rotationIntervalDays: 180,
-    isAutomatic: false,
-    rotationProcess: 'Generate new key and update SST Secret',
-  },
   NPM_TOKEN: {
     description: 'npm access token for private package publishing',
     rotationIntervalDays: 180,

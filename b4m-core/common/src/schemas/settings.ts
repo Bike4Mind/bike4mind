@@ -2164,7 +2164,7 @@ export const settingsMap = {
     name: 'Data Lakes: Use Atlas $vectorSearch',
     defaultValue: false,
     description:
-      'Kill-switch for the Atlas $vectorSearch cutover on Data Lake semantic search. Off by default; even when on, only files whose chunks are fully re-indexed on an Atlas backend actually use it - everything else keeps using the brute-force scan.',
+      'Kill-switch for the Atlas $vectorSearch cutover on Data Lake semantic search. Off by default; even when on, only files whose chunks are fully re-indexed on an Atlas backend actually use it - everything else keeps using the brute-force scan. Also lets forced retrieval choose which files to score by relevance on a scope larger than its candidate cap, instead of alphabetically by file name.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 92,

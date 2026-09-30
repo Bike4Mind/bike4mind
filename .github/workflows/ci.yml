@@ -439,9 +439,9 @@ jobs:
   #     nothing runs twice and nothing is dropped.
   #   - services: by far the heaviest remaining package (test-file count and
   #     Mongo-backed setup cost), alone so it doesn't drag down a shared bucket.
-  #   - cli-slack, data: hand-grouped buckets of the next-heaviest packages, kept
-  #     under a bounded per-package worker pool (VITEST_MAX_WORKERS) so concurrent
-  #     packages don't oversubscribe CPU. See vitest.shared.ts.
+  #   - cli-slack, data: hand-grouped buckets of the next-heaviest packages. Their
+  #     packages run one at a time (see the workspace-concurrency note on the test
+  #     step), each with the whole runner's worker pool.
   #   - misc: a NEGATION catch-all (every non-client package minus the ones
   #     explicitly placed above) instead of an explicit include list. This makes
   #     bucket coverage complete by construction: a package with a `test` script
@@ -454,10 +454,11 @@ jobs:
   # status check.
   test-shards:
     needs: core-build
-    # Medium tier: the ubuntu-latest-m GitHub-hosted larger runner, via
-    # RUNNER_LABEL_MEDIUM. Pinned to the MEDIUM tier rather than the deploy's HEAVY
-    # tier so raising HEAVY (e.g. to ubuntu-latest-l for the deploy runner) does not
-    # drag the test-shard fan-out onto the larger, pricier runner.
+    # Medium tier, via RUNNER_LABEL_MEDIUM. Pinned to the MEDIUM tier rather than the
+    # deploy's HEAVY tier so raising HEAVY (e.g. to ubuntu-latest-l for the deploy runner)
+    # does not drag the test-shard fan-out onto the larger, pricier runner. The variable
+    # currently resolves to the standard 4-vCPU ubuntu-latest, not the fallback label, so
+    # size worker budgets for 4 cores.
     runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: Run Tests (${{ matrix.shard.name }})
     # Hard ceiling, not a budget: it costs nothing when a shard finishes early, and its only
@@ -531,18 +532,24 @@ jobs:
             workers: '2'
             script: 'test:integration'
             args: '--shard=3/3'
+          # apps/workers' real-Mongo suites, split off its unit lane (which runs in `misc` below)
+          # for the same mongod-contention reason as client-integration above. Unsharded: the lane
+          # holds only a few files. See apps/workers/vitest.config.mts.
+          - name: workers-integration
+            filter: '--filter @bike4mind/workers'
+            workers: '2'
+            script: 'test:integration'
           - name: services
             filter: '--filter @bike4mind/services'
             workers: ''
-          # Many packages run concurrently in the buckets below; cap each
-          # package's pool so `workspace-concurrency (4) x workers ~= cores`,
-          # no oversubscription.
+          # The buckets below hold several packages, but the step runs them one at a time, so
+          # each still owns the runner and needs no per-package cap.
           - name: cli-slack
             filter: '--filter @bike4mind/cli --filter @bike4mind/slack --filter @bike4mind/voice'
-            workers: '25%'
+            workers: ''
           - name: data
             filter: '--filter @bike4mind/common --filter @bike4mind/database --filter @bike4mind/db-core --filter @bike4mind/core'
-            workers: '25%'
+            workers: ''
           # The catch-all: every workspace package the buckets above do not name. A `filter`
           # value reaches the step as an env var and is split on whitespace into argv, so the
           # tokens here must be BARE. Quotes around a pattern are not shell quoting at this
@@ -550,7 +557,7 @@ jobs:
           # nothing. `!` needs no quoting either: history expansion is interactive-only.
           - name: misc
             filter: '--filter !@bike4mind/client --filter !@bike4mind/services --filter !@bike4mind/cli --filter !@bike4mind/slack --filter !@bike4mind/voice --filter !@bike4mind/common --filter !@bike4mind/database --filter !@bike4mind/db-core --filter !@bike4mind/core'
-            workers: '25%'
+            workers: ''
 
     steps:
       - name: Checkout code
@@ -640,8 +647,8 @@ jobs:
       - name: Mark shard start
         run: echo "SHARD_START_SECONDS=$(date +%s)" >> "$GITHUB_ENV"
 
-      # `matrix.shard.script` is unset on every shard but the three client-integration
-      # ones, and an unset matrix value is the empty string here, so `||` falls back
+      # `matrix.shard.script` is unset on every shard but the integration ones (client and
+      # workers), and an unset matrix value is the empty string here, so `||` falls back
       # to the unit `test` script. `matrix.shard.args` is likewise set only on the
       # shard legs (three client, three client-integration), where it carries
       # `--shard=i/3` - deliberately with no `--` separator before it, see the matrix
@@ -650,6 +657,13 @@ jobs:
         env:
           CI: true
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}
+          # mongod data on tmpfs for the real-Mongo lane. Every file boots a mongod that creates
+          # ~200 collections plus their indexes on connect, which is fsync-bound: on a slow runner
+          # disk that phase alone ran 5x long while CPU-bound import time did not move, and the
+          # lane's timeouts followed it. mongodb-memory-server puts dbPath under os.tmpdir().
+          # Scoped to this lane because unit suites write and exec scripts under the tmpdir, and
+          # an empty value falls back to /tmp.
+          TMPDIR: ${{ matrix.shard.script == 'test:integration' && '/dev/shm' || '' }}
           SHARD_NAME: ${{ matrix.shard.name }}
           SHARD_FILTER: ${{ matrix.shard.filter }}
           SHARD_SCRIPT: ${{ matrix.shard.script || 'test' }}
@@ -675,11 +689,17 @@ jobs:
             exit 1
           fi
 
-          pnpm --recursive --workspace-concurrency=4 "${filter_args[@]}" "$SHARD_SCRIPT" "${script_args[@]}"
+          # One package at a time: vitest sizes each package's pool to the whole runner, so N
+          # concurrent packages meant N pools (and N sets of mongods) on the same cores, and a
+          # per-package cap cannot fix that because pnpm runs dependents last - the heaviest
+          # packages (database, scripts) ended up alone on a pool capped at a quarter of the box.
+          # Serial with full pools measured faster on the data and misc legs, with no
+          # oversubscription by construction. vitestWorkerBudget.test.ts pins this.
+          pnpm --recursive --workspace-concurrency=1 "${filter_args[@]}" "$SHARD_SCRIPT" "${script_args[@]}"
 
       # Tests that live outside every pnpm workspace, which the sharded run above cannot reach:
-      # infra/ has no package.json, and scripts/codemods is not in pnpm-workspace.yaml, so
-      # `pnpm --recursive ... test` has no project to run in either. They passed locally and
+      # infra/ has no package.json, and scripts/codemods and scripts/__tests__ are not in
+      # pnpm-workspace.yaml, so `pnpm --recursive ... test` has no project to run in either. They passed locally and
       # nowhere else, which is worse than having no tests - infra/__tests__ holds the guard that
       # is meant to fail the build when a WAF shadow rule flips from Count to Block, and it could
       # not have.
@@ -703,6 +723,7 @@ jobs:
         run: |
           pnpm exec vitest run --dir infra
           pnpm exec vitest run --dir scripts/codemods
+          pnpm test:scripts
         env:
           CI: true
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}

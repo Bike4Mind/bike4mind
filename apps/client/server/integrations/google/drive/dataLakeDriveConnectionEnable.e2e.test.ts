@@ -135,6 +135,14 @@ describe('disableDriveConnectionForLake / enableDriveConnectionForLake (real rep
     });
   });
 
+  it('does not re-enable a connection whose disconnect purge is still queued', async () => {
+    const lake = await seedLake();
+    const conn = await seedConnection(lake.id, { enabled: false, disconnectRequestedAt: new Date() });
+
+    await expect(enableDriveConnectionForLake(lake.id)).resolves.toBe(false);
+    expect((await OrgGoogleDriveConnection.findById(conn.id))?.enabled).toBe(false);
+  });
+
   it('is a no-op returning false when the lake has no Drive connection', async () => {
     const lake = await seedLake();
 

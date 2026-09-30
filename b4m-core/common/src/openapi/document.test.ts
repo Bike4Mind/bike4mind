@@ -5,7 +5,7 @@ import { registerContracts } from './operations';
 import { assertUniqueOperations } from './assertUniqueOperations';
 import { assertContractConventions } from '../api-contract/assertContractConventions';
 import { ApiKeyScope } from '../types/entities/UserApiKeyTypes';
-import { chatContract, synthesizeSpeechContract } from '../api-contract';
+import { CONTRACTS, chatContract, synthesizeSpeechContract } from '../api-contract';
 import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spec doc is loosely typed for traversal
@@ -154,6 +154,7 @@ describe('buildOpenApiDocument', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spec doc is loosely typed for traversal
       const rebuilt = buildOpenApiDocument('9.9.9') as any;
       expect(rebuilt.servers[0].url).toBe('https://api.test.example');
+      expect(rebuilt.info.contact.url).toBe('https://api.test.example');
       const curl = rebuilt.paths['/api/ai/v1/completions'].post['x-codeSamples'].find(
         (s: { lang: string }) => s.lang === 'curl'
       ).source as string;
@@ -330,6 +331,23 @@ describe('registerContracts wiring', () => {
 
   it('runs the uniqueness guard before registering', () => {
     expect(() => registerContracts([conformingContract, conformingContract])).toThrow(/Duplicate operationId/);
+  });
+
+  it('registers nothing from a rejected batch', () => {
+    expect(() => registerContracts([conformingContract, conformingContract])).toThrow(/Duplicate operationId/);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spec doc is loosely typed for traversal
+    const rebuilt = buildOpenApiDocument('9.9.9') as any;
+    expect(rebuilt.paths[conformingContract.path]).toBeUndefined();
+  });
+
+  it('rejects a contract that reuses an already-registered operation', () => {
+    const core = CONTRACTS[0];
+    expect(() => registerContracts([{ ...conformingContract, operationId: core.operationId }])).toThrow(
+      /Duplicate operationId/
+    );
+    expect(() => registerContracts([{ ...conformingContract, method: core.method, path: core.path }])).toThrow(
+      /Duplicate route/
+    );
   });
 
   it('rejects those two for the injected violation, not for the fixture itself', () => {

@@ -88,19 +88,38 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
         <Chip size="sm" variant="soft" color={color}>
           {label}
         </Chip>
-        <Button
-          data-testid="drive-resync-btn"
-          size="sm"
-          variant="outlined"
-          color="neutral"
-          startDecorator={<SyncIcon />}
-          loading={connect.isPending || isPicking}
-          onClick={openFolderPicker}
-        >
-          Re-sync
-        </Button>
+        {/* drive-sync refuses a folder whose disconnect purge is still queued. */}
+        {!connection.disconnecting && (
+          <Button
+            data-testid="drive-resync-btn"
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            startDecorator={<SyncIcon />}
+            loading={connect.isPending || isPicking}
+            onClick={openFolderPicker}
+          >
+            Re-sync
+          </Button>
+        )}
+        {connection.disconnecting && (
+          <Typography level="body-xs" data-testid="drive-disconnecting-note" sx={{ flexBasis: '100%' }}>
+            {connection.fileCount === 0
+              ? 'Finishing disconnect...'
+              : `Removing ${connection.fileCount} remaining file${connection.fileCount === 1 ? '' : 's'} in the background.`}
+          </Typography>
+        )}
         {confirmingDisconnect ? (
           <>
+            <Typography
+              level="body-xs"
+              color="danger"
+              data-testid="drive-disconnect-warning"
+              sx={{ flexBasis: '100%' }}
+            >
+              This will permanently delete {connection.fileCount} file{connection.fileCount === 1 ? '' : 's'} this
+              connection ingested into the data lake.
+            </Typography>
             <Button
               data-testid="drive-disconnect-confirm-btn"
               size="sm"
@@ -112,7 +131,9 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
                 disconnect.mutate(lakeId, {
                   onSuccess: () => {
                     setConfirmingDisconnect(false);
-                    toast.success('Disconnected the Google Drive folder.');
+                    toast.success(
+                      'Disconnecting the Google Drive folder. Its files are being removed in the background.'
+                    );
                   },
                   // Surface e.g. the 409 "a sync is in progress" so the user knows to retry later.
                   onError: (e: unknown) => toast.error(serverError(e) || 'Could not disconnect. Please try again.'),
@@ -139,9 +160,16 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
             variant="plain"
             color="danger"
             startDecorator={<LinkOffIcon />}
+            // The route declines to re-queue a purge that is still progressing, so only offer a retry
+            // once it looks stalled.
+            disabled={connection.disconnecting && !connection.disconnectStalled}
             onClick={() => setConfirmingDisconnect(true)}
           >
-            Disconnect
+            {!connection.disconnecting
+              ? 'Disconnect'
+              : connection.disconnectStalled
+                ? 'Retry disconnect'
+                : 'Disconnecting'}
           </Button>
         )}
         {connection.lastError && (

@@ -17,6 +17,7 @@ import {
   requestHasGateProof,
   type AnnotationLean,
 } from '@server/services/publish';
+import { isValidObjectId } from '@server/utils/objectId';
 
 /**
  * /api/publish/annotations/[publicId] - the collaboration layer for a published
@@ -165,9 +166,12 @@ const handler = baseApi({ auth: false })
 
     // Thread integrity: a reply must target a live annotation on the SAME artifact.
     if (input.threadRootId) {
-      const root = await Annotation.findOne({ _id: input.threadRootId, publicId, deletedAt: null })
-        .select('_id')
-        .lean<{ _id: unknown } | null>();
+      // A non-ObjectId can never name an annotation; checking first keeps it off the `_id` cast.
+      const root = isValidObjectId(input.threadRootId)
+        ? await Annotation.findOne({ _id: input.threadRootId, publicId, deletedAt: null })
+            .select('_id')
+            .lean<{ _id: unknown } | null>()
+        : null;
       if (!root)
         return res.status(400).json({ error: 'threadRootId does not reference an annotation on this artifact' });
     }

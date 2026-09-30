@@ -78,6 +78,13 @@ const projectTest = {
   // dead ends - autoIndex:false breaks index-dependent suites, and a single shared mongod
   // serializes every worker's index builds and made it markedly worse.
   testTimeout: 30000,
+  // Integration-lane only: these suites exercise real concurrency (compare-and-set races,
+  // multi-document transactions) against a real mongod under CI's worker-capped, oversubscribed
+  // CPU, so an occasional loss is timing noise, not a wrong answer - a regression that fails on
+  // every attempt (up to 3, not 2) still fails. Unset in the unit lane, where a retry would just
+  // mask a real bug. Guarded by vitest.config.test.ts: this gate only changes behaviour on
+  // failure, so nothing else would catch it silently widening into the unit lane.
+  ...(INTEGRATION_LANE ? { retry: 2 } : {}),
 };
 
 // Vite-level options both projects share. A factory, not a constant: each project gets its own

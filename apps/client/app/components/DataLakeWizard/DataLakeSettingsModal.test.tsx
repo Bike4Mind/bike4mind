@@ -84,8 +84,18 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   // assertion runs, whether or not the test touches that tab.
   useDataLakeResearchConfigs: (...args: unknown[]) => useDataLakeResearchConfigsMock(...args),
   useDataLakeResearchRuns: (...args: unknown[]) => useDataLakeResearchRunsMock(...args),
-  useCreateDataLakeResearchConfig: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
-  useUpdateDataLakeResearchConfig: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
+  useCreateDataLakeResearchConfig: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn().mockResolvedValue(undefined),
+    isPending: false,
+    variables: undefined,
+  }),
+  useUpdateDataLakeResearchConfig: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn().mockResolvedValue(undefined),
+    isPending: false,
+    variables: undefined,
+  }),
   useDeleteDataLakeResearchConfig: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
   useStartDataLakeResearchRun: () => ({ mutate: startResearchRunMutate, isPending: false, variables: undefined }),
 }));
@@ -192,6 +202,7 @@ const gatedLake = {
   origin: 'curated' as const,
   requiredPassageTokenTarget: null,
   lakeMemoryEnabled: false,
+  injectPromptForReaders: false,
   canManage: true,
 };
 
@@ -209,6 +220,7 @@ const openLake = {
   origin: 'curated' as const,
   requiredPassageTokenTarget: null,
   lakeMemoryEnabled: false,
+  injectPromptForReaders: false,
   canManage: true,
 };
 
@@ -226,6 +238,7 @@ const entitlementGatedLake = {
   origin: 'curated' as const,
   requiredPassageTokenTarget: null,
   lakeMemoryEnabled: false,
+  injectPromptForReaders: false,
   canManage: true,
 };
 
@@ -451,7 +464,12 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
 
     const help = screen.getByTestId('datalake-systemprompt-help');
     expect(help).toHaveTextContent(/anyone holding an owner or curator grant on this lake/i);
-    expect(help).toHaveTextContent(/not to users given read-only access by tag, entitlement, or a reader grant/i);
+    // Since injectPromptForReaders (#reader opt-in): readers by tag/entitlement/reader-grant are
+    // named as NOT reached by default, but the copy now also points at the opt-in toggle rather
+    // than stating a flat exclusion.
+    expect(help).toHaveTextContent(
+      /users given read-only access by tag, entitlement, or a reader grant don't get them unless you turn on "apply to readers"/i
+    );
   });
 
   it('states the retrieval-scoped condition, so the copy cannot regress to always-on wording', () => {
@@ -1247,6 +1265,63 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
     await user.click(screen.getByTestId('datalake-settings-tab-settings'));
     expect(screen.getByTestId('datalake-settings-save-btn')).toBeInTheDocument();
   });
+
+  // Same shape as the Research draft: the half-typed reason is this panel's own state, so an
+  // unmount loses it.
+  it('keeps a half-typed decline reason while the curator visits another tab', async () => {
+    withQueue([queued()]);
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
+    await user.click(screen.getByTestId('datalake-proposal-decline-btn'));
+    await user.type(screen.getByTestId('datalake-proposal-decline-reason'), 'Paywalled');
+
+    await user.click(screen.getByTestId('datalake-settings-tab-settings'));
+    await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
+
+    expect(screen.getByTestId('datalake-proposal-decline-reason')).toHaveValue('Paywalled');
+  });
+
+  it('asks before discarding an unsaved decline reason', async () => {
+    withQueue([queued()]);
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={onClose} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
+    await user.click(screen.getByTestId('datalake-proposal-decline-btn'));
+    await user.type(screen.getByTestId('datalake-proposal-decline-reason'), 'Paywalled');
+    await user.click(screen.getByTestId('datalake-settings-close-btn'));
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('datalake-discard-confirm')).toBeInTheDocument();
+  });
+
+  it('closes without asking when a decline was opened but no reason typed', async () => {
+    withQueue([queued()]);
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={onClose} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
+    await user.click(screen.getByTestId('datalake-proposal-decline-btn'));
+    await user.click(screen.getByTestId('datalake-settings-close-btn'));
+
+    expect(onClose).toHaveBeenCalled();
+  });
 });
 
 describe('DataLakeSettingsModal - Research tab', () => {
@@ -1284,6 +1359,22 @@ describe('DataLakeSettingsModal - Research tab', () => {
     expect(useDataLakeResearchConfigsMock).toHaveBeenCalledWith('lake-res-2', { enabled: false });
   });
 
+  // The panel is kept mounted for the curators who have the tab, so an offered-tab guard is the
+  // only thing keeping a hidden copy of it out of a reader's dialog. Needs a reader who reaches
+  // the Tabs at all: strip every tab and the dialog renders the bare settings form instead, which
+  // would pass this without the guard.
+  it('keeps the panel out of the dialog for a reader who has other tabs', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...readerLake, embeddingSpendMicroUsd: 0 }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-tab-spend')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-settings-tab-research')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-research-panel')).not.toBeInTheDocument();
+  });
+
   // The whole point of the tab-gated `enabled`: opening the modal must not pay for two reads a
   // manager who came for the Settings form will never look at.
   it('does not read the configurations until the tab is opened', async () => {
@@ -1308,9 +1399,11 @@ describe('DataLakeSettingsModal - Research tab', () => {
       </Wrapper>
     );
 
+    expect(screen.getByTestId('datalake-research-panel')).not.toBeVisible();
+
     await userEvent.click(screen.getByTestId('datalake-settings-tab-research'));
 
-    expect(await screen.findByTestId('datalake-research-panel')).toBeInTheDocument();
+    expect(await screen.findByTestId('datalake-research-panel')).toBeVisible();
     expect(screen.getByTestId('datalake-research-empty')).toBeInTheDocument();
   });
 
@@ -1344,6 +1437,73 @@ describe('DataLakeSettingsModal - Research tab', () => {
     await userEvent.click(await screen.findByTestId('datalake-research-run-btn'));
 
     expect(startResearchRunMutate).toHaveBeenCalledWith('config-1');
+  });
+
+  // The draft lives in the panel's own state, so anything that unmounts the panel takes with it
+  // work the curator never got the chance to save.
+  it('keeps an unsaved configuration draft while the curator visits another tab', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-research'));
+    await user.click(await screen.findByTestId('datalake-research-new-btn'));
+    await user.type(screen.getByTestId('datalake-research-name-input'), 'Weekly sweep');
+
+    await user.click(screen.getByTestId('datalake-settings-tab-settings'));
+    await user.click(screen.getByTestId('datalake-settings-tab-research'));
+
+    expect(screen.getByTestId('datalake-research-form')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-research-name-input')).toHaveValue('Weekly sweep');
+  });
+
+  // The quieter half of the same bug: the panel reports its dirty state, so an unmount reported
+  // clean and the close confirm stopped firing at the moment there was most to lose.
+  it('still warns on close when an unsaved draft was left behind on another tab', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={onClose} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-research'));
+    await user.click(await screen.findByTestId('datalake-research-new-btn'));
+    await user.type(screen.getByTestId('datalake-research-name-input'), 'Weekly sweep');
+    await user.click(screen.getByTestId('datalake-settings-tab-settings'));
+
+    await user.click(screen.getByTestId('datalake-settings-close-btn'));
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('datalake-discard-confirm')).toBeInTheDocument();
+  });
+
+  // The flip side of keeping the panel alive: a draft that outlived its own lake would be offered
+  // for saving against the next one. Same seed-once-per-lake rule the settings form already holds.
+  it('does not carry a draft over to a different lake', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-research'));
+    await user.click(await screen.findByTestId('datalake-research-new-btn'));
+    await user.type(screen.getByTestId('datalake-research-name-input'), 'Weekly sweep');
+
+    rerender(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-res-3' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-research'));
+    expect(screen.queryByTestId('datalake-research-form')).not.toBeInTheDocument();
   });
 });
 
@@ -1493,6 +1653,78 @@ describe('DataLakeSettingsModal - lake memory toggle', () => {
 
     expect(screen.getByTestId('datalake-memory-toggle')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-memory-toggle-help')).toHaveTextContent(/disabled platform-wide/i);
+  });
+});
+
+describe('DataLakeSettingsModal - reader-prompt toggle (injectPromptForReaders)', () => {
+  beforeEach(() => {
+    updateMutate.mockReset();
+  });
+
+  it('renders for a manager and does not render for a non-manager', () => {
+    const readerLake = { ...openLake, id: 'lake-reader-1', canManage: false };
+    const { rerender } = render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-reader-2' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.getByTestId('datalake-reader-prompt-toggle')).toBeInTheDocument();
+
+    rerender(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.queryByTestId('datalake-reader-prompt-toggle')).not.toBeInTheDocument();
+  });
+
+  it('sends injectPromptForReaders: true only when the editor toggles it and saves', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-reader-3' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-reader-prompt-toggle'));
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ injectPromptForReaders: true });
+  });
+
+  it('never sends injectPromptForReaders when the editor leaves it unchanged', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-reader-4' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).not.toHaveProperty('injectPromptForReaders');
+  });
+
+  it('warns the toggle has no effect when the lake has no access tag or entitlement', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-reader-5' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-reader-prompt-toggle-help')).toHaveTextContent(/has no effect/i);
+  });
+
+  it('describes what the toggle does once the lake has an access tag', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...gatedLake, id: 'lake-reader-6' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-reader-prompt-toggle-help')).not.toHaveTextContent(/has no effect/i);
   });
 });
 

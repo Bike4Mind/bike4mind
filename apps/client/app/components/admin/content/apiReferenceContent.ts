@@ -79,9 +79,11 @@ API keys can be scoped to limit access. Available scopes:
 | \`ai:chat\` | Send chat messages and use LLM endpoints |
 | \`admin:*\` | Full admin access (superuser only) |
 
-For rotate specifically, scope containment is checked literally: \`admin:*\` is not treated
-as a superset of other scopes, so an \`admin:*\`-scoped key still can't rotate a key holding
-scopes it doesn't literally list.
+An API-key caller can't escalate through key management: creating a key via
+\`POST /api/user-api-keys\` or rotating one is refused unless the calling key already holds
+every scope involved. Containment is checked literally: \`admin:*\` is not treated as a
+superset of other scopes, so an \`admin:*\`-scoped key still can't mint or rotate a key
+holding scopes it doesn't literally list.
 
 ### Rate Limits
 
@@ -125,35 +127,18 @@ POST /api/chat
 #### Poll Quest Status
 
 \`\`\`
-GET /api/quests/[id]
+GET /api/v1/quests/{id}
 \`\`\`
 
-**Required API-key scope:** \`notebooks:read\`, \`ai:chat\`, or \`ai:generate\` (any one grants access — an AI scope works so the chat→poll flow needs a single key).
+> **This endpoint is now generated from its contract.** The full request/response
+> reference - every field, its type, and the error responses - lives in the
+> [generated API docs](/api/v1/docs) under \`getQuest\`, derived from the same
+> object the handler validates with. The legacy path \`GET /api/quests/[id]\` serves
+> the same handler.
+
+**Required API-key scope:** \`notebooks:read\`, \`ai:chat\`, or \`ai:generate\` (any one grants access - an AI scope works so the chat-to-poll flow needs a single key).
 
 Not a pure read: polling a quest whose run died without writing a terminal status settles it, so the poll that crosses the liveness threshold returns \`status: "done"\` instead of spinning on \`running\` forever. Whatever the run produced is preserved; \`type: "error"\` marks the case where it produced nothing, which is how a client machine-distinguishes a timeout from a genuine answer. Only the session owner's poll can settle a quest - a shared-session viewer reads it as-is, and a background sweep settles it instead.
-
-**Response:**
-
-\`\`\`json
-{
-  "id": "quest_abc123",
-  "status": "completed",
-  "type": "message",
-  "reply": {
-    "content": "Here is the AI response...",
-    "model": "gpt-4o",
-    "tokensUsed": { "input": 150, "output": 320 },
-    "sources": [],
-    "artifacts": []
-  },
-  "images": ["a1b2c3.png"],
-  "files": [
-    { "name": "a1b2c3.png", "url": "https://cdn.example.com/generated/a1b2c3.png", "isImage": true }
-  ],
-  "createdAt": "2025-01-15T10:30:00Z",
-  "completedAt": "2025-01-15T10:30:05Z"
-}
-\`\`\`
 
 For file-generating quests (image generation, editing, etc.), \`images\` lists the raw generated
 file basenames and \`files\` lists each as a descriptor with a ready-to-use CDN \`url\` and an
@@ -184,7 +169,7 @@ Cancels an in-progress streaming response.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | /api/chat | Send a message to the AI |
-| GET | /api/quests/[id] | Get quest status and reply |
+| GET | /api/v1/quests/{id} | Get quest status and reply |
 | GET | /api/quests/[id]/files | Get files from a quest |
 | GET | /api/quests/[id]/check-timeout | Check if quest has timed out |
 | POST | /api/quests/[id]/client-timing | Report client-side timing data |
@@ -245,6 +230,30 @@ GET /api/v1/agent-executions/[id]
 
 ---
 
+### Data Lakes
+
+List and inspect the data lakes you can reach, manage which files belong to one, and run
+semantic search over a single lake. Every route answers 403 when Data Lakes are disabled on the
+deployment.
+
+**Required API-key scope:** \`datalake:read\` (or \`datalake:write\` / \`datalake:query\`) to read,
+\`datalake:write\` to change membership, \`datalake:query\` to search.
+
+> **These endpoints are generated from their contracts.** The full reference lives in the
+> [generated API docs](/api/v1/docs) under the Data Lakes tag. Adding a file does not ingest it:
+> poll the file endpoint until \`ingestion_status\` is \`ready\` before relying on it in search.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /api/v1/data-lakes | List lakes (cursor-paginated) |
+| GET | /api/v1/data-lakes/[id] | Get one lake by id or slug |
+| GET | /api/v1/data-lakes/[id]/files/[file_id] | A member file's ingestion status |
+| POST | /api/v1/data-lakes/[id]/files/[file_id] | Add a file to the lake |
+| DELETE | /api/v1/data-lakes/[id]/files/[file_id] | Remove a file from the lake |
+| POST | /api/v1/data-lakes/[id]/search | Semantic search over the lake |
+
+---
+
 ### Files (FabFiles)
 
 Manage uploaded files, trigger chunking for RAG, and search file content.
@@ -294,18 +303,34 @@ GET /api/files
 #### Upload a File
 
 \`\`\`
-POST /api/files/createFabFileURL
+POST /api/v1/files
 \`\`\`
 
-Returns a presigned S3 URL for direct upload.
+**Required API-key scope:** \`files:write\`.
 
-**Request Body:**
+> **This endpoint is generated from its contract.** The full request/response
+> reference - every field, its type, defaults, and validation rules - lives in the
+> [generated API docs](/api/v1/docs) under \`createFileUpload\`, derived from the same
+> object the handler validates with.
+>
+> Uploading is three steps: call this endpoint with the file's name, MIME type, and size;
+> \`PUT\` the raw bytes to the returned \`upload_url\` (no \`Authorization\` header - the URL
+> signature is the credential); then poll \`GET /api/v1/files/[id]\` until the file is
+> downloadable. The returned \`id\` is what you pass to any endpoint that takes a file id.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| fileName | string | Yes | Original filename |
-| contentType | string | Yes | MIME type |
-| projectId | string | No | Associate with a project |
+#### Get a File
+
+\`\`\`
+GET /api/v1/files/[id]
+\`\`\`
+
+**Required API-key scope:** \`files:read\`.
+
+> See the [generated API docs](/api/v1/docs) under \`getFile\`. Returns the file's metadata and
+> a short-lived signed \`download_url\`, which stays \`null\` until the upload has landed and
+> passed moderation. It is both the upload poll and the way to fetch any file id another
+> endpoint returns. GET requests here are exempt from the per-day API-key quota; the
+> per-minute burst limit still applies.
 
 #### Trigger Chunking
 
@@ -326,6 +351,8 @@ Initiates the chunking and embedding pipeline for a file.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| POST | /api/v1/files | Start a file upload (presigned PUT) |
+| GET | /api/v1/files/[id] | Get a file and its download URL |
 | GET | /api/files | List files with pagination and filters |
 | GET | /api/files/[id] | Get file details |
 | PUT | /api/files/[id] | Update file metadata |
@@ -337,11 +364,11 @@ Initiates the chunking and embedding pipeline for a file.
 | POST | /api/files/bulk-delete | Delete multiple files |
 | GET | /api/files/byIds | Get multiple files by ID |
 | POST | /api/files/copy-generated-image | Copy AI-generated image to files |
-| GET | /api/files/download | Download file content |
-| POST | /api/files/generate-presigned-url | Generate download URL |
+| GET | /api/files/download | Download every exportable file as a zip |
+| POST | /api/files/generate-presigned-url | Generate presigned upload URL (internal; use /api/v1/files) |
 | POST | /api/files/generate-smart-name | AI-generated filename |
 | GET | /api/files/getFabFileNameById | Get filename by ID |
-| GET | /api/files/presigned-url | Get presigned URL |
+| GET | /api/files/presigned-url | Get presigned download URLs by storage key |
 | GET | /api/files/tags | List all tags |
 | GET | /api/files/tags/counts | Tag usage counts |
 | POST | /api/files/tags/toggle | Toggle tag on a file |
@@ -413,7 +440,7 @@ PUT /api/sessions/[id]
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | /api/sessions | List sessions |
-| POST | /api/sessions/create | Create a new session |
+| POST | /api/v1/sessions | Create a new session (legacy path: /api/sessions/create) |
 | GET | /api/sessions/[id] | Get session details |
 | PUT | /api/sessions/[id] | Update session |
 | DELETE | /api/sessions/[id] | Delete session |
@@ -676,50 +703,30 @@ POST /api/ai/llm
 | maxTokens | number | No | Max output tokens |
 | systemPrompt | string | No | System prompt override |
 
-#### Image Generation (async)
+#### Image Generation and Editing (async)
 
 \`\`\`
-POST /api/ai/generate-image
+POST /api/v1/image-generations
+POST /api/v1/image-edits
 \`\`\`
 
 **Required API-key scope:** \`ai:generate\`.
 
-**Request Body:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| prompt | string | Yes | Image description |
-| model | string | Yes | Image model identifier (e.g. \`gpt-image-1\`); a request without a supported model is rejected \`422\` |
-| n | number | No | Number of images (1-10) |
-| size | string | No | Image dimensions (e.g. \`1024x1024\`) |
-| fabFileIds | string[] | No | Attached files; the first image among them is the input image |
-| referenceImageFabFileIds | string[] | No | Up to 4 gpt-image style-reference images, as fabFile ids (see below) |
-| sessionId | string | No | Existing session; a new one is created if omitted |
-
-**Style reference images** (\`gpt-image-*\` only): pass up to 4 fabFile ids in
-\`referenceImageFabFileIds\` to anchor the render on images you have already uploaded - useful
-for a consistent icon or art style across many generations. They are sent to the model in the
-order given, after the input image from \`fabFileIds\` if there is one. Every id must be one your
-API key can access and must have cleared moderation; otherwise the request is rejected rather
-than rendering a subset. Other model families ignore the field.
-
-Generation is asynchronous - the request enqueues work and returns immediately with a quest
-(no image yet). It never blocks on generation, so it is not subject to the API-gateway request
-timeout. Retrieve the result by polling \`GET /api/quests/{id}\` until \`status\` is \`done\`, then
-read \`files\` (see [Poll Quest Status](#poll-quest-status)).
-
-**Response:**
-
-\`\`\`json
-{
-  "quest": { "id": "quest_abc123", "status": "pending" },
-  "session": { "id": "sess_xyz789" }
-}
-\`\`\`
+> **These endpoints are generated from their contracts.** The full request/response
+> reference - every field, its type, defaults, and validation rules, including the
+> \`referenceImageFabFileIds\` style anchors - lives in the [generated API docs](/api/v1/docs)
+> under \`generateImage\` and \`editImage\`, derived from the same objects the handlers
+> validate with.
+>
+> Both are asynchronous: the call queues the render and returns a quest with no image yet,
+> so it never blocks on generation. Poll \`GET /api/v1/quests/{id}\` until \`status\` is \`done\`
+> (see [Poll Quest Status](#poll-quest-status)); a render that failed arrives there as
+> \`type: "error"\`, not as a 4xx. \`POST /api/ai/generate-image\` and \`POST /api/ai/edit-image\`
+> are legacy aliases of the same handlers and keep working.
 
 #### OpenAPI 3.1 documented endpoints
 
-A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code. Currently: \`/api/chat\`, \`/api/ai/v1/completions\`, \`/api/ai/v1/tools\`, and the audio generation endpoints (\`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`). Everything documented there is omitted from the summary tables below - the spec is the source of truth for those.
+A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code. Currently: \`/api/chat\`, \`/api/ai/v1/completions\`, \`/api/ai/v1/tools\`, the audio generation endpoints (\`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`), the image endpoints (\`/api/v1/image-generations\`, \`/api/v1/image-edits\`), and \`/api/v1/embeddings\`. Everything documented there is omitted from the summary tables below - the spec is the source of truth for those.
 
 | Resource | Path | Description |
 |----------|------|-------------|
@@ -737,8 +744,6 @@ Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI
 | POST | /api/ai/llm | Raw LLM completion |
 | POST | /api/ai/transcribe | Audio/video to text (Whisper) |
 | POST | /api/ai/text-to-speech | Text to speech synthesis (OpenAI; legacy, use /api/ai/tts) |
-| POST | /api/ai/generate-image | Image generation (DALL-E) |
-| POST | /api/ai/edit-image | Image editing (accepts \`referenceImageFabFileIds\` like generate-image) |
 | POST | /api/ai/generate-video | Video generation (Sora) |
 | POST | /api/ai/barkeep-chat | Tavern AI barkeep conversation |
 | POST | /api/ai/tavern-conversation | Tavern NPC conversation |
@@ -875,6 +880,27 @@ issues no browser session \u2014 unlike \`/api/identify\`, which does both.
 > **This endpoint is generated from its contract.** The full response reference lives
 > in the [generated API docs](/api/v1/docs) under \`getMe\`, derived from the same
 > object the handler validates against.
+
+---
+
+### Embeddings
+
+#### Create Embeddings
+
+\`\`\`
+POST /api/v1/embeddings
+\`\`\`
+
+**Required API-key scope:** \`ai:generate\`.
+
+Returns one embedding vector per input string, for integrations that keep their own vector
+index. The request and success bodies follow the OpenAI embeddings API shape (\`model\`,
+\`input\`, \`dimensions\`, \`encoding_format\`), so an OpenAI SDK client can call it with its base
+URL set to \`<your deployment>/api/v1\` and a \`b4m_live_\` key; errors use the standard B4M error
+envelope rather than OpenAI's. Billed in credits per input token.
+
+> **This endpoint is generated from its contract.** The full request and response reference
+> lives in the [generated API docs](/api/v1/docs) under \`createEmbeddings\`.
 
 ---
 
@@ -1479,7 +1505,7 @@ Real-time updates are delivered via WebSocket. Connect to the WebSocket endpoint
 
 1. **Always use the authenticated client.** In the B4M frontend, import \`api\` from \`@client/app/contexts/ApiContext\` rather than using \`fetch()\`. The \`api\` instance handles token refresh, request IDs, and error interceptors automatically.
 
-2. **Poll quests, don&apos;t block on chat.** The \`POST /api/chat\` endpoint returns immediately with a \`questId\`. Poll \`GET /api/quests/[id]\` or listen on WebSocket for \`quest:completed\` to get the response.
+2. **Poll quests, don&apos;t block on chat.** The \`POST /api/chat\` endpoint returns immediately with a \`questId\`. Poll \`GET /api/v1/quests/{id}\` or listen on WebSocket for \`quest:completed\` to get the response.
 
 3. **Use streaming for better UX.** Pass \`stream: true\` in chat requests and listen for \`quest:chunk\` WebSocket events to display tokens as they arrive.
 

@@ -35,10 +35,13 @@ const SELF_PATH = path.relative(REPO_ROOT, fileURLToPath(import.meta.url)).repla
 
 describe('every S3Client construction routes through createS3Client', () => {
   it('has no raw `new S3Client(` outside the allowlist', () => {
-    const out = execSync('grep -rln "new S3Client(" --include="*.ts" apps/client b4m-core packages || true', {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-    });
+    const out = execSync(
+      'grep -rln "new S3Client(" --include="*.ts" apps/client apps/workers b4m-core packages || true',
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+      }
+    );
     const hits = out.split('\n').filter(Boolean);
     const unexpected = hits.filter(f => f !== SELF_PATH && !ALLOWLIST.has(f));
 

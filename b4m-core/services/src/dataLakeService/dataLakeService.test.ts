@@ -1534,6 +1534,7 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
         'fileCount',
         'fileTagPrefix',
         'id',
+        'injectPromptForReaders',
         'isPublic',
         'lakeMemoryEnabled',
         'lastSyncAt',
@@ -2188,6 +2189,27 @@ describe('updateDataLake - per-lake systemPrompt (#843)', () => {
     await expect(
       updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { systemPrompt: '' }, { db })
     ).resolves.toMatchObject({ systemPrompt: '' });
+  });
+});
+
+describe('updateDataLake - reader opt-in flag (injectPromptForReaders)', () => {
+  it('persists injectPromptForReaders set by the lake creator', async () => {
+    const l = lake({ createdByUserId: 'owner', injectPromptForReaders: false });
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { injectPromptForReaders: true }, { db })
+    ).resolves.toMatchObject({ injectPromptForReaders: true });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ injectPromptForReaders: true }));
+  });
+
+  it('persists turning injectPromptForReaders back off', async () => {
+    const l = lake({ createdByUserId: 'owner', injectPromptForReaders: true });
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { injectPromptForReaders: false }, { db })
+    ).resolves.toMatchObject({ injectPromptForReaders: false });
   });
 });
 
@@ -2991,6 +3013,13 @@ describe('unarchiveDataLake - Drive connection re-enable', () => {
     ).rejects.toThrow(/moved to 'deleted'/i);
     expect(enableDriveConnection).not.toHaveBeenCalled();
   });
+
+  it('re-enables the GitHub connection once the lake has settled back to active', async () => {
+    const adapters = makeAdapters();
+    const enableGitHubConnection = vi.fn().mockResolvedValue(undefined);
+    await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, enableGitHubConnection });
+    expect(enableGitHubConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
+  });
 });
 
 describe('restoreDeletedDataLake - now delegates the manage gate to canManageLake (#1153)', () => {
@@ -3237,6 +3266,33 @@ describe('restoreDeletedDataLake - Drive connection re-enable', () => {
     else await call();
 
     expect(enableDriveConnection).not.toHaveBeenCalled();
+  });
+
+  it('re-enables the GitHub connection once the lake has settled back to active', async () => {
+    const fabFiles = {
+      findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+      undeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+    };
+    const dataLakes = {
+      findById: vi.fn().mockResolvedValue(lake({ status: 'deleted' })),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi
+        .fn()
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      activateIfDraft: vi.fn(),
+      claimRestoring: vi.fn().mockResolvedValue(true),
+    };
+    const enableGitHubConnection = vi.fn().mockResolvedValue(undefined);
+
+    await restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      db: { dataLakes, fabFiles },
+      enableGitHubConnection,
+    });
+
+    expect(enableGitHubConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
   });
 });
 
@@ -3625,6 +3681,25 @@ describe('archiveDataLake - Drive connection disable', () => {
     ).rejects.toThrow(throws);
     expect(disableDriveConnection).not.toHaveBeenCalled();
   });
+
+  it('disables the GitHub connection once the lake has settled to archived', async () => {
+    const adapters = makeAdapters();
+    const disableGitHubConnection = vi.fn().mockResolvedValue(undefined);
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, disableGitHubConnection });
+    expect(disableGitHubConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
+  });
+
+  it('does not fail the archive when disabling the GitHub connection throws', async () => {
+    const adapters = makeAdapters();
+    const disableGitHubConnection = vi.fn().mockRejectedValue(new Error('github down'));
+    await expect(
+      archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, disableGitHubConnection })
+    ).resolves.toMatchObject({ status: 'archived' });
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to update GitHub connection enabled state for lake lake1'),
+      expect.any(Error)
+    );
+  });
 });
 
 describe('deleteDataLake - now delegates the manage gate to canManageLake (#1153)', () => {
@@ -3998,6 +4073,13 @@ describe('deleteDataLake - Drive connection disable', () => {
       deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, disableDriveConnection })
     ).rejects.toThrow(throws);
     expect(disableDriveConnection).not.toHaveBeenCalled();
+  });
+
+  it('disables the GitHub connection once the lake has settled to deleted', async () => {
+    const adapters = makeAdapters();
+    const disableGitHubConnection = vi.fn().mockResolvedValue(undefined);
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, disableGitHubConnection });
+    expect(disableGitHubConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
   });
 });
 

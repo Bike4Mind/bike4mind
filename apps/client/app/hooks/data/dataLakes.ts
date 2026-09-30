@@ -9,6 +9,7 @@ import type {
   IDataLakeResearchConfigDocument,
   IDataLakeResearchRunDocument,
   ResearchRunTrigger,
+  ResearchScheduleCadence,
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
   IDataLakeFindingDocument,
@@ -594,7 +595,7 @@ export function useCreateDataLake(options?: { onSuccess?: (data: DataLakeConfig)
     },
     onSuccess: data => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
-      // Reveal the 'datalakes' nav slot immediately rather than after the
+      // Show the 'datalakes' reward immediately rather than after the
       // gears/status staleTime elapses (#833).
       invalidateGearsStatusWhileLocked(queryClient, ['datalakes']);
       toast.success(`Data lake "${data.name}" created`);
@@ -2295,6 +2296,10 @@ export function useReviewDataLakeProposal(dataLakeId: string) {
     },
     onSuccess: (proposal, { decision }) => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.proposalsOf(dataLakeId) });
+      // A reviewed proposal changes the pending count the research panel compares against each
+      // config's `reviewBacklogLimit`, so a queue that drains below the limit must clear the
+      // paused state without the manager having to reopen the tab.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.researchConfigs(dataLakeId) });
       if (decision === 'approve') {
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
@@ -2323,6 +2328,10 @@ export function useReviewDataLakeProposal(dataLakeId: string) {
 export type ResearchConfigInput = {
   name?: string;
   trigger?: ResearchRunTrigger;
+  /** off/daily/weekly/monthly. The server derives `trigger` from this - clients send cadence, not trigger. */
+  cadence?: ResearchScheduleCadence;
+  /** Pending-proposal count at which a due scheduled run is skipped. See RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT. */
+  reviewBacklogLimit?: number;
   query?: string;
   model?: string | null;
   maxResults?: number;
@@ -2443,16 +2452,23 @@ export function useDataLakeResearchConfigs(dataLakeId: string | null, opts?: { e
   const query = useQuery({
     queryKey: dataLakeKeys.researchConfigs(dataLakeId),
     queryFn: async () => {
-      const { data } = await api.get<{ data: IDataLakeResearchConfigDocument[] }>(
+      const { data } = await api.get<{ data: IDataLakeResearchConfigDocument[]; pendingProposals: number }>(
         `/api/data-lakes/${dataLakeId}/research/configs`
       );
-      return data.data;
+      return data;
     },
     enabled: !!dataLakeId && (opts?.enabled ?? true),
     retry: false,
     staleTime: 1000 * 60,
   });
-  return { ...query, isForbidden: isPermissionRejection(query.error) };
+  return {
+    ...query,
+    data: query.data?.data,
+    // The same count the scheduler compares against each config's `reviewBacklogLimit`, so the
+    // panel can show a schedule as paused without a second fetch.
+    pendingProposals: query.data?.pendingProposals,
+    isForbidden: isPermissionRejection(query.error),
+  };
 }
 
 export function useCreateDataLakeResearchConfig(dataLakeId: string) {
@@ -2552,9 +2568,10 @@ export function useDataLakeResearchRuns(dataLakeId: string | null, opts?: { enab
     const settled = wasInFlight.current && !anyInFlight;
     wasInFlight.current = anyInFlight;
     if (!settled || !dataLakeId) return;
-    // Only the queue. `lastRunAt` is the config row's single run-derived field and it is stamped at
-    // START, not at settle, so the invalidation the start mutation already does covers it.
     queryClient.invalidateQueries({ queryKey: dataLakeKeys.proposalsOf(dataLakeId) });
+    // Also the configs: a scheduled run settling is what changes `lastRunAt` and
+    // `lastScheduledOutcome`, and there is no other client event to hang that refetch on either.
+    queryClient.invalidateQueries({ queryKey: dataLakeKeys.researchConfigs(dataLakeId) });
   }, [anyInFlight, dataLakeId, queryClient]);
 
   return { ...query, isForbidden: isPermissionRejection(query.error) };

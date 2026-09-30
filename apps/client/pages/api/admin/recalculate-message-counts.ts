@@ -21,7 +21,7 @@ type SpiderOperation = 'messageCount' | 'curation' | 'summarize' | 'tags' | 'emb
  * different things:
  *
  * - `summarize` keeps a plain `summaryAt: null` count. Its only content-dependent return
- *   (`server/events/sessionSummarization.ts`, after the model resolve and before the completion;
+ *   (`apps/workers/src/events/sessionSummarization.ts`, after the model resolve and before the completion;
  *   the four returns above it are argument and existence guards a counted notebook cannot hit)
  *   also requires `!needsInitialSummaryId`, and the only writer of `summaryModelId` sets it in
  *   the same update as `summaryAt` - so a notebook this leg
@@ -30,7 +30,7 @@ type SpiderOperation = 'messageCount' | 'curation' | 'summarize' | 'tags' | 'emb
  *   `summaryAt` and leaves the id (notebookImportService); such a notebook can return early only
  *   if the imported file also carried no chat history. Not narrowed for: that population is tiny,
  *   and the effect is the same harmless direction described below.
- * - `tags` cannot use `taggedAt: null` alone. `server/events/sessionTagging.ts` aborts before the
+ * - `tags` cannot use `taggedAt: null` alone. `apps/workers/src/events/sessionTagging.ts` aborts before the
  *   model when the notebook has no quest AND writes nothing, so such a notebook is dispatched,
  *   counted, and re-counted on every run while settling nothing.
  *   `countTaggableNotebooks` adds the quest-existence term that mirrors that gate.

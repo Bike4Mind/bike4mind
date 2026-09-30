@@ -8,7 +8,7 @@ import InsightsIcon from '@mui/icons-material/Insights';
 import SecurityIcon from '@mui/icons-material/Security';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import CloseIcon from '@mui/icons-material/Close';
-import { Badge, Box, LinearProgress, Tab, TabList, TabPanel, Tabs, Tooltip, Typography, IconButton } from '@mui/joy';
+import { Badge, Box, LinearProgress, TabList, TabPanel, Tabs, Tooltip, Typography, IconButton } from '@mui/joy';
 import { styled } from '@mui/system';
 import PeopleIcon from '@mui/icons-material/People';
 import LinkIcon from '@mui/icons-material/Link';
@@ -20,7 +20,8 @@ import { useTranslation } from 'react-i18next';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import CommunityTabContent from '@client/app/components/ProfileModal/CommunityTabContent';
 import { ContextHelpButton } from '@client/app/components/help';
-import { profileTabListSx } from './profileTabListSx';
+import { profileTabListSx } from '@client/app/components/common/profileTabListSx';
+import { PageTab } from '@client/app/components/common/pageTabs';
 import { useQuery } from '@tanstack/react-query';
 import { listMyPublishedArtifacts } from '@client/app/utils/publishApi';
 
@@ -192,7 +193,7 @@ const ProfilePage = () => {
         }}
       >
         <TabList data-testid="profile-tablist" sx={profileTabListSx}>
-          <StyledTab data-testid="profile-tab" sx={{ borderBottomLeftRadius: '0' }} value={ProfileTab.Profile}>
+          <PageTab data-testid="profile-tab" sx={{ borderBottomLeftRadius: '0' }} value={ProfileTab.Profile}>
             <Tooltip title={t('profile.tooltip')}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <AccountCircleIcon sx={{ flexShrink: 0, color: 'text.primary', fontSize: '16px' }} />
@@ -201,9 +202,9 @@ const ProfilePage = () => {
                 </Typography>
               </Box>
             </Tooltip>
-          </StyledTab>
+          </PageTab>
 
-          <StyledTab data-testid="community-tab" sx={{ borderBottomLeftRadius: '0' }} value={ProfileTab.Community}>
+          <PageTab data-testid="community-tab" sx={{ borderBottomLeftRadius: '0' }} value={ProfileTab.Community}>
             <Tooltip title={t('community.tooltip')}>
               <Badge size="sm" color="danger" invisible={friendRequests?.length === 0}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
@@ -214,9 +215,9 @@ const ProfilePage = () => {
                 </Box>
               </Badge>
             </Tooltip>
-          </StyledTab>
+          </PageTab>
 
-          <StyledTab data-testid="settings-tab" value={ProfileTab.Settings}>
+          <PageTab data-testid="settings-tab" value={ProfileTab.Settings}>
             <Tooltip title={t('settings.tooltip')}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <SettingsIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
@@ -225,27 +226,27 @@ const ProfilePage = () => {
                 </Typography>
               </Box>
             </Tooltip>
-          </StyledTab>
+          </PageTab>
 
-          <StyledTab data-testid="api-keys-tab" value={ProfileTab.ApiKeys}>
+          <PageTab data-testid="api-keys-tab" value={ProfileTab.ApiKeys}>
             <Tooltip title="Manage your API keys">
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <KeyOutlinedIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
                 <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>API Keys</Typography>
               </Box>
             </Tooltip>
-          </StyledTab>
+          </PageTab>
 
-          <StyledTab data-testid="usage-tab" value={ProfileTab.Usage}>
+          <PageTab data-testid="usage-tab" value={ProfileTab.Usage}>
             <Tooltip title="View your credit usage and model pricing">
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <InsightsIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
                 <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>Usage</Typography>
               </Box>
             </Tooltip>
-          </StyledTab>
+          </PageTab>
 
-          <StyledTab data-testid="integrations-tab" value={ProfileTab.Integrations}>
+          <PageTab data-testid="integrations-tab" value={ProfileTab.Integrations}>
             <Tooltip title="Manage external integrations">
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <LinkIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
@@ -254,21 +255,21 @@ const ProfilePage = () => {
                 </Typography>
               </Box>
             </Tooltip>
-          </StyledTab>
+          </PageTab>
 
           {isAdmin && (
-            <StyledTab data-testid="security-tab" value={ProfileTab.Security}>
+            <PageTab data-testid="security-tab" value={ProfileTab.Security}>
               <Tooltip title="View security events and alerts">
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   <SecurityIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
                   <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>Security</Typography>
                 </Box>
               </Tooltip>
-            </StyledTab>
+            </PageTab>
           )}
 
           {hasPublishedArtifacts && (
-            <StyledTab data-testid="published-tab" value={ProfileTab.Published}>
+            <PageTab data-testid="published-tab" value={ProfileTab.Published}>
               <Tooltip title="Manage your Live Artifacts (published & shared)">
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   <ShareIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
@@ -277,7 +278,7 @@ const ProfilePage = () => {
                   </Typography>
                 </Box>
               </Tooltip>
-            </StyledTab>
+            </PageTab>
           )}
         </TabList>
 
@@ -326,31 +327,5 @@ const ProfilePage = () => {
 const StyledTabPanel = styled(TabPanel)({
   padding: '15px 0 0',
 });
-
-const StyledTab = styled(Tab)(({ theme }) => ({
-  borderBottomLeftRadius: '0',
-  borderBottomRightRadius: '0',
-  '&:hover:not([aria-selected="true"])': {
-    backgroundColor: `${theme.palette.notebooklist.hoverBg} !important`,
-    '& .MuiTypography-root': {
-      opacity: 1,
-    },
-    '& .MuiSvgIcon-root': {
-      opacity: 1,
-    },
-  },
-  '& .MuiTypography-root': {
-    opacity: 0.7,
-  },
-  '& .MuiSvgIcon-root': {
-    opacity: 0.5,
-  },
-  '&[aria-selected="true"] .MuiTypography-root': {
-    opacity: 1,
-  },
-  '&[aria-selected="true"] .MuiSvgIcon-root': {
-    opacity: 1,
-  },
-}));
 
 export default ProfilePage;

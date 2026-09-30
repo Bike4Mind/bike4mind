@@ -3,6 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest, adminSettingsRepository } from '@bike4mind/database';
 import { z } from 'zod';
 import { ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { isValidObjectId } from '@server/utils/objectId';
 import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
 import {
   ApiKeyScope,
@@ -39,7 +40,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     const logger = new Logger({ metadata: { service: 'ContextTelemetryAnalyze' } });
     const { id, force } = paramsSchema.parse(req.query);
 
-    const quest = await Quest.findById(id).select(TELEMETRY_SAFE_PROJECTION).lean();
+    const quest = isValidObjectId(id) ? await Quest.findById(id).select(TELEMETRY_SAFE_PROJECTION).lean() : null;
 
     if (!quest) {
       throw new NotFoundError(`Telemetry entry not found: ${id}`);

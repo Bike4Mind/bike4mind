@@ -44,8 +44,10 @@ function productIngestKeys(): Record<string, string> {
 
 /** The ingest key for a product, or undefined when it has none. For callers that post other Overwatch writes (such as a daily stats snapshot) with the same key. */
 export function ingestKeyFor(productId: string): string | undefined {
-  if (productId === HOST_PRODUCT_ID) return isSet(Config.OVERWATCH_INGEST_KEY) ? Config.OVERWATCH_INGEST_KEY : undefined;
-  return productIngestKeys()[productId];
+  if (productId === HOST_PRODUCT_ID)
+    return isSet(Config.OVERWATCH_INGEST_KEY) ? Config.OVERWATCH_INGEST_KEY : undefined;
+  const keys = productIngestKeys();
+  return Object.hasOwn(keys, productId) ? keys[productId] : undefined;
 }
 
 export function isAnalyticsConfigured(productId: string = HOST_PRODUCT_ID): boolean {
@@ -137,6 +139,11 @@ export interface ProductEventOptions {
   utm?: OverwatchUtm;
   /** Flat and small: the ingest schema caps metadata at 1KB. */
   metadata?: Record<string, string | number | boolean>;
+  /**
+   * A caller-chosen UUID for an event that may be sent more than once for one occurrence (a
+   * retried webhook). The receiver de-duplicates on eventId. Random when omitted.
+   */
+  eventId?: string;
 }
 
 /**
@@ -155,7 +162,8 @@ export async function emitProductEvent(opts: ProductEventOptions): Promise<void>
       ...(opts.utm !== undefined && { utm: opts.utm }),
       ...(Object.keys(metadata).length > 0 && { metadata }),
     },
-    opts.productId
+    opts.productId,
+    opts.eventId
   );
 }
 
@@ -168,10 +176,13 @@ interface EventFields {
   metadata?: Record<string, string | number | boolean>;
 }
 
-async function postEvent(fields: EventFields, productId: string = HOST_PRODUCT_ID): Promise<void> {
+async function postEvent(
+  fields: EventFields,
+  productId: string = HOST_PRODUCT_ID,
+  eventId: string = crypto.randomUUID()
+): Promise<void> {
   if (!isAnalyticsConfigured(productId)) return;
 
-  const eventId = crypto.randomUUID();
   const timestamp = new Date().toISOString();
 
   const event = {

@@ -21,6 +21,10 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
 import { sendToQueue } from '@server/utils/sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { disableDriveConnectionForLake, enableDriveConnectionForLake } from '@server/integrations/google/drive/common';
+import {
+  disableGitHubConnectionForLake,
+  enableGitHubConnectionForLake,
+} from '@server/integrations/github/dataLake/githubLakeConnection';
 
 const LifecycleInput = z.object({
   action: z.enum(['archive', 'unarchive', 'restore', 'delete', 'cleanup', 'promote', 'demote']),
@@ -87,6 +91,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
           disableDriveConnection: async ({ dataLakeId }) => {
             await disableDriveConnectionForLake(dataLakeId);
           },
+          disableGitHubConnection: async ({ dataLakeId }) => {
+            await disableGitHubConnectionForLake(dataLakeId);
+          },
           logger: req.logger,
         });
         return res.json(result);
@@ -102,6 +109,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
           },
           enableDriveConnection: async ({ dataLakeId }) => {
             await enableDriveConnectionForLake(dataLakeId);
+          },
+          enableGitHubConnection: async ({ dataLakeId }) => {
+            await enableGitHubConnectionForLake(dataLakeId);
           },
           logger: req.logger,
         });
@@ -145,6 +155,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
           enableDriveConnection: async ({ dataLakeId }) => {
             await enableDriveConnectionForLake(dataLakeId);
           },
+          enableGitHubConnection: async ({ dataLakeId }) => {
+            await enableGitHubConnectionForLake(dataLakeId);
+          },
           logger: req.logger,
         });
         return res.json(result);
@@ -166,6 +179,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
           retrievalIndex: retrievalIndex(),
           disableDriveConnection: async ({ dataLakeId }) => {
             await disableDriveConnectionForLake(dataLakeId);
+          },
+          disableGitHubConnection: async ({ dataLakeId }) => {
+            await disableGitHubConnectionForLake(dataLakeId);
           },
           // The prefix-overlap warning is the point of logging here: without a sink it no-ops.
           logger: req.logger,

@@ -89,6 +89,15 @@ import {
   resolveMajorityEmbeddingModel,
 } from '../dataLakeService/embeddingMismatch';
 import { partitionByIndexAvailability } from '../dataLakeService/retrievalUnavailable';
+import { isVectorSearchReady, type VectorSearchReadinessFile } from '../dataLakeService/vectorSearchEligibility';
+import { atlasVectorSearch, isAtlasVectorSearchAvailable } from '../dataLakeService/atlasVectorSearch';
+import type { AnnRankableFile } from '../dataLakeService/annVectorSearch';
+import {
+  DeadlineExceededError,
+  rankCandidateFilesByRelevance,
+  withDeadline,
+  type ForcedRetrievalCandidateSelection,
+} from './forcedRetrievalCandidateSelection';
 import {
   buildSupersessionReport,
   formatSupersededSample,
@@ -100,6 +109,7 @@ import {
   getAccessibleDataLakePrompts,
   datalakeTagsFrom,
   grantedLakeIdsUsedFor,
+  readerOptInLakeIdsUsedFrom,
 } from '../dataLakeService/getDataLakePrompts';
 import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
 import { membershipOrgIdsForTurn } from '../dataLakeService/membershipOrgIdsForTurn';
@@ -176,7 +186,10 @@ interface DatabaseAdapters {
     // a future literal replacing this repo cannot silently drop it with no type error; every
     // current call site already wires the real repository, which has it.
     | 'annResidentFabFileIds'
-  >;
+  > &
+    // Forced retrieval's relevance pick of candidate files (selectForcedRetrievalCandidates). A
+    // host without them keeps the file-name pick, as with semanticDataLakeSearch's adapter shape.
+    Partial<Pick<IFabFileChunkRepository, 'vectorSearch' | 'getAtlasIndexStatus'>>;
   mementos: IMementoRepository;
   projects: IProjectRepository;
   organizations: IOrganizationRepository;
@@ -1192,7 +1205,12 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     const session = isObjectIdShaped(plan.notebookId)
       ? await this.chatCompletion.db.sessions.findById(plan.notebookId)
       : null;
-    return session?.userId === userId;
+    if (session?.userId !== userId) return false;
+    // Backfill like the HTTP side does, so the owner arm of the plan's write filter (writableBy in
+    // QuestMasterPlanModel.ts) matches the write that follows.
+    await this.chatCompletion.db.questMasterPlans.update({ id: plan.id, userId });
+    plan.userId = userId;
+    return true;
   }
 
   async onComplete({
@@ -1227,6 +1245,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
 
     await this.chatCompletion.db.questMasterPlans.updateTaskStatus(
       questMaster.questMasterPlanId,
+      this.user.id,
       questMaster.questId,
       questMaster.subQuestId,
       'completed'
@@ -1287,6 +1306,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
 
     await this.chatCompletion.db.questMasterPlans.updateTaskStatus(
       questMaster.questMasterPlanId,
+      this.user.id,
       questMaster.questId,
       questMaster.subQuestId,
       'in_progress'
@@ -1700,8 +1720,25 @@ export class SessionPromptFeature implements ChatCompletionFeature {
 // Upper bound on lake files whose chunks we score. Deliberately NOT raised to match the
 // data-lake search primitive: this runs inline on EVERY user turn, so scanning thousands of
 // files would add seconds per turn. A lake bigger than this is reported as partial coverage
-// (see reportCoverage) rather than scanned further.
+// (see reportCoverage) rather than scanned further. With vector search on, WHICH files make the
+// cut is decided by an ANN query over the scope (see selectForcedRetrievalCandidates); otherwise by
+// file name.
 const FORCED_RETRIEVAL_MAX_CANDIDATE_FILES = 100;
+// Metadata rows listed when the candidates can be chosen by relevance: the ANN query ranks this
+// many files down to the cap above. Metadata only (no chunks), so it is cheap next to the scan.
+const FORCED_RETRIEVAL_MAX_LISTED_FILES = 1000;
+// Chunk hits requested from the ANN query - several per candidate file, so a few chunk-dense
+// documents cannot fill the pool alone and leave the cap short of distinct files.
+const FORCED_RETRIEVAL_ANN_CHUNK_LIMIT = 1000;
+// This runs inline on every turn and a cold Atlas index has been seen taking tens of seconds, so
+// the ANN pick gets a hard deadline and falls back to the file-name pick past it.
+const FORCED_RETRIEVAL_ANN_DEADLINE_MS = 3000;
+// The listing-row fields the ANN seam shapes its rows from (see AnnRankableFile).
+type ForcedRetrievalCandidateFile = VectorSearchReadinessFile & {
+  fileName?: string | null;
+  tags?: { name: string }[];
+  documentDate?: Date | null;
+};
 // File ids per chunk query, and chunk rows per query - together these bound how many vectors
 // are resident at once instead of loading every candidate file's chunks up front.
 const FORCED_RETRIEVAL_FILE_BATCH_SIZE = 10;
@@ -1865,8 +1902,16 @@ interface ForcedRetrievalCandidate {
 /** What the turn actually managed to look at. All-zero/false means full coverage - stay silent. */
 interface ForcedRetrievalCoverage {
   filesListed: number;
-  /** More files matched than the candidate cap returned, so whole documents were never considered. */
+  /**
+   * The candidate cap cut whole documents out of consideration, BY FILE NAME: either the listing
+   * itself overflowed, or more servable files remained than the cap and no relevance pick ran. A
+   * relevance pick that ranked the full listing down to the cap does not set this - the cap then
+   * limits breadth, not which documents the scope can answer from.
+   */
   moreFilesBeyondCap: boolean;
+  candidateSelection: ForcedRetrievalCandidateSelection;
+  /** The listing's page size: FORCED_RETRIEVAL_MAX_LISTED_FILES with a relevance pick available, else the cap. */
+  listingLimit: number;
   /** Files withheld before the chunk load because they were embedded with a different model. */
   filesExcludedForeignModel: number;
   /**
@@ -1955,6 +2000,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   private preauthorizedLakeIds: string[];
   /** `session.lakeScopeExplicit` - see sessionGroundsOnNoLake for why an empty scope needs it. */
   private lakeScopeExplicit: boolean | undefined;
+  /**
+   * Owner-vetted copy of `retrievalTags` - the reader's consent for the lake-prompt READER
+   * OPT-IN arm. Kept separate from `retrievalTags`, which stays populated for a non-owner turn so
+   * retrieval scoping keeps working; see ToolContext.sessionReaderConsentDatalakeTags.
+   */
+  private readerConsentTags: string[];
 
   constructor(
     chatCompletion: ChatCompletionContext,
@@ -1962,7 +2013,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     citationStyle?: 'named' | 'indexed',
     retrievalFilter?: RetrievalExclusionOptions,
     preauthorizedLakeIds?: string[],
-    lakeScopeExplicit?: boolean
+    lakeScopeExplicit?: boolean,
+    readerConsentDatalakeTags?: string[]
   ) {
     this.chatCompletion = chatCompletion;
     this.logger = chatCompletion.logger;
@@ -1971,6 +2023,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     this.retrievalFilter = retrievalFilter ?? {};
     this.preauthorizedLakeIds = Array.isArray(preauthorizedLakeIds) ? preauthorizedLakeIds : [];
     this.lakeScopeExplicit = lakeScopeExplicit;
+    this.readerConsentTags = Array.isArray(readerConsentDatalakeTags) ? readerConsentDatalakeTags : [];
   }
 
   async beforeDataGathering(): Promise<{ shouldContinue: boolean }> {
@@ -2049,11 +2102,19 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // Names the selection RULE, not just the shortfall: candidates come off a fileName-ascending
       // page (see the listing above), so an over-cap library does not lose a random slice - it
       // loses the same tail on every turn, permanently. A reader told only "some were skipped"
-      // reasonably assumes a retry or a rephrase reaches the rest. It never does.
+      // reasonably assumes a retry or a rephrase reaches the rest. It never does. Outside a by-name
+      // pick this is only set when the widened LISTING overflowed, which is the same by-name cut
+      // one level up.
+      const cutAtCandidateCap =
+        coverage.candidateSelection === 'fileName' || coverage.listingLimit <= FORCED_RETRIEVAL_MAX_CANDIDATE_FILES;
       reasons.push(
-        `more than the ${FORCED_RETRIEVAL_MAX_CANDIDATE_FILES}-document candidate cap matched, and candidates are ` +
-          'selected alphabetically by file name - so the same documents are considered on every turn and the rest ' +
-          'of the library is never reached'
+        cutAtCandidateCap
+          ? `more than the ${FORCED_RETRIEVAL_MAX_CANDIDATE_FILES}-document candidate cap matched, and candidates are ` +
+              'selected alphabetically by file name - so the same documents are considered on every turn and the rest ' +
+              'of the library is never reached'
+          : `more than ${coverage.listingLimit} documents matched; only the first ${coverage.listingLimit} by file ` +
+              `name are considered${coverage.candidateSelection === 'relevance' ? ' (and ranked by relevance)' : ''}, ` +
+              'so the rest of the library is never reached'
       );
     }
     if (coverage.stoppedByChunkBudget) {
@@ -2130,7 +2191,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     try {
       const tagNames = sourceFileIds.flatMap(fid => (fileById.get(fid)?.tags ?? []).map(t => t.name));
       const datalakeTags = datalakeTagsFrom(tagNames);
-      if (datalakeTags.length === 0) return null;
+      // Still recorded, as present-and-empty: "the site ran and grounded on no lake file" must stay
+      // distinguishable from "the site never ran" (absent).
+      if (datalakeTags.length === 0) {
+        this.recordLakePromptInjection(quest, { injectedLakePromptIds: [] });
+        return null;
+      }
 
       const { db, user } = this.chatCompletion;
       const { keys: entitlementKeys, resolved: entitlementKeysResolved } =
@@ -2142,24 +2208,20 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const prompts = await getAccessibleDataLakePrompts(lakeAccessContext, {
         restrictToDatalakeTags: datalakeTags,
         preauthorizedLakeIds: this.preauthorizedLakeIds,
+        readerConsentDatalakeTags: this.readerConsentTags,
       });
       const injectedLakePromptIds = prompts.map(p => p.id);
       const preauthorizedSet = new Set(this.preauthorizedLakeIds);
       const preauthorizedLakeIdsUsed = injectedLakePromptIds.filter(id => preauthorizedSet.has(id));
       const grantedLakeIdsUsed = await grantedLakeIdsUsedFor(lakeAccessContext, injectedLakePromptIds);
+      const readerOptInLakeIdsUsed = readerOptInLakeIdsUsedFrom(prompts);
       // Recorded whenever this injection site ran, even if nothing qualified (present-and-empty
       // is distinct from absent - see the field's own comment in promptMeta.ts).
-      quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
-        sessionId: quest.sessionId,
-        userId: user.id,
-      });
-      quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
-        attempted: true,
-        surfaces: [],
-        dataLakeTags: [],
+      this.recordLakePromptInjection(quest, {
         injectedLakePromptIds,
         ...(preauthorizedLakeIdsUsed.length ? { preauthorizedLakeIdsUsed } : {}),
         ...(grantedLakeIdsUsed.length ? { grantedLakeIdsUsed } : {}),
+        ...(readerOptInLakeIdsUsed.length ? { readerOptInLakeIdsUsed } : {}),
       });
       const section = renderDataLakePromptSection(prompts);
       if (!section) return null;
@@ -2172,6 +2234,26 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       this.logger.warn('📋 Forced retrieval: lake-prompt resolution failed; injecting no lake prompt', err);
       return null;
     }
+  }
+
+  /** Merge this site's lake-prompt telemetry onto the quest's retrieval summary. */
+  private recordLakePromptInjection(
+    quest: IChatHistoryItemDocument,
+    lakePromptIds: Pick<
+      RetrievalSummary,
+      'injectedLakePromptIds' | 'preauthorizedLakeIdsUsed' | 'grantedLakeIdsUsed' | 'readerOptInLakeIdsUsed'
+    >
+  ): void {
+    quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+      sessionId: quest.sessionId,
+      userId: this.chatCompletion.user.id,
+    });
+    quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
+      attempted: true,
+      surfaces: [],
+      dataLakeTags: [],
+      ...lakePromptIds,
+    });
   }
 
   /**
@@ -2187,6 +2269,130 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       );
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Whether this turn can choose its candidate files by relevance: EnableDataLakeVectorSearch plus
+   * isAtlasVectorSearchAvailable, the gate semanticDataLakeSearch shares. Self-host OpenSearch is
+   * not wired here and keeps the file-name pick.
+   * Fails closed, like readSupersessionCollapseSetting: an unreadable setting means the file-name
+   * pick this path always had, never an error.
+   */
+  private async canSelectCandidatesByRelevance(): Promise<boolean> {
+    const { fabfilechunks, adminSettings } = this.chatCompletion.db;
+    if (!isAtlasVectorSearchAvailable(fabfilechunks)) return false;
+    try {
+      return (await adminSettings?.getSettingsValue('EnableDataLakeVectorSearch')) === true;
+    } catch (error) {
+      this.logger.warn(
+        '🔒 Forced retrieval: could not read EnableDataLakeVectorSearch - picking candidates by name',
+        error
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Cuts the servable files (in stable scan order) down to FORCED_RETRIEVAL_MAX_CANDIDATE_FILES.
+   * A relevance pick ranks them with one ANN query (see rankCandidateFilesByRelevance); anything
+   * that stops it - index not queryable, no index-ready file, an error, or the deadline - falls
+   * back to the file-name prefix, which reportCoverage then flags as the by-name cut it is.
+   */
+  private async selectForcedRetrievalCandidates<T extends ForcedRetrievalCandidateFile>(
+    files: T[],
+    queryVector: number[],
+    embeddingModel: SupportedEmbeddingModel,
+    relevanceSelectionAvailable: boolean
+  ): Promise<{ files: T[]; selection: ForcedRetrievalCandidateSelection }> {
+    if (files.length <= FORCED_RETRIEVAL_MAX_CANDIDATE_FILES) return { files, selection: 'all' };
+    const ranked = relevanceSelectionAvailable
+      ? await this.rankCandidatesByAnn(files, queryVector, embeddingModel)
+      : null;
+    if (ranked) return { files: ranked.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'relevance' };
+    return { files: files.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'fileName' };
+  }
+
+  /**
+   * The ANN half of selectForcedRetrievalCandidates, run through the same atlasVectorSearch seam
+   * as semanticDataLakeSearch. `null` means "fall back"; never throws.
+   */
+  private async rankCandidatesByAnn<T extends ForcedRetrievalCandidateFile>(
+    files: T[],
+    queryVector: number[],
+    embeddingModel: SupportedEmbeddingModel
+  ): Promise<T[] | null> {
+    const { fabfilechunks } = this.chatCompletion.db;
+    if (!isAtlasVectorSearchAvailable(fabfilechunks)) return null;
+    const now = new Date();
+    const annReadyIds = files.filter(f => isVectorSearchReady(f, now)).map(f => f.id);
+    if (annReadyIds.length === 0) {
+      this.logger.warn('🔒 Forced retrieval: no candidate file is vector-index ready yet - picking candidates by name');
+      return null;
+    }
+    try {
+      // One deadline across both calls: the status read is cached but a cold miss is a round trip.
+      const ann = await withDeadline(
+        (async () => {
+          const status = await fabfilechunks.getAtlasIndexStatus(embeddingModel);
+          if (!status?.queryable) return null;
+          const fileById = new Map<string, AnnRankableFile>(
+            files.map(f => [
+              f.id,
+              {
+                fileName: f.fileName ?? '',
+                fileTags: f.tags?.map(t => t.name) ?? [],
+                documentDate: f.documentDate ?? null,
+              },
+            ])
+          );
+          return atlasVectorSearch({
+            fileIds: annReadyIds,
+            fileById,
+            queryVector,
+            model: embeddingModel,
+            limit: FORCED_RETRIEVAL_ANN_CHUNK_LIMIT,
+            // No floor: the scores only ORDER the candidates, and a weak hit still outranks no hit.
+            minScore: -Infinity,
+            // Only fileId + score feed the ranking; skipping `text` keeps up to
+            // FORCED_RETRIEVAL_ANN_CHUNK_LIMIT chunk bodies off the wire on every turn.
+            includeText: false,
+            adapters: fabfilechunks,
+          });
+        })(),
+        FORCED_RETRIEVAL_ANN_DEADLINE_MS,
+        'forced-retrieval ANN candidate pick'
+      );
+      if (!ann) {
+        this.logger.warn(
+          `🔒 Forced retrieval: ${embeddingModel} vector index not queryable - picking candidates by name`
+        );
+        return null;
+      }
+      // An empty answer is not a ranking: ranking on it would return the input (by-name) order
+      // while reporting 'relevance', hiding the cut. Seen in the mongot lag window, where the
+      // index is queryable but has no chunks yet for the ready files. Counted after the seam drops
+      // hits for files outside the listing, which would rank nothing either.
+      if (ann.results.length === 0) {
+        this.logger.warn(
+          `🔒 Forced retrieval: ${embeddingModel} vector index returned no hits - picking candidates by name`
+        );
+        return null;
+      }
+      return rankCandidateFilesByRelevance(
+        files,
+        ann.results.map(r => ({ fabFileId: r.fileId, score: r.score })),
+        now
+      );
+    } catch (error) {
+      if (error instanceof DeadlineExceededError) {
+        this.logger.warn(
+          `🔒 Forced retrieval: ANN candidate pick ran past ${FORCED_RETRIEVAL_ANN_DEADLINE_MS}ms - picking candidates by name`
+        );
+      } else {
+        this.logger.warn('🔒 Forced retrieval: ANN candidate pick failed - picking candidates by name', error);
+      }
+      return null;
     }
   }
 
@@ -2643,13 +2849,22 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const nonLakeRetrievalTags = this.retrievalTags.filter(tag => !tag.startsWith(DATALAKE_TAG_PREFIX));
 
       // 1. List the lake-accessible files (empty query -> all accessible). Ranking is by semantic
-      //    similarity below, but the ORDER still matters: on a lake larger than the candidate cap
-      //    it decides which files are considered at all, so it must be stable turn to turn.
+      //    similarity below, but the ORDER still matters: on a lake larger than the listing limit
+      //    it decides which files are considered at all, so it must be stable turn to turn. With a
+      //    relevance pick available the listing is wider and an ANN query cuts it to the cap (see
+      //    selectForcedRetrievalCandidates); without one the listing IS the cut.
+      //    The widening cannot wait on index queryability: the embedding model whose index would be
+      //    asked is voted from this listing (resolveMajorityEmbeddingModel below), so the electorate
+      //    is the wider listing whenever the setting is on, even on a turn that falls back by name.
+      const relevanceSelectionAvailable = await this.canSelectCandidatesByRelevance();
+      const listingLimit = relevanceSelectionAvailable
+        ? FORCED_RETRIEVAL_MAX_LISTED_FILES
+        : FORCED_RETRIEVAL_MAX_CANDIDATE_FILES;
       const fileResults = await db.fabfiles.search(
         user.id,
         '',
         { tags: nonLakeRetrievalTags, shared: false },
-        { page: 1, limit: FORCED_RETRIEVAL_MAX_CANDIDATE_FILES },
+        { page: 1, limit: listingLimit },
         { by: 'fileName', direction: 'asc' },
         {
           textSearch: true,
@@ -2781,7 +2996,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             { lakes, identityTiers: supersessionCollapseEnabled }
           )
         : { servable: modelMatchedFiles, superseded: [] };
-      const scanCandidates = collapse.servable;
+      // The cap applies HERE, after every partition above, so a withheld, foreign-model or
+      // superseded file never takes a candidate slot from one that can actually be served.
+      const { files: scanCandidates, selection: candidateSelection } = await this.selectForcedRetrievalCandidates(
+        collapse.servable,
+        queryVector,
+        embeddingModel,
+        relevanceSelectionAvailable
+      );
       const supersession = buildSupersessionReport(collapse.superseded);
       // The audit value, resolved once here and used by every write site below. Deliberately NOT
       // read off `coverage.filesSupersededCollapsed`, which is the user-facing coverage note's
@@ -2806,8 +3028,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // Files beyond the candidate cap, NOT files the exclusion filter removed. `total` counts
         // rows the in-memory post-filter later drops (the DB clause is best-effort), so comparing
         // against it would report partial coverage on every turn of an exclusion-configured
-        // session. `hasMore` is the only honest "the cap cut something off" signal here.
-        moreFilesBeyondCap: fileResults.hasMore === true,
+        // session. `hasMore` is the only honest "the listing cut something off" signal here; a
+        // file-name pick that trimmed the servable set to the cap is the other by-name cut.
+        moreFilesBeyondCap: fileResults.hasMore === true || candidateSelection === 'fileName',
+        candidateSelection,
+        listingLimit,
         filesExcludedForeignModel: excludedForeignFiles.length,
         filesWithheldReindexing: reindexingFiles.length,
         filesSupersededCollapsed: supersession.count,

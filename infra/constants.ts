@@ -27,10 +27,6 @@ export const DEFAULT_LAMBDA_ENVIRONMENT = {
   // NOTE: APP_URL is NOT set here — it is injected per-construct (see infra/web.ts). Any
   // handler that calls requireEnv('APP_URL') must run in a lambda whose env includes APP_URL.
   SERVER_DOMAIN: process.env.SERVER_DOMAIN || '',
-  // Production domain (account-tied, no brand fallback), available on every stage so non-prod
-  // jobs that pull config FROM production (see dataSyncerHandler) target the prod host rather
-  // than the deploying stage's own domain. Empty when unset.
-  PROD_SERVER_DOMAIN: process.env.PROD_SERVER_DOMAIN || '',
   // Brand identity, externalized for open-core (issue #9310). All three carry NO brand
   // fallback — empty when unset — so a fresh clone never ships the "Bike4Mind" literal.
   // APP_NAME: product/display name; WEBSITE_URL: marketing site URL; PLATFORM_EMAIL_DOMAIN:

@@ -1,9 +1,6 @@
 import { Logger } from '@bike4mind/observability';
-import { ARTIFACT_ATTRS_PATTERN, ArtifactOperation, ArtifactType, mapMimeTypeToArtifactType } from '@bike4mind/common';
+import { ArtifactOperation, ArtifactType, mapMimeTypeToArtifactType, matchArtifactBlocks } from '@bike4mind/common';
 
-// Built from the shared ARTIFACT_ATTRS_PATTERN so the attribute sub-pattern
-// stays in sync with the client parser and PromptReplies truncation detector.
-const ARTIFACT_REGEX = new RegExp(`<artifact\\s+(${ARTIFACT_ATTRS_PATTERN})>([\\s\\S]*?)<\\/artifact>`, 'gi');
 // Value is anchored to its own quote kind so a double-quoted value can contain
 // apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
 // body, group 3 the single-quoted one; exactly one matches.
@@ -76,15 +73,10 @@ export function isSvgGraphicallyEmpty(svg: string): boolean {
 export function parseArtifacts(content: string): ArtifactParseResult {
   const artifacts: ParsedArtifact[] = [];
   let cleanedContent = content;
-  let match;
 
-  // Reset lastIndex; ARTIFACT_REGEX is a global regex and retains state between calls.
-  ARTIFACT_REGEX.lastIndex = 0;
-
-  while ((match = ARTIFACT_REGEX.exec(content)) !== null) {
-    const [fullMatch, attributesString, artifactContent] = match;
-    const startIndex = match.index;
-    const endIndex = match.index + fullMatch.length;
+  for (const block of matchArtifactBlocks(content)) {
+    const { index: startIndex, fullMatch, attrs: attributesString, body: artifactContent } = block;
+    const endIndex = startIndex + fullMatch.length;
 
     // Parse attributes
     const attributes: Record<string, string> = {};
@@ -766,9 +758,28 @@ function extractComponentName(code: string): string | null {
   return null;
 }
 
-function extractHTMLTitle(code: string): string | null {
-  const titleMatch = code.match(/<title>(.*?)<\/title>/i);
-  return titleMatch ? titleMatch[1] : null;
+// Same result as code.match(/<title>(.*?)<\/title>/i)?.[1] ?? null in one forward pass: that
+// regex rescans to the line end from every opener, so repeated `<title>` runs in quadratic time.
+export function extractHTMLTitle(code: string): string | null {
+  const opener = /<title>/gi;
+  const closer = /<\/title>/gi;
+  const lineEnd = /[\n\r\u2028\u2029]/g;
+  let closeAt = -1;
+  let lineEndAt = -1;
+  for (let open = opener.exec(code); open; open = opener.exec(code)) {
+    const bodyStart = opener.lastIndex;
+    if (closeAt < bodyStart) closeAt = nextMatchIndex(closer, code, bodyStart);
+    if (closeAt === Infinity) return null;
+    if (lineEndAt < bodyStart) lineEndAt = nextMatchIndex(lineEnd, code, bodyStart);
+    if (closeAt < lineEndAt) return code.slice(bodyStart, closeAt);
+  }
+  return null;
+}
+
+function nextMatchIndex(re: RegExp, text: string, from: number): number {
+  re.lastIndex = from;
+  const m = re.exec(text);
+  return m ? m.index : Infinity;
 }
 
 // Strip <, >, and " before interpolating a document-controlled title into title="...".

@@ -647,7 +647,7 @@ export interface ISession {
   lakeScopeExplicit?: boolean;
   /**
    * Lake ids a manager was admitted to for THIS session even though they are not a member of the
-   * lake (manage-but-not-member admission) - set ONLY by pages/api/sessions/create.ts, AFTER its
+   * lake (manage-but-not-member admission) - set ONLY by pages/api/v1/sessions/index.ts, AFTER its
    * own canManageLake check, as a write separate from session creation. Never part of
    * createSession's input type (fork/clone/snip cannot copy it - a type error, not a runtime
    * check) and never part of SessionUpdateRequestSchema (no session can grant itself this after
@@ -805,7 +805,7 @@ function tagRetryCutoff(now: number): Date {
  *
  * MUST agree with `tagAttemptDueFilter` below. The gate decides what is dispatched and the filter
  * decides what the credit pre-flight prices; the two disagreeing is exactly the defect
- * `apps/client/server/events/sessionTaggingGate.e2e.test.ts` exists to catch, which is why both
+ * `apps/workers/src/events/sessionTaggingGate.e2e.test.ts` exists to catch, which is why both
  * forms live here rather than one beside each caller.
  */
 export function isTagAttemptDue(session: Pick<ISession, 'tagLastAttemptAt'>, now: number = Date.now()): boolean {
@@ -906,6 +906,12 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * @returns The sessions
    */
   findAllWithKnowledgeId: (knowledgeId: string) => Promise<ISessionDocument[]>;
+
+  /**
+   * Atomically remove the given file ids from every session's `knowledgeIds` (a `$pull`, so
+   * concurrent callers cannot overwrite each other's removals). Resolves to the sessions modified.
+   */
+  pullKnowledgeIds: (fabFileIds: string[]) => Promise<number>;
 
   /**
    * Search for sessions by user ID

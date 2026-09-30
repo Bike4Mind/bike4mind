@@ -1,4 +1,10 @@
-import { ApiKeyScope, type IDataLakeRepository } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  DATA_LAKE_QUERY_API_KEY_SCOPES,
+  DATA_LAKE_READ_API_KEY_SCOPES,
+  DATA_LAKE_WRITE_API_KEY_SCOPES,
+  type IDataLakeRepository,
+} from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import { ForbiddenError } from '@server/utils/errors';
 import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
@@ -33,30 +39,22 @@ import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@serv
  * with no grace period and 403 every key in circulation the minute the gate
  * deploys. An admin key that calls a lake route is part of the same re-mint list
  * as any other key. See docs/architecture/api-key-scope-rollout.md.
+ *
+ * The read/write/query sets are copies of the constants in `@bike4mind/common`
+ * (constants/dataLakeApiKeyScopes.ts), which the public `/api/v1/data-lakes`
+ * contracts also declare, so both route families accept the same keys.
  */
-export const DATA_LAKE_READ_SCOPES: ApiKeyScope[] = [
-  ApiKeyScope.DATALAKE_READ,
-  ApiKeyScope.DATALAKE_WRITE,
-  // Query implies read: a key minted with exactly `datalake:query` still has to reach the
-  // read-gated routes the in-REPL RLM tools call back into (e.g. GET /api/data-lakes/articles,
-  // replayed with the caller's own credential - see rlm-answer.ts). Without this, a key holding
-  // only the scope the feature advertises 403s mid-call.
-  ApiKeyScope.DATALAKE_QUERY,
-];
+export const DATA_LAKE_READ_SCOPES: ApiKeyScope[] = [...DATA_LAKE_READ_API_KEY_SCOPES];
 
-export const DATA_LAKE_WRITE_SCOPES: ApiKeyScope[] = [ApiKeyScope.DATALAKE_WRITE];
+export const DATA_LAKE_WRITE_SCOPES: ApiKeyScope[] = [...DATA_LAKE_WRITE_API_KEY_SCOPES];
 
 export const DATA_LAKE_SHARE_SCOPES: ApiKeyScope[] = [ApiKeyScope.DATALAKE_SHARE];
 
 /**
  * Gate for a route that spends LLM/search budget against a lake (semantic-search, rlm-answer).
- * This array is query-ONLY - a `datalake:read` key still cannot call these spend routes
- * directly, even though `DATA_LAKE_READ_SCOPES` above admits `DATALAKE_QUERY` (query implies
- * read for the READ gate's own routes, not the other way around). `datalake:query` is its own
- * scope for a UI reason too: `datalake:read` ends in `:read` and auto-joins the New-Key modal's
- * "Read-only" preset, which must stay non-spending.
+ * Query-ONLY; the rationale lives with the shared constant in `@bike4mind/common`.
  */
-export const DATA_LAKE_QUERY_SCOPES: ApiKeyScope[] = [ApiKeyScope.DATALAKE_QUERY];
+export const DATA_LAKE_QUERY_SCOPES: ApiKeyScope[] = [...DATA_LAKE_QUERY_API_KEY_SCOPES];
 
 /** Gate for a route whose read method is open to readers and whose write method re-shares the lake. */
 export const DATA_LAKE_READ_OR_SHARE_SCOPES: ApiKeyScope[] = [...DATA_LAKE_READ_SCOPES, ApiKeyScope.DATALAKE_SHARE];
@@ -79,12 +77,23 @@ interface ScopedRequest {
  * has `apiKeyInfo` set, and treating a missing `scopes` array as "let it through"
  * would fail open for exactly the caller this gate exists to check.
  */
-function assertScope(req: ScopedRequest, required: ApiKeyScope[], message: string): void {
-  if (!req.apiKeyInfo) return;
+function holdsScope(req: ScopedRequest, required: ApiKeyScope[]): boolean {
+  if (!req.apiKeyInfo) return true;
   const held = req.apiKeyInfo.scopes ?? [];
   const { staged } = parseStagedScopes(process.env[SCOPE_STAGING_ENV_VAR]);
-  if (decideScopeGate(required, held, staged).outcome !== 'deny') return;
-  throw new ForbiddenError(message);
+  return decideScopeGate(required, held, staged).outcome !== 'deny';
+}
+
+function assertScope(req: ScopedRequest, required: ApiKeyScope[], message: string): void {
+  if (!holdsScope(req, required)) throw new ForbiddenError(message);
+}
+
+/**
+ * Non-throwing read-scope check for a door whose data-lake reach is a fallback rather than its
+ * purpose (loadAccessibleFabFile): a key without datalake:read keeps the door but not the lake.
+ */
+export function holdsDataLakeReadScope(req: ScopedRequest): boolean {
+  return holdsScope(req, DATA_LAKE_READ_SCOPES);
 }
 
 export function assertDataLakeWriteScope(req: ScopedRequest): void {

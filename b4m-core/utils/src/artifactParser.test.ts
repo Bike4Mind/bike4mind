@@ -4,6 +4,7 @@ import {
   parseArtifacts,
   isSvgGraphicallyEmpty,
   scanMermaidFences,
+  extractHTMLTitle,
   maskToolOutputRegions,
   TOOL_OUTPUT_MARKER,
   stripToolOutputMarker,
@@ -1049,6 +1050,68 @@ describe('mutation control: the body characters the original regex could not cro
     }
     expect(vsOriginal.extra).toBeGreaterThan(1000);
     expect(vsScanner.extra).toBeGreaterThan(1000);
+  });
+});
+
+describe('extractHTMLTitle', () => {
+  const oldExtract = (code: string) => code.match(/<title>(.*?)<\/title>/i)?.[1] ?? null;
+
+  it('matches case-insensitively and returns an empty title as an empty string', () => {
+    expect(extractHTMLTitle('<TITLE>Hi</Title>')).toBe('Hi');
+    expect(extractHTMLTitle('<title></title>')).toBe('');
+    expect(extractHTMLTitle('no title here')).toBeNull();
+  });
+
+  it('skips a title broken by a line terminator and takes a later valid one', () => {
+    expect(extractHTMLTitle('<title>a\r\nb</title><title>ok</title>')).toBe('ok');
+    expect(extractHTMLTitle('<title>a\u2028b</title> <title>ok</title>')).toBe('ok');
+    expect(extractHTMLTitle('<title>a\nb</title>')).toBeNull();
+  });
+
+  it('agrees with the old regex on seeded random input', () => {
+    let seed = 7;
+    const rand = () => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const tokens = [
+      '<title>',
+      '<TITLE>',
+      '<Title>',
+      '</title>',
+      '</TITLE>',
+      '<title',
+      'title>',
+      '<',
+      '/',
+      'x',
+      ' ',
+      '\n',
+      '\r',
+      '\u2028',
+      '\u2029',
+    ];
+    for (let i = 0; i < 5000; i++) {
+      let text = '';
+      const len = 1 + Math.floor(rand() * 12);
+      for (let j = 0; j < len; j++) text += tokens[Math.floor(rand() * tokens.length)];
+      expect(extractHTMLTitle(text), JSON.stringify(text)).toBe(oldExtract(text));
+    }
+  });
+
+  it.each([
+    // Sized so the old regex's quadratic rescan clears MIN_BASELINE_MS and fails the ratio.
+    ['repeated openers', (n: number) => '<title>'.repeat(n), 8_000],
+    ['openers each broken by a newline', (n: number) => '<title>x\n'.repeat(n), 40_000],
+  ])('scans %s in linear time', (_label, build, small) => {
+    assertLinearGrowth(
+      build,
+      small,
+      out => expect(out).toBe(''),
+      input => extractHTMLTitle(input) ?? ''
+    );
   });
 });
 

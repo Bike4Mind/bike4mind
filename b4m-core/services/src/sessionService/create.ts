@@ -19,6 +19,10 @@ import { usableSessionIds } from '../utils/objectIds';
 import * as projectService from '../projectService';
 import { deriveRetrievalTagsFromFiles, type DeriveRetrievalTagsAdapters } from './deriveRetrievalTags';
 import { resolveLakeScopeForcedRetrieval } from './resolveLakeScopeForcedRetrieval';
+import {
+  filterAccessibleKnowledgeIds,
+  type FilterAccessibleKnowledgeIdsAdapters,
+} from './filterAccessibleKnowledgeIds';
 
 const createSessionParametersSchema = z.object({
   name: z.string(),
@@ -68,7 +72,7 @@ const createSessionParametersSchema = z.object({
   // holds one loses the provenance instead of failing the copy.
   summaryTrigger: z.enum(PERSISTED_SESSION_SUMMARY_TRIGGERS).optional(),
   // Companion of `tags` the way `summaryAt` is of `summary`, so clone/fork must carry it or the
-  // spider gate at apps/client/server/events/spider.ts pays to re-tag every copy; snip deliberately
+  // spider gate at apps/workers/src/events/spider.ts pays to re-tag every copy; snip deliberately
   // does not. Declared here because secureParameters strips unknown keys; still not a client input,
   // since z.date() rejects the string a JSON body would carry.
   taggedAt: z.date().optional(),
@@ -105,12 +109,24 @@ export interface CreateSessionAdapters {
   logger?: Logger;
   /** Lets the lake-tag derivation see lake-membership files - see DeriveRetrievalTagsAdapters. */
   resolveLakeAccess?: DeriveRetrievalTagsAdapters['resolveLakeAccess'];
+  /** Lets a supplied lake-only file pass the access check - see filterAccessibleKnowledgeIds. */
+  resolveAttachmentLakeAccess?: FilterAccessibleKnowledgeIdsAdapters['resolveAttachmentLakeAccess'];
+}
+
+export interface CreateSessionOptions {
+  /**
+   * Set by the copy paths (clone/fork/snip): their knowledgeIds come from a session the caller was
+   * already authorized to read, not from the request, and they thread no lake resolver - so the
+   * access filter would drop the source's lake files. Export still re-checks access on the copy.
+   */
+  knowledgeIdsFromSourceSession?: boolean;
 }
 
 export const createSession = async (
   user: IUserDocument,
   parameters: CreateSessionParameters,
-  adapters: CreateSessionAdapters
+  adapters: CreateSessionAdapters,
+  options: CreateSessionOptions = {}
 ) => {
   const { db } = adapters;
   const {
@@ -125,7 +141,10 @@ export const createSession = async (
   // NOTE: notebookImportService writes sessions through sessionRepository.create directly, so it
   // does NOT pass through here - the read-side guards still carry rows it produces.
   const dropLogger = adapters.logger ?? Logger.globalInstance;
-  const knowledgeIds = usableSessionIds(rawKnowledgeIds, 'knowledge', dropLogger);
+  const usableKnowledgeIds = usableSessionIds(rawKnowledgeIds, 'knowledge', dropLogger);
+  const knowledgeIds = options.knowledgeIdsFromSourceSession
+    ? usableKnowledgeIds
+    : await filterAccessibleKnowledgeIds(user, usableKnowledgeIds, adapters);
   const agentIds = usableSessionIds(rawAgentIds, 'agent', dropLogger);
 
   // Explicit wins: a caller that already resolved a lake (resolveLakeSessionDefaults) or hand-set

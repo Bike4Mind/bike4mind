@@ -126,21 +126,22 @@ const revokeSessionKnowledgeFileGrants = async (
   const { db } = adapters;
 
   // Reach is bounded by knowledgeIds AS OF THIS CALL, and that list is client-writable by anyone
-  // holding update on the session (sessionService/update.ts validates shape only). A sharee can
-  // therefore detach a file before the owner revokes them and keep the tagged row: the cascade
-  // never visits it. The file's owner can still clear it with an unscoped revoke, but the session
-  // owner doing the revoking may not be that person. Closing it needs a
-  // `find({ 'users.sessionId': session.id })` sweep, which is an unindexed scan of a
-  // high-cardinality collection on every revoke - deliberately not paid here. The tag defends the
-  // destructive direction, which was the exposure; this is the evasive one.
+  // holding update on the session (sessionService/update.ts access-checks only the ids a write
+  // adds; removals are unchecked). A sharee can therefore detach a file before the owner revokes
+  // them and keep the tagged row: the cascade never visits it. The file's owner can still clear it
+  // with an unscoped revoke, but the session owner doing the revoking may not be that person.
+  // Closing it needs a `find({ 'users.sessionId': session.id })` sweep, which is an unindexed scan
+  // of a high-cardinality collection on every revoke - deliberately not paid here. The tag defends
+  // the destructive direction, which was the exposure; this is the evasive one.
   const files = await db.fabFiles.findAllByIds(session.knowledgeIds ?? []);
   for (const file of files) {
     // Only rows this session minted. The tag is the authorization: a row carrying `sessionId` was
     // written by accept.ts's propagation, which already required the inviter to hold share on the
     // file, so matching on it cannot reach a grant this session did not create. knowledgeIds is
-    // client-writable (sessionService/update.ts validates shape only), and that is exactly why the
-    // filter keys on the tag rather than on the session owner's present authority - pointing your
-    // session at a stranger's file gives you nothing, because no row on it carries your session id.
+    // client-writable (update.ts checks only additions; removals, legacy rows and notebook import
+    // are not gated), and that is exactly why the filter keys on the tag rather than on the session
+    // owner's present authority - pointing your session at a stranger's file gives you nothing,
+    // because no row on it carries your session id.
     //
     // Untagged rows are left alone: a direct share of the same file to the same user is a separate
     // row, and deleting it here destroyed a grant a third party had made and the revoker had no say

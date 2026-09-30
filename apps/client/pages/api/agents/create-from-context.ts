@@ -19,6 +19,7 @@ import { getFilesStorage } from '@server/utils/storage';
 import { isValidObjectId } from '@server/utils/objectId';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { apiKeyService } from '@bike4mind/services';
+import { createAttachmentLakeAccess } from '@server/queueHandlers/agentExecutor.attachmentLakeAccess';
 import { v4 as uuidv4 } from 'uuid';
 
 interface CreateFromContextRequest {
@@ -414,7 +415,17 @@ const handler = baseApi().post<Request<{}, CreateFromContextResponse, CreateFrom
     // Derive file IDs from session data (knowledgeIds + message fabFileIds)
     // instead of trusting client-provided file IDs
     const fileIds = await collectSessionFileIds(sessionId, messages);
-    const fabFiles = fileIds.length > 0 ? await fabFileRepository.findAllByIds(fileIds) : [];
+    // Access-scoped: both id lists are client-written, and file contents go into the generated
+    // agent's prompt. Same arms as the attachment door; a lake resolution failure leaves
+    // ownership-only arms, so a lake file drops out of the context rather than widening it.
+    const fabFiles =
+      fileIds.length > 0
+        ? await fabFileRepository.findAccessibleInIds(
+            fileIds,
+            { userId: authenticatedUserId, userGroups: req.user!.groups ?? undefined },
+            await createAttachmentLakeAccess(req.user!, req.logger)()
+          )
+        : [];
 
     // Generate the agent from context
     const agentData = await generateAgentFromContext(agentName, messages, fabFiles, authenticatedUserId, req.logger);

@@ -17,6 +17,8 @@ export const secrets = {
   GITHUB_LAKE_APP_ID: new sst.Secret('GITHUB_LAKE_APP_ID', 'not-configured'),
   GITHUB_LAKE_APP_PRIVATE_KEY: new sst.Secret('GITHUB_LAKE_APP_PRIVATE_KEY', 'not-configured'),
   GITHUB_LAKE_APP_SLUG: new sst.Secret('GITHUB_LAKE_APP_SLUG', 'not-configured'),
+  // Signs the App's push webhooks (pages/api/webhooks/github/lake.ts); unset means pushes are refused.
+  GITHUB_LAKE_APP_WEBHOOK_SECRET: new sst.Secret('GITHUB_LAKE_APP_WEBHOOK_SECRET', 'not-configured'),
   STRIPE_SECRET_KEY: new sst.Secret('STRIPE_SECRET_KEY', 'not-configured'),
   STRIPE_PUBLISHABLE_KEY: new sst.Secret('STRIPE_PUBLISHABLE_KEY', 'not-configured'),
   STRIPE_WEBHOOK_SECRET: new sst.Secret('STRIPE_WEBHOOK_SECRET', 'not-configured'),
@@ -180,12 +182,10 @@ export const secrets = {
   //     retention history. Set once per stage and leave it. The ingest key rotates freely; this does not.
   // Generate: openssl rand -hex 32
   OVERWATCH_PSEUDONYM_SALT: new sst.Secret('OVERWATCH_PSEUDONYM_SALT', 'not-configured'),
+  // QA status alarm (apps/client/server/qa/evaluateAlarm.ts). JSON map of product slug to a Slack
+  // incoming-webhook URL: {"<product>": "https://hooks..."}. A product without an entry logs only.
+  // Set per stage: sst secret set QA_ALARM_SLACK_WEBHOOKS '<json>' --stage <stage>
+  QA_ALARM_SLACK_WEBHOOKS: new sst.Secret('QA_ALARM_SLACK_WEBHOOKS', 'not-configured'),
 };
 
 export const allSecrets = Object.values(secrets);
-
-// Deliberately outside `secrets`, and therefore outside both `allSecrets` and the
-// `Object.values(secrets)` spread in web.ts - either one links a secret into every
-// Lambda and service on every stage. DataSyncer is the only consumer and links this
-// export directly (infra/dataSyncer.ts); keep it that way when adding a consumer.
-export const b4mProdApiKey = new sst.Secret('B4M_PROD_API_KEY', 'not-configured');

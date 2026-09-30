@@ -8,6 +8,20 @@ import { synthesizeSpeechContract } from './tts.contract';
 import { generateMusicContract } from './music.contract';
 import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
+import { generateImageContract } from './imageGeneration.contract';
+import { editImageContract } from './imageEdit.contract';
+import { createFileUploadContract, getFileContract } from './files.contract';
+import { createEmbeddingsContract } from './embeddings.contract';
+import { getQuestContract } from './quest.contract';
+import { createSessionContract } from './sessionCreate.contract';
+import {
+  listDataLakesContract,
+  getDataLakeContract,
+  getDataLakeFileContract,
+  addDataLakeFileContract,
+  removeDataLakeFileContract,
+  searchDataLakeContract,
+} from './dataLakes.contract';
 
 /**
  * Every public endpoint, as a contract. The OpenAPI generator registers each of
@@ -26,4 +40,17 @@ export const CONTRACTS: readonly EndpointContract[] = [
   generateMusicContract,
   generateSoundEffectContract,
   getMeContract,
+  generateImageContract,
+  editImageContract,
+  createFileUploadContract,
+  getFileContract,
+  createEmbeddingsContract,
+  getQuestContract,
+  createSessionContract,
+  listDataLakesContract,
+  getDataLakeContract,
+  getDataLakeFileContract,
+  addDataLakeFileContract,
+  removeDataLakeFileContract,
+  searchDataLakeContract,
 ];

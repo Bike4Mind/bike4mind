@@ -33,6 +33,8 @@ const ADMIN_GATE = /requiredScopes:\s*\[\s*ApiKeyScope\.ADMIN\s*\]/;
  */
 const NO_API_KEY_AUTH = new Set<string>([
   'emergency-login.ts',
+  // Authorized by the run-scoped token in its path, minted only by the gated qa/runs/[id].ts.
+  'qa/report/[runId]/[token]/[...path].ts',
   'rate-limits/ingest.ts',
   'security-dashboard/attack-simulation-ingest.ts',
   'security-dashboard/cloud-prowler-ingest.ts',

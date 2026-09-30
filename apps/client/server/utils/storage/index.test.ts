@@ -31,4 +31,9 @@ describe('storage module lazy contract', () => {
     const { getGeneratedImageStorage } = await import('./index');
     expect(() => getGeneratedImageStorage()).toThrow(/SST Resource\.generatedImagesBucket accessed/);
   });
+
+  it('accesses SST Resource only when getQaArtifactsStorage is invoked', async () => {
+    const { getQaArtifactsStorage } = await import('./index');
+    expect(() => getQaArtifactsStorage()).toThrow(/SST Resource\.qaArtifactsBucket accessed/);
+  });
 });

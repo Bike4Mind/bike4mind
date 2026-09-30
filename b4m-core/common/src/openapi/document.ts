@@ -270,17 +270,24 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       title: 'Bike4Mind API',
       version,
       description: infoDescription(),
-      contact: { name: 'Bike4Mind', url: 'https://your-deployment.example.com' },
+      contact: { name: 'Bike4Mind', url: prodUrl() },
       license: { name: 'Proprietary' },
     },
     servers: servers(),
   });
 
   doc.tags = [
-    { name: 'AI', description: 'Chat, completions, and server-side tool execution.' },
+    { name: 'AI', description: 'Chat, completions, embeddings, and server-side tool execution.' },
     { name: 'Sessions', description: 'Sessions (called "notebooks" in the product UI) and their attached knowledge.' },
     { name: 'Audio', description: 'Speech, music, and sound-effect generation.' },
+    { name: 'Images', description: 'Image generation and editing, queued and polled as quests.' },
     { name: 'Account', description: "The caller's own identity, plan tier, credit balance, and entitlements." },
+    {
+      name: 'Data Lakes',
+      description:
+        'Curated document collections: list and inspect the lakes you can reach, manage which files belong ' +
+        "to one, check each file's ingestion status, and run semantic search over a single lake.",
+    },
   ];
 
   // Attach per-operation vendor extensions + headers by operationId. Restrict to

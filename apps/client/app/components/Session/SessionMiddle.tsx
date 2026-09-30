@@ -11,6 +11,7 @@ import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useGetSessionQuests } from '@client/app/hooks/data/sessions';
 import { useConversationalVoiceStore } from '@client/app/components/Session/ConversationalVoice/useConversationalVoice';
 import { LLMSettings, handleLLMCommand } from '../commands/LLMCommand';
+import { selectTurnPreferences } from '../commands/turnPreferences';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useShallow } from 'zustand/react/shallow';
 import { INFINITE_VALUE } from '../FibonacciSlider';
@@ -193,6 +194,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
       s.imageModel,
     ])
   );
+  const turnPreferences = useLLM(useShallow(selectTurnPreferences));
 
   // Ensure max_tokens is never undefined
   const safeMaxTokens = max_tokens ?? 2048;
@@ -352,6 +354,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
           projectId,
           organizationId,
           thinking,
+          ...turnPreferences,
           setChatCompletion,
           ...llmSettings,
           imageConfig: imageConfig,

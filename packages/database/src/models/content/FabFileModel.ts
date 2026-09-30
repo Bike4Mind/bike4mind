@@ -554,13 +554,13 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     fileIds: string[],
     queryVector: number[],
     model: string,
-    options: { limit?: number } = {}
+    options: { limit?: number; includeText?: boolean } = {}
   ): Promise<Array<{ id: string; fabFileId: string; text: string; score: number }>> {
     if (fileIds.length === 0) return [];
     const target = getAtlasIndexForModel(model);
     if (!target) return [];
 
-    const { limit = 50 } = options;
+    const { limit = 50, includeText = true } = options;
     // Atlas applies `filter` DURING HNSW traversal, not as a post-filter, but recall still
     // degrades as the filter gets more selective relative to the collection - and `fabfilechunks`
     // holds every user's chunks, while `fileIds` here is usually a handful of files out of that
@@ -581,7 +581,14 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
           filter: { $and: [{ fabFileId: { $in: fileIds } }, { embeddingModel: model }] },
         },
       },
-      { $project: { _id: 1, fabFileId: 1, text: 1, score: { $meta: 'vectorSearchScore' } } },
+      {
+        $project: {
+          _id: 1,
+          fabFileId: 1,
+          ...(includeText ? { text: 1 } : {}),
+          score: { $meta: 'vectorSearchScore' },
+        },
+      },
     ];
 
     // any: $vectorSearch and the $meta vectorSearchScore projection are Atlas-only aggregation
@@ -939,11 +946,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // the door that admitted the file and silently drop lake-only images. Same builder, same
     // `archivedAt: null` post-processing on each arm - so the two doors can never disagree.
     //
-    // They still disagree on DRAFT lakes, and not because of anything here: the arms are only as
-    // wide as the `lakeAccess` a caller passes, and every attachment door resolves that through
-    // `findActiveByUserTagsAndEntitlements` (`status: 'active'`), while browse - `GET
-    // /api/files/byIds`, which is what admits the file to the workbench - selects draft AND active.
-    // So an unpublished lake's file is attachable and readable there, and absent here. Pinned by
+    // DRAFT lakes follow the same rule, but not from anything here: the arms are only as wide as
+    // the `lakeAccess` a caller passes. Browse (`GET /api/files/byIds`, which admits the file to the
+    // workbench) selects draft AND active, so every attachment door resolves its `lakeAccess` with
+    // `includeDraftLakes` to match - an active-only scope would drop an unpublished lake's file
+    // here that browse just showed. Retrieval and semantic search stay active-only. Pinned by
     // `queries/dataLakeDraftAttachmentScope.integration.test.ts`.
     const lakeArms = buildLakeArms({
       lakeMemberships: lakeAccess?.lakeMemberships,
@@ -1801,18 +1808,62 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return results;
   }
 
-  async findByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]> {
-    const docs = await this.fabFileModel.find({
-      driveConnectionId,
-      deletedAt: null,
-      archivedAt: null,
+  /** Shared by a connector's finder and count so the disconnect dialog and the purge agree. */
+  private connectorInDataLakeFilter(connectorFilter: Record<string, string>, datalakeTag: string) {
+    return {
+      ...connectorFilter,
       tags: { $elemMatch: { name: datalakeTag } },
       // Exclude in-flight rows: a 'pending' file from a sync still mid-upload is not yet a
       // durable member, so it must not be mistaken for a delete (absent from the fresh walk it
       // has not finished ingesting) nor for a stale copy.
       status: { $ne: 'pending' },
-    });
+    };
+  }
+
+  /**
+   * Every file a given connector connection (Drive or GitHub) has ingested into a lake. The basis
+   * a re-sync diffs its fresh walk/tree against: a stored file absent from the fresh read was
+   * DELETED, and one whose content moved was EDITED - neither detectable from the walk alone.
+   *
+   * `includeDeleted` drops the archivedAt/deletedAt filters for the disconnect purge, which must
+   * reach an archived lake's members (every member is archivedAt-stamped when its lake archives)
+   * and soft-deleted rows, mirroring `hardDeleteByDataLakeTag`. `status: 'pending'` rows are
+   * excluded either way.
+   */
+  private async findByConnectorInDataLake(
+    connectorFilter: Record<string, string>,
+    datalakeTag: string,
+    options?: { includeDeleted?: boolean; limit?: number }
+  ): Promise<IFabFileDocument[]> {
+    const filter = this.connectorInDataLakeFilter(connectorFilter, datalakeTag);
+    const query = options?.includeDeleted
+      ? this.fabFileModel.find(filter).setOptions({ includeDeleted: true })
+      : this.fabFileModel.find({ ...filter, deletedAt: null, archivedAt: null });
+    if (options?.limit !== undefined) query.limit(options.limit);
+    const docs = await query;
     return docs.map(d => d.toJSON());
+  }
+
+  async findByDriveConnectionIdInDataLake(
+    driveConnectionId: string,
+    datalakeTag: string,
+    options?: { includeDeleted?: boolean; limit?: number }
+  ): Promise<IFabFileDocument[]> {
+    return this.findByConnectorInDataLake({ driveConnectionId }, datalakeTag, options);
+  }
+
+  async countByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<number> {
+    // countDocuments is not soft-delete-plugin-filtered, so this counts the includeDeleted set the
+    // disconnect purge reaches, archived and soft-deleted rows included.
+    return this.fabFileModel.countDocuments(this.connectorInDataLakeFilter({ driveConnectionId }, datalakeTag));
+  }
+
+  async findByGitHubConnectionIdInDataLake(
+    githubConnectionId: string,
+    datalakeTag: string,
+    options?: { includeDeleted?: boolean; limit?: number }
+  ): Promise<IFabFileDocument[]> {
+    return this.findByConnectorInDataLake({ githubConnectionId }, datalakeTag, options);
   }
 
   async findDriveFileIdsByBatchId(batchId: string): Promise<string[]> {
@@ -3521,6 +3572,10 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     driveMd5Checksum: { type: String },
     sourceLakeId: { type: String },
     driveConnectionId: { type: String },
+    // GitHub repository ingest provenance. Populated when sourceType === GITHUB.
+    githubConnectionId: { type: String },
+    githubPath: { type: String },
+    githubBlobSha: { type: String },
     // Curator supersession rulings, one per lake - see IFabFile.supersededInLakes. `default:
     // undefined` so an unruled file stores no empty array, matching `versions` above.
     // `select: false`: this is control-plane data (who ruled, when, which lake), never something a
@@ -3637,6 +3692,9 @@ FabFileSchema.index({ driveFileId: 1 });
 // three equality keys the query also carries bound it to the live rows in the index itself
 // (archivedAt and tags.name stay post-filters; a multikey array key here would not help).
 FabFileSchema.index({ driveConnectionId: 1, deletedAt: 1, status: 1 });
+
+// GitHub re-sync reconcile (findByGitHubConnectionIdInDataLake), same shape and reason as the Drive one above.
+FabFileSchema.index({ githubConnectionId: 1, deletedAt: 1, status: 1 });
 
 // Un-chunked rescue sweep (buildFabFileChunkScanFilter: self-host worker scan + the hosted
 // dataLakeBatchReconcile cron). Equality prefix, createdAt range last; without it the daily

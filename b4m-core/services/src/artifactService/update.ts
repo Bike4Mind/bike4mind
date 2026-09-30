@@ -5,6 +5,7 @@ import {
   calculateContentHash,
   calculateContentSize,
 } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { secureParameters, NotFoundError, UnauthorizedError } from '@bike4mind/utils';
 import { z } from 'zod';
 
@@ -117,6 +118,17 @@ export const update = async (
 
   let newVersion = null;
   let newContent = null;
+  let deactivatedVersionId: string | null = null;
+
+  // Before any version or content row is written, a claim that touches only updatedAt: a writer
+  // revoked (or an artifact deleted) since the check above is refused here and leaves nothing behind.
+  // Metadata waits for the single gated write at the end, so a failed save never half-applies it.
+  const claimVersionWrite = async () => {
+    const claimed = await db.artifacts.updateWithWriteAccess(userId, { id: artifact.id, updatedAt: new Date() });
+    if (!claimed) {
+      throw new UnauthorizedError('Write access denied');
+    }
+  };
 
   // Handle content update (creates new version)
   if (content !== undefined) {
@@ -125,6 +137,8 @@ export const update = async (
 
     // Check if content actually changed OR if forced version creation is requested
     if (contentHash !== artifact.contentHash || createNewVersion) {
+      await claimVersionWrite();
+
       // Get the highest version number from the database
       const allVersions = await db.artifactVersions.findByArtifactId(artifact.id);
 
@@ -159,6 +173,7 @@ export const update = async (
             id: currentVersionDoc._id,
             isActive: false,
           } as any);
+          deactivatedVersionId = currentVersionDoc._id;
         }
       }
 
@@ -200,6 +215,8 @@ export const update = async (
     const currentContentArray = await db.artifactContents.findByArtifactId(artifact.id);
     const currentContent = currentContentArray?.[0]; // Get the latest content
     if (currentContent) {
+      await claimVersionWrite();
+
       // Create or update content record with same content
       newContent = await db.artifactContents.createOrUpdate({
         artifactId: artifact.id,
@@ -220,6 +237,7 @@ export const update = async (
             id: currentVersionDoc._id,
             isActive: false,
           } as any);
+          deactivatedVersionId = currentVersionDoc._id;
         }
       }
 
@@ -241,8 +259,13 @@ export const update = async (
     }
   }
 
-  // Update the artifact
-  const updatedArtifact = await db.artifacts.update(updateData);
+  // One gated write for metadata and the version pointer together.
+  const updatedArtifact = await db.artifacts.updateWithWriteAccess(userId, updateData);
+  if (!updatedArtifact) {
+    if (newVersion)
+      await rollbackVersionRows(adapters, artifact.id, newVersion._id, newContent?._id, deactivatedVersionId);
+    throw new UnauthorizedError('Write access denied');
+  }
 
   const result: any = {
     artifact: updatedArtifact,
@@ -255,7 +278,45 @@ export const update = async (
 };
 
 /**
- * Check if user can write to artifact
+ * Undoes a refused save's version rows. Versions upsert on {artifactId, version}, so a concurrent
+ * saver that computed the same number shares these rows: when the artifact now points at them, they
+ * belong to that saver and are left alone. Best-effort, not transactional; each step is independent.
+ */
+async function rollbackVersionRows(
+  { db }: UpdateArtifactAdapters,
+  artifactId: string,
+  versionId: string,
+  contentId: string | undefined,
+  deactivatedVersionId: string | null
+) {
+  const step = async (label: string, run: () => Promise<unknown>) => {
+    try {
+      await run();
+    } catch (error) {
+      Logger.globalInstance.error(`artifact update rollback: ${label} failed for artifact ${artifactId}:`, error);
+    }
+  };
+
+  // An unreadable artifact counts as adopted: orphan rows are recoverable, a deleted live version is not.
+  let adopted = true;
+  await step('re-read', async () => {
+    const current = await db.artifacts.findOne({ id: artifactId });
+    adopted = String(current?.currentVersionId) === String(versionId);
+  });
+  if (adopted) return;
+
+  await step('delete version', () => db.artifactVersions.delete(String(versionId)));
+  if (contentId) await step('delete content', () => db.artifactContents.delete(String(contentId)));
+  if (deactivatedVersionId) {
+    await step('reactivate previous version', () =>
+      // any: `id` is not a known key of Partial<IArtifactVersionDocument>
+      db.artifactVersions.update({ id: deactivatedVersionId, isActive: true } as any)
+    );
+  }
+}
+
+/**
+ * Check if user can write to artifact. Must stay in sync with ArtifactRepository.updateWithWriteAccess.
  */
 function canUserWriteArtifact(userId: string, artifact: any): boolean {
   // Owner always has write access

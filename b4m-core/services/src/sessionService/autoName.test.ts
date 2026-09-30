@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { sanitizeSessionTitle } from './autoName';
+import { describe, it, expect, vi } from 'vitest';
+import { NotFoundError } from '@bike4mind/utils';
+import { autoName, sanitizeSessionTitle } from './autoName';
 
 describe('sanitizeSessionTitle (#8960)', () => {
   it('passes through a normal plain-text title', () => {
@@ -53,5 +54,41 @@ describe('sanitizeSessionTitle (#8960)', () => {
     const out = sanitizeSessionTitle('😀'.repeat(100));
     expect(out.endsWith('…')).toBe(true);
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(out)).toBe(false);
+  });
+});
+
+describe('autoName write-time re-check', () => {
+  const writer = { id: 'sharee', groups: [] };
+  const makeAdapters = () => ({
+    db: {
+      sessions: {
+        findById: vi.fn().mockResolvedValue({ id: 's1' }),
+        update: vi.fn(),
+        updateWithUpdateAccess: vi.fn().mockResolvedValue({ id: 's1', name: 'Title' }),
+      },
+      quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue([{ prompt: 'p', reply: 'r' }]) },
+    },
+    createCompletion: vi.fn().mockResolvedValue('Title'),
+    logger: { info: vi.fn() },
+  });
+
+  it('writes through the gated update for a request-driven rename, global-write included', async () => {
+    const adapters = makeAdapters();
+
+    await autoName({ sessionId: 's1' }, adapters as never, writer);
+
+    expect(adapters.db.sessions.updateWithUpdateAccess).toHaveBeenCalledWith(
+      writer,
+      { id: 's1', name: 'Title', isAutoNamed: true },
+      { includeGlobalWrite: true }
+    );
+    expect(adapters.db.sessions.update).not.toHaveBeenCalled();
+  });
+
+  it('answers NotFoundError when access was revoked during the LLM call', async () => {
+    const adapters = makeAdapters();
+    adapters.db.sessions.updateWithUpdateAccess.mockResolvedValue(null);
+
+    await expect(autoName({ sessionId: 's1' }, adapters as never, writer)).rejects.toThrow(NotFoundError);
   });
 });

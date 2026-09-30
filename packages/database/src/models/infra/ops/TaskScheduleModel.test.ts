@@ -25,7 +25,9 @@ describe('TaskScheduleRepository', () => {
 
   it('claims a due pending task and leaves a future-dated one alone', async () => {
     const due = await taskScheduleRepository.create(createTaskData({ processDate: new Date(now.getTime() - 10000) }));
-    await taskScheduleRepository.create(createTaskData({ processDate: new Date(now.getTime() + 10000) }));
+    // Off the real clock with a wide margin: `now` is taken at file collection, so
+    // a slow leg could otherwise reach now + 10s before claim() runs.
+    await taskScheduleRepository.create(createTaskData({ processDate: new Date(Date.now() + 60 * 60_000) }));
 
     const claimed = await claim();
 
