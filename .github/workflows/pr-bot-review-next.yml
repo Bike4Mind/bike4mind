@@ -41,6 +41,8 @@ jobs:
       fold_mode: ${{ github.event.label.name == 'bot-review-fold-next' }}
       # b4m-devtools main, 2026-09-30
       skill_ref: 9e7b019a41b55e429e654006808215fc65732507
-      verdict_on_clean: APPROVE
+      # Not APPROVE: under workflow_call the action's exchanged token cannot
+      # approve ("without explicit repository access"), though it can comment.
+      verdict_on_clean: COMMENT
       changeset_guard: true
       runner_label: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
