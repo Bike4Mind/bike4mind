@@ -310,6 +310,7 @@ export function MessageThread({
   onRespond,
   onContinue,
   status,
+  footer,
 }: {
   messages: ChatMessage[];
   /** Needed to read attachment bytes back; they are stored per conversation. */
@@ -326,6 +327,12 @@ export function MessageThread({
    * which is the same condition `streaming` reports - so the two can never say different things.
    */
   status?: ReactNode;
+  /**
+   * Drawn after the last turn, in the reading column and inside the scroll - the background
+   * task count. It belongs to the thread rather than to the composer: it is a running note on
+   * what this conversation set going, so it reads as the last thing that happened in it.
+   */
+  footer?: ReactNode;
 }) {
   const bottom = useRef<HTMLDivElement>(null);
   const last = messages[messages.length - 1];
@@ -370,6 +377,9 @@ export function MessageThread({
             />
           )
         )}
+        {footer}
+        {/* Stays the LAST child: the auto-scroll targets it, so anything below it would be
+            scrolled past rather than brought into view. */}
         <div ref={bottom} />
       </Stack>
     </Box>

@@ -6,7 +6,6 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { runningTasksLabel, splitTasks, taskElapsedMs, taskTitle } from './backgroundTasks';
 import { ChevronIcon, CloseIcon, ExpandIcon, StopIcon, TrashIcon } from './icons';
-import { contentColumnSx } from './layout';
 import { formatElapsed } from './statusLine';
 import type { BackgroundProcessView } from './useBackgroundProcesses';
 
@@ -271,17 +270,20 @@ export function BackgroundTaskPanel({
 }
 
 /**
- * The count above the composer, and the way back to a panel that has been closed.
+ * The count at the foot of the transcript, and the way back to a panel that has been closed.
  *
  * Drawn only while something is running: a chip reading "0 running tasks" is a line of chrome
  * that is never true of anything the user cares about. Finished tasks stay reachable from the
  * panel, which is where they were left.
+ *
+ * Carries no column of its own - the thread it sits at the end of already provides one - so
+ * the Box is only there to keep the chip at its natural width in a stretching column.
  */
 export function BackgroundTaskChip({ running, onClick }: { running: number; onClick: () => void }) {
   if (running === 0) return null;
 
   return (
-    <Box sx={{ ...contentColumnSx, pt: 1 }}>
+    <Box>
       <Chip
         size="sm"
         variant="soft"
