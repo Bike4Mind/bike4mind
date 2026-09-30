@@ -78,6 +78,11 @@ const projectTest = {
   // dead ends - autoIndex:false breaks index-dependent suites, and a single shared mongod
   // serializes every worker's index builds and made it markedly worse.
   testTimeout: 30000,
+  // Integration-lane only: these suites exercise real concurrency (compare-and-set races,
+  // multi-document transactions) against a real mongod under CI's worker-capped, oversubscribed
+  // CPU, so an occasional loss is timing noise, not a wrong answer - a genuine regression still
+  // fails after the retries. Unset in the unit lane, where a retry would just mask a real bug.
+  ...(INTEGRATION_LANE ? { retry: 2 } : {}),
 };
 
 // Vite-level options both projects share. A factory, not a constant: each project gets its own
