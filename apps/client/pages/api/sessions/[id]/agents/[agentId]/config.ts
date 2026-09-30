@@ -20,6 +20,21 @@ const updateConfigSchema = z.object({
 });
 
 /**
+ * Re-check session write access right before a config write. The grant lives on the session and
+ * the write is to the config, so it cannot share one filter; this narrows the window since
+ * assertSessionAccess to the gap before the write, which is left open (not worth a transaction).
+ * Matches assertSessionAccess 'write', global-write included.
+ */
+async function assertStillWritable(
+  user: Parameters<typeof sessionRepository.shareable.findUpdateAccessById>[0],
+  sessionId: string
+) {
+  if (!(await sessionRepository.shareable.findUpdateAccessById(user, sessionId, { includeGlobalWrite: true }))) {
+    throw new NotFoundError('Session not found');
+  }
+}
+
+/**
  * Agent-level authz + attachment check, shared by all three verbs below: does the caller have
  * access to the agent itself (owner, user-share, or group-share - the same object-level
  * predicate agents.ts's POST agent-attach handler uses), and is that agent actually attached to
@@ -73,6 +88,8 @@ const handler = baseApi()
 
     const existingConfig = await sessionAgentConfigRepository.findBySessionAndAgent(sessionId, agentId);
 
+    await assertStillWritable(req.user!, sessionId);
+
     let config;
     if (existingConfig) {
       // Re-stamp userId to the caller on every update: this config's userId is who the
@@ -124,6 +141,7 @@ const handler = baseApi()
     // A write-sharee can delete a config they can't trigger (trigger-proactive-messages.ts only
     // fires configs the caller owns) - intentional: deletion doesn't run anyone else's prompt or
     // spend anyone else's credits, so it doesn't need the same per-owner restriction.
+    await assertStillWritable(req.user!, sessionId);
     await sessionAgentConfigRepository.deleteBySessionAndAgent(sessionId, agentId);
 
     res.json({ success: true });

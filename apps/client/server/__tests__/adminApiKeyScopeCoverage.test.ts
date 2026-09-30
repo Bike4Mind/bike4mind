@@ -103,6 +103,9 @@ const KNOWN_UNGATED = new Set<string>([
   'published-artifacts/[id]/reports.ts',
   'published-artifacts/[id]/takedown.ts',
   'published-artifacts/index.ts',
+  // auth: false, so no API key or JWT is ever accepted and a scope gate cannot apply. Authorized
+  // by the run-scoped token in its path, minted only by the gated qa/runs/[id].ts.
+  'qa/report/[runId]/[token]/[...path].ts',
   'rapid-reply/mappings/[id].ts',
   'rapid-reply/mappings/bulk.ts',
   'rapid-reply/mappings/index.ts',

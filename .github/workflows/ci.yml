@@ -691,8 +691,8 @@ jobs:
           pnpm --recursive --workspace-concurrency=1 "${filter_args[@]}" "$SHARD_SCRIPT" "${script_args[@]}"
 
       # Tests that live outside every pnpm workspace, which the sharded run above cannot reach:
-      # infra/ has no package.json, and scripts/codemods is not in pnpm-workspace.yaml, so
-      # `pnpm --recursive ... test` has no project to run in either. They passed locally and
+      # infra/ has no package.json, and scripts/codemods and scripts/__tests__ are not in
+      # pnpm-workspace.yaml, so `pnpm --recursive ... test` has no project to run in either. They passed locally and
       # nowhere else, which is worse than having no tests - infra/__tests__ holds the guard that
       # is meant to fail the build when a WAF shadow rule flips from Count to Block, and it could
       # not have.
@@ -716,6 +716,7 @@ jobs:
         run: |
           pnpm exec vitest run --dir infra
           pnpm exec vitest run --dir scripts/codemods
+          pnpm test:scripts
         env:
           CI: true
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}

@@ -529,12 +529,40 @@ const publishedArtifactsBucketLifecycle = new aws.s3.BucketLifecycleConfiguratio
   }
 );
 
+/**
+ * ===============================
+ * QaArtifactsBucket
+ * ===============================
+ * Failure media (screenshots, videos, traces) and HTML reports for the admin
+ * /status page. Private and unversioned. CI writes through size-bound presigned
+ * PUTs from GitHub runners (server-to-server, so no CORS); admins read through
+ * presigned GETs and the /api/admin/qa/report proxy. Everything expires after 30
+ * days; run metadata in Mongo is kept. Keep in sync with QA_MEDIA_RETENTION_DAYS
+ * in b4m-core/common/src/schemas/qa.ts.
+ */
+const qaArtifactsBucket = new sst.aws.Bucket('qaArtifactsBucket', {});
+
+const qaArtifactsBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('qaArtifactsBucketLifecycle', {
+  bucket: qaArtifactsBucket.name,
+  rules: [
+    {
+      id: 'expire-qa-artifacts',
+      status: 'Enabled',
+      filter: { prefix: '' },
+      expiration: { days: 30 },
+      abortIncompleteMultipartUpload: { daysAfterInitiation: 1 },
+    },
+  ],
+});
+
 export {
   fabFileBucket,
   generatedImagesBucket,
   appFilesBucket,
   publishedArtifactsBucket,
   publishedArtifactsBucketLifecycle,
+  qaArtifactsBucket,
+  qaArtifactsBucketLifecycle,
   historyImportBucket,
   appFilesBucketNotification,
   historyImportBucketNotification,

@@ -17,7 +17,7 @@ export const editImageContract = defineEndpoint({
   summary: 'Edit an image',
   description:
     'Queues an edit of an existing image and returns the quest that will carry the result, before the ' +
-    'render runs. Poll `GET /api/quests/{id}` until `status` is `"done"` (see the `editImage200PollResult` ' +
+    'render runs. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `editImage200PollResult` ' +
     'schema). `image` is the URL of the source image; `fabFileIds` must name at least one file, and the ' +
     'first is the inpainting mask. `referenceImageFabFileIds` (gpt-image models only) adds up to 4 style ' +
     'anchors after the source image, so the mask always applies to the source. Credits are checked when ' +
@@ -39,7 +39,7 @@ export const editImageContract = defineEndpoint({
     200: {
       description:
         'Edit queued - NOT a finished render. The body is the quest itself, with no images yet; its ' +
-        'outcome arrives on `GET /api/quests/{id}`.',
+        'outcome arrives on `GET /api/v1/quests/{id}`.',
       schema: ImageQuestSchema,
       pollResult: imageQuestPollResult,
     },

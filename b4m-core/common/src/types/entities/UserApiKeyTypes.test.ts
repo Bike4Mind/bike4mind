@@ -12,6 +12,7 @@ const EXPECTED_CONFINED: ReadonlySet<ApiKeyScope> = new Set([
   ApiKeyScope.CC_BRIDGE,
   ApiKeyScope.EMBED_CHAT,
   ApiKeyScope.OVERWATCH_INGEST_WRITE,
+  ApiKeyScope.QA_INGEST,
 ]);
 
 const EXPECTED_NOT_CONFINED: ReadonlySet<ApiKeyScope> = new Set([

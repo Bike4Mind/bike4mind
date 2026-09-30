@@ -11,4 +11,8 @@ export { generateSoundEffectContract } from './contracts/soundEffects.contract';
 export { getMeContract } from './contracts/me.contract';
 export { generateImageContract } from './contracts/imageGeneration.contract';
 export { editImageContract } from './contracts/imageEdit.contract';
+export { createFileUploadContract, getFileContract } from './contracts/files.contract';
+export { createEmbeddingsContract } from './contracts/embeddings.contract';
+export { getQuestContract } from './contracts/quest.contract';
+export { createSessionContract } from './contracts/sessionCreate.contract';
 export { CONTRACTS } from './contracts';

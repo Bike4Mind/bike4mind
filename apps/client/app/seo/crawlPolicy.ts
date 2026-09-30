@@ -76,6 +76,7 @@ export const CORE_DISALLOWED_PATHS: readonly string[] = [
   '/projects',
   '/quests',
   '/skills',
+  '/status',
   '/subscribe',
   '/subscriptions',
   '/tutorials',

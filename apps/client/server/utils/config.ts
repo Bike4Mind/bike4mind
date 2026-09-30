@@ -115,6 +115,8 @@ const Config = {
     'OVERWATCH_PSEUDONYM_SALT',
     () => Resource.OVERWATCH_PSEUDONYM_SALT.value
   ),
+  // JSON map of product slug -> Slack webhook for the QA status alarm (server/qa/evaluateAlarm.ts).
+  QA_ALARM_SLACK_WEBHOOKS: readOptionalSecret('QA_ALARM_SLACK_WEBHOOKS', () => Resource.QA_ALARM_SLACK_WEBHOOKS.value),
   STAGE: Resource.App.stage,
 } as const;
 

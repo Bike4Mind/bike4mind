@@ -32,6 +32,7 @@ const FIELD_LABEL: Record<LakeConfigChangeField, string> = {
   organizationId: 'Organization',
   isPublic: 'Public',
   auditQueryTextEnabled: 'Query-text auditing',
+  injectPromptForReaders: 'Prompt for readers',
   lakeMemoryEnabled: 'Lake memory',
   status: 'Status',
   origin: 'Origin',

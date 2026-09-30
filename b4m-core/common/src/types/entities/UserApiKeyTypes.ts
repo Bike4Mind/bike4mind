@@ -108,12 +108,20 @@ export enum ApiKeyScope {
    * the claim - it is a property of the consumer, recorded for the reader.
    */
   OVERWATCH_READ = 'overwatch:read',
+  /**
+   * CI-to-server ingest of Playwright runs for the admin /status page
+   * (`POST /api/qa/uploads`, `POST /api/qa/runs`). Admin-provisioned only,
+   * and confined like {@link OVERWATCH_INGEST_WRITE}: a leaked CI key reaches the
+   * two ingest routes and nothing else. The routes also require the key's owner
+   * to carry the `qa-ingest` user tag (QA_INGEST_USER_TAG in schemas/qa.ts).
+   */
+  QA_INGEST = 'qa:ingest',
 }
 
 /**
  * Scopes bound to a single dedicated flow: bridge pairing, the embed widget,
- * Overwatch ingest. A key carrying ANY of these is *confined* and both ends of the
- * system say the same thing about it in the same words:
+ * Overwatch ingest, QA run ingest. A key carrying ANY of these is *confined* and
+ * both ends of the system say the same thing about it in the same words:
  *  - at mint (createUserApiKey): a confined scope must be the key's only scope, so
  *    a confined key is never persisted alongside reach it would then lose;
  *  - at runtime (apiKeyScopeGate `isConfinedKey`/`decideScopeGate`): it authorizes
@@ -125,6 +133,7 @@ export const CONFINED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.CC_BRIDGE,
   ApiKeyScope.EMBED_CHAT,
   ApiKeyScope.OVERWATCH_INGEST_WRITE,
+  ApiKeyScope.QA_INGEST,
 ];
 
 export enum ApiKeyStatus {
@@ -252,7 +261,7 @@ export interface IUserApiKey {
   /**
    * Lake ids this key is bound to for the manage-but-not-member session admission (see
    * `preauthorizedLakeIds` on the session, and its containment check at
-   * pages/api/sessions/create.ts). Admin-minted only; a key's presence in this list is not itself
+   * pages/api/v1/sessions/index.ts). Admin-minted only; a key's presence in this list is not itself
    * authority to admit a lake - the caller must still pass the live canManageLake check on every
    * request, this only narrows which lakes that authority may be exercised for.
    */
@@ -299,8 +308,11 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   updateLastUsed: (id: string) => Promise<void>;
   findActiveByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   deactivateAllByUserId: (userId: string) => Promise<void>;
-  /** Disables the key and stamps revokedAt/revokedBy/revokedReason, only if it is not already DISABLED. */
-  revokeIfActive: (id: string, revokedBy: string, revokedReason?: string) => Promise<void>;
+  /**
+   * Disables the key and stamps revokedAt/revokedBy/revokedReason, only if it is not already DISABLED.
+   * Optional so adding it stays additive: an external implementer of this interface is not broken by the new member.
+   */
+  revokeIfNotDisabled?: (id: string, revokedBy: string, revokedReason?: string) => Promise<void>;
   findExpiredKeys: () => Promise<IUserApiKeyDocument[]>;
   countActiveByUserId: (userId: string) => Promise<number>;
   findByProductId: (productId: string) => Promise<IUserApiKeyDocument[]>;

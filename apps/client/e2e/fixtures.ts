@@ -76,7 +76,7 @@ export const test = base.extend<TestFixtures>({
   authState: async ({}, use, testInfo) => {
     // @realauth tests drive the app's real refresh-cookie bootstrap (e.g. the hard-reload guard),
     // so they must NOT be wrapped through /auth/success - null passes their gotos through untouched
-    // and they authenticate from the pristine cookie the setup planted (see seedAuthStorageState).
+    // and they plant their own never-exchanged refresh cookie (see seedAuthStorageState for why).
     const current = testInfo.tags.includes('@realauth') ? null : specAuthForProject(testInfo.project.name);
     await use({ current });
   },
@@ -87,6 +87,18 @@ export const test = base.extend<TestFixtures>({
     await page.route('**/api/modals**', route =>
       route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
     );
+
+    // A fresh browser has no region cookie, so CookieConsentBanner asks, and its fixed bar
+    // intercepts clicks on the sidenav and menus. Seed a decision before any app script runs.
+    // The key must stay in sync with CONSENT_KEY in app/utils/consentRegion.ts. 'denied' keeps
+    // trackers off; a test that sets its own value first wins.
+    await page.addInitScript(() => {
+      try {
+        if (!localStorage.getItem('cookie_consent')) localStorage.setItem('cookie_consent', 'denied');
+      } catch {
+        // Opaque origins (about:blank) have no localStorage.
+      }
+    });
 
     // Authenticated projects: the access token is memory-only and dies on every full load, so a raw
     // goto to a protected route cold-loads unauthenticated and the router guard bounces to /login.

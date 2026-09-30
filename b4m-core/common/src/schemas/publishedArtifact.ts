@@ -406,9 +406,10 @@ export const PublishedArtifactSchema = z.object({
   shareToken: z.string().optional(),
   /** When `shareToken` was last minted/rotated; drives the owner-facing "link created" surface. */
   shareTokenUpdatedAt: z.date().nullish(),
-  /** Every share link ever minted, revoked ones included. Mirrors the two fields above during
-   *  the rollout and becomes the source of truth once the backfill has run everywhere; `token`
-   *  is stripped from serialized responses, so an owner-facing read sees only the metadata. */
+  /** Every share link ever minted, revoked ones included. THE source of truth for share links
+   *  as of #3255 step 3 - the two fields above are now only mirrored from the newest live entry
+   *  for rollback safety. `token` is stripped from serialized responses, so an owner-facing
+   *  read sees only the metadata. */
   shareTokens: z.array(ShareTokenEntrySchema).prefault([]),
 
   /** Collaboration gate: who (among viewers) may annotate. Orthogonal to

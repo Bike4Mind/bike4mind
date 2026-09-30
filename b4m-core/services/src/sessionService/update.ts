@@ -112,10 +112,6 @@ export const updateSession = async (
   const refused = new Set(requestedAdded.filter(id => !addedFileIds.includes(id)));
   const knowledgeIds = usableIds?.filter(id => !refused.has(id));
 
-  if (addedFileIds.length > 0 && propagateToProjects !== false) {
-    await addFilesToProjects(user, { session, fileIds: addedFileIds }, adapters);
-  }
-
   // Persist ONLY the fields this request changed, as a plain partial keyed by id.
   // findUpdateAccessById returns a hydrated mongoose doc, and passing it straight to
   // db.sessions.update($set of the whole thing) reverted any owner share revocation,
@@ -173,10 +169,15 @@ export const updateSession = async (
   update.lastUpdated = new Date();
 
   // The read above authorizes; the write re-checks, since a share revocation or soft-delete can land
-  // during addFilesToProjects or lake derivation. Same arms as findUpdateAccessById (global write off).
+  // during lake derivation. Same arms as findUpdateAccessById (global write off).
   const updated = await db.sessions.updateWithUpdateAccess(user, update);
   if (!updated) {
     throw new NotFoundError('Session not found');
+  }
+
+  // Only after the gated write, so a caller revoked mid-request grants no project member these files.
+  if (addedFileIds.length > 0 && propagateToProjects !== false) {
+    await addFilesToProjects(user, { session, fileIds: addedFileIds }, adapters);
   }
 
   return updated;
@@ -239,7 +240,7 @@ const addFilesToProjects = async (
   for (const project of projects) {
     project.fileIds = uniq([...project.fileIds, ...fileIds]);
 
-    await updateShareableFiles(user.id, { project, files }, adapters);
+    await updateShareableFiles(user, { project, files }, adapters);
 
     await db.projects.update({ id: project.id, fileIds: project.fileIds });
   }

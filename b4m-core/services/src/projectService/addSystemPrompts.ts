@@ -1,10 +1,10 @@
 import { Logger } from '@bike4mind/observability';
-import { pushShareable } from '../sharingService';
-import { IFabFileRepository, IProjectDocument, IProjectRepository, IUserDocument, Permission } from '@bike4mind/common';
+import { IFabFileRepository, IProjectDocument, IProjectRepository, IUserDocument } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { canonicalId, distinctIdCount } from '../utils/objectIds';
 import uniq from 'lodash/uniq.js';
+import { updateShareableFiles } from './addFiles';
 
 const addSystemPromptsSchema = z.object({
   projectId: z.string(),
@@ -30,8 +30,7 @@ export const addSystemPrompts = async (
 
   // Update-level, not read-level: adding a system prompt mutates the project and pushes share
   // grants onto the attached files, so a read grant must not reach it. Normalized to a plain
-  // object because this predicate returns a hydrated document where findAccessibleById did not,
-  // and `project` is handed to db.projects.update below.
+  // object because this predicate returns a hydrated document where findAccessibleById did not.
   const found = await db.projects.shareable.findUpdateAccessById(user, projectId);
   // NotFoundError, not a bare Error: this refusal is routine and user-triggerable - a read-only
   // sharee clicking the button reaches it - and a bare Error is a 500 that pages LiveOps. 404
@@ -70,30 +69,17 @@ export const addSystemPrompts = async (
   project.systemPrompts.push(...newSystemPrompts);
   project.updatedAt = new Date();
 
+  // Project write first, gated in its filter, so a caller revoked since the read above gets a 404
+  // before any grant is pushed onto the files (see addFiles).
+  const written = await db.projects.updateWithUpdateAccess(user, {
+    id: project.id,
+    systemPrompts: project.systemPrompts,
+    updatedAt: project.updatedAt,
+  });
+  if (!written) throw new NotFoundError('Project not found');
+
   try {
-    const fileUpdates = [];
-    for (const file of files) {
-      // Share with project owner if they're not the one adding the file
-      if (project.userId !== user.id) {
-        pushShareable(file, {
-          userId: project.userId,
-          permissions: [Permission.read, Permission.update],
-          projectId,
-        });
-      }
-
-      // Share with all project members
-      for (const projectUser of project.users) {
-        pushShareable(file, { userId: projectUser.userId, permissions: projectUser.permissions, projectId });
-      }
-
-      fileUpdates.push(db.fabFiles.update({ id: file.id, users: file.users }));
-    }
-
-    await Promise.all([
-      ...fileUpdates,
-      db.projects.update({ id: project.id, systemPrompts: project.systemPrompts, updatedAt: project.updatedAt }),
-    ]);
+    await updateShareableFiles(user, { project, files }, adapters);
 
     return project;
   } catch (error) {
@@ -102,8 +88,10 @@ export const addSystemPrompts = async (
 
     try {
       // Write only the fields this cleanup path touches, not the whole stale project: the success
-      // path above may have already advanced the doc, and a whole-doc write would clobber it.
-      await db.projects.update({ id: project.id, systemPrompts: project.systemPrompts });
+      // path above may have already advanced the doc, and a whole-doc write would clobber it. Gated
+      // like every write here: a caller revoked meanwhile leaves the prompts for a current member to
+      // remove rather than writing as someone who no longer can.
+      await db.projects.updateWithUpdateAccess(user, { id: project.id, systemPrompts: project.systemPrompts });
     } catch (cleanupError) {
       Logger.globalInstance.error('Failed to cleanup after error:', cleanupError);
     }

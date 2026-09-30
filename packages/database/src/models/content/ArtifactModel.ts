@@ -274,6 +274,23 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
     return this._plainUpdate<IArtifactDocument>({ id: data.id }, data as Record<string, unknown>, options);
   }
 
+  /**
+   * Partial update that matches only while `userId` still owns the artifact or is in
+   * permissions.canWrite, and it is not deleted; null otherwise. `deletedAt: null` is explicit because
+   * Artifact is not a softDeletePlugin model. Must stay in sync with canUserWriteArtifact in
+   * b4m-core/services/src/artifactService/update.ts.
+   */
+  async updateWithWriteAccess(
+    userId: string,
+    data: Partial<IArtifactDocument> & { id: string }
+  ): Promise<IArtifactDocument | null> {
+    const { id, ...updateData } = data;
+    return this._plainUpdate<IArtifactDocument>(
+      { id, deletedAt: null, $or: [{ userId }, { 'permissions.canWrite': userId }] },
+      updateData as Record<string, unknown>
+    );
+  }
+
   // Implement artifact-specific methods
   async findByType(type: string, filter: Record<string, unknown> = {}) {
     return this.find({ ...filter, type, deletedAt: null });

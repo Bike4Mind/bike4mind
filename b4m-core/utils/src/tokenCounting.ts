@@ -33,6 +33,8 @@ export interface TokenizerOptions {
  */
 export class TiktokenTokenizer implements ITokenizer {
   private encoderCache = new Map<string, Tiktoken>();
+  /** Model ids tiktoken has no mapping for (non-OpenAI models); they count with the fallback encoding. */
+  private modelsWithoutEncoding = new Set<string>();
   private isShuttingDown = false;
   private logger: ILogger;
   private enableCaching: boolean;
@@ -116,7 +118,8 @@ export class TiktokenTokenizer implements ITokenizer {
   private async getEncoder(modelId?: string, logger: ILogger = this.logger): Promise<Tiktoken> {
     const { encoding_for_model, get_encoding } = await import('tiktoken');
 
-    const cacheKey = modelId || this.fallbackEncoding;
+    const encodedModel = modelId && !this.modelsWithoutEncoding.has(modelId) ? modelId : undefined;
+    const cacheKey = encodedModel ?? this.fallbackEncoding;
 
     if (this.enableCaching && this.encoderCache.has(cacheKey)) {
       return this.encoderCache.get(cacheKey)!;
@@ -124,8 +127,8 @@ export class TiktokenTokenizer implements ITokenizer {
 
     let encoder: Tiktoken;
     try {
-      if (modelId) {
-        encoder = encoding_for_model(modelId as TiktokenModel);
+      if (encodedModel) {
+        encoder = encoding_for_model(encodedModel as TiktokenModel);
         logger.debug(`Created tiktoken encoder for model: ${modelId}`);
       } else {
         encoder = get_encoding(this.fallbackEncoding as any);
@@ -136,12 +139,12 @@ export class TiktokenTokenizer implements ITokenizer {
         this.encoderCache.set(cacheKey, encoder);
       }
     } catch (error) {
+      if (!encodedModel) throw error;
       logger.warn(`Failed to create encoder for model ${modelId}, falling back to ${this.fallbackEncoding}:`, error);
-      encoder = get_encoding(this.fallbackEncoding as any);
-
-      if (this.enableCaching) {
-        this.encoderCache.set(this.fallbackEncoding, encoder);
-      }
+      // Remembered so the next call for this model goes straight to the cached fallback encoder,
+      // instead of rebuilding (and leaking) a fresh one per call.
+      this.modelsWithoutEncoding.add(encodedModel);
+      return this.getEncoder(undefined, logger);
     }
 
     return encoder;

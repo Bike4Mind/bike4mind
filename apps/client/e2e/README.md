@@ -207,6 +207,10 @@ await loginPage.fillOtc(code);
 await loginPage.submit();
 ```
 
+The endpoint returns the last code sent to the address, and specs run in parallel. Give each
+OTC test its own user (`apiCreateThrowawayUser` in `helpers/api.ts`), or a parallel test's send
+hands this one a code its pending token does not match.
+
 **MFA** needs no extra infra: the MFA setup endpoint returns the `totpSecret`, so a test
 can enroll, then generate valid codes in-test with `otplib`/`speakeasy`.
 
@@ -379,6 +383,17 @@ That repo secret is a mirror of the value the deployer seeds onto every stage, a
 - `e2e-ai-latency.yml` - the Slack post reads `:fast_forward: Skipped (E2E_CLEANUP_SECRET not configured)` and the table legend names the configuration gap instead of blaming Playwright. **One exception:** a *full-matrix* preview dispatch still fails red, because model discovery cannot run without the secret and the matrix cannot be built without discovered models. That run names the cause in an `::error::` rather than reporting an empty discovery result.
 
 If you see any of these, the fix is to set the repo secret, not to debug the suite.
+
+### QA ingest (/status)
+
+Each stage that reports to `/status` needs:
+
+1. A non-admin service user tagged `qa-ingest`.
+2. An API key for that user with only the `qa:ingest` scope, stored as repo secret `QA_INGEST_KEY`.
+3. Repo variables `QA_INGEST_URL` (origin only) and `QA_PRODUCT`.
+4. SST secret `QA_ALARM_SLACK_WEBHOOKS` for state-change alarms.
+
+The ingest step is best-effort. With the variables unset it logs a `::warning::` and skips, and the job never fails.
 
 ## Debugging
 

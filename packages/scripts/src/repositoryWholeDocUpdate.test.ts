@@ -58,7 +58,6 @@ const ALLOWED = new Map<string, string>([
   ['apps/client/pages/api/sre/patterns/[id].ts::updates', PARTIAL],
   ['b4m-core/auth/src/mfaService/verify.ts::updateData', PARTIAL],
   ['b4m-core/services/src/artifactService/delete.ts::updateData', PARTIAL],
-  ['b4m-core/services/src/artifactService/update.ts::updateData', PARTIAL],
   ['b4m-core/services/src/fabFileService/edit.ts::updatedFile', PARTIAL],
   ['b4m-core/services/src/latticeService/latticeModelService.ts::updateData', PARTIAL],
   ['b4m-core/services/src/latticeService/latticeModelService.ts::updatedModel', PARTIAL],
@@ -69,7 +68,7 @@ const ALLOWED = new Map<string, string>([
   ['b4m-core/services/src/userService/adminUpdate.ts::writeData', 'built by toUserUpdatePartial'],
   ['packages/scripts/generateAgentSystemPrompts.ts::updateData', PARTIAL],
 ]);
-const ALLOWED_ENTRIES = 27;
+const ALLOWED_ENTRIES = 26;
 const SITE_COUNT = new Map<string, number>([
   ['b4m-core/services/src/latticeService/latticeModelService.ts::updatedModel', 3],
 ]);

@@ -135,7 +135,7 @@ export type SimplifiedChatRequest = z.infer<typeof SimplifiedChatRequestSchema>;
 /**
  * Async ACK returned on the default (wait:false) path of POST /api/chat. The
  * `type`/`errorCode` pair below is the same classifier the `wait: true` body and
- * the polled quest (`GET /api/quests/{id}`) carry, so it is modelled once here -
+ * the polled quest (`GET /api/v1/quests/{id}`) carry, so it is modelled once here -
  * the rest of those two bodies is NOT described by this schema. The
  * handler assembles the ack body inline (apps/client/pages/api/chat.ts), so
  * this schema MUST stay in sync with that `res.json({...})` shape.
@@ -148,7 +148,7 @@ export const ChatAckSchema = z.object({
   model: z.string(),
   message: z.string().optional(),
   // Present unconditionally on the `wait: true` body, carrying the quest's own value -
-  // same as the polled quest (`GET /api/quests/{id}`). Absent only on the immediate async
+  // same as the polled quest (`GET /api/v1/quests/{id}`). Absent only on the immediate async
   // ack, where nothing has run yet. `type` (not `errorCode`) is what separates a
   // failure from an answer: it is `'error'` for every failure class that sets it, coded
   // or not.
@@ -192,23 +192,13 @@ export const ChatAckSchema = z.object({
 export type ChatAck = z.infer<typeof ChatAckSchema>;
 
 /**
- * The quest a `wait: false` caller polls at `GET /api/quests/{id}` - the outcome
+ * The quest a `wait: false` caller polls at `GET /api/v1/quests/{id}` - the outcome
  * of the turn the ACK above only acknowledged.
  *
- * Deliberately the OUTCOME SUBSET, not the whole quest: that endpoint is a plain
- * handler rather than a contract, so this models only what decides whether the
- * turn succeeded, and a poll body carries further fields (`images`, `files`,
- * `toolPayloads`, `promptMeta`, ...). Must stay in sync with that handler's
- * `res.json` shape (apps/client/pages/api/quests/[id]/index.ts) - unlike a
- * contract-registered request/response schema, nothing validates this at
- * runtime. The "parses against the published ChatQuestPollResultSchema"
- * integration test (index.integration.test.ts) only proves the handler's
- * CURRENT response satisfies this schema - a non-strict `z.object` strips
- * unknown keys rather than rejecting them, and only `id` is required, so a
- * field the handler starts returning without a matching addition here keeps
- * that test green. The real per-field coverage lives in the sibling
- * assertions in that same test file; a shape addition still needs a schema
- * update by hand.
+ * Deliberately the OUTCOME SUBSET, not the whole quest: it models only what decides
+ * whether the turn succeeded. The full response of that endpoint is
+ * QuestPollResponseSchema (schemas/quest.ts), which extends this schema and is
+ * the 200 body of the `getQuest` contract.
  *
  * A failed turn is still `status: 'done'` with the failure text in `reply`, so
  * `reply` alone cannot tell an answer from a failure - `type` and `errorCode` are
@@ -221,7 +211,7 @@ export type ChatAck = z.infer<typeof ChatAckSchema>;
  */
 export const ChatQuestPollResultSchema = z.object({
   id: z.string(),
-  status: z.enum(['stopped', 'running', 'done']).optional(),
+  status: z.enum(['pending', 'stopped', 'running', 'done']).optional(),
   // A finished turn that FAILED is `type: 'error'` carrying the failure text in
   // `reply`; anything else is a real reply.
   // Derived from CHAT_HISTORY_ITEM_TYPES, like ChatAckSchema's twin above:

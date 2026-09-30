@@ -27,10 +27,6 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
-    "B4M_PROD_API_KEY": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
     "CliToolHandler": {
       "name": string
       "type": "sst.aws.Function"
@@ -238,6 +234,10 @@ declare module "sst" {
       "url": string
     }
     "CHAT_COMPLETION_INTERNAL_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "QA_ALARM_SLACK_WEBHOOKS": {
       "type": "sst.sst.Secret"
       "value": string
     }
@@ -609,6 +609,10 @@ declare module "sst" {
       "url": string
     }
     "publishedArtifactsBucket": {
+      "name": string
+      "type": "sst.aws.Bucket"
+    }
+    "qaArtifactsBucket": {
       "name": string
       "type": "sst.aws.Bucket"
     }

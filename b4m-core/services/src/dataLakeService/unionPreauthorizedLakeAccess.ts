@@ -25,7 +25,7 @@ export type ResolvedLakeAccessSetWithAdmissions = ResolvedLakeAccessSet & {
  * Adds a session's pre-authorized lakes (manager-but-not-member admission) into an
  * already-resolved access set, as SCOPED (dynamic) entries - a pre-authorized lake is always a
  * DB lake, never a registry one. Authorization happened first at session-create time (see
- * pages/api/sessions/create.ts's canManageLake check), and this RE-DERIVES it per turn against
+ * pages/api/v1/sessions/index.ts's canManageLake check), and this RE-DERIVES it per turn against
  * the same rule, so the admission tracks the caller's current manage rights: a lake deleted,
  * archived, or whose curator grant / org-admin role was revoked stops being reachable from the
  * sessions already created for it. `preauthorizedLakeIds` is therefore a record of what was

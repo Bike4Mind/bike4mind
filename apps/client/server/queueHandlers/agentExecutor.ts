@@ -1583,6 +1583,11 @@ async function processExecution(
       // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
       // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
       sessionRetrievalTags: session.retrievalTags,
+      // Reader opt-in consent, threaded unvetted like sessionPreauthorizedLakeIds below: the
+      // ownership gate above already confirmed the session belongs to this run, so there is no
+      // separate acting principal to vet against (unlike the chat path's ChatCompletionProcess,
+      // which can run on someone else's session and needs vetReaderConsentDatalakeTags for that).
+      sessionReaderConsentDatalakeTags: session.retrievalTags,
       // Its sidecar, and NOT optional to forward: without it an empty scope reads as "no lake
       // opinion" and the agent searches every lake its owner can reach - the opposite of what a
       // deliberate no-lake session asked for. See sessionGroundsOnNoLake.
@@ -3395,6 +3400,11 @@ async function processSubagentDispatch(
       // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
       // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
       sessionRetrievalTags: session.retrievalTags,
+      // Reader opt-in consent, threaded unvetted like sessionPreauthorizedLakeIds below: the
+      // ownership gate above already confirmed the session belongs to this run, so there is no
+      // separate acting principal to vet against (unlike the chat path's ChatCompletionProcess,
+      // which can run on someone else's session and needs vetReaderConsentDatalakeTags for that).
+      sessionReaderConsentDatalakeTags: session.retrievalTags,
       // Its sidecar, and NOT optional to forward: without it an empty scope reads as "no lake
       // opinion" and the agent searches every lake its owner can reach - the opposite of what a
       // deliberate no-lake session asked for. See sessionGroundsOnNoLake.
