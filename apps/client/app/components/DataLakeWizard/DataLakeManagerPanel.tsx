@@ -120,6 +120,7 @@ export default function DataLakeManagerPanel() {
           origin: l.origin ?? DEFAULT_DATA_LAKE_ORIGIN,
           // Absent (predates the field) reads the same as an explicit false: never built.
           lakeMemoryEnabled: l.lakeMemoryEnabled ?? false,
+          injectPromptForReaders: l.injectPromptForReaders ?? false,
           // null/undefined both mean "no explicit policy" (the lake inherits), which is the state
           // the field renders as blank - and the state in which this lake never converges.
           requiredPassageTokenTarget: l.requiredPassageTokenTarget ?? null,

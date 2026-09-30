@@ -180,12 +180,10 @@ export const secrets = {
   //     retention history. Set once per stage and leave it. The ingest key rotates freely; this does not.
   // Generate: openssl rand -hex 32
   OVERWATCH_PSEUDONYM_SALT: new sst.Secret('OVERWATCH_PSEUDONYM_SALT', 'not-configured'),
+  // QA status alarm (apps/client/server/qa/evaluateAlarm.ts). JSON map of product slug to a Slack
+  // incoming-webhook URL: {"<product>": "https://hooks..."}. A product without an entry logs only.
+  // Set per stage: sst secret set QA_ALARM_SLACK_WEBHOOKS '<json>' --stage <stage>
+  QA_ALARM_SLACK_WEBHOOKS: new sst.Secret('QA_ALARM_SLACK_WEBHOOKS', 'not-configured'),
 };
 
 export const allSecrets = Object.values(secrets);
-
-// Deliberately outside `secrets`, and therefore outside both `allSecrets` and the
-// `Object.values(secrets)` spread in web.ts - either one links a secret into every
-// Lambda and service on every stage. DataSyncer is the only consumer and links this
-// export directly (infra/dataSyncer.ts); keep it that way when adding a consumer.
-export const b4mProdApiKey = new sst.Secret('B4M_PROD_API_KEY', 'not-configured');

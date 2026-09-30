@@ -595,7 +595,7 @@ export function useCreateDataLake(options?: { onSuccess?: (data: DataLakeConfig)
     },
     onSuccess: data => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
-      // Reveal the 'datalakes' nav slot immediately rather than after the
+      // Show the 'datalakes' reward immediately rather than after the
       // gears/status staleTime elapses (#833).
       invalidateGearsStatusWhileLocked(queryClient, ['datalakes']);
       toast.success(`Data lake "${data.name}" created`);

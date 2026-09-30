@@ -3,6 +3,7 @@ import {
   fabFileBucket,
   generatedImagesBucket,
   publishedArtifactsBucket,
+  qaArtifactsBucket,
   historyImportBucket,
   whatsNewDistributionBucket,
   uploadCompleteFunction,
@@ -47,6 +48,8 @@ import {
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueue,
   driveLakeIngestQueueDLQ,
+  driveDisconnectPurgeQueue,
+  driveDisconnectPurgeQueueDLQ,
   whatsNewGenerationQueue,
   whatsNewHighlightsQueue,
   notebookCurationQueue,
@@ -135,6 +138,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'lake-memory': lakeMemoryQueueDLQ.url,
     'lake-inconsistency-model': lakeInconsistencyModelQueueDLQ.url,
     'drive-lake-ingest': driveLakeIngestQueueDLQ.url,
+    'drive-disconnect-purge': driveDisconnectPurgeQueueDLQ.url,
   },
 });
 
@@ -192,6 +196,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     lakeMemoryQueue: lakeMemoryQueue.url,
     lakeInconsistencyModelQueue: lakeInconsistencyModelQueue.url,
     driveLakeIngestQueue: driveLakeIngestQueue.url,
+    driveDisconnectPurgeQueue: driveDisconnectPurgeQueue.url,
   },
 });
 
@@ -225,6 +230,7 @@ export const web = new sst.aws.Nextjs(
       generatedImagesBucket,
       appFilesBucket,
       publishedArtifactsBucket,
+      qaArtifactsBucket,
       eventBus,
       slackEventBus,
       uploadCompleteFunction,

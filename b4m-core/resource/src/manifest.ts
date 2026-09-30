@@ -8,7 +8,6 @@ export const DEFAULT_MANIFEST = {
   // core boot secrets (JWT/session/encryption/Mongo) are hard-required.
   ANTHROPIC_API_KEY: { kind: 'secret', optional: true },
   B4M_ANALYTICS_ENABLED: { kind: 'secret', optional: true },
-  B4M_PROD_API_KEY: { kind: 'secret', optional: true },
   // Shared-secret bearer for the frontend -> ChatCompletion /process dispatch. Required:
   // chat dispatch fails closed (401) without it. Distinct from SECRET_ENCRYPTION_KEY.
   CHAT_COMPLETION_INTERNAL_SECRET: { kind: 'secret' },
@@ -49,6 +48,7 @@ export const DEFAULT_MANIFEST = {
   OPTIHASHI_API_URL: { kind: 'secret', optional: true },
   OPTIHASHI_WEBHOOK_SECRET: { kind: 'secret', optional: true },
   OPTIHASHI_WEBHOOK_SECRET_PREVIOUS: { kind: 'secret', optional: true },
+  QA_ALARM_SLACK_WEBHOOKS: { kind: 'secret', optional: true },
   RATE_LIMIT_INGEST_TOKEN: { kind: 'secret', optional: true },
   SECOPS_ATTACK_SIMULATION_INGEST_TOKEN: { kind: 'secret', optional: true },
   SECOPS_CODE_INGEST_TOKEN: { kind: 'secret', optional: true },
@@ -76,6 +76,8 @@ export const DEFAULT_MANIFEST = {
   generatedImagesBucket: { kind: 'bucket' },
   historyImportBucket: { kind: 'bucket' },
   publishedArtifactsBucket: { kind: 'bucket' },
+  // Optional: only the admin /status page reads it, and a self-host install need not run QA ingest.
+  qaArtifactsBucket: { kind: 'bucket', optional: true },
   slackExportBucket: { kind: 'bucket' },
   // --- queue ---
   agentContinuationQueue: { kind: 'queue' },
@@ -98,6 +100,10 @@ export const DEFAULT_MANIFEST = {
   // failure that needs a manual row deletion. webhookDeliveryQueue's two sites catch and return
   // a clean 503, so there the silent no-op really is the worse of the two.
   driveLakeIngestQueue: { kind: 'queue' },
+  // Read by the Drive disconnect route (via sourceQueueUrls) and by its consumer's own slice
+  // re-enqueue. Optional so an install that upgraded without the env var keeps the worker up; the
+  // route then rolls the disconnect back and fails instead of accepting work nothing consumes.
+  driveDisconnectPurgeQueue: { kind: 'queue', optional: true },
   emailAnalysisQueue: { kind: 'queue', optional: true },
   emailBatchQueue: { kind: 'queue' },
   emailIngestionQueue: { kind: 'queue' },

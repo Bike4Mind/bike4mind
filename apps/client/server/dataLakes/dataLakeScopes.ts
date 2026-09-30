@@ -79,12 +79,23 @@ interface ScopedRequest {
  * has `apiKeyInfo` set, and treating a missing `scopes` array as "let it through"
  * would fail open for exactly the caller this gate exists to check.
  */
-function assertScope(req: ScopedRequest, required: ApiKeyScope[], message: string): void {
-  if (!req.apiKeyInfo) return;
+function holdsScope(req: ScopedRequest, required: ApiKeyScope[]): boolean {
+  if (!req.apiKeyInfo) return true;
   const held = req.apiKeyInfo.scopes ?? [];
   const { staged } = parseStagedScopes(process.env[SCOPE_STAGING_ENV_VAR]);
-  if (decideScopeGate(required, held, staged).outcome !== 'deny') return;
-  throw new ForbiddenError(message);
+  return decideScopeGate(required, held, staged).outcome !== 'deny';
+}
+
+function assertScope(req: ScopedRequest, required: ApiKeyScope[], message: string): void {
+  if (!holdsScope(req, required)) throw new ForbiddenError(message);
+}
+
+/**
+ * Non-throwing read-scope check for a door whose data-lake reach is a fallback rather than its
+ * purpose (loadAccessibleFabFile): a key without datalake:read keeps the door but not the lake.
+ */
+export function holdsDataLakeReadScope(req: ScopedRequest): boolean {
+  return holdsScope(req, DATA_LAKE_READ_SCOPES);
 }
 
 export function assertDataLakeWriteScope(req: ScopedRequest): void {

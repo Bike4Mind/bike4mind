@@ -49,7 +49,7 @@ export interface CreateUserApiKeyRequest {
 
 /**
  * Admin-only mint request: the self-service shape plus `preauthorizedLakeIds` (manage-but-not-member
- * session admission, see pages/api/sessions/create.ts). Kept out of `CreateUserApiKeyRequest` so the
+ * session admission, see pages/api/v1/sessions/index.ts). Kept out of `CreateUserApiKeyRequest` so the
  * self-service mint path can't accept this field even at the type level.
  */
 export interface AdminCreateUserApiKeyRequest extends CreateUserApiKeyRequest {

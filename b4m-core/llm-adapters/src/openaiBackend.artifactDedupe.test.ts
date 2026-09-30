@@ -13,7 +13,12 @@
  * and strip an echo of it.
  */
 import { describe, it, expect } from 'vitest';
-import { ChatModels, type ICompletionOptionTools } from '@bike4mind/common';
+import {
+  ARTIFACT_DELIVERED_PLACEHOLDER,
+  ARTIFACT_REMOVED_PLACEHOLDER,
+  ChatModels,
+  type ICompletionOptionTools,
+} from '@bike4mind/common';
 import { OpenAIBackend } from './openaiBackend';
 
 type AnyRecord = Record<string, unknown>;
@@ -65,6 +70,7 @@ function clientText(calls: Array<{ text: (string | null | undefined)[] }>): stri
 describe('OpenAIBackend (Responses path) does not duplicate an echoed tool artifact card (#3253)', () => {
   it('strips a synthesis-turn echo of an artifact delivered via completeViaResponses', async () => {
     const backend = new OpenAIBackend('test-key');
+    const turn2Requests: string[] = [];
     (backend as unknown as { _api: unknown })._api = {
       // Turn 1: responses.create returns a function_call for the artifact-emitting tool.
       responses: {
@@ -85,12 +91,15 @@ describe('OpenAIBackend (Responses path) does not duplicate an echoed tool artif
       // the model echoes the artifact tag it retains from the tool call's own arguments.
       chat: {
         completions: {
-          create: async () => ({
-            choices: [
-              { index: 0, message: { role: 'assistant', content: `Here is your diagram:\n\n${MERMAID_ARTIFACT}` } },
-            ],
-            usage: { prompt_tokens: 5, completion_tokens: 3 },
-          }),
+          create: async (params: AnyRecord) => {
+            turn2Requests.push(JSON.stringify(params));
+            return {
+              choices: [
+                { index: 0, message: { role: 'assistant', content: `Here is your diagram:\n\n${MERMAID_ARTIFACT}` } },
+              ],
+              usage: { prompt_tokens: 5, completion_tokens: 3 },
+            };
+          },
         },
       },
     };
@@ -108,6 +117,124 @@ describe('OpenAIBackend (Responses path) does not duplicate an echoed tool artif
     // the services-layer tool_result extraction, not this stream.
     expect((text.match(/<artifact\b/g) || []).length).toBe(0);
     expect(text).toContain('Here is your diagram:');
+
+    // The recorded tool message that fed this turn must carry the delivered placeholder, not
+    // just the client-facing stream - stripUnstreamedToolResult acts on history, and a pass
+    // that only checks the stream can miss a regression there.
+    expect(turn2Requests).toHaveLength(1);
+    expect(turn2Requests[0]).not.toContain('<artifact');
+    expect(turn2Requests[0]).toContain(ARTIFACT_DELIVERED_PLACEHOLDER);
+  });
+
+  it('chooses the removed placeholder for an upper-case-only opener, which extraction never delivers', async () => {
+    // hasDeliverablePinnedArtifact is case-sensitive (mirrors sharedToolBuilder's own extraction
+    // gate), so this is never actually delivered to the client - markDelivered's gate must stay
+    // false and history must say REMOVED, not DELIVERED, unlike the lower-case case above.
+    const UPPER_MERMAID = MERMAID_ARTIFACT.replace('<artifact', '<ARTIFACT').replace('</artifact>', '</ARTIFACT>');
+    const upperCaseTool: ICompletionOptionTools = {
+      toolSchema: {
+        name: 'mermaid_chart',
+        description: 'Generate a Mermaid chart',
+        parameters: { type: 'object', properties: { definition: { type: 'string' } }, required: ['definition'] },
+      },
+      toolFn: async () => UPPER_MERMAID,
+    };
+    const backend = new OpenAIBackend('test-key');
+    const turn2Requests: string[] = [];
+    (backend as unknown as { _api: unknown })._api = {
+      responses: {
+        create: async () =>
+          responsesEventStream({
+            output: [
+              {
+                type: 'function_call',
+                call_id: 'call_1',
+                name: 'mermaid_chart',
+                arguments: '{"definition":"graph TD;A-->B"}',
+              },
+            ],
+            usage: { input_tokens: 10, output_tokens: 4 },
+          }),
+      },
+      chat: {
+        completions: {
+          create: async (params: AnyRecord) => {
+            turn2Requests.push(JSON.stringify(params));
+            return {
+              choices: [{ index: 0, message: { role: 'assistant', content: 'Here is your diagram.' } }],
+              usage: { prompt_tokens: 5, completion_tokens: 3 },
+            };
+          },
+        },
+      },
+    };
+
+    const { cb } = captureCb();
+    await backend.complete(
+      ChatModels.GPT5,
+      [{ role: 'user', content: 'a simple process flow diagram' }],
+      { tools: [upperCaseTool] },
+      cb
+    );
+
+    expect(turn2Requests).toHaveLength(1);
+    expect(turn2Requests[0]).not.toContain('<ARTIFACT');
+    expect(turn2Requests[0]).toContain(ARTIFACT_REMOVED_PLACEHOLDER);
+    expect(turn2Requests[0]).not.toContain(ARTIFACT_DELIVERED_PLACEHOLDER);
+  });
+
+  it('strips artifact markup from a tool error message on the Responses path too', async () => {
+    const throwingTool: ICompletionOptionTools = {
+      toolSchema: {
+        name: 'mermaid_chart',
+        description: 'Generate a Mermaid chart',
+        parameters: { type: 'object', properties: { definition: { type: 'string' } }, required: ['definition'] },
+      },
+      toolFn: async () => {
+        throw new Error(`bad diagram ${MERMAID_ARTIFACT}`);
+      },
+    };
+    const backend = new OpenAIBackend('test-key');
+    const turn2Requests: string[] = [];
+    (backend as unknown as { _api: unknown })._api = {
+      responses: {
+        create: async () =>
+          responsesEventStream({
+            output: [
+              {
+                type: 'function_call',
+                call_id: 'call_1',
+                name: 'mermaid_chart',
+                arguments: '{"definition":"graph TD;A-->B"}',
+              },
+            ],
+            usage: { input_tokens: 10, output_tokens: 4 },
+          }),
+      },
+      chat: {
+        completions: {
+          create: async (params: AnyRecord) => {
+            turn2Requests.push(JSON.stringify(params));
+            return {
+              choices: [{ index: 0, message: { role: 'assistant', content: 'Sorry, that failed.' } }],
+              usage: { prompt_tokens: 5, completion_tokens: 3 },
+            };
+          },
+        },
+      },
+    };
+
+    const { cb } = captureCb();
+    await backend.complete(
+      ChatModels.GPT5,
+      [{ role: 'user', content: 'a simple process flow diagram' }],
+      { tools: [throwingTool] },
+      cb
+    );
+
+    expect(turn2Requests).toHaveLength(1);
+    expect(turn2Requests[0]).not.toContain('<artifact');
+    expect(turn2Requests[0]).toContain(ARTIFACT_REMOVED_PLACEHOLDER);
   });
 
   it('pin: a genuinely NEW artifact the model composes in its own reply text is not mistaken for an echo', async () => {

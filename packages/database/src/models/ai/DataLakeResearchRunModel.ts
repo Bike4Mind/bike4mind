@@ -158,7 +158,7 @@ class DataLakeResearchRunRepository
    * Returns whether this call actually settled the row (false when it was already terminal). The
    * EXECUTOR's own settle: `runLakeResearch.ts` always calls this after `claimForExecution` has
    * already flipped the row to `running`, so the guard covers `running` (its normal case) and
-   * `queued` (belt-and-suspenders, never actually reachable from that caller). A route settling a
+   * `queued` (a compatibility arm, not a path that caller takes). A route settling a
    * row it does NOT own the claim on must use `settleQueuedRun` instead - see that method's own
    * comment for why admitting `running` here would be the wrong guard for that caller.
    */
@@ -172,10 +172,10 @@ class DataLakeResearchRunRepository
 
   /**
    * Queued-only settle for a caller that does NOT hold the execution claim -
-   * `research/runs/index.ts`'s enqueue-failure path, which wrote the row but never got a message
+   * `queueResearchRun`'s enqueue-failure path, which wrote the row but never got a message
    * to the executor. Matches ONLY `status: 'queued'`: if the executor has already claimed the run
-   * (flipped it to `running`) this is a no-op and returns false, so the route knows the executor -
-   * not this route - now owns the run's outcome, rather than clobbering an in-flight claimed run
+   * (flipped it to `running`) this is a no-op and returns false, so the caller knows the executor -
+   * not this caller - now owns the run's outcome, rather than clobbering an in-flight claimed run
    * with a `failed` settle the executor never asked for.
    */
   async settleQueuedRun(id: string, input: SettleResearchRunInput): Promise<boolean> {
@@ -183,8 +183,16 @@ class DataLakeResearchRunRepository
     return result.matchedCount > 0;
   }
 
-  async recordProgress(id: string, spentMicroUsd: number, totals: ResearchRunTotals): Promise<void> {
-    await this.runModel.updateOne({ _id: id }, { $set: { spentMicroUsd, totals } });
+  async recordProgress(
+    id: string,
+    spentMicroUsd: number,
+    totals: ResearchRunTotals,
+    judgeModel?: string
+  ): Promise<void> {
+    await this.runModel.updateOne(
+      { _id: id },
+      { $set: { spentMicroUsd, totals, ...(judgeModel !== undefined ? { judgeModel } : {}) } }
+    );
   }
 
   async countStartedSince(dataLakeId: string, since: Date): Promise<number> {

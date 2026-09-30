@@ -150,6 +150,8 @@ const ALLOWLIST: Record<string, string> = {
     'gated via generateSignedUrl choke (search -> get.ts) for reads; the other match is a delete-only storage.delete call',
   'apps/client/pages/api/files/[id]/index.ts':
     'GET/PUT route through fabFileService.getFabFile/updateFabFile (both gated: get.ts via the generateSignedUrl choke, update.ts imports isImageServeable directly); DELETE branch only calls storage.delete (delete.ts is delete-only)',
+  'apps/client/server/files/loadAccessibleFabFile.ts':
+    'DI passthrough - generateSignedUrl closure consumed by fabFileService.getFabFile and, on the data-lake fallback, fabFileService.generateSignedUrl directly; both return through the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/data-lakes/[id]/articles.ts':
     'DI passthrough — generateSignedUrl closure consumed by fabFileService.search, gated via the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/files/createFabFileURL.ts':

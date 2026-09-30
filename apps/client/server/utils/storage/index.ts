@@ -5,6 +5,7 @@ let _filesStorage: S3Storage | undefined;
 let _generatedImageStorage: S3Storage | undefined;
 let _publishedArtifactsStorage: S3Storage | undefined;
 let _appFilesStorage: S3Storage | undefined;
+let _qaArtifactsStorage: S3Storage | undefined;
 
 export const getFilesStorage = () => {
   if (!_filesStorage) _filesStorage = new S3Storage(Resource.fabFileBucket.name);
@@ -26,4 +27,16 @@ export const getPublishedArtifactsStorage = () => {
     _publishedArtifactsStorage = new S3Storage(Resource.publishedArtifactsBucket.name);
   }
   return _publishedArtifactsStorage;
+};
+
+/** Optional in the self-host manifest, so an install without QA ingest fails here, not inside the SDK. */
+export const getQaArtifactsBucketName = (): string => {
+  const name = Resource.qaArtifactsBucket.name;
+  if (!name) throw new Error('qaArtifactsBucket is not configured');
+  return name;
+};
+
+export const getQaArtifactsStorage = () => {
+  if (!_qaArtifactsStorage) _qaArtifactsStorage = new S3Storage(getQaArtifactsBucketName());
+  return _qaArtifactsStorage;
 };

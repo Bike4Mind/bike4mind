@@ -573,7 +573,7 @@ function ApiDocumentation({ sampleApiKey = 'b4m_live_your_api_key_here' }: ApiDo
   -H "X-API-Key: ${sampleApiKey}" \\
   -H "Content-Type: application/json" \\
   -d '{"name": "My API Session"}' \\
-  https://your-deployment.example.com/api/sessions/create`,
+  https://your-deployment.example.com/api/v1/sessions`,
       aiChatSimple: `curl -X POST \\
   -H "X-API-Key: ${sampleApiKey}" \\
   -H "Content-Type: application/json" \\
@@ -595,7 +595,7 @@ function ApiDocumentation({ sampleApiKey = 'b4m_live_your_api_key_here' }: ApiDo
   https://your-deployment.example.com/api/chat`,
       questStatus: `curl -X GET \\
   -H "X-API-Key: ${sampleApiKey}" \\
-  https://your-deployment.example.com/api/quests/quest_123`,
+  https://your-deployment.example.com/api/v1/quests/quest_123`,
       aiChat: `curl -X POST \\
   -H "X-API-Key: ${sampleApiKey}" \\
   -H "Content-Type: application/json" \\
@@ -629,7 +629,7 @@ function ApiDocumentation({ sampleApiKey = 'b4m_live_your_api_key_here' }: ApiDo
   }
 });
 const sessions = await response.json();`,
-      createSession: `const response = await fetch('/api/sessions/create', {
+      createSession: `const response = await fetch('/api/v1/sessions', {
   method: 'POST',
   headers: {
     'X-API-Key': '${sampleApiKey}',
@@ -667,7 +667,7 @@ const result = await response.json();`,
   })
 });
 const result = await response.json();`,
-      questStatus: `const response = await fetch('/api/quests/quest_123', {
+      questStatus: `const response = await fetch('/api/v1/quests/quest_123', {
   method: 'GET',
   headers: {
     'X-API-Key': '${sampleApiKey}'
@@ -710,7 +710,7 @@ headers = {
 }
 
 data = {'name': 'My API Session'}
-response = requests.post('/api/sessions/create', 
+response = requests.post('/api/v1/sessions', 
                         headers=headers, json=data)
 new_session = response.json()`,
       aiChatSimple: `import requests
@@ -750,7 +750,7 @@ headers = {
     'X-API-Key': '${sampleApiKey}'
 }
 
-response = requests.get('/api/quests/quest_123', headers=headers)
+response = requests.get('/api/v1/quests/quest_123', headers=headers)
 quest = response.json()`,
       aiChat: `import requests
 
@@ -1001,7 +1001,7 @@ ai_response = response.json()`,
                       </Chip>
                     </td>
                     <td>
-                      <code>/api/sessions/create</code>
+                      <code>/api/v1/sessions</code>
                     </td>
                     <td>Create a new notebook</td>
                     <td>
@@ -1033,7 +1033,7 @@ ai_response = response.json()`,
                       </Chip>
                     </td>
                     <td>
-                      <code>/api/quests/:id</code>
+                      <code>/api/v1/quests/:id</code>
                     </td>
                     <td>Check quest status and retrieve results</td>
                     <td>

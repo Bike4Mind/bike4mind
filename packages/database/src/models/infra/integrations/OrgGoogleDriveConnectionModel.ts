@@ -98,6 +98,7 @@ const OrgGoogleDriveConnectionSchema = new Schema<IOrgGoogleDriveConnectionDocum
     // Last completed FULL folder walk; the poll cron forces another once this goes stale, which is
     // what reconciles the subtree moves Drive's per-file changes feed cannot report.
     lastFullWalkAt: { type: Date },
+    disconnectRequestedAt: { type: Date },
   },
   {
     timestamps: true,
@@ -272,7 +273,9 @@ class OrgGoogleDriveConnectionRepository
     connectedBy: string
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
     return this.model.findOneAndUpdate(
-      { _id: id, organizationId },
+      // A pending disconnect is refused: re-enabling here would let an ingest land files after the
+      // queued purge resolved its slice, and the release would then strand them.
+      { _id: id, organizationId, disconnectRequestedAt: null },
       [
         {
           $set: {
@@ -347,7 +350,7 @@ class OrgGoogleDriveConnectionRepository
    * otherwise still win this claim AFTER the drive-connection DELETE handler disables the row,
    * create FabFiles past the purge's snapshot, and then have its row hard-deleted by release -
    * stranding those new files exactly like the bug this whole purge exists to fix. Paired with the
-   * atomic disable in disableIfNotSyncing: either this wins (disable can't have landed while enabled
+   * atomic disable in markDisconnecting: either this wins (disable can't have landed while enabled
    * was still true) or the disable already won (enabled is false and this matches nothing) - never
    * both.
    *
@@ -388,8 +391,9 @@ class OrgGoogleDriveConnectionRepository
 
   /**
    * Route-side half of the disconnect/claimForSync race (see claimForSync's `enabled` guard for the
-   * other half): atomically disables the connection ONLY if it is not currently claimed for an
-   * in-flight sync, instead of the old snapshot-read-then-unconditional-disable that let a claim
+   * other half): atomically disables the connection and stamps `disconnectRequestedAt` ONLY if it
+   * is not currently claimed for an in-flight sync, instead of the old
+   * snapshot-read-then-unconditional-disable that let a claim
    * landing in the gap between the two survive the disable. Either this wins (status was not
    * 'syncing', enabled flips false, and claimForSync's own guard then refuses any claim that lands
    * after) or a claim already won (status is 'syncing') and this matches nothing - never both.
@@ -403,12 +407,39 @@ class OrgGoogleDriveConnectionRepository
    * Returns whether the disable took effect; false means the caller should 409 (a sync is currently
    * in flight) rather than proceed to purge past a connection that might still be ingesting.
    */
-  async disableIfNotSyncing(id: string, organizationId: string): Promise<boolean> {
-    const result = await this.model.findOneAndUpdate(
+  async markDisconnecting(
+    id: string,
+    organizationId: string
+  ): Promise<{ stamp: Date; created: boolean; previousEnabled: boolean } | null> {
+    const stamp = new Date();
+    // Returns the PRE-update document, which is what tells a creator apart from a re-stamp.
+    const previous = await this.model.findOneAndUpdate(
       { _id: id, organizationId, status: { $ne: 'syncing' } },
-      { $set: { enabled: false } }
+      { $set: { enabled: false, disconnectRequestedAt: stamp } }
     );
-    return result !== null;
+    if (!previous) return null;
+    return { stamp, created: !previous.disconnectRequestedAt, previousEnabled: previous.enabled !== false };
+  }
+
+  async cancelDisconnect(id: string, organizationId: string, stamp: Date, enabled: boolean): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, organizationId, disconnectRequestedAt: stamp },
+      { $set: { enabled }, $unset: { disconnectRequestedAt: '' } }
+    );
+    return result.matchedCount > 0;
+  }
+
+  async enableUnlessDisconnecting(id: string): Promise<boolean> {
+    const result = await this.model.updateOne({ _id: id, disconnectRequestedAt: null }, { $set: { enabled: true } });
+    return result.matchedCount > 0;
+  }
+
+  async touchDisconnect(id: string, organizationId: string): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, organizationId, disconnectRequestedAt: { $ne: null } },
+      { $set: { disconnectRequestedAt: new Date() } }
+    );
+    return result.matchedCount > 0;
   }
 
   /**

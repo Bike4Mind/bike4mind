@@ -252,7 +252,7 @@ describe('createSession knowledgeIds validation', () => {
 
   // Phase 3, regression case 4: preauthorizedLakeIds (manage-but-not-member admission) must never
   // enter createSession's own input - it is authorized and written as a SEPARATE call by the create
-  // route, strictly after createSession returns (see pages/api/sessions/create.ts). A caller that
+  // route, strictly after createSession returns (see pages/api/v1/sessions/index.ts). A caller that
   // tries to pass it here - fork/snip/clone included, though none of them do today; they build their
   // own db.sessions.create() literal and never call this function at all - must not be able to
   // smuggle it in via a future refactor that forwards a source session's fields wholesale.

@@ -1,18 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Unit test of the per-lake Drive connection status/disconnect route (D2). Repo + auth gate mocked.
+// Unit test of the per-lake Drive connection status/disconnect route (D2). Repo, queue and auth gate
+// mocked; the purge itself is driveDisconnectPurge's (see its unit and e2e suites).
+const MARK_STAMP = new Date('2026-01-01T00:00:00Z');
+const MARK = { stamp: MARK_STAMP, created: true, previousEnabled: true };
+const STALE = new Date(Date.now() - 16 * 60 * 1000);
+
 const h = vi.hoisted(() => ({
   verifyOrgAccess: vi.fn(),
   dlFindById: vi.fn(),
   connFindByDataLakeIdAny: vi.fn(),
-  connDisableIfNotSyncing: vi.fn(async () => true),
-  releaseDriveConnection: vi.fn(),
-  enableDriveConnectionForLake: vi.fn(async () => true),
-  shredMemoryForLakeTags: vi.fn(),
-  fabFilesFindAllByDriveConnectionIdInDataLake: vi.fn(async () => []),
+  connMarkDisconnecting: vi.fn(
+    async (): Promise<{ stamp: Date; created: boolean; previousEnabled: boolean } | null> => MARK
+  ),
+  connCancelDisconnect: vi.fn(async () => true),
   fabFilesCountByDriveConnectionIdInDataLake: vi.fn(async () => 0),
-  purgeDataLakeConnectionFiles: vi.fn(async () => ({ filesPurged: 0, storageObjectsDeleted: 0 })),
-  recomputeLakeStats: vi.fn(async () => ({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 })),
+  fabFilesFindByDriveConnectionIdInDataLake: vi.fn(async () => []),
+  sendToQueue: vi.fn(async () => 'msg-1'),
+  getSourceQueueUrl: vi.fn(() => 'https://sqs.example.com/drive-disconnect-purge'),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -29,15 +34,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
-// The route's job is the gate + delegation; the revoke-then-delete seam has its own unit test
-// (server/integrations/google/drive/releaseDriveConnection.test.ts).
-vi.mock('@server/integrations/google/drive/common', () => ({
-  releaseDriveConnection: h.releaseDriveConnection,
-  enableDriveConnectionForLake: h.enableDriveConnectionForLake,
-}));
-// The per-document lake-memory shred has its own coverage (shredMemoryForLakeTags's unit tests);
-// this route's job is wiring the call, so it is stubbed here.
-vi.mock('@server/dataLakes/shredMemoryForLakeTags', () => ({ shredMemoryForLakeTags: h.shredMemoryForLakeTags }));
+vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
 vi.mock('@bike4mind/database', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/database')>();
   return {
@@ -46,32 +44,16 @@ vi.mock('@bike4mind/database', async importOriginal => {
     orgGoogleDriveConnectionRepository: {
       ...actual.orgGoogleDriveConnectionRepository,
       findByDataLakeIdAny: h.connFindByDataLakeIdAny,
-      disableIfNotSyncing: h.connDisableIfNotSyncing,
+      markDisconnecting: h.connMarkDisconnecting,
+      cancelDisconnect: h.connCancelDisconnect,
     },
     fabFileRepository: {
       ...actual.fabFileRepository,
-      findAllByDriveConnectionIdInDataLake: h.fabFilesFindAllByDriveConnectionIdInDataLake,
+      findByDriveConnectionIdInDataLake: h.fabFilesFindByDriveConnectionIdInDataLake,
       countByDriveConnectionIdInDataLake: h.fabFilesCountByDriveConnectionIdInDataLake,
     },
   };
 });
-// The content sweep itself (files/chunks/index/storage) has its own coverage
-// (purgeDataLakeConnectionFiles's unit tests + the connection-content e2e suite); this route's job
-// is the gate + delegation, so the sweep is stubbed here.
-vi.mock('@bike4mind/services', () => ({
-  dataLakeService: {
-    purgeDataLakeConnectionFiles: h.purgeDataLakeConnectionFiles,
-    lakeMembershipScope: (lake: unknown) => lake,
-    openSearchRetrievalIndex: vi.fn(),
-    recomputeLakeStats: h.recomputeLakeStats,
-  },
-}));
-vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
-// NOT mocked: @bike4mind/database's own models import from @bike4mind/db-core internally, so
-// replacing the whole module here breaks unrelated imports it needs. selfHostOpenSearchEnabled
-// just reads env vars and is false by default in this test environment, which is the branch this
-// suite wants anyway (no self-host OpenSearch retrieval index to wire).
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ delete: vi.fn() }) }));
 
 import handler from '../drive-connection';
 
@@ -81,7 +63,9 @@ const makeRes = () => {
   const status = vi.fn(() => ({ json, send }));
   return { res: { json, send, status } as never, json, send, status };
 };
-const makeReq = (method: string) => ({ method, query: { id: 'lake1' }, user: { id: 'u1', isAdmin: false } }) as never;
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+const makeReq = (method: string) =>
+  ({ method, query: { id: 'lake1' }, user: { id: 'u1', isAdmin: false }, logger }) as never;
 const run = (req: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req, res);
 
 describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
@@ -89,9 +73,9 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     vi.clearAllMocks();
     h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', datalakeTag: 'datalake:lake1' });
     h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
-    h.fabFilesFindAllByDriveConnectionIdInDataLake.mockResolvedValue([]);
     h.fabFilesCountByDriveConnectionIdInDataLake.mockResolvedValue(0);
-    h.connDisableIfNotSyncing.mockResolvedValue(true);
+    h.connMarkDisconnecting.mockResolvedValue(MARK);
+    h.sendToQueue.mockResolvedValue('msg-1');
   });
 
   it('GET returns a credential-free connection view, with how many files it ingested', async () => {
@@ -120,6 +104,37 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     expect(h.fabFilesCountByDriveConnectionIdInDataLake).toHaveBeenCalledWith('conn1', 'datalake:lake1');
   });
 
+  it('GET reports a connection whose queued disconnect purge is still running', async () => {
+    h.connFindByDataLakeIdAny.mockResolvedValue({
+      id: 'conn1',
+      organizationId: 'orgA',
+      status: 'connected',
+      enabled: false,
+      disconnectRequestedAt: new Date(),
+    });
+    h.fabFilesCountByDriveConnectionIdInDataLake.mockResolvedValue(12);
+    const { res, json } = makeRes();
+    await run(makeReq('GET'), res);
+    expect(json.mock.calls[0][0].connection).toMatchObject({
+      disconnecting: true,
+      disconnectStalled: false,
+      fileCount: 12,
+    });
+  });
+
+  it('GET flags a pending disconnect with no purge run for DRIVE_DISCONNECT_STALL_MS as stalled', async () => {
+    h.connFindByDataLakeIdAny.mockResolvedValue({
+      id: 'conn1',
+      organizationId: 'orgA',
+      status: 'connected',
+      enabled: false,
+      disconnectRequestedAt: STALE,
+    });
+    const { res, json } = makeRes();
+    await run(makeReq('GET'), res);
+    expect(json.mock.calls[0][0].connection).toMatchObject({ disconnecting: true, disconnectStalled: true });
+  });
+
   it('GET returns null when no connection feeds the lake', async () => {
     h.connFindByDataLakeIdAny.mockResolvedValue(null);
     const { res, json } = makeRes();
@@ -127,130 +142,120 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     expect(json).toHaveBeenCalledWith({ connection: null });
   });
 
-  it('DELETE releases the connection through the revoking seam, purges its ingested files, recomputes stats, and 204s', async () => {
-    h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA' });
-    h.releaseDriveConnection.mockResolvedValue(true);
-    const files = [{ id: 'f1', userId: 'u1', fileSize: 10, filePath: 'p1', versions: [] }];
-    h.fabFilesFindAllByDriveConnectionIdInDataLake.mockResolvedValue(files);
+  it('DELETE marks the connection disconnecting, enqueues the purge, and 202s without purging inline', async () => {
+    h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA', enabled: true });
     const calls: string[] = [];
-    h.connDisableIfNotSyncing.mockImplementationOnce(async () => (calls.push('disable'), true));
-    h.purgeDataLakeConnectionFiles.mockImplementationOnce(
-      async () => (calls.push('purge'), { filesPurged: 1, storageObjectsDeleted: 1 })
-    );
-    h.recomputeLakeStats.mockImplementationOnce(
-      async () => (calls.push('recompute'), { fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 })
-    );
-    h.releaseDriveConnection.mockImplementationOnce(async () => (calls.push('release'), true));
-    const { res, status } = makeRes();
+    h.connMarkDisconnecting.mockImplementationOnce(async () => (calls.push('mark'), MARK));
+    h.sendToQueue.mockImplementationOnce(async () => (calls.push('enqueue'), 'msg-1'));
+    const { res, status, json } = makeRes();
     await run(makeReq('DELETE'), res);
-    // Not the bare repo delete: going through the seam is what revokes the Google grant, so a
-    // disconnect cannot leave a live grant behind a deleted row.
-    expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', 'orgA');
-    expect(status).toHaveBeenCalledWith(204);
-    // The gate + release are scoped to the LAKE's org, never a caller-supplied one.
+
+    // Marked before enqueue: the consumer drops a message whose connection carries no pending mark.
+    expect(calls).toEqual(['mark', 'enqueue']);
+    // Scoped to the LAKE's org, never a caller-supplied one.
     expect(h.verifyOrgAccess).toHaveBeenCalledWith(expect.anything(), 'orgA');
-    // disableIfNotSyncing is org-scoped too, matching release/updateCredential.
-    expect(h.connDisableIfNotSyncing).toHaveBeenCalledWith('conn1', 'orgA');
-    // Every FabFile the disconnected connection ingested must be swept, not just the connection row -
-    // via the archivedAt/deletedAt-blind finder, not the reconcile-scoped one.
-    expect(h.fabFilesFindAllByDriveConnectionIdInDataLake).toHaveBeenCalledWith('conn1', 'datalake:lake1');
-    expect(h.purgeDataLakeConnectionFiles).toHaveBeenCalledWith(expect.anything(), files, expect.anything());
-    // The sessions adapter is wired so purged files get unlinked from chat knowledgeIds too.
-    const adapters = h.purgeDataLakeConnectionFiles.mock.calls[0][2];
-    expect(adapters.db.sessions).toBeDefined();
-    // Disable-then-purge-then-recompute-then-release: the row must outlive a failed purge
-    // (retriable), the poll must not be able to re-enqueue this connection while the purge is
-    // running, and the lake's persisted stats must reflect the sweep before the row goes.
-    expect(calls).toEqual(['disable', 'purge', 'recompute', 'release']);
+    expect(h.connMarkDisconnecting).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.getSourceQueueUrl).toHaveBeenCalledWith('driveDisconnectPurgeQueue');
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/drive-disconnect-purge', {
+      connectionId: 'conn1',
+      dataLakeId: 'lake1',
+      organizationId: 'orgA',
+    });
+    expect(status).toHaveBeenCalledWith(202);
+    expect(json).toHaveBeenCalledWith({ success: true, queued: true });
+    // File count no longer bounds the request: nothing is resolved or swept on the request path.
+    expect(h.fabFilesFindByDriveConnectionIdInDataLake).not.toHaveBeenCalled();
   });
 
-  it('DELETE wires a shredDocumentMemory callback that shreds the purged file against this lake', async () => {
-    h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA' });
-    h.releaseDriveConnection.mockResolvedValue(true);
-    h.dlFindById.mockResolvedValue({
-      id: 'lake1',
-      organizationId: 'orgA',
-      datalakeTag: 'datalake:lake1',
-      createdByUserId: 'owner1',
-    });
-    h.fabFilesFindAllByDriveConnectionIdInDataLake.mockResolvedValue([
-      { id: 'f1', userId: 'u1', fileSize: 10, filePath: 'p1', versions: [], tags: [{ name: 'datalake:lake1' }] },
-    ]);
-    h.purgeDataLakeConnectionFiles.mockImplementationOnce(async (_scope, _files, adapters) => {
-      // Exercise the callback the route wired, the same way the real sweep would call it per file.
-      await adapters.shredDocumentMemory({ tagNames: ['datalake:lake1'], fabFileId: 'f1', ownerUserId: 'u1' });
-      return { filesPurged: 1, storageObjectsDeleted: 1 };
-    });
+  it('DELETE rolls back its own mark, compare-and-set on the stamp it wrote, when the enqueue fails', async () => {
+    h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA', enabled: true });
+    h.sendToQueue.mockRejectedValueOnce(new Error('SQS unavailable'));
     const { res } = makeRes();
-    await run(makeReq('DELETE'), res);
-    expect(h.shredMemoryForLakeTags).toHaveBeenCalledWith(
-      ['datalake:lake1'],
-      'f1',
-      'u1',
-      { id: 'lake1', datalakeTag: 'datalake:lake1', createdByUserId: 'owner1' },
-      expect.anything()
+    await expect(run(makeReq('DELETE'), res)).rejects.toThrow('SQS unavailable');
+    expect(h.connCancelDisconnect).toHaveBeenCalledWith('conn1', 'orgA', MARK_STAMP, true);
+  });
+
+  it('DELETE restores the pre-mark enabled value (an archived lake stays disabled) on rollback', async () => {
+    h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA', enabled: false });
+    h.connMarkDisconnecting.mockResolvedValueOnce({ ...MARK, previousEnabled: false });
+    h.sendToQueue.mockRejectedValueOnce(new Error('SQS unavailable'));
+    const { res } = makeRes();
+    await expect(run(makeReq('DELETE'), res)).rejects.toThrow('SQS unavailable');
+    expect(h.connCancelDisconnect).toHaveBeenCalledWith('conn1', 'orgA', MARK_STAMP, false);
+  });
+
+  it('DELETE skips the rollback when this call did not create the mark (a concurrent DELETE did)', async () => {
+    // The snapshot read no pending disconnect, but another DELETE stamped the row first; its
+    // message may have landed, so this one must not un-stamp it.
+    h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA', enabled: true });
+    h.connMarkDisconnecting.mockResolvedValueOnce({ ...MARK, created: false });
+    h.sendToQueue.mockRejectedValueOnce(new Error('SQS unavailable'));
+    const { res } = makeRes();
+    await expect(run(makeReq('DELETE'), res)).rejects.toThrow('SQS unavailable');
+    expect(h.connCancelDisconnect).not.toHaveBeenCalled();
+  });
+
+  it('DELETE surfaces the enqueue error when the rollback itself throws', async () => {
+    h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA', enabled: true });
+    h.sendToQueue.mockRejectedValueOnce(new Error('SQS unavailable'));
+    h.connCancelDisconnect.mockRejectedValueOnce(new Error('mongo blip'));
+    const { res } = makeRes();
+    await expect(run(makeReq('DELETE'), res)).rejects.toThrow('SQS unavailable');
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('roll back'),
+      expect.objectContaining({ error: 'mongo blip' })
     );
   });
 
-  it('DELETE leaves the connection row intact when the content purge throws, so a retry can still find it', async () => {
-    h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA' });
-    h.fabFilesFindAllByDriveConnectionIdInDataLake.mockResolvedValue([
-      { id: 'f1', userId: 'u1', fileSize: 10, filePath: 'p1', versions: [] },
-    ]);
-    h.purgeDataLakeConnectionFiles.mockRejectedValueOnce(new Error('storage.delete blip'));
-    const { res } = makeRes();
-    await expect(run(makeReq('DELETE'), res)).rejects.toThrow('storage.delete blip');
-    expect(h.connDisableIfNotSyncing).toHaveBeenCalledWith('conn1', 'orgA');
-    expect(h.recomputeLakeStats).not.toHaveBeenCalled();
-    expect(h.releaseDriveConnection).not.toHaveBeenCalled();
-  });
-
-  it('DELETE re-enables the connection before rethrowing when the purge fails, so it does not stay silently disabled', async () => {
-    // disableIfNotSyncing already flipped enabled false; a purge failure must not leave that as the
-    // final state, or findDueForPoll (enabled: true only) would silently stop re-syncing this
-    // connection forever with no surface telling the user.
-    h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA' });
-    h.fabFilesFindAllByDriveConnectionIdInDataLake.mockResolvedValue([
-      { id: 'f1', userId: 'u1', fileSize: 10, filePath: 'p1', versions: [] },
-    ]);
-    h.purgeDataLakeConnectionFiles.mockRejectedValueOnce(new Error('storage.delete blip'));
-    const { res } = makeRes();
-    await expect(run(makeReq('DELETE'), res)).rejects.toThrow('storage.delete blip');
-    expect(h.enableDriveConnectionForLake).toHaveBeenCalledWith('lake1');
-    expect(h.releaseDriveConnection).not.toHaveBeenCalled();
-  });
-
-  it('DELETE skips the content sweep call when the connection ingested no files', async () => {
-    h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA' });
-    h.releaseDriveConnection.mockResolvedValue(true);
-    h.fabFilesFindAllByDriveConnectionIdInDataLake.mockResolvedValue([]);
+  it('DELETE re-queues a stalled pending disconnect, so a purge that landed in the DLQ can be retried', async () => {
+    h.connFindByDataLakeIdAny.mockResolvedValue({
+      id: 'conn1',
+      organizationId: 'orgA',
+      enabled: false,
+      disconnectRequestedAt: STALE,
+    });
+    h.connMarkDisconnecting.mockResolvedValueOnce({ ...MARK, created: false, previousEnabled: false });
     const { res, status } = makeRes();
     await run(makeReq('DELETE'), res);
-    expect(h.purgeDataLakeConnectionFiles).not.toHaveBeenCalled();
-    expect(status).toHaveBeenCalledWith(204);
+    expect(h.connMarkDisconnecting).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+    expect(status).toHaveBeenCalledWith(202);
   });
 
-  it('DELETE 204s even when there is nothing to release', async () => {
+  it('DELETE accepts but does not re-queue a pending disconnect whose purge ran recently', async () => {
+    // A second message would start a parallel self-re-enqueueing chain over the same files.
+    h.connFindByDataLakeIdAny.mockResolvedValue({
+      id: 'conn1',
+      organizationId: 'orgA',
+      enabled: false,
+      disconnectRequestedAt: new Date(),
+    });
+    const { res, status, json } = makeRes();
+    await run(makeReq('DELETE'), res);
+    expect(h.connMarkDisconnecting).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(202);
+    expect(json).toHaveBeenCalledWith({ success: true, queued: false });
+  });
+
+  it('DELETE 204s when there is nothing to release', async () => {
     h.connFindByDataLakeIdAny.mockResolvedValue(null);
     const { res, status } = makeRes();
     await run(makeReq('DELETE'), res);
-    expect(h.releaseDriveConnection).not.toHaveBeenCalled();
-    expect(h.fabFilesFindAllByDriveConnectionIdInDataLake).not.toHaveBeenCalled();
+    expect(h.connMarkDisconnecting).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
     expect(status).toHaveBeenCalledWith(204);
   });
 
-  it('DELETE 409s (does NOT hard-delete or purge) while a sync is in progress', async () => {
-    // Hard-deleting under a live ingest would orphan the running handler's connection while the UI
-    // reads "Disconnected"; make the caller wait until the sync finishes (or its claim goes stale).
-    // disableIfNotSyncing is the atomic compare-and-set that answers this - not a snapshot read of
+  it('DELETE 409s (does NOT mark or enqueue) while a sync is in progress', async () => {
+    // markDisconnecting is the atomic compare-and-set that answers this - not a snapshot read of
     // `conn.status`, which a concurrent claimForSync could race between the read and a bare disable.
     h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA', status: 'syncing' });
-    h.connDisableIfNotSyncing.mockResolvedValue(false);
+    h.connMarkDisconnecting.mockResolvedValue(null);
     const { res, status } = makeRes();
     await run(makeReq('DELETE'), res);
-    expect(h.connDisableIfNotSyncing).toHaveBeenCalledWith('conn1', 'orgA');
-    expect(h.releaseDriveConnection).not.toHaveBeenCalled();
-    expect(h.fabFilesFindAllByDriveConnectionIdInDataLake).not.toHaveBeenCalled();
+    expect(h.connMarkDisconnecting).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.sendToQueue).not.toHaveBeenCalled();
     expect(status).toHaveBeenCalledWith(409);
   });
 
@@ -261,18 +266,17 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
    * globally-unique driveFolderId claim stayed held, so the folder could never be re-claimed by
    * anyone and this endpoint would answer 204 having revoked nothing.
    */
-  it('DELETE still revokes for an archived lake whose connection is disabled', async () => {
+  it('DELETE still queues the revoking purge for an archived lake whose connection is disabled', async () => {
     h.connFindByDataLakeIdAny.mockResolvedValue({
       id: 'conn1',
       organizationId: 'orgA',
       enabled: false,
       status: 'connected',
     });
-    h.releaseDriveConnection.mockResolvedValue(true);
     const { res, status } = makeRes();
     await run(makeReq('DELETE'), res);
-    expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', 'orgA');
-    expect(status).toHaveBeenCalledWith(204);
+    expect(h.sendToQueue).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ connectionId: 'conn1' }));
+    expect(status).toHaveBeenCalledWith(202);
   });
 
   it('GET reports a disabled connection rather than pretending it is gone', async () => {
@@ -296,7 +300,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
       h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgB' });
       const { res } = makeRes();
       await expect(run(makeReq(method), res)).rejects.toThrow(/not found/i);
-      expect(h.releaseDriveConnection).not.toHaveBeenCalled();
+      expect(h.sendToQueue).not.toHaveBeenCalled();
     }
   );
 

@@ -56,6 +56,7 @@ jobs:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     outputs:
       playwright_args:    ${{ steps.resolve.outputs.playwright_args }}
+      suite_name:         ${{ steps.resolve.outputs.suite_name }}
       stamp_promotable:   ${{ steps.resolve.outputs.stamp_promotable }}
       show_credits:       ${{ steps.resolve.outputs.show_credits }}
       trigger_label:      ${{ steps.resolve.outputs.trigger_label }}
@@ -94,6 +95,14 @@ jobs:
             *)                  ARGS="" ; echo "Unknown selection '$TEST_PROJECT' — running full suite" ;;
           esac
           echo "playwright_args=$ARGS" >> "$GITHUB_OUTPUT"
+
+          # A scoped run is ingested under its own QA suite, so /status and its alarm
+          # never read it as the full suite. Empty keeps e2e-run.yml's 'Full' default.
+          if [ -n "$ARGS" ]; then
+            echo "suite_name=$TEST_PROJECT" >> "$GITHUB_OUTPUT"
+          else
+            echo "suite_name=" >> "$GITHUB_OUTPUT"
+          fi
 
           # Stamp e2e/smoke only for the promotable frontier: scheduled, or a
           # dev/staging All-tests dispatch. Skip previews and scoped single tests.
@@ -145,7 +154,7 @@ jobs:
       gate_run:           ${{ inputs.gate_run }}
       playwright_args:    ${{ needs.prep.outputs.playwright_args }}
       status_context:     'e2e/smoke'
-      suite_name:         ''
+      suite_name:         ${{ needs.prep.outputs.suite_name }}
       artifact_suffix:    ''
       timeout_minutes:    60
       stamp_promotable:   ${{ needs.prep.outputs.stamp_promotable == 'true' }}

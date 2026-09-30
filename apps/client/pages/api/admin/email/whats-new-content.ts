@@ -1,4 +1,5 @@
 import { ModalModel } from '@bike4mind/database';
+import { usableObjectIds } from '@bike4mind/db-core';
 import { ApiKeyScope, IModalDocument } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
@@ -27,10 +28,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
 
   if (ids) {
     // Fetch specific modals by ID
-    const modalIds = ids
-      .split(',')
-      .map(id => id.trim())
-      .filter(Boolean);
+    // One uncastable id rejects the whole $in; drop (and log) it rather than fail the request.
+    const modalIds = usableObjectIds(
+      ids
+        .split(',')
+        .map(id => id.trim())
+        .filter(Boolean),
+      'whats-new-content',
+      req.logger
+    );
     modals = await ModalModel.find({
       _id: { $in: modalIds },
       tags: { $in: whatsNewTags },

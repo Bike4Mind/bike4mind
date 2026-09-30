@@ -5,8 +5,8 @@
   "scripts": {
     "postinstall": "node scripts/copy-tavern-assets.mjs && node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && node scripts/generate-premium-glue.mjs",
     "codegen": "node scripts/generate-premium-glue.mjs",
-    "predev": "node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && node scripts/generate-premium-glue.mjs && pnpm help:build",
-    "prebuild": "node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && pnpm help:build",
+    "predev": "node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && node scripts/generate-premium-glue.mjs && pnpm openapi:deployment && pnpm help:build",
+    "prebuild": "node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && node scripts/generate-premium-glue.mjs && pnpm openapi:deployment && pnpm help:build",
     "dev": "WATCHPACK_POLLING=true next dev",
     "devPerformance": "sst ${SST_ARGS} bind \"bash -c 'NEXT_PUBLIC_VERBOSE_PERFORMANCE=true NODE_OPTIONS=--inspect node_modules/.bin/next dev'\"",
     "devTTFVT": "sst ${SST_ARGS} bind \"bash -c 'NEXT_PUBLIC_VERBOSE_PERFORMANCE=true BYPASS_QUEUE=true ENABLE_SERVER_THROTTLING=false NODE_OPTIONS=--inspect node_modules/.bin/next dev'\"",
@@ -41,7 +41,8 @@
     "security:scan": "semgrep scan --config auto --exclude node_modules --exclude .next --exclude .sst",
     "help:build-index": "tsx ../../packages/scripts/help/build-help-index.ts",
     "help:bundle-content": "tsx ../../packages/scripts/help/bundle-help-content.ts",
-    "help:build": "pnpm help:build-index && pnpm help:bundle-content"
+    "help:build": "pnpm help:build-index && pnpm help:bundle-content",
+    "openapi:deployment": "pnpm --filter @bike4mind/common openapi:generate:deployment"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
@@ -172,7 +173,7 @@
     "mongoose": "^8.24.1",
     "next": "16.3.6",
     "next-connect": "^0.13.0",
-    "nodemailer": "^9.0.3",
+    "nodemailer": "^10.0.12",
     "nuqs": "^2.10.1",
     "openai": "^6.46.0",
     "openid-client": "^6.8.8",

@@ -1,23 +1,16 @@
-import { ARTIFACT_ATTRS_PATTERN, ClaudeArtifactMimeTypes } from '../types/entities/ArtifactTypes';
+import { ClaudeArtifactMimeTypes } from '../types/entities/ArtifactTypes';
+import { type ArtifactTagMemo, scanArtifactOpenTag } from './artifactOpenTag';
+import { scanArtifactTags } from './scanArtifactTags';
 
 // The tools whose results may carry artifacts, each pinned to the one type it emits. Any other
 // tool's output (web pages, files, MCP servers) is untrusted and can carry forged markup. Read by
-// sharedToolBuilder (tool_result extraction) and llm-adapters toolStreamingHelper (reply streaming);
-// a new artifact-emitting tool must be added here or its artifact is dropped on both paths.
+// sharedToolBuilder (tool_result extraction) and llm-adapters toolStreamingHelper (reply streaming
+// and the delivered-vs-removed placeholder every backend puts in history); a new artifact-emitting
+// tool must be added here or its artifact is dropped on both paths.
 //
-// Gating status (#3253/#3329's fix + #3354's follow-ups only cover the 4 backends that
-// live-stream a tool's own result as a distinct chunk via handleToolResultStreaming: Anthropic,
-// Gemini, Bedrock, OpenAI). kimiBackend.ts, xaiBackend.ts, deepseekBackend.ts, and
-// ollamaBackend.ts reference neither TOOL_ARTIFACT_EMITTERS nor handleToolResultStreaming - but
-// this is NOT a "nothing to dedupe" case: sharedToolBuilder.ts's onArtifactExtracted callback
-// pulls an artifact out of ANY backend's tool result into quest.promptMeta.artifacts regardless of
-// this map's 4-backend gating, and all 4 of these backends push the tool result RAW (unstripped)
-// into pushToolMessages/history with no stripToolArtifactMarkup call - so the model can see and
-// echo its own artifact tag back in reply text, reproducing #3253's exact duplicate-card bug on
-// these 4 backends too. Left unfixed here deliberately - fixing it means wiring
-// stripToolArtifactMarkup + createRecursiveArtifactGuard/markDelivered into 4 more backends,
-// out of scope for #3354's test-coverage/hardening follow-ups. Not excluded from this map either:
-// that would just silently drop these tools' availability without closing the real gap.
+// Gating status: every backend strips tool-result artifact markup before it enters history, and
+// every backend wires createRecursiveArtifactGuard to catch a model that reconstructs the tag.
+// Only OpenAI's Responses path, which never streams a tool artifact live, also calls markDelivered.
 export const TOOL_ARTIFACT_EMITTERS: ReadonlyMap<string, string> = new Map([
   ['recharts', ClaudeArtifactMimeTypes.RECHARTS],
   ['mermaid_chart', ClaudeArtifactMimeTypes.MERMAID],
@@ -50,7 +43,7 @@ export function parseToolArtifactAttributes(attrsStr: string): Record<string, st
  * Returns `text` with every artifact tag not of `toolName`'s pinned type removed, or null when
  * the tool is not an emitter, no tag is kept, or the text holds an artifact opener outside a
  * kept, closed, un-nested tag (a client streaming parser would still render an unclosed tag).
- * Tags are read with ARTIFACT_ATTRS_PATTERN, the grammar of the reply parser that consumes the
+ * Tags are read by scanArtifactOpenTag, the grammar of the reply parser that consumes the
  * streamed text, so a quoted ">" cannot end a tag here that the reply parser reads further.
  * A single forward scan: the input is tool output, so no per-opener rescan to the end.
  */
@@ -58,20 +51,19 @@ export function filterToolArtifactMarkup(toolName: string, text: string): string
   const allowedType = TOOL_ARTIFACT_EMITTERS.get(toolName);
   if (allowedType === undefined) return null;
   const opener = /<artifact\b/gi;
-  const openTag = new RegExp(`<artifact\\s(${ARTIFACT_ATTRS_PATTERN})>`, 'iy');
+  const memo: ArtifactTagMemo = {};
   const closer = /<\/artifact>/gi;
   let out = '';
   let cursor = 0;
   let kept = 0;
   for (let open = opener.exec(text); open; open = opener.exec(text)) {
-    openTag.lastIndex = open.index;
-    const tag = openTag.exec(text);
+    const tag = scanArtifactOpenTag(text, open.index, 'one', memo);
     if (!tag) return null;
-    const bodyStart = openTag.lastIndex;
+    const bodyStart = tag.end;
     closer.lastIndex = bodyStart;
     const close = closer.exec(text);
     if (!close) return null;
-    const keep = parseToolArtifactAttributes(tag[1]).type === allowedType;
+    const keep = parseToolArtifactAttributes(tag.attrs).type === allowedType;
     if (keep) {
       if (/<artifact\b/i.test(text.slice(bodyStart, close.index))) return null;
       kept++;
@@ -84,6 +76,18 @@ export function filterToolArtifactMarkup(toolName: string, text: string): string
 }
 
 /**
+ * True when `text` holds at least one complete `<artifact>` block of `toolName`'s pinned type -
+ * the outcome sharedToolBuilder's extraction actually delivers to the client. Shares
+ * scanArtifactTags with that extraction (rather than re-parsing openers with the reply-parser
+ * grammar filterToolArtifactMarkup uses), and mirrors extraction's case-sensitive entry gate.
+ */
+export function hasDeliverablePinnedArtifact(toolName: string, text: string): boolean {
+  const allowedType = TOOL_ARTIFACT_EMITTERS.get(toolName);
+  if (allowedType === undefined || !text.includes('<artifact')) return false;
+  return scanArtifactTags(text, true).some(({ attrs }) => parseToolArtifactAttributes(attrs).type === allowedType);
+}
+
+/**
  * Replaces each `<artifact ...>...</artifact>` block in a tool result with `placeholder`, so the
  * model never sees markup it could echo into its reply (where the reply parser would render it).
  * The open tag is read with the reply parser grammar, so a quoted `</artifact>` cannot end a block
@@ -91,15 +95,15 @@ export function filterToolArtifactMarkup(toolName: string, text: string): string
  */
 export function stripToolArtifactMarkup(text: string, placeholder: string): string {
   const opener = /<artifact\b/gi;
-  const openTag = new RegExp(`<artifact\\s(?:${ARTIFACT_ATTRS_PATTERN})>`, 'iy');
+  const memo: ArtifactTagMemo = {};
   const closer = /<\/artifact>/gi;
   let out = '';
   let cursor = 0;
   for (let open = opener.exec(text); open; open = opener.exec(text)) {
     out += text.slice(cursor, open.index) + placeholder;
-    openTag.lastIndex = open.index;
-    if (!openTag.exec(text)) return out;
-    closer.lastIndex = openTag.lastIndex;
+    const tag = scanArtifactOpenTag(text, open.index, 'one', memo);
+    if (!tag) return out;
+    closer.lastIndex = tag.end;
     if (!closer.exec(text)) return out;
     cursor = closer.lastIndex;
     opener.lastIndex = cursor;
@@ -110,14 +114,21 @@ export function stripToolArtifactMarkup(text: string, placeholder: string): stri
 /**
  * Parses the `identifier` attribute out of every complete artifact tag opener in `markup`.
  * `markup` here is always content this codebase generated itself (artifact text already
- * streamed to the client), never adversarial input, so a plain global scan is safe.
+ * streamed to the client). Matches a `gi` scan of `<artifact\s(ATTRS)>`.
  */
 function extractArtifactIdentifiers(markup: string): Set<string> {
   const ids = new Set<string>();
-  const openTag = new RegExp(`<artifact\\s(${ARTIFACT_ATTRS_PATTERN})>`, 'gi');
-  for (const match of markup.matchAll(openTag)) {
-    const identifier = parseToolArtifactAttributes(match[1]).identifier;
+  const memo: ArtifactTagMemo = {};
+  const opener = /<artifact/gi;
+  for (let open = opener.exec(markup); open; open = opener.exec(markup)) {
+    const tag = scanArtifactOpenTag(markup, open.index, 'one', memo);
+    if (!tag) {
+      opener.lastIndex = open.index + 1;
+      continue;
+    }
+    const identifier = parseToolArtifactAttributes(tag.attrs).identifier;
     if (identifier !== undefined) ids.add(identifier);
+    opener.lastIndex = tag.end;
   }
   return ids;
 }
@@ -137,38 +148,31 @@ export function stripDeliveredArtifactBlocks(text: string, deliveredMarkup: stri
   const deliveredIdentifiers = extractArtifactIdentifiers(deliveredMarkup);
   if (deliveredIdentifiers.size === 0) return text;
   const opener = /<artifact\b/gi;
-  const openTag = new RegExp(`<artifact\\s(${ARTIFACT_ATTRS_PATTERN})>`, 'iy');
+  const memo: ArtifactTagMemo = {};
   const closer = /<\/artifact>/gi;
   let out = '';
   let cursor = 0;
   for (let open = opener.exec(text); open; open = opener.exec(text)) {
-    // Cheap O(1) rejection before the expensive scan below: no whitespace immediately after
+    // Cheap O(1) rejection before the scan below: no whitespace immediately after
     // "artifact" can never open a tag here, no matter how the rest of the text reads - skip to
     // the next opener match, same as a real reply parser would.
     if (!/\s/.test(text[open.index + 9] ?? '')) {
       opener.lastIndex = open.index + 1;
       continue;
     }
-    openTag.lastIndex = open.index;
-    const tag = openTag.exec(text);
+    const tag = scanArtifactOpenTag(text, open.index, 'one', memo);
     if (!tag) {
-      // The attrs-then-`>` scan ran all the way to the end of the string with no reachable,
-      // unquoted `>` to close it. Retrying the same expensive scan at every later opener would
-      // blow up to O(n^2) on adversarial input (e.g. `'<artifact '.repeat(100_000)`, where every
-      // retry re-scans to the end and finds nothing). Stop scanning entirely instead - everything
+      // No unquoted `>` closes this tag before the end of the string. Stop scanning - everything
       // from here to the end is kept literally below.
       //
-      // Known trade-off, not a guarantee: a later genuine duplicate does NOT always survive this
-      // break unscathed - it usually gets swallowed (and, by luck, still correctly identified and
-      // removed - see toolArtifactEmitters.test.ts) because ARTIFACT_ATTRS_PATTERN greedily reaches
-      // for the later block's own `>`. But an UNBALANCED quote in the stray text between here and
-      // that later block (e.g. an apostrophe in prose: "it won't help") blocks the attrs pattern
-      // before it ever reaches that `>`, so this scan genuinely ends here and the later duplicate
-      // is left unstripped. Accepted to keep the scan linear - see toolArtifactEmitters.test.ts's
+      // Known trade-off, not a guarantee: a later genuine duplicate usually still gets swallowed and
+      // removed, because the open-tag scan reaches for the later block's own `>`. But an UNBALANCED
+      // quote in the stray text between here and that later block (e.g. "it won't help") stops the
+      // scan before that `>`, so the later duplicate is left unstripped. See toolArtifactEmitters.test.ts's
       // "unbalanced quote after a stray opener" pin for the exact reproducing input.
       break;
     }
-    closer.lastIndex = openTag.lastIndex;
+    closer.lastIndex = tag.end;
     const close = closer.exec(text);
     if (!close) {
       // An unclosed tag here means nothing closes anywhere later either (closer is a plain
@@ -177,7 +181,7 @@ export function stripDeliveredArtifactBlocks(text: string, deliveredMarkup: stri
       // `</artifact>`, and this unscoped search would have found it already if it existed.
       break;
     }
-    const identifier = parseToolArtifactAttributes(tag[1]).identifier;
+    const identifier = parseToolArtifactAttributes(tag.attrs).identifier;
     const remove = identifier !== undefined && deliveredIdentifiers.has(identifier);
     out += text.slice(cursor, open.index) + (remove ? '' : text.slice(open.index, closer.lastIndex));
     cursor = closer.lastIndex;

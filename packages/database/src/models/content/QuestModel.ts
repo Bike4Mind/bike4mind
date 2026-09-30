@@ -8,7 +8,7 @@ import {
   MessageContentObject,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
-import BaseRepository from '@bike4mind/db-core';
+import BaseRepository, { convertId } from '@bike4mind/db-core';
 
 export interface IChatHistoryItemModel extends Model<IChatHistoryItemDocument> {}
 
@@ -163,6 +163,8 @@ const RetrievalSummarySchema = subSchema({
   // Same shape and the same default:undefined reason as preauthorizedLakeIdsUsed above - its
   // per-arm sibling, which the two overlap by design (see both fields on the Zod side).
   grantedLakeIdsUsed: { type: [String], required: false, default: undefined },
+  // Same shape and default:undefined reason as its per-arm siblings above (see the Zod side).
+  readerOptInLakeIdsUsed: { type: [String], required: false, default: undefined },
   // default: undefined for the same auto-vivification reason as `injected` above - and here it
   // also preserves the presence contract that absence means NOT RECORDED, never "nothing excluded".
   excludedLakes: { type: ExcludedLakesSchema, required: false, default: undefined },
@@ -766,6 +768,17 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     this.ctx = null;
   }
 
+  /** Partial update of one live quest, matched only inside `sessionId` so it cannot land on another session's quest. */
+  async updateInSession(
+    sessionId: string,
+    data: Partial<IChatHistoryItemDocument> & { id: string }
+  ): Promise<IChatHistoryItemDocument | null> {
+    const { id, ...updateData } = data;
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    // deletedAt is explicit: softDeletePlugin does not hook _plainUpdate's findOneAndUpdate.
+    return this._plainUpdate({ _id: convertId(id), sessionId, deletedAt: null }, updateData as Record<string, unknown>);
+  }
+
   async findBySessionIdAndId(sessionId: string, id: string) {
     // A non-ObjectId id can never address a row - report no such row, not a CastError the
     // calling route cannot attribute. Same contract as `BaseRepository.findById`.
@@ -1015,12 +1028,30 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    * overwrite a real answer with the abandoned-run error. Callers count only
    * the writes that matched, so a quest that finished in that window is
    * reported as not settled rather than as settled.
+   *
+   * `finishReason` lands on `promptMeta.finishReason` through an update
+   * pipeline, not a dotted `$set`: a quest whose `promptMeta` is null would make
+   * the dotted path fail on every attempt, so that quest could never settle,
+   * while `$mergeObjects` treats a null or missing operand as empty. Values go
+   * through `$literal` because a pipeline reads a string starting with `$` as a
+   * field path, and a reply can start with one.
    */
   async settleIfUnfinished(
     id: string,
-    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply'>>
+    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply' | 'replies'>> & { finishReason?: string }
   ): Promise<boolean> {
-    const result = await this.model.updateOne({ _id: id, status: { $nin: TERMINAL_QUEST_STATUSES } }, { $set: patch });
+    const filter = { _id: id, status: { $nin: TERMINAL_QUEST_STATUSES } };
+    const { finishReason, ...fields } = patch;
+    const result = finishReason
+      ? await this.model.updateOne(filter, [
+          {
+            $set: {
+              ...Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, { $literal: value }])),
+              promptMeta: { $mergeObjects: ['$promptMeta', { finishReason: { $literal: finishReason } }] },
+            },
+          },
+        ])
+      : await this.model.updateOne(filter, { $set: fields });
     return result.matchedCount > 0;
   }
 

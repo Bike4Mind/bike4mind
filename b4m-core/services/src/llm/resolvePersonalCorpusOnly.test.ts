@@ -101,6 +101,16 @@ describe('resolvePersonalCorpusOnly', () => {
     ).resolves.toBe(true);
   });
 
+  // A DRAFT lake's file resolves through the attachment door (which admits draft lakes, as browse
+  // does) but is not in the retrieval-scoped `accessibleLakeTags` and not lake-reachable by the
+  // count. It is classified personal on purpose: nothing retrieval could reach is attached, and the
+  // file itself is inlined.
+  it('is true for a draft-lake attachment, which retrieval cannot reach', async () => {
+    await expect(
+      resolvePersonalCorpusOnly({ ...base, resolvedFiles: [file('f1', ['datalake:draftkb'])] })
+    ).resolves.toBe(true);
+  });
+
   it('is false with nothing attached', async () => {
     await expect(resolvePersonalCorpusOnly({ ...base, requestedKnowledgeIds: [], resolvedFiles: [] })).resolves.toBe(
       false

@@ -1,6 +1,26 @@
-const UTM_COOKIE_NAME = 'b4m_utm';
+import { resolveConsent } from './consentRegion';
+import { ACQUISITION_COOKIES } from '@client/lib/subscriptions/acquisition';
+
+const UTM_COOKIE_NAME = ACQUISITION_COOKIES.session;
 // 30-minute window: long enough for a landing session, short enough to not persist stale campaigns.
 const TTL_SECONDS = 30 * 60;
+
+// Purchase attribution needs a longer memory than a session. A visitor who lands from a campaign
+// and subscribes a week later has lost `b4m_utm` by checkout, so the same capture also keeps:
+// - the last campaign landing, overwritten on each one, for 30 days
+// - the first campaign landing this app saw, written once, for 90 days - a fallback for the
+//   marketing site's parent-domain `b4m-first-touch`, which only visitors who came through the
+//   marketing site carry. It has its own name so the two can never be confused or overwrite
+//   each other; the server prefers the marketing site's when both exist.
+// Both are read server-side at checkout (server/analytics/acquisition.ts).
+export const LAST_TOUCH_COOKIE_NAME = ACQUISITION_COOKIES.lastTouch;
+export const APP_FIRST_TOUCH_COOKIE_NAME = ACQUISITION_COOKIES.appFirstTouch;
+const LAST_TOUCH_TTL_SECONDS = 30 * 24 * 60 * 60;
+const APP_FIRST_TOUCH_TTL_SECONDS = 90 * 24 * 60 * 60;
+
+function hasCookie(name: string): boolean {
+  return document.cookie.split('; ').some(c => c.startsWith(`${name}=`));
+}
 
 /**
  * Capture utm_* params from the current URL into a first-party cookie that the server-side
@@ -14,6 +34,9 @@ const TTL_SECONDS = 30 * 60;
  *
  * Only writes when `utm_source` is present (deliberate campaign attribution intent). Safe during
  * SSR (no-ops without `window`) and safe to call more than once (idempotent for a given URL).
+ *
+ * None of these cookies are essential to running the app, so none are written until consent
+ * allows it - see flushUtmCapture below for why a refused capture is held rather than dropped.
  */
 export function captureUtmParams(): void {
   if (typeof window === 'undefined') return;
@@ -30,6 +53,50 @@ export function captureUtmParams(): void {
   const content = params.get('utm_content');
   if (content) utm.content = content;
 
-  const expires = new Date(Date.now() + TTL_SECONDS * 1000).toUTCString();
-  document.cookie = `${UTM_COOKIE_NAME}=${encodeURIComponent(JSON.stringify(utm))}; path=/; SameSite=Strict; expires=${expires}`;
+  pending = encodeURIComponent(JSON.stringify(utm));
+  flushUtmCapture();
+}
+
+// The landing campaign, captured but not yet written because consent does not (yet) allow it.
+// Module scope, so it lives exactly as long as the page load that saw the URL.
+let pending: string | undefined;
+
+/**
+ * Write the held capture if consent now allows it.
+ *
+ * Held rather than dropped because the two events cannot be reordered: the capture has to read
+ * `window.location.search` at module load (the route guard strips it - see above), while an
+ * opt-in-region visitor cannot answer the banner until after React has mounted. Dropping on a
+ * not-yet-granted read would mean a visitor who lands from a campaign and then clicks Accept is
+ * unattributable, which is a worse answer than either consent state honestly gives. Nothing is
+ * persisted, sent, or readable by the server while it waits.
+ *
+ * Called by CookieConsentBanner when consent resolves to granted.
+ */
+export function flushUtmCapture(): void {
+  if (typeof window === 'undefined' || pending === undefined) return;
+  if (resolveConsent() !== 'granted') return;
+
+  const value = pending;
+  const expiresIn = (seconds: number) => new Date(Date.now() + seconds * 1000).toUTCString();
+  document.cookie = `${UTM_COOKIE_NAME}=${value}; path=/; SameSite=Strict; expires=${expiresIn(TTL_SECONDS)}`;
+  document.cookie = `${LAST_TOUCH_COOKIE_NAME}=${value}; path=/; SameSite=Strict; expires=${expiresIn(LAST_TOUCH_TTL_SECONDS)}`;
+  if (!hasCookie(APP_FIRST_TOUCH_COOKIE_NAME)) {
+    document.cookie = `${APP_FIRST_TOUCH_COOKIE_NAME}=${value}; path=/; SameSite=Strict; expires=${expiresIn(APP_FIRST_TOUCH_TTL_SECONDS)}`;
+  }
+  pending = undefined;
+}
+
+/**
+ * Expire the app's attribution cookies and drop any held capture on denial.
+ * The parent-domain marketing cookie can remain; checkout and pixel readers
+ * separately gate its use on the resolved consent decision.
+ */
+export function clearAttributionCookies(): void {
+  if (typeof document === 'undefined') return;
+
+  for (const name of [UTM_COOKIE_NAME, LAST_TOUCH_COOKIE_NAME, APP_FIRST_TOUCH_COOKIE_NAME]) {
+    document.cookie = `${name}=; path=/; SameSite=Strict; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+  }
+  pending = undefined;
 }

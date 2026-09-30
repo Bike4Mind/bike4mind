@@ -8,6 +8,7 @@
 
 import {
   parseToolArtifactAttributes,
+  scanArtifactTags,
   TOOL_ARTIFACT_EMITTERS,
   type IChatHistoryItemDocument,
   type ModelInfo,
@@ -32,7 +33,6 @@ import { isToolOfferable, type ToolAvailability } from './toolAvailability';
 import { extractAndSaveEntitiesFromToolResult, shouldExtractEntitiesFromTool } from '../conversationContextService';
 import type { MinimalSessionRepository } from '../conversationContextService/types';
 import { notifyToolFinish } from './toolFinishObserver';
-import { scanArtifactTags } from '../utils/scanArtifactTags';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -58,6 +58,8 @@ export interface ToolBuilderDeps {
   suppressLakeArms?: ToolContext['suppressLakeArms'];
   /** Session lake scope, forwarded to the tool context (see ToolContext.sessionRetrievalTags). */
   sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
+  /** Reader opt-in consent, forwarded to the tool context (see ToolContext.sessionReaderConsentDatalakeTags). */
+  sessionReaderConsentDatalakeTags?: ToolContext['sessionReaderConsentDatalakeTags'];
   /** Lake-scope sidecar, forwarded to the tool context (see ToolContext.sessionLakeScopeExplicit). */
   sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
   /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
@@ -325,6 +327,7 @@ export function buildSharedTools(
     fullyInlinedAttachmentIds,
     suppressLakeArms,
     sessionRetrievalTags,
+    sessionReaderConsentDatalakeTags,
     sessionLakeScopeExplicit,
     sessionPreauthorizedLakeIds,
   } = deps;
@@ -344,6 +347,7 @@ export function buildSharedTools(
       fullyInlinedAttachmentIds,
       suppressLakeArms,
       sessionRetrievalTags,
+      sessionReaderConsentDatalakeTags,
       sessionLakeScopeExplicit,
       sessionPreauthorizedLakeIds,
       questId: callbacks.questId,

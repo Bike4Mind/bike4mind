@@ -1,42 +1,8 @@
-import { type APIRequestContext } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
-import { getTestUsers, getTestRunId, getE2ETestId } from './helpers/test-users';
+import { getTestUsers } from './helpers/test-users';
 import { seedAuthOnPage } from './helpers/auth-seed';
-import { apiCreateTestUser, apiGetOtcCode, apiLoginViaOtc } from './helpers/api';
-
-/**
- * Mint a dedicated throwaway account for a test that logs out. Logout is now per-device (issue
- * #1194): it revokes only the requesting session, not the user's other tokens. These specs still
- * use a throwaway user for clean isolation (they seed one session and log it out), which keeps the
- * teardown sweep simple - not because logout would otherwise nuke a shared user. The email mirrors
- * the setup convention (`...-<id>-e2e@test.com`) so global-teardown's cleanup sweep matches it.
- *
- * The retry index is baked into the identity: attempt 0 already created (and logged out)
- * `auth-<label>0-...`, and createUser rejects a duplicate username OR email, so without this a
- * retry would die inside apiCreateTestUser instead of re-running the test - defeating the retry
- * safety net for exactly these tests. The marker stays BEFORE the `<id>-<runId>` tail so both
- * cleanup regexes in pages/api/test/cleanup.ts still match.
- */
-async function createLogoutUser(request: APIRequestContext, label: string) {
-  const e2eId = getE2ETestId();
-  const idSuffix = e2eId ? `${e2eId}-${getTestRunId()}` : getTestRunId();
-  const slug = `auth-${label}${test.info().retry}`;
-  const email = `${slug}-${idSuffix}-e2e@test.com`;
-  const result = await apiCreateTestUser(request, {
-    username: `${slug}-${idSuffix}`,
-    email,
-    name: `Auth ${label} ${idSuffix}`,
-    password: `E2eAuth${label}Pass123!`,
-    isAdmin: false,
-  });
-  return {
-    email,
-    userId: (result.user.id || result.user._id) as string,
-    accessToken: result.accessToken,
-    refreshToken: result.refreshToken,
-  };
-}
+import { apiCreateThrowawayUser, apiGetOtcCode, apiLoginViaOtc } from './helpers/api';
 
 test.describe('Authentication', () => {
   test('authenticated session loads the app', async ({ basePage, page }) => {
@@ -58,7 +24,9 @@ test.describe('Authentication', () => {
   }) => {
     // Passwordless happy-path against a deployed env: email triggers /api/otc/send, code is read
     // back via the non-prod /api/test/otc-code endpoint (no mailbox). Requires E2E_CLEANUP_SECRET + non-prod stage.
-    const { user } = getTestUsers();
+    // Own user: that endpoint returns the LAST code sent to the email, so a parallel test sending to
+    // the same address would hand this one a code the browser's pending token does not match.
+    const user = await apiCreateThrowawayUser(request, 'otcflow');
     await basePage.clearAllStorage();
     await loginPage.goto();
     await loginPage.fillEmail(user.email); // advances to the OTC step and sends the code
@@ -70,9 +38,9 @@ test.describe('Authentication', () => {
     await expect(page).not.toHaveURL(/.*login.*/);
   });
 
-  test('shows error on invalid OTC code', async ({ basePage, loginPage }) => {
-    // Use a real existing user's email so the flow reaches the OTC step deterministically.
-    const { user } = getTestUsers();
+  test('shows error on invalid OTC code', async ({ basePage, loginPage, request }) => {
+    // A real existing user's email so the flow reaches the OTC step deterministically.
+    const user = await apiCreateThrowawayUser(request, 'otcinvalid');
     await basePage.clearAllStorage();
     await loginPage.goto();
     await loginPage.fillEmail(user.email);
@@ -92,7 +60,7 @@ test.describe('Authentication', () => {
 
   test('should logout successfully', async ({ basePage, navigationPage, page, request }) => {
     // Dedicated user keeps this self-contained; logout only revokes this seeded session (per-device).
-    const user = await createLogoutUser(request, 'logout');
+    const user = await apiCreateThrowawayUser(request, 'logout');
     await basePage.clearAllStorage();
     await seedAuthOnPage(page, { accessToken: user.accessToken, refreshToken: user.refreshToken });
     await page.goto('/');
@@ -106,7 +74,7 @@ test.describe('Authentication', () => {
   test('logout on one device leaves other devices signed in (per-device, #1194)', async ({ request }) => {
     // Pure API-level proof of the per-device contract, independent of the browser logout UI: two
     // sessions for the SAME user, log one out, the other must survive.
-    const user = await createLogoutUser(request, 'perdevice');
+    const user = await apiCreateThrowawayUser(request, 'perdevice');
 
     // Session A is the one minted at user creation; session B is a second independent login. Reusing
     // the creation session as A keeps this to a single extra OTC round-trip (avoids OTC-send limits).
@@ -137,7 +105,7 @@ test.describe('Authentication', () => {
 
   test('log out of all other devices keeps the current one, revokes the rest (#1194)', async ({ request }) => {
     // "Log out other devices" (GitHub/Google model): keep the calling session, revoke every other.
-    const user = await createLogoutUser(request, 'logoutothers');
+    const user = await apiCreateThrowawayUser(request, 'logoutothers');
     const sessionA = { accessToken: user.accessToken, refreshToken: user.refreshToken };
     const sessionB = await apiLoginViaOtc(request, user.email);
 
@@ -162,7 +130,7 @@ test.describe('Authentication', () => {
 
   // Skipped: indexedDB is not cleared after logout. Covered by a manual test; re-enable once the fix lands.
   test.skip('should clear IndexedDB caches on logout', async ({ basePage, navigationPage, page, request }) => {
-    const user = await createLogoutUser(request, 'cachelogout');
+    const user = await apiCreateThrowawayUser(request, 'cachelogout');
     await basePage.clearAllStorage();
     await seedAuthOnPage(page, { accessToken: user.accessToken, refreshToken: user.refreshToken });
     await basePage.dismissModals();
@@ -317,7 +285,7 @@ test.describe('Authentication', () => {
   }) => {
     test.slow();
     // Dedicated user: logout revokes the seeded token, so we re-login below for a fresh one.
-    const user = await createLogoutUser(request, 'relogin');
+    const user = await apiCreateThrowawayUser(request, 'relogin');
     await basePage.clearAllStorage();
     // Seed auth, navigate to populate cache, then logout
     await seedAuthOnPage(page, { accessToken: user.accessToken, refreshToken: user.refreshToken });
