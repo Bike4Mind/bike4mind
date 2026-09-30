@@ -156,11 +156,14 @@ describe('softDeletePlugin update hook', () => {
 
   // A stale snapshot upserted back (repo.update(snapshot, { upsert: true })) $sets deletedAt: null, so
   // an upsert that names deletedAt stays guarded and fails closed instead of reviving the tombstone.
-  it('an upsert that $sets or $unsets deletedAt fails with E11000 and leaves the tombstone deleted', async () => {
+  it('an upsert that names deletedAt (top-level, $set or $unset) fails with E11000 and leaves the tombstone deleted', async () => {
     const { id, deletedAt } = await seedTombstone('taken');
 
     await expect(
       SoftModel.updateOne({ slug: 'taken' }, { $set: { name: 'up', deletedAt: null } }, { upsert: true })
+    ).rejects.toMatchObject({ code: 11000 });
+    await expect(
+      SoftModel.updateOne({ slug: 'taken' }, { name: 'up', deletedAt: null }, { upsert: true })
     ).rejects.toMatchObject({ code: 11000 });
     await expect(
       SoftModel.updateOne({ slug: 'taken' }, { $unset: { deletedAt: 1 } }, { upsert: true })
@@ -174,6 +177,20 @@ describe('softDeletePlugin update hook', () => {
 
     expect(await SoftModel.collection.countDocuments()).toBe(1);
     expect(await rawDoc(id)).toMatchObject({ name: 'before', deletedAt });
+  });
+
+  // The retrieval probes' writeSetting recovers a tombstone left by an older run this way.
+  it('an includeDeleted upsert that $sets deletedAt: null revives the tombstone in place', async () => {
+    const { id } = await seedTombstone('taken');
+
+    await SoftModel.updateOne(
+      { slug: 'taken' },
+      { $set: { name: 'revived', deletedAt: null } },
+      { upsert: true }
+    ).setOptions(includeDeleted);
+
+    expect(await SoftModel.collection.countDocuments()).toBe(1);
+    expect(await rawDoc(id)).toMatchObject({ name: 'revived', deletedAt: null });
   });
 
   it('a filter with deletedAt: undefined is still guarded', async () => {

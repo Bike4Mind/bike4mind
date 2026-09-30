@@ -474,7 +474,9 @@ export const softDeletePlugin = (
   // tombstone without reviving it. Replace upserts, and update upserts that $set/$unset deletedAt
   // (e.g. repo.update(snapshot, { upsert: true })), stay guarded and fail closed with E11000 instead,
   // since matching the tombstone would revive it.
-  // Known gap: Model.bulkWrite fires no query middleware, so its ops are unguarded.
+  // Known gaps: Model.bulkWrite fires no query middleware, so its ops are unguarded; and only an
+  // object update's top-level/$set/$unset deletedAt is seen, so a pipeline-form update or a $rename
+  // of deletedAt still upserts into (and revives) a tombstone. Neither has a caller today.
   schema.pre(
     ['findOneAndUpdate', 'updateOne', 'updateMany', 'findOneAndReplace', 'replaceOne'],
     { document: false, query: true },
