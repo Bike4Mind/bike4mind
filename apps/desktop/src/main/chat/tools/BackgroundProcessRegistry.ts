@@ -34,6 +34,12 @@ export interface StartRequest {
   cwd: string;
   roots: readonly string[];
   protectedPaths: readonly string[];
+  /**
+   * Run outside the Seatbelt profile, with these environment overrides. For work the APP
+   * starts on its own initiative (a dependency install), never for anything the model asked
+   * for: the sandbox is what confines model-authored commands.
+   */
+  unsandboxed?: { env?: NodeJS.ProcessEnv };
 }
 
 export interface ReadResult {
@@ -100,11 +106,10 @@ export class BackgroundProcessRegistry {
     if (this.shuttingDown) throw new Error('The app is shutting down; no new commands can be started.');
     this.enforceLimits(request.sessionId);
 
-    const sandboxed = await sandboxCommand(
-      wrapWithParentWatchdog(request.command),
-      request.roots,
-      request.protectedPaths
-    );
+    const wrapped = wrapWithParentWatchdog(request.command);
+    const sandboxed: SandboxedCommand = request.unsandboxed
+      ? { executable: '/bin/bash', args: ['-c', wrapped], cleanup: async () => undefined }
+      : await sandboxCommand(wrapped, request.roots, request.protectedPaths);
 
     const id = randomUUID().slice(0, 8);
     const info: BackgroundProcessInfo = {
@@ -128,7 +133,9 @@ export class BackgroundProcessRegistry {
         // fd 3 is the watch pipe the child blocks on. Its write end stays open in this process
         // for exactly as long as this process lives, which is the entire mechanism.
         stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
-        env: { ...process.env, B4M_DESKTOP_SANDBOX: '1', B4M_DESKTOP_BACKGROUND: '1' },
+        env: request.unsandboxed
+          ? { ...process.env, ...request.unsandboxed.env, B4M_DESKTOP_BACKGROUND: '1' }
+          : { ...process.env, B4M_DESKTOP_SANDBOX: '1', B4M_DESKTOP_BACKGROUND: '1' },
       });
     } catch (err) {
       await sandboxed.cleanup();

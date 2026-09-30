@@ -35,7 +35,9 @@ import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
 import { projectDisplayName } from './project/git';
-import { resolveWorkspace } from './project/workspace';
+import type { DependencyInstaller } from './project/dependencyInstall';
+import { ProjectContextCache } from './project/projectContext';
+import { resolveWorkspace, type WorkspaceOutcome } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
 import { DEFAULT_COMPLETIONS_PATH, streamCompletion, type CompletionMessage } from './completions';
@@ -218,6 +220,8 @@ export interface ChatServiceDeps {
   approvals?: ApprovalGate;
   /** Owns long-running commands. Absent in tests, which then have no background tools. */
   background?: BackgroundProcessRegistry;
+  /** Installs a new worktree's dependencies. Absent in tests, which then never install. */
+  dependencies?: DependencyInstaller;
   /** Where generated images and audio land. Absent in tests, which then have no generation tools. */
   media?: MediaStore;
   /**
@@ -349,6 +353,9 @@ export class ChatService {
    */
   private readonly turnRelay = new Map<string, { hops: number; sends: number }>();
 
+  /** Instructions and file tree per session, frozen so the cached system prompt never moves. */
+  private readonly projectContext = new ProjectContextCache();
+
   /** Resolved serverConfig fields, cached per environment URL (it is one round trip). */
   private serverConfigCache: { environmentUrl: string; config: ResolvedServerConfig } | null = null;
 
@@ -435,12 +442,14 @@ export class ChatService {
 
     let workingDirectory = directory;
     let reusedWorkspace = false;
+    let workspaceOutcome: WorkspaceOutcome | undefined;
     if (request.workspace) {
       if (!branch) return { ok: false, error: 'Pick a branch for the workspace to run on.' };
       try {
         const resolved = await resolveWorkspace(directory, branch);
         workingDirectory = resolved.workingDirectory;
         reusedWorkspace = resolved.outcome === 'reused';
+        workspaceOutcome = resolved.outcome;
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : 'Could not prepare the workspace.' };
       }
@@ -457,6 +466,7 @@ export class ChatService {
       },
     });
 
+    this.startDependencyInstall(session.id, workingDirectory, workspaceOutcome);
     return { ok: true, session, ...(reusedWorkspace ? { reusedWorkspace } : {}) };
   }
 
@@ -505,10 +515,13 @@ export class ChatService {
     const workspace = request.workspace ?? current?.workspace ?? false;
 
     let workingDirectory = directory;
+    let workspaceOutcome: WorkspaceOutcome | undefined;
     if (workspace) {
       if (!branch) return { ok: false, error: 'Pick a branch for the workspace to run on.' };
       try {
-        workingDirectory = (await resolveWorkspace(directory, branch)).workingDirectory;
+        const resolved = await resolveWorkspace(directory, branch);
+        workingDirectory = resolved.workingDirectory;
+        workspaceOutcome = resolved.outcome;
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : 'Could not prepare the workspace.' };
       }
@@ -526,7 +539,20 @@ export class ChatService {
       contextDirectories: movedProject ? [] : (current?.contextDirectories ?? []),
     });
     if (!updated) return { ok: false, error: 'This conversation is no longer available.' };
+    this.startDependencyInstall(request.sessionId, workingDirectory, workspaceOutcome);
     return { ok: true, session: updated };
+  }
+
+  /** Fire and forget: an install must never hold up, or fail, creating the session. */
+  private startDependencyInstall(
+    sessionId: string,
+    workingDirectory: string,
+    outcome: WorkspaceOutcome | undefined
+  ): void {
+    if (!this.deps.dependencies || !outcome) return;
+    this.deps.dependencies.maybeStart({ sessionId, workingDirectory, outcome }).catch(err => {
+      this.deps.logger.warn(`Dependency install did not start: ${err instanceof Error ? err.message : 'unknown'}`);
+    });
   }
 
   /**
@@ -1129,8 +1155,20 @@ export class ChatService {
         session,
         (attachment: ChatAttachment) => this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null)
       );
+      const project = session.mode === 'code' ? session.project : undefined;
+      const projectContext = project
+        ? await this.projectContext.get(session.id, project.workingDirectory, project.directory)
+        : '';
       wire.unshift(
-        buildSystemMessage(roots, !!media, !!host, this.deps.mcp?.connectedServerNames() ?? [], session.project)
+        buildSystemMessage(
+          roots,
+          !!media,
+          !!host,
+          this.deps.mcp?.connectedServerNames() ?? [],
+          session.project,
+          this.deps.dependencies?.promptLines(session.id) ?? [],
+          projectContext
+        )
       );
 
       for (let roundIndex = 0; roundIndex < limits.rounds; roundIndex++) {
@@ -2235,7 +2273,9 @@ function buildSystemMessage(
   media: boolean,
   host: boolean,
   mcpServers: readonly string[],
-  project?: ChatProject
+  project?: ChatProject,
+  dependencyLines: readonly string[] = [],
+  projectContext = ''
 ): CompletionMessage {
   if (roots.length === 0) {
     return {
@@ -2263,11 +2303,18 @@ function buildSystemMessage(
       'You can read and change files on the user machine, and run bash commands on it, with the',
       'provided tools.',
       ...(project ? projectPreamble(project) : []),
+      ...dependencyLines,
       'These folders are shared with you, including everything beneath them:',
       ...roots.map(root => `  ${root}`),
       'Always pass absolute paths. Any path outside those folders is denied;',
       'if you need one, ask the user to share it - from the chip row above the message box in a',
       'Code session, or the sidebar card in any conversation.',
+      ...(projectContext
+        ? [
+            'The project instructions and file tree are already below: do not list the root or re-read',
+            'CLAUDE.md or AGENTS.md; use glob_files for anything deeper than the tree shows.',
+          ]
+        : []),
       'Explore with grep_search and glob_files, not grep, find or ls through bash_execute: they need',
       'no approval, skip ignored and binary files, and are faster. Search before you read - find the',
       'symbol with grep_search, then read only the lines around it with file_read offset and limit.',
@@ -2293,6 +2340,7 @@ function buildSystemMessage(
       ...mcpGuidance(mcpServers),
       '',
       DESKTOP_ARTIFACT_PROMPT,
+      ...(projectContext ? ['', projectContext] : []),
     ].join('\n'),
   };
 }
