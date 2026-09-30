@@ -12,5 +12,5 @@
     "target": "es2018"
   },
   "include": ["sst-env.d.ts", "../client/global.d.ts", "src/**/*.ts", "../client/**/*.ts"],
-  "exclude": ["node_modules", "../client/node_modules", "**/*.test.ts"]
+  "exclude": ["node_modules", "../client/node_modules", "**/*.test.ts", "../client/**/*.test.ts"]
 }
