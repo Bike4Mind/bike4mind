@@ -309,10 +309,22 @@ const handler = baseApi()
       .lean<ShareTokenArtifactLean>();
     const persisted = current ? liveLinkViews(current) : [];
     const newest = newestLive(persisted);
+    // Tokens, not ids: legacy links have a null id.
+    const before = new Set(live.map(l => l.shareToken));
+    if (regenerate && persisted.some(l => before.has(l.shareToken))) {
+      return res
+        .status(409)
+        .json({ error: 'The share links changed while rotating - try again', code: 'SHARE_LINK_RACED' });
+    }
+    if (!newest) {
+      return res
+        .status(409)
+        .json({ error: 'The share link was revoked while it was being created - try again', code: 'SHARE_LINK_RACED' });
+    }
     return res.status(200).json({
-      id: newest?.id ?? null,
-      shareToken: newest?.shareToken ?? candidate,
-      shareUrl: newest?.shareUrl ?? `/a/${candidate}`,
+      id: newest.id,
+      shareToken: newest.shareToken,
+      shareUrl: newest.shareUrl,
       shareLinks: persisted,
     });
   })

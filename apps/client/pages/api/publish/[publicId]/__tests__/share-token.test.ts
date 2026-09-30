@@ -224,6 +224,36 @@ describe('POST /api/publish/[publicId]/share-token', () => {
     expect(res._getJSONData()).toMatchObject({ shareToken: 'WINNER-TOKEN', shareUrl: '/a/WINNER-TOKEN' });
   });
 
+  it('on a regenerate lost race where a pre-rotate link is still live, returns 409', async () => {
+    const outgoing = entry('OUTGOING');
+    mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareTokens: [outgoing] });
+    mockFindOneAndUpdate.mockResolvedValue(null);
+    mockCurrent.mockResolvedValue({ shareTokens: [outgoing] });
+    const { res, promise } = run({ body: { regenerate: true } });
+    await promise;
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData().code).toBe('SHARE_LINK_RACED');
+  });
+
+  it('on a regenerate lost race with nothing live, returns 409', async () => {
+    mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareTokens: [entry('OUTGOING')] });
+    mockFindOneAndUpdate.mockResolvedValue(null);
+    mockCurrent.mockResolvedValue({ shareTokens: [entry('GONE', { revokedAt: new Date() })] });
+    const { res, promise } = run({ body: { regenerate: true } });
+    await promise;
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData().code).toBe('SHARE_LINK_RACED');
+  });
+
+  it('on a mint lost race with nothing live, returns 409 instead of an unwritten candidate', async () => {
+    mockFindOneAndUpdate.mockResolvedValue(null);
+    mockCurrent.mockResolvedValue({ shareTokens: [] });
+    const { res, promise } = run();
+    await promise;
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData().code).toBe('SHARE_LINK_RACED');
+  });
+
   it('lets an admin manage a link they do not own', async () => {
     mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'someone-else', shareTokens: [] });
     const { res, promise } = run({ user: { id: 'admin1', isAdmin: true } });

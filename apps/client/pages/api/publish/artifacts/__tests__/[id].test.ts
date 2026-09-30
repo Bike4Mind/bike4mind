@@ -386,6 +386,35 @@ describe('PATCH /api/publish/artifacts/[id] - a gate needs an ENFORCING surface,
     return a;
   }
 
+  /** A PRIVATE artifact whose only link lives in the shareTokens array (no legacy scalar). */
+  function arrayOnlyShared(entryOver: Record<string, unknown> = {}) {
+    const a = makeArtifact();
+    a.visibility = 'private';
+    (a as unknown as { shareTokens?: unknown[] }).shareTokens = [
+      { _id: 'entry-arr-1', token: 'TOKEN-arr', createdAt: new Date(), revokedAt: null, ...entryOver },
+    ];
+    return a;
+  }
+
+  it('ACCEPTS a passphrase gate on a private artifact whose only live link is in the array', async () => {
+    const { res, artifact } = await patchBody(
+      { accessGate: { kind: 'passphrase', passphrase: 'a-long-passphrase' } },
+      arrayOnlyShared()
+    );
+    expect(res._getStatusCode()).toBe(200);
+    expect(artifact.save).toHaveBeenCalled();
+  });
+
+  it('REJECTS a passphrase gate on a private artifact whose only array link is revoked', async () => {
+    const { res, artifact } = await patchBody(
+      { accessGate: { kind: 'passphrase', passphrase: 'a-long-passphrase' } },
+      arrayOnlyShared({ revokedAt: new Date() })
+    );
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().code).toBe('GATE_REQUIRES_ENFORCING_SURFACE');
+    expect(artifact.save).not.toHaveBeenCalled();
+  });
+
   it('ACCEPTS a passphrase gate on a private artifact that has a share token', async () => {
     const { res, artifact } = await patchBody(
       { accessGate: { kind: 'passphrase', passphrase: 'a-long-passphrase' } },
