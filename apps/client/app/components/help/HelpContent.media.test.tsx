@@ -58,6 +58,17 @@ class MockIntersectionObserver {
   }
 }
 
+// jsdom does not implement media playback, and HelpVideo calls play()/pause() as a demo enters
+// and leaves view; stub both so unrelated tests don't log "Not implemented".
+beforeEach(() => {
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe('resolveHelpMediaSrc', () => {
   it('resolves ./ and bare relative paths against the article directory', () => {
     expect(resolveHelpMediaSrc('./media/x.gif', 'features/notebooks.md')).toBe('/help-content/features/media/x.gif');
@@ -148,7 +159,60 @@ describe('help media rendering (public)', () => {
     const video = await screen.findByTestId('help-video-player');
     expect(video.getAttribute('src')).toBe('/help-content/features/media/slack-setup.mp4');
     expect(screen.queryByTestId('help-video-placeholder')).toBeNull();
-    expect(observer.disconnect).toHaveBeenCalled();
+    // The observer outlives the first intersection: it keeps driving play/pause.
+    expect(observer.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('plays a demo only while it is near the viewport and pauses it once scrolled away', async () => {
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    const pause = vi.mocked(HTMLMediaElement.prototype.pause);
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+    renderMarkdown('![Slack setup demo](./media/slack-setup.mp4)');
+
+    const observer = MockIntersectionObserver.instances[0];
+    const notify = (isIntersecting: boolean) =>
+      act(() => {
+        observer.callback(
+          [{ isIntersecting } as IntersectionObserverEntry],
+          observer as unknown as IntersectionObserver
+        );
+      });
+
+    notify(true);
+    const video = await screen.findByTestId('help-video-player');
+    expect(video.hasAttribute('autoplay')).toBe(false);
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(pause).not.toHaveBeenCalled();
+
+    notify(false);
+    expect(pause).toHaveBeenCalledTimes(1);
+    // Scrolled away: the clip stays mounted (no reload on scroll back), just paused.
+    expect(screen.getByTestId('help-video-player')).toBe(video);
+
+    notify(true);
+    expect(play).toHaveBeenCalledTimes(2);
+  });
+
+  it('attaches a catch to play() so blocked autoplay is not an unhandled rejection', async () => {
+    // A real rejected promise with a spied catch: the component must chain onto it, otherwise a
+    // browser that blocks autoplay would surface an unhandled rejection.
+    const blocked = Promise.reject(new Error('autoplay blocked'));
+    const catchSpy = vi.spyOn(blocked, 'catch');
+    vi.mocked(HTMLMediaElement.prototype.play).mockReturnValue(blocked);
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+    renderMarkdown('![Slack setup demo](./media/slack-setup.mp4)');
+
+    const observer = MockIntersectionObserver.instances[0];
+    act(() => {
+      observer.callback(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        observer as unknown as IntersectionObserver
+      );
+    });
+
+    const video = await screen.findByTestId('help-video-player');
+    expect(catchSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('help-video-player')).toBe(video);
   });
 
   it('renders a YouTube link as a privacy-preserving lazy embed', () => {
@@ -160,6 +224,20 @@ describe('help media rendering (public)', () => {
     expect(iframe.hasAttribute('allowfullscreen')).toBe(true);
     // Pinned: a demo clip needs no accelerometer/gyroscope/clipboard-write/web-share.
     expect(iframe.getAttribute('allow')).toBe('autoplay; encrypted-media; picture-in-picture; fullscreen');
+  });
+
+  it('carries a start offset from ?t= into the embed URL', () => {
+    renderMarkdown('![demo](https://youtu.be/dQw4w9WgXcQ?t=42)');
+    expect(screen.getByTestId('help-youtube-iframe').getAttribute('src')).toBe(
+      'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?start=42'
+    );
+  });
+
+  it('converts a 1m30s offset on a watch link to seconds', () => {
+    renderMarkdown('![demo](https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=1m30s)');
+    expect(screen.getByTestId('help-youtube-iframe').getAttribute('src')).toBe(
+      'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?start=90'
+    );
   });
 
   it('accepts the youtu.be short-link form', () => {
@@ -246,6 +324,11 @@ describe('help media rendering (admin)', () => {
     });
     await waitFor(() => {
       expect(video.getAttribute('src')).toBe('blob:mock-admin-media');
+    });
+    // Once srcless at mount, then again when the blob lands: the second call only happens
+    // because playableSrc is in the play effect's deps.
+    await waitFor(() => {
+      expect(vi.mocked(HTMLMediaElement.prototype.play)).toHaveBeenCalledTimes(2);
     });
   });
 

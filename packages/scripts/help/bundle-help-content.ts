@@ -35,6 +35,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { isDirectInvocation } from './isDirectInvocation.js';
 import type { HelpIndex, HelpIndexEntry } from './types.js';
 import { ADMIN_HELP_CONTENT_DIR, PUBLIC_HELP_CONTENT_DIR, isPublicAccessLevel } from './utils.js';
 import {
@@ -137,9 +138,11 @@ export interface BundleOptions {
 }
 
 /**
- * Main bundle function
+ * Main bundle function. Resolves to the number of errors (rejected assets, missing
+ * or uncopyable sources); the CLI entrypoint turns a non-zero count into a failing
+ * exit code, since help:build has no other deploy gate.
  */
-export async function bundleHelpContent(opts: BundleOptions = {}): Promise<void> {
+export async function bundleHelpContent(opts: BundleOptions = {}): Promise<number> {
   const docsRoot = opts.docsRoot ?? DOCS_ROOT;
   const outputDir = opts.outputDir ?? OUTPUT_DIR;
   const adminOutputDir = opts.adminOutputDir ?? ADMIN_OUTPUT_DIR;
@@ -320,11 +323,26 @@ export async function bundleHelpContent(opts: BundleOptions = {}): Promise<void>
     console.log(`  Errors: ${errorCount}`);
   }
   console.log(`  Total: ${articles.length} files in index`);
+
+  return errorCount;
+}
+
+/**
+ * CLI body: fails the process when the bundle reported errors. Sets process.exitCode
+ * here rather than in bundleHelpContent so importing that function never touches the
+ * caller's exit status.
+ */
+export async function runBundleCli(opts: BundleOptions = {}): Promise<void> {
+  const errorCount = await bundleHelpContent(opts);
+  if (errorCount > 0) {
+    console.error(`Help content bundle finished with ${errorCount} error(s); failing the build.`);
+    process.exitCode = 1;
+  }
 }
 
 // Only run when invoked directly (not when imported by tests)
-if (process.argv[1] && process.argv[1].endsWith('bundle-help-content.ts')) {
-  bundleHelpContent().catch(error => {
+if (isDirectInvocation(import.meta.url)) {
+  runBundleCli().catch(error => {
     console.error('Failed to bundle help content:', error);
     process.exit(1);
   });
