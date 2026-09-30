@@ -1,11 +1,13 @@
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { DataLakeModel } from '../../../../packages/database/src/models/ai/DataLakeModel';
 import {
   DataLakeHealthSnapshotModel,
   dataLakeHealthSnapshotRepository,
 } from '../../../../packages/database/src/models/ai/DataLakeHealthSnapshotModel';
+
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 vi.mock('@bike4mind/database', async () => {
   const lakes = await import('../../../../packages/database/src/models/ai/DataLakeModel');
@@ -80,7 +82,10 @@ it('persists only active-lake trends, upserts a repeat day and reads a distinct 
   try {
     await runLakeHealthSweep({ emitMetrics: false });
     now = '2026-09-28T07:00:00Z';
-    await runLakeHealthSweep({ emitMetrics: false });
+    const repeated = await runLakeHealthSweep({ emitMetrics: false });
+    expect(repeated).toMatchObject({ scanned: 1, failed: 0 });
+    const [sameDay] = await dataLakeHealthSnapshotRepository.getTrend(active.id);
+    expect(sameDay.computedAt.toISOString()).toBe(new RealDate(now).toISOString());
     expect(await DataLakeHealthSnapshotModel.countDocuments()).toBe(1);
     now = '2026-09-29T06:00:00Z';
     await runLakeHealthSweep({ emitMetrics: false });
