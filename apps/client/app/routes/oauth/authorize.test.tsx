@@ -1,3 +1,4 @@
+import React from 'react';
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -10,6 +11,14 @@ let searchParams: Record<string, string | undefined>;
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mockNavigate,
   useSearch: () => searchParams,
+  Link: ({ children, search, ...props }: { children: React.ReactNode; search?: unknown; [key: string]: unknown }) => (
+    <a
+      {...(props as React.AnchorHTMLAttributes<HTMLAnchorElement>)}
+      data-search={search !== undefined ? JSON.stringify(search) : undefined}
+    >
+      {children}
+    </a>
+  ),
 }));
 
 vi.mock('@client/app/hooks/useAccessToken', () => ({
@@ -123,6 +132,22 @@ describe('OAuthAuthorizePage consent screen', () => {
     expect(list).toHaveTextContent('ai:generate');
     expect(screen.getByTestId('oauth-consent-allow-btn')).toBeInTheDocument();
     expect(screen.getByTestId('oauth-consent-deny-btn')).toBeInTheDocument();
+  });
+
+  it('renders the revoke-hint link pointing to Settings > Security > Approved Apps', async () => {
+    global.fetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ consent_required: true, client_name: 'VibesWire', scopes: ['openid'] }),
+    });
+
+    renderPage();
+
+    await screen.findByTestId('oauth-consent-scopes');
+    const hint = screen.getByTestId('oauth-consent-revoke-hint-link');
+    expect(hint).toBeInTheDocument();
+    expect(hint).toHaveAttribute('to', '/profile');
+    expect(hint).toHaveAttribute('data-search', JSON.stringify({ tab: 'settings', section: 'security' }));
   });
 
   it('shows a plain-language label with the raw scope id kept beside it', async () => {
