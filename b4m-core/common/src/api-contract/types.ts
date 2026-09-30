@@ -103,7 +103,7 @@ export type CodeSample = {
  * already excuses that rule per-RESPONSE, so a contract-wide version would only
  * ever be the blunter way to say the same thing.
  */
-export type ConventionRule = 'status-table' | 'scope-required' | 'version-root';
+export type ConventionRule = 'status-table' | 'scope-required' | 'version-root' | 'pagination';
 
 /**
  * Exemptions from {@link ConventionRule}, each carrying WHY.

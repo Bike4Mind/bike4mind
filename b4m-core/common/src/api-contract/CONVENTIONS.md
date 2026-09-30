@@ -414,6 +414,8 @@ A `GET` that genuinely returns a `data` array but is not a list (nothing to page
 a `pagination` conventionExemption stating why, the same escape hatch `status-table` and
 `scope-required` use.
 
+This exemption is not live-caller debt, so the exemption policy at the top of this file does not govern it. It records that the list inference misfired on a GET whose `data` array has nothing to page through. Prefer renaming the field over exempting it.
+
 ---
 
 ## What is not gated yet
@@ -423,6 +425,7 @@ mistakes "CI passed" for "conventions met":
 
 | Rule | Why it is not gated |
 |---|---|
+| Cursor pagination is enforced in the handler | The gate checks that `limit` is bounded 1-100 and `cursor` rejects an empty string. It cannot check that the handler pages with `paginateById` rather than slicing by hand, or that cursors stay opaque. That lives in handler control flow. |
 | A bespoke error schema is used only where no body is thrown | Whether a body is thrown or `res.status(...).json(...)`-ed lives in handler control flow, not the contract, exactly like the status-condition rule below. So nothing catches a bespoke schema on a status a throw can reach, which then omits whatever errorHandler adds to that body. |
 | A condition maps to the status this guide gives it | The gate checks only that a status is in the allowed *set*. Nothing checks that "no provider key configured" is the `503` the table says - and `/api/ai/tts` returns `401` for it today. Not structurally derivable: the condition lives in handler control flow, not the contract. |
 | `emitsRateLimitHeaders` matches the handler's middleware chain | Half of this **is** now gated - the flag is rejected on any auth mode but `apiKeyOrJwt`, since `baseApi` mounts `apiKeyRateLimit` only on the api-key chain. What remains ungated is whether an `apiKeyOrJwt` handler actually mounts `baseApi`. Closing it needs the adapters to assert at runtime in non-prod, the way they already assert response schemas. |

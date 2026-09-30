@@ -188,6 +188,12 @@ describe('POST /api/v1/data-lakes/{id}/search', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
+  it('applies the documented defaults when only a query is sent', async () => {
+    const res = await run({ query: 'q' });
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRunSearch.mock.calls[0][1]).toMatchObject({ topK: 10, minScore: 0, tags: [] });
+  });
+
   it('404s a lake the caller cannot see, before resolving any scope', async () => {
     mockAssertLakeAccess.mockRejectedValue(new NotFoundError('Data lake not found'));
     await expect(run()).rejects.toMatchObject({ statusCode: 404 });

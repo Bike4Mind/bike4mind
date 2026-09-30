@@ -415,6 +415,11 @@ describe('assertContractConventions', () => {
       expect(() => assertContractConventions([list({ queryParams })])).toThrow(/\[pagination\]/);
     });
 
+    it('rejects an unbounded limit or a cursor that accepts an empty string', () => {
+      const queryParams = z.object({ limit: z.coerce.number().int().optional(), cursor: z.string().min(1).optional() });
+      expect(() => assertContractConventions([list({ queryParams })])).toThrow(/\[pagination\]/);
+    });
+
     it('does not apply to a non-list GET or to a POST that returns a data array', () => {
       expect(() => assertContractConventions([contract({ method: 'get' })])).not.toThrow();
       const post = contract({

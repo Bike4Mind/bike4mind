@@ -58,8 +58,7 @@ const CAMEL_CASE = /^[a-z][A-Za-z0-9]*$/;
  * these are enforced but not exemptable via `conventionExemptions`
  * (`error-envelope` uses the finer-grained per-response `bespokeErrorShape`).
  */
-type ConventionLabel =
-  ConventionRule | 'operation-id' | 'error-envelope' | 'rate-limit-headers' | 'stream-error-frame' | 'pagination';
+type ConventionLabel = ConventionRule | 'operation-id' | 'error-envelope' | 'rate-limit-headers' | 'stream-error-frame';
 
 function fail(contract: EndpointContract, rule: ConventionLabel, problem: string, remedy: string): never {
   throw new Error(
@@ -180,7 +179,14 @@ function carriesCursorPagination(contract: EndpointContract): boolean {
   const query = contract.queryParams?.shape as Record<string, z.ZodTypeAny> | undefined;
   const limit = query?.limit;
   const cursor = query?.cursor;
-  const paramsOk = !!limit && !!cursor && limit.safeParse(undefined).success && cursor.safeParse(undefined).success;
+  const paramsOk =
+    !!limit &&
+    !!cursor &&
+    limit.safeParse(undefined).success &&
+    cursor.safeParse(undefined).success &&
+    !limit.safeParse(0).success &&
+    !limit.safeParse(101).success &&
+    !cursor.safeParse('').success;
 
   return cursorOk && paramsOk;
 }
@@ -204,7 +210,7 @@ export function assertContractConventions(contracts: readonly EndpointContract[]
     const exemptions = contract.conventionExemptions;
     // `scope-required` / `version-root` / `pagination` are contract-wide; `status-table` is keyed
     // by the individual status, so excusing 402 cannot also excuse an unrelated 418.
-    const exempt = (rule: 'scope-required' | 'version-root' | 'pagination') => Boolean(exemptions?.[rule]);
+    const exempt = (rule: Exclude<ConventionRule, 'status-table'>) => Boolean(exemptions?.[rule]);
     const statusExempt = (status: number) => Boolean(exemptions?.['status-table']?.[status]);
 
     if (!CAMEL_CASE.test(contract.operationId)) {

@@ -108,7 +108,8 @@ export const getDataLakeFileContract = defineEndpoint({
     'becomes searchable once it has been chunked and embedded, so poll this endpoint until ' +
     '`ingestion_status` is `ready`. `indexing` clears on its own; `paused` means re-processing was ' +
     'stopped partway and needs the file reprocessed (or background lake work resumed) before it ' +
-    'returns; `failed` carries the reason in `error`; `not_ingested` means no ingestion has started. ' +
+    'returns; `failed` carries the reason in `error`; `not_ingested` means the file has no searchable passages yet: ingestion has not started, a first pass ' +
+    'has not committed its chunks, or the file has no extractable text (such a file never becomes `ready`). ' +
     'These agree with what search reports under `retrieval_unavailable`.',
   tags: ['Data Lakes'],
   auth: 'apiKeyOrJwt',
