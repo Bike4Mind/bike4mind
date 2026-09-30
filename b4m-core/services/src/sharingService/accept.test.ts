@@ -156,6 +156,7 @@ describe('sharingService - acceptInvite (Organization)', () => {
 
     await acceptInvite(userId, { id: inviteId }, mockAdapters as any);
 
+    expect(mockAdapters.db.users.update).toHaveBeenCalledTimes(1);
     expect(mockAdapters.db.users.update.mock.calls[0][0]).toStrictEqual({ id: userId, organizationId });
   });
 
@@ -262,6 +263,7 @@ describe('sharingService - acceptInvite (Group)', () => {
 
     expect(mockAdapters.db.users.update).toHaveBeenCalledTimes(1);
     expect(mockAdapters.db.users.update.mock.calls[0][0]).toStrictEqual({ id: userId, groups: [groupId] });
+    expect(mockAdapters.db.invites.update).toHaveBeenCalledTimes(1);
     expect(mockAdapters.db.invites.update.mock.calls[0][0]).toStrictEqual({
       id: inviteId,
       recipients: { pending: [], refused: [], accepted: ['member@example.com'] },
@@ -583,6 +585,7 @@ describe('sharingService - acceptInvite (Session knowledgeId propagation)', () =
         },
       ],
     });
+    expect(adapters.db.invites.update).toHaveBeenCalledTimes(1);
     expect(adapters.db.invites.update.mock.calls[0][0]).toStrictEqual({
       id: inviteId,
       recipients: { pending: [], refused: [], accepted: ['accepter@x.com'] },
@@ -736,6 +739,7 @@ describe('sharingService - acceptInvite (addressing)', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await acceptInvite('user-1', { id: TOKEN }, adapters as any);
 
+    expect(adapters.db.invites.update).toHaveBeenCalledTimes(1);
     expect(adapters.db.invites.update.mock.calls[0][0]).toStrictEqual({
       id: ID,
       recipients: { pending: [], refused: [], accepted: ['me@example.com'] },
@@ -751,6 +755,7 @@ describe('sharingService - acceptInvite (addressing)', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await acceptInvite('user-1', { id: ID }, adapters as any);
 
+    expect(adapters.db.invites.update).toHaveBeenCalledTimes(1);
     expect(adapters.db.invites.update.mock.calls[0][0]).toStrictEqual({
       id: ID,
       recipients: { pending: [], refused: [], accepted: ['me@example.com'] },
@@ -820,6 +825,7 @@ describe('sharingService - acceptInvite (Project)', () => {
     await acceptInvite(userId, { id: inviteId }, { db } as never);
 
     const grant = [{ userId, permissions: [Permission.read], projectId, sessionId: undefined }];
+    expect(db.invites.update).toHaveBeenCalledTimes(1);
     expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
       id: inviteId,
       recipients: { pending: [], refused: [], accepted: ['a@x.com'] },

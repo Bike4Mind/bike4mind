@@ -45,6 +45,7 @@ describe('sharingService - refuseWholeInvite', () => {
 
     await refuseWholeInvite(user, { id: '65a1f77bcf86cd7994390001' }, { db } as any);
 
+    expect(db.invites.update).toHaveBeenCalledTimes(1);
     expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
       id: '65a1f77bcf86cd7994390001',
       remaining: 1,
@@ -87,6 +88,7 @@ describe('sharingService - refuseWholeInvite', () => {
     await refuseWholeInvite(user, { id: '65a1f77bcf86cd7994390001' }, { db } as any);
 
     expect(db.fabFiles.shareable.findShareAccessById).toHaveBeenCalledWith(user, 'doc-1');
+    expect(db.invites.update).toHaveBeenCalledTimes(1);
     expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
       id: '65a1f77bcf86cd7994390001',
       remaining: 0,
@@ -128,6 +130,7 @@ describe('sharingService - refuseWholeInvite', () => {
 
     await refuseWholeInvite(user, { id: '65a1f77bcf86cd7994390001' }, { db } as any);
 
+    expect(db.invites.update).toHaveBeenCalledTimes(1);
     expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
       id: '65a1f77bcf86cd7994390001',
       remaining: 0,
@@ -167,6 +170,7 @@ describe('sharingService - refuseWholeInvite', () => {
 
     await refuseWholeInvite(user, { id: '65a1f77bcf86cd7994390001' }, { db } as any);
 
+    expect(db.invites.update).toHaveBeenCalledTimes(1);
     expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
       id: '65a1f77bcf86cd7994390001',
       remaining: 0,
@@ -195,7 +199,7 @@ describe('sharingService - refuseWholeInvite', () => {
       users: [{ userId: 'member-1', permissions: ['read'] }],
     });
 
-    await expect(refuseWholeInvite(member, { id: '65a1f77bcf86cd7994390001' }, { db } as any)).rejects.toThrow(
+    await expect(refuseWholeInvite(member, { id: '65a1f77bcf86cd7994390001' }, { db } as never)).rejects.toThrow(
       ForbiddenError
     );
     expect(db.invites.update).not.toHaveBeenCalled();
@@ -216,6 +220,7 @@ describe('sharingService - refuseWholeInvite', () => {
 
     await refuseWholeInvite(owner, { id: '65a1f77bcf86cd7994390002' }, { db } as any);
 
+    expect(db.invites.update).toHaveBeenCalledTimes(1);
     expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
       id: '65a1f77bcf86cd7994390002',
       remaining: 0,
@@ -266,6 +271,7 @@ describe('sharingService - refuseWholeInvite', () => {
 
       await refuseWholeInvite(user, { id: TOKEN }, { db } as any);
 
+      expect(db.invites.update).toHaveBeenCalledTimes(1);
       expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
         id: ID,
         remaining: 1,
@@ -281,6 +287,7 @@ describe('sharingService - refuseWholeInvite', () => {
 
       await refuseWholeInvite(user, { id: ID }, { db } as any);
 
+      expect(db.invites.update).toHaveBeenCalledTimes(1);
       expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
         id: ID,
         remaining: 1,

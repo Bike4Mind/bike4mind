@@ -102,6 +102,8 @@ describe('registerUser', () => {
       usedbyId: 'newUserId',
       status: RegInviteStatusType.used,
     });
+    const limitedInvite = mockAdapters.db.registrationInvites.update.mock.calls[0][0];
+    expect(limitedInvite.used).toBe(limitedInvite.usageHistory[0].usedAt);
     expect(mockAdapters.db.registrationInvites.update.mock.calls[0][1]).toBeUndefined();
   });
 
@@ -236,6 +238,7 @@ describe('registerUser', () => {
 
     await expect(registerUser(reuseParams, mockAdapters)).resolves.toBeDefined();
 
+    expect(mockAdapters.db.registrationInvites.update).toHaveBeenCalledTimes(2);
     const updatedUnlimitedInvite = mockAdapters.db.registrationInvites.update.mock.calls.at(-1)?.[0];
     expect(updatedUnlimitedInvite).toStrictEqual({
       id: 'invite-1',
@@ -268,6 +271,7 @@ describe('registerUser', () => {
 
   it('marks invite as used and updates status', async () => {
     await registerUser(baseParams, mockAdapters);
+    expect(mockAdapters.db.registrationInvites.update).toHaveBeenCalledTimes(1);
     const updatedInvite = mockAdapters.db.registrationInvites.update.mock.calls[0][0];
     expect(updatedInvite).toStrictEqual({
       id: 'invite-1',
@@ -276,6 +280,7 @@ describe('registerUser', () => {
       usedbyId: 'newUserId',
       status: RegInviteStatusType.used,
     });
+    expect(updatedInvite.used).toBe(updatedInvite.usageHistory[0].usedAt);
     expect(mockAdapters.db.registrationInvites.update.mock.calls[0][1]).toBeUndefined();
   });
 

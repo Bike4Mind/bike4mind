@@ -110,6 +110,7 @@ describe('sharingService - cancelInvite authority', () => {
     // The clamp is a ceiling, not a reset: two named recipients still hold a slot each.
     expect(result[0].remaining).toBe(2);
     expect(result[0].recipients.pending).toEqual(['a@example.com', 'c@example.com']);
+    expect(db.invites.update).toHaveBeenCalledTimes(1);
     expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
       id: 'invite-3',
       recipients: { pending: ['a@example.com', 'c@example.com'], accepted: [], refused: [] },
