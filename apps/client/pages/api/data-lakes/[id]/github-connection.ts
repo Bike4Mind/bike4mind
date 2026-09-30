@@ -5,7 +5,7 @@ import { dataLakeRepository, orgGitHubLakeConnectionRepository } from '@bike4min
 import { getGitHubLakeAppConfig } from '@server/integrations/github/dataLake/lakeAppClient';
 import {
   buildGitHubLakeConnectUrls,
-  releaseGitHubLakeConnection,
+  disconnectGitHubLakeConnection,
   requireGitHubLakeAppConfig,
   resolveConnectableLake,
   toGitHubLakeConnectionResponse,
@@ -32,8 +32,9 @@ async function findLakeConnection(lakeId: string, organizationId: string) {
  * POST   /api/data-lakes/:id/github-connection -> { installUrl, authorizeUrl } (starts the connect; see
  *        buildGitHubLakeConnectUrls for when the callback page needs authorizeUrl. The page then
  *        completes the flow via POST /api/data-lakes/github-callback)
- * DELETE /api/data-lakes/:id/github-connection -> { installationRetained } (see
- *        releaseGitHubLakeConnection for when the App stays installed)
+ * DELETE /api/data-lakes/:id/github-connection -> { installationRetained } (purges what the
+ *        connection ingested and 409s while a sync is live - see disconnectGitHubLakeConnection,
+ *        and releaseGitHubLakeConnection for when the App stays installed)
  *
  * Mirrors drive-connection.ts: GET answers a personal lake with a null connection (it genuinely has
  * none), so a 404 always means the lake is missing or the caller is not an org owner/manager. POST
@@ -75,9 +76,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     if (!conn) {
       return res.json({ installationRetained: false });
     }
-    // The App config is only needed to uninstall; a retained installation releases without it.
-    const result = await releaseGitHubLakeConnection(conn, getGitHubLakeAppConfig());
-    return res.json(result);
+    return res.json(await disconnectGitHubLakeConnection(lake, conn, req.logger));
   });
 
 export const config = {

@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer } from '../../../__test__/createMongoServer';
-import { OrgGitHubLakeConnection, orgGitHubLakeConnectionRepository } from './OrgGitHubLakeConnectionModel';
+import {
+  OrgGitHubLakeConnection,
+  orgGitHubLakeConnectionRepository,
+  isGitHubLakeSyncClaimLive,
+} from './OrgGitHubLakeConnectionModel';
 
 /**
  * Invariants for the one-repo-to-one-lake GitHub connection: the global uniqueness of both
@@ -107,5 +111,207 @@ describe('OrgGitHubLakeConnectionModel - release', () => {
       targetDataLakeId: 'lake-2',
     });
     expect(reclaimed.id).toBeTruthy();
+  });
+});
+
+const repo = orgGitHubLakeConnectionRepository;
+const ageClaim = (id: string, minutes: number) =>
+  OrgGitHubLakeConnection.updateOne({ _id: id }, { $set: { syncClaimedAt: new Date(Date.now() - minutes * 60_000) } });
+
+describe('OrgGitHubLakeConnectionModel - sync claim', () => {
+  it('defaults a new binding to enabled and connected', async () => {
+    const { id } = await repo.create(base);
+    expect(await repo.findById(id)).toMatchObject({ enabled: true, status: 'connected' });
+  });
+
+  it('lets exactly one of two concurrent claims win', async () => {
+    const { id } = await repo.create(base);
+    const tokens = await Promise.all([repo.claimForSync(id), repo.claimForSync(id)]);
+    expect(tokens.filter(Boolean)).toHaveLength(1);
+  });
+
+  it('claims a binding written before the sync fields existed', async () => {
+    const { insertedId } = await OrgGitHubLakeConnection.collection.insertOne({
+      ...base,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    expect(await repo.claimForSync(insertedId.toString())).toEqual(expect.any(String));
+  });
+
+  it('reclaims an unchained claim only once it is stale', async () => {
+    const { id } = await repo.create(base);
+    expect(await repo.claimForSync(id)).toBeTruthy();
+    expect(await repo.claimForSync(id)).toBeNull();
+    await ageClaim(id, 21);
+    expect(await repo.claimForSync(id)).toBeTruthy();
+  });
+
+  it('holds a chained claim past the unchained staleness window', async () => {
+    const { id } = await repo.create(base);
+    const token = await repo.claimForSync(id);
+    expect(await repo.renewSyncClaim(id, 'batch-1', token!)).toBeTruthy();
+    await ageClaim(id, 21);
+    expect(await repo.claimForSync(id)).toBeNull();
+    await ageClaim(id, 61);
+    expect(await repo.claimForSync(id)).toBeTruthy();
+  });
+
+  it('hands a chain from slice to slice and refuses a replayed token', async () => {
+    const { id } = await repo.create(base);
+    const claimed = await repo.claimForSync(id);
+    const renewed = await repo.renewSyncClaim(id, 'batch-1', claimed!);
+    const adopted = await repo.adoptSyncClaim(id, 'batch-1', renewed!);
+    expect(adopted).toEqual({ token: expect.any(String), enabled: true });
+    expect(await repo.adoptSyncClaim(id, 'batch-1', renewed!)).toBeNull();
+    expect(await repo.renewSyncClaim(id, 'batch-1', renewed!)).toBeNull();
+    expect(await repo.renewSyncClaim(id, 'batch-1', adopted!.token)).toBeTruthy();
+  });
+
+  it('release heals to connected, redacts lastError, and ends the chain', async () => {
+    const { id } = await repo.create(base);
+    const token = await repo.claimForSync(id);
+    const renewed = await repo.renewSyncClaim(id, 'batch-1', token!);
+    const tokenLike = 'x'.repeat(40);
+    expect(await repo.releaseSyncClaim(id, renewed!, `boom ${tokenLike}`)).not.toBeNull();
+    const after = await repo.findById(id);
+    expect(after).toMatchObject({ status: 'connected', lastError: 'boom [redacted]' });
+    expect(after?.activeIngestBatchId).toBeUndefined();
+    expect(after?.ingestClaimToken).toBeUndefined();
+    expect(await repo.adoptSyncClaim(id, 'batch-1', renewed!)).toBeNull();
+  });
+
+  it('release can park the connection in error, and a later claim may retry it', async () => {
+    const { id } = await repo.create(base);
+    const token = await repo.claimForSync(id);
+    await repo.releaseSyncClaim(id, token!, 'reconnect', 'error');
+    expect(await repo.findById(id)).toMatchObject({ status: 'error', lastError: 'reconnect' });
+    expect(await repo.claimForSync(id)).toBeTruthy();
+  });
+
+  it('release by a superseded token leaves the new owner alone', async () => {
+    const { id } = await repo.create(base);
+    const stale = await repo.claimForSync(id);
+    await ageClaim(id, 21);
+    const fresh = await repo.claimForSync(id);
+    expect(await repo.releaseSyncClaim(id, stale!, null)).toBeNull();
+    expect(await repo.findById(id)).toMatchObject({ status: 'syncing', ingestClaimToken: fresh });
+  });
+
+  it('recordSynced stamps the commit and branch, clears lastError, and ends the claim', async () => {
+    const { id } = await repo.create(base);
+    const failed = await repo.claimForSync(id);
+    await repo.releaseSyncClaim(id, failed!, 'earlier failure');
+    const token = await repo.claimForSync(id);
+    expect(await repo.recordSynced(id, token!, { commitSha: 'abc123', defaultBranch: 'main' })).not.toBeNull();
+    const after = await repo.findById(id);
+    expect(after).toMatchObject({
+      status: 'connected',
+      lastError: null,
+      lastSyncedCommitSha: 'abc123',
+      defaultBranch: 'main',
+    });
+    expect(after?.lastSyncedAt).toBeInstanceOf(Date);
+    expect(after?.ingestClaimToken).toBeUndefined();
+  });
+});
+
+describe('OrgGitHubLakeConnectionModel - disconnect compare-and-set', () => {
+  it('disables an idle connection, after which claimForSync refuses it', async () => {
+    const { id } = await repo.create(base);
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toEqual({ wasEnabled: true });
+    expect(await repo.findById(id)).toMatchObject({ enabled: false });
+    expect(await repo.claimForSync(id)).toBeNull();
+  });
+
+  it('matches a retry on an already-disabled row and reports it was not enabled', async () => {
+    const { id } = await repo.create(base);
+    await repo.setEnabledForLake('lake-1', false);
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toEqual({ wasEnabled: false });
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toEqual({ wasEnabled: false });
+  });
+
+  it('disables an unchained claim once it passes the unchained staleness window', async () => {
+    const { id } = await repo.create(base);
+    await repo.claimForSync(id);
+    await ageClaim(id, 21);
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toEqual({ wasEnabled: true });
+  });
+
+  it('lets a continuation adopt a disabled chain only to end it: adopt reports disabled, renew refuses', async () => {
+    const { id } = await repo.create(base);
+    const claimed = await repo.claimForSync(id);
+    const renewed = await repo.renewSyncClaim(id, 'batch-1', claimed!);
+    await repo.setEnabledForLake('lake-1', false);
+    const adopted = await repo.adoptSyncClaim(id, 'batch-1', renewed!);
+    expect(adopted).toEqual({ token: expect.any(String), enabled: false });
+    expect(await repo.renewSyncClaim(id, 'batch-1', adopted!.token)).toBeNull();
+    // The adopted claim is live, so a disconnect waits for the continuation to release it.
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toBeNull();
+    expect(await repo.releaseSyncClaim(id, adopted!.token, null)).not.toBeNull();
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toEqual({ wasEnabled: false });
+  });
+
+  it('refuses while a claim is live and disables once it goes stale', async () => {
+    const { id } = await repo.create(base);
+    const token = await repo.claimForSync(id);
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toBeNull();
+    await repo.renewSyncClaim(id, 'batch-1', token!);
+    await ageClaim(id, 21);
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toBeNull();
+    await ageClaim(id, 61);
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toEqual({ wasEnabled: true });
+    expect(await repo.findById(id)).toMatchObject({ enabled: false });
+  });
+
+  it('lets exactly one of a racing claim and disable win', async () => {
+    const { id } = await repo.create(base);
+    const [token, disabled] = await Promise.all([repo.claimForSync(id), repo.disableIfNoLiveSyncClaim(id, 'org-1')]);
+    expect(Boolean(token) !== Boolean(disabled)).toBe(true);
+  });
+
+  it('is org-scoped', async () => {
+    const { id } = await repo.create(base);
+    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-2')).toBeNull();
+    expect(await repo.findById(id)).toMatchObject({ enabled: true });
+  });
+});
+
+describe('OrgGitHubLakeConnectionModel - setEnabledForLake', () => {
+  it('toggles enabled on the lake s binding and reports whether one existed', async () => {
+    await repo.create(base);
+    expect(await repo.setEnabledForLake('lake-1', false)).toBe(true);
+    expect(await repo.findByDataLakeIdAny('lake-1')).toMatchObject({ enabled: false });
+    expect(await repo.setEnabledForLake('lake-1', true)).toBe(true);
+    expect(await repo.findByDataLakeIdAny('lake-1')).toMatchObject({ enabled: true });
+    expect(await repo.setEnabledForLake('no-such-lake', false)).toBe(false);
+  });
+});
+
+describe('OrgGitHubLakeConnectionModel - recordLastError', () => {
+  it('sets lastError and redacts a token-shaped value, without disturbing status', async () => {
+    const { id } = await repo.create(base);
+    const tokenLike = 'x'.repeat(40);
+    expect(await repo.recordLastError(id, `queue failure ${tokenLike}`)).toBe(true);
+    expect(await repo.findById(id)).toMatchObject({ status: 'connected', lastError: 'queue failure [redacted]' });
+  });
+
+  it('reports false for a missing connection', async () => {
+    expect(await repo.recordLastError('000000000000000000000000', 'boom')).toBe(false);
+  });
+});
+
+describe('isGitHubLakeSyncClaimLive', () => {
+  const now = Date.parse('2026-09-28T12:00:00Z');
+  const minutesAgo = (m: number) => new Date(now - m * 60_000);
+
+  it.each([
+    [{ status: 'connected' as const }, false],
+    [{ status: 'syncing' as const, syncClaimedAt: minutesAgo(5) }, true],
+    [{ status: 'syncing' as const, syncClaimedAt: minutesAgo(21) }, false],
+    [{ status: 'syncing' as const, syncClaimedAt: minutesAgo(21), activeIngestBatchId: 'b1' }, true],
+    [{ status: 'syncing' as const, syncClaimedAt: minutesAgo(61), activeIngestBatchId: 'b1' }, false],
+  ])('%o -> %s', (conn, live) => {
+    expect(isGitHubLakeSyncClaimLive(conn, now)).toBe(live);
   });
 });

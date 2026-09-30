@@ -86,6 +86,17 @@ const driveLakeIngestQueue = new sst.aws.Queue('driveLakeIngestQueue', {
   },
 });
 
+// GitHub repository -> data lake ingest. Same shape as driveLakeIngestQueue: long ingest, self re-enqueue.
+const githubLakeIngestQueueDLQ = new sst.aws.Queue('githubLakeIngestQueueDLQ', {});
+const githubLakeIngestQueue = new sst.aws.Queue('githubLakeIngestQueue', {
+  // Must exceed the handler's 10-minute timeout (below) or SQS redelivers mid-run.
+  visibilityTimeout: '12 minutes',
+  dlq: {
+    queue: githubLakeIngestQueueDLQ.arn,
+    retry: 2,
+  },
+});
+
 // FabFile Vectorize Queue
 const fabFileVectorizeQueueDLQ = new sst.aws.Queue('fabFileVectorizeQueueDLQ', {});
 const fabFileVectorizeQueue = new sst.aws.Queue('fabFileVectorizeQueue', {
@@ -883,6 +894,24 @@ const driveDisconnectPurgeQueueSubscription = driveDisconnectPurgeQueue.subscrib
   SINGLE_RECORD_BATCH
 );
 
+const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/githubLakeIngest.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    // fabFileBucket for the uploads; the queue itself for deadline, rate-limit and claim-loser re-enqueues.
+    link: [...allSecrets, fabFileBucket, githubLakeIngestQueue],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
 // What's New Highlights Queue
 // Generates weekly highlights summary from What's New modals and posts to Slack
 const whatsNewHighlightsQueueDLQ = new sst.aws.Queue('whatsNewHighlightsQueueDLQ', {
@@ -1517,6 +1546,7 @@ export {
   lakeInconsistencyModelQueue,
   driveLakeIngestQueue,
   driveDisconnectPurgeQueue,
+  githubLakeIngestQueue,
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
@@ -1549,6 +1579,7 @@ export {
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueueDLQ,
   driveDisconnectPurgeQueueDLQ,
+  githubLakeIngestQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -1583,6 +1614,7 @@ export {
   lakeInconsistencyModelQueueSubscription,
   driveLakeIngestQueueSubscription,
   driveDisconnectPurgeQueueSubscription,
+  githubLakeIngestQueueSubscription,
   liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,
