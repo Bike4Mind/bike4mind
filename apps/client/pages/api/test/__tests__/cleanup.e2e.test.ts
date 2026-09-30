@@ -107,6 +107,17 @@ const seedChildren = async (userId: mongoose.Types.ObjectId) => {
   await Artifact.collection.insertOne({ _id: oid(), userId: uid });
   // The one genuinely ObjectId-typed user reference - guards against over-correcting Tool to strings.
   await Tool.collection.insertOne({ _id: oid(), userId });
+  // Activity keys ownership as ownerType/ownerId (both String), not userId, so it needs its own
+  // filter - the generic `userId` delete is a no-op for it. Guards that dedicated filter.
+  await mongoose.models.Activity.collection.insertOne({
+    _id: oid(),
+    key: `k-${uid}`,
+    trackableType: 'User',
+    trackableId: uid,
+    ownerType: 'User',
+    ownerId: uid,
+    createdAt: new Date(),
+  });
   await DataLakeModel.collection.insertOne({ _id: lakeId, createdByUserId: uid, name: `lake-${uid}` });
   await DataLakeAccessGrantModel.collection.insertOne({
     _id: oid(),
@@ -158,6 +169,7 @@ describe('DELETE /api/test/cleanup (real DB)', () => {
     expect(await Organization.collection.countDocuments({ userId: uid })).toBe(0);
     expect(await Favorite.collection.countDocuments({ userId: uid })).toBe(0);
     expect(await Artifact.collection.countDocuments({ userId: uid })).toBe(0);
+    expect(await mongoose.models.Activity.collection.countDocuments({ ownerType: 'User', ownerId: uid })).toBe(0);
   });
 
   it('deletes quests of soft-deleted sessions, which the session hard-delete also removes', async () => {
@@ -222,6 +234,7 @@ describe('DELETE /api/test/cleanup (real DB)', () => {
     expect(await User.collection.countDocuments({ _id: controlUserId })).toBe(1);
     expect(await Session.collection.countDocuments({ userId: cuid })).toBe(1);
     expect(await FabFile.collection.countDocuments({ userId: cuid })).toBe(1);
+    expect(await mongoose.models.Activity.collection.countDocuments({ ownerType: 'User', ownerId: cuid })).toBe(1);
     expect(await DataLakeModel.collection.countDocuments({ createdByUserId: cuid })).toBe(1);
     expect(await DataLakeAccessGrantModel.collection.countDocuments({ dataLakeId: controlLakeId.toString() })).toBe(1);
     expect(await DataLakeProposalModel.collection.countDocuments({ dataLakeId: controlLakeId.toString() })).toBe(1);
