@@ -40,6 +40,16 @@ describe('approval mode copy', () => {
     expect(notes).toMatch(/never runs at full access/i);
   });
 
+  /**
+   * The other half of the honesty requirement, and the one that is easy to lose: 'auto' reads
+   * as "unsafe things still ask", and package-manager scripts run repository code unasked. The
+   * copy has to say so, so the saying of it is asserted and not left to the next copy edit.
+   */
+  it('admits that approve-for-me runs the project scripts unasked', () => {
+    const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
+    expect(notes).toMatch(/test, lint and typecheck scripts without asking/i);
+  });
+
   it('falls back to asking for a mode it does not recognise', () => {
     expect(approvalModeLabel('ask')).toBe('Ask for approval');
     expect(approvalModeOption('nonsense' as never).mode).toBe('ask');

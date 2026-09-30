@@ -3,12 +3,15 @@ import { resolveCwd } from './shellTools';
 import type { ApprovalPrompt, ToolContext } from './types';
 
 /**
- * Whether one gated call is provably safe enough to run without asking under 'auto'.
+ * Whether one gated call is contained enough to run without asking under 'auto'.
  *
- * 'contained' is a claim this module has to be able to PROVE from the call itself, not a guess
- * about intent. Everything it cannot prove is 'sensitive' and still asks, which is why every
+ * 'contained' is a claim this module reads off the call itself, not a guess about intent.
+ * Everything it cannot read off the call is 'sensitive' and still asks, which is why every
  * decision below is allow-list shaped: a deny list over shell text is exactly the weak detector
  * that makes a reassuring label worse than no label at all.
+ *
+ * One entry is a judgement rather than a proof and is marked as such where it is made: the
+ * package-manager scripts under INERT_COMMANDS run repository code, and the user chose that.
  */
 export type ApprovalRisk = 'contained' | 'sensitive';
 
@@ -59,22 +62,61 @@ const SHELL_CONTROL = /[;&|`$(){}<>\\'"~!#[\]*?\n\r]/;
  */
 const FOLLOWS_SYMLINKS: readonly string[] = ['-L', '-R', '--dereference', '--dereference-recursive', '--follow'];
 
-/** Absent `subcommands` means the executable is inert whatever it is asked to do. */
+/**
+ * The package-manager scripts 'auto' will run unasked.
+ *
+ * Suffixed variants are in because the real commands are spelled that way - this repo's own
+ * check is `lint:check` - and a hand-listed set would be wrong in the next repository. The
+ * prefix is anchored, so `turbo:typecheck` does not match: it names a different runner that
+ * happens to end in an allowed word, and widening the pattern to reach it would let any script
+ * in by choosing its suffix.
+ */
+const RUNNABLE_SCRIPT = /^(test|lint|typecheck)([:-][a-zA-Z0-9:-]+)?$/;
+
+/**
+ * Package-manager flags whose value is the NEXT token, so that token is not the script name.
+ *
+ * `pnpm --filter <pkg> test` is how a workspace command is actually written, and without this
+ * the script would be read as `<pkg>` and the call would ask. The values are still sent through
+ * the containment check below like every other token, so `--filter ../../../etc` still asks -
+ * a package selector resolves under the cwd and passes, a path that escapes does not.
+ *
+ * `-w` is deliberately absent: it is a boolean, and consuming a value after it would swallow
+ * the script name it precedes.
+ */
+const SCRIPT_VALUE_FLAGS: readonly string[] = ['--filter', '-F', '-C', '--dir'];
+
+/** Absent `subcommands` and `scripts` means the executable is inert whatever it is asked to do. */
 interface InertCommand {
   /** The only first arguments that stay read-only. Anything else asks. */
   subcommands?: readonly string[];
   /** Arguments that turn this command into a write, an exec or a network call. */
   forbiddenArguments?: readonly string[];
+  /** Marks a package manager, and bounds the script names it may be asked to run. */
+  scripts?: RegExp;
 }
 
 /**
  * The executables 'auto' will run unasked, and only those.
  *
- * The bar is: given a fixed argv and path arguments proven to sit inside a granted root, this
- * program reads and prints, and does not write, execute, or open a socket. That excludes every
- * build and test runner - `pnpm test` runs whatever is in the repo, which a crafted prompt may
- * have just written - and every interpreter, and everything that can reach the network. 'auto'
- * is an accelerator for reading and for the write tools, not an unattended build agent.
+ * Two different bars are being applied here, and the difference is the point.
+ *
+ * For everything without `scripts` the bar is provable inertness: given a fixed argv and path
+ * arguments inside a granted root, the program reads and prints, and does not write, execute or
+ * open a socket. That still excludes every interpreter and everything that can reach the
+ * network.
+ *
+ * `npm`, `pnpm` and `yarn` do not meet that bar and are here anyway, by an explicit decision of
+ * the user's: running a project's own `test`, `lint` and `typecheck` scripts is most of what
+ * they want this mode for, and having it ask each time is what made the mode not worth turning
+ * on. So the claim made for these three is narrower and worth stating plainly - it is NOT that
+ * the call is inert. It is that the script name is one of a bounded few, and that whatever those
+ * scripts contain is the repository's own code, which the agent could in principle have just
+ * written. Anyone extending this list should hold new entries to the inertness bar unless the
+ * user has decided otherwise for them too, the way they did for these.
+ *
+ * What this does not open: `npx`, `dlx` and `exec` are absent, and absent by default rather than
+ * by denial, because they fetch and run a package that is not the repository's at all.
  */
 const INERT_COMMANDS: Readonly<Record<string, InertCommand>> = {
   basename: {},
@@ -113,6 +155,8 @@ const INERT_COMMANDS: Readonly<Record<string, InertCommand>> = {
   head: {},
   ls: {},
   nl: {},
+  npm: { scripts: RUNNABLE_SCRIPT },
+  pnpm: { scripts: RUNNABLE_SCRIPT },
   pwd: {},
   realpath: {},
   rg: { forbiddenArguments: ['--pre', '--pre-glob', '--hostname-bin'] },
@@ -124,6 +168,7 @@ const INERT_COMMANDS: Readonly<Record<string, InertCommand>> = {
   uniq: {},
   wc: {},
   which: {},
+  yarn: { scripts: RUNNABLE_SCRIPT },
 };
 
 /**
@@ -170,11 +215,36 @@ function looksLikePath(value: string): boolean {
 }
 
 /**
+ * The script a package-manager call is asking for, or null when it is asking for something else.
+ *
+ * `run` is accepted in front of the name because `npm run lint` and `pnpm lint` are the same
+ * request, and a user who writes one form should not be asked while the other is not. Bare
+ * `pnpm` reaches this with nothing positional and returns null, which is what keeps an install
+ * asking - it is the most consequential thing any of these three does by default.
+ */
+function runnableScript(rest: readonly string[], allowed: RegExp): string | null {
+  const positional: string[] = [];
+  for (let index = 0; index < rest.length; index += 1) {
+    const token = rest[index];
+    if (!token.startsWith('-')) {
+      positional.push(token);
+      continue;
+    }
+    // `--filter=<pkg>` carries its value in the same token; only the spaced form eats the next.
+    if (!token.includes('=') && SCRIPT_VALUE_FLAGS.includes(token)) index += 1;
+  }
+
+  const candidate = positional[0] === 'run' ? positional[1] : positional[0];
+  return candidate !== undefined && allowed.test(candidate) ? candidate : null;
+}
+
+/**
  * Whether a shell command is confined enough to run unasked.
  *
- * Every clause is necessary: no shell control characters, so the argv is fixed; an inert
- * executable, so what it does with that argv is known; and every path argument proven inside a
- * granted root by the same resolver the tools use, so it reads only what the user shared.
+ * Every clause is necessary: no shell control characters, so the argv is fixed; a listed
+ * executable, so what it does with that argv is bounded - by inertness for most of the list,
+ * and by the script name for the three package managers; and every path argument proven inside
+ * a granted root by the same resolver the tools use, so it reaches only what the user shared.
  */
 async function assessCommand(input: Record<string, unknown>, context: ToolContext): Promise<ApprovalRisk> {
   const command = typeof input.command === 'string' ? input.command.trim() : '';
@@ -199,6 +269,8 @@ async function assessCommand(input: Record<string, unknown>, context: ToolContex
     const subcommand = rest.find(token => !token.startsWith('-'));
     if (!subcommand || !inert.subcommands.includes(subcommand)) return 'sensitive';
   }
+
+  if (inert.scripts && !runnableScript(rest, inert.scripts)) return 'sensitive';
 
   // Throws when `cwd` is outside every granted root, which is itself a reason to ask.
   const cwd = await resolveCwd(input, context.roots, context.workingDirectory);

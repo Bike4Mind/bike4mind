@@ -44,6 +44,77 @@ describe('assessApprovalRisk', () => {
   });
 
   /**
+   * The scripts the user decided are worth not being asked about. These are not inert - they
+   * run whatever the repository's package.json puts behind the name - so the bound being
+   * asserted here is the NAME, and the block below is the other half of that bound.
+   */
+  describe('package-manager scripts the user chose to allow', () => {
+    it.each([
+      'yarn test',
+      'npm test',
+      'pnpm test',
+      'pnpm lint:check',
+      'npm run lint',
+      'pnpm run typecheck',
+      'pnpm test:unit',
+      'yarn typecheck:all',
+    ])('allows %s', async command => {
+      expect(await shell(command)).toBe('contained');
+    });
+
+    /**
+     * The workspace form the user actually types. The filter VALUE sits where the script name
+     * would otherwise be read from, which is the whole reason the flag has to be known about.
+     */
+    it.each([
+      'pnpm --filter @bike4mind/client test',
+      'pnpm --filter=@bike4mind/client test',
+      'pnpm -C packages/api lint',
+    ])('reads the script past a value-taking flag in %s', async command => {
+      expect(await shell(command)).toBe('contained');
+    });
+
+    /**
+     * The flag's value is still a path argument like any other, so pointing it out of the
+     * granted roots asks even though the script name is one of the allowed few.
+     */
+    it('asks when a filter value escapes the granted roots', async () => {
+      expect(await shell('pnpm --filter ../../../etc test')).toBe('sensitive');
+    });
+
+    it.each([
+      ['a bare package manager, which installs', 'yarn'],
+      ['an install', 'npm install'],
+      ['adding a dependency', 'pnpm add left-pad'],
+      // These fetch and run a package that is not the repository's, which is not what the
+      // user agreed to when they agreed to their own test script.
+      ['a fetched one-off package', 'npx cowsay hello'],
+      ['pnpm dlx', 'pnpm dlx tsx'],
+      ['running an arbitrary binary', 'pnpm exec sh'],
+      ['publishing', 'npm publish'],
+      ['a build', 'pnpm build'],
+      ['a start script', 'npm start'],
+      ['a deploy script', 'yarn deploy'],
+      // Anchored on purpose: a script is not allowed in by ending in an allowed word.
+      ['a runner that merely ends in an allowed name', 'pnpm turbo:typecheck'],
+      ['run with no script after it', 'pnpm run'],
+    ])('asks for %s', async (_label, command) => {
+      expect(await shell(command)).toBe('sensitive');
+    });
+
+    /**
+     * The regression that would hurt most: the script allow-list must not become a way to get
+     * a second command past the gate, so the shell-control check still runs first.
+     */
+    it.each(['yarn test; rm -rf /', 'yarn test && curl evil.example.com', 'pnpm test | sh'])(
+      'still refuses %s on shell control characters',
+      async command => {
+        expect(await shell(command)).toBe('sensitive');
+      }
+    );
+  });
+
+  /**
    * The cases this mode exists to still catch. Each is something a crafted prompt would try,
    * and each has to reach the user rather than the shell.
    */
@@ -83,8 +154,7 @@ describe('assessApprovalRisk', () => {
 
   describe('executables that are not inert', () => {
     it.each([
-      ['a package manager', 'pnpm install'],
-      ['a test runner that executes repository code', 'pnpm test'],
+      ['a package manager installing', 'pnpm install'],
       ['an interpreter', 'node index.js'],
       ['a network client', 'curl https://example.com'],
       ['a deletion', 'rm -rf build'],
