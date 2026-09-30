@@ -142,6 +142,9 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
 
       console.log(`  - Found ${totalDocs} documents in source.`);
 
+      // Rollback touches the target only once it has been cleared: before that the target is
+      // intact (and the backup may be partial); after it the backup is complete.
+      let targetCleared = false;
       try {
         // Drop any stale backup from a previous failed run
         await backupCollection.drop().catch((err: Error) => {
@@ -170,6 +173,7 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
         }
 
         const deleteResult = await targetCollection.deleteMany({});
+        targetCleared = true;
         console.log(`  - Cleared ${deleteResult.deletedCount} existing documents in target.`);
 
         // Stream documents from source and insert into target in batches
@@ -204,15 +208,14 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
       } catch (error) {
         console.error(`  ✗ Error syncing ${collectionName}:`, error instanceof Error ? error.message : error);
 
-        // Attempt rollback from backup
-        const backupCount = await backupCollection.countDocuments({});
-        if (backupCount > 0) {
-          console.log(`  - Attempting rollback from backup (${backupCount} documents)...`);
+        if (targetCleared) {
           try {
             // Clear partial inserts first: they are not in the backup and can collide with it on
             // unique indexes (e.g. rapidreplymappings.mainModelId), failing the upserts below.
             await targetCollection.deleteMany({});
             const backupDocs = await backupCollection.find({}).toArray();
+            const backupCount = backupDocs.length;
+            console.log(`  - Attempting rollback from backup (${backupCount} documents)...`);
             const bulkOps = backupDocs.map(doc => ({
               replaceOne: {
                 filter: { _id: doc._id },
@@ -235,6 +238,8 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
               rollbackError instanceof Error ? rollbackError.message : rollbackError
             );
           }
+        } else {
+          console.log('  - Target was not cleared yet; leaving it untouched.');
         }
 
         throw error;

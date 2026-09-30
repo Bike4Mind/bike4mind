@@ -5,43 +5,49 @@ import type { Context } from 'aws-lambda';
 vi.mock('sst', () => ({ Resource: { MONGODB_URI: { value: 'mongodb://target/%STAGE%' } } }));
 
 const inserted = vi.hoisted(() => new Map<string, number>());
-// Per-test knobs: an existing sync marker, a collection whose insert fails, and an op log.
+// Per-test knobs: an existing sync marker, a collection whose insert fails, an empty preview
+// target, and an op log.
 const state = vi.hoisted(() => ({
   marker: null as { syncedAt: Date } | null,
   failInsertInto: undefined as string | undefined,
+  emptyTarget: false,
   ops: [] as string[],
 }));
 
 vi.mock('mongodb', () => {
-  const collection = (name: string) => ({
-    findOne: vi.fn(async () => state.marker),
-    countDocuments: vi.fn(async () => 1),
-    find: vi.fn(() => ({
-      async *[Symbol.asyncIterator]() {
-        yield { _id: `${name}-doc` };
-      },
-      toArray: async () => [{ _id: `${name}-doc` }],
-    })),
-    insertMany: vi.fn(async (docs: unknown[]) => {
-      if (name === state.failInsertInto) throw new Error(`insert into ${name} failed`);
-      inserted.set(name, (inserted.get(name) ?? 0) + docs.length);
-      return { insertedCount: docs.length };
-    }),
-    deleteMany: vi.fn(async () => {
-      state.ops.push(`${name}.deleteMany`);
-      return { deletedCount: 0 };
-    }),
-    bulkWrite: vi.fn(async () => {
-      state.ops.push(`${name}.bulkWrite`);
-      return {};
-    }),
-    drop: vi.fn(async () => true),
-    updateOne: vi.fn(async () => ({})),
-  });
+  const collection = (name: string, isTarget: boolean) => {
+    const docs = isTarget && state.emptyTarget ? [] : [{ _id: `${name}-doc` }];
+    return {
+      findOne: vi.fn(async () => state.marker),
+      countDocuments: vi.fn(async () => docs.length),
+      find: vi.fn(() => ({
+        async *[Symbol.asyncIterator]() {
+          yield* docs;
+        },
+        toArray: async () => docs,
+      })),
+      insertMany: vi.fn(async (docs: unknown[]) => {
+        if (name === state.failInsertInto) throw new Error(`insert into ${name} failed`);
+        inserted.set(name, (inserted.get(name) ?? 0) + docs.length);
+        return { insertedCount: docs.length };
+      }),
+      deleteMany: vi.fn(async () => {
+        state.ops.push(`${name}.deleteMany`);
+        return { deletedCount: 0 };
+      }),
+      bulkWrite: vi.fn(async () => {
+        state.ops.push(`${name}.bulkWrite`);
+        return {};
+      }),
+      drop: vi.fn(async () => true),
+      updateOne: vi.fn(async () => ({})),
+    };
+  };
   class MongoClient {
+    constructor(private uri: string) {}
     connect = vi.fn(async () => this);
     close = vi.fn(async () => undefined);
-    db = () => ({ collection });
+    db = () => ({ collection: (name: string) => collection(name, this.uri.startsWith('mongodb://target/')) });
   }
   return { MongoClient };
 });
@@ -58,6 +64,7 @@ describe('dataSyncerHandler', () => {
     inserted.clear();
     state.marker = null;
     state.failInsertInto = undefined;
+    state.emptyTarget = false;
     state.ops = [];
     fetchSpy.mockReset();
     vi.stubGlobal('fetch', fetchSpy);
@@ -113,5 +120,28 @@ describe('dataSyncerHandler', () => {
       'rapidreplymappings.bulkWrite',
     ]);
     expect(result?.message).toContain('Preview settings sync failed');
+  });
+
+  it('leaves the target untouched when the backup itself fails, so a partial backup never replaces it', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+    state.failInsertInto = 'rapidreplymappings_backup_temp';
+
+    const result = await invoke();
+
+    expect(state.ops.filter(op => op.startsWith('rapidreplymappings.'))).toEqual([]);
+    expect(result?.message).toContain('Preview settings sync failed');
+  });
+
+  it('clears partial inserts even when the target was empty and there is no backup to restore', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+    state.emptyTarget = true;
+    state.failInsertInto = 'rapidreplymappings';
+
+    await invoke();
+
+    expect(state.ops.filter(op => op.startsWith('rapidreplymappings.'))).toEqual([
+      'rapidreplymappings.deleteMany',
+      'rapidreplymappings.deleteMany',
+    ]);
   });
 });
