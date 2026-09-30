@@ -65,8 +65,6 @@ const AcceptPoliciesPage = lazy(() => import('./routes/accept-policies'));
 const VerifyEmailPage = lazy(() => import('./routes/verify-email'));
 const VerifyEmailChangePage = lazy(() => import('./routes/verify-change'));
 const SubscribePage = lazy(() => import('./routes/subscribe'));
-const TutorialsPage = lazy(() => import('./routes/tutorials'));
-const TutorialsExplorePage = lazy(() => import('./components/Tutorials/TutorialsExplorePage'));
 const ArtifactsDemoPage = lazy(() => import('./routes/artifacts-demo'));
 const AdminEmergencyPage = lazy(() => import('./routes/admin-emergency'));
 const GoogleDriveCallbackPage = lazy(() => import('./routes/google-drive/callback'));
@@ -333,7 +331,7 @@ const notebookRoute = createRoute({
   },
 });
 
-// Gears - the earned-nav progression page (one card per major feature).
+// Gears - the feature tour, where each feature's one-time reward is claimed (one card per feature).
 const gearsRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/gears',
@@ -856,35 +854,6 @@ const subscribeRoute = createRoute({
   ),
 });
 
-// Tutorials (new) - the tabbed feature-discovery page. Sits on its own path
-// while the original FTUE slider still owns `/tutorials`; it takes that path
-// over once the slider is retired.
-const tutorialsExploreRoute = createRoute({
-  getParentRoute: () => layoutRoute,
-  path: '/tutorials/explore',
-  component: () => (
-    // Admin-gated on the ROUTE, not just on the menu row that reaches it: the
-    // gate has to be visible from here, because this is where the follow-ups
-    // that give the page real behaviour will land.
-    <RestrictedPage requireAdmin>
-      <Suspense fallback={<RouteLoadingFallback />}>
-        <TutorialsExplorePage />
-      </Suspense>
-    </RestrictedPage>
-  ),
-});
-
-// Tutorials route (replaces /tutorials.tsx)
-const tutorialsRoute = createRoute({
-  getParentRoute: () => layoutRoute,
-  path: '/tutorials',
-  component: () => (
-    <Suspense fallback={<RouteLoadingFallback />}>
-      <TutorialsPage />
-    </Suspense>
-  ),
-});
-
 // Artifacts demo route (replaces /artifacts-demo.tsx)
 const artifactsDemoRoute = createRoute({
   getParentRoute: () => layoutRoute,
@@ -1156,8 +1125,6 @@ const routeTree = rootRoute.addChildren([
     reportPublicRoute,
     organizationsRoute,
     organizationDetailRoute,
-    tutorialsRoute,
-    tutorialsExploreRoute,
     artifactsDemoRoute,
     questsRoute,
     questsV5Route,

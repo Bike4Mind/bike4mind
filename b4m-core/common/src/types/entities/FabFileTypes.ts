@@ -1550,12 +1550,13 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * `includeDeleted` drops the archivedAt/deletedAt filters for the disconnect purge, which must
    * reach an archived lake's members (every member is archivedAt-stamped when its lake archives)
    * and soft-deleted rows, mirroring `hardDeleteByDataLakeTag`. `status: 'pending'` rows are
-   * excluded either way.
+   * excluded either way. `limit` caps the rows returned, so the queued disconnect purge can work
+   * through a large connection one bounded slice per invocation.
    */
   findByDriveConnectionIdInDataLake(
     driveConnectionId: string,
     datalakeTag: string,
-    options?: { includeDeleted?: boolean }
+    options?: { includeDeleted?: boolean; limit?: number }
   ): Promise<IFabFileDocument[]>;
   /**
    * Lightweight count of the `includeDeleted` set `findByDriveConnectionIdInDataLake` resolves -

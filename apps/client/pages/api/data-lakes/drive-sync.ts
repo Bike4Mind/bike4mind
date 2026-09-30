@@ -148,6 +148,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       if (byFolder.targetDataLakeId !== dataLakeId) {
         return res.status(409).json({ error: 'This Drive folder is already connected to another data lake' });
       }
+      if (byFolder.disconnectRequestedAt) {
+        return res
+          .status(409)
+          .json({ error: 'This Drive folder is still being disconnected. Try again once its files are removed.' });
+      }
       // Same folder + lake: refresh the stored credential (a reconnect is often to fix a broken one)
       // and re-stamp connectedBy to this user, then re-ingest (the handler dedups by driveFileId). Set
       // connectedBy so ingest runs as a still-present user even if the original connector was deleted.
