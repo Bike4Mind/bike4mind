@@ -90,6 +90,8 @@ import {
 } from '../dataLakeService/embeddingMismatch';
 import { partitionByIndexAvailability } from '../dataLakeService/retrievalUnavailable';
 import { isVectorSearchReady, type VectorSearchReadinessFile } from '../dataLakeService/vectorSearchEligibility';
+import { atlasVectorSearch, isAtlasVectorSearchAvailable } from '../dataLakeService/atlasVectorSearch';
+import type { AnnRankableFile } from '../dataLakeService/annVectorSearch';
 import {
   DeadlineExceededError,
   rankCandidateFilesByRelevance,
@@ -140,7 +142,6 @@ import {
 import { filterRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { supportsAtlasVectorSearch } from '@bike4mind/db-core';
 import { MongoAbility } from '@casl/ability';
 import mongoose from 'mongoose';
 import { z } from 'zod';
@@ -1732,6 +1733,12 @@ const FORCED_RETRIEVAL_ANN_CHUNK_LIMIT = 1000;
 // This runs inline on every turn and a cold Atlas index has been seen taking tens of seconds, so
 // the ANN pick gets a hard deadline and falls back to the file-name pick past it.
 const FORCED_RETRIEVAL_ANN_DEADLINE_MS = 3000;
+// The listing-row fields the ANN seam shapes its rows from (see AnnRankableFile).
+type ForcedRetrievalCandidateFile = VectorSearchReadinessFile & {
+  fileName?: string | null;
+  tags?: { name: string }[];
+  documentDate?: Date | null;
+};
 // File ids per chunk query, and chunk rows per query - together these bound how many vectors
 // are resident at once instead of loading every candidate file's chunks up front.
 const FORCED_RETRIEVAL_FILE_BATCH_SIZE = 10;
@@ -2266,17 +2273,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   }
 
   /**
-   * Whether this turn can choose its candidate files by relevance: the same gate the
-   * search_knowledge_base path applies (EnableDataLakeVectorSearch + an Atlas backend + the ANN
-   * repository methods). Self-host OpenSearch is not wired here and keeps the file-name pick.
+   * Whether this turn can choose its candidate files by relevance: EnableDataLakeVectorSearch plus
+   * isAtlasVectorSearchAvailable, the gate semanticDataLakeSearch shares. Self-host OpenSearch is
+   * not wired here and keeps the file-name pick.
    * Fails closed, like readSupersessionCollapseSetting: an unreadable setting means the file-name
    * pick this path always had, never an error.
    */
   private async canSelectCandidatesByRelevance(): Promise<boolean> {
     const { fabfilechunks, adminSettings } = this.chatCompletion.db;
-    if (!supportsAtlasVectorSearch() || !fabfilechunks?.vectorSearch || !fabfilechunks.getAtlasIndexStatus) {
-      return false;
-    }
+    if (!isAtlasVectorSearchAvailable(fabfilechunks)) return false;
     try {
       return (await adminSettings?.getSettingsValue('EnableDataLakeVectorSearch')) === true;
     } catch (error) {
@@ -2294,7 +2299,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * that stops it - index not queryable, no index-ready file, an error, or the deadline - falls
    * back to the file-name prefix, which reportCoverage then flags as the by-name cut it is.
    */
-  private async selectForcedRetrievalCandidates<T extends VectorSearchReadinessFile>(
+  private async selectForcedRetrievalCandidates<T extends ForcedRetrievalCandidateFile>(
     files: T[],
     queryVector: number[],
     embeddingModel: SupportedEmbeddingModel,
@@ -2308,16 +2313,17 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     return { files: files.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'fileName' };
   }
 
-  /** The ANN half of selectForcedRetrievalCandidates. `null` means "fall back"; never throws. */
-  private async rankCandidatesByAnn<T extends VectorSearchReadinessFile>(
+  /**
+   * The ANN half of selectForcedRetrievalCandidates, run through the same atlasVectorSearch seam
+   * as semanticDataLakeSearch. `null` means "fall back"; never throws.
+   */
+  private async rankCandidatesByAnn<T extends ForcedRetrievalCandidateFile>(
     files: T[],
     queryVector: number[],
     embeddingModel: SupportedEmbeddingModel
   ): Promise<T[] | null> {
     const { fabfilechunks } = this.chatCompletion.db;
-    const vectorSearch = fabfilechunks?.vectorSearch?.bind(fabfilechunks);
-    const getIndexStatus = fabfilechunks?.getAtlasIndexStatus?.bind(fabfilechunks);
-    if (!vectorSearch || !getIndexStatus) return null;
+    if (!isAtlasVectorSearchAvailable(fabfilechunks)) return null;
     const now = new Date();
     const annReadyIds = files.filter(f => isVectorSearchReady(f, now)).map(f => f.id);
     if (annReadyIds.length === 0) {
@@ -2326,21 +2332,38 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     }
     try {
       // One deadline across both calls: the status read is cached but a cold miss is a round trip.
-      const hits = await withDeadline(
+      const ann = await withDeadline(
         (async () => {
-          const status = await getIndexStatus(embeddingModel);
+          const status = await fabfilechunks.getAtlasIndexStatus(embeddingModel);
           if (!status?.queryable) return null;
-          // Only fabFileId + score feed the ranking; skipping `text` keeps up to
-          // FORCED_RETRIEVAL_ANN_CHUNK_LIMIT chunk bodies off the wire on every turn.
-          return vectorSearch(annReadyIds, queryVector, embeddingModel, {
+          const fileById = new Map<string, AnnRankableFile>(
+            files.map(f => [
+              f.id,
+              {
+                fileName: f.fileName ?? '',
+                fileTags: f.tags?.map(t => t.name) ?? [],
+                documentDate: f.documentDate ?? null,
+              },
+            ])
+          );
+          return atlasVectorSearch({
+            fileIds: annReadyIds,
+            fileById,
+            queryVector,
+            model: embeddingModel,
             limit: FORCED_RETRIEVAL_ANN_CHUNK_LIMIT,
+            // No floor: the scores only ORDER the candidates, and a weak hit still outranks no hit.
+            minScore: -Infinity,
+            // Only fileId + score feed the ranking; skipping `text` keeps up to
+            // FORCED_RETRIEVAL_ANN_CHUNK_LIMIT chunk bodies off the wire on every turn.
             includeText: false,
+            adapters: fabfilechunks,
           });
         })(),
         FORCED_RETRIEVAL_ANN_DEADLINE_MS,
         'forced-retrieval ANN candidate pick'
       );
-      if (!hits) {
+      if (!ann) {
         this.logger.warn(
           `🔒 Forced retrieval: ${embeddingModel} vector index not queryable - picking candidates by name`
         );
@@ -2348,14 +2371,19 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       }
       // An empty answer is not a ranking: ranking on it would return the input (by-name) order
       // while reporting 'relevance', hiding the cut. Seen in the mongot lag window, where the
-      // index is queryable but has no chunks yet for the ready files.
-      if (hits.length === 0) {
+      // index is queryable but has no chunks yet for the ready files. Counted after the seam drops
+      // hits for files outside the listing, which would rank nothing either.
+      if (ann.results.length === 0) {
         this.logger.warn(
           `🔒 Forced retrieval: ${embeddingModel} vector index returned no hits - picking candidates by name`
         );
         return null;
       }
-      return rankCandidateFilesByRelevance(files, hits, now);
+      return rankCandidateFilesByRelevance(
+        files,
+        ann.results.map(r => ({ fabFileId: r.fileId, score: r.score })),
+        now
+      );
     } catch (error) {
       if (error instanceof DeadlineExceededError) {
         this.logger.warn(

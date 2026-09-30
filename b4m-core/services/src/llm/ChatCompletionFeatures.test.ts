@@ -1178,6 +1178,26 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect((quest.promptMeta as { retrievalCoverage?: { partial: boolean } }).retrievalCoverage?.partial).toBe(true);
     });
 
+    it('applies no score floor: a weak hit still ranks its file into the pick', async () => {
+      // A raw 0.1 denormalizes to -0.8, which any minScore the seam applied would drop.
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      annDb.vectorSearch.mockResolvedValue([{ id: `ch-${TARGET}`, fabFileId: TARGET, text: '', score: 0.1 }]);
+      const { content } = await run(ctx);
+      expect(content).toContain(targetHeading);
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+    });
+
+    it('falls back, and reports the by-name cut, when every hit names a file outside the listing', async () => {
+      // Nothing to rank on: without this the pick would keep the input order while reporting relevance.
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      annDb.vectorSearch.mockResolvedValue([{ id: 'ch-ghost', fabFileId: 'ghost', text: '', score: 0.99 }]);
+      const { quest, content } = await run(ctx);
+      expect(content).not.toContain(targetHeading);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('vector index returned no hits'));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+      expect((quest.promptMeta as { retrievalCoverage?: { partial: boolean } }).retrievalCoverage?.partial).toBe(true);
+    });
+
     it('falls back without querying when the index status is unknown', async () => {
       const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
       annDb.getAtlasIndexStatus.mockResolvedValue(null);
