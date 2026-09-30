@@ -79,6 +79,7 @@ export * from './reconcileStuckTaxonomy';
 export * from './applyTaxonomySuggestions';
 export * from './dismissTaxonomySuggestion';
 export * from './getDynamicDataLakeTags';
+export * from './narrowLakeAccessToSession';
 export * from './embeddingMismatch';
 export * from './retrievalUnavailable';
 export * from './supersession';
