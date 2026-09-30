@@ -3485,7 +3485,13 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
     createdAt: new Date(createdAt),
   });
 
-  const makeCtx = (opts: { files: Array<Record<string, unknown>>; collapseEnabled?: boolean; score?: number }) => {
+  const makeCtx = (opts: {
+    files: Array<Record<string, unknown>>;
+    collapseEnabled?: boolean;
+    score?: number;
+    hasMore?: boolean;
+    settings?: Record<string, unknown>;
+  }) => {
     const vector = vectorScoring(opts.score ?? 1);
     return {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
@@ -3493,7 +3499,11 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
       db: {
         organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
         fabfiles: {
-          search: vi.fn().mockResolvedValue({ data: opts.files, hasMore: false, total: opts.files.length }),
+          search: vi.fn().mockResolvedValue({
+            data: opts.files,
+            hasMore: opts.hasMore ?? false,
+            total: opts.files.length,
+          }),
         },
         fabfilechunks: {
           findByFabFileId: vi.fn(),
@@ -3506,9 +3516,10 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
           findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([LAKE]),
         },
         adminSettings: {
-          getSettingsValue: vi.fn(async (key: string) =>
-            key === 'EnableRetrievalSupersessionCollapse' ? (opts.collapseEnabled ?? false) : undefined
-          ),
+          getSettingsValue: vi.fn(async (key: string) => {
+            if (opts.settings && key in opts.settings) return opts.settings[key];
+            return key === 'EnableRetrievalSupersessionCollapse' ? (opts.collapseEnabled ?? false) : undefined;
+          }),
         },
         lakeAccessEvents: { record },
       },
@@ -3606,6 +3617,8 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
     expect(input).toMatchObject({
       surface: 'forced-retrieval',
       servedNothing: true,
+      // One file, whole listing: nothing was cut, so this row must not claim the cap was reached.
+      candidateCapReached: false,
       // The scope that was SEARCHED - there is no returned file whose tags could be reversed here.
       resolvedLakeIds: ['lakeZ'],
       fileIds: [],
@@ -3647,6 +3660,74 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
     // The grounded write never mentions the flag at all, so key absence is the real assertion here.
     expect(recordedInput()).not.toHaveProperty('servedNothing');
     expect(recordedInput()?.fileIds).toEqual(['only']);
+  });
+
+  it('records candidateCapReached: true on a zero row when the listing was cut off', async () => {
+    await run(makeCtx({ files: [generation('only', '2025-01-01')], score: 0.1, hasMore: true }), ['datalake:z']);
+    expect(recordedInput()).toMatchObject({ servedNothing: true, candidateCapReached: true });
+  });
+
+  /**
+   * candidateCapReached after the >100-file candidate pick. The listing itself is whole here
+   * (`hasMore: false`), so only the pick decides the value: a relevance pick chose the candidates
+   * by ANN rank over the whole listing, so no file was cut by name, while the by-name fallback
+   * trimmed the servable set, which is a cut the row has to own. Vector search stays on in both, so
+   * the listing limit (1000) is the same and the ANN outcome is the only variable.
+   */
+  describe('candidateCapReached after candidate selection', () => {
+    const lakeFiles = Array.from({ length: 150 }, (_, i) => {
+      const n = String(i).padStart(3, '0');
+      return {
+        id: `f${n}`,
+        fileName: `doc-${n}.pdf`,
+        tags: [{ name: 'datalake:z' }],
+        vectorized: true,
+        embeddingModel: 'text-embedding-ada-002',
+        chunkCount: 1,
+        vectorizedChunkCount: 1,
+        chunkEmbeddingModelStampedAt: new Date('2026-01-01T00:00:00Z'),
+        createdAt: new Date('2025-01-01'),
+      };
+    });
+
+    const ROWS = {
+      grounded: { score: 1, retrievalTags: undefined, servedNothing: false },
+      'served-nothing': { score: 0.1, retrievalTags: ['datalake:z'], servedNothing: true },
+    } as const;
+
+    it.each([
+      { row: 'grounded', pick: 'relevance', expected: false },
+      { row: 'served-nothing', pick: 'relevance', expected: false },
+      { row: 'grounded', pick: 'by-name fallback', expected: true },
+      { row: 'served-nothing', pick: 'by-name fallback', expected: true },
+    ] as const)('$row row after a $pick pick: candidateCapReached $expected', async ({ row, pick, expected }) => {
+      const { score, retrievalTags, servedNothing } = ROWS[row];
+      const ctx = makeCtx({ files: lakeFiles, score, settings: { EnableDataLakeVectorSearch: true } });
+      const annDb = {
+        getAtlasIndexStatus: vi.fn().mockResolvedValue({ queryable: true, status: 'READY' }),
+        vectorSearch: vi.fn().mockResolvedValue([
+          { id: 'ch-f149', fabFileId: 'f149', score: 0.97 },
+          { id: 'ch-f000', fabFileId: 'f000', score: 0.2 },
+        ]),
+      };
+      if (pick === 'by-name fallback') annDb.vectorSearch.mockRejectedValue(new Error('mongot unavailable'));
+      Object.assign(ctx.db.fabfilechunks, annDb);
+
+      await run(ctx, retrievalTags ? [...retrievalTags] : undefined);
+
+      // Guards that the >100 pick ran (not the 'all' shortcut) and that the intended row fired.
+      expect(annDb.vectorSearch).toHaveBeenCalled();
+      const warnMessages = vi.mocked(ctx.logger.warn).mock.calls.map(([message]) => String(message));
+      if (pick === 'by-name fallback') {
+        expect(warnMessages).toContainEqual(expect.stringContaining('ANN candidate pick failed'));
+      } else {
+        expect(warnMessages.filter(m => m.includes('ANN candidate pick'))).toEqual([]);
+      }
+      const input = recordedInput();
+      if (servedNothing) expect(input).toMatchObject({ servedNothing: true });
+      else expect(input).not.toHaveProperty('servedNothing');
+      expect(input?.candidateCapReached).toBe(expected);
+    });
   });
 });
 
