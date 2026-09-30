@@ -23,7 +23,7 @@ describe('githubLakeRevokeQueue', () => {
     const queue = cut(QUEUES, "const githubLakeRevokeQueue = new sst.aws.Queue('githubLakeRevokeQueue'", '\n});');
     expect(queue).toMatch(/visibilityTimeout:\s*'12 minutes'/);
     expect(queue).toMatch(/queue:\s*githubLakeRevokeQueueDLQ\.arn/);
-    expect(queue).toMatch(/retry:\s*6\b/);
+    expect(queue).toMatch(/retry:\s*7\b/);
   });
 
   it('keeps the retry window past the longest sync claim and the visibility above the handler timeout', () => {
@@ -39,7 +39,8 @@ describe('githubLakeRevokeQueue', () => {
       /CHAINED_SYNC_CLAIM_STALE_MS = (\d+) \* 60 \* 1000/
     );
     expect(claim, 'CHAINED_SYNC_CLAIM_STALE_MS in minutes').not.toBeNull();
-    expect(retry * minutes(queue, 'visibilityTimeout')).toBeGreaterThan(Number(claim?.[1]));
+    // The last receive starts after (retry - 1) visibility windows; it must land past a stale claim.
+    expect((retry - 1) * minutes(queue, 'visibilityTimeout')).toBeGreaterThan(Number(claim?.[1]));
     expect(minutes(queue, 'visibilityTimeout')).toBeGreaterThan(minutes(sub, 'timeout'));
   });
 
@@ -63,6 +64,8 @@ describe('githubLakeRevokeQueue', () => {
     const web = read('infra/web.ts');
     expect(web).toMatch(/'github-lake-revoke':\s*githubLakeRevokeQueueDLQ\.url/);
     expect(web).toMatch(/githubLakeRevokeQueue:\s*githubLakeRevokeQueue\.url/);
-    expect(web.match(/^\s+githubLakeRevokeQueue,$/gm)?.length ?? 0).toBeGreaterThanOrEqual(2);
+    // Inside the web Lambda's link array, not just the import list at the top of the file.
+    const link = cut(web, '    link: [', '\n    ],');
+    expect(link).toMatch(/^\s+githubLakeRevokeQueue,$/m);
   });
 });

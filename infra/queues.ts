@@ -107,10 +107,11 @@ const githubLakeRevokeQueue = new sst.aws.Queue('githubLakeRevokeQueue', {
   visibilityTimeout: '12 minutes',
   dlq: {
     queue: githubLakeRevokeQueueDLQ.arn,
-    // 6 x 12 min outlasts a stale sync claim (CHAINED_SYNC_CLAIM_STALE_MS, 60 min,
-    // OrgGitHubLakeConnectionModel.ts), but not a live sync that keeps renewing its claim: that one
-    // dead-letters unpurged, and the DLQ alarm (dlqAlarms.ts) is the prompt to redrive it.
-    retry: 6,
+    // The last of 7 receives starts at (7 - 1) x 12 = 72 min, past the point a sync claim goes stale
+    // (CHAINED_SYNC_CLAIM_STALE_MS, 60 min, OrgGitHubLakeConnectionModel.ts), but not a live sync that
+    // keeps renewing its claim: that one dead-letters unpurged, and the DLQ alarm (dlqAlarms.ts) is the
+    // prompt to redrive it.
+    retry: 7,
   },
 });
 

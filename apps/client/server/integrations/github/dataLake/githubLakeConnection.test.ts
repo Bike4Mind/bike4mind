@@ -564,6 +564,16 @@ describe('revokeGitHubLakeConnection', () => {
     expect(h.deleteInstallation).not.toHaveBeenCalled();
   });
 
+  it('rethrows a failed uninstall on a connection-gone retry so SQS keeps retrying it', async () => {
+    h.ghConnFindById.mockResolvedValue(null);
+    h.ghConnFindByInstallationId.mockResolvedValue([]);
+    h.deleteInstallation.mockRejectedValue(Object.assign(new Error('GitHub API is unavailable'), { status: 502 }));
+    await expect(revokeGitHubLakeConnection({ connectionId: 'conn1', installationId: 42 }, logger)).rejects.toThrow(
+      'GitHub API is unavailable'
+    );
+    expect(h.deleteInstallation).toHaveBeenCalledWith(CONFIG, 42);
+  });
+
   it('only releases the connection/installation claim when its lake is already gone', async () => {
     h.dlFindById.mockResolvedValue(null);
     await revokeGitHubLakeConnection({ connectionId: 'conn1', installationId: 42 }, logger);

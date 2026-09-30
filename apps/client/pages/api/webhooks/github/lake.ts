@@ -25,17 +25,18 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { Resource } from 'sst';
+import { isPlaceholderValue } from '@bike4mind/common';
 import { connectDB, orgGitHubLakeConnectionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { getRawBody, PayloadTooLargeError, verifyGitHubSignature } from '@server/integrations/github/webhookUtils';
-import { resolveGitHubLakeRevocation } from '@server/integrations/github/dataLake/githubLakeRevocation';
+import {
+  findRevokedConnectionIds,
+  isGitHubLakeRevocationEvent,
+  parseGitHubLakeRevocation,
+} from '@server/integrations/github/dataLake/githubLakeRevocation';
 import { sendToQueue } from '@server/utils/sqs';
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
-
-const UNSET_SECRET = 'not-configured';
-
-const REVOCATION_EVENTS: ReadonlySet<string> = new Set(['installation', 'installation_repositories']);
 
 const PushEventSchema = z.object({
   ref: z.string(),
@@ -78,14 +79,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       entityType: 'webhook',
       integrationName: 'github',
       // Unverified until the HMAC check below; it only labels the audit record.
-      action: eventType && REVOCATION_EVENTS.has(eventType) ? 'webhook_lake_revoke' : 'webhook_lake_push',
+      action: isGitHubLakeRevocationEvent(eventType) ? 'webhook_lake_revoke' : 'webhook_lake_push',
       requestId: deliveryId || randomUUID(),
     },
     req
   );
 
   const secret = Config.GITHUB_LAKE_APP_WEBHOOK_SECRET;
-  if (!secret || secret === UNSET_SECRET) {
+  // Every reserved placeholder (the shipped 'not-configured', SST's default) fails closed: signed with
+  // a publicly known key, this unauthenticated route would let anyone enqueue purges.
+  if (!secret || isPlaceholderValue(secret)) {
     logger.warn('[githubLakeWebhook] GITHUB_LAKE_APP_WEBHOOK_SECRET is not configured; refusing delivery', {
       deliveryId,
     });
@@ -119,7 +122,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     auditLogger.failure('missing_event_header');
     return res.status(400).json({ message: 'Missing x-github-event header' });
   }
-  if (eventType !== 'push' && !REVOCATION_EVENTS.has(eventType)) {
+  if (eventType !== 'push' && !isGitHubLakeRevocationEvent(eventType)) {
     return res.status(200).json({ status: 'ignored', reason: 'not a handled event' });
   }
 
@@ -186,22 +189,23 @@ async function handleRevocation(
   body: unknown,
   { res, logger, auditLogger, deliveryId }: DeliveryContext
 ) {
-  await connectToDatabase(logger);
-  const resolved = await resolveGitHubLakeRevocation(eventType, body);
-  if (resolved === null) {
+  const target = parseGitHubLakeRevocation(eventType, body);
+  if (target === null) {
     return res.status(200).json({ status: 'ignored', reason: 'not a revoking action' });
   }
-  if ('malformed' in resolved) {
+  if ('malformed' in target) {
     logger.warn('[githubLakeWebhook] malformed payload for a revoking event', {
       event: eventType,
       deliveryId,
-      error: resolved.malformed,
+      error: target.malformed,
     });
     auditLogger.failure('invalid_payload_shape');
     return res.status(400).json({ message: 'Malformed payload' });
   }
 
-  const { installationId, connectionIds } = resolved;
+  await connectToDatabase(logger);
+  const { installationId } = target;
+  const connectionIds = await findRevokedConnectionIds(target);
   try {
     await Promise.all(
       connectionIds.map(connectionId =>

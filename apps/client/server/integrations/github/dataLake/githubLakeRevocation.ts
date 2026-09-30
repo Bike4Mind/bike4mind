@@ -1,6 +1,8 @@
 import { orgGitHubLakeConnectionRepository } from '@bike4mind/database';
 import { z } from 'zod';
 
+const REVOCATION_EVENTS: ReadonlySet<string> = new Set(['installation', 'installation_repositories']);
+
 const InstallationEvent = z.object({
   action: z.string(),
   installation: z.object({ id: z.number() }),
@@ -12,39 +14,45 @@ const InstallationRepositoriesRemovedEvent = InstallationEvent.extend({
   repositories_removed: z.array(z.object({ id: z.number() })).min(1),
 });
 
-export type GitHubLakeRevocation = { installationId: number; connectionIds: string[] };
+/** A revoke scoped to the whole installation (`repositoryIds: null`) or to the named repositories. */
+export type GitHubLakeRevocationTarget = { installationId: number; repositoryIds: ReadonlySet<number> | null };
 
-export type GitHubLakeRevocationResult = GitHubLakeRevocation | { malformed: string } | null;
+/** The event types that can carry a revoke; parseGitHubLakeRevocation still decides by action. */
+export const isGitHubLakeRevocationEvent = (eventType: string | undefined): boolean =>
+  eventType !== undefined && REVOCATION_EVENTS.has(eventType);
 
 /**
- * The lake connections a data-lake App webhook delivery revokes (webhooks/github/lake.ts), or
- * null when the event/action is not one we act on: `installation.deleted` revokes every binding of
- * the installation, `installation_repositories.removed` only the bindings of the removed repositories.
+ * What a data-lake App webhook delivery (webhooks/github/lake.ts) revokes, without touching the
+ * database - so an ignored action never opens a connection - or null when the
+ * event/action is not one we act on: `installation.deleted` revokes the whole installation,
+ * `installation_repositories.removed` only the removed repositories.
  */
-export async function resolveGitHubLakeRevocation(
+export function parseGitHubLakeRevocation(
   eventType: string | undefined,
   payload: unknown
-): Promise<GitHubLakeRevocationResult> {
-  if (eventType !== 'installation' && eventType !== 'installation_repositories') return null;
+): GitHubLakeRevocationTarget | { malformed: string } | null {
+  if (!isGitHubLakeRevocationEvent(eventType)) return null;
   const event = InstallationEvent.safeParse(payload);
   if (!event.success) return { malformed: event.error.message };
   const installationId = event.data.installation.id;
 
   if (eventType === 'installation') {
-    if (event.data.action !== 'deleted') return null;
-    const bindings = await orgGitHubLakeConnectionRepository.findByInstallationId(installationId);
-    return { installationId, connectionIds: bindings.map(binding => binding.id) };
+    return event.data.action === 'deleted' ? { installationId, repositoryIds: null } : null;
   }
 
   if (event.data.action !== 'removed') return null;
   const removed = InstallationRepositoriesRemovedEvent.safeParse(payload);
   if (!removed.success) return { malformed: removed.error.message };
-  const removedRepositoryIds = new Set(removed.data.repositories_removed.map(repo => repo.id));
+  return { installationId, repositoryIds: new Set(removed.data.repositories_removed.map(repo => repo.id)) };
+}
+
+/** The lake connections a parsed revoke applies to. Needs a database connection. */
+export async function findRevokedConnectionIds({
+  installationId,
+  repositoryIds,
+}: GitHubLakeRevocationTarget): Promise<string[]> {
   const bindings = await orgGitHubLakeConnectionRepository.findByInstallationId(installationId);
-  return {
-    installationId,
-    connectionIds: bindings
-      .filter(binding => removedRepositoryIds.has(binding.repositoryId))
-      .map(binding => binding.id),
-  };
+  return bindings
+    .filter(binding => repositoryIds === null || repositoryIds.has(binding.repositoryId))
+    .map(binding => binding.id);
 }

@@ -173,6 +173,22 @@ describe('POST /api/webhooks/github/lake', () => {
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
+  it.each(['my-secret-placeholder-value', ' Not-Configured '])(
+    'refuses a delivery signed with the reserved placeholder secret %j',
+    async placeholder => {
+      h.config.GITHUB_LAKE_APP_WEBHOOK_SECRET = placeholder;
+      const { status } = await deliver({
+        event: 'installation',
+        body: installationPayload(),
+        signature: sign(JSON.stringify(installationPayload()), placeholder),
+      });
+
+      expect(status).toBe(503);
+      expect(h.connectDB).not.toHaveBeenCalled();
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    }
+  );
+
   it('ignores a push to a branch other than the default', async () => {
     const { status, json } = await deliver({ body: pushPayload({ ref: 'refs/heads/feature/x' }) });
 
@@ -325,6 +341,7 @@ describe('POST /api/webhooks/github/lake', () => {
 
     expect(status).toBe(200);
     expect(json).toEqual({ status: 'ignored', reason: 'not a revoking action' });
+    expect(h.connectDB).not.toHaveBeenCalled();
     expect(h.findByInstallationId).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
@@ -337,6 +354,7 @@ describe('POST /api/webhooks/github/lake', () => {
 
     expect(status).toBe(200);
     expect(json).toEqual({ status: 'ignored', reason: 'not a revoking action' });
+    expect(h.connectDB).not.toHaveBeenCalled();
     expect(h.findByInstallationId).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
@@ -373,6 +391,36 @@ describe('POST /api/webhooks/github/lake', () => {
     expect(status).toBe(202);
     expect(json).toEqual({ status: 'queued', count: 0 });
     expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('queues count: 0 for an installation.deleted whose installation has no binding left', async () => {
+    h.findByInstallationId.mockResolvedValue([]);
+    const { status, json } = await deliver({ event: 'installation', body: installationPayload() });
+
+    expect(status).toBe(202);
+    expect(json).toEqual({ status: 'queued', count: 0 });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('500s a partial multi-connection enqueue failure, and a redelivery re-enqueues every connection', async () => {
+    h.findByInstallationId.mockResolvedValue([
+      { id: 'conn1', installationId: INSTALLATION_ID, repositoryId: 100, enabled: true },
+      { id: 'conn2', installationId: INSTALLATION_ID, repositoryId: 200, enabled: true },
+    ]);
+    h.sendToQueue.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('SQS throttled'));
+    const first = await deliver({ event: 'installation', body: installationPayload() });
+
+    expect(first.status).toBe(500);
+    expect(first.json).toEqual({ message: 'Could not queue the revoke' });
+
+    // conn1 is queued twice across the two deliveries; revokeGitHubLakeConnection is idempotent.
+    h.sendToQueue.mockClear();
+    h.sendToQueue.mockResolvedValue(undefined);
+    const redelivery = await deliver({ event: 'installation', body: installationPayload() });
+
+    expect(redelivery.status).toBe(202);
+    expect(redelivery.json).toEqual({ status: 'queued', count: 2 });
+    expect(h.sendToQueue.mock.calls.map(([, message]) => message.connectionId)).toEqual(['conn1', 'conn2']);
   });
 
   it('500s when the revoke enqueue fails, without throwing', async () => {
