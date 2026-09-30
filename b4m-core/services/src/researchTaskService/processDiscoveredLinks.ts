@@ -347,7 +347,7 @@ export const processDiscoveredLinks = async (
     await queueRunner.close();
 
     logger?.info(`🔍 [PROCESS_DISCOVERED_LINKS] Updating research task ${id}`);
-    await db.researchTasks.update(researchTask);
+    await db.researchTasks.update({ id: researchTask.id, discoveredLinks: researchTask.discoveredLinks });
 
     await jobs.researchTasks.downloadRelevantLinks(id, researchTask.userId);
   } catch (e) {

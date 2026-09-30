@@ -2,6 +2,7 @@ import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
@@ -23,7 +24,7 @@ import { getApiKeyRateLimitUsage, type RateLimitUsage } from '@server/utils/apiK
  * keyHash redaction happens in UserApiKeyModel's toJSON transform, so the
  * docs must stay hydrated - do not switch this path to .lean().
  */
-const handler = baseApi().get(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
   asyncHandler(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

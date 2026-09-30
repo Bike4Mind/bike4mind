@@ -64,7 +64,12 @@ export const leaveProject = async (
     project.sessionIds = pruned.sessionIds;
   }
 
-  await adapters.db.projects.update(project);
+  await adapters.db.projects.update({
+    id: project.id,
+    users: project.users,
+    fileIds: project.fileIds,
+    sessionIds: project.sessionIds,
+  });
 
   return project;
 };

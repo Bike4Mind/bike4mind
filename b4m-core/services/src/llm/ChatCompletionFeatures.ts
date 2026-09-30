@@ -43,6 +43,9 @@ import {
   ImageModerationIncident,
   ILakeAccessEventRepository,
   IScopedSettingsRepository,
+  ILakeMembershipRemovalRepository,
+  ILakeConfigChangeEventRepository,
+  ILakeMembershipChangeEventRepository,
   isExperimentalFeatureEnabled,
   isSupportedEmbeddingModel,
   resolveHistoryFetchLimit,
@@ -256,7 +259,14 @@ interface DatabaseAdapters {
     // read that narrows the retrieval creator arm, so every host that can retrieve has to wire it
     // rather than silently degrade to bare creator provenance.
     | 'findIdsCreatedBy'
-  >;
+  > &
+    // Must stay a superset of ToolContext.db.dataLakes (the data-lake write tools' methods).
+    Partial<
+      Pick<
+        IDataLakeRepository,
+        'findAccessible' | 'findBySlug' | 'findBySlugAmongIds' | 'create' | 'setStats' | 'activateIfDraft'
+      >
+    >;
   /**
    * Access-grant lookup shared by two independent optional features:
    * - the retrieval resolver's grant arm (getDynamicDataLakeAccess / `listByPrincipal`), so a
@@ -267,7 +277,12 @@ interface DatabaseAdapters {
    *   rungs cannot resolve, so the re-check revokes a maintainer whose rights are in fact intact.
    * Optional here - absent means both features resolve lake access with no grant arm.
    */
-  dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes'>;
+  dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes'> &
+    Partial<Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'upsertGrant'>>;
+  /** Forwarded to ToolContext.db for the data-lake write tools - see its doc comment there. */
+  lakeMembershipRemovals?: Pick<ILakeMembershipRemovalRepository, 'findLive'>;
+  lakeConfigChangeEvents?: Pick<ILakeConfigChangeEventRepository, 'record'>;
+  lakeMembershipChangeEvents?: Pick<ILakeMembershipChangeEventRepository, 'record'>;
   /**
    * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
    * IFallbackLakeSetting). Used only by getAccessibleDataLakePrompts' registry-candidate branch,
@@ -1116,7 +1131,14 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     try {
       quest.status = 'running';
       quest.type = 'message';
-      await this.chatCompletion.db.quests.update(quest);
+      // promptMeta carries the in-memory statusLog ('Spinning up...'); a QuestMaster takeover
+      // returns without the pipeline's saveQuest, so these writes are the only ones that persist it.
+      await this.chatCompletion.db.quests.update({
+        id: quest.id,
+        status: quest.status,
+        type: quest.type,
+        promptMeta: quest.promptMeta,
+      });
 
       await this.chatCompletion.sendStatusUpdate(quest, 'Generating QuestMaster plan...');
 
@@ -1167,7 +1189,11 @@ export class QuestMasterFeature implements ChatCompletionFeature {
       });
 
       updatedQuest.status = 'done';
-      await this.chatCompletion.db.quests.update(updatedQuest);
+      await this.chatCompletion.db.quests.update({
+        id: updatedQuest.id,
+        status: updatedQuest.status,
+        promptMeta: updatedQuest.promptMeta,
+      });
 
       await this.chatCompletion.sendStatusUpdate(updatedQuest, null);
 
@@ -1179,7 +1205,12 @@ export class QuestMasterFeature implements ChatCompletionFeature {
       quest.type = 'error';
       quest.status = 'done';
       quest.reply = (error as Error).message;
-      await this.chatCompletion.db.quests.update(quest);
+      await this.chatCompletion.db.quests.update({
+        id: quest.id,
+        type: quest.type,
+        status: quest.status,
+        reply: quest.reply,
+      });
 
       // Let normal processing continue
       return { shouldContinue: true };

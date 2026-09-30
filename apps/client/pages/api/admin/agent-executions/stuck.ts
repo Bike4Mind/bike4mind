@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin, BadRequestError } from '@server/utils/errors';
 import {
@@ -39,7 +40,7 @@ export type StuckExecutionsResponse = {
  * older than `minutes`. Backed by {@link agentExecutionRepository.listStuck};
  * `awaiting_subagent` is deliberately excluded - see model docstring.
  */
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   ensureAdmin(req.user?.isAdmin);
 
   const parsed = QuerySchema.safeParse(req.query);

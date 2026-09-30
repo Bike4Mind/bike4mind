@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { HelpAccessLevel } from '../types';
-import { bundleHelpContent } from '../bundle-help-content';
+import { bundleHelpContent, runBundleCli } from '../bundle-help-content';
 import { MEDIA_SIZE_LIMITS } from '../validate-help-content';
 
 /**
@@ -134,8 +134,9 @@ describe('bundleHelpContent', () => {
     write(path.join(docsRoot(), 'features/media/demo.gif'), 'x'.repeat(MEDIA_SIZE_LIMITS.gif.maxBytes + 1));
     writeIndex(['features/a.md']);
 
-    await bundleHelpContent(opts());
+    const errorCount = await bundleHelpContent(opts());
 
+    expect(errorCount).toBe(1);
     expect(fs.existsSync(outFile('features/a.md'))).toBe(true);
     expect(fs.existsSync(outFile('features/media/demo.gif'))).toBe(false);
     expect(errorSpy.mock.calls.flat().join(' ')).toContain('gif cap');
@@ -146,11 +147,63 @@ describe('bundleHelpContent', () => {
     writeArticle('features/media/demo.mpg', 'mpeg-bytes');
     writeIndex(['features/a.md']);
 
-    await bundleHelpContent(opts());
+    const errorCount = await bundleHelpContent(opts());
 
+    expect(errorCount).toBe(1);
     expect(fs.existsSync(outFile('features/a.md'))).toBe(true);
     expect(fs.existsSync(outFile('features/media/demo.mpg'))).toBe(false);
     expect(errorSpy.mock.calls.flat().join(' ')).toContain('Unsupported embed format');
+  });
+
+  it('reports zero errors for a clean bundle', async () => {
+    writeArticle('features/a.md', '![Demo](./media/demo.gif)\n');
+    writeArticle('features/media/demo.gif', 'gif-bytes');
+    writeIndex(['features/a.md']);
+
+    expect(await bundleHelpContent(opts())).toBe(0);
+  });
+
+  describe('runBundleCli (CLI body)', () => {
+    let originalExitCode: typeof process.exitCode;
+
+    beforeEach(() => {
+      originalExitCode = process.exitCode;
+      process.exitCode = undefined;
+    });
+
+    afterEach(() => {
+      process.exitCode = originalExitCode;
+    });
+
+    it('fails the process when the bundle reported errors', async () => {
+      writeArticle('features/a.md', '![Demo](./media/demo.mpg)\n');
+      writeArticle('features/media/demo.mpg', 'mpeg-bytes');
+      writeIndex(['features/a.md']);
+
+      await runBundleCli(opts());
+
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('leaves the exit code alone for a clean bundle', async () => {
+      writeArticle('features/a.md', '# A\n');
+      writeIndex(['features/a.md']);
+
+      await runBundleCli(opts());
+
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it('propagates a missing help index instead of swallowing it', async () => {
+      await expect(runBundleCli(opts())).rejects.toThrow('help-index.json not found');
+      expect(process.exitCode).toBeUndefined();
+    });
+  });
+
+  it('counts an indexed article whose source file is missing', async () => {
+    writeIndex(['features/gone.md']);
+
+    expect(await bundleHelpContent(opts())).toBe(1);
   });
 
   it('throws when the help index is missing', async () => {

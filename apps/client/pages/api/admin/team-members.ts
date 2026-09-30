@@ -1,7 +1,7 @@
 import { internalTeamMemberRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
-import { InternalTeamMemberSchema } from '@bike4mind/common';
+import { ApiKeyScope, InternalTeamMemberSchema } from '@bike4mind/common';
 import { z } from 'zod';
 
 const TeamMemberCreateSchema = InternalTeamMemberSchema.omit({ isActive: true }).extend({
@@ -18,7 +18,7 @@ const ensureAdmin = (isAdmin?: boolean | null) => {
   }
 };
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
     ensureAdmin(req.user?.isAdmin);
 

@@ -244,9 +244,9 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    *    incremented - so N racing joins land N members with `seats` equal to that size, never a
    *    double-raise past it.
    *
-   * `deletedAt: null` keeps the write off a soft-deleted org: the softDeletePlugin only hooks
-   * `find`/`findOne`, not `findOneAndUpdate`, so without this a delete landing between the caller's
-   * read and this write would grow a dead org's ceiling.
+   * `deletedAt: null` keeps the write off a soft-deleted org, so a delete landing between the
+   * caller's read and this write cannot grow a dead org's ceiling. softDeletePlugin's update hook
+   * adds the same filter; this one is redundant but keeps the guarantee visible here.
    *
    * Returns the PRE-image ({ new: false }) - the caller derives before/after seats from this one
    * atomically-matched document rather than from an earlier read, so two racers can't report
@@ -267,10 +267,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * matches no doc and returns null - the caller routes that to the same 'at-capacity' outcome the
    * Stripe path already uses (an admin is alerted to add seats), rather than raising past the ceiling.
    */
-  async addMemberRaisingSeats(
-    organizationId: string,
-    member: IUserShare
-  ): Promise<IOrganizationDocument | null> {
+  async addMemberRaisingSeats(organizationId: string, member: IUserShare): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOneAndUpdate(
       {
         _id: organizationId,
@@ -304,10 +301,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * Returns the PRE-image ({ new: false }); null means already a member, org gone, OR at capacity -
    * the caller re-reads to tell those apart.
    */
-  async addMemberIfUnderCeiling(
-    organizationId: string,
-    member: IUserShare
-  ): Promise<IOrganizationDocument | null> {
+  async addMemberIfUnderCeiling(organizationId: string, member: IUserShare): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOneAndUpdate(
       {
         _id: organizationId,
@@ -481,7 +475,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   async incrementCurrentStorage(organizationId: string, count: number): Promise<void> {
-    await this.organizationModel.findByIdAndUpdate(organizationId, [
+    await this.organizationModel.updateOne({ _id: organizationId }, [
       {
         $set: {
           currentStorageSize: {
@@ -489,7 +483,33 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
           },
         },
       },
-      { new: true },
+    ]);
+  }
+
+  /**
+   * Atomically drop a member from `users`, `userDetails` and `adminUserIds`, and vacate
+   * `managerId` if they held it, in one pipeline update, so a concurrent add or credit `$inc` on
+   * another member survives. A pipeline rather than `$pull` because `$pull` rejects the whole
+   * update when a field is stored as `null`; `$ifNull` heals that like the old whole-doc write did.
+   * Ids compare via `$toString` (pipelines skip Mongoose casting) so a legacy ObjectId entry still
+   * matches. Idempotent (safe under a withTransaction retry).
+   */
+  async removeMember(organizationId: string, userId: string): Promise<void> {
+    const without = (field: string, idPath: string) => ({
+      $filter: {
+        input: { $ifNull: [`$${field}`, []] },
+        cond: { $ne: [{ $toString: idPath }, userId] },
+      },
+    });
+    await this.organizationModel.updateOne({ _id: organizationId }, [
+      {
+        $set: {
+          users: without('users', '$$this.userId'),
+          userDetails: without('userDetails', '$$this.id'),
+          adminUserIds: without('adminUserIds', '$$this'),
+          managerId: { $cond: [{ $eq: [{ $toString: '$managerId' }, userId] }, null, '$managerId'] },
+        },
+      },
     ]);
   }
 

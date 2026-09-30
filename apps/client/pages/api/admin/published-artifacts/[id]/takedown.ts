@@ -1,6 +1,7 @@
 import { Request } from 'express';
 import { z } from 'zod';
 import { ForbiddenError } from '@server/utils/errors';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { PublishedArtifact, PublishedArtifactReport } from '@bike4mind/database';
 import { invalidatePublishCdn, toCacheTarget } from '@server/services/publish';
@@ -22,7 +23,7 @@ const TakedownSchema = z.object({ reason: z.string().max(1000).optional() });
 /** Strip CR/LF from admin-supplied free text before it reaches the log line. */
 const oneLine = (s: string) => s.replace(/[\r\n]+/g, ' ').trim();
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .post(async (req: Request, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Admin access required');

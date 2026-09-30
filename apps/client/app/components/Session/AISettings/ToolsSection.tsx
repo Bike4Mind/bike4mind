@@ -31,6 +31,7 @@ import {
   ShowChart as FinanceIcon,
   Close as CloseIcon,
   PlaylistAddCheck as OnlyPickedToolsIcon,
+  SaveAlt as SaveToDataLakeIcon,
 } from '@mui/icons-material';
 import { Box, Grid, Input, Tooltip, Typography, IconButton } from '@mui/joy';
 import type { BoxProps } from '@mui/joy';
@@ -302,6 +303,7 @@ const ToolsSection = ({
   const isResearchModeFeatureEnabled = checkFeatureEnabled('enableResearchMode');
   const isDeepResearchEnabled = isAdminFeatureEnabled('EnableDeepResearch');
   const isKnowledgeBaseSearchEnabled = isAdminFeatureEnabled('EnableKnowledgeBaseSearch');
+  const isDataLakesEnabled = isAdminFeatureEnabled('EnableDataLakes');
   const isFmpFinancialDataEnabled = isAdminFeatureEnabled('EnableFmpFinancialData');
   // Presence-only availability of key-gated tools (no key values leak to the client).
   const { data: serverConfig } = useConfig();
@@ -1112,6 +1114,29 @@ const ToolsSection = ({
               />
             </ToolContainer>
           </Grid>
+          {isDataLakesEnabled && (
+            <Grid xs={12} className="tool-item tool-item-save-to-data-lake">
+              <ToolContainer sx={toolContainerSx} toolId="save_content_to_data_lake">
+                <Box
+                  className="tool-content"
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
+                >
+                  <SaveToDataLakeIcon
+                    sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                  />
+                  <ToolLabel
+                    name={getToolDisplayName('save_content_to_data_lake')}
+                    description={getToolDescription('save_content_to_data_lake')}
+                  />
+                </Box>
+                <SquareSlideToggle
+                  data-testid="tool-toggle-save-to-data-lake"
+                  onChange={() => handleToggleTool('save_content_to_data_lake')}
+                  checked={displayTools.includes('save_content_to_data_lake')}
+                />
+              </ToolContainer>
+            </Grid>
+          )}
           <Grid xs={12} className="tool-item tool-item-thinking">
             {/* flexWrap + responsive order let the budget input drop to its own line on
                 mobile (so it stops cropping the description) while staying inline on desktop. */}

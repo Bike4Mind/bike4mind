@@ -40,9 +40,10 @@ import {
   useCreateLakeFromDrive,
   useDataLakeBatchCompletionSync,
 } from './dataLakeWizard';
-import { slugifyDataLakeName } from './dataLakeSlug';
+import { slugifyDataLakeName } from '@bike4mind/common';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
-import type { DataLakeStatus } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
+import type { DataLakeStatus, IUserDocument } from '@bike4mind/common';
 
 const mountHook = <T>(hook: () => T) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -753,6 +754,99 @@ describe('useBatchUpload rollback (#816)', () => {
     expect(deleteCalledWith('/api/data-lakes/lake1')).toBe(true);
     expect(putCall('/api/data-lakes/batches/batch1')?.[1]).toMatchObject({ status: 'failed' });
     expect(toastMock.success).not.toHaveBeenCalled();
+  });
+});
+
+describe('useBatchUpload storage limit', () => {
+  const refreshUser = vi.fn(() => Promise.resolve());
+  const setStorage = (currentStorageSize: number, storageLimitMb = 1) =>
+    useUser.setState({
+      currentUser: { currentStorageSize, storageLimit: storageLimitMb } as IUserDocument,
+      refreshUser,
+    });
+
+  beforeEach(() => {
+    apiPost.mockReset();
+    toastMock.error.mockClear();
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  afterEach(() => {
+    useUser.setState({ currentUser: null });
+    uploadFileToUrlMock.mockClear();
+  });
+
+  it('refuses before the lake is created when the files do not fit', async () => {
+    installApiPostRouter();
+    setStorage(1_000_000);
+    seedWizardFile();
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
+    expect(apiPost).not.toHaveBeenCalled();
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    // Not 'validation': a storage refusal is not about the Name/Tag Prefix fields.
+    expect(progress.errorKind).toBe('server');
+    expect(progress.errorMessage).toMatch(/Free up at least 8 B/);
+    expect(refreshUser).toHaveBeenCalled();
+  });
+
+  it('uploads when a fresh read shows files were freed since the cached usage', async () => {
+    installApiPostRouter();
+    setStorage(1_000_000);
+    refreshUser.mockImplementationOnce(async () => {
+      useUser.setState({ currentUser: { currentStorageSize: 0, storageLimit: 1 } as IUserDocument });
+    });
+    seedWizardFile();
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(postCall('/api/data-lakes')).toBeDefined();
+  });
+
+  it('uploads as before when the files fit', async () => {
+    installApiPostRouter();
+    setStorage(0);
+    seedWizardFile();
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(postCall('/api/data-lakes')).toBeDefined();
+  });
+
+  it("shows the server's storage-limit refusal verbatim", async () => {
+    installApiPostRouter();
+    const router = apiPost.getMockImplementation()!;
+    apiPost.mockImplementation((url: string, body?: unknown) =>
+      url === '/api/files/generate-presigned-urls-batch'
+        ? Promise.reject({
+            isAxiosError: true,
+            message: 'Request failed with status code 400',
+            response: { status: 400, data: { error: 'File size exceeds storage limit' } },
+          })
+        : router(url, body)
+    );
+    seedWizardFile();
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
+    expect(useDataLakeWizardStore.getState().uploadProgress.errorMessage).toBe('File size exceeds storage limit');
   });
 });
 

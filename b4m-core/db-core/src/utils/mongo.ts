@@ -297,7 +297,10 @@ export function findModelByCollectionName(collectionName: string) {
   return null;
 }
 
-// TODO: populate when soft-delete options (e.g. deletedAtField name) are needed
+// Plugin-level config: none yet. Per-query behavior is set with query options instead:
+// `includeDeleted: true` lets find AND update/replace queries reach tombstones (writes are guarded
+// by default so a snapshot cannot resurrect one; counts are never filtered); `hardDelete: true`
+// makes a delete real.
 export interface SoftDeletePluginOptions {}
 
 // Casts all string/ObjectId values inside a MongoDB operator object so every
@@ -461,6 +464,45 @@ export const softDeletePlugin = (
     }
     next();
   });
+
+  // Same default for update and replace queries, so a whole-doc BaseRepository.update(snapshot) - which
+  // $sets deletedAt: null - or a replacement that omits deletedAt (schema default null) cannot
+  // resurrect a tombstone (SessionModel's explicit deletedAt: null filter is now redundant but kept).
+  // Skipped for includeDeleted, for a caller filter with a top-level deletedAt (nested $or/$and is not
+  // detected), and for update-verb upserts that leave deletedAt alone: a unique- or _id-keyed upsert
+  // onto a tombstone would otherwise miss and E11000, so such an upsert can still write into a
+  // tombstone without reviving it. Replace upserts, and update upserts that $set/$unset deletedAt
+  // (e.g. repo.update(snapshot, { upsert: true })), stay guarded and fail closed with E11000 instead,
+  // since matching the tombstone would revive it.
+  // Known gaps: Model.bulkWrite fires no query middleware, so its ops are unguarded; and only an
+  // object update's top-level/$set/$unset deletedAt is seen, so a pipeline-form update or a $rename
+  // of deletedAt still upserts into (and revives) a tombstone. Neither has a caller today.
+  schema.pre(
+    ['findOneAndUpdate', 'updateOne', 'updateMany', 'findOneAndReplace', 'replaceOne'],
+    { document: false, query: true },
+    function (next) {
+      const opts = this.getOptions();
+      // Query#op is set at runtime for every verb but missing from Mongoose's typings.
+      const { op } = this as unknown as { op: string };
+      const isReplace = op === 'replaceOne' || op === 'findOneAndReplace';
+      // $setOnInsert is not checked: it only applies when no doc matched, so it cannot revive one.
+      const update = (this.getUpdate() ?? {}) as Record<string, Record<string, unknown> | undefined>;
+      const touchesDeletedAt =
+        update.deletedAt !== undefined ||
+        update.$set?.deletedAt !== undefined ||
+        update.$unset?.deletedAt !== undefined;
+      // `!== undefined` rather than hasOwn: `deletedAt: undefined` constrains nothing once
+      // ignoreUndefined drops it, so it must not count as the caller taking over.
+      if (
+        !opts.includeDeleted &&
+        (!opts.upsert || isReplace || touchesDeletedAt) &&
+        this.getFilter().deletedAt === undefined
+      ) {
+        this.where({ deletedAt: null });
+      }
+      next();
+    }
+  );
 
   // Document-level middleware for deleteOne/deleteMany
   schema.pre(['deleteOne', 'deleteMany'], { document: true, query: false }, async function (next) {

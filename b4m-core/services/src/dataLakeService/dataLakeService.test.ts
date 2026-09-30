@@ -29,6 +29,7 @@ import {
 } from './authorizeLakeWrite';
 import type { LakeGrant } from './manageRule';
 import { createDataLake } from './createDataLake';
+import { TAG_PREFIX_UNAVAILABLE_CODE } from './tagPrefixCollision';
 import { archiveDataLake } from './archiveDataLake';
 import { deleteDataLake } from './deleteDataLake';
 import type { RetrievalIndexRemoval } from './ports';
@@ -2636,7 +2637,10 @@ describe('createDataLake', () => {
     const find = vi.fn().mockResolvedValue([lake({ id: 'other', name: 'Sibling', fileTagPrefix: 'xy:' })]);
     await expect(
       createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db: { dataLakes: { create, find } } })
-    ).rejects.toThrow(/overlaps an existing data lake/i);
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/overlaps an existing data lake/i),
+      additionalInfo: { code: TAG_PREFIX_UNAVAILABLE_CODE },
+    });
     expect(create).not.toHaveBeenCalled();
   });
 
@@ -2653,7 +2657,10 @@ describe('createDataLake', () => {
     const find = vi.fn().mockResolvedValue([]);
     await expect(
       createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db: { dataLakes: { create, find } } })
-    ).rejects.toThrow(/overlaps an existing data lake/i);
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/overlaps an existing data lake/i),
+      additionalInfo: { code: TAG_PREFIX_UNAVAILABLE_CODE },
+    });
   });
 
   it('does not mislabel a duplicate-key collision on a DIFFERENT index as a prefix overlap', async () => {
@@ -2684,7 +2691,10 @@ describe('createDataLake', () => {
         { db: { dataLakes: { create: vi.fn(), find } } },
         'orgA'
       )
-    ).rejects.toThrow(/overlaps an existing data lake in this organization/i);
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/overlaps an existing data lake in this organization/i),
+      additionalInfo: { code: TAG_PREFIX_UNAVAILABLE_CODE },
+    });
 
     const mine = lake({ id: 'other', name: 'My Other Lake', fileTagPrefix: 'xy:', createdByUserId: 'owner' });
     await expect(
@@ -2694,6 +2704,27 @@ describe('createDataLake', () => {
         { db: { dataLakes: { create: vi.fn(), find: vi.fn().mockResolvedValue([mine]) } } }
       )
     ).rejects.toThrow(/"My Other Lake"/);
+  });
+
+  it('refuses a prefix that collides with a built-in registry lake, before touching the slug', async () => {
+    // Deleting the { code } tag on this throw (or collidesWithRegistryPrefix's call site) makes
+    // create_data_lake's disambiguation stop treating this as a collision, and the raw 4xx
+    // surfaces instead - the exact regression the code-based match exists to catch.
+    const registryPrefix = DATA_LAKES[0].fileTagPrefix;
+    const create = vi.fn();
+    const find = vi.fn().mockResolvedValue([]);
+    await expect(
+      createDataLake(
+        'owner',
+        { name: 'X', slug: 'xy', fileTagPrefix: registryPrefix },
+        { db: { dataLakes: { create, find } } }
+      )
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/reserved by a built-in knowledge base/i),
+      additionalInfo: { code: TAG_PREFIX_UNAVAILABLE_CODE },
+    });
+    expect(create).not.toHaveBeenCalled();
+    expect(find).not.toHaveBeenCalled();
   });
 
   it('allows a prefix that only collides outside the create scope', async () => {
@@ -4294,8 +4325,8 @@ describe('acceptDataLakePurge - the accept-time status transition (#1744)', () =
 
   it('claims deleted -> purging so the lake leaves the deleted list before the sweep runs', async () => {
     const adapters = makeAdapters(lake({ status: 'deleted' }));
-    await expect(acceptDataLakePurge(owner, 'lake1', adapters as never)).resolves.toBeUndefined();
-    expect(adapters.db.dataLakes.claimPurging).toHaveBeenCalledWith('lake1');
+    await expect(acceptDataLakePurge(owner, 'lake1', 'claim-1', adapters as never)).resolves.toBeUndefined();
+    expect(adapters.db.dataLakes.claimPurging).toHaveBeenCalledWith('lake1', 'claim-1');
   });
 
   it('refuses when the claim is LOST, which is what stops a purge racing a concurrent restore', async () => {
@@ -4303,12 +4334,12 @@ describe('acceptDataLakePurge - the accept-time status transition (#1744)', () =
     // so a restore landing in that gap must make this refuse rather than overwrite it. A bare status
     // write here would leave #1744 in place behind a narrower window.
     const adapters = makeAdapters(lake({ status: 'deleted' }), false);
-    await expect(acceptDataLakePurge(owner, 'lake1', adapters as never)).rejects.toThrow(/soft-deleted/i);
+    await expect(acceptDataLakePurge(owner, 'lake1', 'claim-1', adapters as never)).rejects.toThrow(/soft-deleted/i);
   });
 
   it('records no audit event when the claim is lost, so the trail never shows a refused purge', async () => {
     const adapters = makeAdapters(lake({ status: 'deleted' }), false);
-    await expect(acceptDataLakePurge(owner, 'lake1', adapters as never)).rejects.toThrow();
+    await expect(acceptDataLakePurge(owner, 'lake1', 'claim-1', adapters as never)).rejects.toThrow();
     expect(adapters.db.lakeConfigChangeEvents.record).not.toHaveBeenCalled();
   });
 
@@ -4317,7 +4348,7 @@ describe('acceptDataLakePurge - the accept-time status transition (#1744)', () =
     // the lake, so folding it into 'delete' would make the irreversible request indistinguishable
     // from the reversible one for the rest of time.
     const adapters = makeAdapters(lake({ status: 'deleted' }));
-    await acceptDataLakePurge(owner, 'lake1', adapters as never);
+    await acceptDataLakePurge(owner, 'lake1', 'claim-1', adapters as never);
     expect(adapters.db.lakeConfigChangeEvents.record).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'purge' })
     );
@@ -4326,7 +4357,7 @@ describe('acceptDataLakePurge - the accept-time status transition (#1744)', () =
   it('refuses a caller who cannot manage the lake, and never claims', async () => {
     const adapters = makeAdapters(lake({ status: 'deleted', createdByUserId: 'someone-else' }));
     await expect(
-      acceptDataLakePurge({ userId: 'intruder', isAdmin: false }, 'lake1', adapters as never)
+      acceptDataLakePurge({ userId: 'intruder', isAdmin: false }, 'lake1', 'claim-1', adapters as never)
     ).rejects.toThrow(/do not have permission to clean up/i);
     expect(adapters.db.dataLakes.claimPurging).not.toHaveBeenCalled();
   });

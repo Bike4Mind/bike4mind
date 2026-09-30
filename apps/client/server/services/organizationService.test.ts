@@ -177,7 +177,7 @@ describe('organizationService', () => {
       const result = await setSeats('org1', 5, { type: 'admin', userId: 'a1' });
 
       expect(result.seats).toBe(5);
-      expect(organizationRepository.update).toHaveBeenCalledWith(expect.objectContaining({ seats: 5 }));
+      expect(organizationRepository.update).toHaveBeenCalledWith({ id: 'org1', seats: 5 });
       expect(subscriptionRepository.updateByStripeSubscriptionId).toHaveBeenCalledWith('sub_abc', { quantity: 5 });
       expect(subscriptionRepository.update).not.toHaveBeenCalled();
     });
@@ -256,7 +256,7 @@ describe('organizationService', () => {
       const result = await reconcileOrgSeatsFromSubscription('orgR');
 
       expect(result).toEqual({ organization: org, before: 10, after: 30 });
-      expect(organizationRepository.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'orgR', seats: 30 }));
+      expect(organizationRepository.update).toHaveBeenCalledWith({ id: 'orgR', seats: 30 });
     });
 
     it('is a no-op when seats already match the billed quantity', async () => {

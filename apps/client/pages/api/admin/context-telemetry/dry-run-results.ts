@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { ForbiddenError } from '@server/utils/errors';
@@ -15,7 +16,7 @@ const querySchema = z.object({
  * Fetches recent dry run results for the Context Telemetry alert system.
  * Results are sorted by timestamp (most recent first) and auto-expire after 24 hours.
  */
-const handler = baseApi().get(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
   asyncHandler(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

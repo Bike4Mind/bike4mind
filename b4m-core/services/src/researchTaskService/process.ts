@@ -136,7 +136,7 @@ export const process = async (
 
   // Update status to PROCESSING before starting (no transaction needed for single operation)
   researchTask.status = ResearchTaskStatus.PROCESSING;
-  await db.researchTasks.update(researchTask);
+  await db.researchTasks.update({ id: researchTask.id, status: researchTask.status });
 
   logger?.info(`✅ [PROCESS_START] Processing research task ${researchTask.id} with status: ${researchTask.status}`);
 
@@ -237,7 +237,11 @@ export const process = async (
     } else {
       researchTask.status = ResearchTaskStatus.COMPLETED;
       researchTask.statusCompletedAt = new Date();
-      await db.researchTasks.update(researchTask);
+      await db.researchTasks.update({
+        id: researchTask.id,
+        status: researchTask.status,
+        statusCompletedAt: researchTask.statusCompletedAt,
+      });
 
       try {
         await jobs.researchTasks.sendToClient(researchTask, {
@@ -635,7 +639,11 @@ const processDeepResearch = async (
 
     researchTask.status = ResearchTaskStatus.COMPLETED;
     researchTask.statusCompletedAt = new Date();
-    await db.researchTasks.update(researchTask);
+    await db.researchTasks.update({
+      id: researchTask.id,
+      status: researchTask.status,
+      statusCompletedAt: researchTask.statusCompletedAt,
+    });
 
     await sendToClient?.(researchTask, {
       status: 'completed',

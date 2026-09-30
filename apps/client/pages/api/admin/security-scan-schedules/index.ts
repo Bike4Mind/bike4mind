@@ -15,12 +15,13 @@
  */
 
 import { Request, Response } from 'express';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { securityScanScheduleRepository } from '@bike4mind/database';
 import { resolveStage } from '@server/security/resolveStage';
 
-const handler = baseApi().get(async (req: Request, res: Response) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req: Request, res: Response) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Admin access required');
   }

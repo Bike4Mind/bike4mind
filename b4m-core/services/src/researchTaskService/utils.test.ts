@@ -402,7 +402,8 @@ describe('findExistingResearchData utils', () => {
         expect(result!.file.fileUrl).toBeUndefined();
         expect(result!.file.fileUrlExpireAt).toBeUndefined();
         expect(mockFabFilesRepo.update).toHaveBeenCalledWith(
-          expect.objectContaining({ fileUrl: undefined, fileUrlExpireAt: undefined })
+          { id: mockFabFile.id, updatedAt: expect.any(Date) },
+          { unset: ['fileUrl', 'fileUrlExpireAt'] }
         );
       });
 
@@ -502,7 +503,8 @@ describe('findExistingResearchData utils', () => {
         expect(result!.file.fileUrl).toBeUndefined();
         expect(result!.file.fileUrlExpireAt).toBeUndefined();
         expect(mockFabFilesRepo.update).toHaveBeenCalledWith(
-          expect.objectContaining({ fileUrl: undefined, fileUrlExpireAt: undefined })
+          { id: mockFabFile.id, updatedAt: expect.any(Date) },
+          { unset: ['fileUrl', 'fileUrlExpireAt'] }
         );
       });
     });

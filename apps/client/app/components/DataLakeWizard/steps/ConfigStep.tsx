@@ -18,11 +18,10 @@ import { useTheme } from '@mui/joy/styles';
 import { useEffect, useMemo, useRef } from 'react';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { useComputeHashes, useCheckDuplicates } from '@client/app/hooks/data/dataLakeWizard';
-import { slugifyDataLakeName } from '@client/app/hooks/data/dataLakeSlug';
 // The name, its slug rule, and the duplicate-name hint moved to the source step (#824), so
 // their imports live there now. tagPrefixIssue covers both prefix problems this step reports:
 // the reserved namespace and an overlap with another lake's prefix.
-import { submittedTagPrefix, tagPrefixIssue } from '@bike4mind/common';
+import { slugifyDataLakeName, submittedTagPrefix, tagPrefixIssue } from '@bike4mind/common';
 import { useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
 import { EmbeddingBudgetEstimate } from '@client/app/components/DataLakeWizard/EmbeddingBudgetEstimate';
 

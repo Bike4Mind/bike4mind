@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { AdminSettings } from '@bike4mind/database';
@@ -43,7 +44,7 @@ const HighlightsConfigSchema = z.object({
   attachMarkdownFile: z.boolean().optional(),
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: ADMIN_CONFIG_RATE_LIMIT, windowMs: ONE_MINUTE_MS }))
   .get(async (req: Request, res: Response) => {
     // Check if user is admin

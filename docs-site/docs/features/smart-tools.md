@@ -80,6 +80,14 @@ Search your uploaded documents in the Knowledge Base. The AI can find and refere
 - "Search my knowledge base for the Q3 report"
 - "What do my uploaded documents say about the deployment process?"
 
+### Save to Data Lake
+
+Save text the AI writes for you -- a summary, meeting notes, a table -- as a file in one of your [Data Lakes](./data-lakes.md). The AI saves only when you ask, lists the lakes you can add files to, and can create a new lake if you don't have one yet. A lake created from chat starts as a draft, so its files are not searchable until you publish it.
+
+**Example prompts:**
+- "Save that summary to my Research data lake"
+- "Put these notes in a new data lake called Onboarding"
+
 ---
 
 ## Creative Tools

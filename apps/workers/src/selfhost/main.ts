@@ -18,8 +18,10 @@ import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { runResearchScheduleTick } from '@server/cron/dataLakeResearchSchedule';
 import { SelfHostWorker } from './selfHostWorker';
 import { registerTaskScheduler } from './taskScheduler';
+import { registerLakeMemoryQueue } from './lakeMemoryQueue';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
+import { registerLakeHealthSweep } from './lakeHealthSweep';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { runChunkRescueSweep, runStrandedVectorizeRescue } from '@server/s3/chunkRescueSweep';
 import { runModerationRescueSweep } from '@server/s3/moderationRescueSweep';
@@ -76,6 +78,7 @@ async function main() {
   const worker = new SelfHostWorker(bootLogger);
   registerAbandonedExecutionSweep(worker);
   registerQuestTimeoutSweep(worker);
+  registerLakeHealthSweep(worker);
 
   worker.registerQueueHandler('researchEngineQueue', Resource.researchEngineQueue.url, researchEngineDispatch, {
     visibilityTimeoutSec: RESEARCH_VISIBILITY_TIMEOUT_SEC,
@@ -141,6 +144,8 @@ async function main() {
   } else {
     bootLogger.warn('dataLakeTaxonomyQueue not configured; background AI tag suggestion will not run');
   }
+
+  registerLakeMemoryQueue(worker, Resource.lakeMemoryQueue?.url, bootLogger);
 
   // User-triggered research runs (#1682). Optional in the self-host manifest for the same reason as
   // taxonomy: an install that never set the env var simply cannot start a run, and the API refuses

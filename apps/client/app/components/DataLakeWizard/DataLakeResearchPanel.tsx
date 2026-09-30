@@ -266,14 +266,16 @@ const RUN_STATUS_COLOR = {
 } as const;
 
 /**
- * Why a run stopped early, in the reviewer's terms. A stop reason is not a failure - it is the
- * lever that fired, and naming the lever is what makes it obvious which one to raise.
+ * Why a run stopped early, in the reviewer's terms. A stop reason is usually not a failure - it is
+ * the lever that fired, and naming the lever is what makes it obvious which one to raise. The
+ * exception is `judge_unavailable`, which the run records as `failed`.
  */
 const STOP_REASON_LABEL = {
   exhausted: 'Reviewed every search result',
   cost_ceiling: 'Stopped at the cost ceiling',
   proposal_limit: 'Reached the proposal limit',
   time_budget: 'Stopped at the time budget',
+  judge_unavailable: 'Stopped: the relevance judge was unavailable',
 } as const;
 
 /** When a run actually began, falling back to when it was queued - the time its history row shows. */
@@ -373,6 +375,7 @@ const DROP_REASON_LABEL: Record<Exclude<keyof ResearchRunTotals, 'searchHits' | 
   suppressedByTombstone: 'previously declined',
   unusableSource: 'unusable source',
   fetchFailed: 'could not be fetched',
+  notJudged: 'not judged (the judge was unavailable, so the run stopped)',
 };
 
 /**
@@ -987,7 +990,8 @@ export function DataLakeResearchPanel({
                     {run.error}
                   </Typography>
                 )}
-                {run.status === 'completed' && (
+                {/* A judge-failed run is `failed`, but its totals show how far the judge got. */}
+                {(run.status === 'completed' || (run.status === 'failed' && run.totals.judgeFailed > 0)) && (
                   <Typography level="body-xs" data-testid="datalake-research-run-totals">
                     {runOutcomeSummary(run)}
                   </Typography>

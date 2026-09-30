@@ -59,7 +59,7 @@ async function verifyQuestPlanAccess(
       if (session && session.userId === userId) {
         hasAccess = true;
         plan.userId = session.userId;
-        await questMasterPlanRepository.update(plan);
+        await questMasterPlanRepository.update({ id: plan.id, userId: plan.userId });
       }
     }
   }

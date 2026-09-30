@@ -13,7 +13,7 @@ import {
 } from '@bike4mind/llm-adapters';
 import { modelDiscoveryService } from '@bike4mind/services';
 import { builtInAgentModelReferences } from '@bike4mind/services/llm';
-import { toPerMTokRate, type IModelPrice, type PerMTokRate } from '@bike4mind/common';
+import { ApiKeyScope, toPerMTokRate, type IModelPrice, type PerMTokRate } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 
 /**
@@ -65,7 +65,7 @@ const ResolveBody = z.object({
   acknowledgeBlockers: z.boolean().optional(),
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
     if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
 
