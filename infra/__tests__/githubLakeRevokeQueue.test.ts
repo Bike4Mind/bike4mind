@@ -12,10 +12,14 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const read = (file: string) => readFileSync(path.join(REPO_ROOT, file), 'utf8');
 const QUEUES = read('infra/queues.ts');
 
+// Both markers must be found: a missed end marker would otherwise slice to end of file and let a
+// reformatted block pass on text that belongs to its neighbours.
 const cut = (source: string, start: string, end: string) => {
   const from = source.indexOf(start);
-  expect(from).toBeGreaterThanOrEqual(0);
-  return source.slice(from, source.indexOf(end, from));
+  expect(from, `start marker ${start}`).toBeGreaterThanOrEqual(0);
+  const to = source.indexOf(end, from);
+  expect(to, `end marker after ${start}`).toBeGreaterThan(from);
+  return source.slice(from, to);
 };
 
 describe('githubLakeRevokeQueue', () => {
@@ -58,6 +62,13 @@ describe('githubLakeRevokeQueue', () => {
     expect(read('infra/dlqAlarms.ts')).toMatch(
       /sourceQueue:\s*'githubLakeRevokeQueue',\s*queue:\s*githubLakeRevokeQueueDLQ/
     );
+  });
+
+  it("ships the revoke and ingest handlers' logs to the log monitor", () => {
+    const monitor = read('infra/logMonitor.ts');
+    for (const subscription of ['githubLakeRevokeQueueSubscription', 'githubLakeIngestQueueSubscription']) {
+      expect(monitor).toMatch(new RegExp(`^\\s+${subscription}\\.nodes\\.function\\.nodes\\.logGroup\\.apply\\(`, 'm'));
+    }
   });
 
   it('is reachable from the web Lambda that enqueues from the App webhook', () => {

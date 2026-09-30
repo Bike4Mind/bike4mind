@@ -1,4 +1,4 @@
-import { orgGitHubLakeConnectionRepository } from '@bike4mind/database';
+import { cacheRepository, orgGitHubLakeConnectionRepository } from '@bike4mind/database';
 import { z } from 'zod';
 
 const REVOCATION_EVENTS: ReadonlySet<string> = new Set(['installation', 'installation_repositories']);
@@ -55,4 +55,38 @@ export async function findRevokedConnectionIds({
   return bindings
     .filter(binding => repositoryIds === null || repositoryIds.has(binding.repositoryId))
     .map(binding => binding.id);
+}
+
+// Outlasts GitHub's 3-day window for manually redelivering a webhook delivery.
+const RESOLVED_DELIVERY_TTL_MS = 4 * 24 * 60 * 60 * 1000;
+
+const ResolvedDelivery = z.object({ connectionIds: z.array(z.string()) });
+
+const resolvedDeliveryKey = (deliveryId: string) => `github-lake-revoke-delivery-${deliveryId}`;
+
+/**
+ * findRevokedConnectionIds, pinned to the delivery: the first delivery's answer is stored under its
+ * `x-github-delivery` id, and a redelivery of that id reuses it instead of re-reading live bindings.
+ * Re-resolving would match a connection the user made after re-granting the repository and purge it.
+ * Pinned before anything is enqueued, so a redelivery after a partial enqueue failure re-sends the
+ * same set (revokes are idempotent per connection). Needs a database connection.
+ */
+export async function resolveRevokedConnectionIds(
+  target: GitHubLakeRevocationTarget,
+  deliveryId: string
+): Promise<string[]> {
+  const key = resolvedDeliveryKey(deliveryId);
+  const pinned = await cacheRepository.findByKey(key);
+  if (pinned) {
+    const parsed = ResolvedDelivery.safeParse(pinned.result);
+    if (parsed.success) return parsed.data.connectionIds;
+  }
+
+  const connectionIds = await findRevokedConnectionIds(target);
+  await cacheRepository.createOrUpdate({
+    key,
+    result: { connectionIds },
+    expiresAt: new Date(Date.now() + RESOLVED_DELIVERY_TTL_MS),
+  });
+  return connectionIds;
 }

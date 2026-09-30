@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   findByInstallationId: vi.fn(),
   recordLastError: vi.fn(),
   sendToQueue: vi.fn(),
+  cache: new Map<string, { result: unknown }>(),
 }));
 
 vi.mock('@server/utils/config', () => ({
@@ -16,6 +17,13 @@ vi.mock('@server/utils/config', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   connectDB: h.connectDB,
+  // In memory, so the real per-delivery pinning in resolveRevokedConnectionIds runs end to end.
+  cacheRepository: {
+    findByKey: vi.fn(async (key: string) => h.cache.get(key) ?? null),
+    createOrUpdate: vi.fn(async ({ key, result }: { key: string; result: unknown }) => {
+      h.cache.set(key, { result });
+    }),
+  },
   orgGitHubLakeConnectionRepository: {
     findByInstallationId: h.findByInstallationId,
     recordLastError: h.recordLastError,
@@ -79,6 +87,7 @@ type Delivery = {
   event?: string | null;
   method?: string;
   signature?: string | null;
+  deliveryId?: string | null;
   reqError?: Error;
 };
 
@@ -90,10 +99,12 @@ async function deliver({
   event = 'push',
   method = 'POST',
   signature,
+  deliveryId = 'delivery-1',
   reqError,
 }: Delivery = {}) {
   const resolvedRawBody = rawBody ?? JSON.stringify(body);
-  const headers: Record<string, string> = { 'x-github-delivery': 'delivery-1' };
+  const headers: Record<string, string> = {};
+  if (deliveryId !== null) headers['x-github-delivery'] = deliveryId;
   if (event !== null) headers['x-github-event'] = event;
   const resolvedSignature = signature === undefined ? sign(resolvedRawBody) : signature;
   if (resolvedSignature !== null) headers['x-hub-signature-256'] = resolvedSignature;
@@ -125,6 +136,7 @@ async function deliver({
 describe('POST /api/webhooks/github/lake', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.cache.clear();
     h.config = {
       GITHUB_LAKE_APP_WEBHOOK_SECRET: SECRET,
       MONGODB_URI: 'mongodb://localhost:27017/%STAGE%',
@@ -413,7 +425,7 @@ describe('POST /api/webhooks/github/lake', () => {
     expect(first.status).toBe(500);
     expect(first.json).toEqual({ message: 'Could not queue the revoke' });
 
-    // conn1 is queued twice across the two deliveries; revokeGitHubLakeConnection is idempotent.
+    // The redelivery re-sends the pinned set, so conn1 is queued twice; revokeGitHubLakeConnection is idempotent.
     h.sendToQueue.mockClear();
     h.sendToQueue.mockResolvedValue(undefined);
     const redelivery = await deliver({ event: 'installation', body: installationPayload() });
@@ -421,6 +433,61 @@ describe('POST /api/webhooks/github/lake', () => {
     expect(redelivery.status).toBe(202);
     expect(redelivery.json).toEqual({ status: 'queued', count: 2 });
     expect(h.sendToQueue.mock.calls.map(([, message]) => message.connectionId)).toEqual(['conn1', 'conn2']);
+  });
+
+  it('does not revoke a connection made after the event when the same delivery is redelivered', async () => {
+    const first = await deliver({ event: 'installation_repositories', body: installationRepositoriesPayload() });
+    expect(first.status).toBe(202);
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', {
+      connectionId: 'conn1',
+      installationId: INSTALLATION_ID,
+    });
+
+    // The user re-grants the repository and reconnects: a new row binds the same repository.
+    h.findByInstallationId.mockResolvedValue([{ ...connection, id: 'conn1-prime' }]);
+    h.sendToQueue.mockClear();
+    const redelivery = await deliver({ event: 'installation_repositories', body: installationRepositoriesPayload() });
+
+    expect(redelivery.status).toBe(202);
+    expect(h.sendToQueue.mock.calls.map(([, message]) => message.connectionId)).toEqual(['conn1']);
+  });
+
+  it('resolves a different delivery against the live bindings', async () => {
+    await deliver({ event: 'installation_repositories', body: installationRepositoriesPayload() });
+    h.findByInstallationId.mockResolvedValue([{ ...connection, id: 'conn1-prime' }]);
+    h.sendToQueue.mockClear();
+
+    await deliver({
+      event: 'installation_repositories',
+      body: installationRepositoriesPayload(),
+      deliveryId: 'delivery-2',
+    });
+
+    expect(h.sendToQueue.mock.calls.map(([, message]) => message.connectionId)).toEqual(['conn1-prime']);
+  });
+
+  it('400s a revoking event with no x-github-delivery header, since it cannot be pinned', async () => {
+    const { status, json } = await deliver({ event: 'installation', body: installationPayload(), deliveryId: null });
+
+    expect(status).toBe(400);
+    expect(json).toEqual({ message: 'Missing x-github-delivery header' });
+    expect(h.findByInstallationId).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('500s and logs when resolving the affected connections fails', async () => {
+    h.findByInstallationId.mockRejectedValue(new Error('mongo down'));
+    const { status, json } = await deliver({ event: 'installation', body: installationPayload() });
+
+    expect(status).toBe(500);
+    expect(json).toEqual({ message: 'Could not resolve the revoke' });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    const { Logger } = await import('@bike4mind/observability');
+    const logger = vi.mocked(Logger).mock.results.at(-1)?.value as { error: ReturnType<typeof vi.fn> };
+    expect(logger.error).toHaveBeenCalledWith(
+      '[githubLakeWebhook] could not resolve the revoked connections',
+      expect.objectContaining({ deliveryId: 'delivery-1', installationId: INSTALLATION_ID })
+    );
   });
 
   it('500s when the revoke enqueue fails, without throwing', async () => {

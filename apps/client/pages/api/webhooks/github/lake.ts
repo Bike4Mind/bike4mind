@@ -11,7 +11,8 @@
  * - `installation.deleted` / `installation_repositories.removed`: the App lost access, so each
  *   affected connection is queued on githubLakeRevokeQueue for purge (queueHandlers/githubLakeRevoke.ts).
  *   It only enqueues: GitHub never redelivers on its own and a live sync makes the purge 409, so the
- *   queue owns the retries. A revoke is idempotent, so a redelivery is a no-op.
+ *   queue owns the retries. The affected connections are pinned per delivery id, so a redelivery
+ *   re-sends the same revokes and never reaches a connection made after the original event.
  * - Everything else (ping, the reversible `suspend`, other actions) is acknowledged and ignored.
  *
  * There is no user here; the App's webhook HMAC is the only auth.
@@ -31,9 +32,9 @@ import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { getRawBody, PayloadTooLargeError, verifyGitHubSignature } from '@server/integrations/github/webhookUtils';
 import {
-  findRevokedConnectionIds,
   isGitHubLakeRevocationEvent,
   parseGitHubLakeRevocation,
+  resolveRevokedConnectionIds,
 } from '@server/integrations/github/dataLake/githubLakeRevocation';
 import { sendToQueue } from '@server/utils/sqs';
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
@@ -203,9 +204,27 @@ async function handleRevocation(
     return res.status(400).json({ message: 'Malformed payload' });
   }
 
+  if (!deliveryId) {
+    logger.warn('[githubLakeWebhook] missing x-github-delivery header on a revoking event', { event: eventType });
+    auditLogger.failure('missing_delivery_header');
+    return res.status(400).json({ message: 'Missing x-github-delivery header' });
+  }
+
   await connectToDatabase(logger);
   const { installationId } = target;
-  const connectionIds = await findRevokedConnectionIds(target);
+  let connectionIds: string[];
+  try {
+    connectionIds = await resolveRevokedConnectionIds(target, deliveryId);
+  } catch (error) {
+    logger.error('[githubLakeWebhook] could not resolve the revoked connections', {
+      deliveryId,
+      installationId,
+      error,
+    });
+    auditLogger.failure('resolve_failed', { installationId });
+    return res.status(500).json({ message: 'Could not resolve the revoke' });
+  }
+
   try {
     await Promise.all(
       connectionIds.map(connectionId =>
@@ -213,7 +232,7 @@ async function handleRevocation(
       )
     );
   } catch (error) {
-    // 500 so the delivery shows failed for a manual redeliver; revokes are idempotent.
+    // 500 so the delivery shows failed for a manual redeliver, which re-sends the pinned set.
     logger.error('[githubLakeWebhook] revoke enqueue failed', { deliveryId, installationId, error });
     auditLogger.failure('enqueue_failed', { installationId });
     return res.status(500).json({ message: 'Could not queue the revoke' });
