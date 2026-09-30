@@ -60,7 +60,10 @@ export function setPromptSuggestionsEnabled(next: boolean): void {
 
 /** The setting, and the toggle for it. Re-renders every reader when either one changes it. */
 export function usePromptSuggestions(): [boolean, () => void] {
-  const value = useSyncExternalStore(subscribe, promptSuggestionsEnabled);
+  // The third argument is the same reader: there is no server, and the value is a module
+  // global rather than anything React renders around, so a string render sees what a live one
+  // would. Without it React refuses to render this hook outside the browser at all.
+  const value = useSyncExternalStore(subscribe, promptSuggestionsEnabled, promptSuggestionsEnabled);
   const toggle = useCallback(() => setPromptSuggestionsEnabled(!promptSuggestionsEnabled()), []);
   return [value, toggle];
 }

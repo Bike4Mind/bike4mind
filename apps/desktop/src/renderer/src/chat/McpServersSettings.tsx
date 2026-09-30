@@ -4,16 +4,12 @@ import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Chip from '@mui/joy/Chip';
 import CircularProgress from '@mui/joy/CircularProgress';
-import DialogTitle from '@mui/joy/DialogTitle';
 import Divider from '@mui/joy/Divider';
 import FormControl from '@mui/joy/FormControl';
 import FormHelperText from '@mui/joy/FormHelperText';
 import FormLabel from '@mui/joy/FormLabel';
 import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
-import Modal from '@mui/joy/Modal';
-import ModalClose from '@mui/joy/ModalClose';
-import ModalDialog from '@mui/joy/ModalDialog';
 import Option from '@mui/joy/Option';
 import Select from '@mui/joy/Select';
 import Sheet from '@mui/joy/Sheet';
@@ -336,16 +332,12 @@ function ServerForm({
  * does, which the copy at the bottom says out loud: a user adding a server is adding a program
  * that can declare arbitrary tools inside an app that already reaches their filesystem, and
  * that is worth one sentence where they are making the decision.
+ *
+ * Bare content, with no window of its own: it is a section of the Customize screen, which
+ * already has a heading and a way out. It was a modal only because Customize used to be a
+ * sidebar list with nowhere to put it.
  */
-export function McpServersDialog({
-  open,
-  onClose,
-  controller,
-}: {
-  open: boolean;
-  onClose: () => void;
-  controller: McpServersController;
-}) {
+export function McpServersSettings({ controller }: { controller: McpServersController }) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -375,71 +367,64 @@ export function McpServersDialog({
   }, [draft, controller]);
 
   return (
-    <Modal open={open} onClose={onClose}>
-      <ModalDialog sx={{ width: 620, maxWidth: '92vw', maxHeight: '86vh', overflow: 'auto' }} data-testid="mcp-dialog">
-        <ModalClose data-testid="mcp-dialog-close-btn" />
-        <DialogTitle>MCP servers</DialogTitle>
+    <Stack spacing={1.25} data-testid="mcp-settings">
+      {!controller.secretsPersisted && (
+        <Alert size="sm" color="warning" variant="soft" data-testid="mcp-settings-no-keychain">
+          This machine has no keychain this app can use, so tokens you enter are kept only until you quit. They are
+          never written to disk in plain text.
+        </Alert>
+      )}
 
-        <Stack spacing={1.25}>
-          {!controller.secretsPersisted && (
-            <Alert size="sm" color="warning" variant="soft" data-testid="mcp-dialog-no-keychain">
-              This machine has no keychain this app can use, so tokens you enter are kept only until you quit. They are
-              never written to disk in plain text.
-            </Alert>
-          )}
+      {controller.servers.length === 0 && !draft && (
+        <Typography level="body-sm" textColor="text.tertiary" data-testid="mcp-settings-empty">
+          No MCP servers yet. Add one to give this app the tools it provides.
+        </Typography>
+      )}
 
-          {controller.servers.length === 0 && !draft && (
-            <Typography level="body-sm" textColor="text.tertiary" data-testid="mcp-dialog-empty">
-              No MCP servers yet. Add one to give this app the tools it provides.
-            </Typography>
-          )}
+      {controller.servers.map(server => (
+        <ServerRow
+          key={server.id}
+          server={server}
+          controller={controller}
+          onEdit={() => {
+            setError(null);
+            setDraft(draftFor(server));
+          }}
+        />
+      ))}
 
-          {controller.servers.map(server => (
-            <ServerRow
-              key={server.id}
-              server={server}
-              controller={controller}
-              onEdit={() => {
-                setError(null);
-                setDraft(draftFor(server));
-              }}
-            />
-          ))}
+      {draft ? (
+        <>
+          <Divider />
+          <ServerForm
+            draft={draft}
+            setDraft={setDraft}
+            error={error}
+            busy={busy}
+            onSave={() => void save()}
+            onCancel={() => setDraft(null)}
+          />
+        </>
+      ) : (
+        <Button
+          size="sm"
+          variant="soft"
+          startDecorator={<PlusIcon />}
+          onClick={() => {
+            setError(null);
+            setDraft(emptyDraft());
+          }}
+          data-testid="mcp-settings-add-btn"
+        >
+          Add server
+        </Button>
+      )}
 
-          {draft ? (
-            <>
-              <Divider />
-              <ServerForm
-                draft={draft}
-                setDraft={setDraft}
-                error={error}
-                busy={busy}
-                onSave={() => void save()}
-                onCancel={() => setDraft(null)}
-              />
-            </>
-          ) : (
-            <Button
-              size="sm"
-              variant="soft"
-              startDecorator={<PlusIcon />}
-              onClick={() => {
-                setError(null);
-                setDraft(emptyDraft());
-              }}
-              data-testid="mcp-dialog-add-btn"
-            >
-              Add server
-            </Button>
-          )}
-
-          <Typography level="body-xs" textColor="text.tertiary">
-            An MCP server is a program or endpoint you trust: it can declare any tool it likes. Every one of its tools
-            asks you to approve each call, the same as a bash command, and nothing it says about itself can change what
-            this app will do.
-          </Typography>
-        </Stack>
-      </ModalDialog>
-    </Modal>
+      <Typography level="body-xs" textColor="text.tertiary">
+        An MCP server is a program or endpoint you trust: it can declare any tool it likes. Every one of its tools asks
+        you to approve each call, the same as a bash command, and nothing it says about itself can change what this app
+        will do.
+      </Typography>
+    </Stack>
   );
 }
