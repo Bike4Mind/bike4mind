@@ -52,6 +52,8 @@ import {
   driveDisconnectPurgeQueueDLQ,
   githubLakeIngestQueue,
   githubLakeIngestQueueDLQ,
+  githubLakeRevokeQueue,
+  githubLakeRevokeQueueDLQ,
   whatsNewGenerationQueue,
   whatsNewHighlightsQueue,
   notebookCurationQueue,
@@ -142,6 +144,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'drive-lake-ingest': driveLakeIngestQueueDLQ.url,
     'drive-disconnect-purge': driveDisconnectPurgeQueueDLQ.url,
     'github-lake-ingest': githubLakeIngestQueueDLQ.url,
+    'github-lake-revoke': githubLakeRevokeQueueDLQ.url,
   },
 });
 
@@ -201,6 +204,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     driveLakeIngestQueue: driveLakeIngestQueue.url,
     driveDisconnectPurgeQueue: driveDisconnectPurgeQueue.url,
     githubLakeIngestQueue: githubLakeIngestQueue.url,
+    githubLakeRevokeQueue: githubLakeRevokeQueue.url,
   },
 });
 
@@ -256,6 +260,10 @@ export const web = new sst.aws.Nextjs(
       dataLakeTaxonomyQueue,
       driveLakeIngestQueue,
       githubLakeIngestQueue,
+      // The App's webhook (pages/api/webhooks/github/lake.ts) reads Resource.githubLakeRevokeQueue.url directly
+      // to enqueue one purge message per affected connection, the same reason githubLakeIngestQueue
+      // above is linked directly rather than only through sourceQueueUrls.
+      githubLakeRevokeQueue,
       // Directly linked for the plainer reason: `POST /api/data-lakes/:id/research/runs` reads
       // Resource.dataLakeResearchQueue.url to enqueue the run. Via sourceQueueUrls alone the key is
       // only reachable as Resource.sourceQueueUrls.dataLakeResearchQueue, and sst's Resource proxy
