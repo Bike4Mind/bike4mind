@@ -27,6 +27,8 @@ export interface IOAuthGrantDocument extends IMongoDocument {
 export interface IOAuthGrantRepository extends IBaseRepository<IOAuthGrantDocument> {
   /** The active (non-revoked) grant for this pair, or null. */
   findGrant(userId: string, clientId: string): Promise<IOAuthGrantDocument | null>;
+  /** All active (non-revoked) grants for this user, most-recently approved first. */
+  listActiveByUser(userId: string): Promise<IOAuthGrantDocument[]>;
   /** Create or widen the grant for this pair, clearing any prior revocation. */
   upsertGrant(params: {
     userId: string;
@@ -53,6 +55,9 @@ const OAuthGrantSchema = new Schema<IOAuthGrantDocument>(
 
 // One grant per (client, user); the upsert keys on it.
 OAuthGrantSchema.index({ clientId: 1, userId: 1 }, { unique: true });
+// Covers listActiveByUser: equality on userId + revokedAt, sort on updatedAt (most-recently
+// re-approved first -- approvedAt in the API response comes from updatedAt).
+OAuthGrantSchema.index({ userId: 1, revokedAt: 1, updatedAt: -1 });
 
 class OAuthGrantRepository extends BaseRepository<IOAuthGrantDocument> implements IOAuthGrantRepository {
   constructor(m: IOAuthGrantModel) {
@@ -61,6 +66,10 @@ class OAuthGrantRepository extends BaseRepository<IOAuthGrantDocument> implement
 
   findGrant(userId: string, clientId: string) {
     return this.model.findOne({ userId, clientId, revokedAt: null }).exec();
+  }
+
+  listActiveByUser(userId: string) {
+    return this.model.find({ userId, revokedAt: null }).sort({ updatedAt: -1 }).exec();
   }
 
   async upsertGrant(params: { userId: string; clientId: string; scopes: string[]; source: string }) {
@@ -89,7 +98,9 @@ class OAuthGrantRepository extends BaseRepository<IOAuthGrantDocument> implement
   }
 
   revoke(userId: string, clientId: string) {
-    return this.model.findOneAndUpdate({ userId, clientId }, { $set: { revokedAt: new Date() } }, { new: true }).exec();
+    return this.model
+      .findOneAndUpdate({ userId, clientId, revokedAt: null }, { $set: { revokedAt: new Date() } }, { new: true })
+      .exec();
   }
 }
 
