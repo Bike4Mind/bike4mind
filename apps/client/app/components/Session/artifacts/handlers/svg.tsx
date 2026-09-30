@@ -1,8 +1,9 @@
 import React, { useMemo } from 'react';
-import { Box, Typography } from '@mui/joy';
+import { Box } from '@mui/joy';
 import DOMPurify from 'dompurify';
 import type { SvgArtifact } from '@bike4mind/common';
 import ArtifactPreviewCard from '@client/app/components/GenAI/ArtifactPreviewCard';
+import { artifactFileName } from '@client/app/utils/artifactFileName';
 import { registerArtifactType, type ArtifactPreviewProps } from '../registry';
 
 export const sanitizeSvg = (raw: string): string =>
@@ -64,13 +65,12 @@ const SvgPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactId }
     [artifactId, svgTitle, artifact.content]
   );
 
-  const lineCount = artifact.content.split('\n').length;
-
   return (
     <Box data-testid={`artifact-preview-svg-${artifactId}`}>
       <ArtifactPreviewCard
         artifactId={svgArtifact.id}
         artifactType="svg"
+        sourceLanguage="xml"
         mimeType="image/svg+xml"
         artifactContent={svgArtifact}
         contentKey={artifact.content}
@@ -79,25 +79,27 @@ const SvgPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactId }
         testIdPrefix="svg"
         // The graphic IS the artifact: always shown, never collapsed, and no source view
         // (so no code toggle) -- but the markup is still worth saving as a file.
-        collapsible={false}
         source={artifact.content}
         saveTooltip="Save as SVG file"
         saveFile={() => ({
-          fileName: `${svgTitle.toLowerCase().replace(/\s+/g, '_')}_${Date.now()}.svg`,
+          fileName: artifactFileName(svgTitle, 'svg', 'svg-graphic'),
           mimeType: 'image/svg+xml',
           successMessage: 'Saved SVG as file',
         })}
         actions={{ save: true }}
-        stats={
-          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-            {lineCount} lines
-          </Typography>
-        }
         renderPreview={() => (
           <Box
             sx={{
               display: 'flex',
               justifyContent: 'center',
+              // A fixed white plate in both schemes, like the HTML and React sandboxes.
+              // The preview used to be transparent, so an SVG drawn in light strokes for
+              // a dark canvas disappeared on a light card, and dark strokes disappeared
+              // on a dark one. An SVG is authored artwork and cannot be re-themed; giving
+              // it the canvas most artwork assumes is the only reading that never hides it.
+              backgroundColor: '#FFFFFF',
+              borderRadius: '6px',
+              p: 1,
               '& svg': {
                 maxWidth: '100%',
                 height: 'auto',

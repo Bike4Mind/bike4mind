@@ -37,6 +37,9 @@ const connected = (over: Partial<LakeDriveConnection> = {}): LakeDriveConnection
   lastError: null,
   lastUsedAt: null,
   connectedAt: null,
+  fileCount: 3,
+  disconnecting: false,
+  disconnectStalled: false,
   ...over,
 });
 
@@ -50,6 +53,18 @@ describe('DriveConnectAction', () => {
   it('offers an enabled Connect button when the lake has no connection yet', () => {
     wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
     expect(screen.getByTestId('drive-connect-btn')).not.toBeDisabled();
+  });
+
+  it('says what the grant can read before the user reaches Google consent', () => {
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('drive-access-disclosure')).toHaveTextContent(/whole Google Drive/);
+    expect(screen.getByTestId('drive-access-disclosure')).toHaveTextContent(/Only the folder you pick is ingested/);
+  });
+
+  it('drops the disclosure once a folder is connected', () => {
+    h.connection.current = connected();
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.queryByTestId('drive-access-disclosure')).toBeNull();
   });
 
   it('disables the action when the status query errors (personal lake / non-manager)', () => {
@@ -100,5 +115,49 @@ describe('DriveConnectAction', () => {
 
     fireEvent.click(screen.getByTestId('drive-disconnect-confirm-btn'));
     expect(h.disconnectMutate).toHaveBeenCalledWith('lake1', expect.any(Object));
+  });
+
+  it('warns how many files disconnecting will delete', () => {
+    h.connection.current = connected({ fileCount: 42 });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+
+    fireEvent.click(screen.getByTestId('drive-disconnect-btn'));
+    expect(screen.getByTestId('drive-disconnect-warning')).toHaveTextContent('42 files');
+  });
+
+  it('reads Disconnecting while the queued purge runs, with no Re-sync and no retry yet', () => {
+    h.connection.current = connected({ disconnecting: true, fileCount: 7 });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+
+    expect(screen.getByTestId('drive-connection-status')).toHaveTextContent('Disconnecting');
+    expect(screen.getByTestId('drive-disconnecting-note')).toHaveTextContent('7 remaining files');
+    expect(screen.queryByTestId('drive-resync-btn')).toBeNull();
+    // A retry now would only start a second purge chain over the same files.
+    const button = screen.getByTestId('drive-disconnect-btn');
+    expect(button).toHaveTextContent('Disconnecting');
+    expect(button).toBeDisabled();
+  });
+
+  it('offers Retry disconnect once the purge looks stalled, so a DLQ-bound purge can be re-queued', () => {
+    h.connection.current = connected({ disconnecting: true, disconnectStalled: true });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+
+    const button = screen.getByTestId('drive-disconnect-btn');
+    expect(button).toHaveTextContent('Retry disconnect');
+    expect(button).not.toBeDisabled();
+  });
+
+  it('says it is finishing up rather than removing 0 files', () => {
+    h.connection.current = connected({ disconnecting: true, fileCount: 0 });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('drive-disconnecting-note')).toHaveTextContent('Finishing disconnect...');
+  });
+
+  it('uses singular wording for exactly one file', () => {
+    h.connection.current = connected({ fileCount: 1 });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+
+    fireEvent.click(screen.getByTestId('drive-disconnect-btn'));
+    expect(screen.getByTestId('drive-disconnect-warning')).toHaveTextContent('1 file ');
   });
 });

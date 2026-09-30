@@ -8,15 +8,18 @@ import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { admitProposedSource } from '@server/dataLakes/proposalAdmissionDeps';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 
 const ReviewInput = z.object({
-  decision: z.enum(['approve', 'decline']),
+  decision: z.enum(['approve', 'decline', 'restore']),
   /** Recorded on the tombstone so a later reviewer can see why this source was refused. */
   reason: z.string().trim().max(500).optional(),
 });
 
 /**
- * POST /api/data-lakes/:id/proposals/:proposalId - rule on one acquisition proposal (#1671).
+ * POST /api/data-lakes/:id/proposals/:proposalId - rule on one acquisition proposal (#1671), or
+ * `restore` a declined one to the pending queue.
  *
  * The only way content a producer found reaches a lake, and it is a human action by construction:
  * there is no auto-approval lever here or anywhere else (#1658 decision 10). Authorization,
@@ -47,17 +50,33 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       dataLakeProposals: dataLakeProposalRepository,
       dataLakes: dataLakeRepository,
       dataLakeAccessGrants: dataLakeAccessGrantRepository,
+      ...lakeConfigAuditDb,
     };
+    // Attribute a key-driven review decision to the KEY, matching every other config-write route
+    // (grants.ts, lifecycle.ts) - see lakeConfigAuditPrincipal for why a session write needs no override.
+    const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
+
+    if (decision === 'restore') {
+      const restored = await dataLakeService.restoreDataLakeProposal(proposalId, actor, { db, logger: req.logger });
+      return res.json({ data: restored });
+    }
 
     if (decision === 'decline') {
-      const declined = await dataLakeService.declineDataLakeProposal(proposalId, ctx, { reason }, { db });
+      const declined = await dataLakeService.declineDataLakeProposal(
+        proposalId,
+        actor,
+        { reason },
+        { db, logger: req.logger }
+      );
       return res.json({ data: declined });
     }
 
-    const { proposal: approved, fabFile } = await dataLakeService.approveDataLakeProposal(proposalId, ctx, {
-      db,
-      admitSource: admitProposedSource,
-    });
+    const { proposal: approved, fabFile } = await dataLakeService.approveDataLakeProposal(
+      proposalId,
+      actor,
+      { db, admitSource: admitProposedSource, logger: req.logger },
+      { approverName: req.user?.name || req.user?.username || undefined }
+    );
     return res.json({ data: approved, fabFile: { id: fabFile.id, fileName: fabFile.fileName } });
   });
 

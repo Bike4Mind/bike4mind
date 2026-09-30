@@ -1,5 +1,6 @@
 import { BadRequestError } from '@bike4mind/utils';
 import { ForbiddenError } from '@server/utils/errors';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
@@ -19,7 +20,7 @@ interface RequestQuery {
   id: string;
 }
 
-const handler = baseApi().patch(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).patch(
   asyncHandler(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

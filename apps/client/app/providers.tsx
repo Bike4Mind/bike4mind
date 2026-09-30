@@ -184,9 +184,7 @@ export function ClientProviders({ children }: { children: ReactNode }) {
   return (
     <CoreProviders>
       {mounted && <Toaster richColors closeButton position="bottom-right" />}
-      {mounted && !!(process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID || process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID) && (
-        <CookieConsentBanner />
-      )}
+      {mounted && <CookieConsentBanner />}
       <TranslationProvider>
         <DefaultMetaTags />
         <main>

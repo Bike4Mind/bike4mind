@@ -54,6 +54,7 @@ const SKIP_PATTERNS = [
   /modelPrices\.seed\.json$/, // same reason as the catalog seed: a retired model keeps its rate so historical usage still settles
   /aggregatorKeys\.json$/, // a captured snapshot of what models.dev and litellm publish, retired entries included; not our usage
   /mocks\//, // test mock data
+  /__fixtures__\//, // captured provider responses, retired models included; not our usage
   /test-config\.ts$/, // test config fixtures
   /telemetryFingerprint\.ts$/, // normalization logic references old IDs in comments/examples
   /DEPRECATED_MODEL_MAP/, // map definitions are intentional

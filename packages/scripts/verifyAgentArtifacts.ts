@@ -158,13 +158,19 @@ async function runAgent(args: {
   const cfg = await api<{ websocketUrl?: string }>('/api/settings/serverConfig', { token: args.token });
   if (!cfg.websocketUrl) throw new Error('serverConfig response missing websocketUrl');
 
+  // The $connect route authenticates before the socket opens and rejects with a
+  // bare 1006 otherwise. The web path is a single-use `?ticket=` (minted here per
+  // connect, same as the browser); the raw session JWT is no longer accepted in
+  // the URL, and the CLI's `Sec-WebSocket-Protocol: access_token.<jwt>` form is
+  // not usable here because the connect Lambda does not echo the accepted
+  // subprotocol back and a spec-compliant client then fails the handshake.
+  const { ticket } = await api<{ ticket: string }>('/api/websocket/ticket', {
+    method: 'POST',
+    token: args.token,
+  });
+
   return new Promise((resolve, reject) => {
-    // The $connect route authenticates before the socket opens and rejects with
-    // a bare 1006 otherwise. `?token=` is the web-client form; the CLI's
-    // `Sec-WebSocket-Protocol: access_token.<jwt>` form is NOT usable here,
-    // because the connect Lambda does not echo the accepted subprotocol back
-    // and a spec-compliant client then fails the handshake.
-    const wsUrl = `${cfg.websocketUrl}?token=${encodeURIComponent(args.token)}`;
+    const wsUrl = `${cfg.websocketUrl}?ticket=${encodeURIComponent(ticket)}`;
     const ws = new WebSocket(wsUrl);
     const timer = setTimeout(() => {
       ws.close();

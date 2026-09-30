@@ -14,7 +14,7 @@ import { createMocks } from 'node-mocks-http';
  */
 
 const { mocks } = vi.hoisted(() => ({
-  mocks: { findOne: vi.fn(), select: vi.fn(), lean: vi.fn(), setCookie: vi.fn(() => true) },
+  mocks: { findOne: vi.fn(), select: vi.fn(), lean: vi.fn(), setCookie: vi.fn(() => true), parse: vi.fn() },
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -46,10 +46,12 @@ vi.mock('@bike4mind/database', () => ({
       };
     },
   },
+  shareTokenFilter: (token: string) => ({ __shareFilterFor: token }),
 }));
 vi.mock('@server/services/publish/parsePublishPath', () => ({
   segmentsFromViewerPathname: (p: string) => (p === '/bad' ? null : ['u', 'scope', 'slug']),
-  parsePublishPath: () => ({ kind: 'bundle', tier: 'user', scopeId: 'scope', slug: 'slug', assetPath: null }),
+  parsePublishPath: (...a: unknown[]) =>
+    mocks.parse(...a) ?? { kind: 'bundle', tier: 'user', scopeId: 'scope', slug: 'slug', assetPath: null },
 }));
 vi.mock('@server/services/publish/publishGateToken', () => ({
   setGateProofCookie: (...a: unknown[]) => mocks.setCookie(...a),
@@ -57,7 +59,9 @@ vi.mock('@server/services/publish/publishGateToken', () => ({
 
 import handler from '../owner';
 
-type Principal = { id: string; isAdmin?: boolean; mfaPending?: boolean } | undefined;
+type Principal =
+  | { id: string; isAdmin?: boolean; mfaPending?: boolean; oauthGrant?: { scopes: string[]; clientId: string } }
+  | undefined;
 
 const run = (body: unknown, user: Principal) => {
   const { req, res } = createMocks({ method: 'POST', body });
@@ -137,6 +141,48 @@ describe('POST /api/publish/gate/owner - who is admitted', () => {
 
     expect(res._getStatusCode()).toBe(401);
     expect(mocks.setCookie).not.toHaveBeenCalled();
+  });
+
+  // Same hazard as mfaPending, different marker: a relying-party OAuth access token stamps
+  // oauthGrant onto req.user. optionalAuth filters it, but this route keeps its own check because
+  // it is `auth: false` and oauthRouteGate never runs here. An openid-only OAuth token acting as
+  // the owner (or admin) must not walk away with a credential-free proof cookie.
+  it('401s an OAuth token even when it IS the owner', async () => {
+    gated();
+
+    const { res, promise } = run(
+      { path: '/p/u/scope/slug' },
+      { id: 'owner1', oauthGrant: { scopes: ['openid'], clientId: 'c1' } }
+    );
+    await promise;
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(mocks.setCookie).not.toHaveBeenCalled();
+  });
+
+  it('401s an OAuth token carrying an admin subject, who would otherwise unlock every gated artifact', async () => {
+    gated();
+
+    const { res, promise } = run(
+      { path: '/p/u/scope/slug' },
+      { id: 'root', isAdmin: true, oauthGrant: { scopes: ['openid'], clientId: 'c1' } }
+    );
+    await promise;
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(mocks.setCookie).not.toHaveBeenCalled();
+  });
+
+  it('resolves a share link through the shared shareTokenFilter', async () => {
+    mocks.parse.mockReturnValue({ kind: 'share', shareToken: 'tok123', assetPath: null });
+    gated();
+
+    const { res, promise } = run({ path: '/a/tok123' }, { id: 'owner1' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(204);
+    expect(mocks.setCookie).toHaveBeenCalledWith(expect.anything(), 'pub1');
+    expect(mocks.findOne.mock.calls[0][0]).toEqual({ __shareFilterFor: 'tok123', deletedAt: null });
   });
 });
 

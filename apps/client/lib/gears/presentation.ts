@@ -1,3 +1,5 @@
+import type { GearKey } from './keys';
+
 /**
  * Gears - code-defined presentation defaults, shared by the Gears page, the
  * status endpoint (admin-override-merged), and the Manage Gears dashboard.
@@ -16,7 +18,7 @@ export interface GearPresentation {
   ctaAction: string;
 }
 
-export const GEAR_PRESENTATION: Record<string, GearPresentation> = {
+export const GEAR_PRESENTATION: Record<GearKey, GearPresentation> = {
   // --- Destinations ---
   projects: {
     title: 'Projects',
@@ -157,6 +159,20 @@ export const GEAR_PRESENTATION: Record<string, GearPresentation> = {
     tagline: 'Prompt to motion',
     intro: 'Generate short video from a text prompt, right in the conversation.',
     cta: 'Generate a video',
+    ctaAction: 'navigate:/new',
+  },
+  music: {
+    title: 'Music Generation',
+    tagline: 'Prompt to melody',
+    intro: 'Ask a chat for a track and it composes one - background music, a jingle, a mood piece.',
+    cta: 'Generate a track',
+    ctaAction: 'navigate:/new',
+  },
+  sound: {
+    title: 'Sound Effects',
+    tagline: 'Describe it, hear it',
+    intro: 'Describe a sound in words and get it made - rain on a tin roof, a door creak, a whoosh.',
+    cta: 'Generate a sound',
     ctaAction: 'navigate:/new',
   },
   research: {

@@ -35,7 +35,7 @@ describe('useSendMessage — host-managed first-message creation (regression)', 
 
   it('delegates BEFORE the generic send path begins (ordering invariant)', () => {
     const delegateIdx = source.indexOf('await hostCreateSession(prompt)');
-    const newOptimisticIdx = source.indexOf("location.pathname === '/new'");
+    const newOptimisticIdx = source.indexOf("if (location.pathname === '/new' && !dataLakeCreated)");
 
     expect(delegateIdx).toBeGreaterThan(-1);
     // Delegation short-circuits before the /new optimistic-create branch that would mint a generic session.

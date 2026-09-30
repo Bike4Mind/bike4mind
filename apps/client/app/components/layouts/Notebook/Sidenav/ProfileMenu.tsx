@@ -22,6 +22,7 @@ import { useEntitlements } from '@client/app/hooks/data/entitlements';
 import { filterVisiblePremiumNavItems } from '@client/app/utils/premiumNav';
 import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.generated';
 import { openExternalLinkByKey } from '@client/app/utils/externalLinks';
+import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
 import { greenAlpha } from '@client/app/utils/themes/colors';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
@@ -39,12 +40,12 @@ import PersonAddIcon from '@mui/icons-material/PersonAddOutlined';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettingsOutlined';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import GavelIcon from '@mui/icons-material/GavelOutlined';
+import CookieOutlinedIcon from '@mui/icons-material/CookieOutlined';
 import ExtensionIcon from '@mui/icons-material/ExtensionOutlined';
 import FeedbackOutlinedIcon from '@mui/icons-material/FeedbackOutlined';
 import { defaultFeedbackRollupWindow } from '@client/app/utils/feedbackRollupWindow';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesomeOutlined';
-import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
 import LogoDevIcon from '@mui/icons-material/LogoDev';
 import LogoutIcon from '@mui/icons-material/LogoutOutlined';
 import RefreshIcon from '@mui/icons-material/RefreshOutlined';
@@ -208,6 +209,7 @@ const ProfileMenu = () => {
 
   const { setOpen: setInboxOpen } = useInbox.getState();
   const toggleReferralModal = useReferralModal(s => s.toggle);
+  const openCookieSettings = useCookieSettings(s => s.open);
   const logEvent = useLogEvent();
   const { data: friendRequests } = useGetFriendRequests(currentUser?.id);
   const returnToAdmin = useReturnToAdmin();
@@ -528,19 +530,6 @@ const ProfileMenu = () => {
                     closeAll();
                   }}
                 />
-                {/* Admin-only while the page is placeholder copy. Drop the gate - and move
-                    this row to the sidenav rail - once it replaces the first-run slider. */}
-                {isAdmin && (
-                  <MenuRow
-                    testId="profile-more-tutorials"
-                    icon={<MenuBookOutlinedIcon sx={{ fontSize: '18px' }} />}
-                    label={t('tutorials.title', 'Tutorials')}
-                    onClick={() => {
-                      navigate({ to: '/tutorials/explore' });
-                      closeNavigation();
-                    }}
-                  />
-                )}
                 <MenuRow
                   testId="profile-more-about"
                   icon={<InfoOutlinedIcon sx={{ fontSize: '18px' }} />}
@@ -556,6 +545,15 @@ const ProfileMenu = () => {
                   label={t('terms_policies', 'Terms & Policies')}
                   onClick={() => {
                     openExternalLinkByKey('terms');
+                    closeAll();
+                  }}
+                />
+                <MenuRow
+                  testId="profile-more-cookie-settings"
+                  icon={<CookieOutlinedIcon sx={{ fontSize: '18px' }} />}
+                  label={t('cookie_settings', 'Cookie settings')}
+                  onClick={() => {
+                    openCookieSettings();
                     closeAll();
                   }}
                 />

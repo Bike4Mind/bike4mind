@@ -48,6 +48,14 @@ function makeFabFilesAdapter(initial: FileFixture) {
       }
       return modified;
     }),
+    // The membership door's push: same state mutation, but returns the PRE-IMAGE so the door can
+    // tell a real join from filling in a meta-tag on a file the prefix arm already held.
+    pushTagReturningPriorState: vi.fn().mockImplementation(async (_id: string, name: string, strength = 0) => {
+      if (state.tags.some(t => t.name === name)) return null;
+      const prior = { userId: state.userId, tags: [...state.tags] };
+      state.tags.push({ name, strength });
+      return prior;
+    }),
     pullTagsByFabFileId: vi.fn().mockImplementation(async (_id: string, names: string[]) => {
       const before = state.tags.length;
       state.tags = state.tags.filter(t => !names.includes(t.name));

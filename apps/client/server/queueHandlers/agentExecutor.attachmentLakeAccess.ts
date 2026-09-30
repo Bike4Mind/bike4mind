@@ -12,6 +12,13 @@ import type { Logger } from '@bike4mind/observability';
  * attachment door structurally cannot follow it, so inheriting it here would ship the two
  * attachment doors disagreeing for exactly the caller class most likely to notice.
  *
+ * Opted IN to `includeDraftLakes`, which is what makes this an ATTACHMENT scope rather than the
+ * retrieval one the resolver's name describes: browse (`GET /api/files/byIds`) admits a
+ * DRAFT lake's file to the workbench, so re-authorizing that same named file against an
+ * active-only lake set would be narrower than the door that admitted it and silently drop the
+ * mask, the reference anchors and the generation input. The other three
+ * `resolveRetrievalLakeScopeForUser` call sites are retrieval-tag derivation and must not pass it.
+ *
  * Returns a THUNK, and the caller must keep it one: a handoff is a FRESH invocation (published to
  * the continuation queue, not an in-process resume), so laziness - not the memo - is what avoids
  * resolving on a wake that will not use it. Build one per invocation and never hoist it to module
@@ -31,6 +38,7 @@ export function createAttachmentLakeAccess(user: IUserDocument, logger: Logger):
         const scope = await resolveRetrievalLakeScopeForUser(user, {
           logger,
           staticRegistryBypass: false,
+          includeDraftLakes: true,
         });
         const lakeMemberships = dataLakeService.lakeMembershipsFrom(scope.lakes);
         dataLakeService.warnIfManyLakeMemberships(lakeMemberships, logger, 'attachment-resolution:agent');
@@ -40,12 +48,15 @@ export function createAttachmentLakeAccess(user: IUserDocument, logger: Logger):
           dataLakeTagPrefixes: scope.dataLakeTagPrefixes,
         };
       } catch (err) {
-        // Degrade to today's ownership-only behaviour. Widening on error is never correct here,
-        // and neither is failing the run.
+        // Degrade to ownership-only. Widening on error is never correct here, and neither is
+        // failing every caller outright - so the buckets stay empty and `resolutionFailed` carries
+        // the reason, letting a consumer that would otherwise SUBSTITUTE a different file (and bill
+        // for it) fail closed instead. Returning a bare `{}` made an outage indistinguishable from
+        // "this caller reaches no lakes"; see AttachmentLakeAccess.resolutionFailed.
         logger.warn('[AttachmentLakeAccess] Resolution failed; falling back to ownership-only', {
           error: err instanceof Error ? err.message : String(err),
         });
-        return {};
+        return { resolutionFailed: true };
       }
     })());
 }

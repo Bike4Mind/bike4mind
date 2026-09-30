@@ -8,7 +8,7 @@ import {
   MessageContentObject,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
-import BaseRepository from '@bike4mind/db-core';
+import BaseRepository, { convertId } from '@bike4mind/db-core';
 
 export interface IChatHistoryItemModel extends Model<IChatHistoryItemDocument> {}
 
@@ -115,6 +115,14 @@ const AnswerabilityProbeSchema = subSchema({
   probedAt: { type: Date, required: true },
 });
 
+// Count + reason only (#3055) - no lake id/name field belongs here even informally, since the
+// caller may not be permitted to know the excluded lake exists. No enum on `reason`, matching the
+// file header's rule: Zod (RetrievalSummarySchema, promptMeta.ts) is the validating contract.
+const ExcludedLakesSchema = subSchema({
+  count: { type: Number, required: true },
+  reason: { type: String, required: true },
+});
+
 // Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
 // auto-vivification of `surfaces`/`dataLakeTags` as empty arrays, which would fail the Zod
 // re-parse since `attempted` is required). Top-level on promptMeta, not nested under
@@ -155,6 +163,11 @@ const RetrievalSummarySchema = subSchema({
   // Same shape and the same default:undefined reason as preauthorizedLakeIdsUsed above - its
   // per-arm sibling, which the two overlap by design (see both fields on the Zod side).
   grantedLakeIdsUsed: { type: [String], required: false, default: undefined },
+  // Same shape and default:undefined reason as its per-arm siblings above (see the Zod side).
+  readerOptInLakeIdsUsed: { type: [String], required: false, default: undefined },
+  // default: undefined for the same auto-vivification reason as `injected` above - and here it
+  // also preserves the presence contract that absence means NOT RECORDED, never "nothing excluded".
+  excludedLakes: { type: ExcludedLakesSchema, required: false, default: undefined },
 });
 
 // Partial-grounding-coverage detail. subSchema + default:undefined for the same reason as
@@ -755,6 +768,18 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     this.ctx = null;
   }
 
+  /** Partial update of one live quest, matched only inside `sessionId` so it cannot land on another session's quest. */
+  async updateInSession(
+    sessionId: string,
+    data: Partial<IChatHistoryItemDocument> & { id: string }
+  ): Promise<IChatHistoryItemDocument | null> {
+    const { id, ...updateData } = data;
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    // deletedAt: null is explicit for readability; without it the softDeletePlugin update hook
+    // would add the same guard.
+    return this._plainUpdate({ _id: convertId(id), sessionId, deletedAt: null }, updateData as Record<string, unknown>);
+  }
+
   async findBySessionIdAndId(sessionId: string, id: string) {
     // A non-ObjectId id can never address a row - report no such row, not a CastError the
     // calling route cannot attribute. Same contract as `BaseRepository.findById`.
@@ -963,7 +988,9 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    * the quest, so without this the UI spins forever on a run the backend knows
    * is dead. Returns only the content fields the terminal-patch decision reads
    * (`terminalRecoveryFor`), not whole quest documents - a sweep can match many
-   * rows and the checkpoint/context fields are large.
+   * rows and the checkpoint/context fields are large. `agentExecutionId` is
+   * included so a caller whose write to a specific quest fails can attribute
+   * that failure back to the execution that owns it.
    *
    * `done` and `stopped` are the terminal statuses; anything else (`pending`,
    * `running`) is still claiming to be live. Terminal quests are excluded rather
@@ -977,7 +1004,16 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const docs = await this.model
       .find(
         { agentExecutionId: { $in: agentExecutionIds }, status: { $nin: TERMINAL_QUEST_STATUSES } },
-        { _id: 1, reply: 1, replies: 1, images: 1, videos: 1, structuredReplies: 1, toolResults: 1 }
+        {
+          _id: 1,
+          agentExecutionId: 1,
+          reply: 1,
+          replies: 1,
+          images: 1,
+          videos: 1,
+          structuredReplies: 1,
+          toolResults: 1,
+        }
       )
       .lean<Array<Omit<UnfinishedQuestView, 'id'> & { _id: mongoose.Types.ObjectId }>>();
     return docs.map(({ _id, ...content }) => ({ ...content, id: _id.toString() }));
@@ -993,12 +1029,30 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    * overwrite a real answer with the abandoned-run error. Callers count only
    * the writes that matched, so a quest that finished in that window is
    * reported as not settled rather than as settled.
+   *
+   * `finishReason` lands on `promptMeta.finishReason` through an update
+   * pipeline, not a dotted `$set`: a quest whose `promptMeta` is null would make
+   * the dotted path fail on every attempt, so that quest could never settle,
+   * while `$mergeObjects` treats a null or missing operand as empty. Values go
+   * through `$literal` because a pipeline reads a string starting with `$` as a
+   * field path, and a reply can start with one.
    */
   async settleIfUnfinished(
     id: string,
-    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply'>>
+    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply' | 'replies'>> & { finishReason?: string }
   ): Promise<boolean> {
-    const result = await this.model.updateOne({ _id: id, status: { $nin: TERMINAL_QUEST_STATUSES } }, { $set: patch });
+    const filter = { _id: id, status: { $nin: TERMINAL_QUEST_STATUSES } };
+    const { finishReason, ...fields } = patch;
+    const result = finishReason
+      ? await this.model.updateOne(filter, [
+          {
+            $set: {
+              ...Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, { $literal: value }])),
+              promptMeta: { $mergeObjects: ['$promptMeta', { finishReason: { $literal: finishReason } }] },
+            },
+          },
+        ])
+      : await this.model.updateOne(filter, { $set: fields });
     return result.matchedCount > 0;
   }
 
@@ -1225,7 +1279,7 @@ export const questRepository = new QuestRepository(Quest);
  */
 export type UnfinishedQuestView = { id: string } & Pick<
   IChatHistoryItem,
-  'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
+  'agentExecutionId' | 'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
 >;
 
 /**

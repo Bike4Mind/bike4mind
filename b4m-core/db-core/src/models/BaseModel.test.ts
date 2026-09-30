@@ -188,6 +188,62 @@ describe('BaseRepository', () => {
     });
   });
 
+  // The reserved `unset` option. A doc read back through findById is a plain object, so
+  // `doc.field = undefined` keeps the key with an undefined value and `$set` drops it as an
+  // absence - naming the field here is the only way `update` can clear it. Both cores honour it,
+  // so a caller cannot discover that the guarded variant silently ignored it.
+  describe('unset option', () => {
+    const ID = '507f1f77bcf86cd799439011';
+    let mockFindOneAndUpdate: ReturnType<typeof vi.fn>;
+    let repo: TestRepository;
+
+    beforeEach(() => {
+      mockFindOneAndUpdate = vi.fn().mockReturnValue(makeQuery({ toJSON: () => ({ id: ID }) }));
+      const mockModel = {
+        findOneAndUpdate: mockFindOneAndUpdate,
+        exists: vi.fn().mockReturnValue(makeQuery(null)),
+        modelName: 'TestDoc',
+      } as unknown as mongoose.Model<TestDoc>;
+      repo = new TestRepository(mockModel);
+    });
+
+    it('turns the named fields into $unset and drops them from $set', async () => {
+      await repo.update({ id: ID, name: 'updated', userId: undefined } as Partial<TestDoc>, { unset: ['userId'] });
+
+      const [, update] = mockFindOneAndUpdate.mock.calls[0];
+      expect(update.$unset).toEqual({ userId: '' });
+      // Leaving the key in $set makes Mongo reject the whole write with a path conflict.
+      expect(update.$set).toEqual({ name: 'updated' });
+    });
+
+    it('consumes the reserved key and forwards the rest of the bag to mongoose', async () => {
+      await repo.update({ id: ID, name: 'updated' }, { unset: ['userId'], upsert: true });
+
+      const [, , options] = mockFindOneAndUpdate.mock.calls[0];
+      // `unset` is ours, not a findOneAndUpdate option - mongoose must never see it.
+      expect(options).toEqual({ new: true, upsert: true });
+    });
+
+    it('emits no $unset operator when the option is absent', async () => {
+      await repo.update({ id: ID, name: 'updated' });
+
+      const [, update] = mockFindOneAndUpdate.mock.calls[0];
+      expect(update).not.toHaveProperty('$unset');
+    });
+
+    it('applies the same treatment on the guarded path, alongside the version bump', async () => {
+      await repo.updateGuarded({ id: ID, name: 'updated', userId: undefined, __v: 3 } as Partial<TestDoc>, {
+        unset: ['userId'],
+      });
+
+      const [filter, update] = mockFindOneAndUpdate.mock.calls[0];
+      expect(filter.__v).toBe(3);
+      expect(update.$inc).toEqual({ __v: 1 });
+      expect(update.$unset).toEqual({ userId: '' });
+      expect(update.$set).toEqual({ name: 'updated' });
+    });
+  });
+
   // updateMany had the same `.session(this._txn)` bug as update.
   describe('findById', () => {
     const makeRepo = (findByIdImpl: ReturnType<typeof vi.fn>) =>

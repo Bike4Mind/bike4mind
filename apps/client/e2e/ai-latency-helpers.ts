@@ -121,6 +121,18 @@ export interface PromptScenario {
    * before scraping text, so the keyword check reads the resolved article rather than the spinner.
    */
   generatesArtifact?: boolean;
+  /**
+   * Per-response streaming budget, in seconds, for a prompt whose long pole is tool work rather
+   * than token output. A web-search-heavy turn can spend minutes gathering sources before it emits
+   * a single character, and until then there is no partial text for the stabilisation fallback in
+   * ChatPage.waitForStreamingComplete to settle on - so a budget sized for plain streaming fails it
+   * as a hang. Omit for prompts that start streaming promptly; the suite's thresholdSec applies.
+   *
+   * TEXT prompts only. Image/artifact prompts always take TIMEOUTS.IMAGE_GENERATION, so setting
+   * this alongside expectsImage/generatesArtifact would be silently ignored - the suite factory
+   * rejects that combination rather than letting it read as configuration that does nothing.
+   */
+  textStreamingBudgetSec?: number;
 }
 
 export interface PromptResult {
@@ -140,4 +152,11 @@ export interface PromptResult {
    * still catches a real text regression. Absent (falsy) for text prompts.
    */
   measuresDeliverable?: boolean;
+  /**
+   * The prompt never finished: responseTimeSec is the elapsed time when it was abandoned, a FLOOR
+   * on the real latency rather than a measurement of it. Recorded so a timed-out prompt still
+   * counts against the gated average - dropping it removed the slowest prompt in the cell from the
+   * mean precisely because it was the slowest. Absent (falsy) for prompts that completed.
+   */
+  incomplete?: boolean;
 }

@@ -189,11 +189,11 @@ describe('GET /api/react-artifact-sandbox', () => {
     handler(makeReq('GET'), res);
     const body = getBody();
     expect(body).toContain('var withoutTypeImports'); // the strip pass is wired
-    expect(body).toContain('import\\s+type\\s+'); // whole-clause type-only import removal
+    expect(body).toContain('importScanner.stripTypeOnlyImports(code)'); // the shared strip, not a regex copy
     // strip is computed before the relative-import guard...
     expect(body.indexOf('var withoutTypeImports')).toBeLessThan(body.indexOf('var relImport'));
     // ...and the guard checks the stripped view, not the raw code.
-    expect(body).toContain('withoutTypeImports.match(');
+    expect(body).toContain('importScanner.findRelativeImport(withoutTypeImports)');
   });
 
   // Regression guard: a literal `</script>` inside a JS comment in the

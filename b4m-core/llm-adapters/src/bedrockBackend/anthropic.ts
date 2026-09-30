@@ -1,6 +1,7 @@
 import {
   BEDROCK_NO_PROMPT_CACHING_MODELS,
   ChatModels,
+  createThinkMarkerEscaper,
   IMessage,
   MessageContentText,
   ModelBackend,
@@ -240,6 +241,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
   // Track thinking block state
   private isInThinkingBlock = false;
+  private reasoningEscaper = createThinkMarkerEscaper();
   /**
    * Reasoning blocks of the assistant turn currently being translated, indexed by the
    * stream's content-block index. Reset at `message_start` and consumed by
@@ -932,6 +934,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
   }
 
   formatMessages(messages: IMessage[]): IMessage[] {
+    // Pure: base.ts re-runs this over the SAME messages array every tool round, so the merges
+    // below push shallow copies (content arrays are replaced, never mutated in place).
+    // Regression context: anthropic.cacheControlToolRounds.test.ts.
     const formattedMessages = messages.reduce((cur, value) => {
       const previousMessage = cur[cur.length - 1];
 
@@ -956,7 +961,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
           // Only merge if current value.content is also a string (not an array with images)
           if (typeof value.content !== 'string') {
-            cur.push(value);
+            cur.push({ ...value });
             return cur;
           }
 
@@ -979,7 +984,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         } else {
           // Only merge if current value.content is a string (not an array with images)
           if (typeof value.content !== 'string') {
-            cur.push(value);
+            cur.push({ ...value });
             return cur;
           }
 
@@ -1005,7 +1010,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       }
 
       // Push the message if the role is different
-      cur.push(value);
+      cur.push({ ...value });
 
       return cur;
     }, [] as IMessage[]);
@@ -1125,6 +1130,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       if (isMessageStart(chunk)) {
         // Reset thinking block state at the start of a new message
         this.isInThinkingBlock = false;
+        this.reasoningEscaper = createThinkMarkerEscaper();
         this.assistantReasoningBlocks = [];
         choice = {
           chunkText: '',
@@ -1153,6 +1159,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           // thinking_delta / signature_delta accumulate into this block for the replay.
           this.assistantReasoningBlocks[chunk.index] = { ...contentBlock, thinking: contentBlock.thinking ?? '' };
           choice.chunkText = '<think>';
+          choice.channel = 'reasoning';
         } else if (isRedactedThinkingContentBlock(contentBlock)) {
           // Arrives whole and carries no readable text, so it opens no <think> markers -
           // but it still has to be replayed alongside its turn's tool_use block.
@@ -1172,7 +1179,10 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         } else if (isInputJsonDelta(delta)) {
           choice.chunkText = delta.partial_json;
         } else if (isThinkingDelta(delta)) {
-          choice.chunkText = delta.thinking;
+          // Escaped for the transcript; the replay copy in assistantReasoningBlocks stays
+          // raw since it is resent to the API verbatim in tool-use loops.
+          choice.chunkText = this.reasoningEscaper.push(delta.thinking);
+          choice.channel = 'reasoning';
           const block = this.assistantReasoningBlocks[chunk.index];
           if (block?.type === 'thinking') block.thinking += delta.thinking;
         } else if (isSignatureDelta(delta)) {
@@ -1186,7 +1196,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         choice = {
           status: ChoiceStatus.STREAM,
           index: chunk.index,
-          chunkText: this.isInThinkingBlock ? '</think>' : '',
+          chunkText: this.isInThinkingBlock ? this.reasoningEscaper.flush() + '</think>' : '',
+          ...(this.isInThinkingBlock ? { channel: 'reasoning' as const } : {}),
         } as IChoice;
 
         // Reset thinking block state

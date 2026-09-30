@@ -16,6 +16,7 @@ import { WebsocketContextValue } from '../contexts/WebsocketContext';
 import { ImageEditCommandArgs, ImageGenerationCommandArgs } from '../components/commands/ImageGenerationCommand';
 import { LLMSettings } from '../components/commands/LLMCommand';
 import { QueryClient } from '@tanstack/react-query';
+import { terminalQuests } from '../hooks/chatCompletionState';
 
 type CommandArgs = CommandArgExtra & ImageGenerationCommandArgs & ImageEditCommandArgs & LLMSettings;
 
@@ -47,6 +48,8 @@ export type CommandArgExtra = {
   researchMode?: LLMApiRequestBody['researchMode'];
   /** Suppresses the server-side tool auto-offers for this turn. See LLMContext.skipAutoOffers. */
   skipAutoOffers?: LLMApiRequestBody['skipAutoOffers'];
+  /** Agent-mode routing provenance, forwarded to the `/llm` handler's payload. See LLMCommandArgs.agentMode. */
+  agentMode?: LLMApiRequestBody['agentMode'];
   deepResearchConfig?: {
     maxDepth?: number;
     duration?: number;
@@ -76,6 +79,9 @@ export const handleCommand = async (commandHandlers: CommandHandlers, args: Comm
   const { userId, command, params, ...rest } = args;
   const handler = commandHandlers[command as CommandKey];
   if (handler) {
+    // A re-run restarts an existing quest in place; its earlier terminal frame must not mark
+    // the new run's chunks stale. Image/video payloads carry no updatedAt to prove recency.
+    if (rest.questId) terminalQuests.forget(rest.questId);
     return await handler({ userId, params, ...rest });
   } else {
     throw new Error(`Unknown command ${command}`);

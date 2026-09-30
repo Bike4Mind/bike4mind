@@ -48,6 +48,18 @@ const INCOMPLETE_200 = {
 const FUNCTION_CALL_200 = { status: 200, body: { output: [{ type: 'function_call', name: 'ping' }] } };
 const TEXT_ONLY_200 = { status: 200, body: { output: [{ type: 'message', content: [] }] } };
 
+/** What a model that calls functions on chat only with reasoning disabled returns to the forced call. */
+const TOOLS_REFUSED_400 = {
+  status: 400,
+  body: {
+    error: {
+      param: 'tools',
+      message: 'Function tools with reasoning_effort are not supported for this model in /v1/chat/completions.',
+    },
+  },
+};
+const PLAIN_200 = { status: 200, body: { choices: [{ finish_reason: 'stop', message: { content: 'OK' } }] } };
+
 const unsupportedParam = (param: string) => ({
   status: 400,
   body: { error: { param, message: `Unsupported parameter: '${param}' is not supported with this model.` } },
@@ -125,19 +137,122 @@ describe('probeOpenAiDispatch', () => {
     expect(calls[1].body.tool_choice).toEqual({ type: 'function', name: 'ping' });
   });
 
-  it('asks the responses endpoint when the chat endpoint refuses tools', async () => {
+  it('verifies the token parameter without tools when the chat endpoint refuses them', async () => {
+    const { deps, calls } = stubFetch([TOOLS_REFUSED_400, FUNCTION_CALL_200, PLAIN_200]);
+
+    const result = await probeOpenAiDispatch('gpt-6-sol', deps);
+
+    expect(result).toEqual({
+      answer: {
+        adapterFamily: 'openai-responses',
+        dispatchProfile: { maxTokensParam: 'max_completion_tokens', toolTransport: 'responses' },
+        maxTokensParamVerified: true,
+      },
+      retryable: false,
+    });
+    expect(calls.map(call => call.url)).toEqual([
+      'https://api.openai.com/v1/chat/completions',
+      'https://api.openai.com/v1/responses',
+      'https://api.openai.com/v1/chat/completions',
+    ]);
+    expect(calls[2].body).not.toHaveProperty('tools');
+    expect(calls[2].body).not.toHaveProperty('tool_choice');
+    expect(calls[2].body.max_completion_tokens).toBeTypeOf('number');
+  });
+
+  it('counts a truncated tool-free reply as proof of the parameter', async () => {
+    const { deps } = stubFetch([TOOLS_REFUSED_400, FUNCTION_CALL_200, TRUNCATED_200]);
+
+    expect((await probeOpenAiDispatch('gpt-6-sol', deps)).answer?.maxTokensParamVerified).toBe(true);
+  });
+
+  it('flips the parameter once when the tool-free call names it', async () => {
     const { deps, calls } = stubFetch([
-      { status: 400, body: { error: { param: 'tool_choice', message: 'tool_choice is not supported' } } },
+      TOOLS_REFUSED_400,
       FUNCTION_CALL_200,
+      unsupportedParam('max_completion_tokens'),
+      PLAIN_200,
     ]);
 
-    const result = await probeOpenAiDispatch('gpt-6-astra', deps);
+    const result = await probeOpenAiDispatch('gpt-6-sol', deps);
 
-    expect(result.answer?.dispatchProfile.toolTransport).toBe('responses');
-    expect(calls[1].url).toBe('https://api.openai.com/v1/responses');
-    // No 200 ever came back from the chat endpoint, so maxTokensParam is still
-    // predictMaxTokensParam's guess and the write path must not promote it.
+    expect(result.answer).toEqual({
+      adapterFamily: 'openai-responses',
+      dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'responses' },
+      maxTokensParamVerified: true,
+    });
+    expect(calls).toHaveLength(4);
+    expect(calls[3].body.max_tokens).toBeTypeOf('number');
+    expect(calls[3].body).not.toHaveProperty('max_completion_tokens');
+  });
+
+  it('does not undo a flip the forced call already made', async () => {
+    const { deps, calls } = stubFetch([
+      unsupportedParam('max_completion_tokens'),
+      TOOLS_REFUSED_400,
+      FUNCTION_CALL_200,
+      unsupportedParam('max_tokens'),
+    ]);
+
+    const result = await probeOpenAiDispatch('gpt-6-sol', deps);
+
+    expect(result.answer?.dispatchProfile.maxTokensParam).toBe('max_tokens');
     expect(result.answer?.maxTokensParamVerified).toBe(false);
+    expect(calls).toHaveLength(4);
+  });
+
+  it('leaves the parameter unverified when the tool-free call is refused', async () => {
+    // A 200 is the only proof, so the write path must not promote the guess.
+    const { deps, calls } = stubFetch([
+      TOOLS_REFUSED_400,
+      FUNCTION_CALL_200,
+      { status: 400, body: { error: { message: 'something else entirely' } } },
+    ]);
+
+    const result = await probeOpenAiDispatch('gpt-6-sol', deps);
+
+    expect(result.answer?.dispatchProfile).toEqual({
+      maxTokensParam: 'max_completion_tokens',
+      toolTransport: 'responses',
+    });
+    expect(result.answer?.maxTokensParamVerified).toBe(false);
+    expect(calls).toHaveLength(3);
+  });
+
+  it('flips once and stays unverified when the tool-free call refuses both parameters', async () => {
+    const { deps, calls } = stubFetch([
+      TOOLS_REFUSED_400,
+      FUNCTION_CALL_200,
+      unsupportedParam('max_completion_tokens'),
+      unsupportedParam('max_tokens'),
+    ]);
+
+    const result = await probeOpenAiDispatch('gpt-6-sol', deps);
+
+    expect(result.answer?.dispatchProfile.maxTokensParam).toBe('max_tokens');
+    expect(result.answer?.maxTokensParamVerified).toBe(false);
+    expect(calls).toHaveLength(4);
+  });
+
+  it('reads a 422 on the tool-free call as a verdict, not as retryable', async () => {
+    const { deps } = stubFetch([TOOLS_REFUSED_400, FUNCTION_CALL_200, { status: 422 }]);
+
+    const result = await probeOpenAiDispatch('gpt-6-sol', deps);
+
+    expect(result.retryable).toBe(false);
+    expect(result.answer?.maxTokensParamVerified).toBe(false);
+  });
+
+  it('reports a transport failure on the tool-free call as retryable', async () => {
+    const { deps } = stubFetch([TOOLS_REFUSED_400, FUNCTION_CALL_200, { status: 0, throws: true }]);
+
+    expect(await probeOpenAiDispatch('gpt-6-sol', deps)).toEqual({ retryable: true });
+  });
+
+  it('reports a retryable tool-free call as retryable rather than as an unverified verdict', async () => {
+    const { deps } = stubFetch([TOOLS_REFUSED_400, FUNCTION_CALL_200, { status: 429 }]);
+
+    expect(await probeOpenAiDispatch('gpt-6-sol', deps)).toEqual({ retryable: true });
   });
 
   it('authors no profile when neither endpoint emits a call', async () => {

@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeRepository, orgGoogleDriveConnectionRepository, User } from '@bike4mind/database';
-import { isLakeIngestable } from '@bike4mind/common';
+import { acceptsConnectorContent, isLakeIngestable } from '@bike4mind/common';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import {
   isValidDriveFolderId,
@@ -98,6 +98,17 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       throw new BadRequestError(`Cannot connect a Drive folder to a data lake in '${lake.status}' status`);
     }
 
+    // Same placement rationale as the status gate above: after verifyOrgAccess so a non-member
+    // cannot probe a lake's origin, and before captureOrgCredential so a refused connect costs no
+    // Drive calls. Binding does NOT flip origin - an automatic flip would walk straight through the
+    // guard it exists to trip, so the owner declares the lake connector-fed first and that
+    // declaration is the consent.
+    if (!acceptsConnectorContent(lake.origin)) {
+      throw new BadRequestError(
+        `"${lake.name}" is curated. Change its origin to connector-fed in the lake's settings before connecting a Drive folder.`
+      );
+    }
+
     const oauthRefreshToken = await captureOrgCredential(req.user.id);
 
     // Verify the connecting user can actually READ the folder before claiming it. The claim is GLOBAL
@@ -136,6 +147,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     if (byFolder) {
       if (byFolder.targetDataLakeId !== dataLakeId) {
         return res.status(409).json({ error: 'This Drive folder is already connected to another data lake' });
+      }
+      if (byFolder.disconnectRequestedAt) {
+        return res
+          .status(409)
+          .json({ error: 'This Drive folder is still being disconnected. Try again once its files are removed.' });
       }
       // Same folder + lake: refresh the stored credential (a reconnect is often to fix a broken one)
       // and re-stamp connectedBy to this user, then re-ingest (the handler dedups by driveFileId). Set

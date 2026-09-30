@@ -365,7 +365,11 @@ ${
 - Attached Files: ${contextWindow.tokensBySource.fabFiles.toLocaleString()} (${((contextWindow.tokensBySource.fabFiles / contextWindow.inputTokens) * 100).toFixed(1)}%)
 - URL Content: ${contextWindow.tokensBySource.urlContent.toLocaleString()} (${((contextWindow.tokensBySource.urlContent / contextWindow.inputTokens) * 100).toFixed(1)}%)
 - Tool Schemas: ${contextWindow.tokensBySource.toolSchemas.toLocaleString()} (${((contextWindow.tokensBySource.toolSchemas / contextWindow.inputTokens) * 100).toFixed(1)}%)
-- User Prompt: ${contextWindow.tokensBySource.userPrompt.toLocaleString()} (${((contextWindow.tokensBySource.userPrompt / contextWindow.inputTokens) * 100).toFixed(1)}%)`
+- User Prompt: ${contextWindow.tokensBySource.userPrompt.toLocaleString()} (${((contextWindow.tokensBySource.userPrompt / contextWindow.inputTokens) * 100).toFixed(1)}%)${
+        contextWindow.tokensBySource.lakeRetrieval !== undefined
+          ? `\n- Lake Retrieval: ${contextWindow.tokensBySource.lakeRetrieval.toLocaleString()} (${((contextWindow.tokensBySource.lakeRetrieval / contextWindow.inputTokens) * 100).toFixed(1)}%)`
+          : ''
+      }`
     : '_(Basic telemetry — token breakdown not available)_'
 }
 
@@ -512,6 +516,20 @@ Respond in JSON format with this exact structure:
 // ─── LLM Analysis ───────────────────────────────────────────────────────────
 
 /**
+ * The JSON text of an analysis response: a markdown code fence body when present, else the span
+ * from the first '{' to the last '}' (what a greedy /\{[\s\S]*\}/ matched, without its quadratic
+ * scan over many unclosed braces), else the trimmed response.
+ */
+export function extractAnalysisJson(responseText: string): string {
+  const trimmed = responseText.trim();
+  const fence = trimmed.match(/```(?:json)?([\s\S]*?)```/);
+  if (fence) return fence[1].trim();
+  const start = trimmed.indexOf('{');
+  const end = trimmed.lastIndexOf('}');
+  return start !== -1 && end > start ? trimmed.slice(start, end + 1) : trimmed;
+}
+
+/**
  * Generate LLM-powered analysis of telemetry data.
  * Unified implementation used by both the analyze API and the auto-alert handler.
  *
@@ -580,22 +598,7 @@ export async function generateLLMAnalysis(
 
   logger.debug(`[ContextTelemetry] Raw LLM response (${responseText.length} chars): ${responseText.slice(0, 500)}`);
 
-  // Extract JSON from response (handle markdown code blocks)
-  let jsonStr = responseText.trim();
-  const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (jsonMatch) {
-    jsonStr = jsonMatch[1].trim();
-  }
-
-  // Fallback: extract bare JSON object if no code block found
-  if (!jsonMatch) {
-    const braceMatch = jsonStr.match(/\{[\s\S]*\}/);
-    if (braceMatch) {
-      jsonStr = braceMatch[0];
-    }
-  }
-
-  const parsed = JSON.parse(jsonStr);
+  const parsed = JSON.parse(extractAnalysisJson(responseText));
   const validated = LLMAnalysisSchema.safeParse(parsed);
 
   if (!validated.success) {
@@ -798,7 +801,7 @@ export function formatIssueBody(telemetry: ContextTelemetry, options: IssueBodyO
       sections.push(`| Source | Tokens | % |`);
       sections.push(`|--------|--------|---|`);
       const total = contextWindow.inputTokens;
-      const sources = [
+      const sources: { name: string; value: number; showZero?: boolean }[] = [
         { name: 'System Prompts', value: tokensBySource.systemPrompts },
         { name: 'Conversation History', value: tokensBySource.conversationHistory },
         { name: 'Mementos', value: tokensBySource.mementos },
@@ -807,8 +810,13 @@ export function formatIssueBody(telemetry: ContextTelemetry, options: IssueBodyO
         { name: 'Tool Schemas', value: tokensBySource.toolSchemas },
         { name: 'User Prompt', value: tokensBySource.userPrompt },
       ];
+      // A recorded zero is a measurement and gets a row; an unrecorded bucket (older telemetry)
+      // has no row at all, so the table never passes off unknown lake volume as none.
+      if (tokensBySource.lakeRetrieval !== undefined) {
+        sources.push({ name: 'Lake Retrieval', value: tokensBySource.lakeRetrieval, showZero: true });
+      }
       for (const source of sources) {
-        if (source.value > 0) {
+        if (source.value > 0 || source.showZero) {
           sections.push(
             `| ${source.name} | ${source.value.toLocaleString()} | ${((source.value / total) * 100).toFixed(1)}% |`
           );

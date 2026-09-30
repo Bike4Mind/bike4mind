@@ -13,7 +13,10 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: {},
 }));
 
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services', async importOriginal => ({
+  // Real `userService.accountBlockReasons` drives the account-state gate; the rest of the barrel
+  // loads alongside it (its db/config deps are mocked here).
+  ...(await importOriginal<typeof import('@bike4mind/services')>()),
   // Real kill-switch + token-type comparisons so the tests exercise actual enforcement (not stubs).
   isTokenVersionCurrent: (a?: number, b?: number) => (a ?? 0) === (b ?? 0),
   isTokenTypeAcceptable: (t: unknown, expected: string) => t === undefined || t === expected,
@@ -138,6 +141,26 @@ describe('checkRateLimit (JWT per-user rate limiter)', () => {
     });
   });
 
+  describe('buckets', () => {
+    it('keeps a bucketed counter apart from the shared one, in both directions', async () => {
+      // A CLI session at 1000 on the shared counter must not spend the tools budget.
+      for (let i = 0; i < 1000; i++) {
+        await checkRateLimit(userId, 'cli');
+      }
+      await expect(checkRateLimit(userId, undefined, { bucket: 'tools' })).resolves.toBeUndefined();
+      expect(cacheStore.get(key)!.value).toBe(1000);
+      expect(cacheStore.get(`rate-limit:ws-auth:tools:${userId}`)!.value).toBe(1);
+    });
+
+    it('applies the source cap to the bucketed counter', async () => {
+      for (let i = 0; i < 100; i++) {
+        await checkRateLimit(userId, undefined, { bucket: 'tools' });
+      }
+      await expect(checkRateLimit(userId, undefined, { bucket: 'tools' })).rejects.toThrow(/Rate limit exceeded/);
+      expect(cacheStore.has(key)).toBe(false);
+    });
+  });
+
   describe('error message', () => {
     it('reports the remaining window in seconds (not a reset-to-full hour)', async () => {
       vi.useFakeTimers().setSystemTime(new Date('2026-01-01T00:00:00Z'));
@@ -243,6 +266,15 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
     await expect(verifyJwtToken(jwt.sign({ id: 'u1', typ: 'access' }, 'test-secret'))).resolves.toMatchObject({
       id: 'u1',
     });
+  });
+
+  it('rejects a relying-party OAuth access token before hitting the DB (oauthRouteGate does not cover this surface)', async () => {
+    // Wiring guard: this primitive backs the CLI/LLM surfaces the route gate never runs on, so the
+    // kind:oauth rejection here is the ONLY thing keeping a scope-bound OAuth token off them.
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', kind: 'oauth' }, 'test-secret'))).rejects.toThrow(
+      'OAuth access tokens are not accepted on this endpoint'
+    );
+    expect(User.findById).not.toHaveBeenCalled();
   });
 
   // A still-valid session JWT for a consented account must still be refused once the account is

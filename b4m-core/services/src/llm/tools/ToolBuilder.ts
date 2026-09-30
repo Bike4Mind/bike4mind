@@ -5,6 +5,7 @@ import {
   IUserDocument,
   IOrganizationDocument,
   IUsageEventInput,
+  UsageEventFeature,
   ModelInfo,
   MusicGenerationVendor,
   materializePromptMetaSession,
@@ -27,6 +28,7 @@ import {
   getConversationContextSystemMessage,
 } from '../../conversationContextService';
 import { buildSharedTools } from '../sharedToolBuilder';
+import { UNATTRIBUTED_TOOL_CHARGE } from '../settleToolCredits';
 import type { ToolAvailability } from '../toolAvailability';
 import type { SubagentTelemetryData } from './implementation/delegateToAgent';
 import type { IChatCompletionServiceOptions, QuestStartBodySchema } from '../ChatCompletionFeatures';
@@ -48,6 +50,12 @@ export function buildToolUsageEvent(params: {
   cacheWriteTokens?: number;
   /** Provider stop reason of the underlying completion, when the tool wraps one (e.g. delegate_to_agent). */
   finishReason?: string;
+  /**
+   * Defaults to 'tool'. The music and audio tools pass the feature their direct endpoint
+   * writes (music_generation, sound_effects, text_to_speech), so a track counts as a track
+   * whichever path made it - the Gears status reads these features to unlock its gears.
+   */
+  feature?: UsageEventFeature;
 }): IUsageEventInput {
   const { quest, user, organization } = params;
   return {
@@ -56,7 +64,7 @@ export function buildToolUsageEvent(params: {
     ownerId: organization ? organization.id : user.id,
     ownerType: organization ? CreditHolderType.Organization : CreditHolderType.User,
     sessionId: quest.sessionId,
-    feature: 'tool',
+    feature: params.feature ?? 'tool',
     provider: params.provider,
     model: params.model,
     inputTokens: params.inputTokens ?? 0,
@@ -110,6 +118,10 @@ export interface ToolBuilderConfig {
   suppressLakeArms?: ToolContext['suppressLakeArms'];
   /** Session lake scope, forwarded to the tool context (see ToolContext.sessionRetrievalTags). */
   sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
+  /** Reader opt-in consent, forwarded to the tool context (see ToolContext.sessionReaderConsentDatalakeTags). */
+  sessionReaderConsentDatalakeTags?: ToolContext['sessionReaderConsentDatalakeTags'];
+  /** Lake-scope sidecar, forwarded to the tool context (see ToolContext.sessionLakeScopeExplicit). */
+  sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
   /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
   sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
   logger: Logger;
@@ -129,6 +141,11 @@ export interface ToolBuilderConfig {
   // overwrite a same-name call's earlier reservation and reintroduce the double-count
   // bug this queue exists to prevent.
   toolCreditsMap: Map<string, number[]>;
+  // Distinct models that actually charged tool credits this turn, in no order. The
+  // quest's single aggregate `tool_usage` ledger row names the model only when this
+  // holds exactly one; see ChatCompletionProcess's settlement block. Must be cleared
+  // alongside toolCreditsMap on a fallback retry.
+  toolCreditModels: Set<string>;
   // Shared by reference with ChatCompletionProcess; mutations from callbacks
   // propagate to the parent for end-of-quest telemetry assembly.
   subagentTelemetryData: SubagentTelemetryData[];
@@ -254,13 +271,46 @@ export function applyQuestStatusChanges(
 
   if (changedPromptMeta && quest.promptMeta) {
     const mergedCitables = [...(quest.promptMeta.citables || []), ...(changedPromptMeta.citables || [])];
-    const seenCitableKeys = new Set<string>();
-    const dedupedCitables = mergedCitables.filter(c => {
-      const key = c.id || c.url || c.title;
-      if (!key || seenCitableKeys.has(key)) return false;
-      seenCitableKeys.add(key);
-      return true;
-    });
+    // Dedup keeps ONE entry per identity but prefers the one carrying a passage anchor: the same
+    // file can be cited by a file-level arm and a chunk-level one on the same turn, and keeping
+    // whichever merely arrived first would silently drop the chip the reader can deep-link from
+    // (#3038). The winner takes the loser's POSITION, because a citation index [N] refers to this
+    // array's order - reordering here would repoint every marker after it.
+    const hasPassageAnchor = (citable: (typeof mergedCitables)[number]): boolean =>
+      typeof citable?.metadata?.fullContext === 'string' && citable.metadata.fullContext.length > 0;
+    const citableIndexByKey = new Map<string, number>();
+    const dedupedCitables: typeof mergedCitables = [];
+    for (const citable of mergedCitables) {
+      const key = citable.id || citable.url || citable.title;
+      if (!key) continue;
+      const existingIndex = citableIndexByKey.get(key);
+      if (existingIndex === undefined) {
+        citableIndexByKey.set(key, dedupedCitables.length);
+        dedupedCitables.push(citable);
+        continue;
+      }
+      const winner =
+        !hasPassageAnchor(dedupedCitables[existingIndex]) && hasPassageAnchor(citable)
+          ? citable
+          : dedupedCitables[existingIndex];
+      // Unioned across both chips rather than riding on the anchor rule above (#3041): the anchor
+      // and the conflict marks are independent signals written by different arms, and
+      // knowledgeBaseRetrieve stamps conflictsWith while deliberately never carrying an anchor. So
+      // whenever a search chip for the same file also lands this turn, letting the anchor decide
+      // alone would silently drop the marks - the reader would lose a warning the model still got.
+      // Array.isArray because these arrive off a stored document, where metadata is Mixed.
+      const conflictsWith = [
+        ...new Set(
+          [dedupedCitables[existingIndex], citable].flatMap(c =>
+            Array.isArray(c?.metadata?.conflictsWith) ? c.metadata.conflictsWith : []
+          )
+        ),
+      ];
+      // Copied, never mutated in place: the loser may be the caller's own object.
+      dedupedCitables[existingIndex] = conflictsWith.length
+        ? { ...winner, metadata: { ...winner.metadata, conflictsWith } }
+        : winner;
+    }
     const mergedWarnings = [...(quest.promptMeta.warnings || []), ...(changedPromptMeta.warnings || [])];
     const mergedRetrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, changedPromptMeta.retrieval);
     quest.promptMeta = materializePromptMetaSession(
@@ -388,11 +438,31 @@ export class ToolBuilder {
    * than once in a turn (e.g. a 10s then a 20s music track) settles as the sum of
    * every call, not the count times the last call's cost. Fires exactly once per
    * call: image/edit/music via onToolStart/onToolFinish, delegate via onSubagentCredits.
+   *
+   * `model` is the model that actually incurs the cost (gpt-image-2, a music vendor
+   * model, the subagent's chat model) - never the quest's own chat model. It feeds the
+   * aggregate ledger row's attribution; pass it wherever it is resolvable. A charge whose
+   * model cannot be resolved still records UNATTRIBUTED_TOOL_CHARGE, so the row can never
+   * look single-model while billing for a model nobody named.
    */
-  private reserveToolCredits(toolName: string, credits: number): void {
+  private reserveToolCredits(toolName: string, credits: number, model?: string): void {
     const queue = this.deps.toolCreditsMap.get(toolName) ?? [];
     queue.push(credits);
     this.deps.toolCreditsMap.set(toolName, queue);
+    // Only a charging call contributes: a zero-credit call is absent from the aggregate
+    // ledger row's amount, so recording anything for it would be misleading.
+    // ASSUMES this queue only ever carries positive charges, which every call site holds
+    // today. If it is ever reused for corrections or refunds, a negative entry would be
+    // silently dropped here - widen this to `credits !== 0` at the same time.
+    //
+    // NOTE this set is RESERVATION-scoped while the row's amount is SETTLEMENT-scoped
+    // (ChatCompletionProcess sums quest.promptMeta.functionCalls[].creditsUsed, which
+    // settleToolCallCredits distributes from these same queues). A reservation with no
+    // surviving function call drops out of the total but keeps its model here, so the two
+    // can disagree: the row can go blank over a model it did not end up billing. That
+    // errs toward saying nothing, never toward a wrong name, which is the direction this
+    // whole rule is built to fail in.
+    if (credits > 0) this.deps.toolCreditModels.add(model ?? UNATTRIBUTED_TOOL_CHARGE);
   }
 
   /**
@@ -431,7 +501,7 @@ export class ToolBuilder {
         billedSeconds,
       } = estimateMusicCredits(data.provider, { lengthMs: data.lengthMs });
       this.deps.logger.info(`Credits used for tool music_generation: ${creditsUsed}`);
-      this.reserveToolCredits('music_generation', creditsUsed);
+      this.reserveToolCredits('music_generation', creditsUsed, data.modelId);
       quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
       recordToolUsageEvent(
         this.deps.db,
@@ -446,6 +516,7 @@ export class ToolBuilder {
           costUsd: usdCost,
           creditsCharged: creditsUsed,
           units: billedSeconds,
+          feature: 'music_generation',
         })
       );
     }
@@ -502,8 +573,12 @@ export class ToolBuilder {
               characters: data.characters ?? 0,
             };
       const { requiredCredits: creditsUsed, usdCost, units } = estimateAudioCredits(costInput);
+      // Speech always resolves a real model id; a sound effect has none, so qualify it by
+      // provider (e.g. "elevenlabs-sound_effect") instead of the bare kind so per-model
+      // COGS analytics stays clean.
+      const billedModel = data.model ?? `${data.provider}-${data.kind}`;
       this.deps.logger.info(`Credits used for tool audio_generation (${data.kind}): ${creditsUsed}`);
-      this.reserveToolCredits('audio_generation', creditsUsed);
+      this.reserveToolCredits('audio_generation', creditsUsed, billedModel);
       quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
       recordToolUsageEvent(
         this.deps.db,
@@ -514,13 +589,11 @@ export class ToolBuilder {
           user: this.deps.user,
           organization,
           provider: data.provider,
-          // Speech always resolves a real model id; a sound effect has none, so
-          // qualify it by provider (e.g. "elevenlabs-sound_effect") instead of the
-          // bare kind so per-model COGS analytics stays clean.
-          model: data.model ?? `${data.provider}-${data.kind}`,
+          model: billedModel,
           costUsd: usdCost,
           creditsCharged: creditsUsed,
           units,
+          feature: data.kind === 'sound_effect' ? 'sound_effects' : 'text_to_speech',
         })
       );
     }
@@ -563,7 +636,7 @@ export class ToolBuilder {
       organization
     );
     this.deps.logger.info(`Credits used for tool ${toolName}: ${creditsUsed}`);
-    this.reserveToolCredits(toolName, creditsUsed);
+    this.reserveToolCredits(toolName, creditsUsed, toolModel);
     quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
     await saveQuest(quest);
     recordToolUsageEvent(
@@ -747,6 +820,8 @@ export class ToolBuilder {
         fullyInlinedAttachmentIds: this.deps.fullyInlinedAttachmentIds,
         suppressLakeArms: this.deps.suppressLakeArms,
         sessionRetrievalTags: this.deps.sessionRetrievalTags,
+        sessionReaderConsentDatalakeTags: this.deps.sessionReaderConsentDatalakeTags,
+        sessionLakeScopeExplicit: this.deps.sessionLakeScopeExplicit,
         sessionPreauthorizedLakeIds: this.deps.sessionPreauthorizedLakeIds,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,
@@ -905,7 +980,7 @@ export class ToolBuilder {
         sessionId: quest.sessionId,
         questId: quest.id,
         onSubagentCredits: (credits, meta) => {
-          this.reserveToolCredits('delegate_to_agent', credits);
+          this.reserveToolCredits('delegate_to_agent', credits, meta?.model);
           // No meta == model unresolvable; skip rather than fabricate a zero-cost event.
           if (meta) {
             recordToolUsageEvent(

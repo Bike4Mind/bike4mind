@@ -51,7 +51,7 @@ function makeEntry(slug: string, accessLevel: 'public' | 'admin' = 'public'): He
  * In-memory stand-in for the three repositories the mirror writes through. Records every call so a
  * test can assert on what did NOT happen (no delete, no embed) as well as what did.
  */
-function makeHarness(lake: { id: string; status?: string } | null = { id: 'lake-1' }) {
+function makeHarness(lake: { id: string; status?: string; origin?: string } | null = { id: 'lake-1' }) {
   const files: {
     id: string;
     tags: { name: string; strength: number }[];
@@ -100,7 +100,9 @@ function makeHarness(lake: { id: string; status?: string } | null = { id: 'lake-
         ),
       } as never,
       dataLakes: {
-        findBySlug: vi.fn(async () => (lake ? ({ status: 'active', ...lake } as never) : null)),
+        findBySlug: vi.fn(async () =>
+          lake ? ({ status: 'active', origin: 'connector-fed', ...lake } as never) : null
+        ),
         create: vi.fn(async (data: Record<string, unknown>) => {
           lakeCreates.push(data);
           return { ...data, id: 'lake-created' } as never;
@@ -417,6 +419,24 @@ describe('ingestHelpDatalake', () => {
       createdByUserId: USER_ID,
       status: 'active',
     });
+  });
+
+  it('repairs a lake whose origin drifted to curated, since this script owns that field unattended', async () => {
+    writeCorpus([makeEntry('features/a')], { 'features/a': '## One\n\nalpha\n' });
+    const h = makeHarness({ id: 'lake-1', origin: 'curated' });
+
+    await ingestHelpDatalake(h.deps, opts());
+
+    expect(h.lakeUpdates).toContainEqual(expect.objectContaining({ id: 'lake-1', origin: 'connector-fed' }));
+  });
+
+  it('does not redundantly update a lake whose origin is already connector-fed', async () => {
+    writeCorpus([makeEntry('features/a')], { 'features/a': '## One\n\nalpha\n' });
+    const h = makeHarness({ id: 'lake-1', origin: 'connector-fed' });
+
+    await ingestHelpDatalake(h.deps, opts());
+
+    expect(h.lakeUpdates.some(u => 'origin' in u)).toBe(false);
   });
 
   it('writes nothing on a dry run', async () => {

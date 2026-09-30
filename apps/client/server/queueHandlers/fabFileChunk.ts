@@ -26,7 +26,7 @@ import {
 import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 import { isChunkClaimLostError, isSupportedEmbeddingModel } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { CHUNK_CLAIM_STALE_MS } from '@server/worker/chunkScan';
+import { CHUNK_CLAIM_STALE_MS } from '@server/s3/chunkScan';
 import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
 import { provenancePayloadShape } from '@server/queueHandlers/convergenceProvenance';
 import type { Logger } from '@bike4mind/observability';

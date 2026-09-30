@@ -169,6 +169,13 @@ in its grace period only while *every* alternative it accepts is staged - if eve
 is already enforced, a key that legitimately needs the route could have been minted
 with it, and holding none of them is a real miss.
 
+`alsoRequiredScopes` (AND semantics - a route requiring two orthogonal scopes together,
+e.g. a feature scope and a separate spend gate) has **no staging path at all**: it
+enforces from the moment it is declared. It exists only for a route adopting the AND
+requirement fresh, so there is no grandfathered population to protect the way OR-list
+staging protects one - size any AND rollout with the scope preflight before declaring
+it, since there is no grace-period log to fall back on.
+
 Unset (the default) means every declared gate enforces. Enforcement is the default
 state; staging is the temporary one.
 

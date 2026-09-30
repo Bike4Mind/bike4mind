@@ -678,6 +678,7 @@ describe('scoped retrieval settings are caller-altitude, not per-lake (#2624, #2
       'PauseLakeConvergence',
       'LakeConvergenceBulkChangeSharePct',
       'EnforceLakeAdmission',
+      'EnforceLakeOriginOnIngest',
     ];
 
     const declaringLake = (Object.keys(settingsMap) as SettingKey[]).filter(key =>
@@ -1221,4 +1222,34 @@ describe('bflApiKey spells the vendor the way the rest of the app does', () => {
       expect(settingsMap.bflApiKey[field]).not.toContain('BlackForest');
     });
   }
+});
+
+describe('SimulatorComputeCreditsPerRound', () => {
+  const setting = settingsMap.SimulatorComputeCreditsPerRound;
+
+  it('defaults to 50 credits per round when unset or cleared', () => {
+    expect(setting.defaultValue).toBe(50);
+    expect(setting.schema.parse(undefined)).toBe(50);
+    expect(setting.schema.parse('')).toBe(50);
+  });
+
+  it('keeps an explicit 0 as free rather than falling back to the default', () => {
+    expect(setting.min).toBe(0);
+    expect(setting.schema.parse(0)).toBe(0);
+    expect(setting.schema.parse('0')).toBe(0);
+  });
+
+  it('bounds the price to whole credits in [0, 10_000]', () => {
+    expect(setting.max).toBe(10_000);
+    expect(setting.schema.parse(10_000)).toBe(10_000);
+    expect(() => setting.schema.parse(10_001)).toThrow();
+    expect(() => setting.schema.parse(-1)).toThrow();
+    expect(() => setting.schema.parse(12.5)).toThrow();
+  });
+
+  it('sorts beside the Hardware Compute settings in the admin tab', () => {
+    expect(setting.order).toBeGreaterThan(settingsMap.HardwareComputeMaxUsdPerUserPerDay.order);
+    expect(setting.order).toBeLessThan(settingsMap.EnableDataLakeSlackAdd.order);
+    expect(setting.order).toBeLessThan(settingsMap.EnableQuestMaster.order);
+  });
 });

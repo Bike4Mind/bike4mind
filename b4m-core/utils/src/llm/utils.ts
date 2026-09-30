@@ -1,3 +1,4 @@
+import { stripToolOutputMarker } from '../artifactParser';
 import { assemblyTokenBuffer, MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION } from './contextBudget';
 import {
   type AttachmentLakeAccess,
@@ -693,7 +694,7 @@ export async function fetchAndProcessPreviousMessages(
       const assistantContent: MessageContentObject[] = [];
 
       if (textReply) {
-        assistantContent.push({ type: 'text', text: textReply } as MessageContentText);
+        assistantContent.push({ type: 'text', text: stripToolOutputMarker(textReply) } as MessageContentText);
       }
 
       for (const fc of toolCalls) {
@@ -724,7 +725,7 @@ export async function fetchAndProcessPreviousMessages(
     // Priority 3: Legacy fallback - text-only replies
     else {
       const textReply = historyTextReply(cur);
-      if (textReply) acc.push({ role: 'assistant', content: textReply });
+      if (textReply) acc.push({ role: 'assistant', content: stripToolOutputMarker(textReply) });
     }
 
     return acc;
@@ -814,7 +815,7 @@ export async function fetchAgentConversationHistory(
     // Same text-only fallback as fetchAndProcessPreviousMessages, so the agent sees the actual
     // answer (including Research Mode answers), not internal thoughts.
     const textReply = historyTextReply(cur);
-    if (textReply) acc.push({ role: 'assistant', content: textReply });
+    if (textReply) acc.push({ role: 'assistant', content: stripToolOutputMarker(textReply) });
     return acc;
   }, new Array<{ role: 'user' | 'assistant'; content: string }>());
 }

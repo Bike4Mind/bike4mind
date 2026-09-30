@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { DATA_LAKES, type IDataLakeAccessGrantDocument, type IDataLakeDocument } from '@bike4mind/common';
 import {
+  isOrgAdminOf,
   isOrgOwnershipCandidate,
   listLakeOwnershipCandidates,
   listOrgOwnershipCandidateIds,
@@ -20,7 +21,14 @@ const ownerGrant = (principalId: string): IDataLakeAccessGrantDocument =>
     grantedByUserId: 'g',
   }) as IDataLakeAccessGrantDocument;
 
-const org = (over: { userId?: string; adminUserIds?: string[]; users?: { userId: string }[] } = {}) => ({
+const org = (
+  over: {
+    userId?: string;
+    managerId?: string;
+    adminUserIds?: string[];
+    users?: { userId: string }[];
+  } = {}
+) => ({
   name: 'Acme',
   userId: 'billingOwner',
   adminUserIds: [],
@@ -79,6 +87,24 @@ describe('listOrgOwnershipCandidateIds', () => {
   it('rejects a non-member and a blank id', () => {
     expect(isOrgOwnershipCandidate(org(), 'stranger')).toBe(false);
     expect(isOrgOwnershipCandidate(org(), '')).toBe(false);
+  });
+});
+
+describe('isOrgAdminOf - the arm-for-arm mirror of administeredOrgIds', () => {
+  it('admits the billing owner, the team manager and an appointed admin; nobody else', () => {
+    // The accept-time owner-rung re-check leans on this predicate, and the `managerId` arm is the one
+    // `isOrgOwnershipCandidate` lacks - so all three arms are pinned here rather than inferred.
+    const o = org({
+      userId: 'billingOwner',
+      managerId: 'manager',
+      adminUserIds: ['appointed'],
+      users: [{ userId: 'member' }],
+    });
+    expect(isOrgAdminOf(o, 'billingOwner')).toBe(true);
+    expect(isOrgAdminOf(o, 'manager')).toBe(true);
+    expect(isOrgAdminOf(o, 'appointed')).toBe(true);
+    expect(isOrgAdminOf(o, 'member')).toBe(false);
+    expect(isOrgAdminOf(o, '')).toBe(false);
   });
 });
 

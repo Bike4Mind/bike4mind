@@ -14,7 +14,6 @@ import ProjectModal from './ProjectModal';
 import TagModal from './TagModal';
 import { useBulkActions } from './useBulkActions';
 import type { CombinedItem, CombinedSessionDocument } from './types';
-import { APP_NAME } from '@client/config/general';
 import { ISessionDocument, IProjectDocument } from '@bike4mind/common';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import TuneIcon from '@mui/icons-material/Tune';
@@ -26,8 +25,6 @@ import { useShallow } from 'zustand/react/shallow';
 import FavoriteIcon from '@mui/icons-material/Favorite';
 import { useTranslation } from 'react-i18next';
 import SearchBar from '@client/app/components/Session/SearchBar';
-import { BookOpen } from 'lucide-react';
-import dayjs from 'dayjs';
 import SidenavNav from './SidenavNav';
 import { useNavigate, useLocation } from '@tanstack/react-router';
 import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
@@ -109,16 +106,6 @@ const CombinedNotebooks = () => {
 
   // Advanced search state
   const { openDrawer, hasActiveFilters, getActiveFilterCount } = useAdvancedSearch();
-
-  // Check if user is new (created within the last 3 days)
-  const isNewUser = useMemo(() => {
-    return currentUser?.createdAt && dayjs(currentUser.createdAt).isAfter(dayjs().subtract(3, 'day'));
-  }, [currentUser]);
-
-  const handleTutorialClick = () => {
-    if (isMobile) setOpenSideNav(false);
-    navigate({ to: '/tutorials' });
-  };
 
   // Track the pinned nav's rendered height so the sticky search `top` stays in sync with it.
   useEffect(() => {
@@ -621,82 +608,6 @@ const CombinedNotebooks = () => {
           </Box>
         </Box>
         <Stack className="combined-notebooks-list" gap="10px" sx={{ p: '10px 5px 16px 10px' }}>
-          {/* Tutorial section for new users */}
-          {isNewUser && (
-            <div>
-              <Typography
-                className="notebook-sidenav-section-title"
-                level="body-xs"
-                sx={{
-                  color: 'neutral.softDisabledColor',
-                  marginBottom: '0.1em',
-                }}
-              >
-                Tutorials
-              </Typography>
-              <Box
-                className="notebook-sidenav-tutorial-item"
-                role="button"
-                tabIndex={0}
-                onClick={handleTutorialClick}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    handleTutorialClick();
-                  }
-                }}
-                sx={theme => {
-                  const isSelected = location.pathname === '/tutorials';
-                  return {
-                    borderRadius: '8px',
-                    gap: '8px',
-                    padding: '8px 12px',
-                    marginBottom: '10px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    cursor: 'pointer',
-                    backgroundColor: isSelected ? theme.palette.notebooklist.focusedBackground : 'transparent',
-                    '&:hover': {
-                      backgroundColor: isSelected ? undefined : theme.palette.notebooklist.hoverBg,
-                    },
-                    transition: 'background 0.2s',
-                  };
-                }}
-              >
-                {/* 20x20 frame around an 18px SVG, matching the top SidenavNav icon slots.
-                    Pin the child svg to 18px so it can't stretch to fill the 20px frame. */}
-                <Box
-                  sx={{
-                    width: 20,
-                    height: 20,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0,
-                    '& svg': { width: '18px', height: '18px' },
-                  }}
-                >
-                  <BookOpen style={{ color: 'inherit' }} />
-                </Box>
-                <Typography
-                  level="body-xs"
-                  sx={theme => ({
-                    color: theme.palette.neutral.softColor,
-                    fontWeight: 400,
-                    textAlign: 'left',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                  })}
-                  noWrap
-                >
-                  {/* brand externalized */}
-                  {APP_NAME ? `How to work with ${APP_NAME}?` : 'How to get started?'}
-                </Typography>
-              </Box>
-            </div>
-          )}
-
           {/* Favorites section */}
           {filteredFavoriteSession.length > 0 && (
             <div>

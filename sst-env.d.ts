@@ -27,10 +27,6 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
-    "B4M_PROD_API_KEY": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
     "CliToolHandler": {
       "name": string
       "type": "sst.aws.Function"
@@ -78,6 +74,30 @@ declare module "sst" {
       "value": string
     }
     "GITHUB_CLIENT_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "GITHUB_LAKE_APP_CLIENT_ID": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "GITHUB_LAKE_APP_CLIENT_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "GITHUB_LAKE_APP_ID": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "GITHUB_LAKE_APP_PRIVATE_KEY": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "GITHUB_LAKE_APP_SLUG": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "GITHUB_LAKE_APP_WEBHOOK_SECRET": {
       "type": "sst.sst.Secret"
       "value": string
     }
@@ -185,6 +205,10 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "OVERWATCH_PRODUCT_INGEST_KEYS": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "OVERWATCH_PSEUDONYM_SALT": {
       "type": "sst.sst.Secret"
       "value": string
@@ -214,6 +238,10 @@ declare module "sst" {
       "url": string
     }
     "CHAT_COMPLETION_INTERNAL_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "QA_ALARM_SLACK_WEBHOOKS": {
       "type": "sst.sst.Secret"
       "value": string
     }
@@ -406,6 +434,18 @@ declare module "sst" {
       "type": "sst.aws.Queue"
       "url": string
     }
+    "driveDisconnectPurgeQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "githubLakeIngestQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "githubLakeRevokeQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
     "dataLakeTaxonomyQueueDLQ": {
       "type": "sst.aws.Queue"
       "url": string
@@ -428,6 +468,7 @@ declare module "sst" {
       "email-job": string
       "fab-file-chunk": string
       "fab-file-vectorize": string
+      "github-lake-revoke": string
       "github-webhook": string
       "image-edit": string
       "image-generation": string
@@ -588,6 +629,10 @@ declare module "sst" {
       "name": string
       "type": "sst.aws.Bucket"
     }
+    "qaArtifactsBucket": {
+      "name": string
+      "type": "sst.aws.Bucket"
+    }
     "questExportQueue": {
       "type": "sst.aws.Queue"
       "url": string
@@ -642,6 +687,7 @@ declare module "sst" {
       "emailJobQueue": string
       "fabFileChunkQueue": string
       "fabFileVectorizeQueue": string
+      "githubLakeRevokeQueue": string
       "githubWebhookQueue": string
       "imageEditQueue": string
       "imageGenerationQueue": string

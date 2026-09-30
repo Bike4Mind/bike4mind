@@ -8,6 +8,18 @@ export const secrets = {
   GOOGLE_CLIENT_SECRET: new sst.Secret('GOOGLE_CLIENT_SECRET', 'not-configured'),
   GITHUB_CLIENT_ID: new sst.Secret('GITHUB_CLIENT_ID', 'not-configured'),
   GITHUB_CLIENT_SECRET: new sst.Secret('GITHUB_CLIENT_SECRET', 'not-configured'),
+  // Read-only GitHub App that feeds data lakes (contents:read + metadata:read, installed on selected
+  // repositories only). Separate from the MCP OAuth app and OrgGitHubConnection automation on purpose.
+  // The client id/secret are the App's own OAuth credentials, used to prove the installer can see the
+  // installation. The private key is the PEM, newlines kept or escaped as \n.
+  GITHUB_LAKE_APP_CLIENT_ID: new sst.Secret('GITHUB_LAKE_APP_CLIENT_ID', 'not-configured'),
+  GITHUB_LAKE_APP_CLIENT_SECRET: new sst.Secret('GITHUB_LAKE_APP_CLIENT_SECRET', 'not-configured'),
+  GITHUB_LAKE_APP_ID: new sst.Secret('GITHUB_LAKE_APP_ID', 'not-configured'),
+  GITHUB_LAKE_APP_PRIVATE_KEY: new sst.Secret('GITHUB_LAKE_APP_PRIVATE_KEY', 'not-configured'),
+  GITHUB_LAKE_APP_SLUG: new sst.Secret('GITHUB_LAKE_APP_SLUG', 'not-configured'),
+  // HMAC secret for the App's single webhook (pages/api/webhooks/github/lake.ts: pushes and
+  // installation revokes); unset means deliveries are refused.
+  GITHUB_LAKE_APP_WEBHOOK_SECRET: new sst.Secret('GITHUB_LAKE_APP_WEBHOOK_SECRET', 'not-configured'),
   STRIPE_SECRET_KEY: new sst.Secret('STRIPE_SECRET_KEY', 'not-configured'),
   STRIPE_PUBLISHABLE_KEY: new sst.Secret('STRIPE_PUBLISHABLE_KEY', 'not-configured'),
   STRIPE_WEBHOOK_SECRET: new sst.Secret('STRIPE_WEBHOOK_SECRET', 'not-configured'),
@@ -158,6 +170,11 @@ export const secrets = {
   // Migration to standalone Overwatch = repoint OVERWATCH_INGEST_URL + re-mint key. Zero code change.
   OVERWATCH_INGEST_URL: new sst.Secret('OVERWATCH_INGEST_URL', 'not-configured'),
   OVERWATCH_INGEST_KEY: new sst.Secret('OVERWATCH_INGEST_KEY', 'not-configured'),
+  // Ingest keys for the other Overwatch products this deployment serves (premium overlays), as JSON:
+  // {"<productId>": "<ingest key>"}. Each key is minted in Overwatch bound to its own productId, since
+  // the ingest endpoint rejects an event whose productId is not the key's. Adding a product is a
+  // secret change, not a code change. Set per-stage like the key above.
+  OVERWATCH_PRODUCT_INGEST_KEYS: new sst.Secret('OVERWATCH_PRODUCT_INGEST_KEYS', 'not-configured'),
   // b4m-side kill switch for analytics emission. Set to 'false' to silence emission without
   // touching the receiver. Separate from OVERWATCH_INGEST_ENABLED (receiver-side).
   B4M_ANALYTICS_ENABLED: new sst.Secret('B4M_ANALYTICS_ENABLED', 'true'),
@@ -166,12 +183,10 @@ export const secrets = {
   //     retention history. Set once per stage and leave it. The ingest key rotates freely; this does not.
   // Generate: openssl rand -hex 32
   OVERWATCH_PSEUDONYM_SALT: new sst.Secret('OVERWATCH_PSEUDONYM_SALT', 'not-configured'),
+  // QA status alarm (apps/client/server/qa/evaluateAlarm.ts). JSON map of product slug to a Slack
+  // incoming-webhook URL: {"<product>": "https://hooks..."}. A product without an entry logs only.
+  // Set per stage: sst secret set QA_ALARM_SLACK_WEBHOOKS '<json>' --stage <stage>
+  QA_ALARM_SLACK_WEBHOOKS: new sst.Secret('QA_ALARM_SLACK_WEBHOOKS', 'not-configured'),
 };
 
 export const allSecrets = Object.values(secrets);
-
-// Deliberately outside `secrets`, and therefore outside both `allSecrets` and the
-// `Object.values(secrets)` spread in web.ts - either one links a secret into every
-// Lambda and service on every stage. DataSyncer is the only consumer and links this
-// export directly (infra/dataSyncer.ts); keep it that way when adding a consumer.
-export const b4mProdApiKey = new sst.Secret('B4M_PROD_API_KEY', 'not-configured');

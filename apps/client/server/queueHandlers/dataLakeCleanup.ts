@@ -2,6 +2,8 @@ import {
   dataLakeRepository,
   dataLakeBatchRepository,
   dataLakeAccessGrantRepository,
+  dataLakeCorpusActionRepository,
+  dataLakeFindingRepository,
   dataLakeProposalRepository,
   dataLakeResearchConfigRepository,
   dataLakeResearchRunRepository,
@@ -17,7 +19,9 @@ import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { shredPrincipalMemory } from '@server/memory/ledgerMemoryStore';
 import { releaseDriveConnectionForLake } from '@server/integrations/google/drive/common';
+import { releaseGitHubLakeConnectionForLake } from '@server/integrations/github/dataLake/githubLakeConnection';
 import { createKeyProvider } from '@server/memory/factCipher';
+import { getFilesStorage } from '@server/utils/storage';
 import { BadRequestError } from '@bike4mind/utils';
 import { z, ZodError } from 'zod';
 
@@ -53,6 +57,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
         dataLakeProposals: dataLakeProposalRepository,
+        dataLakeFindings: dataLakeFindingRepository,
+        dataLakeCorpusActions: dataLakeCorpusActionRepository,
         dataLakeResearchConfigs: dataLakeResearchConfigRepository,
         dataLakeResearchRuns: dataLakeResearchRunRepository,
         lakeMembershipDecisions: lakeMembershipDecisionRepository,
@@ -60,6 +66,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         fabFiles: fabFileRepository,
         fabFileChunks: fabFileChunkRepository,
       },
+      // Deletes each purged file's stored object(s) before its row. Needs `fabFileBucket` linked on
+      // this subscriber (infra/queues.ts); unlinked, this throws and every purge lands in the DLQ.
+      storage: getFilesStorage(),
       // Undefined everywhere except self-host OpenSearch - Atlas's vector index lives on the
       // FabFileChunk collection itself, so the chunk-sweep two steps below already removes it.
       retrievalIndex: selfHostOpenSearchEnabled()
@@ -104,6 +113,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         const released = await releaseDriveConnectionForLake(dataLakeId);
         if (released) {
           logger.info('[driveLake] released the purged lake Drive connection and its folder claim', { dataLakeId });
+        }
+      },
+      releaseGitHubConnection: async ({ dataLakeId }) => {
+        const released = await releaseGitHubLakeConnectionForLake(dataLakeId);
+        if (released) {
+          logger.info('[githubLake] released the purged lake GitHub connection and its repository claim', {
+            dataLakeId,
+            installationRetained: released.installationRetained,
+          });
         }
       },
       logger,

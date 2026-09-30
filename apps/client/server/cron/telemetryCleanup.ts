@@ -32,18 +32,24 @@ export async function handler(event: never, context: Context) {
     let totalModified = 0;
     let batchCount = 0;
 
+    // includeDeleted on both queries: soft-deleted quests keep their telemetry, and the plugin's
+    // find and update hooks would otherwise leave it past the retention window.
     while (true) {
       const batch = await Quest.find(
         { timestamp: { $lt: cutoff }, 'promptMeta.contextTelemetry': { $exists: true } },
         { _id: 1 }
       )
+        .setOptions({ includeDeleted: true })
         .limit(BATCH_SIZE)
         .lean();
 
       if (batch.length === 0) break;
 
       const ids = batch.map(q => q._id);
-      const result = await Quest.updateMany({ _id: { $in: ids } }, { $unset: { 'promptMeta.contextTelemetry': '' } });
+      const result = await Quest.updateMany(
+        { _id: { $in: ids } },
+        { $unset: { 'promptMeta.contextTelemetry': '' } }
+      ).setOptions({ includeDeleted: true });
 
       totalModified += result.modifiedCount;
       batchCount++;

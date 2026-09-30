@@ -1,6 +1,7 @@
 import { Organization, organizationRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ForbiddenError } from '@server/utils/errors';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
@@ -25,7 +26,7 @@ interface RequestQuery {
   id: string;
 }
 
-const handler = baseApi().post(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

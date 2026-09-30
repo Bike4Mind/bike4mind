@@ -7,6 +7,7 @@ import { QuestStartBodySchema } from '@bike4mind/services/llm/questStartBody';
 import {
   ContextTelemetrySchema,
   ContextTelemetryAlertsSchema,
+  PERSISTED_SESSION_SUMMARY_TRIGGERS,
   SRE_ANALYSIS_COMPLETED_EVENT,
   type SreFixRequest,
 } from '@bike4mind/common';
@@ -14,7 +15,7 @@ import { Logger } from '@bike4mind/observability';
 
 // Self-host has no EventBridge. Deliver email.send straight to the mailer, and route
 // everything else to the SELF_HOST_EVENT_QUEUE for the background worker to consume
-// (server/worker/eventDispatch.ts). These events feed async enrichment (naming,
+// (apps/workers/src/selfhost/eventDispatch.ts). These events feed async enrichment (naming,
 // summaries, tags, memento embedding), so a delivery failure must degrade the feature,
 // not 500 the caller - hence warn-and-drop, never throw.
 async function publishSelfHost(eventName: string, detail: unknown): Promise<void> {
@@ -158,7 +159,16 @@ export const SessionEvents = {
       sessionId: z.string(),
       userId: z.string().optional(),
       callTagging: z.boolean().optional(),
-      trigger: z.enum(['manual', 'project', 'earlyMilestone', 'contentGrowth', 'throttling']).optional(),
+      // Persisted list, not the full union: the handler stamps this straight onto the session, so
+      // accepting a decision-only reason here would store provenance for a run that never happened.
+      // Required, because the handler's write goes through $set, which drops an undefined - an event
+      // without a trigger would leave a NEW summary sitting next to the PREVIOUS run's provenance.
+      // Every publisher already passes one, and the summarizeSession chain now types it that way.
+      trigger: z.enum(PERSISTED_SESSION_SUMMARY_TRIGGERS),
+      // Who asked, when not the owner: the handler's summary write re-checks this user's update
+      // access, and it is forwarded to the Tag job it queues. Distinct from `userId`, which picks
+      // the billed user.
+      requesterId: z.string().optional(),
     })
   ),
   Tag: event(
@@ -166,6 +176,9 @@ export const SessionEvents = {
     z.object({
       sessionId: z.string(),
       userId: z.string().optional(),
+      // Who asked, when not the owner: the handler's writes re-check this user's update access.
+      // Distinct from `userId`, which picks the billed user.
+      requesterId: z.string().optional(),
     })
   ),
   ContextSummarize: event(

@@ -223,6 +223,11 @@ const handler = nextRouteForContract(chatContract, {
       model: internalRequest.params.model,
       response: completedQuest.reply,
       responses: completedQuest.replies,
+      // Terminal-failure classifier (see chatContract's 200 description). `type` is present
+      // unconditionally, matching the polled quest (GET /api/v1/quests/{id}); `errorCode` stays
+      // conditional since only the billing failures set it.
+      type: completedQuest.type,
+      ...(completedQuest.type === 'error' && { errorCode: completedQuest.errorCode }),
       // Additive twin of `response`: the machine-readable state the turn's tools produced, which
       // otherwise survives only on the quest (the model sees a terse displayMessage instead). The
       // prose above is unchanged - a caller reads one, the other, or both.
@@ -325,7 +330,7 @@ async function getSessionId(requestedSessionId: string | undefined, userId: stri
     return mostRecentSession.id;
   }
 
-  throw new NotFoundError('No notebook found. Please create a notebook first using POST /api/sessions/create');
+  throw new NotFoundError('No notebook found. Please create a notebook first using POST /api/v1/sessions');
 }
 
 function transformToInternalFormat(

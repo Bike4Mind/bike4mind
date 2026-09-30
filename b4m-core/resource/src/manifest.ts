@@ -8,7 +8,6 @@ export const DEFAULT_MANIFEST = {
   // core boot secrets (JWT/session/encryption/Mongo) are hard-required.
   ANTHROPIC_API_KEY: { kind: 'secret', optional: true },
   B4M_ANALYTICS_ENABLED: { kind: 'secret', optional: true },
-  B4M_PROD_API_KEY: { kind: 'secret', optional: true },
   // Shared-secret bearer for the frontend -> ChatCompletion /process dispatch. Required:
   // chat dispatch fails closed (401) without it. Distinct from SECRET_ENCRYPTION_KEY.
   CHAT_COMPLETION_INTERNAL_SECRET: { kind: 'secret' },
@@ -18,6 +17,12 @@ export const DEFAULT_MANIFEST = {
   GEMINI_API_KEY: { kind: 'secret', optional: true },
   GITHUB_CLIENT_ID: { kind: 'secret', optional: true },
   GITHUB_CLIENT_SECRET: { kind: 'secret', optional: true },
+  GITHUB_LAKE_APP_CLIENT_ID: { kind: 'secret', optional: true },
+  GITHUB_LAKE_APP_CLIENT_SECRET: { kind: 'secret', optional: true },
+  GITHUB_LAKE_APP_ID: { kind: 'secret', optional: true },
+  GITHUB_LAKE_APP_PRIVATE_KEY: { kind: 'secret', optional: true },
+  GITHUB_LAKE_APP_SLUG: { kind: 'secret', optional: true },
+  GITHUB_LAKE_APP_WEBHOOK_SECRET: { kind: 'secret', optional: true },
   GITHUB_ZAP_REF: { kind: 'secret', optional: true },
   GOOGLE_CLIENT_ID: { kind: 'secret', optional: true },
   GOOGLE_CLIENT_SECRET: { kind: 'secret', optional: true },
@@ -38,11 +43,13 @@ export const DEFAULT_MANIFEST = {
   OVERWATCH_INGEST_ENABLED: { kind: 'secret', optional: true }, // transient: removed after product extraction
   OVERWATCH_INGEST_KEY: { kind: 'secret', optional: true }, // transient: removed after product extraction
   OVERWATCH_INGEST_URL: { kind: 'secret', optional: true }, // transient: removed after product extraction
+  OVERWATCH_PRODUCT_INGEST_KEYS: { kind: 'secret', optional: true }, // transient: removed after product extraction
   OVERWATCH_PSEUDONYM_SALT: { kind: 'secret', optional: true }, // transient: removed after product extraction
   OPTIHASHI_API_TOKEN: { kind: 'secret', optional: true },
   OPTIHASHI_API_URL: { kind: 'secret', optional: true },
   OPTIHASHI_WEBHOOK_SECRET: { kind: 'secret', optional: true },
   OPTIHASHI_WEBHOOK_SECRET_PREVIOUS: { kind: 'secret', optional: true },
+  QA_ALARM_SLACK_WEBHOOKS: { kind: 'secret', optional: true },
   RATE_LIMIT_INGEST_TOKEN: { kind: 'secret', optional: true },
   SECOPS_ATTACK_SIMULATION_INGEST_TOKEN: { kind: 'secret', optional: true },
   SECOPS_CODE_INGEST_TOKEN: { kind: 'secret', optional: true },
@@ -70,6 +77,8 @@ export const DEFAULT_MANIFEST = {
   generatedImagesBucket: { kind: 'bucket' },
   historyImportBucket: { kind: 'bucket' },
   publishedArtifactsBucket: { kind: 'bucket' },
+  // Optional: only the admin /status page reads it, and a self-host install need not run QA ingest.
+  qaArtifactsBucket: { kind: 'bucket', optional: true },
   slackExportBucket: { kind: 'bucket' },
   // --- queue ---
   agentContinuationQueue: { kind: 'queue' },
@@ -92,6 +101,18 @@ export const DEFAULT_MANIFEST = {
   // failure that needs a manual row deletion. webhookDeliveryQueue's two sites catch and return
   // a clean 503, so there the silent no-op really is the worse of the two.
   driveLakeIngestQueue: { kind: 'queue' },
+  // Read by the Drive disconnect route (via sourceQueueUrls) and by its consumer's own slice
+  // re-enqueue. Optional so an install that upgraded without the env var keeps the worker up; the
+  // route then rolls the disconnect back and fails instead of accepting work nothing consumes.
+  driveDisconnectPurgeQueue: { kind: 'queue', optional: true },
+  // Read by the connect callback, the re-sync route and the ingest handler's own re-enqueues. Not optional: the
+  // connect path reads it after the binding row is written, the same hazard as driveLakeIngestQueue above.
+  githubLakeIngestQueue: { kind: 'queue' },
+  // Read by the App's webhook (webhooks/github/lake.ts) only after it verifies the signature and
+  // resolves affected connections - no row is written first. Registered so the webhook resolves the
+  // key instead of throwing; the self-host worker runner (apps/workers/src/selfhost) has no consumer
+  // for this queue (nor githubLakeIngestQueue), so on a self-host the queued revokes still wait for one.
+  githubLakeRevokeQueue: { kind: 'queue' },
   emailAnalysisQueue: { kind: 'queue', optional: true },
   emailBatchQueue: { kind: 'queue' },
   emailIngestionQueue: { kind: 'queue' },
@@ -111,6 +132,11 @@ export const DEFAULT_MANIFEST = {
   // an operator needs - with no URL configured the enqueue still fails into those catches and
   // says so, rather than accepting a message into a queue nothing is consuming yet.
   lakeMemoryQueue: { kind: 'queue', optional: true },
+  // Reached from POST /api/data-lakes/:id/inconsistencies?detector=model. `optional` for the same
+  // reason as lakeMemoryQueue above: it sits behind an off-by-default admin flag
+  // (`EnableLakeModelInconsistencyDetection`), so a basic install never sets it, and with no URL
+  // configured the route refuses the run outright rather than accepting work nothing will consume.
+  lakeInconsistencyModelQueue: { kind: 'queue', optional: true },
   liveOpsTriageQueue: { kind: 'queue' },
   notebookCurationQueue: { kind: 'queue', optional: true },
   researchEngineQueue: { kind: 'queue' },

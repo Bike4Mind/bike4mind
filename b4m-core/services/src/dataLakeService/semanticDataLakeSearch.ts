@@ -10,6 +10,7 @@ import {
   SupportedEmbeddingModel,
   type ChunkStallReason,
   type DataLakeMembershipScope,
+  type LakeSupersession,
 } from '@bike4mind/common';
 import {
   computeCosineSimilarity,
@@ -19,11 +20,7 @@ import {
 } from '@bike4mind/utils';
 import { filterRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { Logger } from '@bike4mind/observability';
-import {
-  supportsAtlasVectorSearch,
-  selfHostOpenSearchEnabled,
-  selfHostOpenSearchResidencyRequired,
-} from '@bike4mind/db-core';
+import { selfHostOpenSearchEnabled, selfHostOpenSearchResidencyRequired } from '@bike4mind/db-core';
 import {
   classifyLoadedChunk,
   createEmbeddingMismatchAccumulator,
@@ -55,7 +52,7 @@ import {
   type SupersessionReport,
 } from './supersession';
 import type { AttributableLake } from './attributeAccessedLakes';
-import { atlasVectorSearch, type AtlasVectorSearchAdapters } from './atlasVectorSearch';
+import { atlasVectorSearch, isAtlasVectorSearchAvailable, type AtlasVectorSearchAdapters } from './atlasVectorSearch';
 import { openSearchVectorSearch, type OpenSearchVectorSearchAdapters } from './openSearchVectorSearch';
 import { planAlternateAnnModels, runAlternateModelAnn, type AlternateAnnOutcome } from './alternateModelAnn';
 import { slowestAnnQueryMs, type AnnVectorSearchResult } from './annVectorSearch';
@@ -106,19 +103,10 @@ export interface SemanticChunkResult {
   fileId: string;
   fileName: string;
   fileTags: string[];
+  /** The source document's own vintage (#3048), for the passage header. Null when it has none. */
+  documentDate: Date | null;
   chunkText: string;
   score: number;
-  /**
-   * The parent document's `createdAt`, rendered by `documentDateClause` into the passage header
-   * (#2236). Required, not optional, so every producer (this module's scan, annVectorSearch) has
-   * to supply it: a producer that omitted it would serve dateless passages from one retrieval
-   * backend and dated ones from another, and nothing would fail. `null` when the parent carries
-   * no date.
-   *
-   * NOTE: this interface is a public export of @bike4mind/services, so this required field is a
-   * source break for any out-of-repo code that CONSTRUCTS one. Readers are unaffected.
-   */
-  fileCreatedAt: Date | string | null;
 }
 
 /** Tuning + hard limits. All optional; the module defaults apply when omitted. */
@@ -352,6 +340,13 @@ export interface SemanticDataLakeSearchParams {
   /** OPEN static-registry content-tag prefixes (e.g. 'opti:') - ownership-bypass by design. */
   dataLakeTagPrefixes: string[];
   /**
+   * Rank ONLY lake members: drop the owner/shared/group base arms so the caller's own non-member
+   * files stay out, the same `restrictToDataLake` the single-lake browse uses. For a caller whose
+   * scope was already narrowed to one lake (the public per-lake search). Off by default, so every
+   * existing caller keeps the mixed corpus described on `collectScopedFiles`.
+   */
+  restrictToDataLake?: boolean;
+  /**
    * One membership arm per SCOPED dynamic lake, each anchored to THAT lake's creator (see
    * `lakeMembershipsFrom`) - replaces the old caller-anchored `scopedTagPrefixes` prefix match, so
    * a prefix-only member is reachable by every caller who passes the lake gate, not only its
@@ -444,8 +439,25 @@ async function resolveIndexResidency(
 interface RankableFile {
   fileName: string;
   fileTags: string[];
-  /** Parent-document date for the passage header (#2236). Both builders below must carry it. */
+  /**
+   * Upload time, read only by `partitionBySupersession` as the recency signal for which of two
+   * copies of the same source is the later one. Deliberately NOT surfaced to the model as the
+   * document's date - see formatDocumentDate in renderRetrievedContentBlock.ts. Both builders
+   * below must carry it.
+   */
   createdAt?: Date | string | null;
+  /**
+   * The document's OWN vintage (#3048) - the one date that IS surfaced to the model, unlike
+   * `createdAt` above. Carried purely so the passage header can show it: supersession ranking
+   * still keys on `createdAt`, because which COPY we ingested last is a different question from
+   * when the document was written.
+   *
+   * REQUIRED, unlike its neighbours here: this is the only field on this shape that the model
+   * actually reads, and omitting it is invisible - the passage simply renders undated, which is
+   * also the legitimate output for a file that has no vintage. A builder must say `null` and mean
+   * it rather than reach that state by forgetting the field.
+   */
+  documentDate: Date | null;
   /**
    * The only record of which embedding space a file's chunks live in - chunks carry no model of
    * their own. Width alone cannot separate ada-002 from text-embedding-3-small (both 1536), so
@@ -472,11 +484,8 @@ interface RankableFile {
   chunkRebuildRequestedAt?: Date | string | null;
   /**
    * These two, plus `createdAt` above, are the source-identity key supersession collapse groups on,
-   * read there ONLY by `partitionBySupersession`. `createdAt` is shared with the passage header
-   * rather than declared twice - it is the recency signal here and the document date there, and one
-   * field serving both is why a builder that drops it breaks two features at once. Both builders
-   * below populate all three even though only the lake-scoped entrypoint opts into the collapse -
-   * see the note at each builder.
+   * read ONLY by `partitionBySupersession`. Both builders below populate all three even though only
+   * the lake-scoped entrypoint opts into the collapse - see the note at each builder.
    */
   relativePath?: string;
   driveFileId?: string;
@@ -486,6 +495,12 @@ interface RankableFile {
    * fails quiet - the collapse silently narrows to meta-tagged members - so both builders carry it.
    */
   userId?: string;
+  /**
+   * Curator supersession rulings (#3046), read by the collapse as a tier above every derived one.
+   * Same both-builders rule as the source-identity fields above: a builder that stopped carrying
+   * this would make an explicit curator ruling a silent no-op on that entrypoint.
+   */
+  supersededInLakes?: LakeSupersession[];
 }
 
 /**
@@ -789,9 +804,13 @@ async function scanAndRank(args: {
           fileId: chunk.fabFileId,
           fileName: file.fileName,
           fileTags: file.fileTags,
+          // `?? null` despite the field now being required above: the type stops a TYPED builder
+          // from dropping it, this stops an undefined reaching the row from a structurally-typed
+          // caller. SemanticChunkResult's contract is null-for-undated, and the render channels key
+          // on it. Same defence as annVectorSearch.ts's identical coalesce.
+          documentDate: file.documentDate ?? null,
           chunkText: chunk.text ?? '',
           score,
-          fileCreatedAt: file.createdAt ?? null,
         });
       }
 
@@ -824,10 +843,11 @@ async function scanAndRank(args: {
  * Page fabfiles.search up to the file budget. A lake that fits in one page costs exactly one
  * query as before; a larger one is no longer silently cut off at the first page.
  *
- * `includeShared: true` is hardcoded below and `restrictToDataLake` is never set, so dropping the
- * old caller-anchored `scopedTagPrefixes` arm in favour of `lakeMemberships` is lossless here: the
- * caller's own files stay in scope via the base owner/share/group arms regardless of which lake
- * arm ran (see semanticDataLakeSearch's Approach property 1).
+ * `includeShared: true` is hardcoded below and `restrictToDataLake` is off unless the caller asks,
+ * so dropping the old caller-anchored `scopedTagPrefixes` arm in favour of `lakeMemberships` is
+ * lossless here: the caller's own files stay in scope via the base owner/share/group arms regardless
+ * of which lake arm ran (see semanticDataLakeSearch's Approach property 1). A caller that sets
+ * `restrictToDataLake` has opted out of exactly those base arms.
  */
 async function collectScopedFiles(args: {
   // The repository OBJECT, not a detached `search` reference: FabFileRepository.search calls
@@ -839,6 +859,7 @@ async function collectScopedFiles(args: {
   dataLakeTags: string[];
   dataLakeTagPrefixes: string[];
   lakeMemberships: DataLakeMembershipScope[];
+  restrictToDataLake: boolean;
   retrievalFilter: RetrievalExclusionOptions;
   maxFiles: number;
   filePageSize: number;
@@ -874,7 +895,11 @@ async function collectScopedFiles(args: {
         dataLakeTags: args.dataLakeTags,
         dataLakeTagPrefixes: args.dataLakeTagPrefixes,
         lakeMemberships: args.lakeMemberships,
+        ...(args.restrictToDataLake ? { restrictToDataLake: true } : {}),
         excludeContent: true,
+        // supersededInLakes is select:false by default; this walk is the lake-scoped collapse's
+        // own read, so it opts back in - see FabFileModel.executeSearch.
+        includeSupersessionRulings: true,
         // Retrieval exclusion (caller-driven) - best-effort DB pre-filter; the authoritative
         // in-memory pass below guarantees excluded files are dropped before any chunk load.
         ...args.retrievalFilter,
@@ -926,8 +951,11 @@ async function rankChunksForFiles(args: {
    * Opt-in to per-lake supersession collapse. Present only from `semanticDataLakeSearch`;
    * `fileScopedSemanticSearch` deliberately never passes it (see the note at its builder), so the
    * collapse cannot reach a curated allow-list by accident.
+   *
+   * `identityTiers` gates the DERIVED tiers alone: curator rulings are honored whenever this is
+   * present at all, because they carry none of the doubt the admin setting exists for.
    */
-  supersession?: { lakes: AttributableLake[] };
+  supersession?: { lakes: AttributableLake[]; identityTiers?: boolean };
   logger?: Logger;
   fabfilechunks: FabFileChunksAdapter;
   vectorIndex?: OpenSearchVectorSearchAdapters;
@@ -992,6 +1020,10 @@ async function rankChunksForFiles(args: {
       driveFileId: file?.driveFileId,
       createdAt: file?.createdAt,
       userId: file?.userId,
+      // The curator ruling the collapse reads as its top tier. This projection is the LAST hop
+      // before the partition, so a field carried faithfully by both `fileById` builders and
+      // dropped here is silently never honored - which is exactly what happened to this one.
+      supersededInLakes: file?.supersededInLakes,
     };
   });
   // Refuse mid-(re)index files BEFORE anything else looks at them (#1681 constraint 1). Their old
@@ -1071,11 +1103,7 @@ async function rankChunksForFiles(args: {
   // before this cutover existed.
   let annEligible: typeof rankable = [];
   let scanEligible = rankable;
-  const canUseAtlas =
-    args.vectorSearchEnabled &&
-    supportsAtlasVectorSearch() &&
-    !!args.fabfilechunks.vectorSearch &&
-    !!args.fabfilechunks.getAtlasIndexStatus;
+  const canUseAtlas = !!args.vectorSearchEnabled && isAtlasVectorSearchAvailable(args.fabfilechunks);
   // Atlas and self-host OpenSearch are mutually exclusive: getVectorBackend() resolves to exactly
   // one VectorBackend per deployment, so this is an if/else-if documenting that invariant, not two
   // independent guards that happen never to both fire.
@@ -1579,6 +1607,7 @@ async function lakeScopedSearch(
     dataLakeTags,
     dataLakeTagPrefixes,
     lakeMemberships = [],
+    restrictToDataLake = false,
     retrievalFilter = {},
     ownFilesOnly = false,
     logger,
@@ -1600,6 +1629,7 @@ async function lakeScopedSearch(
     dataLakeTags,
     dataLakeTagPrefixes,
     lakeMemberships,
+    restrictToDataLake,
     retrievalFilter,
     maxFiles: budgets.maxFiles,
     filePageSize: budgets.filePageSize,
@@ -1651,6 +1681,7 @@ async function lakeScopedSearch(
         fileName: f.fileName,
         fileTags: f.tags?.map(t => t.name) ?? [],
         createdAt: f.createdAt,
+        documentDate: f.documentDate ?? null,
         embeddingModel: f.embeddingModel,
         vectorizedChunkCount: f.vectorizedChunkCount,
         chunkEmbeddingModelStampedAt: f.chunkEmbeddingModelStampedAt,
@@ -1665,13 +1696,14 @@ async function lakeScopedSearch(
         // ranking map below still names it) is exactly the omission this comment warns about, and it
         // fails silently - the member reads as an image and is served.
         chunkRebuildRequestedAt: f.chunkRebuildRequestedAt,
-        // Source identity for the supersession collapse - with `createdAt` above, which the passage
-        // header shares. Same both-builders rule as above: only the lake-scoped entrypoint opts into
-        // the collapse today, but a builder that quietly stopped carrying these would make the
-        // collapse a silent no-op rather than an error.
+        // Source identity for the supersession collapse, with `createdAt` above. Same both-builders
+        // rule as above: only the lake-scoped entrypoint opts into the collapse today, but a builder
+        // that quietly stopped carrying these would make the collapse a silent no-op rather than an
+        // error.
         relativePath: f.relativePath,
         driveFileId: f.driveFileId,
         userId: f.userId,
+        supersededInLakes: f.supersededInLakes,
       },
     ])
   );
@@ -1689,9 +1721,15 @@ async function lakeScopedSearch(
     fileBudgetHit: scoped.fileBudgetHit,
     filesByLake,
     vectorSearchEnabled: params.vectorSearchEnabled ?? false,
-    // Both halves are required: the flag alone with no lakes could not attribute anything, and
-    // lakes alone would collapse behind an admin's back.
-    supersession: params.supersessionCollapseEnabled && params.lakes?.length ? { lakes: params.lakes } : undefined,
+    // LAKES are what decide whether the partition runs at all: without them nothing can be
+    // attributed to a lake and neither half of the collapse has a scope to work in. The admin flag
+    // now gates only the DERIVED tiers, because a curator's explicit ruling carries none of the
+    // doubt that setting exists for - the same split `ChatCompletionFeatures` makes. Gating the
+    // whole partition on the flag, as this used to, made every curator ruling a no-op on the
+    // default deployment, where the setting is off.
+    supersession: params.lakes?.length
+      ? { lakes: params.lakes, identityTiers: params.supersessionCollapseEnabled ?? false }
+      : undefined,
     logger,
     fabfilechunks: adapters.db.fabfilechunks,
     vectorIndex: adapters.vectorIndex,
@@ -1776,6 +1814,7 @@ async function fileScopedSearch(
         fileName: f.fileName,
         fileTags: f.tags?.map(t => t.name) ?? [],
         createdAt: f.createdAt,
+        documentDate: f.documentDate ?? null,
         embeddingModel: f.embeddingModel,
         vectorizedChunkCount: f.vectorizedChunkCount,
         chunkEmbeddingModelStampedAt: f.chunkEmbeddingModelStampedAt,
@@ -1790,13 +1829,14 @@ async function fileScopedSearch(
         // ranking map below still names it) is exactly the omission this comment warns about, and it
         // fails silently - the member reads as an image and is served.
         chunkRebuildRequestedAt: f.chunkRebuildRequestedAt,
-        // Source identity for the supersession collapse - with `createdAt` above, which the passage
-        // header shares. Same both-builders rule as above: only the lake-scoped entrypoint opts into
-        // the collapse today, but a builder that quietly stopped carrying these would make the
-        // collapse a silent no-op rather than an error.
+        // Source identity for the supersession collapse, with `createdAt` above. Same both-builders
+        // rule as above: only the lake-scoped entrypoint opts into the collapse today, but a builder
+        // that quietly stopped carrying these would make the collapse a silent no-op rather than an
+        // error.
         relativePath: f.relativePath,
         driveFileId: f.driveFileId,
         userId: f.userId,
+        supersededInLakes: f.supersededInLakes,
       },
     ])
   );

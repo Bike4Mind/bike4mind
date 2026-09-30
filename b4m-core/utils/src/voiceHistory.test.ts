@@ -175,3 +175,12 @@ describe('buildVoiceInstructions', () => {
     expect(result).toContain('User: Hello');
   });
 });
+
+describe('formatVoiceHistory - tool output marker', () => {
+  it('drops the tool-output marker from a replayed reply', () => {
+    const reply = 'Fetched:\n~~~html b4m-tool-output\n<p>quoted</p>\n~~~';
+    const result = formatVoiceHistory([createMockHistoryItem('Hi', reply)] as IChatHistoryItemDocument[]);
+    expect(result).toContain('~~~html\n<p>quoted</p>');
+    expect(result).not.toContain('b4m-tool-output');
+  });
+});

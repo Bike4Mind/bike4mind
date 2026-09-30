@@ -2,7 +2,8 @@ import { test, expect } from './fixtures';
 import { TIMEOUTS, MONITORED_MODELS } from './constants';
 import { type ModelCreditsData } from './helpers/slack';
 import { writeCreditsData } from './helpers/credits-store';
-import { apiCreateSession, apiDeleteSession, apiRenameSession } from './helpers/api';
+import { apiCreateSession, apiCreateThrowawayUser, apiDeleteSession, apiRenameSession } from './helpers/api';
+import { seedAuthOnPage } from './helpers/auth-seed';
 import { getTestUsers } from './helpers/test-users';
 
 // Shared with warmup.setup.ts (which warms these before the measured runs). See constants.ts.
@@ -123,15 +124,17 @@ test.describe('Notebook - Router resilience', () => {
   // Guards against TanStack Router / React Query regressions on deep-route reload
   // and browser history navigation - the surface most likely to break on router/query upgrades.
   // @realauth: exercises hard reload + history nav, which must hit the app's real refresh-cookie
-  // bootstrap - so this test opts out of the /auth/success seed (see fixtures.ts authState) and
-  // relies on the pristine cookie the setup planted (see seedAuthStorageState).
+  // bootstrap - so this test opts out of the /auth/success seed (see fixtures.ts authState). It
+  // plants a fresh user's refresh cookie per attempt: a retry that replayed the setup's cookie,
+  // already rotated by the first attempt, would have its session revoked by reuse detection.
   test(
     'survives hard reload and history nav on a deep notebook route',
     { tag: '@realauth' },
     async ({ page, request, basePage, consoleTracker }) => {
       const NOTEBOOK_NAME = `E2E Router ${Date.now().toString().slice(-6)}`;
-      const { specUsers } = getTestUsers();
-      const token = specUsers.notebook.accessToken;
+      const user = await apiCreateThrowawayUser(request, 'router');
+      const token = user.accessToken;
+      await seedAuthOnPage(page, { accessToken: user.accessToken, refreshToken: user.refreshToken });
 
       const sessionId = await apiCreateSession(request, token);
       await apiRenameSession(request, token, sessionId, NOTEBOOK_NAME);
@@ -178,4 +181,139 @@ test.describe('Notebook - Router resilience', () => {
       }
     }
   );
+});
+
+test.describe('Notebook - Inline location map', () => {
+  // The quest fetch is routed to a fixture below, and page.route cannot see a request the service
+  // worker answers. The SW's own CSP needs for map tiles are pinned in proxy.test.ts instead.
+  test.use({ serviceWorkers: 'block' });
+
+  const PLACES = [
+    { id: 'e2e-hotel', name: 'E2E Harbour Hotel', lat: 55.6767, lng: 12.5665, rating: 4.5, reviews: 1706 },
+    { id: 'e2e-bistro', name: 'E2E Bistro', lat: 55.6745, lng: 12.5652, rating: 4.6, category: 'Bistro' },
+    { id: 'e2e-trattoria', name: 'E2E Trattoria', lat: 55.6738, lng: 12.5689, rating: 4.3, category: 'Italian' },
+  ];
+  const place = (id: string) => PLACES.find(p => p.id === id)!;
+  // Place citables as web_search stores them; the fence can only reference them by id.
+  const citables = PLACES.map(p => ({
+    id: `place:${p.id}`,
+    type: 'web_url',
+    title: p.name,
+    url: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.name)}`,
+    status: 'complete',
+    timestamp: new Date().toISOString(),
+    metadata: { sourceSystem: 'web_search', place: p },
+  }));
+  const fence = JSON.stringify({
+    anchor: { id: 'e2e-hotel', name: place('e2e-hotel').name, label: 'Your hotel' },
+    places: [
+      { id: 'e2e-bistro', name: 'E2E Bistro', note: 'Two minutes on foot.', lat: 1, lng: 1 },
+      { id: 'e2e-trattoria', name: 'E2E Trattoria', note: 'Good pasta.' },
+      { id: 'e2e-invented', name: 'E2E Invented Place', note: 'Not in the search results.' },
+    ],
+  });
+  const reply = ['Dinner near your hotel:', '', '```b4m_map', fence, '```', '', 'Book ahead on weekends.'].join('\n');
+  const TILE_PNG = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+    'base64'
+  );
+
+  test('renders pins from stored coordinates beside a synced list, where the reply placed it', async ({
+    page,
+    request,
+    basePage,
+  }) => {
+    const { specUsers } = getTestUsers();
+    const token = specUsers.notebook.accessToken;
+    const sessionId = await apiCreateSession(request, token);
+    const now = new Date().toISOString();
+    const quest = {
+      id: 'e2e0000000000000000000a1',
+      sessionId,
+      type: 'message',
+      status: 'done',
+      prompt: 'Dinner near my hotel?',
+      replies: [reply],
+      promptMeta: { citables },
+      timestamp: now,
+      createdAt: now,
+      updatedAt: now,
+      images: [],
+      videos: [],
+      fabFileIds: [],
+      agentIds: [],
+      structuredReplies: [],
+      toolResults: [],
+      researchModeResults: [],
+      navigationIntents: [],
+      uiSideEffects: [],
+      attachmentNotices: [],
+    };
+
+    try {
+      await page.route(`**/api/sessions/${sessionId}/chat**`, route =>
+        route.fulfill({ json: { data: [quest], hasMore: false } })
+      );
+      await page.route('https://tile.openstreetmap.org/**', route =>
+        route.fulfill({ contentType: 'image/png', body: TILE_PNG })
+      );
+      const tileRequested = page.waitForRequest(/^https:\/\/tile\.openstreetmap\.org\/\d+\/\d+\/\d+\.png$/);
+
+      await page.goto(`/notebooks/${sessionId}`);
+      await basePage.dismissModals();
+
+      const map = page.getByTestId('location-map');
+      await expect(map).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+      await tileRequested;
+
+      await test.step('anchor and pins come from the citables; an invented id is dropped', async () => {
+        await expect(map.getByTestId('location-map-anchor-pin')).toHaveText('Your hotel');
+        await expect(map.getByTestId('location-map-pin')).toHaveText(['4.6', '4.3']);
+        const rows = map.getByTestId('location-map-row');
+        await expect(rows).toHaveCount(3);
+        await expect(rows.nth(0)).toContainText('E2E Harbour Hotel');
+        await expect(map.getByTestId('location-map-anchor-tag')).toHaveText('Your hotel');
+        await expect(map).not.toContainText('E2E Invented Place');
+      });
+
+      await test.step('a row keeps its category and note on separate lines', async () => {
+        const row = map.getByTestId('location-map-row').nth(1);
+        await expect(row.getByTestId('location-map-row-meta')).toHaveText(/4\.6 .* Bistro/);
+        await expect(row.getByTestId('location-map-row-note')).toHaveText('Two minutes on foot.');
+        const meta = await row.getByTestId('location-map-row-meta').boundingBox();
+        const note = await row.getByTestId('location-map-row-note').boundingBox();
+        expect(note!.y).toBeGreaterThanOrEqual(meta!.y + meta!.height - 1);
+      });
+
+      await test.step('hovering a row highlights its pin; clicking a pin selects its row', async () => {
+        const rows = map.getByTestId('location-map-row');
+        const pins = map.getByTestId('location-map-pin');
+        await rows.nth(2).hover();
+        await expect(pins.nth(1)).toHaveCSS('background-color', 'rgb(21, 101, 192)');
+        await expect(pins.nth(0)).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+
+        // At this viewport the map's top sits under the header. Leaflet's keyboard handler used to
+        // focus the map on mousedown, scrolling the chat mid-click so the click missed the pin.
+        // Measure the map, not the pin: selecting a pin animates panTo, which moves the pin inside a
+        // still map, while the focus scroll moved the whole map with the chat.
+        await page.mouse.move(0, 0);
+        const mapBefore = await map.boundingBox();
+        await pins.nth(0).click();
+        await expect(rows.nth(1)).toHaveAttribute('data-active', 'true');
+        expect(Math.abs((await map.boundingBox())!.y - mapBefore!.y)).toBeLessThan(1);
+      });
+
+      await test.step('the map sits between the prose around it, with no raw fence text', async () => {
+        const before = await page.getByText('Dinner near your hotel:').boundingBox();
+        const after = await page.getByText('Book ahead on weekends.').boundingBox();
+        const box = await map.boundingBox();
+        expect(box!.y).toBeGreaterThan(before!.y);
+        expect(after!.y).toBeGreaterThan(box!.y + box!.height - 1);
+        await expect(page.getByText('b4m_map')).toHaveCount(0);
+        await expect(page.getByText('"places"')).toHaveCount(0);
+      });
+    } finally {
+      await apiDeleteSession(request, token, sessionId).catch(() => {});
+    }
+  });
 });

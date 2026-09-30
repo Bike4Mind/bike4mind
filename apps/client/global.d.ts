@@ -11,6 +11,7 @@ declare global {
       keyId: string;
       scopes: ApiKeyScope[];
       rateLimit: IUserApiKeyRateLimit;
+      expiresAt?: Date;
       /** Overwatch product this key is bound to. Set only for OVERWATCH_INGEST_WRITE keys. */
       productId?: string;
       /** Billing target. Organization -> usage bills `organizationId`'s credit pool. */
@@ -41,12 +42,25 @@ declare global {
       /** Correlation ID for this request, echoed back as the X-Request-ID header. */
       requestId: string;
       /**
+       * When this request arrived, stamped by the FIRST `baseApi` middleware. The instant to hand the
+       * crypto-shred fence as `startedAt`: a handler-local `new Date()` is taken after connectDB and
+       * auth have awaited, and a purge landing in that gap would lift its own tombstone.
+       */
+      receivedAt: Date;
+      /**
        * The authenticated user, plus the transient auth claims `verifyJwtPayload` attaches from
        * the access-token JWT (never persisted on the document): `sid` (session id, for per-device
-       * logout), `mfaPending`, and `impersonatedBy`. All optional - API-key auth sets `user`
-       * without them, and legacy/mfaPending tokens omit `sid`.
+       * logout), `mfaPending`, `impersonatedBy`, and `oauthGrant` (present ONLY for a relying-party
+       * `kind:'oauth'` access token - the marker oauthRouteGate/admitsOptionalAuthUser default-deny
+       * on). All optional - API-key auth sets `user` without them, and legacy/mfaPending tokens omit
+       * `sid`.
        */
-      user: IUserDocument & { sid?: string; mfaPending?: boolean; impersonatedBy?: string };
+      user: IUserDocument & {
+        sid?: string;
+        mfaPending?: boolean;
+        impersonatedBy?: string;
+        oauthGrant?: { clientId: string; scopes: string[]; aud?: string | string[] };
+      };
       ability?: Ability;
       /**
        * Per-request memoized entitlement keys (Quest 3). Set ONLY by

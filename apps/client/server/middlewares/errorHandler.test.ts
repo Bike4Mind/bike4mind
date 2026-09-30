@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ApiErrorSchema, BadRequestError } from '@bike4mind/common';
+import { ApiErrorSchema, BadGatewayError, BadRequestError } from '@bike4mind/common';
 import { z } from 'zod';
 import errorHandler from './errorHandler';
 
@@ -114,6 +114,16 @@ describe('errorHandler - CastError only means 404 when the cast was on `_id`', (
     expect(JSON.stringify(json.mock.calls[0][0])).not.toContain('Feedback');
   });
 
+  // The marker is what the production log query counts before the rule is removed, so its
+  // text is load-bearing: rename it only together with that query.
+  it('logs the original cast message under a stable marker, and still answers 404', () => {
+    const { req, res, status } = makeReqRes();
+    errorHandler(castError('_id'), req, res);
+    expect(status).toHaveBeenCalledWith(404);
+    expect(req.logger.warn).toHaveBeenCalledWith(`[cast-id-remap] POST /api/chat: ${castError('_id').message}`);
+    expect(req.logger.error).not.toHaveBeenCalled();
+  });
+
   it('leaves a cast on any other field a 500 and logs it as a server error', () => {
     const { req, res, status } = makeReqRes();
     errorHandler(castError('userId'), req, res);
@@ -208,5 +218,22 @@ describe('errorHandler - a ZodError becomes a 422', () => {
     expect(message).toMatch(/^Validation error: /);
     expect(message).not.toContain('invalid_type');
     expect(message).not.toContain('"path"');
+  });
+});
+
+describe('errorHandler - expected upstream failures', () => {
+  it('logs a 5xx marked expected at warn, keeping its status', () => {
+    const { req, res, status } = makeReqRes();
+    const err = Object.assign(new BadGatewayError('the source returned HTTP 404'), { expected: true });
+    errorHandler(err, req, res);
+    expect(status).toHaveBeenCalledWith(502);
+    expect(req.logger.warn).toHaveBeenCalled();
+    expect(req.logger.error).not.toHaveBeenCalled();
+  });
+
+  it('still logs an unmarked 5xx as a server error', () => {
+    const { req, res } = makeReqRes();
+    errorHandler(new BadGatewayError('provider down'), req, res);
+    expect(req.logger.error).toHaveBeenCalled();
   });
 });

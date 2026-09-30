@@ -8,4 +8,19 @@ export { createCompletionContract } from './contracts/completions.contract';
 export { synthesizeSpeechContract } from './contracts/tts.contract';
 export { generateMusicContract } from './contracts/music.contract';
 export { generateSoundEffectContract } from './contracts/soundEffects.contract';
+export { getMeContract } from './contracts/me.contract';
+export { generateImageContract } from './contracts/imageGeneration.contract';
+export { editImageContract } from './contracts/imageEdit.contract';
+export { createFileUploadContract, getFileContract } from './contracts/files.contract';
+export { createEmbeddingsContract } from './contracts/embeddings.contract';
+export { getQuestContract } from './contracts/quest.contract';
+export { createSessionContract } from './contracts/sessionCreate.contract';
+export {
+  listDataLakesContract,
+  getDataLakeContract,
+  getDataLakeFileContract,
+  addDataLakeFileContract,
+  removeDataLakeFileContract,
+  searchDataLakeContract,
+} from './contracts/dataLakes.contract';
 export { CONTRACTS } from './contracts';

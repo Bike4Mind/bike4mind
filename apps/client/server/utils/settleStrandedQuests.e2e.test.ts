@@ -5,7 +5,8 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { agentExecutionRepository, questRepository, Quest, type AgentExecutionStatus } from '@bike4mind/database';
 import { settleStrandedQuests } from './settleStrandedQuests';
-import { ABANDONED_REPLY } from '@server/chatCompletion/questTimeoutRecovery';
+import { RUN_ABANDONED_FINISH_REASON } from '@bike4mind/common';
+import { ABANDONED_REPLY, UNFINISHED_REPLY_NOTICE } from '@server/chatCompletion/questTimeoutRecovery';
 
 /**
  * The one test that spans the seam this whole path is built on: a real execution
@@ -116,7 +117,11 @@ describe('stranded-quest settling, end to end', () => {
     // The bubble is still stranded at this point - the sweep alone is the bug.
     expect((await questById(quest.id))?.status).toBe('pending');
 
-    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({ settled: 1, failed: false });
+    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({
+      settled: 1,
+      failed: false,
+      failedExecutionIds: [],
+    });
 
     const after = await questById(quest.id);
     expect(after?.status).toBe('done');
@@ -140,7 +145,7 @@ describe('stranded-quest settling, end to end', () => {
         logger,
         '[test]'
       )
-    ).toEqual({ settled: 1, failed: false });
+    ).toEqual({ settled: 1, failed: false, failedExecutionIds: [] });
 
     expect((await questById(quest.id))?.reply).toBe(ABANDONED_REPLY);
     const after = await agentExecutionRepository.findById(execution.id);
@@ -161,13 +166,18 @@ describe('stranded-quest settling, end to end', () => {
     });
 
     const swept = await agentExecutionRepository.cleanupStaleActive(userId, STALE_MS);
-    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({ settled: 1, failed: false });
+    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({
+      settled: 1,
+      failed: false,
+      failedExecutionIds: [],
+    });
 
     const after = await questById(quest.id);
     expect(after?.status).toBe('done');
-    expect(after?.reply).toBe('here is half an answer');
-    // Only `status` flipped: the bubble is not an error, it is a short answer.
+    expect(after?.reply).toBe(`here is half an answer\n\n${UNFINISHED_REPLY_NOTICE}`);
+    // Not an error bubble, but marked cut off so no reader takes it for a finished answer.
     expect(after?.type).toBe('message');
+    expect(after?.promptMeta?.finishReason).toBe(RUN_ABANDONED_FINISH_REASON);
   });
 
   it('leaves a run that finished naturally alone, whichever way the race went', async () => {
@@ -184,7 +194,11 @@ describe('stranded-quest settling, end to end', () => {
 
     const swept = await agentExecutionRepository.cleanupStaleActive(userId, STALE_MS);
     expect(swept).toEqual([execution.id]);
-    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({ settled: 0, failed: false });
+    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({
+      settled: 0,
+      failed: false,
+      failedExecutionIds: [],
+    });
 
     const after = await questById(quest.id);
     expect(after?.status).toBe('done');
@@ -206,7 +220,11 @@ describe('stranded-quest settling, end to end', () => {
 
     const swept = await agentExecutionRepository.cleanupStaleActive(userId, STALE_MS);
     expect(swept).toEqual([]);
-    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({ settled: 0, failed: false });
+    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({
+      settled: 0,
+      failed: false,
+      failedExecutionIds: [],
+    });
 
     expect((await agentExecutionRepository.findById(execution.id))?.status).toBe('awaiting_dag_children');
     expect((await questById(quest.id))?.status).toBe('pending');
@@ -221,7 +239,11 @@ describe('stranded-quest settling, end to end', () => {
 
     const swept = await agentExecutionRepository.cleanupStaleActive(userId, STALE_MS);
     expect(swept).toEqual([dead.execution.id]);
-    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({ settled: 1, failed: false });
+    expect(await settleStrandedQuests(swept, logger, '[test]')).toEqual({
+      settled: 1,
+      failed: false,
+      failedExecutionIds: [],
+    });
 
     expect((await questById(dead.quest.id))?.status).toBe('done');
     expect((await questById(live.quest.id))?.status).toBe('pending');

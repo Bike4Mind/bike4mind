@@ -2,12 +2,20 @@ import ImageContainer from '@client/app/components/Session/ImageContainer';
 import VideoContainer from '@client/app/components/Session/VideoContainer';
 import { Box, Stack, Chip, Avatar, Tooltip, Button, Alert } from '@mui/joy';
 import Typography from '@mui/joy/Typography';
-import React, { FC, useCallback, useState, useRef, useEffect, ReactNode, useMemo, ComponentProps } from 'react';
+import React, {
+  FC,
+  useCallback,
+  useState,
+  useRef,
+  useEffect,
+  ReactNode,
+  useMemo,
+  useContext,
+  createContext,
+  ComponentProps,
+} from 'react';
 import ReactMarkdown, { ExtraProps } from 'react-markdown';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter/dist/cjs';
-import { useTheme } from '@mui/joy/styles';
 import { createMarkdownComponents } from './markdown/markdownComponents';
-import { getMarkdownSyntaxTheme, type PrismStyle } from './markdown/syntaxTheme';
 import './markdown/observatory.css';
 import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
@@ -19,7 +27,8 @@ import { useContentTruncation } from '@client/app/hooks/useContentTruncation';
 import QuoteActions from './QuoteActions';
 import { link } from './MarkdownLink';
 import { PromptReplyProps, ReplyContainerProps } from './types/UserPromptTypes';
-import { CopyCodeButton } from './CopyCodeButton';
+import CodeBlockHeader from './CodeBlockHeader';
+import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import ThoughtBubbles from './ThoughtBubbles';
 import CodeArtifactPreviewCard from '../GenAI/CodeArtifactPreviewCard';
 import ContentTransformPreviewCard from '../GenAI/ContentTransformPreviewCard';
@@ -51,18 +60,25 @@ import {
 import RechartsRenderer from '../Charts/RechartsRenderer';
 import ChessBoard from '../Chess/ChessBoard';
 import { useSessions } from '@client/app/contexts/SessionsContext';
-import { extractReplies } from '@client/app/utils/replyUtils';
+import { extractReplies, extractThinking } from '@client/app/utils/replyUtils';
 import DeepResearchProgress from '../GenAI/DeepResearchProgress';
 import PromptEnhancementBanner from './PromptEnhancementBanner';
 import { extractCodeBlockTitle } from '@client/app/utils/codeBlockTitleExtractor';
 import CitableSources from './CitableSources';
 import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/app/utils/chartJsonParser';
 import NavigationButtons from './NavigationButtons';
+import ReplyAccessories from './ReplyAccessories';
 import AttachmentNotices from './AttachmentNotices';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
 import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
 import { getReplyTruncationState } from '@client/app/utils/replyTruncation';
+
+import SearchResultCards from './SearchResultCards';
+import { SEARCH_RESULT_CARDS_LANGUAGE } from './parseSearchResultCards';
+import LocationMap from './LocationMap';
+import { LOCATION_MAP_LANGUAGE, placesFromCitables } from './parseLocationMap';
+import type { WebSearchPlace } from '@bike4mind/common';
 
 // Artifact system (extracted modules)
 import ArtifactRenderer from './artifacts/ArtifactRenderer';
@@ -92,11 +108,39 @@ function simpleHash(str: string): string {
   return Math.abs(hash).toString(36).slice(0, 8);
 }
 
-// Markdown `code` component: handles inline artifacts in code blocks. The
-// Prism theme is closed over rather than read from a hook here, because the
-// caller already resolves the color scheme and this function deliberately
-// stays a plain render helper.
-const createCodeComponent = (syntaxTheme: PrismStyle) => {
+// Whether the reply this code block belongs to has finished streaming. Read via context
+// (ReplyCompleteContext.Provider, below) rather than a `createCodeComponent` argument: its
+// caller memoizes the return value on `syntaxTheme` alone, so the `code` component's own
+// identity stays stable across the streaming -> completed transition. If `completed` instead
+// flowed in as a closed-over value, changing it would change `codeComponent`'s identity the
+// instant a reply finishes, and react-markdown treats a new `code` component as a new element
+// type - every code block in the reply (image cards, charts, artifact previews) would unmount
+// and remount at once.
+export const ReplyCompleteContext = createContext(false);
+
+// `code` (below) is a lowercase-named plain render helper, not a component ESLint's hooks rules
+// recognize - and its body has pre-existing patterns (JSX inside try/catch, etc.) that would newly
+// fail component-purity lint rules if it were renamed to look like one. This wrapper is the actual
+// component that reads the context, kept tiny and hook-clean on purpose.
+const SearchResultCardsInReply: FC<{ content: string }> = ({ content }) => {
+  const replyComplete = useContext(ReplyCompleteContext);
+  return <SearchResultCards content={content} replyComplete={replyComplete} />;
+};
+
+// The web_search places of the reply being rendered, keyed by place id - the only source of map
+// pins. Context for the same identity-stability reason as ReplyCompleteContext above.
+export const ReplyPlacesContext = createContext<ReadonlyMap<string, WebSearchPlace>>(new Map());
+
+const LocationMapInReply: FC<{ content: string }> = ({ content }) => {
+  const replyComplete = useContext(ReplyCompleteContext);
+  const placesById = useContext(ReplyPlacesContext);
+  return <LocationMap content={content} placesById={placesById} replyComplete={replyComplete} />;
+};
+
+// Markdown `code` component: handles inline artifacts in code blocks. Takes no arguments -
+// HighlightedCode resolves the syntax theme from a hook of its own, so this stays a plain
+// render helper with nothing to close over.
+export const createCodeComponent = () => {
   const code = ({ node, className, children, ref, ...props }: ComponentProps<'code'> & ExtraProps) => {
     const match = /language-(\w+)/.exec(className || '');
     const language = match ? match[1] : 'text';
@@ -154,6 +198,16 @@ const createCodeComponent = (syntaxTheme: PrismStyle) => {
       } catch {
         // Not a blog-draft JSON block - fall through to normal code rendering.
       }
+    }
+
+    // Model-authored image cards for a visual web_search answer, placed inline by the model.
+    if (language === SEARCH_RESULT_CARDS_LANGUAGE) {
+      return <SearchResultCardsInReply content={codeContent} />;
+    }
+
+    // Model-placed inline map of a location web_search's places.
+    if (language === LOCATION_MAP_LANGUAGE) {
+      return <LocationMapInReply content={codeContent} />;
     }
 
     // Recharts inline rendering
@@ -381,19 +435,9 @@ const createCodeComponent = (syntaxTheme: PrismStyle) => {
     // Inline code or short snippet
     if (inline || lineCount <= 10) {
       return !inline ? (
-        <Box sx={{ position: 'relative' }}>
-          <CopyCodeButton code={codeContent} language={language} />
-          <SyntaxHighlighter
-            // @ts-ignore - ignoring style prop type issue
-            style={syntaxTheme}
-            customStyle={{ paddingTop: '32px' }}
-            language={language}
-            PreTag="div"
-            {...props}
-          >
-            {codeContent}
-          </SyntaxHighlighter>
-        </Box>
+        <CodeBlockHeader code={codeContent} language={language}>
+          <HighlightedCode code={codeContent} language={language} />
+        </CodeBlockHeader>
       ) : (
         // Bare <code>: observatory.css owns the inline-code skin, and a hardcoded
         // sx here would only lose to it on specificity while reading as live.
@@ -482,9 +526,11 @@ const PromptReplies: FC<PromptReplyProps> = ({
 
   const replies = useMemo(() => extractReplies(messageData), [messageData]);
 
-  const thoughts = useMemo(() => {
-    return (messageData.replies || []).filter(Boolean).filter(r => r.startsWith('<think>'));
-  }, [messageData.replies]);
+  // extractThinking walks every thinking block across every reply slot (see
+  // appendStreamedChunk: a tool-using turn reopens thinking inside the slot that already
+  // holds the partial answer), so ThoughtBubbles gets parsed reasoning text rather than a
+  // whole slot with the answer and raw <think> markers still in it.
+  const thought = useMemo(() => extractThinking(messageData), [messageData]);
 
   const generatedImagesUrl = `${cdnUrl}/generated`;
   // quest.images carries every file a tool generated this turn, but not all of them are
@@ -542,7 +588,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         errorCode={messageData.errorCode}
         showSyntaxHighlight={showSyntaxHighlight}
         reply={messageData.questMasterReply || replies[0]}
-        thought={thoughts[0]}
+        thought={thought}
         images={images}
         generatedFiles={generatedFiles}
         videos={videos}
@@ -1209,10 +1255,8 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   // as a bare semantic tag and is styled by observatory.css.
   const markdownComponents = useMemo(() => createMarkdownComponents({ highlightText }), [highlightText]);
 
-  // palette.mode rather than useColorScheme(), which can report 'system'.
-  const replyTheme = useTheme();
-  const syntaxTheme = useMemo(() => getMarkdownSyntaxTheme(replyTheme.palette.mode), [replyTheme.palette.mode]);
-  const codeComponent = useMemo(() => createCodeComponent(syntaxTheme), [syntaxTheme]);
+  const codeComponent = useMemo(() => createCodeComponent(), []);
+  const placesById = useMemo(() => placesFromCitables(promptMeta?.citables), [promptMeta?.citables]);
 
   const cleanReply = useMemo(() => {
     return omitBetweenTags(reply || '', '<think>', '</think>');
@@ -1474,10 +1518,11 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
       {showSyntaxHighlight ? (
         <>
-          <SyntaxHighlighter style={syntaxTheme}>{processedContent || cleanReply}</SyntaxHighlighter>
+          <HighlightedCode code={processedContent || cleanReply} />
           {/* Repeated rather than hoisted above the branch: the suggestions read as part of
               the reply, so they follow whichever body this view rendered. Edit mode is the
               one body they are deliberately left out of. */}
+          {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
           {navSuggestions && <NavigationButtons navigationIntents={navSuggestions} />}
         </>
       ) : (
@@ -1497,7 +1542,6 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
               <MementoIndicator mementoIds={promptMeta.context.mementoIds} />
             </Box>
           )}
-          {promptMeta?.citables && promptMeta.citables.length > 0 && <CitableSources citables={promptMeta.citables} />}
           {isEditMode && onEdit ? (
             <EditModeContent
               content={processedContent || cleanReply}
@@ -1702,49 +1746,57 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                           // chrome are siblings above, and must not inherit the
                           // reading typography or land in the `> *` measure rules.
                           <div className="b4m-md">
-                            <ReactMarkdown
-                              components={{
-                                ...markdownComponents,
-                                code: codeComponent,
-                                img: ({ alt, src, title }) => {
-                                  if (!src) {
-                                    return null;
-                                  }
+                            <ReplyCompleteContext.Provider value={!!completed}>
+                              <ReplyPlacesContext.Provider value={placesById}>
+                                <ReactMarkdown
+                                  components={{
+                                    ...markdownComponents,
+                                    code: codeComponent,
+                                    img: ({ alt, src, title }) => {
+                                      if (!src) {
+                                        return null;
+                                      }
 
-                                  const srcStr = typeof src === 'string' ? src : '';
-                                  if (
-                                    srcStr.startsWith('/mnt/') ||
-                                    srcStr.startsWith('/tmp/') ||
-                                    srcStr.startsWith('file://') ||
-                                    srcStr.startsWith('sandbox:') ||
-                                    srcStr.includes('/mnt/data/')
-                                  ) {
-                                    return null;
-                                  }
+                                      const srcStr = typeof src === 'string' ? src : '';
+                                      if (
+                                        srcStr.startsWith('/mnt/') ||
+                                        srcStr.startsWith('/tmp/') ||
+                                        srcStr.startsWith('file://') ||
+                                        srcStr.startsWith('sandbox:') ||
+                                        srcStr.includes('/mnt/data/')
+                                      ) {
+                                        return null;
+                                      }
 
-                                  return (
-                                    <ImageContainer
-                                      src={srcStr}
-                                      index={0}
-                                      totalImages={1}
-                                      images={[srcStr]}
-                                      onSendMessage={onSendMessage}
-                                    />
-                                  );
-                                },
-                                a: link,
-                              }}
-                              remarkPlugins={[remarkGfmNoSingleTilde, [remarkMath, { singleDollarTextMath: false }]]}
-                              rehypePlugins={[rehypeKatex]}
-                              remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
-                            >
-                              {mathReadyContent}
-                            </ReactMarkdown>
+                                      return (
+                                        <ImageContainer
+                                          src={srcStr}
+                                          index={0}
+                                          totalImages={1}
+                                          images={[srcStr]}
+                                          onSendMessage={onSendMessage}
+                                        />
+                                      );
+                                    },
+                                    a: link,
+                                  }}
+                                  remarkPlugins={[
+                                    remarkGfmNoSingleTilde,
+                                    [remarkMath, { singleDollarTextMath: false }],
+                                  ]}
+                                  rehypePlugins={[rehypeKatex]}
+                                  remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
+                                >
+                                  {mathReadyContent}
+                                </ReactMarkdown>
+                              </ReplyPlacesContext.Provider>
+                            </ReplyCompleteContext.Provider>
                           </div>
                         )}
                       </>
                     )}
 
+                    {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
                     {navSuggestions && <NavigationButtons navigationIntents={navSuggestions} />}
                   </Typography>
                 </Box>
@@ -1755,6 +1807,15 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       )}
 
       <ExpandCollapseButton needsTruncation={needsTruncation} isExpanded={isExpanded} onToggle={toggleExpanded} />
+
+      {/* Below the reply, not above it. The [N] markers are plain text in the body, so a list
+          above it means reading forward to the marker and then scrolling BACK past the answer
+          to resolve it - and citables merge in mid-stream (useStreamingMessageMerge), so a card
+          above pushed text the reader had already started reading down the page.
+
+          After the expand control, which belongs to the reply body it truncates, and before
+          artifacts, so a tall chart cannot separate a source from the marker that cites it. */}
+      {promptMeta?.citables && promptMeta.citables.length > 0 && <CitableSources citables={promptMeta.citables} />}
 
       {/* Artifacts sit between the reply and the footer. This Stack owns ALL of their
           spacing - 24px above, 8px below, 16px between cards - so individual artifact

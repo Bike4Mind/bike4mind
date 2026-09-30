@@ -1,8 +1,12 @@
 import {
+  ARTIFACT_REMOVED_PLACEHOLDER,
   ChatModels,
+  createThinkMarkerEscaper,
+  escapeThinkMarkers,
   IMessage,
   ModelBackend,
   PermissionDeniedError,
+  stripToolArtifactMarkup,
   type CacheUsageStats,
   type ModelInfo,
 } from '@bike4mind/common';
@@ -14,6 +18,11 @@ import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
+import {
+  createRecursiveArtifactGuard,
+  handleToolResultStreaming,
+  stripUnstreamedToolResult,
+} from './toolStreamingHelper';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -402,9 +411,23 @@ export class KimiBackend implements ICompletionBackend {
                   }
             );
 
+            // The single shared guard for this whole recursive chain - see
+            // createRecursiveArtifactGuard. Only the level that creates it flushes it.
+            const inheritedArtifactGuard = options._internal?.artifactGuard;
+            let artifactGuard = inheritedArtifactGuard;
+
             for (const outcome of outcomes) {
               if (outcome.ok) {
-                const resultStr = outcome.result.toString();
+                // For tools that return artifacts (like recharts), stream the result directly -
+                // Kimi never echoes the tool result verbatim once it is stripped below, so
+                // without this the client never sees the artifact at all.
+                let emitted = false;
+                await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
+                  emitted = true;
+                  if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+                  await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
+                });
+                const resultStr = stripUnstreamedToolResult(outcome.name, outcome.result.toString(), emitted);
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
                 this.pushToolMessages(
                   messages,
@@ -414,7 +437,10 @@ export class KimiBackend implements ICompletionBackend {
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
                 const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
-                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                const observation = stripToolArtifactMarkup(
+                  `Error processing ${outcome.name} tool: ${errorMessage}`,
+                  ARTIFACT_REMOVED_PLACEHOLDER
+                );
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 this.pushToolMessages(
                   messages,
@@ -435,11 +461,17 @@ export class KimiBackend implements ICompletionBackend {
                   accumInputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
                   accumOutputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
                   accumCacheReadTokens: accumCacheReadTokens + turnCacheReadTokens,
+                  artifactGuard,
                 },
               },
-              callback,
+              artifactGuard?.callback ?? callback,
               toolsUsed
             );
+
+            // Only the level that created the guard (none inherited on entry) flushes it - an
+            // inherited guard belongs to an ancestor, which flushes it after this whole subtree
+            // (including this call) has fully resolved.
+            if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
             return;
           } else {
             this.logger.debug(`[Tool Execution] executeTools=false, passing tool calls to callback`);
@@ -456,7 +488,9 @@ export class KimiBackend implements ICompletionBackend {
         } else {
           const prose = c.message.content || '';
           if (prose) sawProse = true;
-          streamedText[c.index] = reasoningContent ? `<think>${reasoningContent}</think>${prose}` : prose;
+          streamedText[c.index] = reasoningContent
+            ? `<think>${escapeThinkMarkers(reasoningContent)}</think>${prose}`
+            : prose;
         }
       }
 
@@ -496,6 +530,7 @@ export class KimiBackend implements ICompletionBackend {
 
     const func: { name?: string; id?: string; parameters?: string }[] = [];
     let isInThinkingBlock = false;
+    const reasoningEscaper = createThinkMarkerEscaper();
     let cachedTokensFromStream = 0;
     let streamFinishReason: string | undefined;
     // Prose, not streamedText: the monologue is wrapped into streamedText as well,
@@ -521,11 +556,12 @@ export class KimiBackend implements ICompletionBackend {
         // Ungated, for the same reason as the non-streaming path: reasoning arrives
         // by default on every current Kimi and is billed either way.
         if (deltaReasoning) {
+          const escapedReasoning = reasoningEscaper.push(deltaReasoning);
           if (!isInThinkingBlock) {
             isInThinkingBlock = true;
-            streamedText[c.index] = '<think>' + deltaReasoning;
+            streamedText[c.index] = '<think>' + escapedReasoning;
           } else {
-            streamedText[c.index] = deltaReasoning;
+            streamedText[c.index] = escapedReasoning;
           }
           // Falls through when the SAME delta also carries prose: Moonshot can end
           // the monologue and start the answer in one chunk, and returning here
@@ -537,7 +573,8 @@ export class KimiBackend implements ICompletionBackend {
         if (isInThinkingBlock && c.delta.content) {
           isInThinkingBlock = false;
           sawProse = true;
-          streamedText[c.index] = (streamedText[c.index] ?? '') + '</think>' + c.delta.content;
+          streamedText[c.index] =
+            (streamedText[c.index] ?? '') + reasoningEscaper.flush() + '</think>' + c.delta.content;
           return;
         }
 
@@ -570,7 +607,7 @@ export class KimiBackend implements ICompletionBackend {
     // truncated mid-reasoning. Without this the tag stays open and the monologue
     // bleeds into the answer after the tool recursion.
     if (isInThinkingBlock) {
-      await callback(['</think>'], {
+      await callback([reasoningEscaper.flush() + '</think>'], {
         ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
@@ -684,9 +721,21 @@ export class KimiBackend implements ICompletionBackend {
               }
         );
 
+        const inheritedArtifactGuard = options._internal?.artifactGuard;
+        let artifactGuard = inheritedArtifactGuard;
+
         for (const outcome of outcomes) {
           if (outcome.ok) {
-            const resultStr = outcome.result.toString();
+            // For tools that return artifacts (like recharts), stream the result directly -
+            // Kimi never echoes the tool result verbatim once it is stripped below, so
+            // without this the client never sees the artifact at all.
+            let emitted = false;
+            await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
+              emitted = true;
+              if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+              await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
+            });
+            const resultStr = stripUnstreamedToolResult(outcome.name, outcome.result.toString(), emitted);
             recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
             this.pushToolMessages(
               messages,
@@ -696,7 +745,10 @@ export class KimiBackend implements ICompletionBackend {
           } else {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
             const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
-            const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+            const observation = stripToolArtifactMarkup(
+              `Error processing ${outcome.name} tool: ${errorMessage}`,
+              ARTIFACT_REMOVED_PLACEHOLDER
+            );
             recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
             this.pushToolMessages(
               messages,
@@ -717,11 +769,14 @@ export class KimiBackend implements ICompletionBackend {
               accumInputTokens: accumInputTokens + inputTokens,
               accumOutputTokens: accumOutputTokens + outputTokens,
               accumCacheReadTokens: accumCacheReadTokens + cachedTokensFromStream,
+              artifactGuard,
             },
           },
-          callback,
+          artifactGuard?.callback ?? callback,
           toolsUsed
         );
+
+        if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
       } else {
         this.logger.debug(`[Tool Execution] executeTools=false, passing tool calls to callback`);
         await callback([null], {

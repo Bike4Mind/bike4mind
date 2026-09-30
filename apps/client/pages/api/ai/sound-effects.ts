@@ -1,26 +1,9 @@
-import {
-  ApiKeyType,
-  CreditHolderType,
-  generateSoundEffectContract,
-  ICreditHolder,
-  ICreditHolderMethods,
-  insufficientCreditsError,
-  IOrganizationDocument,
-  IUserDocument,
-  SoundGenerationVendor,
-} from '@bike4mind/common';
-import {
-  adminSettingsRepository,
-  apiKeyRepository,
-  creditTransactionRepository,
-  organizationRepository,
-  userRepository,
-  usageEventRepository,
-} from '@bike4mind/database';
-import { apiKeyService, creditService, estimateSoundCredits, organizationService } from '@bike4mind/services';
+import { ApiKeyType, generateSoundEffectContract, SoundGenerationVendor } from '@bike4mind/common';
+import { adminSettingsRepository, apiKeyRepository, usageEventRepository } from '@bike4mind/database';
+import { apiKeyService, estimateSoundCredits } from '@bike4mind/services';
 import { aiSoundService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { BadRequestError } from '@server/utils/errors';
 import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
 
 // The stored key type each vendor needs. Resolved per-user first, then falling
@@ -69,82 +52,13 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
   // cost even on credits-off / self-host deployments.
   const { requiredCredits, usdCost, billedSeconds } = estimateSoundCredits(provider, { durationSeconds });
 
-  // Billing owner, in precedence order:
-  //   1. Org-billed API key -> its organization (billingOwnerType invariant).
-  //   2. User-billed API key -> the user (explicit intent; ignore the org seat).
-  //   3. Browser/JWT caller -> the user's own organization seat if any, matching
-  //      image/video generation; otherwise the user.
-  // The user always stays the actor for attribution + per-member usage tracking.
-  const billingOrganizationId = req.apiKeyInfo
-    ? req.apiKeyInfo.billingOwnerType === CreditHolderType.Organization
-      ? req.apiKeyInfo.organizationId
-      : undefined
-    : (req.user?.organizationId?.toString() ?? undefined);
-  const creditOwnerId = billingOrganizationId ?? userId;
-  const creditOwnerType = billingOrganizationId ? CreditHolderType.Organization : CreditHolderType.User;
-  const holderMethods: ICreditHolderMethods = billingOrganizationId ? organizationRepository : userRepository;
-
-  // Holder docs are resolved under enforceCredits only (the charge settlement
-  // needs them); left null on credits-off / self-host deploys, which never bill.
-  let billingUser: IUserDocument | null = null;
-  let billingOrg: IOrganizationDocument | null = null;
-  // Set once credits are reserved; its presence drives the refund/settle below.
-  let reservedHolder: ICreditHolder | null = null;
-
-  if (enforceCredits && requiredCredits > 0) {
-    billingUser = await userRepository.findById(userId);
-    if (!billingUser) throw new BadRequestError('User not found');
-    if (billingOrganizationId) {
-      billingOrg = await organizationRepository.findById(billingOrganizationId);
-      if (!billingOrg) throw new BadRequestError('Billing organization not found');
-    }
-
-    // Mint-time trust is not use-time trust: an org-billed API key carries its billing target
-    // stamped on it and never revisited, so a key whose minting user has since left the org would
-    // keep drawing on that org's shared pool. Re-check against the roster just fetched - no extra
-    // query - and fail closed, matching executeCompletion. Scoped to the API-key path only: that
-    // caller asked for org billing explicitly, whereas the implicit JWT own-org fallback must
-    // degrade rather than 403 a caller on a stale pointer (see resolveBillingOrgId).
-    //
-    // A platform admin mints org-billed keys on a customer org's behalf (user-api-keys/index.ts
-    // admits them explicitly) and is never on that org's roster, so the authority arm is checked
-    // here rather than inside isCurrentOrgMember, which reports roster attachment only. billingUser
-    // is already in hand above - no extra query.
-    if (
-      billingOrg &&
-      req.apiKeyInfo &&
-      !billingUser?.isAdmin &&
-      !organizationService.isCurrentOrgMember(billingOrg, userId)
-    ) {
-      throw new BadRequestError(
-        'This API key bills an organization you are no longer a member of. Re-mint the key to continue.'
-      );
-    }
-
-    // Org-billed: enforce the per-member cap before touching the shared pool. This is an
-    // independent pre-flight - the settlement write (deductCreditsWithOrgSupport) does NOT
-    // re-check the cap, so this path is the only enforcement point for media generation.
-    if (billingOrg && creditService.isMemberCreditCapExceeded(billingOrg, userId, requiredCredits)) {
-      throw insufficientCreditsError(
-        `Your organization member credit limit has been reached for sound generation. Contact your organization administrator.`
-      );
-    }
-
-    // Reserve the deterministic cost BEFORE incurring any provider cost: the
-    // atomic decrement doubles as the balance check (closing the check-then-charge
-    // race) and guarantees the charge can never fail after the audio is produced.
-    // Rolled back immediately if it overdraws; refunded below if generation fails.
-    reservedHolder = await holderMethods.incrementCredits(creditOwnerId, -requiredCredits);
-    if (!reservedHolder || reservedHolder.currentCredits < 0) {
-      if (reservedHolder) await holderMethods.incrementCredits(creditOwnerId, requiredCredits);
-      const availableCredits = (reservedHolder?.currentCredits ?? 0) + requiredCredits;
-      throw insufficientCreditsError(
-        billingOrg
-          ? `Your organization does not have enough credits for sound generation. It currently has ${availableCredits} credits and this requires approximately ${requiredCredits}.`
-          : `You do not have enough credits for sound generation. You currently have ${availableCredits} credits and this requires approximately ${requiredCredits}.`
-      );
-    }
-  }
+  const reservation = await reserveRequestCredits({
+    req,
+    requiredCredits,
+    enforceCredits,
+    featureLabel: 'sound generation',
+  });
+  const { ownerId: creditOwnerId, ownerType: creditOwnerType } = reservation;
 
   const sessionId = `sound-effects-${userId}-${Date.now()}`;
 
@@ -189,47 +103,18 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
       error: error instanceof Error ? error.message : 'Unknown error',
     });
     // Refund the reserved credits - a failed generation incurs no provider cost.
-    if (reservedHolder) await holderMethods.incrementCredits(creditOwnerId, requiredCredits);
+    await reservation.refund();
     recordUsage('error', 0, 0);
     return res.status(502).json({ error: 'Sound generation failed' });
   }
 
-  // Settle the reserved charge: the balance already moved at reservation, so this
-  // only writes the ledger row + per-member usage tracking (skipBalanceUpdate).
-  // If it fails, the customer was still charged (balance moved) - the audit row is
-  // just missing; log for reconciliation. Never a free generation.
-  let creditsCharged = 0;
-  if (reservedHolder) {
-    creditsCharged = requiredCredits;
-    try {
-      // billingUser is guaranteed set here: the reservation branch populated it.
-      await creditService.deductCreditsWithOrgSupport(
-        {
-          type: 'sound_effects_usage',
-          user: billingUser!,
-          organization: billingOrg, // null => the user's personal pool
-          credits: requiredCredits,
-          sessionId,
-          model: provider,
-          source: 'api',
-        },
-        {
-          db: {
-            creditTransactions: creditTransactionRepository,
-            users: userRepository,
-            organizations: organizationRepository,
-          },
-        },
-        { skipBalanceUpdate: true, currentCreditHolder: reservedHolder }
-      );
-    } catch (err) {
-      req.logger.error('Sound-effects usage transaction write failed - credits charged, ledger row missing', {
-        userId,
-        organizationId: billingOrganizationId,
-        error: err instanceof Error ? err.message : 'Unknown error',
-      });
-    }
-  }
+  // Settle the full reservation: the provider generates exactly the billed duration.
+  const creditsCharged = await reservation.settle(reservation.reservedCredits, {
+    type: 'sound_effects_usage',
+    sessionId,
+    model: provider,
+    source: 'api',
+  });
 
   recordUsage('ok', creditsCharged, usdCost);
 

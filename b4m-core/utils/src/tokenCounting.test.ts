@@ -97,6 +97,22 @@ describe('TiktokenTokenizer', () => {
       );
     });
 
+    it('should reuse the cached fallback encoder for a model tiktoken cannot map', async () => {
+      mockEncodingForModel.mockImplementation(() => {
+        throw new Error('Model not supported');
+      });
+
+      await tokenizer.countTokens('a', 'voyage-3');
+      await tokenizer.countTokens('b', 'voyage-3');
+      await tokenizer.countTokens('c', 'nomic-embed-text');
+      await tokenizer.countTokens('d', 'nomic-embed-text');
+
+      expect(mockEncodingForModel).toHaveBeenCalledTimes(2);
+      expect(mockGetEncoding).toHaveBeenCalledTimes(1);
+      expect(mockLogger.warn).toHaveBeenCalledTimes(2);
+      expect(tokenizer.getCacheStats().keys).toEqual(['cl100k_base']);
+    });
+
     it('should cache encoders and reuse them by default', async () => {
       await tokenizer.countTokens('test1', 'gpt-4');
       expect(mockEncodingForModel).toHaveBeenCalledTimes(1);

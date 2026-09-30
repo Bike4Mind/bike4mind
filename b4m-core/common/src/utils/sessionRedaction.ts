@@ -11,7 +11,7 @@ import type { ISession } from '../types/entities/SessionTypes';
  * access the session, including a non-entitled user it was deliberately shared with.
  *
  * `preauthorizedLakeIds` records a manager's manage-but-not-member admission to a lake (see
- * ISession.preauthorizedLakeIds) - an authorization detail set once by pages/api/sessions/create.ts,
+ * ISession.preauthorizedLakeIds) - an authorization detail set once by pages/api/v1/sessions/index.ts,
  * not something a client consumer reads or needs to render.
  *
  * This list is the single source of truth: add a field here and every response boundary

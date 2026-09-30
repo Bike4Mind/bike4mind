@@ -1,9 +1,13 @@
 import {
+  ARTIFACT_REMOVED_PLACEHOLDER,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
+  createThinkMarkerEscaper,
+  escapeThinkMarkers,
   IMessage,
   isUserInitiatedAbort,
   ModelBackend,
   PermissionDeniedError,
+  stripToolArtifactMarkup,
   type MessageContentObject,
   type ModelInfo,
 } from '@bike4mind/common';
@@ -20,7 +24,12 @@ import { ILogger, Logger } from '@bike4mind/observability';
 import { Agent } from 'undici';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { executeToolsBatch } from './executeToolsBatch';
-import { truncateToolResult } from './recordToolResult';
+import { attachFullToolResult, truncateToolResult } from './recordToolResult';
+import {
+  createRecursiveArtifactGuard,
+  handleToolResultStreaming,
+  stripUnstreamedToolResult,
+} from './toolStreamingHelper';
 import { normalizeOllamaDoneReason } from './stopReason';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -366,25 +375,42 @@ export class OllamaBackend implements ICompletionBackend {
         { parallel: options.parallelToolExecution !== false, maxConcurrency: options.maxParallelTools }
       );
 
+      // The single shared guard for this whole recursive chain - see
+      // createRecursiveArtifactGuard. Only the level that creates it flushes it.
+      const inheritedArtifactGuard = options._internal?.artifactGuard;
+      let artifactGuard = inheritedArtifactGuard;
+
       // Captured index-aligned with `resolved` so executedToolsUsed below can stamp each
-      // entry with the exact observation the model saw, success included.
+      // entry with the exact observation the model saw, success included. A plain for loop
+      // (not forEach) because emitting an artifact awaits handleToolResultStreaming below.
       const observations: string[] = [];
-      outcomes.forEach((outcome, i) => {
+      for (let i = 0; i < outcomes.length; i++) {
+        const outcome = outcomes[i];
         const { tc } = resolved[i];
         const params = tc.arguments || '{}';
         if (outcome.ok) {
-          observations[i] = outcome.result;
-          this.pushToolMessages(messages, { id: tc.id, name: tc.name, parameters: params }, outcome.result);
+          // For tools that return artifacts (like recharts), stream the result directly -
+          // Ollama never echoes the tool result verbatim once it is stripped below, so
+          // without this the client never sees the artifact at all.
+          let emitted = false;
+          await handleToolResultStreaming(tc.name, outcome.result, async (results, artifactInfo) => {
+            emitted = true;
+            if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+            await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
+          });
+          observations[i] = stripUnstreamedToolResult(tc.name, outcome.result, emitted);
+          this.pushToolMessages(messages, { id: tc.id, name: tc.name, parameters: params }, observations[i]);
         } else {
           // A denied permission must abort, not be fed back as a result.
           if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
-          const errorMsg = `Error running ${tc.name}: ${
-            outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
-          }`;
+          const errorMsg = stripToolArtifactMarkup(
+            `Error running ${tc.name}: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`,
+            ARTIFACT_REMOVED_PLACEHOLDER
+          );
           observations[i] = errorMsg;
           this.pushToolMessages(messages, { id: tc.id, name: tc.name, parameters: params }, errorMsg);
         }
-      });
+      }
 
       // Only calls we actually ran count as used; hallucinated tool names must
       // not inflate the reported tool list. Ollama rebuilds this array (rather than
@@ -392,22 +418,27 @@ export class OllamaBackend implements ICompletionBackend {
       // stamped directly into the rebuild, index-aligned with outcomes/observations.
       const executedToolsUsed = [
         ...priorToolsUsed,
-        ...resolved.map(({ tc }, i) => ({
-          name: tc.name,
-          arguments: tc.arguments,
-          id: tc.id,
-          // String(...) matches recordToolResult's own defensive wrap on the other backends -
-          // observations[i] is already a string here (executeToolsBatch<string>), but keeping
-          // the same guard means a future change to that generic can't silently drop it.
-          returnValue: truncateToolResult(String(observations[i])),
-          success: outcomes[i].ok,
-        })),
+        ...resolved.map(({ tc }, i) => {
+          const entry = {
+            name: tc.name,
+            arguments: tc.arguments,
+            id: tc.id,
+            // String(...) matches recordToolResult's own defensive wrap on the other backends -
+            // observations[i] is already a string here (executeToolsBatch<string>), but keeping
+            // the same guard means a future change to that generic can't silently drop it.
+            returnValue: truncateToolResult(String(observations[i])),
+            success: outcomes[i].ok,
+          };
+          attachFullToolResult(entry, observations[i]);
+          return entry;
+        }),
       ];
 
       // Stop before another round if the request was cancelled mid-flight, rather
       // than issuing up to maxToolCalls more model calls and tool executions.
       if (options.abortSignal?.aborted) {
-        await callback([''], { inputTokens, outputTokens, toolsUsed: executedToolsUsed });
+        await (artifactGuard?.callback ?? callback)([''], { inputTokens, outputTokens, toolsUsed: executedToolsUsed });
+        if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
         return;
       }
 
@@ -424,10 +455,16 @@ export class OllamaBackend implements ICompletionBackend {
             accumToolsUsed: executedToolsUsed,
             accumInputTokens: inputTokens,
             accumOutputTokens: outputTokens,
+            artifactGuard,
           },
         },
-        callback
+        artifactGuard?.callback ?? callback
       );
+
+      // Only the level that created the guard (none inherited on entry) flushes it - an
+      // inherited guard belongs to an ancestor, which flushes it after this whole subtree
+      // (including this call) has fully resolved.
+      if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
     } catch (error) {
       // Now that the abort signal reaches the transport, pressing Stop surfaces
       // here as an AbortError. That is the request working as intended, not a
@@ -477,6 +514,7 @@ export class OllamaBackend implements ICompletionBackend {
       // Modern Ollama streams reasoning in a separate `thinking` field rather
       // than inline <think> tags; track whether we've opened a wrapper for it.
       let thinkingFieldOpen = false;
+      const thinkEscaper = createThinkMarkerEscaper();
 
       for await (const chunk of response) {
         if (chunk.message.tool_calls?.length) {
@@ -492,11 +530,12 @@ export class OllamaBackend implements ICompletionBackend {
             piece += '<think>';
             thinkingFieldOpen = true;
           }
-          piece += thinkPiece;
+          piece += thinkEscaper.push(thinkPiece);
         }
         const contentPiece = chunk.message.content || '';
         if (contentPiece) {
           if (thinkingFieldOpen) {
+            piece += thinkEscaper.flush();
             piece += '</think>';
             thinkingFieldOpen = false;
           }
@@ -511,6 +550,7 @@ export class OllamaBackend implements ICompletionBackend {
         // Non-reasoning models (e.g. qwen2.5-coder) emit neither, so nothing is
         // appended for them.
         if (chunk.done && (thinkingFieldOpen || (startedThinking && !stoppedThinking))) {
+          if (thinkingFieldOpen) piece += thinkEscaper.flush();
           piece = `${piece}</think>`;
           thinkingFieldOpen = false;
         }
@@ -534,7 +574,7 @@ export class OllamaBackend implements ICompletionBackend {
       // Prepend reasoning (from the separate thinking field) as a <think> block
       // so it renders consistently with the streaming path.
       const think = response.message.thinking || '';
-      content = (think ? `<think>${think}</think>` : '') + (response.message.content || '');
+      content = (think ? `<think>${escapeThinkMarkers(think)}</think>` : '') + (response.message.content || '');
       inputTokens = response.prompt_eval_count || 0;
       outputTokens = response.eval_count || 0;
       doneReason = response.done_reason;

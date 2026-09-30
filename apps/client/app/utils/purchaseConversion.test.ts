@@ -1,11 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-const { mockTrackRedditEvent } = vi.hoisted(() => ({
+const { mockTrackRedditEvent, mockTrackMetaEvent } = vi.hoisted(() => ({
   mockTrackRedditEvent: vi.fn(),
+  mockTrackMetaEvent: vi.fn(),
 }));
 
 vi.mock('./redditPixel', () => ({
   trackRedditEvent: mockTrackRedditEvent,
+}));
+
+vi.mock('./metaPixel', () => ({
+  trackMetaEvent: mockTrackMetaEvent,
 }));
 
 import { trackPurchaseConversion } from './purchaseConversion';
@@ -34,10 +39,14 @@ describe('trackPurchaseConversion', () => {
     vi.stubGlobal('gtag', mockGtag);
     clearCookie('b4m-first-touch');
     clearCookie('b4m_utm');
+    clearCookie('b4m_app_first_touch');
+    clearCookie('b4m_last_touch');
+    localStorage.setItem('cookie_consent', 'granted');
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    localStorage.removeItem('cookie_consent');
   });
 
   it('fires GA4 purchase with the transaction id, value, currency and item', () => {
@@ -58,6 +67,16 @@ describe('trackPurchaseConversion', () => {
       value: 30,
       currency: 'USD',
       transactionId: 'cs_test_1',
+    });
+  });
+
+  it('sends value, currency and the dedupe id to Meta as Subscribe', () => {
+    trackPurchaseConversion(PURCHASE);
+
+    expect(mockTrackMetaEvent).toHaveBeenCalledExactlyOnceWith('Subscribe', {
+      value: 30,
+      currency: 'USD',
+      eventId: 'cs_test_1',
     });
   });
 
@@ -101,12 +120,13 @@ describe('trackPurchaseConversion', () => {
     expect(params.transaction_id).toBe('cs_test_2');
   });
 
-  it('still reports to Reddit when GA4 is absent', () => {
+  it('still reports to both ad pixels when GA4 is absent', () => {
     vi.stubGlobal('gtag', undefined);
 
     trackPurchaseConversion(PURCHASE);
 
     expect(mockGtag).not.toHaveBeenCalled();
     expect(mockTrackRedditEvent).toHaveBeenCalledOnce();
+    expect(mockTrackMetaEvent).toHaveBeenCalledOnce();
   });
 });

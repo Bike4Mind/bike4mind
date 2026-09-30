@@ -17,6 +17,7 @@ import {
   MAX_LAKE_FILE_TAG_NAME_LENGTH,
 } from '../constants/dataLakes';
 import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '../constants/chunking';
+import { DATA_LAKE_ORIGINS } from '../types/entities/DataLakeTypes';
 import type { LakeConfigAuditCoversEveryUpdatableField } from '../types/entities/LakeConfigChangeEventTypes';
 
 // Hash validation
@@ -84,6 +85,10 @@ export const CreateDataLakeRequestInput = z.object({
   // before scoping the lake, so a user still can't plant a lake into an org they don't
   // belong to. Omitted (or empty) means personal scope.
   organizationId: z.string().optional(),
+  // Who fills this lake (see IDataLake.origin). At CREATE time this is the user's own action, not
+  // an inferred flip: picking a Drive folder in the wizard IS the declaration, made in the same
+  // request that creates the lake. Omitted means the Mongoose schema default ('curated') applies.
+  origin: z.enum(DATA_LAKE_ORIGINS).optional(),
 });
 export type CreateDataLakeRequestInputType = z.infer<typeof CreateDataLakeRequestInput>;
 
@@ -93,6 +98,8 @@ export const UpdateDataLakeRequestInput = z.object({
   // Per-lake system prompt (see IDataLake.systemPrompt). Uncapped, matching the other system
   // prompts in the codebase. Edit is gated to creator/admin by updateDataLake (canManageLake).
   systemPrompt: z.string().optional(),
+  // Reader opt-in for that prompt (see IDataLake.injectPromptForReaders). Same canManageLake gate.
+  injectPromptForReaders: z.boolean().optional(),
   // Preferred registry system-prompt id bound to the lake (see IDataLake.preferredSystemPromptId).
   // Empty string clears it, mirroring the requiredUserTag sentinel below. The session-activatable
   // ALLOWLIST check is enforced at the write route (apps/client), which owns the allowlist - core
@@ -146,6 +153,11 @@ export const UpdateDataLakeRequestInput = z.object({
     .max(OVERSIZED_PASSAGE_TOKEN_THRESHOLD)
     .nullable()
     .optional(),
+  // Who fills this lake (see IDataLake.origin). Flipping to 'curated' makes unattended ingest
+  // refuse; flipping to 'connector-fed' is the consent a Drive connect door requires. Omitting it
+  // leaves it unchanged (Mongo $set strips undefined). Also on the CREATE schema above, where the
+  // wizard declares connector-fed when the user already picked a Drive folder.
+  origin: z.enum(DATA_LAKE_ORIGINS).optional(),
   // NOTE: status is intentionally NOT updatable here. Lifecycle transitions
   // (archive/unarchive/delete/cleanup) go through their dedicated endpoints so the
   // required side effects (cancel in-flight batch, archive/soft-delete files, stat

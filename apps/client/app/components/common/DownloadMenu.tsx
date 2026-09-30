@@ -8,6 +8,7 @@ import { marked } from 'marked';
 import { Document, Paragraph, TextRun, Packer, Table, TableRow, TableCell, WidthType } from 'docx';
 import { renderMarkdownToStyledHtml } from '@client/app/utils/markdownToStyledHtml';
 import { buildReplyDownloads, type ReplyDownload } from '@client/app/utils/replyDownloads';
+import { stripSearchResultCardFences } from '@bike4mind/common';
 
 // Utility: Download a file
 export const downloadFile = (content: string, fileName: string, mimeType: string) => {
@@ -220,7 +221,10 @@ const DownloadMenu: React.FC<{
   variant?: 'outlined' | 'plain';
   /** Extra styles for the trigger, so a row can size it with its siblings. */
   triggerSx?: SxProps;
-}> = ({ content, fileName, onClose, variant = 'outlined', triggerSx }) => {
+}> = ({ content: rawContent, fileName, onClose, variant = 'outlined', triggerSx }) => {
+  // The Markdown/DOCX/HTML paths below have no way to render a b4m_cards fence, so they'd
+  // otherwise download raw model-authored card JSON as if it were reply text.
+  const content = stripSearchResultCardFences(rawContent);
   const handleClose = onClose || (() => {});
   const isMobile = useIsMobile();
   // Scanned on open rather than on render: this mounts once per message in a session, and a

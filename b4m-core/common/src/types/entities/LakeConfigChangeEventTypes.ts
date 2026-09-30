@@ -62,6 +62,18 @@ export const LAKE_CONFIG_CHANGE_ACTIONS = [
   'delete',
   'restore',
   /**
+   * draft -> active, requested on purpose by an owner or admin through `promoteDataLake` - the
+   * only door onto `activateIfDraft`. Replaces the old implicit flip: `auto-activate`
+   * below is kept for reading events recorded before this existed, but nothing emits it anymore.
+   */
+  'promote',
+  /**
+   * The reverse of `promote`: active -> draft, through `demoteDataLake`. Pulls the lake out of
+   * grounding (checked live on `status === 'active'` at retrieval time, never cached), so this
+   * takes effect on the lake's next lookup rather than needing its own settle window.
+   */
+  'demote',
+  /**
    * The phase-2 hard delete, recorded when the purge is ACCEPTED rather than when the sweep
    * finishes (#1744). Deliberately NOT folded into `delete`: that verb is the recoverable phase-1
    * soft delete, and an audit trail that cannot distinguish the reversible request from the
@@ -73,11 +85,12 @@ export const LAKE_CONFIG_CHANGE_ACTIONS = [
    */
   'purge',
   /**
-   * The draft -> active flip driven by `activateIfDraft` (a tag edit, a file toggle, a batch
-   * completion). Always records under the `system` RUNG, whoever triggered it: nothing authorized
-   * it, because `activateIfDraft` runs no authorization check at all. The PRINCIPAL is a different
-   * question - the tag doors know their operator and name them, while the batch doors do not and
-   * record `system` for that too.
+   * HISTORICAL ONLY: the old implicit draft -> active flip that used to run as a side
+   * effect of a tag edit, a file toggle or a batch completion, always under the `system` rung
+   * because nothing authorized it. No code path emits this anymore - `recomputeLakeStats` no
+   * longer activates a draft lake on its own, and the deliberate replacement (`promote`) is
+   * recorded under the rung that actually authorized it. Kept in the enum so a reader of an
+   * existing event history can still resolve a historical row's action.
    */
   'auto-activate',
   /**
@@ -102,6 +115,44 @@ export const LAKE_CONFIG_CHANGE_ACTIONS = [
    * would be hiding the only fact that matters here: why the owner changed without anyone asking.
    */
   'membership-succession',
+  /**
+   * A producer-proposed source cleared the acquisition queue (#1671) into the lake, recorded under
+   * whichever rung reviewed it. Split from `decline-proposal`/`restore-proposal` below for the same
+   * reason `grant-access`/`revoke-access` are split from each other: one uniform action per verb the
+   * reviewer actually took, rather than a status field the reader would have to re-derive.
+   */
+  'approve-proposal',
+  /** The reviewer's decline of a proposed source. See `approve-proposal`. */
+  'decline-proposal',
+  /**
+   * Undoes a decline, putting the tombstone back in the pending queue (`restoreDataLakeProposal`).
+   * Deliberately its own literal, not `restore` above - that one is the unrelated lake-undelete
+   * action, and collapsing the two would render as the same label for two different things a
+   * reviewer never confuses in the product.
+   */
+  'restore-proposal',
+  /**
+   * A saved research run configuration (#1682) was created, edited or removed. One action per verb
+   * a curator actually took, matching the proposal-review split above - not a status field the
+   * reader would have to re-derive.
+   */
+  'create-research-config',
+  'update-research-config',
+  'delete-research-config',
+  /**
+   * A research run was queued from a saved configuration. Recorded at REQUEST time (the human who
+   * clicked Run), split from `complete-research-run` below because the two happen at unrelated
+   * times - a run can sit `queued`/`running` for a while before either finishing or failing.
+   */
+  'start-research-run',
+  /**
+   * A queued run reached an outcome (completed OR failed - the value carries which, see
+   * `researchRunChange`). Recorded from the background executor, which has no human actor behind
+   * it - always under the `system` rung (the same rung `membership-succession` stamps, and the
+   * retired `auto-activate` did), but unlike `membership-succession` there is no principal at all
+   * here, not even a triggering user kept alongside the forced rung.
+   */
+  'complete-research-run',
 ] as const;
 export type LakeConfigChangeAction = (typeof LAKE_CONFIG_CHANGE_ACTIONS)[number];
 
@@ -121,6 +172,7 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   slug: 'audited',
   description: 'audited',
   systemPrompt: 'audited',
+  injectPromptForReaders: 'audited',
   preferredSystemPromptId: 'audited',
   groundingMode: 'audited',
   requiredPassageTokenTarget: 'audited',
@@ -133,6 +185,7 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   auditQueryTextEnabled: 'audited',
   lakeMemoryEnabled: 'audited',
   status: 'audited',
+  origin: 'audited',
   // Immutable by design (it anchors the membership prefix arm), so this is a tripwire rather than
   // an expected row: if it ever moves, the audit says so instead of the change passing unseen.
   createdByUserId: 'audited',
@@ -144,6 +197,10 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   totalChunkedChars: 'excluded',
   embeddingSpendMicroUsd: 'excluded',
   lastSyncAt: 'excluded',
+  // Sweep bookkeeping, not an operator choice - see IDataLake.lastHealthCheckedAt.
+  lastHealthCheckedAt: 'excluded',
+  // Sweep bookkeeping, not an operator choice - see IDataLake.lastInconsistencyScanAt.
+  lastInconsistencyScanAt: 'excluded',
   filesDeletedAt: 'excluded',
   filesArchivedAt: 'excluded',
   lakeMemoryExtractionAt: 'excluded',
@@ -155,6 +212,8 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   // a config change, and auditing them would put document excerpts in the config history.
   inconsistencyReport: 'excluded',
   inconsistencyComputedAt: 'excluded',
+  // Run bookkeeping, not an operator choice - the same class as lakeMemoryExtractionAt above.
+  modelInconsistencyRunAt: 'excluded',
 } as const satisfies Record<keyof IDataLake, 'audited' | 'excluded'>;
 
 /** The audited keys as a precise literal union, derived from the map so the two cannot drift. */
@@ -201,15 +260,45 @@ export const LAKE_CONFIG_DERIVED_FIELD_EFFECTIVE_OWNER = 'effectiveOwnerUserId';
  */
 export const LAKE_CONFIG_DERIVED_FIELD_ACCESS_GRANT = 'accessGrant';
 
+/**
+ * A DERIVED field, like the two above: the reviewed row lives in `DataLakeProposal`, never on the
+ * lake document, so `diffLakeConfig` can never see it. Its value carries the source url (see
+ * `proposalReviewChange`), because the action alone (`approve-proposal`/`decline-proposal`/
+ * `restore-proposal`) says WHAT a reviewer decided but not WHICH queued source it was decided on.
+ */
+export const LAKE_CONFIG_DERIVED_FIELD_PROPOSAL_REVIEW = 'proposalReview';
+
+/**
+ * A DERIVED field, like the three above: a saved research configuration lives in its own
+ * `DataLakeResearchConfig` collection, never on the lake document, so `diffLakeConfig` can never
+ * see it. Its value carries the config's name (see `researchConfigChange`).
+ */
+export const LAKE_CONFIG_DERIVED_FIELD_RESEARCH_CONFIG = 'researchConfig';
+
+/**
+ * A DERIVED field for a research run's lifecycle (started -> completed/failed), which lives in its
+ * own `DataLakeResearchRun` collection. Its value carries the run's own QUERY - not the config's
+ * name, since the background executor that records the outcome half only ever has the run's
+ * levers snapshot, never the config document - and which lifecycle point it reached (see
+ * `researchRunChange`).
+ */
+export const LAKE_CONFIG_DERIVED_FIELD_RESEARCH_RUN = 'researchRun';
+
 export const LAKE_CONFIG_CHANGE_FIELDS: readonly LakeConfigChangeField[] = [
   ...LAKE_CONFIG_DOCUMENT_FIELDS,
   LAKE_CONFIG_DERIVED_FIELD_EFFECTIVE_OWNER,
   LAKE_CONFIG_DERIVED_FIELD_ACCESS_GRANT,
+  LAKE_CONFIG_DERIVED_FIELD_PROPOSAL_REVIEW,
+  LAKE_CONFIG_DERIVED_FIELD_RESEARCH_CONFIG,
+  LAKE_CONFIG_DERIVED_FIELD_RESEARCH_RUN,
 ];
 export type LakeConfigChangeField =
   | LakeConfigDocumentField
   | typeof LAKE_CONFIG_DERIVED_FIELD_EFFECTIVE_OWNER
-  | typeof LAKE_CONFIG_DERIVED_FIELD_ACCESS_GRANT;
+  | typeof LAKE_CONFIG_DERIVED_FIELD_ACCESS_GRANT
+  | typeof LAKE_CONFIG_DERIVED_FIELD_PROPOSAL_REVIEW
+  | typeof LAKE_CONFIG_DERIVED_FIELD_RESEARCH_CONFIG
+  | typeof LAKE_CONFIG_DERIVED_FIELD_RESEARCH_RUN;
 
 /**
  * Compile-time pin: every field `UpdateDataLakeRequestInput` can write MUST be audited. Without it

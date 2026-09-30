@@ -38,7 +38,7 @@ const CHAINED_SYNC_CLAIM_STALE_MS = 60 * 60 * 1000; // 60 min, ~5 back-to-back 1
  * token fragments. Strip token-shaped runs and cap the length in this one writer so raw provider
  * output can't leak into an admin-visible field.
  */
-function redactLastError(message: string): string {
+export function redactLastError(message: string): string {
   const redacted = message.replace(/[A-Za-z0-9._~+/=-]{24,}/g, '[redacted]');
   return redacted.length > MAX_LAST_ERROR_LEN ? `${redacted.slice(0, MAX_LAST_ERROR_LEN)}...` : redacted;
 }
@@ -98,6 +98,7 @@ const OrgGoogleDriveConnectionSchema = new Schema<IOrgGoogleDriveConnectionDocum
     // Last completed FULL folder walk; the poll cron forces another once this goes stale, which is
     // what reconciles the subtree moves Drive's per-file changes feed cannot report.
     lastFullWalkAt: { type: Date },
+    disconnectRequestedAt: { type: Date },
   },
   {
     timestamps: true,
@@ -272,7 +273,9 @@ class OrgGoogleDriveConnectionRepository
     connectedBy: string
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
     return this.model.findOneAndUpdate(
-      { _id: id, organizationId },
+      // A pending disconnect is refused: re-enabling here would let an ingest land files after the
+      // queued purge resolved its slice, and the release would then strand them.
+      { _id: id, organizationId, disconnectRequestedAt: null },
       [
         {
           $set: {
@@ -342,6 +345,15 @@ class OrgGoogleDriveConnectionRepository
    * different durations and stealing a live chain is far more damaging than stealing an idle claim -
    * see CHAINED_SYNC_CLAIM_STALE_MS.
    *
+   * `enabled: { $ne: false }` closes the disconnect race: a message already on the ingest queue (a
+   * poll fired just before disconnect, a manual Re-sync, or a fresh connect's first sync) could
+   * otherwise still win this claim AFTER the drive-connection DELETE handler disables the row,
+   * create FabFiles past the purge's snapshot, and then have its row hard-deleted by release -
+   * stranding those new files exactly like the bug this whole purge exists to fix. Paired with the
+   * atomic disable in markDisconnecting: either this wins (disable can't have landed while enabled
+   * was still true) or the disable already won (enabled is false and this matches nothing) - never
+   * both.
+   *
    * Returns the freshly-minted `ingestClaimToken` this claim is identified by (null if the claim was
    * lost). The caller must carry it into its own renewSyncClaim, which compare-and-sets on it.
    */
@@ -352,6 +364,7 @@ class OrgGoogleDriveConnectionRepository
     const claimed = await this.model.findOneAndUpdate(
       {
         _id: id,
+        enabled: { $ne: false },
         $or: [
           { status: 'connected' },
           // $in: [null] matches a missing field too - a claim that never started a chain.
@@ -374,6 +387,59 @@ class OrgGoogleDriveConnectionRepository
       }
     );
     return claimed !== null ? claimToken : null;
+  }
+
+  /**
+   * Route-side half of the disconnect/claimForSync race (see claimForSync's `enabled` guard for the
+   * other half): atomically disables the connection and stamps `disconnectRequestedAt` ONLY if it
+   * is not currently claimed for an in-flight sync, instead of the old
+   * snapshot-read-then-unconditional-disable that let a claim
+   * landing in the gap between the two survive the disable. Either this wins (status was not
+   * 'syncing', enabled flips false, and claimForSync's own guard then refuses any claim that lands
+   * after) or a claim already won (status is 'syncing') and this matches nothing - never both.
+   *
+   * organizationId is REQUIRED, matching its sibling mutators (`updateCredential`, `release`): the
+   * caller's own gate (verifyOrgAccess + findLakeConnection's org comparison) already stops a
+   * cross-org id from reaching here, so nothing is exploitable without it today, but a repository
+   * method that would otherwise disable ANY connection by id alone is the piece that turns that
+   * caller-side comparison into the only thing standing between them.
+   *
+   * Returns whether the disable took effect; false means the caller should 409 (a sync is currently
+   * in flight) rather than proceed to purge past a connection that might still be ingesting.
+   */
+  async markDisconnecting(
+    id: string,
+    organizationId: string
+  ): Promise<{ stamp: Date; created: boolean; previousEnabled: boolean } | null> {
+    const stamp = new Date();
+    // Returns the PRE-update document, which is what tells a creator apart from a re-stamp.
+    const previous = await this.model.findOneAndUpdate(
+      { _id: id, organizationId, status: { $ne: 'syncing' } },
+      { $set: { enabled: false, disconnectRequestedAt: stamp } }
+    );
+    if (!previous) return null;
+    return { stamp, created: !previous.disconnectRequestedAt, previousEnabled: previous.enabled !== false };
+  }
+
+  async cancelDisconnect(id: string, organizationId: string, stamp: Date, enabled: boolean): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, organizationId, disconnectRequestedAt: stamp },
+      { $set: { enabled }, $unset: { disconnectRequestedAt: '' } }
+    );
+    return result.matchedCount > 0;
+  }
+
+  async enableUnlessDisconnecting(id: string): Promise<boolean> {
+    const result = await this.model.updateOne({ _id: id, disconnectRequestedAt: null }, { $set: { enabled: true } });
+    return result.matchedCount > 0;
+  }
+
+  async touchDisconnect(id: string, organizationId: string): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, organizationId, disconnectRequestedAt: { $ne: null } },
+      { $set: { disconnectRequestedAt: new Date() } }
+    );
+    return result.matchedCount > 0;
   }
 
   /**

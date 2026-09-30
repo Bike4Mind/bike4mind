@@ -26,10 +26,12 @@ import { ProviderBundle } from './contexts/ProviderBundle';
 import { premiumRoutes } from './premium-generated/premiumRoutes.generated';
 import { partitionPremiumRoutes } from './premiumRoutePartition';
 import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
+import { lazyWithPreload } from './utils/lazyWithPreload';
+import { parseQaStatusSearch } from './hooks/data/qaStatus';
 
 // Lazy load all route components for code splitting
-const NewNotebookPage = lazy(() => import('./routes/notebooks/new'));
-const NotebookPage = lazy(() => import('./routes/notebooks/$id'));
+// /new and /notebooks/$id render through one shell (see notebookShellRoute).
+const NotebookShell = lazyWithPreload(() => import('./routes/notebooks/shell'));
 const ProjectsPage = lazy(() => import('./routes/projects'));
 const ProjectPage = lazy(() => import('./routes/projects/$id'));
 const ProfilePage = lazy(() => import('./routes/profile/index'));
@@ -48,6 +50,9 @@ const AgentExecutionHistoryPage = lazy(() => import('./routes/agent-executions')
 const FeedbackRollupPage = lazy(() => import('./routes/feedback/rollup'));
 const MissionDossierPage = lazy(() => import('./routes/agents/$id/missions/$missionId'));
 const DeepAgentConsolePage = lazy(() => import('./routes/deep-agents'));
+const QaStatusPage = lazy(() => import('./routes/status'));
+const QaRunPage = lazy(() => import('./routes/status/runs/$id'));
+const QaTestPage = lazy(() => import('./routes/status/tests/$testKey'));
 const SharePage = lazy(() => import('./routes/share/$id'));
 const ReportPublicPage = lazy(() => import('./routes/report/$id'));
 const OrganizationsPage = lazy(() => import('./routes/organizations'));
@@ -60,8 +65,6 @@ const AcceptPoliciesPage = lazy(() => import('./routes/accept-policies'));
 const VerifyEmailPage = lazy(() => import('./routes/verify-email'));
 const VerifyEmailChangePage = lazy(() => import('./routes/verify-change'));
 const SubscribePage = lazy(() => import('./routes/subscribe'));
-const TutorialsPage = lazy(() => import('./routes/tutorials'));
-const TutorialsExplorePage = lazy(() => import('./components/Tutorials/TutorialsExplorePage'));
 const ArtifactsDemoPage = lazy(() => import('./routes/artifacts-demo'));
 const AdminEmergencyPage = lazy(() => import('./routes/admin-emergency'));
 const GoogleDriveCallbackPage = lazy(() => import('./routes/google-drive/callback'));
@@ -78,6 +81,13 @@ const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
 const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
 const QuestMasterV5Page = lazy(() => import('./routes/quests-v5'));
+
+// Shared coercion for the optional string search params nearly every route declares.
+// Identical to the inline form it replaces: falsy (missing or empty) becomes undefined,
+// anything else is String()-coerced. A few routes below deliberately keep a stricter
+// `typeof === 'string'` guard instead, which is not the same thing - do not fold those in.
+const optionalStringParam = (search: Record<string, unknown>, key: string): string | undefined =>
+  search[key] ? String(search[key]) : undefined;
 
 // AI-themed loading messages for route transitions
 const loadingMessages = [
@@ -273,56 +283,55 @@ const indexRoute = createRoute({
   ),
 });
 
-// New notebook route (replaces /new.tsx)
-const newRoute = createRoute({
+// Pathless parent of /new and /notebooks/$id. Its component - one SessionContainer and chat
+// provider - stays mounted across /new -> /notebooks/<optimistic id> -> /notebooks/<real id>, so a
+// first send never remounts the chat it is streaming into. The children render no component of
+// their own: the shell renders each one's route effects itself (routes/notebooks/shell.tsx).
+const notebookShellRoute = createRoute({
   getParentRoute: () => layoutRoute,
-  path: '/new',
+  id: 'notebook-shell',
   loader: () => {
-    // Kick off the NotebookPage chunk download while the user is typing their first
-    // message. By the time they hit send and the optimistic navigation fires, the
-    // chunk is already cached so the Suspense boundary resolves instantly.
-    void import('./routes/notebooks/$id');
+    void NotebookShell.preload();
   },
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
-      <NewNotebookPage />
+      <NotebookShell />
     </Suspense>
   ),
+});
+
+// New notebook route (replaces /new.tsx)
+const newRoute = createRoute({
+  getParentRoute: () => notebookShellRoute,
+  path: '/new',
   validateSearch: (
     search: Record<string, unknown>
   ): { projectId?: string; questmaster?: string; goal?: string; article?: string } => {
     return {
-      projectId: search.projectId ? String(search.projectId) : undefined,
-      questmaster: search.questmaster ? String(search.questmaster) : undefined,
-      goal: search.goal ? String(search.goal) : undefined,
+      projectId: optionalStringParam(search, 'projectId'),
+      questmaster: optionalStringParam(search, 'questmaster'),
+      goal: optionalStringParam(search, 'goal'),
       // Data Lake article deep link, forwarded here from the retired /data-lakes route (#1943).
-      article: search.article ? String(search.article) : undefined,
+      article: optionalStringParam(search, 'article'),
     };
   },
 });
 
 // Notebook route with dynamic ID (replaces /notebooks/[id].tsx)
 const notebookRoute = createRoute({
-  getParentRoute: () => layoutRoute,
+  getParentRoute: () => notebookShellRoute,
   path: '/notebooks/$id',
-  // fallback={null}: if the chunk isn't ready yet (e.g. user sent before preload
-  // finished), show nothing rather than the jarring full-screen loader.
-  component: () => (
-    <Suspense fallback={null}>
-      <NotebookPage />
-    </Suspense>
-  ),
   // `questId` is the turn anchor a feedback deep link carries (see common/utils/deepLinks) - the
   // session loads normally and ChatHistory scrolls to that turn once it has rendered.
   validateSearch: (search: Record<string, unknown>): { projectId?: string; questId?: string } => {
     return {
-      projectId: search.projectId ? String(search.projectId) : undefined,
-      questId: search.questId ? String(search.questId) : undefined,
+      projectId: optionalStringParam(search, 'projectId'),
+      questId: optionalStringParam(search, 'questId'),
     };
   },
 });
 
-// Gears - the earned-nav progression page (one card per major feature).
+// Gears - the feature tour, where each feature's one-time reward is claimed (one card per feature).
 const gearsRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/gears',
@@ -366,9 +375,9 @@ const profileRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { tab?: string; subtab?: string; section?: string } => {
     return {
-      tab: search.tab ? String(search.tab) : undefined,
-      subtab: search.subtab ? String(search.subtab) : undefined,
-      section: search.section ? String(search.section) : undefined,
+      tab: optionalStringParam(search, 'tab'),
+      subtab: optionalStringParam(search, 'subtab'),
+      section: optionalStringParam(search, 'section'),
     };
   },
 });
@@ -417,7 +426,7 @@ const subscriptionsCheckoutRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { plan?: string } => {
     return {
-      plan: search.plan ? String(search.plan) : undefined,
+      plan: optionalStringParam(search, 'plan'),
     };
   },
 });
@@ -598,6 +607,47 @@ const deepAgentsRoute = createRoute({
   ),
 });
 
+// QA status (admin only). Exported so pages read typed search/params via
+// `qaStatusRoute.useSearch()` etc.; filters live in the URL so links deep-link.
+export const qaStatusRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/status',
+  validateSearch: parseQaStatusSearch,
+  component: () => (
+    <RestrictedPage requireAdmin>
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <QaStatusPage />
+      </Suspense>
+    </RestrictedPage>
+  ),
+});
+
+export const qaRunRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/status/runs/$id',
+  component: () => (
+    <RestrictedPage requireAdmin>
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <QaRunPage />
+      </Suspense>
+    </RestrictedPage>
+  ),
+});
+
+// The router encodes the key into one segment (it contains / > ? #); the page
+// re-sends it as ?testKey=.
+export const qaTestRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/status/tests/$testKey',
+  component: () => (
+    <RestrictedPage requireAdmin>
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <QaTestPage />
+      </Suspense>
+    </RestrictedPage>
+  ),
+});
+
 // Share route (replaces /share/[id].tsx)
 const shareRoute = createRoute({
   getParentRoute: () => layoutRoute,
@@ -640,6 +690,14 @@ const organizationDetailRoute = createRoute({
       <OrganizationDetailPage />
     </Suspense>
   ),
+  // Declares `tab` as this route's search contract, mirroring profileRoute. The page reads it via
+  // useSearch({ strict: false }), so this types the param rather than being what makes it work.
+  // Deliberately not exhaustive: the Slack org-connect callback returns to this route carrying
+  // slack_connected/slack_error, which OrgSlackIntegration reads loosely. Keep those reads loose,
+  // or declare the params here too - a strict schema listing only `tab` would hide them.
+  validateSearch: (search: Record<string, unknown>): { tab?: string } => {
+    return { tab: optionalStringParam(search, 'tab') };
+  },
 });
 
 // Auth callback route (replaces /auth/[strategy]/callback.tsx) - no layout needed
@@ -653,8 +711,8 @@ const authCallbackRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { code?: string; state?: string } => {
     return {
-      code: search.code ? String(search.code) : undefined,
-      state: search.state ? String(search.state) : undefined,
+      code: optionalStringParam(search, 'code'),
+      state: optionalStringParam(search, 'state'),
     };
   },
 });
@@ -672,10 +730,10 @@ const authSuccessRoute = createRoute({
     search: Record<string, unknown>
   ): { token?: string; error?: string; userId?: string; redirectTo?: string } => {
     return {
-      token: search.token ? String(search.token) : undefined,
-      error: search.error ? String(search.error) : undefined,
-      userId: search.userId ? String(search.userId) : undefined,
-      redirectTo: search.redirectTo ? String(search.redirectTo) : undefined,
+      token: optionalStringParam(search, 'token'),
+      error: optionalStringParam(search, 'error'),
+      userId: optionalStringParam(search, 'userId'),
+      redirectTo: optionalStringParam(search, 'redirectTo'),
     };
   },
 });
@@ -691,8 +749,8 @@ const loginRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { error?: string; redirectTo?: string } => {
     return {
-      error: search.error ? String(search.error) : undefined,
-      redirectTo: search.redirectTo ? String(search.redirectTo) : undefined,
+      error: optionalStringParam(search, 'error'),
+      redirectTo: optionalStringParam(search, 'redirectTo'),
     };
   },
 });
@@ -721,7 +779,7 @@ const acceptPoliciesRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { redirectTo?: string } => {
     return {
-      redirectTo: search.redirectTo ? String(search.redirectTo) : undefined,
+      redirectTo: optionalStringParam(search, 'redirectTo'),
     };
   },
 });
@@ -737,7 +795,7 @@ const verifyEmailRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { token?: string } => {
     return {
-      token: search.token ? String(search.token) : undefined,
+      token: optionalStringParam(search, 'token'),
     };
   },
 });
@@ -753,7 +811,7 @@ const verifyEmailChangeRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { token?: string } => {
     return {
-      token: search.token ? String(search.token) : undefined,
+      token: optionalStringParam(search, 'token'),
     };
   },
 });
@@ -780,7 +838,7 @@ const googleDriveCallbackRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { code?: string } => {
     return {
-      code: search.code ? String(search.code) : undefined,
+      code: optionalStringParam(search, 'code'),
     };
   },
 });
@@ -792,35 +850,6 @@ const subscribeRoute = createRoute({
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <SubscribePage />
-    </Suspense>
-  ),
-});
-
-// Tutorials (new) - the tabbed feature-discovery page. Sits on its own path
-// while the original FTUE slider still owns `/tutorials`; it takes that path
-// over once the slider is retired.
-const tutorialsExploreRoute = createRoute({
-  getParentRoute: () => layoutRoute,
-  path: '/tutorials/explore',
-  component: () => (
-    // Admin-gated on the ROUTE, not just on the menu row that reaches it: the
-    // gate has to be visible from here, because this is where the follow-ups
-    // that give the page real behaviour will land.
-    <RestrictedPage requireAdmin>
-      <Suspense fallback={<RouteLoadingFallback />}>
-        <TutorialsExplorePage />
-      </Suspense>
-    </RestrictedPage>
-  ),
-});
-
-// Tutorials route (replaces /tutorials.tsx)
-const tutorialsRoute = createRoute({
-  getParentRoute: () => layoutRoute,
-  path: '/tutorials',
-  component: () => (
-    <Suspense fallback={<RouteLoadingFallback />}>
-      <TutorialsPage />
     </Suspense>
   ),
 });
@@ -847,8 +876,8 @@ const questsRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { filter?: string; search?: string } => {
     return {
-      filter: search.filter ? String(search.filter) : undefined,
-      search: search.search ? String(search.search) : undefined,
+      filter: optionalStringParam(search, 'filter'),
+      search: optionalStringParam(search, 'search'),
     };
   },
 });
@@ -901,7 +930,7 @@ const hudRoute = createRoute({
     </Suspense>
   ),
   validateSearch: (search: Record<string, unknown>): { tab?: string } => ({
-    tab: search.tab ? String(search.tab) : undefined,
+    tab: optionalStringParam(search, 'tab'),
   }),
 });
 
@@ -928,8 +957,8 @@ const slackSuccessRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { workspace?: string; reinstall?: boolean; teamId?: string } => {
     return {
-      workspace: search.workspace ? String(search.workspace) : undefined,
-      teamId: search.teamId ? String(search.teamId) : undefined,
+      workspace: optionalStringParam(search, 'workspace'),
+      teamId: optionalStringParam(search, 'teamId'),
       reinstall: search.reinstall === 'true' || search.reinstall === true,
     };
   },
@@ -946,7 +975,7 @@ const slackErrorRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { reason?: string } => {
     return {
-      reason: search.reason ? String(search.reason) : undefined,
+      reason: optionalStringParam(search, 'reason'),
     };
   },
 });
@@ -982,7 +1011,7 @@ const activateRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { code?: string } => {
     return {
-      code: search.code ? String(search.code) : undefined,
+      code: optionalStringParam(search, 'code'),
     };
   },
 });
@@ -1009,9 +1038,9 @@ const adminRoute = createRoute({
     search: Record<string, unknown>
   ): { emergency_access?: string; tab?: string; feedbackId?: string } => {
     return {
-      emergency_access: search.emergency_access ? String(search.emergency_access) : undefined,
-      tab: search.tab ? String(search.tab) : undefined,
-      feedbackId: search.feedbackId ? String(search.feedbackId) : undefined,
+      emergency_access: optionalStringParam(search, 'emergency_access'),
+      tab: optionalStringParam(search, 'tab'),
+      feedbackId: optionalStringParam(search, 'feedbackId'),
     };
   },
 });
@@ -1027,7 +1056,7 @@ const emailUnsubscribeRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { token?: string } => {
     return {
-      token: search.token ? String(search.token) : undefined,
+      token: optionalStringParam(search, 'token'),
     };
   },
 });
@@ -1054,14 +1083,14 @@ const oauthAuthorizeRoute = createRoute({
     code_challenge_method?: string;
     nonce?: string;
   } => ({
-    client_id: search.client_id ? String(search.client_id) : undefined,
-    redirect_uri: search.redirect_uri ? String(search.redirect_uri) : undefined,
-    response_type: search.response_type ? String(search.response_type) : undefined,
-    scope: search.scope ? String(search.scope) : undefined,
-    state: search.state ? String(search.state) : undefined,
-    code_challenge: search.code_challenge ? String(search.code_challenge) : undefined,
-    code_challenge_method: search.code_challenge_method ? String(search.code_challenge_method) : undefined,
-    nonce: search.nonce ? String(search.nonce) : undefined,
+    client_id: optionalStringParam(search, 'client_id'),
+    redirect_uri: optionalStringParam(search, 'redirect_uri'),
+    response_type: optionalStringParam(search, 'response_type'),
+    scope: optionalStringParam(search, 'scope'),
+    state: optionalStringParam(search, 'state'),
+    code_challenge: optionalStringParam(search, 'code_challenge'),
+    code_challenge_method: optionalStringParam(search, 'code_challenge_method'),
+    nonce: optionalStringParam(search, 'nonce'),
   }),
 });
 
@@ -1070,8 +1099,7 @@ const routeTree = rootRoute.addChildren([
   // Layout-wrapped routes (main app)
   layoutRoute.addChildren([
     indexRoute,
-    newRoute,
-    notebookRoute,
+    notebookShellRoute.addChildren([newRoute, notebookRoute]),
     gearsRoute,
     projectsRoute,
     projectRoute,
@@ -1090,12 +1118,13 @@ const routeTree = rootRoute.addChildren([
     agentExecutionHistoryRoute,
     agentMissionRoute,
     deepAgentsRoute,
+    qaStatusRoute,
+    qaRunRoute,
+    qaTestRoute,
     shareRoute,
     reportPublicRoute,
     organizationsRoute,
     organizationDetailRoute,
-    tutorialsRoute,
-    tutorialsExploreRoute,
     artifactsDemoRoute,
     questsRoute,
     questsV5Route,

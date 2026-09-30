@@ -1,9 +1,9 @@
 import mongoose, { Model, Schema, model } from 'mongoose';
-import { IProject, IProjectDocument, IProjectMethods, IProjectRepository } from '@bike4mind/common';
+import { IProject, IProjectDocument, IProjectMethods, IProjectRepository, IUserDocument } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
-import BaseRepository from '@bike4mind/db-core';
+import BaseRepository, { convertId } from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { ShareableDocumentSchema, ShareableDocumentRepository } from './SharableDocumentModel';
+import { ShareableDocumentSchema, ShareableDocumentRepository, updateAccessArms } from './SharableDocumentModel';
 
 const ModelName = 'Project';
 
@@ -21,6 +21,22 @@ export class ProjectRepository extends BaseRepository<IProjectDocument> implemen
     super(projectModel);
     this.projectModel = projectModel;
     this.shareable = extensions.shareable;
+  }
+
+  /**
+   * Partial update that matches only while `user` still holds update access and the project is not
+   * soft-deleted; mirrors SessionRepository.updateWithUpdateAccess.
+   */
+  async updateWithUpdateAccess(
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    data: Partial<IProjectDocument> & { id: string }
+  ): Promise<IProjectDocument | null> {
+    const { id, ...updateData } = data;
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    return this._plainUpdate(
+      { _id: convertId(id), deletedAt: null, $or: updateAccessArms(user) },
+      updateData as Record<string, unknown>
+    );
   }
 
   async findByIdAndUserId(id: string, userId: string) {

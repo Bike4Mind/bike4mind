@@ -6,7 +6,8 @@
  * its logged-in user, and receives a short-lived, revocable `ai:generate` key
  * scoped to that user. The ID token is either one the app's own Cognito pool
  * issued (with B4M federated upstream) or one B4M issued directly, per the
- * client's registered `federatedIdp.subjectSource`. The app then sends the key
+ * client's registered `federatedIdp.subjectSource` (see
+ * server/auth/verifyFederatedIdToken.ts). The app then sends the key
  * as `X-API-Key` to `/api/ai/v1/completions`, so completions bill the resolved
  * user's B4M credits with no manual API-key paste.
  *
@@ -22,6 +23,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { agentRepository, cacheRepository, organizationRepository } from '@bike4mind/database';
 import {
   oauthClientRepository,
+  oauthGrantRepository,
   userApiKeyRepository,
   userRepository,
   UserApiKeyAuditLog,
@@ -29,7 +31,7 @@ import {
 import { userApiKeyService } from '@bike4mind/services';
 import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
 import { hasAcceptedPolicy } from '@server/auth/consentGate';
-import { verifyCognitoIdToken, CognitoIdTokenError } from '@server/auth/verifyCognitoIdToken';
+import { verifyFederatedIdToken, FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 
 /** Minted key lifetime. The app caches the key per-user and re-exchanges only when it expires. */
 const AI_TOKEN_TTL_SECONDS = 15 * 60; // 900s
@@ -43,7 +45,16 @@ const AiTokenRequestSchema = z.object({
   client_secret: z.string().min(1),
   /** The federated app's ID token for its logged-in user (Cognito- or B4M-issued). */
   id_token: z.string().min(1),
+  /**
+   * Space-separated scopes to mint. Defaults to `ai:generate` when omitted (backward-compatible).
+   * Every requested scope must appear in the client's registered `allowedScopes`. Scopes that
+   * authorize spend (ai:generate) additionally require a durable OAuthGrant in enforce mode.
+   */
+  scope: z.string().trim().min(1).optional(),
 });
+
+// Keep this exchange limited to scopes whose mint and consent requirements it implements.
+const AiTokenScopesSchema = z.array(z.enum([ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ])).min(1);
 
 /**
  * Take the last hop from the X-Forwarded-For chain - the one CloudFront appends
@@ -78,7 +89,7 @@ const handler = baseApi({ auth: false })
       return res.status(400).json({ error: 'invalid_request', error_description: parsed.error.message });
     }
 
-    const { client_id, client_secret, id_token } = parsed.data;
+    const { client_id, client_secret, id_token, scope } = parsed.data;
 
     // 1. Client auth - verify the secret directly. Unlike the code exchange we send
     //    no redirect_uri, so we skip validateClientSecret (which also demands one).
@@ -95,6 +106,35 @@ const handler = baseApi({ auth: false })
       return res.status(403).json({
         error: 'access_denied',
         error_description: 'Client is not configured for federated AI-token exchange',
+      });
+    }
+
+    const parsedScopes = AiTokenScopesSchema.safeParse([
+      ...new Set((scope ?? ApiKeyScope.AI_GENERATE).split(' ').filter(Boolean)),
+    ]);
+    if (!parsedScopes.success) {
+      return res.status(403).json({
+        error: 'invalid_scope',
+        error_description: 'This exchange supports only ai:generate and me:read scopes',
+      });
+    }
+    const requestedScopes = parsedScopes.data;
+
+    // 2.5. Scope gate - every requested scope must appear in the client's registered allowedScopes.
+    //      Mirrors code.ts (RFC 6749 4.1.2.1): a clear 403 is better than silently narrowing the
+    //      grant to what the client may have. A client mis-registered without ai:generate in
+    //      allowedScopes cannot escalate to a spend-authorizing key here.
+    //
+    //      Pre-deploy invariant: all production federated clients seeded before this gate was added
+    //      include ai:generate in their allowedScopes (seed-oauth-client.ts has always done so for
+    //      federated clients). Any client that does not will 403 on its next call. Verify with a
+    //      one-time query before deploying to production if in doubt:
+    //        db.oauthclients.find({ 'federatedIdp': { $exists: true }, allowedScopes: { $nin: ['ai:generate'] } })
+    const disallowedScopes = requestedScopes.filter(s => !(client.allowedScopes ?? []).includes(s));
+    if (disallowedScopes.length > 0) {
+      return res.status(403).json({
+        error: 'invalid_scope',
+        error_description: `Scopes not registered for this client: ${disallowedScopes.join(' ')}`,
       });
     }
 
@@ -119,9 +159,9 @@ const handler = baseApi({ auth: false })
     //    token B4M issued itself); every gate above and below is identical either way.
     let b4mUserId: string;
     try {
-      ({ b4mUserId } = await verifyCognitoIdToken(id_token, federatedIdp));
+      ({ b4mUserId } = await verifyFederatedIdToken(id_token, federatedIdp));
     } catch (err) {
-      if (err instanceof CognitoIdTokenError) {
+      if (err instanceof FederatedIdTokenError) {
         req.logger.warn(`[OAUTH_AI_TOKEN] ID token rejected for client ${client_id}: ${err.message}`);
         return res.status(401).json({ error: 'invalid_grant', error_description: 'Invalid ID token' });
       }
@@ -134,6 +174,85 @@ const handler = baseApi({ auth: false })
       return res
         .status(401)
         .json({ error: 'invalid_grant', error_description: 'Token subject does not resolve to a B4M user' });
+    }
+
+    // 5.5. Grant gate (SECURITY) - relying-party clients only. Require the durable (user, client)
+    //      authorization grant recorded by the authorize flow (code.ts), AND that the grant covers
+    //      the billable scope. Closes two holes:
+    //        (a) a pool-signed token - including a forged identities[] entry from a compromised pool
+    //            - for a user who never authorized this client. The pool cannot forge a B4M grant.
+    //        (b) a grant that covers only identity scopes (openid/email/profile) being treated as
+    //            authorization for any minted scope. The grant must cover every scope this exchange
+    //            mints - the user must have explicitly approved each one for this client.
+    //      Reads the SAME OAuthGrant that token.ts enforces, per that model's contract.
+    //
+    //      Scoped to relying-party clients: a first-party / pre-existing federated client is trusted
+    //      (B4M controls the pool) and never went through code.ts's consent flow, so it has no grant
+    //      row and never will. Enforcing one on it would 403 every such integration the moment the
+    //      lever flips - the gate exists to constrain UNTRUSTED relying-party pools, so first-party
+    //      clients are exempt.
+    //
+    //      Defaults to GRACE (log-only): unlike the interactive token.ts flow (where the user
+    //      consents moments earlier in the same round-trip), this server-to-server exchange may
+    //      present a token minted before grants existed, so grace mode logs a would-reject instead of
+    //      blocking while operators re-mint/re-authorize. It does NOT auto-heal - a grant is recorded
+    //      only when the user actually authorizes this client. Flip enforcement per stage with
+    //      OAUTH_AI_TOKEN_ENFORCE_GRANT=true; the lever is plumbed through infra (deploy-contract.json
+    //      + infra/web.ts), per the API_KEY_SCOPE_STAGING precedent.
+    if (client.clientType === 'relying-party') {
+      const enforce = process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT === 'true';
+      let grant: Awaited<ReturnType<typeof oauthGrantRepository.findGrant>> | undefined;
+      let lookupFailed = false;
+      try {
+        grant = await oauthGrantRepository.findGrant(b4mUserId, client_id);
+      } catch (err) {
+        lookupFailed = true;
+        req.logger.warn(
+          `[OAUTH_AI_TOKEN] grant lookup failed for user ${b4mUserId} via client ${client_id}: ${String(err)}`
+        );
+      }
+
+      if (enforce) {
+        // Fail closed: an unreadable grant is UNKNOWN, not absent. Minting anyway would defeat the
+        // gate on exactly the transient error an attacker could induce. 503 so the caller retries.
+        if (lookupFailed) {
+          return res.status(503).json({
+            error: 'temporarily_unavailable',
+            error_description: 'Grant lookup failed; cannot verify authorization',
+          });
+        }
+        if (!grant) {
+          return res
+            .status(403)
+            .json({ error: 'access_denied', error_description: 'User has not authorized this client' });
+        }
+        // Every requested scope must be covered by the grant -- not just billable ones. Any scope
+        // this exchange mints should be one the user explicitly consented to for this client.
+        const uncovered = requestedScopes.filter(s => !(grant.scopes ?? []).includes(s));
+        if (uncovered.length > 0) {
+          return res.status(403).json({
+            error: 'access_denied',
+            error_description: `User has not authorized the following scope(s) for this client: ${uncovered.join(' ')}`,
+          });
+        }
+      } else if (!lookupFailed) {
+        // Grace: surface would-rejects so operators see what enforcement would block. (A lookup
+        // failure is already logged above.)
+        if (!grant) {
+          req.logger.warn(
+            `[OAUTH_AI_TOKEN] would-reject: no grant for user ${b4mUserId} via client ${client_id} ` +
+              `(grace mode; set OAUTH_AI_TOKEN_ENFORCE_GRANT=true to enforce)`
+          );
+        } else {
+          const uncovered = requestedScopes.filter(s => !(grant.scopes ?? []).includes(s));
+          if (uncovered.length > 0) {
+            req.logger.warn(
+              `[OAUTH_AI_TOKEN] would-reject: grant for user ${b4mUserId} via client ${client_id} lacks ` +
+                `scope(s): ${uncovered.join(' ')} (grace mode; set OAUTH_AI_TOKEN_ENFORCE_GRANT=true to enforce)`
+            );
+          }
+        }
+      }
     }
 
     // 6. Consent gate (SECURITY-CRITICAL). This endpoint mints outside the gated REST
@@ -168,7 +287,7 @@ const handler = baseApi({ auth: false })
       b4mUserId,
       {
         name: `AI (federated: ${client.name})`,
-        scopes: [ApiKeyScope.AI_GENERATE],
+        scopes: requestedScopes,
         expiresAt: new Date(Date.now() + AI_TOKEN_TTL_SECONDS * 1000),
         metadata: {
           clientIP: clientIp,
@@ -191,7 +310,7 @@ const handler = baseApi({ auth: false })
     });
 
     req.logger.info(
-      `[OAUTH_AI_TOKEN] Minted ai:generate key ${minted.id} for user ${b4mUserId} via client ${client_id}`
+      `[OAUTH_AI_TOKEN] Minted key ${minted.id} for user ${b4mUserId} via client ${client_id} (scopes: ${requestedScopes.join(' ')})`
     );
 
     // 9. Respond with the raw key exactly once.
@@ -199,7 +318,7 @@ const handler = baseApi({ auth: false })
       api_key: minted.key,
       token_type: 'ApiKey',
       expires_in: AI_TOKEN_TTL_SECONDS,
-      scope: ApiKeyScope.AI_GENERATE,
+      scope: requestedScopes.join(' '),
     });
   });
 

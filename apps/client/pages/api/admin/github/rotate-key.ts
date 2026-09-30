@@ -13,6 +13,7 @@
  */
 
 import { z } from 'zod';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
 import { encryptSecret } from '@server/security/secretEncryption';
@@ -32,7 +33,7 @@ const RotateKeySchema = z.object({
   privateKey: z.string().min(1, 'privateKey is required').max(MAX_PRIVATE_KEY_LENGTH, 'privateKey too long'),
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   // Rate limit to 3 rotations per hour
   .use(
     rateLimit({

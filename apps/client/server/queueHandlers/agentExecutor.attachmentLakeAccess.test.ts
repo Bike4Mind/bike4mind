@@ -44,6 +44,21 @@ describe('createAttachmentLakeAccess', () => {
     );
   });
 
+  it('opts IN to includeDraftLakes, so the attachment scope tracks the door that admitted the file', async () => {
+    // `GET /api/files/byIds` admits a draft lake's file to the workbench. Resolving this door
+    // active-only would be narrower than that, and would drop the image mask / reference anchors /
+    // generation input for a file the user explicitly attached.
+    resolveRetrievalLakeScopeForUser.mockResolvedValue({ lakes: [], dataLakeTags: [], dataLakeTagPrefixes: [] });
+    const logger = makeLogger();
+
+    await createAttachmentLakeAccess(USER, logger as never)();
+
+    expect(resolveRetrievalLakeScopeForUser).toHaveBeenCalledWith(
+      USER,
+      expect.objectContaining({ includeDraftLakes: true })
+    );
+  });
+
   it('derives lakeMemberships through lakeMembershipsFrom and forwards the tag buckets verbatim', async () => {
     resolveRetrievalLakeScopeForUser.mockResolvedValue({
       lakes: [{ id: 'l1' }],
@@ -70,8 +85,13 @@ describe('createAttachmentLakeAccess', () => {
 
     const access = await createAttachmentLakeAccess(USER, logger as never)();
 
-    // {} means "no lake arms" downstream - byte-identical to the pre-#1576 ownership-only query.
-    expect(access).toEqual({});
+    // No lake arms downstream - byte-identical to the pre-#1576 ownership-only query - but
+    // flagged, so a consumer that would otherwise substitute a different file can fail closed
+    // instead of reading the outage as a clean deny.
+    expect(access).toEqual({ resolutionFailed: true });
+    expect(access.lakeMemberships).toBeUndefined();
+    expect(access.dataLakeTags).toBeUndefined();
+    expect(access.dataLakeTagPrefixes).toBeUndefined();
     expect(logger.warn).toHaveBeenCalledWith(
       '[AttachmentLakeAccess] Resolution failed; falling back to ownership-only',
       expect.objectContaining({ error: 'lake read failed' })
@@ -82,8 +102,8 @@ describe('createAttachmentLakeAccess', () => {
     resolveRetrievalLakeScopeForUser.mockRejectedValue(new Error('lake read failed'));
     const thunk = createAttachmentLakeAccess(USER, makeLogger() as never);
 
-    await expect(thunk()).resolves.toEqual({});
-    await expect(thunk()).resolves.toEqual({});
+    await expect(thunk()).resolves.toEqual({ resolutionFailed: true });
+    await expect(thunk()).resolves.toEqual({ resolutionFailed: true });
   });
 
   it('memoizes: the resolver runs once however many times the thunk is called', async () => {

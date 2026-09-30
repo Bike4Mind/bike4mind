@@ -33,8 +33,15 @@ export function buildMemoryContext(facts: readonly string[]): string {
   );
 }
 
-/** Max chars per lake reference fact, so one extracted line cannot dominate the injected block. */
-const LAKE_FACT_MAX_CHARS = 500;
+/**
+ * Max chars per lake reference fact, so one extracted line cannot dominate the injected block.
+ *
+ * Exported because a WRITER has to compose against it: a fact longer than this is clipped here, at
+ * injection, but was embedded and ranked at full length - so the tail steers retrieval while never
+ * reaching the model. A writer that composes a bounded sentence (see `composeFindingResolutionFact`)
+ * has to know where the cliff is.
+ */
+export const LAKE_FACT_MAX_CHARS = 500;
 
 /**
  * Sanitize one LAKE fact before it enters a system block. Lake facts are LLM-extracted from UPLOADED

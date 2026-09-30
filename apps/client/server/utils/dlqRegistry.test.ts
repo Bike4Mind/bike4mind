@@ -34,7 +34,11 @@ const mockDlqUrls = vi.hoisted(() => ({
   'data-lake-research': 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeResearchQueueDLQ',
   'data-lake-taxonomy': 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeTaxonomyQueueDLQ',
   'lake-memory': 'https://sqs.us-east-2.amazonaws.com/123456789/lakeMemoryQueueDLQ',
+  'lake-inconsistency-model': 'https://sqs.us-east-2.amazonaws.com/123456789/lakeInconsistencyModelQueueDLQ',
   'drive-lake-ingest': 'https://sqs.us-east-2.amazonaws.com/123456789/driveLakeIngestQueueDLQ',
+  'drive-disconnect-purge': 'https://sqs.us-east-2.amazonaws.com/123456789/driveDisconnectPurgeQueueDLQ',
+  'github-lake-ingest': 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeIngestQueueDLQ',
+  'github-lake-revoke': 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeRevokeQueueDLQ',
 }));
 
 const mockSourceQueueUrls = vi.hoisted(() => ({
@@ -70,7 +74,11 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   dataLakeResearchQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeResearchQueue',
   dataLakeTaxonomyQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeTaxonomyQueue',
   lakeMemoryQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/lakeMemoryQueue',
+  lakeInconsistencyModelQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/lakeInconsistencyModelQueue',
   driveLakeIngestQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/driveLakeIngestQueue',
+  driveDisconnectPurgeQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/driveDisconnectPurgeQueue',
+  githubLakeIngestQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeIngestQueue',
+  githubLakeRevokeQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeRevokeQueue',
 }));
 
 // Mock SST Resource bindings: both DLQ and source queue URLs via Linkables
@@ -85,9 +93,9 @@ import { getDlqRegistry, getDlqByLabel, getSourceQueueUrl, getDlqUrl } from './d
 
 describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
-    it('returns all 33 DLQ entries', () => {
+    it('returns all 37 DLQ entries', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(33);
+      expect(registry).toHaveLength(37);
     });
 
     it('each entry has required fields', () => {

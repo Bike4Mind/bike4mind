@@ -1,3 +1,5 @@
+import { ORG_FEEDBACK_SUMMARY_TAG_LIMIT } from '@bike4mind/common';
+import FeedbackCountTable, { tagTruncationCaption } from '@client/app/components/organizations/FeedbackCountTable';
 import { type OrgFeedbackRange, useOrgFeedbackReport } from '@client/app/hooks/data/orgFeedbackReport';
 import { useOrgFeedbackSummary } from '@client/app/hooks/data/useOrgFeedbackSummary';
 import { promoteInlineLatexDollars, remarkGfmNoSingleTilde } from '@client/app/utils/remarkPlugins';
@@ -77,6 +79,7 @@ const OrgFeedbackSummaryPanel: FC<{ organizationId: string; range: OrgFeedbackRa
       );
     }
     if (status === 'completed' && data?.artifact) {
+      const storedTags = data.artifact.counts.byTag.slice(0, ORG_FEEDBACK_SUMMARY_TAG_LIMIT);
       return (
         <Stack spacing={1}>
           <Typography level="body-xs">
@@ -91,6 +94,18 @@ const OrgFeedbackSummaryPanel: FC<{ organizationId: string; range: OrgFeedbackRa
               {promoteInlineLatexDollars(data.artifact.summary)}
             </ReactMarkdown>
           </Box>
+          {/* Only the rows the summary worker fed the model (same shared limit as orgFeedbackSummary.ts),
+              so the table matches the prose. Untagged rows are absent, so these do not sum to the total. */}
+          <FeedbackCountTable
+            title="By tag"
+            testId="feedback-summary-by-tag"
+            rows={storedTags}
+            caption={
+              data.artifact.counts.byTagTruncated || data.artifact.counts.byTag.length > storedTags.length
+                ? tagTruncationCaption(storedTags.length, 'stored')
+                : undefined
+            }
+          />
         </Stack>
       );
     }

@@ -72,7 +72,7 @@ describe('unionPreauthorizedLakeAccess', () => {
     const findById = vi.fn();
     const out = await unionPreauthorizedLakeAccess(access(), undefined, ACTOR, deps({ findById }));
 
-    expect(out).toEqual(access());
+    expect(out).toEqual({ ...access(), admittedPreauthorizedTags: new Set() });
     expect(findById).not.toHaveBeenCalled();
   });
 
@@ -81,7 +81,17 @@ describe('unionPreauthorizedLakeAccess', () => {
     const out = await unionPreauthorizedLakeAccess(access(), ['alpha'], ACTOR, deps({ findById }));
 
     expect(findById).not.toHaveBeenCalled();
-    expect(out).toEqual(access());
+    expect(out).toEqual({ ...access(), admittedPreauthorizedTags: new Set() });
+  });
+
+  // #3055: the union rebuilds via `...access`, so excludedByAccessCount rides through
+  // uncorrected - pins that it actually does, since a future rewrite that stops spreading (or
+  // starts recomputing) would change this silently otherwise.
+  it('carries excludedByAccessCount through the union unchanged', async () => {
+    const withExclusions = { ...access(), excludedByAccessCount: 2 };
+    const out = await unionPreauthorizedLakeAccess(withExclusions, undefined, ACTOR, deps({ findById: vi.fn() }));
+
+    expect(out.excludedByAccessCount).toBe(2);
   });
 
   it('drops a pre-authorized id that no longer resolves to an active lake', async () => {
@@ -101,7 +111,33 @@ describe('unionPreauthorizedLakeAccess', () => {
   it('is a no-op when the context carries no dataLakes repository (e.g. a suppressed arm)', async () => {
     const out = await unionPreauthorizedLakeAccess(access(), ['managed'], ACTOR, {});
 
-    expect(out).toEqual(access());
+    expect(out).toEqual({ ...access(), admittedPreauthorizedTags: new Set() });
+  });
+
+  // #3055 (review): the exclusion-count consumers (measureIdentityNamedExclusion) cannot tell a
+  // preauthorization-admitted lake apart from a genuinely gate-excluded one on their own - only
+  // this set of SUCCESSFULLY REVALIDATED tags lets a caller correct for that. Pinned separately
+  // from the `lakes`/`dataLakeTags` assertions above because a future change could keep those
+  // green while silently dropping or over-including this set.
+  describe('admittedPreauthorizedTags (#3055 review)', () => {
+    it('names exactly the tags successfully revalidated this call, not the raw session ids', async () => {
+      const out = await unionPreauthorizedLakeAccess(access(), ['managed'], ACTOR, deps());
+
+      expect(out.admittedPreauthorizedTags).toEqual(new Set(['datalake:managed']));
+    });
+
+    it('is empty when the manage re-check revokes the admission', async () => {
+      const out = await unionPreauthorizedLakeAccess(access(), ['managed'], ACTOR, deps({ grants: [] }));
+
+      expect(out.admittedPreauthorizedTags).toEqual(new Set());
+    });
+
+    it('is empty when the pre-authorized lake is already in the resolved set', async () => {
+      const findById = vi.fn().mockResolvedValue(managedLake());
+      const out = await unionPreauthorizedLakeAccess(access(), ['alpha'], ACTOR, deps({ findById }));
+
+      expect(out.admittedPreauthorizedTags).toEqual(new Set());
+    });
   });
 
   // #2243: retrieval derives its membership arms from `lakes`, so a unioned entry must carry a

@@ -183,6 +183,38 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
     expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], undefined, 'alice')).toEqual([]);
   });
 
+  it('includeDraftLakes lifts that status bound - the ATTACHMENT scope, which tracks browse', async () => {
+    // Browse admits a draft lake's file to the workbench, so an attachment lookup resolved
+    // active-only would be narrower than the door that admitted the file and silently drop it.
+    await dataLakeRepository.create(baseLake({ slug: 'draft', createdByUserId: 'alice', status: 'draft' }));
+
+    const attachment = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], undefined, 'alice', {
+      includeDraftLakes: true,
+    });
+
+    expect(attachment.map(l => l.slug)).toEqual(['draft']);
+  });
+
+  it('includeDraftLakes widens the STATUS filter only - never a gate, and never past draft', async () => {
+    // The whole safety argument for the widening: it may add a lake the caller could have reached
+    // had it been published, and nothing else. Both halves are asserted, because either one
+    // failing turns a status fix into an authorization bug.
+    await dataLakeRepository.create(
+      baseLake({ slug: 'draft-gated', createdByUserId: 'alice', status: 'draft', requiredUserTag: 'TagBobLacks' })
+    );
+    await dataLakeRepository.create(baseLake({ slug: 'archived', createdByUserId: 'bob', status: 'archived' }));
+    await dataLakeRepository.create(baseLake({ slug: 'deleted', createdByUserId: 'bob', status: 'deleted' }));
+    await dataLakeRepository.create(baseLake({ slug: 'archiving', createdByUserId: 'bob', status: 'archiving' }));
+
+    const bob = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], undefined, 'bob', {
+      includeDraftLakes: true,
+    });
+
+    // Bob's own archived/deleted/transitional lakes stay out despite the owner bypass, and Alice's
+    // draft lake stays gated on the tag he does not hold.
+    expect(bob).toEqual([]);
+  });
+
   it('grant arm reaches a private, cross-org, gated lake - and an empty list adds no arm', async () => {
     // The transferred-owner case: transferLakeOwnership moves ownership through grant rows and
     // leaves createdByUserId alone, so without this arm the new owner browses a lake they cannot
@@ -268,6 +300,166 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
         grantedLakeIds: [draft.id],
       })
     ).toEqual([]);
+  });
+});
+
+// #3055: count-only companion to findActiveByUserTagsAndEntitlements. The population here is the
+// deliberate COMPLEMENT of that method's own arms - a lake visible (org member or public) but
+// gated in a way the caller cannot pass, with the owner/grant bypasses subtracted rather than
+// counted, since a bypass means "not excluded" regardless of the gate.
+describe('DataLakeRepository.countGateExcludedLakes', () => {
+  setupMongoTest();
+
+  it('counts a gated lake in the caller org that the caller holds neither the tag nor the entitlement for', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'medlib', organizationId: 'orgA', requiredUserTag: 'medlib', requiredEntitlement: 'medlib:pro' })
+    );
+
+    expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob')).toBe(1);
+  });
+
+  it('does not count a gate the caller DOES hold, by tag or by entitlement', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'by-tag', organizationId: 'orgA', requiredUserTag: 'medlib' }));
+    await dataLakeRepository.create(
+      baseLake({ slug: 'by-key', organizationId: 'orgA', requiredEntitlement: 'medlib:pro' })
+    );
+
+    expect(await dataLakeRepository.countGateExcludedLakes(['medlib'], [], ['orgA'], 'bob')).toBe(1);
+    expect(await dataLakeRepository.countGateExcludedLakes([], ['medlib:pro'], ['orgA'], 'bob')).toBe(1);
+  });
+
+  it('does not count a GATELESS lake - it resolves for every org member regardless', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'open', organizationId: 'orgA' }));
+
+    expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob')).toBe(0);
+  });
+
+  it('does not count a lake outside the caller org and not public - never visible, so never "excluded"', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'gated-in-b', organizationId: 'orgB', requiredUserTag: 'tag' }));
+
+    expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob')).toBe(0);
+  });
+
+  it('counts a gated PUBLIC lake app-wide, even with no shared org', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'public-gated', organizationId: 'orgB', isPublic: true, requiredUserTag: 'tag' })
+    );
+
+    expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob')).toBe(1);
+  });
+
+  it('never counts a lake the caller OWNS, gate or no gate', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'mine', organizationId: 'orgA', createdByUserId: 'bob', requiredUserTag: 'TagBobLacks' })
+    );
+
+    expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob')).toBe(0);
+  });
+
+  // #3055: `createdByUserId` is immutable creator provenance, not current ownership
+  // - a lake whose ownership has since transferred away from its creator must count toward the
+  // creator's exclusion once they hold neither the gate nor another grant. Mirrors
+  // findActiveByUserTagsAndEntitlements's own supersededOwnLakeIds narrowing on the creator arm.
+  it('counts a lake the caller created but whose ownership has since been transferred away (superseded)', async () => {
+    const transferred = await dataLakeRepository.create(
+      baseLake({ slug: 'transferred', organizationId: 'orgA', createdByUserId: 'alice', requiredUserTag: 'medlib' })
+    );
+
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'alice', {
+        supersededOwnLakeIds: [transferred.id],
+      })
+    ).toBe(1);
+  });
+
+  it('still exempts a creator-owned lake NOT in supersededOwnLakeIds, even when other lakes are superseded', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'still-mine', organizationId: 'orgA', createdByUserId: 'alice', requiredUserTag: 'medlib' })
+    );
+    const someOtherLakeId = (
+      await dataLakeRepository.create(
+        baseLake({ slug: 'unrelated', organizationId: 'orgA', createdByUserId: 'alice', requiredUserTag: 'medlib' })
+      )
+    ).id;
+
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'alice', {
+        supersededOwnLakeIds: [someOtherLakeId],
+      })
+    ).toBe(1);
+  });
+
+  it('never counts a lake the caller reaches by a USER or ORG grant', async () => {
+    const byUserGrant = await dataLakeRepository.create(
+      baseLake({ slug: 'user-granted', organizationId: 'orgA', requiredUserTag: 'TagBobLacks' })
+    );
+    const byOrgGrant = await dataLakeRepository.create(
+      baseLake({ slug: 'org-granted', organizationId: 'orgA', requiredUserTag: 'TagBobLacks' })
+    );
+
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+        grantedLakeIds: [byUserGrant.id],
+        orgGrantedLakes: { orgA: [byOrgGrant.id] },
+      })
+    ).toBe(0);
+  });
+
+  // #3055: mirrors findActiveByUserTagsAndEntitlements's own multi-org containment test above
+  // (see "an ORG grant does not reach a lake in the caller OTHER org"). Flattening every org's
+  // granted ids into one list, as the count used to, loses which org issued which grant - a
+  // multi-org caller would then have an orgA grant wrongly exempt an orgB lake from the count.
+  it('an ORG grant does not exempt a lake in the caller OTHER org from the count (multi-org caller)', async () => {
+    const inB = await dataLakeRepository.create(
+      baseLake({ slug: 'gated-in-b', organizationId: 'orgB', requiredUserTag: 'TagBobLacks' })
+    );
+
+    // Bob belongs to both orgs. An orgA-issued grant on the orgB lake must not exempt it.
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA', 'orgB'], 'bob', {
+        orgGrantedLakes: { orgA: [inB.id] },
+      })
+    ).toBe(1);
+
+    // The same lake granted by its OWN org does exempt it - containment, not a dead arm.
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA', 'orgB'], 'bob', {
+        orgGrantedLakes: { orgB: [inB.id] },
+      })
+    ).toBe(0);
+  });
+
+  it('restrictToTags limits the count to exactly the named lakes', async () => {
+    const named = await dataLakeRepository.create(
+      baseLake({ slug: 'named', organizationId: 'orgA', requiredUserTag: 'TagBobLacks' })
+    );
+    await dataLakeRepository.create(
+      baseLake({ slug: 'unrelated', organizationId: 'orgA', requiredUserTag: 'TagBobLacks' })
+    );
+
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+        restrictToTags: [named.datalakeTag],
+      })
+    ).toBe(1);
+
+    // A tag naming no gate-excluded lake in scope - the unrestricted count would be 2 (both
+    // lakes above), so this pins that restriction actually narrows the query rather than being
+    // ignored.
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+        restrictToTags: ['datalake:does-not-exist'],
+      })
+    ).toBe(0);
+  });
+
+  it('never returns a lake document - count only, defense-in-depth stays with the caller', async () => {
+    // Not a behavior a TypeScript signature alone proves - the return type is checked here against
+    // the actual resolved value, not just declared.
+    await dataLakeRepository.create(baseLake({ slug: 'medlib', organizationId: 'orgA', requiredUserTag: 'medlib' }));
+
+    const result = await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob');
+    expect(typeof result).toBe('number');
   });
 });
 
@@ -2833,6 +3025,31 @@ describe('DataLakeRepository.activateIfDraft', () => {
   });
 });
 
+describe('DataLakeRepository.demoteToDraft', () => {
+  setupMongoTest();
+
+  it('flips an active lake back to draft, and only the first call does it', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'fresh', status: 'active' }));
+
+    expect(await dataLakeRepository.demoteToDraft(created.id)).toBe(true);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('draft');
+    expect(await dataLakeRepository.demoteToDraft(created.id)).toBe(false);
+  });
+
+  it('leaves every other status untouched', async () => {
+    for (const status of ['draft', 'archiving', 'archived', 'restoring', 'deleting', 'deleted'] as const) {
+      const created = await dataLakeRepository.create(baseLake({ slug: `lake-${status}`, status }));
+
+      expect(await dataLakeRepository.demoteToDraft(created.id)).toBe(false);
+      expect((await dataLakeRepository.findById(created.id))?.status).toBe(status);
+    }
+  });
+
+  it('reports false for an id that matches no lake', async () => {
+    expect(await dataLakeRepository.demoteToDraft(new mongoose.Types.ObjectId().toString())).toBe(false);
+  });
+});
+
 describe('DataLakeRepository teardown stamp', () => {
   setupMongoTest();
 
@@ -3247,5 +3464,45 @@ describe('DataLakeRepository - LIST_PROJECTION excludes inconsistencyReport', ()
     const [row] = await dataLakeRepository.find({ slug: 'reported' }, { slug: 1 });
     expect(row.slug).toBe('reported');
     expect(row.inconsistencyReport).toBeUndefined();
+  });
+});
+
+describe('origin', () => {
+  setupMongoTest();
+
+  it('defaults to curated', async () => {
+    const lake = await DataLakeModel.create({
+      name: 'Acme Docs',
+      slug: 'acme-docs',
+      fileTagPrefix: 'acme:',
+      datalakeTag: 'datalake:acme-docs',
+      createdByUserId: 'user-1',
+    });
+    expect(lake.origin).toBe('curated');
+  });
+
+  it('accepts connector-fed', async () => {
+    const lake = await DataLakeModel.create({
+      name: 'Drive Docs',
+      slug: 'drive-docs',
+      fileTagPrefix: 'drive:',
+      datalakeTag: 'datalake:drive-docs',
+      createdByUserId: 'user-1',
+      origin: 'connector-fed',
+    });
+    expect(lake.origin).toBe('connector-fed');
+  });
+
+  it('rejects an unknown origin', async () => {
+    await expect(
+      DataLakeModel.create({
+        name: 'Bad',
+        slug: 'bad-origin',
+        fileTagPrefix: 'bad:',
+        datalakeTag: 'datalake:bad-origin',
+        createdByUserId: 'user-1',
+        origin: 'machine-fed',
+      })
+    ).rejects.toThrow();
   });
 });

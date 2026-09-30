@@ -1,7 +1,7 @@
-import matter from 'gray-matter';
 import { z } from 'zod';
 import type { CustomCommand, CustomCommandFrontmatter } from '../storage/types.js';
 import { logger } from './Logger.js';
+import { parseFrontmatter } from './parseFrontmatter.js';
 
 /**
  * Transforms a value that could be a string or array into a string
@@ -181,8 +181,8 @@ export function parseCommandFile(
     // Preprocess to fix common YAML issues (unquoted colons, etc.)
     const processedContent = preprocessFrontmatter(fileContent);
 
-    // Parse frontmatter using gray-matter
-    const { data: frontmatter, content: body } = matter(processedContent);
+    // Parse frontmatter (YAML only - a non-YAML fence never evaluates)
+    const { data: frontmatter, content: body } = parseFrontmatter(processedContent);
 
     // Validate frontmatter against schema
     const validationResult = FrontmatterSchema.safeParse(frontmatter);

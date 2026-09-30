@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError, BadRequestError } from '@server/utils/errors';
 import { z } from 'zod';
@@ -100,7 +101,7 @@ const ensureAdmin = (isAdmin?: boolean | null) => {
   }
 };
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   req.logger.info(req.user?.isAdmin, 'isAdmin');
   ensureAdmin(req.user?.isAdmin);
 
@@ -130,7 +131,8 @@ const handler = baseApi().post(async (req, res) => {
     throw new BadRequestError('Unable to reach the Slack API. Please try again.');
   }
 
-  req.logger.info(slackData, 'slackData');
+  // Never log slackData wholesale: its `credentials` carry the app client/signing secrets.
+  req.logger.info('Slack manifest create response', { ok: slackData.ok, appId: slackData.app_id });
 
   if (!slackData.ok) {
     const slackError = slackData.error as string;
@@ -140,7 +142,7 @@ const handler = baseApi().post(async (req, res) => {
       throw new BadRequestError('Configuration token is invalid or expired. Please provide a valid token.');
     }
 
-    req.logger.error('Slack API error:', slackData);
+    req.logger.error('Slack API error:', { error: slackData.error, errors: slackData.errors });
     throw new BadRequestError(
       slackError || 'Failed to create Slack app',
       (slackData.errors || slackData.response_metadata) as Record<string, unknown> | undefined

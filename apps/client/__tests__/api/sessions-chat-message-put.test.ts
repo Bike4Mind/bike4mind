@@ -3,8 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const captured = vi.hoisted(() => ({ handlers: {} as Record<string, any> }));
 
 vi.mock('@bike4mind/database', () => ({
-  sessionRepository: { findById: vi.fn() },
-  questRepository: { findBySessionIdAndId: vi.fn(), update: vi.fn() },
+  sessionRepository: { findById: vi.fn(), shareable: { findUpdateAccessById: vi.fn() } },
+  questRepository: { findBySessionIdAndId: vi.fn(), updateInSession: vi.fn() },
 }));
 
 vi.mock('@bike4mind/services', () => ({
@@ -54,12 +54,15 @@ const makeRes = () => {
 
 describe('PUT /api/sessions/[id]/chat/[messageId] authorization', () => {
   beforeEach(() => {
-    vi.mocked(questRepository.update)
+    vi.mocked(questRepository.updateInSession)
       .mockReset()
       .mockResolvedValue({ id: 'msg-1', reply: 'edited' } as never);
     vi.mocked(questRepository.findBySessionIdAndId)
       .mockReset()
       .mockResolvedValue({ id: 'msg-1', sessionId: 'session-1', reply: 'original', promptMeta: {} } as never);
+    vi.mocked(sessionRepository.shareable.findUpdateAccessById)
+      .mockReset()
+      .mockResolvedValue({ id: 'session-1' } as never);
     vi.mocked(sessionRepository.findById)
       .mockReset()
       .mockResolvedValue({
@@ -80,7 +83,7 @@ describe('PUT /api/sessions/[id]/chat/[messageId] authorization', () => {
     );
 
     expect(response.out.statusCode).toBe(403);
-    expect(questRepository.update).not.toHaveBeenCalled();
+    expect(questRepository.updateInSession).not.toHaveBeenCalled();
   });
 
   it('still allows a sharee holding update to edit the reply', async () => {
@@ -91,6 +94,28 @@ describe('PUT /api/sessions/[id]/chat/[messageId] authorization', () => {
     );
 
     expect(response.out.statusCode).toBe(200);
-    expect(questRepository.update).toHaveBeenCalled();
+    expect(questRepository.updateInSession).toHaveBeenCalled();
+  });
+
+  it('writes only the edited fields, scoped to the session in the URL', async () => {
+    const response = makeRes();
+    await captured.handlers.put(
+      { query: { id: 'session-1', messageId: 'msg-1' }, body: { reply: 'fixed' }, user: { id: EDITOR } },
+      response
+    );
+
+    expect(questRepository.updateInSession).toHaveBeenCalledWith('session-1', { id: 'msg-1', reply: 'fixed' });
+  });
+
+  it('refuses and writes nothing when update access is revoked right before the write', async () => {
+    vi.mocked(sessionRepository.shareable.findUpdateAccessById).mockResolvedValue(null as never);
+    const response = makeRes();
+    await captured.handlers.put(
+      { query: { id: 'session-1', messageId: 'msg-1' }, body: { reply: 'fixed' }, user: { id: EDITOR } },
+      response
+    );
+
+    expect(response.out.statusCode).toBe(403);
+    expect(questRepository.updateInSession).not.toHaveBeenCalled();
   });
 });

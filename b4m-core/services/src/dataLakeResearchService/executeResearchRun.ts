@@ -1,6 +1,7 @@
 import type { ResearchRunLevers, ResearchRunStopReason, ResearchRunTotals } from '@bike4mind/common';
 import { emptyResearchRunTotals, RESEARCH_RUN_PRODUCER } from '@bike4mind/common';
 import type { ProposalCandidate, ProposalOutcome } from '../dataLakeService/proposeDataLakeContent';
+import type { RelevanceJudgement } from './RelevanceJudgeService';
 import { classifySource } from './sourceFilter';
 
 /**
@@ -45,12 +46,12 @@ export interface ResearchRunPorts {
   /** Ask the search provider for up to `maxResults` hits, honoring the recency lever. */
   search(query: string, maxResults: number, recencyDays?: number): Promise<ResearchCandidate[]>;
   /**
-   * Score one candidate 0..1 and report what the judgment cost. Null when the model could not be
-   * reached at all: the candidate is dropped, so a broken model proposes nothing rather than
-   * everything, but it is counted as `judgeFailed` rather than `belowRelevance` so the run card
-   * says "the model was down" and not "the web had nothing".
+   * Score one candidate 0..1 and report what the judgment cost. A `failed` outcome drops the
+   * candidate, so a broken model proposes nothing rather than everything, but it is counted as
+   * `judgeFailed` rather than `belowRelevance` so the run card says "the model was down" and not
+   * "the web had nothing".
    */
-  judge(candidate: ResearchCandidate): Promise<{ relevance: number; rationale?: string; costMicroUsd: number } | null>;
+  judge(candidate: ResearchCandidate): Promise<RelevanceJudgement>;
   /**
    * Retrieve the page. MUST use the same extractor the ingestion door uses
    * (`fetchAndParseURL` -> the chunker's text branch) or both of the queue's text-hash comparisons
@@ -74,6 +75,14 @@ export interface ResearchRunResult {
   totals: ResearchRunTotals;
   spentMicroUsd: number;
   stopReason: ResearchRunStopReason;
+  /**
+   * The judge step failed outright: at least one judgment was attempted and none produced a score.
+   * Such a run proposed nothing because of the model, not the web, so the caller settles it as
+   * `failed` with `judgeError` rather than as a clean run with an empty result.
+   */
+  judgeStepFailed: boolean;
+  /** The first failed judgment's message, when any judgment failed. */
+  judgeError?: string;
 }
 
 /**
@@ -90,6 +99,8 @@ export async function executeResearchRun(
 ): Promise<ResearchRunResult> {
   const totals = emptyResearchRunTotals();
   let spentMicroUsd = 0;
+  let scored = 0;
+  let judgeError: string | undefined;
 
   const outOfTime = (): boolean =>
     ports.remainingTimeMs !== undefined && ports.remainingTimeMs() <= TIME_BUDGET_RESERVE_MS;
@@ -98,6 +109,8 @@ export async function executeResearchRun(
     totals,
     spentMicroUsd,
     stopReason,
+    judgeStepFailed: totals.judgeFailed > 0 && scored === 0,
+    judgeError,
   });
 
   const candidates = await ports.search(levers.query, levers.maxResults, levers.recencyDays);
@@ -115,17 +128,18 @@ export async function executeResearchRun(
     if (outOfTime()) return settle('time_budget');
 
     const judgement = await ports.judge(candidate);
-    spentMicroUsd += judgement?.costMicroUsd ?? 0;
+    spentMicroUsd += judgement.costMicroUsd;
 
-    // A null judgment (the model was unreachable) and a low score are the same outcome for the
-    // CANDIDATE - both conservative, nothing reaches a human unvouched-for - but they are opposite
-    // answers for the operator, so they are counted apart. Folding them together is how a run
-    // reports a dead model as an empty web.
-    if (!judgement) {
+    // A failed judgment and a low score are the same outcome for the CANDIDATE - both conservative,
+    // nothing reaches a human unvouched-for - but they are opposite answers for the operator, so
+    // they are counted apart. Folding them together is how a run reports a dead model as an empty web.
+    if (judgement.outcome === 'failed') {
       totals.judgeFailed += 1;
+      judgeError ??= judgement.error;
       await ports.onProgress?.(spentMicroUsd, totals);
       continue;
     }
+    scored += 1;
     if (judgement.relevance < levers.minRelevance) {
       totals.belowRelevance += 1;
       await ports.onProgress?.(spentMicroUsd, totals);
@@ -150,6 +164,7 @@ export async function executeResearchRun(
       // Advisory display only. Recorded because a reviewer weighing an unfamiliar source has
       // nothing else to weigh; nothing in the system gates on it - see IDataLakeProposal.confidence.
       confidence: judgement.relevance,
+      rationale: judgement.rationale,
       provenance: {
         producer: RESEARCH_RUN_PRODUCER,
         runId,

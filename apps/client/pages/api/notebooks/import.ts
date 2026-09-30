@@ -4,6 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import { resolveBrowserNotebookImportUploadUrl } from '@server/utils/browserUploadUrl';
+import { buildNotebookImportKeys } from '@server/utils/notebookImportKeys';
 import { Resource } from 'sst';
 import { z } from 'zod';
 
@@ -39,20 +40,19 @@ const handler = baseApi().post(
     const bucket = Resource.historyImportBucket.name; // reuses the history-import bucket
     const s3 = new S3Storage(bucket);
 
-    // notebooks/ prefix distinguishes these from OpenAI/Claude imports
     const timestamp = Date.now();
-    const dataKey = `notebooks/${userId}/${timestamp}.json`;
-    const optionsKey = `notebooks/${userId}/${timestamp}.options.json`;
+    const { dataKey, optionsKey } = buildNotebookImportKeys(String(userId), String(timestamp));
 
     // options are stored in S3 so the import Lambda can read them
     const optionsBuffer = Buffer.from(JSON.stringify(options), 'utf-8');
     await s3.upload(optionsBuffer, optionsKey, { ContentType: 'application/json' });
 
-    const uploadUrl = await s3.getSignedUrl(dataKey, 'put', {
-      expiresIn: 600,
-    });
+    let uploadUrl = '';
+    if (process.env.B4M_SELF_HOST !== 'true') {
+      uploadUrl = await s3.getSignedUrl(dataKey, 'put', { expiresIn: 600 });
+    }
 
-    req.logger.info('Generated presigned URL for notebook import', {
+    req.logger.info('Prepared notebook import upload', {
       userId,
       dataKey,
       optionsKey,

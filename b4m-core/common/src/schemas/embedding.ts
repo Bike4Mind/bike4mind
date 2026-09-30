@@ -194,7 +194,16 @@ export const MEMENTO_EMBEDDING_ID = `${MEMENTO_EMBEDDING_MODEL}@${MEMENTO_EMBEDD
  * told us that".
  */
 export function toMementoVector(full: readonly number[]): number[] {
-  const truncated = full.slice(0, MEMENTO_EMBEDDING_DIMS);
+  return truncateEmbedding(full, MEMENTO_EMBEDDING_DIMS);
+}
+
+/**
+ * Shorten a Matryoshka-trained vector (OpenAI `text-embedding-3-*`) to `dimensions`, then
+ * L2-normalize - equivalent to asking OpenAI for that width via its own `dimensions` parameter.
+ * Meaningless for a model not trained that way: its prefix is not a smaller embedding.
+ */
+export function truncateEmbedding(full: readonly number[], dimensions: number): number[] {
+  const truncated = full.slice(0, dimensions);
   const norm = Math.sqrt(truncated.reduce((sum, x) => sum + x * x, 0));
   return norm > 0 ? truncated.map(x => x / norm) : truncated;
 }

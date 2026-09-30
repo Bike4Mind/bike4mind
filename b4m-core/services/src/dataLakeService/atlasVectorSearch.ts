@@ -1,15 +1,31 @@
-import { annVectorSearch, type AnnVectorSearchResult } from './annVectorSearch';
+import { supportsAtlasVectorSearch } from '@bike4mind/db-core';
+import type { IFabFileChunkRepository } from '@bike4mind/common';
+import { annVectorSearch, type AnnRankableFile, type AnnVectorSearchResult } from './annVectorSearch';
 
 export interface AtlasVectorSearchAdapters {
   vectorSearch(
     fileIds: string[],
     queryVector: number[],
     model: string,
-    options?: { limit?: number }
+    options?: { limit?: number; includeText?: boolean }
   ): Promise<Array<{ id: string; fabFileId: string; text: string; score: number }>>;
 }
 
 export type AtlasVectorSearchResult = AnnVectorSearchResult;
+
+type AtlasAnnMethods = Pick<IFabFileChunkRepository, 'vectorSearch' | 'getAtlasIndexStatus'>;
+
+/**
+ * Whether Atlas ANN can serve this deployment: an Atlas backend plus both repository methods.
+ * The one gate for every Atlas ANN caller (semanticDataLakeSearch, forced retrieval's candidate
+ * pick). The `EnableDataLakeVectorSearch` setting is deliberately NOT read here - each caller
+ * owns that read (see `vectorSearchEnabled` on semanticDataLakeSearch).
+ */
+export function isAtlasVectorSearchAvailable<T extends Partial<AtlasAnnMethods>>(
+  fabfilechunks: T | undefined
+): fabfilechunks is T & AtlasAnnMethods {
+  return supportsAtlasVectorSearch() && !!fabfilechunks?.vectorSearch && !!fabfilechunks.getAtlasIndexStatus;
+}
 
 /**
  * Run Atlas `$vectorSearch` over an already-eligibility-checked file subset (see
@@ -22,11 +38,13 @@ export type AtlasVectorSearchResult = AnnVectorSearchResult;
  */
 export async function atlasVectorSearch(args: {
   fileIds: string[];
-  fileById: Map<string, { fileName: string; fileTags: string[] }>;
+  fileById: Map<string, AnnRankableFile>;
   queryVector: number[];
   model: string;
   limit: number;
   minScore: number;
+  /** Forwarded to the adapter; `false` skips chunk bodies for callers that only rank by score. */
+  includeText?: boolean;
   adapters: AtlasVectorSearchAdapters;
 }): Promise<AtlasVectorSearchResult> {
   const { adapters, ...rest } = args;

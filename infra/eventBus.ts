@@ -10,7 +10,7 @@ import { notebookCurationQueue, sreFixQueue, sreFixQueueDLQ } from './queues';
 const stripeInvoicePaymentSucceededSubscription = eventBus.subscribe(
   'stripe-invoice-payment-succeeded',
   {
-    handler: 'apps/client/server/events/stripe/invoicePaymentSucceeded.handler',
+    handler: 'apps/workers/src/events/stripe/invoicePaymentSucceeded.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, websocketApi, eventBus],
     vpc: lambdaVpc,
@@ -37,7 +37,7 @@ const stripeInvoicePaymentSucceededSubscription = eventBus.subscribe(
 const stripeCustomerSubscriptionUpdatedSubscription = eventBus.subscribe(
   'stripe-customer-subscription-updated',
   {
-    handler: 'apps/client/server/events/stripe/customerSubscriptionUpdated.handler',
+    handler: 'apps/workers/src/events/stripe/customerSubscriptionUpdated.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, websocketApi, eventBus],
     vpc: lambdaVpc,
@@ -64,7 +64,7 @@ const stripeCustomerSubscriptionUpdatedSubscription = eventBus.subscribe(
 eventBus.subscribe(
   'email-send',
   {
-    handler: 'apps/client/server/events/sendEmail.handler',
+    handler: 'apps/workers/src/events/sendEmail.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, websocketApi, eventBus],
     vpc: lambdaVpc,
@@ -80,10 +80,49 @@ eventBus.subscribe(
 );
 
 // Session events
+//
+// Shared DLQ for the session enrichment handlers. EventBridge invokes these Lambdas
+// asynchronously, so a failure can be lost on either side of the invoke:
+// - the rule-target DLQ (sessionEnrichmentRuleDLQ) only sees events EventBridge could not
+//   hand to Lambda at all;
+// - once Lambda accepts the invoke, a thrown error, timeout or init crash is retried by
+//   Lambda (2 retries) and then dropped unless the FUNCTION has a dead-letter target
+//   (sessionEnrichmentFunctionDLQ). This is the side a real handler failure lands on.
+// Alarm-only (no source queue to replay into; recovery is re-emitting the event), see
+// infra/dlqAlarms.ts. Guarded by infra/__tests__/sessionEnrichmentDlq.test.ts.
+const sessionEnrichmentDLQ = new sst.aws.Queue('sessionEnrichmentDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+
+// Lambda delivers async-invoke failures to the DLQ with the function's own execution role.
+const sessionEnrichmentDLQSendPermission = {
+  actions: ['sqs:SendMessage'],
+  resources: [sessionEnrichmentDLQ.arn],
+};
+
+// sst.aws.Function has no first-party async-invoke DLQ prop, so the underlying
+// aws.lambda.Function's deadLetterConfig is set directly (same as fabFileModerationDLQ in
+// infra/queues.ts).
+const sessionEnrichmentFunctionDLQ = {
+  function: {
+    deadLetterConfig: { targetArn: sessionEnrichmentDLQ.arn },
+  },
+};
+
+const sessionEnrichmentRuleDLQ = {
+  target: {
+    deadLetterConfig: { arn: sessionEnrichmentDLQ.arn },
+  },
+};
+
 const sessionAutoNamingSubscription = eventBus.subscribe(
   'session-auto-name',
   {
-    handler: 'apps/client/server/events/sessionAutoNaming.handler',
+    handler: 'apps/workers/src/events/sessionAutoNaming.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus],
     vpc: lambdaVpc,
@@ -96,19 +135,22 @@ const sessionAutoNamingSubscription = eventBus.subscribe(
         actions: ['bedrock:*'],
         resources: ['*'],
       },
+      sessionEnrichmentDLQSendPermission,
     ],
+    transform: sessionEnrichmentFunctionDLQ,
   },
   {
     pattern: {
       detailType: ['session.auto_name'],
     },
+    transform: sessionEnrichmentRuleDLQ,
   }
 );
 
 const sessionSummarizationSubscription = eventBus.subscribe(
   'session-summarize',
   {
-    handler: 'apps/client/server/events/sessionSummarization.handler',
+    handler: 'apps/workers/src/events/sessionSummarization.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, websocketApi, eventBus, fabFileBucket, generatedImagesBucket, appFilesBucket],
     vpc: lambdaVpc,
@@ -121,33 +163,37 @@ const sessionSummarizationSubscription = eventBus.subscribe(
         actions: ['bedrock:*'],
         resources: ['*'],
       },
+      sessionEnrichmentDLQSendPermission,
     ],
+    transform: sessionEnrichmentFunctionDLQ,
   },
   {
     pattern: {
       detailType: ['session.summarize'],
     },
+    transform: sessionEnrichmentRuleDLQ,
   }
 );
 
 const sessionContextSummarizationSubscription = eventBus.subscribe(
   'session-context-summarize',
   {
-    handler: 'apps/client/server/events/sessionContextSummarization.handler',
+    handler: 'apps/workers/src/events/sessionContextSummarization.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, eventBus],
     vpc: lambdaVpc,
     timeout: '2 minutes',
     environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
-    permissions: [{ actions: ['bedrock:*'], resources: ['*'] }],
+    permissions: [{ actions: ['bedrock:*'], resources: ['*'] }, sessionEnrichmentDLQSendPermission],
+    transform: sessionEnrichmentFunctionDLQ,
   },
-  { pattern: { detailType: ['session.context_summarize'] } }
+  { pattern: { detailType: ['session.context_summarize'] }, transform: sessionEnrichmentRuleDLQ }
 );
 
 const sessionTaggingSubscription = eventBus.subscribe(
   'session-tag',
   {
-    handler: 'apps/client/server/events/sessionTagging.handler',
+    handler: 'apps/workers/src/events/sessionTagging.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus],
     vpc: lambdaVpc,
@@ -163,20 +209,52 @@ const sessionTaggingSubscription = eventBus.subscribe(
         actions: ['bedrock:*'],
         resources: ['*'],
       },
+      sessionEnrichmentDLQSendPermission,
     ],
+    transform: sessionEnrichmentFunctionDLQ,
   },
   {
     pattern: {
       detailType: ['session.tag'],
     },
+    transform: sessionEnrichmentRuleDLQ,
   }
 );
+
+const sessionEnrichmentSubscriptions = [
+  sessionAutoNamingSubscription,
+  sessionSummarizationSubscription,
+  sessionContextSummarizationSubscription,
+  sessionTaggingSubscription,
+];
+
+// EventBridge delivers to a rule-target DLQ as the events.amazonaws.com service principal,
+// so the queue needs a resource policy granting SendMessage, scoped to the session rules.
+new aws.sqs.QueuePolicy('sessionEnrichmentDLQPolicy', {
+  queueUrl: sessionEnrichmentDLQ.url,
+  policy: $util
+    .all([sessionEnrichmentDLQ.arn, $util.all(sessionEnrichmentSubscriptions.map(sub => sub.nodes.rule.arn))])
+    .apply(([dlqArn, ruleArns]) =>
+      JSON.stringify({
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Effect: 'Allow',
+            Principal: { Service: 'events.amazonaws.com' },
+            Action: 'sqs:SendMessage',
+            Resource: dlqArn,
+            Condition: { ArnEquals: { 'aws:SourceArn': ruleArns } },
+          },
+        ],
+      })
+    ),
+});
 
 // Notebook Curation events
 eventBus.subscribe(
   'notebook-curation-start',
   {
-    handler: 'apps/client/server/events/notebookCuration.handler',
+    handler: 'apps/workers/src/events/notebookCuration.handler',
     runtime: 'nodejs24.x',
     link: [
       ...allSecrets,
@@ -210,7 +288,7 @@ eventBus.subscribe(
 eventBus.subscribe(
   'notebook-curation-complete-analytics',
   {
-    handler: 'apps/client/server/events/notebookCurationAnalytics.handler',
+    handler: 'apps/workers/src/events/notebookCurationAnalytics.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, eventBus],
     vpc: lambdaVpc,
@@ -254,7 +332,7 @@ const telemetryAlertRuleDLQ = new sst.aws.Queue('telemetryAlertRuleDLQ', {
 const telemetryAlertSubscription = eventBus.subscribe(
   'telemetry-alert',
   {
-    handler: 'apps/client/server/events/telemetryAlert.handler',
+    handler: 'apps/workers/src/events/telemetryAlert.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, websocketApi, eventBus],
     vpc: lambdaVpc,
@@ -308,7 +386,7 @@ new aws.sqs.QueuePolicy('telemetryAlertRuleDLQPolicy', {
 const spiderSubscription = eventBus.subscribe(
   'spider-start',
   {
-    handler: 'apps/client/server/events/spider.handler',
+    handler: 'apps/workers/src/events/spider.handler',
     link: [...allSecrets, websocketApi, eventBus, fabFileBucket, generatedImagesBucket, appFilesBucket],
     vpc: lambdaVpc,
     timeout: '15 minutes', // Longer timeout for processing many notebooks
@@ -354,6 +432,7 @@ sst.aws.Queue.createPolicy('SreFixQueueDLQEventsPolicy', sreFixQueueDLQ.arn);
 export {
   eventBus,
   telemetryAlertRuleDLQ,
+  sessionEnrichmentDLQ,
   sreFixDispatchSubscription,
   sessionAutoNamingSubscription,
   sessionSummarizationSubscription,

@@ -6,12 +6,14 @@ import path from 'path';
  *
  * Returns a normalised RELATIVE path, so callers append it to a root with a template literal
  * rather than handing the root to `path.resolve`. That is a bundle-size constraint, not a style
- * choice: @vercel/nft partially evaluates a `path.resolve()` whose base it cannot determine
+ * choice: the file tracer partially evaluates a `path.resolve()` whose base it cannot determine
  * statically - and a root picked out of a runtime array is exactly that - then gives up on a
  * concrete path and falls back to globbing the entire app directory into the traced Lambda
  * bundle. Measured at 47 MB of source, `public/`, e2e specs and `tsconfig.tsbuildinfo` against a
- * hard 250 MB ceiling. See the upload-spool fix in `server/utils/spoolRequestToFile.ts`, which
- * removed 43 MB for the same reason and by the same means.
+ * hard 250 MB ceiling. Under Turbopack that tracer is Turbopack's own, not `@vercel/nft` - Next
+ * gates nft's `collect-build-traces` on `bundler !== Turbopack` - but the sweep is the same. See
+ * the upload-spool fix in `server/utils/spoolRequestToFile.ts`, which removed 43 MB for the same
+ * reason and by the same means.
  *
  * Because the read paths are opaque to the tracer, the content roots no longer trace themselves:
  * both are declared in `outputFileTracingIncludes` in `apps/client/next.config.mjs`. Those two

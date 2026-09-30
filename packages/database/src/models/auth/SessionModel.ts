@@ -1,12 +1,19 @@
 import mongoose, { Model, model, Schema } from 'mongoose';
-import BaseRepository from '@bike4mind/db-core';
-import { ShareableDocumentRepository, ShareableDocumentSchema } from '../content/SharableDocumentModel';
+import BaseRepository, { convertId } from '@bike4mind/db-core';
+import {
+  ShareableDocumentRepository,
+  ShareableDocumentSchema,
+  updateAccessArms,
+} from '../content/SharableDocumentModel';
 import {
   DATA_LAKE_GROUNDING_MODES,
+  PERSISTED_SESSION_SUMMARY_TRIGGERS,
   ISession,
   ISessionDocument,
   ISessionRepository,
+  IUserDocument,
   SearchOptions,
+  tagAttemptDueFilter,
 } from '@bike4mind/common';
 import { softDeletePlugin, usableObjectIds } from '../../utils/mongo';
 import User from './UserModel';
@@ -58,7 +65,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     lakeScopeExplicit: { type: Boolean, required: false },
     // default: undefined (not []) - keeps "field present" a meaningful marker of manage-but-not-
     // member admission, distinct from an ordinary session that never went through it. Written ONLY
-    // by pages/api/sessions/create.ts, as a separate authorized write AFTER its own canManageLake
+    // by pages/api/v1/sessions/index.ts, as a separate authorized write AFTER its own canManageLake
     // check - never part of session creation's own input, so fork/clone/snip cannot copy it.
     preauthorizedLakeIds: { type: [String], default: undefined },
     // Resolved from the lake at create time (resolveLakeSessionDefaults). DELIBERATELY no default -
@@ -76,11 +83,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     summary: { type: String, required: false },
     summaryAt: { type: Date, required: false },
     summaryModelId: { type: String, required: false },
-    summaryTrigger: {
-      type: String,
-      enum: ['manual', 'project', 'milestone', 'growth', 'throttling'],
-      required: false,
-    },
+    summaryTrigger: { type: String, enum: [...PERSISTED_SESSION_SUMMARY_TRIGGERS], required: false },
     contextSummary: { type: String, required: false },
     contextSummaryUpToQuestId: { type: String, required: false },
     contextSummaryAt: { type: Date, required: false },
@@ -88,8 +91,12 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     tags: { type: [TagSchema], required: false },
     // Pairs with `tags` the way `summaryAt` pairs with `summary`. The schema is strict, so WITHOUT
     // this declaration the field is dropped from every write and the `!session.taggedAt` gate in
-    // apps/client/server/events/spider.ts re-tags notebooks it already paid a completion to tag.
+    // apps/workers/src/events/spider.ts re-tags notebooks it already paid a completion to tag.
     taggedAt: { type: Date, required: false },
+    // Same strict-schema hazard as `taggedAt` above: undeclared means silently dropped, and the
+    // retry gate would read permanently unattempted. Records that a completion was spent and
+    // produced nothing, which is what bounds the retry - NOT that tags exist.
+    tagLastAttemptAt: { type: Date, required: false },
     clonedSourceId: { type: String, required: false },
     forkedSourceId: { type: String, required: false },
     isAutoNamed: { type: Boolean, required: false },
@@ -292,6 +299,25 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     };
   }
 
+  /**
+   * Partial update that matches only while `user` still holds update access and the session is not
+   * soft-deleted, so a revocation or delete landing between the authorizing read and this write
+   * makes it a no-op (null) instead of a write. softDeletePlugin's update hook already adds
+   * `deletedAt: null`; the explicit filter is redundant but keeps the contract visible here.
+   */
+  async updateWithUpdateAccess(
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    data: Partial<ISessionDocument> & { id: string },
+    opts?: { includeGlobalWrite?: boolean }
+  ): Promise<ISessionDocument | null> {
+    const { id, ...updateData } = data;
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    return this._plainUpdate(
+      { _id: convertId(id), deletedAt: null, $or: updateAccessArms(user, opts) },
+      updateData as Record<string, unknown>
+    );
+  }
+
   async upsertByOpenaiConversationId(openaiConversationId: string, update: Partial<ISession>) {
     // Scope the match to the owner: the conversation id is client-controlled (it comes
     // straight from the uploaded export), so without userId a forged id colliding with
@@ -394,6 +420,14 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   async findAllWithKnowledgeId(knowledgeId: string) {
     return this.sessionModel.find({ knowledgeIds: { $in: [knowledgeId] } });
   }
+  async pullKnowledgeIds(fabFileIds: string[]) {
+    if (fabFileIds.length === 0) return 0;
+    const result = await this.sessionModel.updateMany(
+      { knowledgeIds: { $in: fabFileIds } },
+      { $pull: { knowledgeIds: { $in: fabFileIds } } }
+    );
+    return result.modifiedCount;
+  }
   /** Ids come from `project.sessionIds`, declared `[{ type: String }]` - see usableObjectIds. */
   async findAllByIds(ids: string[], options?: { includeDeleted?: boolean }) {
     const query = this.sessionModel.find({ _id: { $in: usableObjectIds(ids, 'SessionModel.findAllByIds') } });
@@ -471,6 +505,50 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
     };
     return this.sessionModel.countDocuments({ userId, ...deletedAtFilter });
+  }
+
+  /**
+   * Untagged notebooks the tagging handler will actually spend an operations-model completion on.
+   *
+   * Narrower than `{ taggedAt: null }` on purpose. `sessionTagging.ts` aborts at its no-quest
+   * branch BEFORE the completion and writes nothing, so a questless notebook stays `taggedAt:
+   * null` and is re-counted on every run. The spider's credit pre-flight sizes a run from this
+   * number, and `assertSessionOperationalCredits` only gates - it never debits - so counting that
+   * notebook does not overcharge anyone; it refuses a low-balance admin a run that would have
+   * spent nothing on it.
+   *
+   * `deletedAt: null` is stated on both queries. On the quest side it is load-bearing:
+   * `softDeletePlugin` hooks only `find` and `findOne`, so `distinct` does NOT inherit it, while
+   * the handler's gate IS a hooked `findOne` - omitting it would price a notebook whose only
+   * quest is soft-deleted. On the session side the hook already applies and the term is belt and
+   * braces, so this does not depend on which verbs the plugin happens to cover.
+   * (`deletedAt: null` matches a missing field as well as a null one.)
+   *
+   * `tagAttemptDueFilter` excludes a notebook still inside its retry backoff. Without it this
+   * would re-price, on every run, the notebook the backoff exists to stop paying for - the same
+   * dispatch-vs-settlement gap in a new place.
+   *
+   * Loads one id per untagged notebook to build the `$in`, which is the same per-notebook scale
+   * the spider itself already runs at.
+   *
+   * Must stay in step with the handler's gate (`determineSessionOperations` in
+   * apps/client/server/utils/sessionOperations.ts): quest existence AND the retry backoff. Both halves of
+   * the backoff are declared together in `@bike4mind/common` so they cannot drift.
+   */
+  async countTaggableNotebooks(userId: string): Promise<number> {
+    const untagged = await this.sessionModel
+      .find({ userId, deletedAt: null, taggedAt: null, ...tagAttemptDueFilter() }, { _id: 1 })
+      .lean();
+    if (untagged.length === 0) return 0;
+
+    const Quest = this.questModel || mongoose.models.Quest || mongoose.model('Quest');
+    // `distinct` collapses a notebook's many quests to one entry, so the length IS the notebook
+    // count - no second pass needed.
+    const taggable = await Quest.distinct('sessionId', {
+      sessionId: { $in: untagged.map(session => session._id.toString()) },
+      deletedAt: null,
+    });
+    return taggable.length;
   }
 
   async countActiveVoiceSessionsByUserId(userId: string) {
@@ -619,20 +697,11 @@ SessionSchema.index({ deletedAt: 1, 'tags.name': 1, userId: 1 });
 // Optimized index for searchCollections query - sessionmodels collection
 SessionSchema.index({ userId: 1, deletedAt: 1, name: 'text', updatedAt: -1 });
 
-// Optimize Slack thread-based notebook lookups.
-// unique: true prevents duplicate notebooks for the same thread (race condition fix);
-// partialFilterExpression only indexes docs with Slack thread metadata, preserving
-// backward compatibility for notebooks without slackMetadata.
-SessionSchema.index(
-  { userId: 1, 'slackMetadata.channelId': 1, 'slackMetadata.threadTs': 1 },
-  {
-    unique: true,
-    // partial index: only index docs where slackMetadata exists
-    partialFilterExpression: {
-      slackMetadata: { $exists: true, $ne: null },
-    },
-  }
-);
+// No unique index on (userId, slackMetadata.channelId, slackMetadata.threadTs), deliberately:
+// softDeletePlugin hides deleted notebooks from findOne, so the Slack find-or-create in
+// b4m-core/slack/src/handlers/notebook-manager.ts would collide with the deleted row on every
+// retry and the thread could never get a notebook again. A partial filter cannot exclude
+// soft-deleted rows. Migration 20251126202452 drops the index where an old build left it.
 
 // Index for admin/cleanup queries on conversation context by user.
 // Feature queries use findById(sessionId), which hits the default _id index;

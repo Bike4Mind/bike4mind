@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { OperationsModelService } from '@client/services/operationsModelService';
 import { ForbiddenError } from '@server/utils/errors';
 import { z } from 'zod';
-import { SpeechToTextModels } from '@bike4mind/common';
+import { ApiKeyScope, SpeechToTextModels } from '@bike4mind/common';
 
 const UpdateOperationsModelSchema = z.object({
   modelId: z.string(),
@@ -11,7 +11,7 @@ const UpdateOperationsModelSchema = z.object({
   speechModelId: z.string(),
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req: Request, res: Response) => {
     // Check if user is admin
     if (!req.user?.isAdmin) {
@@ -68,8 +68,8 @@ const handler = baseApi()
           activeModel: {
             id: result.modelId,
             name: result.modelInfo.name,
-            imageModelId: result.imageModelId,
-            imageModelName: result.imageModelInfo.name,
+            imageModelId: result.imageModelId ?? config.imageModelId,
+            imageModelName: result.imageModelInfo?.name ?? config.imageModelId,
             speechModelId: config.speechModelId, // Use the saved config, not the result
             speechModelName: speechModelInfo?.name || config.speechModelId,
           },

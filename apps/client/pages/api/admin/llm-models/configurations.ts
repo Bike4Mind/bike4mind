@@ -1,5 +1,5 @@
 import { AdminSettings } from '@bike4mind/database/infra';
-import { LLMModelConfig } from '@bike4mind/common';
+import { ApiKeyScope, LLMModelConfig } from '@bike4mind/common';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -122,7 +122,9 @@ const putHandler = asyncHandler<unknown, unknown, { configurations: LLMModelConf
   }
 });
 
-const handler = baseApi().get(getHandler).put(putHandler);
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+  .get(getHandler)
+  .put(putHandler);
 
 export const config = {
   api: {

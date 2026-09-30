@@ -1,8 +1,12 @@
 import {
+  ARTIFACT_REMOVED_PLACEHOLDER,
   ChatModels,
+  createThinkMarkerEscaper,
+  escapeThinkMarkers,
   IMessage,
   ModelBackend,
   PermissionDeniedError,
+  stripToolArtifactMarkup,
   type CacheUsageStats,
   type ModelInfo,
 } from '@bike4mind/common';
@@ -14,6 +18,11 @@ import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
+import {
+  createRecursiveArtifactGuard,
+  handleToolResultStreaming,
+  stripUnstreamedToolResult,
+} from './toolStreamingHelper';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -343,10 +352,22 @@ export class DeepSeekBackend implements ICompletionBackend {
             // Only the first replayed assistant message carries the monologue:
             // repeating it once per parallel tool call would feed DeepSeek the
             // same reasoning several times over.
+            const inheritedArtifactGuard = options._internal?.artifactGuard;
+            let artifactGuard = inheritedArtifactGuard;
+
             let turnReasoning = reasoningContent;
             for (const outcome of outcomes) {
               if (outcome.ok) {
-                const resultStr = outcome.result.toString();
+                // For tools that return artifacts (like recharts), stream the result directly -
+                // DeepSeek never echoes the tool result verbatim once it is stripped below, so
+                // without this the client never sees the artifact at all.
+                let emitted = false;
+                await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
+                  emitted = true;
+                  if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+                  await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
+                });
+                const resultStr = stripUnstreamedToolResult(outcome.name, outcome.result.toString(), emitted);
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
                 this.pushToolMessages(
                   messages,
@@ -357,7 +378,10 @@ export class DeepSeekBackend implements ICompletionBackend {
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
                 const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
-                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                const observation = stripToolArtifactMarkup(
+                  `Error processing ${outcome.name} tool: ${errorMessage}`,
+                  ARTIFACT_REMOVED_PLACEHOLDER
+                );
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 this.pushToolMessages(
                   messages,
@@ -380,11 +404,14 @@ export class DeepSeekBackend implements ICompletionBackend {
                   accumInputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
                   accumOutputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
                   accumCacheReadTokens: accumCacheReadTokens + turnCacheReadTokens,
+                  artifactGuard,
                 },
               },
-              callback,
+              artifactGuard?.callback ?? callback,
               toolsUsed
             );
+
+            if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
             return;
           } else {
             this.logger.debug(`[Tool Execution] executeTools=false, passing tool calls to callback`);
@@ -401,7 +428,9 @@ export class DeepSeekBackend implements ICompletionBackend {
         } else {
           const prose = c.message.content || '';
           if (prose) sawProse = true;
-          streamedText[c.index] = reasoningContent ? `<think>${reasoningContent}</think>${prose}` : prose;
+          streamedText[c.index] = reasoningContent
+            ? `<think>${escapeThinkMarkers(reasoningContent)}</think>${prose}`
+            : prose;
         }
       }
 
@@ -440,6 +469,7 @@ export class DeepSeekBackend implements ICompletionBackend {
 
     const func: { name?: string; id?: string; parameters?: string }[] = [];
     let isInThinkingBlock = false;
+    const reasoningEscaper = createThinkMarkerEscaper();
     let streamedReasoning = '';
     let cachedTokensFromStream = 0;
     let streamFinishReason: string | undefined;
@@ -467,11 +497,12 @@ export class DeepSeekBackend implements ICompletionBackend {
         // arrives by default on both ids and is billed either way.
         if (deltaReasoning) {
           streamedReasoning += deltaReasoning;
+          const escapedReasoning = reasoningEscaper.push(deltaReasoning);
           if (!isInThinkingBlock) {
             isInThinkingBlock = true;
-            streamedText[c.index] = '<think>' + deltaReasoning;
+            streamedText[c.index] = '<think>' + escapedReasoning;
           } else {
-            streamedText[c.index] = deltaReasoning;
+            streamedText[c.index] = escapedReasoning;
           }
           // Falls through when the SAME delta also carries prose: DeepSeek can end
           // the monologue and start the answer in one chunk, and returning here
@@ -483,7 +514,8 @@ export class DeepSeekBackend implements ICompletionBackend {
         if (isInThinkingBlock && c.delta.content) {
           isInThinkingBlock = false;
           sawProse = true;
-          streamedText[c.index] = (streamedText[c.index] ?? '') + '</think>' + c.delta.content;
+          streamedText[c.index] =
+            (streamedText[c.index] ?? '') + reasoningEscaper.flush() + '</think>' + c.delta.content;
           return;
         }
 
@@ -515,7 +547,7 @@ export class DeepSeekBackend implements ICompletionBackend {
     // Without this the tag stays open and the monologue bleeds into the answer
     // after the tool recursion.
     if (isInThinkingBlock) {
-      await callback(['</think>'], {
+      await callback([reasoningEscaper.flush() + '</think>'], {
         ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
@@ -641,10 +673,22 @@ export class DeepSeekBackend implements ICompletionBackend {
               }
         );
 
+        const inheritedArtifactGuard = options._internal?.artifactGuard;
+        let artifactGuard = inheritedArtifactGuard;
+
         let turnReasoning: string | undefined = streamedReasoning || undefined;
         for (const outcome of outcomes) {
           if (outcome.ok) {
-            const resultStr = outcome.result.toString();
+            // For tools that return artifacts (like recharts), stream the result directly -
+            // DeepSeek never echoes the tool result verbatim once it is stripped below, so
+            // without this the client never sees the artifact at all.
+            let emitted = false;
+            await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
+              emitted = true;
+              if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+              await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
+            });
+            const resultStr = stripUnstreamedToolResult(outcome.name, outcome.result.toString(), emitted);
             recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
             this.pushToolMessages(
               messages,
@@ -655,7 +699,10 @@ export class DeepSeekBackend implements ICompletionBackend {
           } else {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
             const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
-            const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+            const observation = stripToolArtifactMarkup(
+              `Error processing ${outcome.name} tool: ${errorMessage}`,
+              ARTIFACT_REMOVED_PLACEHOLDER
+            );
             recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
             this.pushToolMessages(
               messages,
@@ -678,11 +725,14 @@ export class DeepSeekBackend implements ICompletionBackend {
               accumInputTokens: accumInputTokens + inputTokens,
               accumOutputTokens: accumOutputTokens + outputTokens,
               accumCacheReadTokens: accumCacheReadTokens + cachedTokensFromStream,
+              artifactGuard,
             },
           },
-          callback,
+          artifactGuard?.callback ?? callback,
           toolsUsed
         );
+
+        if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
       } else {
         this.logger.debug(`[Tool Execution] executeTools=false, passing tool calls to callback`);
         await callback([null], {

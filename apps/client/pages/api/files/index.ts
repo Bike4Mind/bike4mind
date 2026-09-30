@@ -87,7 +87,11 @@ const handler = baseApi()
           await Promise.all([
             user.save({ session }),
             FabFile.deleteMany(ownedFilter, { session }),
-            FabFile.updateMany(sharedInFilter, { $pull: { users: { userId } } }, { session }),
+            // includeDeleted: the grant must also leave soft-deleted shares, or restoring one
+            // (e.g. a data-lake undelete) would hand the caller's access back.
+            FabFile.updateMany(sharedInFilter, { $pull: { users: { userId } } }, { session }).setOptions({
+              includeDeleted: true,
+            }),
           ]);
 
           await Promise.all(

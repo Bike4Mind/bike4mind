@@ -34,7 +34,9 @@ export const READER_LAKE_FIELDS = [
   'isPublic',
   'auditQueryTextEnabled',
   'lakeMemoryEnabled',
+  'injectPromptForReaders',
   'status',
+  'origin',
   'fileCount',
   'totalSizeBytes',
   'totalChunkedChars',
@@ -62,6 +64,9 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   description: 'reader',
   // Steers every answer drawn from the lake, editable only by its editors.
   systemPrompt: 'withheld',
+  // The prompt TEXT stays withheld, but a reader whose scoped turns it steers should be able to see
+  // that it does - the transparency half of the reader opt-in (see IDataLake.injectPromptForReaders).
+  injectPromptForReaders: 'reader',
   // Editor-only, like systemPrompt: a reader gets its EFFECT (the prompt activates on a session
   // created for the lake, resolved server-side) but never reads the binding itself.
   preferredSystemPromptId: 'withheld',
@@ -96,6 +101,10 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   totalSizeBytes: 'reader',
   totalChunkedChars: 'reader',
   lastSyncAt: 'reader',
+  // Whether a connector fills this lake is a property of the corpus a reader is searching, so it
+  // reads like status rather than like owner telemetry. It does disclose that a connector is
+  // attached; that is the intended trade for letting a reader judge what they are searching.
+  origin: 'reader',
   // Cost-governance meter: the lake's spend against its embedding budget is the owner's
   // financial telemetry, not something a reader needs to search the lake.
   embeddingSpendMicroUsd: 'withheld',
@@ -111,6 +120,9 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   // derived state leaks only a boolean, never the raw timestamp this field withholds.
   lakeMemoryExtractionAt: 'withheld',
   lakeMemoryCursor: 'withheld',
+  // Model inconsistency run lease (#3057): internal bookkeeping on the same footing as the lease
+  // above, and it would tell a reader when the owner last paid to have the corpus read.
+  modelInconsistencyRunAt: 'withheld',
   // Purge fence: same class of internal bookkeeping, and it would tell a reader when a manager wiped
   // what the lake had learned - a management action, not a property of the corpus they can search.
   lakeMemoryPurgedAt: 'withheld',
@@ -119,6 +131,10 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   // for whoever curates the lake, not information a consumer of it acts on.
   inconsistencyReport: 'withheld',
   inconsistencyComputedAt: 'withheld',
+  // Health-sweep bookkeeping (see IDataLake.lastHealthCheckedAt), same class as the lake-memory
+  // lease above: internal to the sweep's own scan ordering, not a property a reader needs.
+  lastHealthCheckedAt: 'withheld',
+  lastInconsistencyScanAt: 'withheld',
 };
 
 /**

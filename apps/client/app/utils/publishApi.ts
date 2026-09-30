@@ -315,14 +315,22 @@ export async function updatePublishedDiscoverable(publicId: string, discoverable
   await api.patch(`/api/publish/artifacts/${publicId}`, { discoverable });
 }
 
-/** Access gate on top of `visibility: 'public'` - see issue #383. */
+/**
+ * Access gate layered on top of a share surface - see issue #383. Applies to BOTH
+ * surfaces that enforce it: `visibility: 'public'` (/p/*, via checkVisibility) and an
+ * active share token (/a/<token>, via checkShareGrant, at any visibility).
+ */
 export type PublishAccessGateInput =
   { kind: 'passphrase'; passphrase: string } | { kind: 'domain'; allowedDomains: string[] } | null;
 
 /**
- * Set, rotate, or clear (null) a public item's access gate (owner/admin).
+ * Set, rotate, or clear (null) an item's access gate (owner/admin).
  * The passphrase is sent once and stored only as a hash server-side; there is
  * no API to read it back - rotating means setting a new one.
+ *
+ * The item must already have an enforcing surface: public visibility, OR a share
+ * token (mint one with `createOrGetShareToken` FIRST). Otherwise the server rejects
+ * the write with `GATE_REQUIRES_ENFORCING_SURFACE` rather than store a gate nothing honors.
  */
 export async function updatePublishedAccessGate(publicId: string, accessGate: PublishAccessGateInput): Promise<void> {
   await api.patch(`/api/publish/artifacts/${publicId}`, { accessGate });
@@ -727,15 +735,38 @@ export function toShareTokenUrl(shareToken: string): string {
   return path;
 }
 
+/** One live no-sign-in share link, as the owner's link list renders it (#3255 step 3).
+ *  `id` is the handle `revokeShareLink` revokes by; it is null only for a link minted before
+ *  the `shareTokens[]` backfill, which can still be revoked with `revokeShareToken`. */
+export interface ShareLink {
+  id: string | null;
+  shareToken: string;
+  shareUrl: string;
+  createdAt: string | null;
+  viewCount: number;
+  lastViewedAt: string | null;
+}
+
 export interface ShareTokenState {
   hasShareToken: boolean;
+  /** The NEWEST live link. Kept beside `shareLinks` for single-link callers. */
   shareToken: string | null;
   shareUrl: string | null;
   shareTokenUpdatedAt: string | null;
+  /** Every live link with its own view count. Empty when nothing is shared. */
+  shareLinks: ShareLink[];
+}
+
+/** What every mint path returns: the link it just produced, plus the resulting list. */
+export interface MintedShareLink {
+  id: string | null;
+  shareToken: string;
+  shareUrl: string;
+  shareLinks: ShareLink[];
 }
 
 /**
- * Read whether a no-sign-in share link is live, WITHOUT minting one (owner/admin).
+ * Read the live no-sign-in share links, WITHOUT minting one (owner/admin).
  * Use this - not `createOrGetShareToken` - to decide which controls to render, so
  * that merely opening a surface never creates a link.
  */
@@ -749,22 +780,46 @@ export async function getShareTokenState(publicId: string): Promise<ShareTokenSt
  * (owner/admin). Pass `regenerate: true` to rotate it, which immediately revokes
  * every outstanding `/a` link. Returns the token and its relative `/a/<token>` path.
  */
-export async function createOrGetShareToken(
-  publicId: string,
-  regenerate = false
-): Promise<{ shareToken: string; shareUrl: string }> {
-  const { data } = await api.post<{ shareToken: string; shareUrl: string }>(`/api/publish/${publicId}/share-token`, {
-    regenerate,
-  });
+export async function createOrGetShareToken(publicId: string, regenerate = false): Promise<MintedShareLink> {
+  const { data } = await api.post<MintedShareLink>(`/api/publish/${publicId}/share-token`, { regenerate });
   return data;
 }
 
 /** Rotate the share token (revokes all outstanding `/a` links), returning the new one. */
-export async function regenerateShareToken(publicId: string): Promise<{ shareToken: string; shareUrl: string }> {
+export async function regenerateShareToken(publicId: string): Promise<MintedShareLink> {
   return createOrGetShareToken(publicId, true);
 }
 
-/** Revoke the share token so every `/a` link 404s immediately (owner/admin). */
+/**
+ * Mint an ADDITIONAL live link alongside the existing ones (owner/admin), so an artifact can
+ * be shared with two audiences and either link revoked on its own. Unlike
+ * `createOrGetShareToken` this is not idempotent - each call is another link. Rejected with
+ * `SHARE_LINK_LIMIT` past 20 live links.
+ */
+export async function createAdditionalShareToken(publicId: string): Promise<MintedShareLink> {
+  const { data } = await api.post<MintedShareLink>(`/api/publish/${publicId}/share-token`, { additional: true });
+  return data;
+}
+
+/**
+ * Revoke EVERY live share link so all `/a` links 404 immediately (owner/admin).
+ * Refused with `REVOKE_WOULD_ORPHAN_GATE` while a non-public item carries an access
+ * gate - the links are then the gate's only enforcing surface; clear the gate or go
+ * public first.
+ */
 export async function revokeShareToken(publicId: string): Promise<void> {
   await api.delete(`/api/publish/${publicId}/share-token`);
+}
+
+/**
+ * Revoke ONE live share link by its `ShareLink.id`, leaving the others working. Returns how
+ * many links are still live. Revoking the last one carries the same `REVOKE_WOULD_ORPHAN_GATE`
+ * refusal as `revokeShareToken`; revoking one of several never does, since the survivors keep
+ * enforcing the gate.
+ */
+export async function revokeShareLink(publicId: string, id: string): Promise<{ remaining: number }> {
+  const { data } = await api.delete<{ revoked: boolean; remaining: number }>(
+    `/api/publish/${publicId}/share-token?id=${encodeURIComponent(id)}`
+  );
+  return { remaining: data.remaining };
 }

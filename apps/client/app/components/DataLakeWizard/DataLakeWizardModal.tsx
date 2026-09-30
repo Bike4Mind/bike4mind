@@ -1,9 +1,15 @@
+import { useEffect } from 'react';
 import { Box, Button, Modal, ModalClose, ModalDialog, Stack, Typography } from '@mui/joy';
 import { useTheme } from '@mui/joy/styles';
 import { toast } from 'sonner';
 import { useDataLakeWizardStore, type OptionalSteps } from '@client/app/stores/useDataLakeWizardStore';
 import type { WizardStep } from '@client/app/stores/useDataLakeWizardStore';
 import { useBatchUpload, useCreateLakeFromDrive, OFFLINE_MESSAGE } from '@client/app/hooks/data/dataLakeWizard';
+import { plannedUploadBytes } from '@client/app/hooks/data/dataLakeUploadPipeline';
+import { useUser } from '@client/app/contexts/UserContext';
+import { checkStorageForUpload, getStorageQuota } from '@client/app/utils/storageQuota';
+import StorageLimitNotice from '@client/app/components/common/StorageLimitNotice';
+import { useFileBrowser } from '@client/app/components/Files/fileBrowserStore';
 import { isValidDataLakeSlug } from '@client/app/hooks/data/dataLakeSlug';
 import {
   hasBlankTagPrefixSegment,
@@ -58,6 +64,15 @@ export default function DataLakeWizardModal() {
   // Nothing to upload, so the commit is the create + Drive connect, not the upload pipeline.
   const isDriveOnlyCommit = !hasIncludedFiles && !!pendingDriveFolder;
   const commit = isDriveOnlyCommit ? createLakeFromDrive : batchUpload;
+  const currentUser = useUser(s => s.currentUser);
+  const setFileBrowserOpen = useFileBrowser(s => s.setOpen);
+  const uploadBytes = plannedUploadBytes(allFiles, config.conflictResolution);
+  const exceedsStorage = checkStorageForUpload(getStorageQuota(currentUser), uploadBytes).status === 'exceeds';
+  // The cached usage is not refreshed when files are deleted, so re-read it before holding the
+  // user to a block - e.g. on returning from "Manage files".
+  useEffect(() => {
+    if (isOpen && exceedsStorage) void useUser.getState().refreshUser();
+  }, [isOpen, exceedsStorage]);
 
   const STEP_ORDER = stepOrderFor({ optionalSteps });
   // What the create request will carry, which is what every rule below judges - see
@@ -99,6 +114,9 @@ export default function DataLakeWizardModal() {
         // bare "a" is the legal "a:" (accepted). Sizing the field got both of those wrong.
         return (
           hasSource &&
+          // Nothing is uploaded on the Drive-only path (uploadBytes is 0 there), so a user
+          // already over quota must not be blocked from a commit that sends no bytes.
+          (isDriveOnlyCommit || !exceedsStorage) &&
           (!!targetLake || isValidDataLakeSlug(config.name)) &&
           effectivePrefix.length >= MIN_TAG_PREFIX_LENGTH &&
           !isReservedTagPrefix(effectivePrefix) &&
@@ -141,6 +159,13 @@ export default function DataLakeWizardModal() {
       }
     }
     resetWizard();
+  };
+
+  // The file browser often sits open beneath the wizard, so the wizard has to close for the
+  // user to reach it; handleClose still confirms discarding the selection.
+  const handleManageFiles = () => {
+    handleClose();
+    if (!useDataLakeWizardStore.getState().isOpen) setFileBrowserOpen(true);
   };
 
   const handleCommit = () => {
@@ -205,6 +230,12 @@ export default function DataLakeWizardModal() {
 
         {/* Step indicator */}
         <WizardStepIndicator currentStep={step} stepKeys={STEP_ORDER} />
+
+        {hasIncludedFiles && step !== 'upload' && (
+          <Box sx={{ px: 3, pt: 1 }}>
+            <StorageLimitNotice uploadBytes={uploadBytes} onManageFiles={handleManageFiles} />
+          </Box>
+        )}
 
         {/* Step content */}
         <Box sx={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>{renderStep()}</Box>

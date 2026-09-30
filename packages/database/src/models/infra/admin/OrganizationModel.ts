@@ -1,6 +1,5 @@
 import {
   IOrganizationDocument,
-  Permission,
   IOrganizationRepository,
   IUserShare,
   ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
@@ -23,7 +22,6 @@ interface IOrganizationModel extends Model<IOrganizationDocument, {}> {
   // the static below just $sets whatever it is handed, and passing a partial is how callers
   // avoid reverting a concurrent write to fields they did not touch.
   update: (organization: Partial<IOrganizationDocument> & { id: string }) => Promise<unknown>;
-  findShareAccessById: (userId: string, id: string) => Promise<IOrganizationDocument | null>;
 }
 
 // The users[] ACL permission values that constitute org membership, from the one shared definition
@@ -166,15 +164,6 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
       virtuals: true,
     },
     statics: {
-      findShareAccessById: async function (userId: string, id: string) {
-        const result = await this.findOne({ _id: id, 'users.userId': userId });
-
-        if (!result) return null;
-
-        result.users.find((u: IUserShare) => u.userId && u.permissions.includes(Permission.share));
-
-        return result;
-      },
       update: function (organization: Partial<IOrganizationDocument> & { id: string }) {
         return this.updateOne({ _id: organization.id }, { $set: organization });
       },
@@ -255,9 +244,9 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    *    incremented - so N racing joins land N members with `seats` equal to that size, never a
    *    double-raise past it.
    *
-   * `deletedAt: null` keeps the write off a soft-deleted org: the softDeletePlugin only hooks
-   * `find`/`findOne`, not `findOneAndUpdate`, so without this a delete landing between the caller's
-   * read and this write would grow a dead org's ceiling.
+   * `deletedAt: null` keeps the write off a soft-deleted org, so a delete landing between the
+   * caller's read and this write cannot grow a dead org's ceiling. softDeletePlugin's update hook
+   * adds the same filter; this one is redundant but keeps the guarantee visible here.
    *
    * Returns the PRE-image ({ new: false }) - the caller derives before/after seats from this one
    * atomically-matched document rather than from an earlier read, so two racers can't report
@@ -278,10 +267,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * matches no doc and returns null - the caller routes that to the same 'at-capacity' outcome the
    * Stripe path already uses (an admin is alerted to add seats), rather than raising past the ceiling.
    */
-  async addMemberRaisingSeats(
-    organizationId: string,
-    member: IOrganizationDocument['users'][number]
-  ): Promise<IOrganizationDocument | null> {
+  async addMemberRaisingSeats(organizationId: string, member: IUserShare): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOneAndUpdate(
       {
         _id: organizationId,
@@ -315,10 +301,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * Returns the PRE-image ({ new: false }); null means already a member, org gone, OR at capacity -
    * the caller re-reads to tell those apart.
    */
-  async addMemberIfUnderCeiling(
-    organizationId: string,
-    member: IOrganizationDocument['users'][number]
-  ): Promise<IOrganizationDocument | null> {
+  async addMemberIfUnderCeiling(organizationId: string, member: IUserShare): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOneAndUpdate(
       {
         _id: organizationId,

@@ -1,4 +1,9 @@
-import type { DataLakeMembershipScope, IFabFileChunkRepository } from '@bike4mind/common';
+import type {
+  DataLakeMembershipScope,
+  DataLakeSweptFile,
+  IFabFileChunkRepository,
+  IUserRepository,
+} from '@bike4mind/common';
 
 /**
  * What a lifecycle sweep hands the index: the lake it ran on, and the member ids it resolved.
@@ -142,34 +147,86 @@ export async function strictIndexRemove(
 }
 
 /**
- * Optional port: flip `enabled` on whatever Drive connection feeds a lake - disable on
- * archive/delete, re-enable on unarchive/restore. Injected because the connection lookup + write
- * lives in the app layer (see disableDriveConnectionForLake/enableDriveConnectionForLake), same
- * reason `releaseDriveConnection` is injected into cleanupDeletedDataLake. Absent -> a host
- * without the Drive integration is unaffected.
+ * Sums `swept[].fileSize` per `userId` and signs the total by `sign` (-1 on soft delete, since
+ * those files leave the owner's counted set; +1 on restore, since they re-enter it). Grouped by
+ * owner, never collapsed to one id, because lake membership carries no ownership conjunct on the
+ * meta-tag arm - a contributor's own file is a full member of someone else's lake and is billed to
+ * its own uploader (see `DataLakeSweptFile`). Zero-size files are dropped rather than emitting a
+ * no-op delta.
  */
-export type DriveConnectionEnablePort = (args: { dataLakeId: string }) => Promise<void>;
+export function groupStorageDeltaByOwner(swept: DataLakeSweptFile[], sign: 1 | -1): Map<string, number> {
+  const totals = new Map<string, number>();
+  for (const file of swept) {
+    const size = file.fileSize;
+    if (!size) continue;
+    totals.set(file.userId, (totals.get(file.userId) ?? 0) + sign * size);
+  }
+  return totals;
+}
+
+/**
+ * Apply a per-owner storage delta after a delete/restore sweep - one atomic
+ * `incrementCurrentStorage` per owner rather than a single aggregate write, since a sweep can
+ * span several owners' files (see `groupStorageDeltaByOwner`). Best-effort like
+ * `bestEffortSetConnectionEnabled` below and for the same reason: failing an
+ * otherwise-successful lifecycle transition over a quota-accounting hiccup would be worse than a
+ * counter briefly out of sync, and the admin recalculate-storage endpoint
+ * (`recalculateUserStorage`) is the existing backstop for exactly that drift.
+ *
+ * `users` takes `| undefined` even though the service-level adapter type declares it required -
+ * same split as `recordLakeConfigChange`'s `lakeConfigChangeEvents` (see its own
+ * `NonNullable<...>` wrapping on each service's adapter type): required at the real API door so a
+ * route cannot forget it, tolerated here so a caller with no reason to exercise storage accounting
+ * (a script, a test) simply gets no adjustment rather than a crash.
+ */
+export async function bestEffortAdjustOwnerStorage(
+  users: Pick<IUserRepository, 'incrementCurrentStorage'> | undefined,
+  deltasByOwner: Map<string, number>,
+  logger?: { warn?: (msg: string, ...args: unknown[]) => void }
+): Promise<void> {
+  if (!users) return;
+  for (const [userId, deltaBytes] of deltasByOwner) {
+    try {
+      await users.incrementCurrentStorage(userId, deltaBytes);
+    } catch (error) {
+      logger?.warn?.(`Failed to adjust storage for user ${userId} after a file lifecycle change:`, error);
+    }
+  }
+}
+
+/**
+ * Optional port: flip `enabled` on whatever connection feeds a lake - disable on archive/delete,
+ * re-enable on unarchive/restore. Injected because the connection lookup + write lives in the app
+ * layer (see disableDriveConnectionForLake/enableDriveConnectionForLake for Drive; the GitHub
+ * connector's own module for GitHub), same reason `releaseDriveConnection` is injected into
+ * cleanupDeletedDataLake. Absent -> a host without that integration is unaffected.
+ */
+export type ConnectionEnablePort = (args: { dataLakeId: string }) => Promise<void>;
 
 /**
  * Archive/delete/unarchive/restore: a failure here is logged, not fatal - failing a whole lifecycle
- * transition over a Drive hiccup would be a worse outcome than a connection briefly out of sync with
- * its lake. The two directions are swallowed for DIFFERENT reasons, and neither is "the ingest guard
- * covers it":
+ * transition over a connector hiccup would be a worse outcome than a connection briefly out of sync
+ * with its lake. The two directions are swallowed for DIFFERENT reasons, and neither is "the ingest
+ * guard covers it":
  *
- * - A lost DISABLE is genuinely backstopped: the ingest-level status guard (driveLakeIngest.ts)
- *   refuses to sync a lake that is not draft/active, so the poll keeps enqueueing work that is always
- *   dropped. Wasteful, never incorrect.
- * - A lost ENABLE has no backstop - `findDueForPoll` is the only reader that ACTS on the flag (the
- *   enabled-only finders and the per-lake GET read it too, but none of them resumes a poll) - so it
- *   is swallowed only because it is REPAIRABLE: the reconnect door re-stamps `enabled: true`
- *   (OrgGoogleDriveConnection.updateCredential), which is where a user goes when sync looks broken.
- *   The GET does report `enabled` truthfully, but no UI reads it - the connection chip renders from
- *   `status` alone - so this state is inspectable over the API, not in the product. Do not remove
- *   that re-stamp without making this direction fatal instead.
+ * - A lost DISABLE is genuinely backstopped: the ingest-level status guard (driveLakeIngest.ts's
+ *   status check for Drive, githubLakeIngest's enabled + isLakeIngestable checks for GitHub)
+ *   refuses to sync a lake that is not draft/active, so the poll keeps enqueueing work that is
+ *   always dropped. Wasteful, never incorrect.
+ * - A lost ENABLE has no backstop for Drive - `findDueForPoll` is the only reader that ACTS on the
+ *   flag (the enabled-only finders and the per-lake GET read it too, but none of them resumes a
+ *   poll) - so it is swallowed only because it is REPAIRABLE: the reconnect door re-stamps
+ *   `enabled: true` (OrgGoogleDriveConnection.updateCredential), which is where a user goes when
+ *   sync looks broken. The GET does report `enabled` truthfully, but no UI reads it - the connection
+ *   chip renders from `status` alone - so this state is inspectable over the API, not in the
+ *   product. Do not remove that re-stamp without making this direction fatal instead. GitHub has
+ *   no in-place reconnect, so its lost ENABLE is repaired by disconnect + reconnect, which
+ *   purges the connection's files and re-ingests the repository from scratch.
  */
-export async function bestEffortSetDriveConnectionEnabled(
-  port: DriveConnectionEnablePort | undefined,
+export async function bestEffortSetConnectionEnabled(
+  port: ConnectionEnablePort | undefined,
   dataLakeId: string,
+  connectorLabel: string,
   // Optional `warn` (not the required shape bestEffortIndexRemove takes): unarchive/restore only
   // inherit LakeConfigAuditAdapters's LakeConfigAuditLogger, which declares it optional.
   logger?: { warn?: (msg: string, ...args: unknown[]) => void }
@@ -178,6 +235,25 @@ export async function bestEffortSetDriveConnectionEnabled(
   try {
     await port({ dataLakeId });
   } catch (error) {
-    logger?.warn?.(`Failed to update Drive connection enabled state for lake ${dataLakeId}:`, error);
+    logger?.warn?.(`Failed to update ${connectorLabel} connection enabled state for lake ${dataLakeId}:`, error);
   }
 }
+
+// Compat aliases: this package is published, so an out-of-repo (premium overlay) importer may
+// still reference the pre-merge names directly.
+/** @deprecated Use ConnectionEnablePort. */
+export type DriveConnectionEnablePort = ConnectionEnablePort;
+/** @deprecated Use ConnectionEnablePort. */
+export type GitHubConnectionEnablePort = ConnectionEnablePort;
+/** @deprecated Use bestEffortSetConnectionEnabled(port, dataLakeId, 'Drive', logger). */
+export const bestEffortSetDriveConnectionEnabled = (
+  port: ConnectionEnablePort | undefined,
+  dataLakeId: string,
+  logger?: { warn?: (msg: string, ...args: unknown[]) => void }
+): Promise<void> => bestEffortSetConnectionEnabled(port, dataLakeId, 'Drive', logger);
+/** @deprecated Use bestEffortSetConnectionEnabled(port, dataLakeId, 'GitHub', logger). */
+export const bestEffortSetGitHubConnectionEnabled = (
+  port: ConnectionEnablePort | undefined,
+  dataLakeId: string,
+  logger?: { warn?: (msg: string, ...args: unknown[]) => void }
+): Promise<void> => bestEffortSetConnectionEnabled(port, dataLakeId, 'GitHub', logger);

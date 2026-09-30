@@ -118,3 +118,43 @@ test.describe.serial('Profile - Settings', () => {
     expect(restoredState).toBe(initialState);
   });
 });
+
+test.describe('Profile - Agent connect', () => {
+  test('should copy a key-free agent prompt and MCP snippets from the API tab', async ({ profilePage, context }) => {
+    const { page } = profilePage;
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await profilePage.gotoProfile();
+    await profilePage.clickTab('API-keys');
+
+    await expect(page.getByTestId('agent-connect-section')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    const origin = new URL(page.url()).origin;
+    const readClipboard = () => page.evaluate(() => navigator.clipboard.readText());
+
+    await page.getByTestId('agent-connect-copy-prompt-btn').click();
+    await expect.poll(readClipboard, { timeout: TIMEOUTS.ELEMENT_STATE }).toContain(`${origin}/llms.txt`);
+    const prompt = await readClipboard();
+    expect(prompt).toContain(`${origin}/api/v1/openapi.json`);
+    expect(prompt).toContain(`${origin}/api/v1/docs`);
+    expect(prompt).not.toContain('b4m_live_');
+
+    for (const id of ['claude-code', 'codex']) {
+      await page.getByTestId(`agent-connect-copy-${id}-btn`).click();
+      const expected = await page.getByTestId(`agent-connect-snippet-${id}`).locator('pre').innerText();
+      await expect.poll(readClipboard, { timeout: TIMEOUTS.ELEMENT_STATE }).toBe(expected);
+      expect(expected).not.toContain('b4m_live_');
+    }
+
+    await expect(page.getByTestId('agent-connect-cursor-install-link')).toHaveAttribute(
+      'href',
+      /^cursor:\/\/anysphere\.cursor-deeplink\/mcp\/install\?name=bike4mind&config=/
+    );
+  });
+
+  test('should serve llms.txt with an Authentication section', async ({ request }) => {
+    const res = await request.get('/llms.txt');
+    expect(res.ok()).toBe(true);
+    const body = await res.text();
+    expect(body).toContain('## Authentication');
+    expect(body).toContain('B4M_API_KEY');
+  });
+});

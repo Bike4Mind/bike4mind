@@ -1,7 +1,14 @@
-import { IFabFileRepository, IProjectRepository, ISessionRepository } from '@bike4mind/common';
+import {
+  IFabFileRepository,
+  IProjectRepository,
+  ISessionRepository,
+  ISessionAgentConfigRepository,
+  IUserRepository,
+} from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { bestEffortAdjustOwnerStorage, groupStorageDeltaByOwner } from '../dataLakeService/ports';
 
 const deleteSessionSchema = z.object({
   id: z.string(),
@@ -14,7 +21,16 @@ interface DeleteSessionAdapters {
     sessions: ISessionRepository;
     projects: IProjectRepository;
     fabFiles: IFabFileRepository;
+    // Optional for the same published-signature reason as `sessionAgentConfigs` below. A caller
+    // that omits it gets no storage debit, leaving the owner's quota over-counted until the admin
+    // recalculate-storage endpoint runs - so every in-repo route must wire it.
+    users?: Pick<IUserRepository, 'incrementCurrentStorage'>;
+    // Optional: this is a published, patch-released signature (re-exported from
+    // @bike4mind/services), so an existing caller built against the pre-cleanup shape must keep
+    // compiling and running without it - the cleanup below is then just skipped for that caller.
+    sessionAgentConfigs?: ISessionAgentConfigRepository;
   };
+  logger?: { warn?: (msg: string, ...args: unknown[]) => void };
 }
 
 export const deleteSession = async (
@@ -22,7 +38,7 @@ export const deleteSession = async (
   parameters: DeleteSessionParameters,
   adapters: DeleteSessionAdapters
 ) => {
-  const { db } = adapters;
+  const { db, logger } = adapters;
   const { id } = secureParameters(parameters, deleteSessionSchema);
 
   const session = await db.sessions.findByIdAndUserId(id, userId);
@@ -81,6 +97,16 @@ export const deleteSession = async (
   await db.projects.removeSession(session.id);
 
   await db.fabFiles.deleteManyInIds(ownedFiles.map(f => f.id));
+
+  // Same helper deleteDataLake debits through. `ownedFiles` is single-owner by the filter above,
+  // so the grouping collapses to one write today.
+  await bestEffortAdjustOwnerStorage(db.users, groupStorageDeltaByOwner(ownedFiles, -1), logger);
+
+  // Otherwise an enabled row lingers forever: the proactive-messaging worker's own
+  // session.deletedAt guard stops it firing, but the cron's eligibility scan only skips a
+  // stale row on session-not-found/deleted, it never deletes it (see getEligibleConfigs.ts).
+  // Optional so a caller on the pre-cleanup adapter shape still compiles and runs.
+  await db.sessionAgentConfigs?.deleteBySessionId(session.id);
 
   const mostRecent = await db.sessions.findRecentlyUpdatedByUserId(userId);
 

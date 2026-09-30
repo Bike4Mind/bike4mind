@@ -1,3 +1,4 @@
+import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Box,
@@ -18,9 +19,8 @@ import {
   useTheme,
 } from '@mui/joy';
 import { type PythonArtifact } from '@bike4mind/common';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import Editor from 'react-simple-code-editor';
+import { getEditorTokenSx, CODE_FONT_STACK } from '@client/app/components/Session/markdown/syntaxTheme';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-python';
 import {
@@ -573,9 +573,11 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
                   sx={{
                     width: '100%',
                     minHeight: '100%',
-                    backgroundColor: mode === 'dark' ? '#282c34' : '#fafafa',
+                    backgroundColor: 'var(--joy-palette-reading-surface)',
                     '& textarea': { outline: 'none !important' },
-                    '& pre': { margin: 0, fontFamily: 'monospace' },
+                    '& pre': { margin: 0, fontFamily: CODE_FONT_STACK },
+                    // One palette for every code surface in the app; see getEditorTokenSx.
+                    ...getEditorTokenSx(mode),
                   }}
                 >
                   <Editor
@@ -585,30 +587,22 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
                     padding={16}
                     placeholder="Enter your Python code here..."
                     style={{
-                      fontFamily: '"Fira Code", "Fira Mono", Consolas, Menlo, Courier, monospace',
+                      fontFamily: CODE_FONT_STACK,
                       fontSize: 14,
                       lineHeight: 1.5,
                       minHeight: '100%',
                       backgroundColor: 'transparent',
-                      color: mode === 'dark' ? '#abb2bf' : '#393A34',
+                      color: 'var(--joy-palette-reading-ink, inherit)',
                     }}
                   />
                 </Box>
               ) : (
-                <SyntaxHighlighter
+                <HighlightedCode
+                  code={editableCode}
                   language="python"
-                  style={oneDark}
-                  customStyle={{
-                    margin: 0,
-                    minHeight: '100%',
-                    fontSize: '14px',
-                    lineHeight: '1.5',
-                    padding: '16px',
-                  }}
+                  customStyle={{ minHeight: '100%' }}
                   showLineNumbers
-                >
-                  {editableCode}
-                </SyntaxHighlighter>
+                />
               )}
             </Box>
           </TabPanel>

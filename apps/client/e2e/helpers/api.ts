@@ -1,6 +1,8 @@
-import { type APIRequestContext } from '@playwright/test';
+import { test, type APIRequestContext } from '@playwright/test';
 import { Resource } from 'sst';
 import crypto from 'crypto';
+import type { DataLakeOrigin } from '@bike4mind/common';
+import { getE2ETestId, getTestRunId } from './test-users';
 
 interface LoginResponse {
   accessToken: string;
@@ -129,6 +131,36 @@ export async function apiCreateTestUser(
   }
 
   return result;
+}
+
+/**
+ * Mint a throwaway account owned by the calling test, for a test that must not share a user with
+ * another test running in parallel (an OTC send overwrites the code the other test reads back) or
+ * must start from a never-exchanged refresh token (a rotated one is revoked on replay).
+ *
+ * The retry and repeat indexes are baked into the identity: createUser rejects a duplicate username
+ * or email, so without them a retry or `--repeat-each` run would die in apiCreateTestUser. The marker
+ * stays before the `<id>-<runId>` tail so both cleanup regexes in pages/api/test/cleanup.ts match.
+ */
+export async function apiCreateThrowawayUser(request: APIRequestContext, label: string) {
+  const e2eId = getE2ETestId();
+  const idSuffix = e2eId ? `${e2eId}-${getTestRunId()}` : getTestRunId();
+  const { retry, repeatEachIndex } = test.info();
+  const slug = `auth-${label}${retry}r${repeatEachIndex}`;
+  const email = `${slug}-${idSuffix}-e2e@test.com`;
+  const result = await apiCreateTestUser(request, {
+    username: `${slug}-${idSuffix}`,
+    email,
+    name: `Auth ${label} ${idSuffix}`,
+    password: `E2eAuth${label}Pass123!`,
+    isAdmin: false,
+  });
+  return {
+    email,
+    userId: (result.user.id || result.user._id) as string,
+    accessToken: result.accessToken,
+    refreshToken: result.refreshToken,
+  };
 }
 
 /**
@@ -522,7 +554,13 @@ export async function apiUpdateDataLake(
   request: APIRequestContext,
   token: string,
   dataLakeId: string,
-  fields: { name?: string; description?: string; requiredUserTag?: string; requiredEntitlement?: string }
+  fields: {
+    name?: string;
+    description?: string;
+    requiredUserTag?: string;
+    requiredEntitlement?: string;
+    origin?: DataLakeOrigin;
+  }
 ): Promise<number> {
   const baseURL = process.env.API_URL || 'http://localhost:3000';
   const response = await request.put(`${baseURL}/api/data-lakes/${dataLakeId}`, {

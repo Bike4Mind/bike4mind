@@ -51,3 +51,18 @@ export const orgAclRowConfersMembership = (row: { permissions?: readonly string[
   (row.permissions ?? []).some(permission =>
     (ORG_MEMBERSHIP_ACL_PERMISSIONS as readonly string[]).includes(permission)
   );
+
+/**
+ * Is `user` a member of `org`? Combines the three membership tiers into one predicate:
+ * platform admin, billing owner (org.userId), or a users[] row that passes
+ * orgAclRowConfersMembership. Use this everywhere an "is X in this org?" question is
+ * answered in memory; do not hand-copy the three-part expression -- that duplication is
+ * how a later fix to one site fails to reach the others.
+ */
+export const isOrgMember = (
+  user: { id: string; isAdmin?: boolean | null },
+  org: { userId: string; users?: ReadonlyArray<{ userId: string; permissions?: readonly string[] | null }> | null }
+): boolean =>
+  user.isAdmin === true ||
+  org.userId === user.id ||
+  (org.users ?? []).some(member => member.userId === user.id && orgAclRowConfersMembership(member));

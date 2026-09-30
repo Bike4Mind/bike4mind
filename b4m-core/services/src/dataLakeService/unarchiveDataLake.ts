@@ -1,4 +1,9 @@
-import type { IDataLakeAccessGrantRepository, IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
+import type {
+  IDataLakeAccessGrantRepository,
+  IDataLakeRepository,
+  IFabFileRepository,
+  IUserRepository,
+} from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { canManageLake, type ManageActor } from './manageRule';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
@@ -7,7 +12,12 @@ import { diffLakeConfig } from './diffLakeConfig';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
-import { bestEffortSetDriveConnectionEnabled, type DriveConnectionEnablePort } from './ports';
+import {
+  bestEffortSetConnectionEnabled,
+  bestEffortAdjustOwnerStorage,
+  groupStorageDeltaByOwner,
+  type ConnectionEnablePort,
+} from './ports';
 
 export interface UnarchiveResult {
   restoredCount: number;
@@ -35,9 +45,15 @@ interface UnarchiveDataLakeAdapters extends LakeConfigAuditAdapters {
       | 'deleteManyInIds'
       | 'computeDataLakeStats'
     >;
+    // REQUIRED, same reasoning as lakeConfigChangeEvents above: a route that forgot to wire it
+    // would silently leave a discarded duplicate's bytes counted against its owner's storage quota
+    // forever, correctable only via the admin recalculate-storage endpoint.
+    users: Pick<IUserRepository, 'incrementCurrentStorage'>;
   };
   /** Re-enable the lake's Drive connection, reversing archiveDataLake's disable. See ports.ts. */
-  enableDriveConnection?: DriveConnectionEnablePort;
+  enableDriveConnection?: ConnectionEnablePort;
+  /** Re-enable the lake's GitHub connection, reversing archiveDataLake's disable. See ports.ts. */
+  enableGitHubConnection?: ConnectionEnablePort;
 }
 
 /**
@@ -54,7 +70,7 @@ interface UnarchiveDataLakeAdapters extends LakeConfigAuditAdapters {
 export const unarchiveDataLake = async (
   actor: ManageActor,
   dataLakeId: string,
-  { db, enableDriveConnection, logger }: UnarchiveDataLakeAdapters
+  { db, enableDriveConnection, enableGitHubConnection, logger }: UnarchiveDataLakeAdapters
 ): Promise<UnarchiveResult> => {
   const existing = await db.dataLakes.findById(dataLakeId);
   if (!existing) {
@@ -112,7 +128,8 @@ export const unarchiveDataLake = async (
     // wrong file.
     const live = await db.fabFiles.findByContentHashesInDataLake(archivedHashes, existing.datalakeTag);
     const liveHashes = new Set(live.map(f => f.contentHash));
-    const duplicateIds = archived.filter(f => f.contentHash && liveHashes.has(f.contentHash)).map(f => f.id);
+    const duplicates = archived.filter(f => f.contentHash && liveHashes.has(f.contentHash));
+    const duplicateIds = duplicates.map(f => f.id);
     if (duplicateIds.length > 0) {
       // The only HARD delete in the lifecycle family, so it is the one side effect that must not
       // run on a lost claim: everything else here is reversible, but rows removed while another
@@ -133,6 +150,11 @@ export const unarchiveDataLake = async (
       } else {
         await db.fabFiles.deleteManyInIds(duplicateIds);
         skippedDuplicates = duplicateIds.length;
+        // Each discarded duplicate was archived-but-live (still counted), and this soft-delete
+        // takes it out of the counted set - the same transition deleteDataLake's own sweep debits,
+        // just reached from the archive axis. Grouped by owner, not the lake's creator: a duplicate
+        // can belong to any contributor (see groupStorageDeltaByOwner).
+        await bestEffortAdjustOwnerStorage(db.users, groupStorageDeltaByOwner(duplicates, -1), logger);
       }
     }
   }
@@ -177,7 +199,8 @@ export const unarchiveDataLake = async (
       { db, logger }
     );
     // Reverses archiveDataLake's disable - see ports.ts for why this is best-effort.
-    await bestEffortSetDriveConnectionEnabled(enableDriveConnection, dataLakeId, logger);
+    await bestEffortSetConnectionEnabled(enableDriveConnection, dataLakeId, 'Drive', logger);
+    await bestEffortSetConnectionEnabled(enableGitHubConnection, dataLakeId, 'GitHub', logger);
   }
   // Logger forwarded for parity with every other recompute call, not because an audit row is
   // expected here: this runs AFTER the status move, which puts the lake beyond activateIfDraft's

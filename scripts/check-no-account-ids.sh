@@ -90,6 +90,17 @@ allow_patterns=$(grep -vE '^[[:space:]]*(#|$)' "$ALLOWLIST" || true)
 raw_findings=$(grep -rEn "${INCLUDES[@]}" "${EXCLUDE_FILES[@]}" "${EXCLUDE_DIRS[@]}" \
   -e "$ALWAYS_PATTERN" -e "$FALLBACK_PATTERN" "${SCAN_DIRS[@]}" 2>/dev/null || true)
 
+# The scan walks the filesystem, so it also reaches git-ignored local artifacts - e2e auth
+# state, probe manifests - which hold real ids by design and can never be committed. Drop
+# them here rather than naming each directory, so a new kind of local artifact does not fail
+# every contributor's next commit. A check-ignore error takes the same branch as "not
+# ignored", keeping the guard loud rather than silently permissive.
+if [ -n "$raw_findings" ]; then
+  raw_findings=$(printf '%s\n' "$raw_findings" | while IFS= read -r line; do
+    git check-ignore -q -- "${line%%:*}" || printf '%s\n' "$line"
+  done)
+fi
+
 if [ -n "$allow_patterns" ] && [ -n "$raw_findings" ]; then
   findings=$(echo "$raw_findings" | grep -vEf <(echo "$allow_patterns") || true)
 else

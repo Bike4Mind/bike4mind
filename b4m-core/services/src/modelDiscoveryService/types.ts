@@ -303,7 +303,9 @@ export type PromotionBlocker =
   | 'incomplete-dispatch-profile'
   | 'no-trusted-price'
   | 'manual-approval-required'
-  | 'no-credential-for-backend';
+  | 'no-credential-for-backend'
+  /** A source disabled the model this run (not entitled, not invocable on demand). */
+  | 'disabled-by-source';
 
 /** One model's proposed change, reported identically in both modes. */
 export interface CatalogDiffEntry {

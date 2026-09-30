@@ -1,4 +1,5 @@
 import type { DataLakeMembershipScope } from '../types/entities/FabFileTypes';
+import type { DataLakeOrigin, DataLakeStatus } from '../types/entities/DataLakeTypes';
 
 /**
  * Namespace prefix for the per-lake join meta-tag (`datalake:<slug>` or
@@ -39,6 +40,12 @@ export type DataLakeGroundingMode = (typeof DATA_LAKE_GROUNDING_MODES)[number];
  * that predate it, whose stored value is absent) at the create-time resolution seam.
  */
 export const DEFAULT_DATA_LAKE_GROUNDING_MODE: DataLakeGroundingMode = 'retrieve';
+
+/**
+ * Default origin for a lake with no stored value: `curated`. Applied at every read site that
+ * hydrates a `DataLakeConfig.origin` (the field is optional - see its own doc comment for why).
+ */
+export const DEFAULT_DATA_LAKE_ORIGIN: DataLakeOrigin = 'curated';
 
 /**
  * Trim a lake's `fileTagPrefix` and return it only if it is usable as a tag prefix
@@ -383,6 +390,12 @@ export interface DataLakeConfig {
    */
   lakeMemoryEnabled?: boolean;
   /**
+   * Reader opt-in for the lake's system prompt (see IDataLake.injectPromptForReaders). Reader-visible
+   * like lakeMemoryEnabled: it answers "does this lake's prompt steer my scoped turns", never the
+   * prompt text itself.
+   */
+  injectPromptForReaders?: boolean;
+  /**
    * Whether the requesting caller may WRITE/MANAGE this lake (add files, edit settings,
    * archive, remove files). Server-computed per request from the manage rule (admin or
    * creator; fallback lakes are read-only for everyone) - the SAME predicate the write
@@ -391,6 +404,19 @@ export interface DataLakeConfig {
    * this. Absent on projections that don't resolve an actor (e.g. tag-only lookups).
    */
   canManage?: boolean;
+  /**
+   * Lake lifecycle (see `DataLakeStatus`), reader-visible - it is what tells a client a lake is
+   * still `draft` and excluded from grounding, so the manager can offer Publish/Move to
+   * draft and explain why a lake with files answers nothing. Absent for a fallback (built-in)
+   * registry lake, which has no document and no lifecycle - always serving.
+   */
+  status?: DataLakeStatus;
+  /**
+   * Who fills this lake (see IDataLake.origin). Reader-visible so the manager can badge a
+   * connector-fed lake without a second fetch. Absent for a fallback (built-in) registry lake,
+   * which has no document.
+   */
+  origin?: DataLakeOrigin;
 }
 
 /**
@@ -443,7 +469,7 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * ordinary tag/entitlement gate would not give them.
    *
    * NOT the same predicate as `canManage`, and the difference is the point: this one is resolved
-   * with `isAdmin: false`, exactly as `pages/api/sessions/create.ts` and `filterStillManagedLakes`
+   * with `isAdmin: false`, exactly as `pages/api/v1/sessions/index.ts` and `filterStillManagedLakes`
    * both resolve it. Platform-admin is deliberately not an admission rung there (the admission
    * widens FILE retrieval, not just prompt injection - see unionPreauthorizedLakeAccess), so a
    * platform admin who holds no other rung on the lake gets `canManage: true` and
@@ -736,6 +762,9 @@ export function toDataLakeConfig(dl: {
   description?: string;
   isPublic?: boolean;
   lakeMemoryEnabled?: boolean;
+  injectPromptForReaders?: boolean;
+  status?: DataLakeStatus;
+  origin?: DataLakeOrigin;
 }): DataLakeConfig {
   return {
     id: dl.id,
@@ -749,6 +778,9 @@ export function toDataLakeConfig(dl: {
     description: dl.description,
     isPublic: dl.isPublic,
     lakeMemoryEnabled: dl.lakeMemoryEnabled,
+    injectPromptForReaders: dl.injectPromptForReaders,
+    status: dl.status,
+    origin: dl.origin,
   };
 }
 

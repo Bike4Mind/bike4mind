@@ -1,4 +1,5 @@
 import { ForbiddenError } from '@server/utils/errors';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
@@ -8,7 +9,7 @@ import { Subscription } from '@server/models/Subscription';
  * Returns the set of active admin-granted Subscriptions, scoped to Organizations.
  * Used by the admin UI to render a "Granted" badge on org rows.
  */
-const handler = baseApi().get(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
   asyncHandler(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

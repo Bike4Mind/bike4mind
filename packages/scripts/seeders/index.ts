@@ -1,4 +1,5 @@
 import { AgentSeeder } from './AgentSeeder';
+import { OAuthClientSeeder } from './OAuthClientSeeder';
 import { SystemSecretsSeeder } from './SystemSecretsSeeder';
 import { UserSeeder } from './UserSeeder';
 
@@ -14,5 +15,7 @@ export const seeders = [
   SystemSecretsSeeder, // Must run first - validates Tier 1 secrets (SST CLI required)
   UserSeeder,
   AgentSeeder, // Depends on UserSeeder - needs the test@test.com super admin to exist.
-  // Add other seeders here...
+  // Last on purpose: preview-only OAuth clients. It swallows its own errors, but keeping it
+  // last also means a failure here can't starve the users/agents above (seed() has no per-seeder catch).
+  OAuthClientSeeder,
 ];

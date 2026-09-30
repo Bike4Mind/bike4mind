@@ -48,7 +48,11 @@ function makeAdapters(over: AdapterOverrides = {}) {
         .mockResolvedValueOnce([{ id: 'msg-1', timestamp: new Date('2026-01-01T00:00:00Z'), promptMeta: PROMPT_META }])
         .mockResolvedValue([]),
     },
-    knowledgeRepository: { ...none, findOne: vi.fn().mockResolvedValue(null) },
+    knowledgeRepository: {
+      ...none,
+      findAccessibleInIds: vi.fn().mockResolvedValue([]),
+      findOne: vi.fn().mockResolvedValue(null),
+    },
     artifactRepository: none,
     artifactContentRepository: none,
     toolRepository: none,
@@ -120,6 +124,37 @@ describe('notebook export', () => {
     expect(promptMeta.tokenUsage.inputTokens).toBe(100);
     expect(promptMeta.performance.totalResponseTime).toBe(1234);
     expect(promptMeta.context.contextWindowUsage.actualInputTokens).toBe(900);
+  });
+
+  it('keeps citables even with "Include Usage Metadata" off, so a b4m_map fence still resolves', async () => {
+    // citables resolve b4m_map place ids in reply text this export always includes, unlike the
+    // rest of promptMeta which is opt-in metadata about the reply - so it must not vanish along
+    // with the rest of promptMeta when the user unchecks that toggle.
+    const citables = [{ id: 'place:abc', type: 'place', metadata: { place: { name: 'A Place' } } }];
+    const { adapters, uploaded } = makeAdapters({
+      chatHistoryRepository: {
+        find: vi
+          .fn()
+          .mockResolvedValueOnce([
+            {
+              id: 'msg-1',
+              timestamp: new Date('2026-01-01T00:00:00Z'),
+              reply: 'See places\n```b4m_map\n{"places":[{"id":"place:abc"}]}\n```',
+              promptMeta: { ...PROMPT_META, citables },
+            },
+          ])
+          .mockResolvedValue([]),
+      },
+    });
+    await new NotebookExportService(adapters).exportNotebooks('user-1', {
+      ...OPTIONS,
+      includeMetadata: false,
+    } as unknown as Parameters<NotebookExportService['exportNotebooks']>[1]);
+    const payload = JSON.parse(uploaded[0]);
+    const message = payload.notebooks[0].chatHistory[0];
+
+    expect(message.promptMeta.model).toBeUndefined();
+    expect(message.promptMeta.citables).toEqual(citables);
   });
 
   it('skips a message with no id rather than emitting one that cannot be re-imported', async () => {
@@ -312,8 +347,7 @@ describe('notebook export', () => {
   it('exports the resolvable knowledge files even when a session holds a non-ObjectId knowledgeId', async () => {
     // FabFile is ObjectId-keyed, but session.knowledgeIds is a plain string array, so a junk
     // entry makes the real collection throw and (before this) killed the whole export.
-    const find = vi.fn(async (query: Record<string, { $in?: string[] }>) => {
-      const ids = query._id?.$in ?? [];
+    const findAccessibleInIds = vi.fn(async (ids: string[]) => {
       const bad = ids.find(id => !/^[0-9a-fA-F]{24}$/.test(id));
       if (bad) {
         throw new Error(`CastError: Cast to ObjectId failed for value "${bad}" at path "_id"`);
@@ -327,7 +361,7 @@ describe('notebook export', () => {
       sessionRepository: {
         find: vi.fn().mockResolvedValue([{ ...SESSION, knowledgeIds: ['not-an-objectid', GOOD, UPPER] }]),
       },
-      knowledgeRepository: { find, findOne: vi.fn().mockResolvedValue(null) },
+      knowledgeRepository: { findAccessibleInIds, findOne: vi.fn().mockResolvedValue(null) },
     });
 
     expect(payload.notebooks[0].knowledge.map((k: { id: string }) => k.id)).toEqual([GOOD, UPPER]);
@@ -609,12 +643,70 @@ async function exportWithKnowledge(bytes: Buffer, file: Record<string, unknown> 
   return exportOnce({
     sessionRepository: { find: vi.fn().mockResolvedValue([{ ...SESSION, knowledgeIds: [GOOD] }]) },
     knowledgeRepository: {
-      find: vi.fn().mockResolvedValue([file]),
+      findAccessibleInIds: vi.fn().mockResolvedValue([file]),
       findOne: vi.fn().mockResolvedValue(null),
     },
     fileStorageService: { getFileContent: vi.fn().mockResolvedValue(bytes) },
   });
 }
+
+describe('notebook export - knowledge access scoping', () => {
+  const FOREIGN = '507f1f77bcf86cd799439021';
+  const LAKE = '507f1f77bcf86cd799439022';
+  const LAKE_FILE = { ...PDF_FILE, id: LAKE, fileName: 'lake.pdf', filePath: 'knowledge/other/lake.pdf' };
+  const FOREIGN_FILE = { ...PDF_FILE, id: FOREIGN, fileName: 'secret.pdf', filePath: 'knowledge/other/secret.pdf' };
+  const lakeAccess = { lakeMemberships: [{ lakeId: 'lake-1' }] };
+
+  // A stand-in for the real predicate: owned file always, lake file only through lake arms, foreign never.
+  const findAccessibleInIds = vi.fn(async (ids: string[], _access: unknown, lake?: { lakeMemberships?: unknown[] }) =>
+    [PDF_FILE, LAKE_FILE, FOREIGN_FILE].filter(
+      f => ids.includes(f.id) && (f === PDF_FILE || (f === LAKE_FILE && lake?.lakeMemberships?.length))
+    )
+  );
+
+  async function run(knowledgeAccess?: unknown) {
+    const getFileContent = vi.fn().mockResolvedValue(PDF_BYTES);
+    const result = await exportOnceWithAdapters({
+      sessionRepository: { find: vi.fn().mockResolvedValue([{ ...SESSION, knowledgeIds: [GOOD, LAKE, FOREIGN] }]) },
+      knowledgeRepository: { findAccessibleInIds, findOne: vi.fn().mockResolvedValue(null) },
+      fileStorageService: { getFileContent },
+      ...(knowledgeAccess ? { knowledgeAccess } : {}),
+    });
+    return { ...result, getFileContent };
+  }
+
+  it('omits a stored foreign id entirely - no entry, no bytes read - and exports owned and lake files', async () => {
+    const { payload, adapters, getFileContent } = await run({
+      userGroups: ['g1'],
+      resolveLakeAccess: async () => lakeAccess,
+    });
+
+    expect(payload.notebooks[0].knowledge.map((k: { id: string }) => k.id)).toEqual([GOOD, LAKE]);
+    expect(JSON.stringify(payload)).not.toContain('secret.pdf');
+    expect(getFileContent).not.toHaveBeenCalledWith(FOREIGN_FILE.filePath);
+    expect(findAccessibleInIds).toHaveBeenCalledWith(
+      [GOOD, LAKE, FOREIGN],
+      { userId: 'user-1', userGroups: ['g1'] },
+      lakeAccess
+    );
+    expect(adapters.logger.warn).toHaveBeenCalledWith('Some knowledge files were not exported', {
+      notExported: [FOREIGN],
+    });
+  });
+
+  it('falls back to ownership-only when no lake access is wired', async () => {
+    const { payload } = await run();
+    expect(payload.notebooks[0].knowledge.map((k: { id: string }) => k.id)).toEqual([GOOD]);
+  });
+
+  it('flags a lake resolution failure on the not-exported warning', async () => {
+    const { adapters } = await run({ resolveLakeAccess: async () => ({ resolutionFailed: true }) });
+    expect(adapters.logger.warn).toHaveBeenCalledWith('Some knowledge files were not exported', {
+      notExported: [LAKE, FOREIGN],
+      lakeAccessResolutionFailed: true,
+    });
+  });
+});
 
 describe('notebook export - knowledge file bytes', () => {
   it('embeds a binary knowledge file as base64 that decodes back byte-identical', async () => {
@@ -667,6 +759,7 @@ describe('notebook export - knowledge file bytes', () => {
         uploadFile: vi.fn(async (_path: string, content: Buffer) => {
           uploads.push(content);
         }),
+        deleteFile: vi.fn(),
       },
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
       generateId: () => 'generated-id',
@@ -704,7 +797,7 @@ describe('notebook export - the tags stamp', () => {
       toolRepository: { create: vi.fn(), find: vi.fn(), findById: vi.fn() },
       agentRepository: { create: vi.fn() },
       userRepository: { findById: vi.fn().mockResolvedValue({ id: 'user-2' }) },
-      fileStorageService: { uploadFile: vi.fn() },
+      fileStorageService: { uploadFile: vi.fn(), deleteFile: vi.fn() },
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
       generateId: () => 'generated-id',
     } as unknown as NotebookImportAdapters;

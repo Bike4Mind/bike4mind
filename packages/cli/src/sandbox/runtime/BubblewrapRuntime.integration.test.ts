@@ -44,6 +44,7 @@ describe.skipIf(skipReason)('BubblewrapRuntime integration', () => {
         allowedReadPaths: [],
         deniedPaths: [],
       },
+      networkEnabled: false,
     });
 
     const output = execSync(wrapped.commandString, { encoding: 'utf-8', timeout: 10000 });
@@ -60,6 +61,7 @@ describe.skipIf(skipReason)('BubblewrapRuntime integration', () => {
         allowedReadPaths: [],
         deniedPaths: [],
       },
+      networkEnabled: false,
     });
 
     execSync(wrapped.commandString, { encoding: 'utf-8', timeout: 10000 });
@@ -77,6 +79,7 @@ describe.skipIf(skipReason)('BubblewrapRuntime integration', () => {
         allowedReadPaths: [],
         deniedPaths: [],
       },
+      networkEnabled: false,
     });
 
     try {
@@ -110,6 +113,7 @@ describe.skipIf(skipReason)('BubblewrapRuntime integration', () => {
         allowedReadPaths: [],
         deniedPaths: [path.join(os.homedir(), '.ssh')],
       },
+      networkEnabled: false,
     });
 
     try {

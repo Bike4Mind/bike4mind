@@ -6,6 +6,7 @@ import {
   userRepository,
   fabFileRepository,
   cacheRepository,
+  sessionAgentConfigRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -57,7 +58,10 @@ const getAndDeleteHandler = baseApi()
             sessions: sessionRepository,
             projects: projectRepository,
             fabFiles: fabFileRepository,
+            users: userRepository,
+            sessionAgentConfigs: sessionAgentConfigRepository,
           },
+          logger: req.logger,
         }
       )
     );
@@ -97,6 +101,12 @@ const putHandler = nextRouteForContract(sessionUpdateContract).put(async (req, r
       // Mongoose models, and it is only needed when files are actually attached).
       resolveLakeAccess: async () =>
         (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
+      // The attachment door's lake arms, so an added lake file passes the access check.
+      resolveAttachmentLakeAccess: async () =>
+        (await import('@server/queueHandlers/agentExecutor.attachmentLakeAccess')).createAttachmentLakeAccess(
+          req.user!,
+          req.logger
+        )(),
       storage: getFilesStorage(),
     }
   );

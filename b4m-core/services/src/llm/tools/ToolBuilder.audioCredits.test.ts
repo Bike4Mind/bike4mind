@@ -24,6 +24,7 @@ const makeBuilder = ({
   hasCreditStore = true,
 }: { credits?: number; hasCreditStore?: boolean } = {}) => {
   const toolCreditsMap = new Map<string, number[]>();
+  const toolCreditModels = new Set<string>();
   const record = vi.fn().mockResolvedValue(undefined);
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
   const deps = {
@@ -34,8 +35,9 @@ const makeBuilder = ({
       usageEvents: { record },
     },
     toolCreditsMap,
+    toolCreditModels,
   } as unknown as ToolBuilderConfig;
-  return { builder: new ToolBuilder(deps), toolCreditsMap, record };
+  return { builder: new ToolBuilder(deps), toolCreditsMap, toolCreditModels, record };
 };
 
 const quest = () => ({ id: 'q1', sessionId: 's1', creditsUsed: 0, images: [] as string[] }) as never;
@@ -53,6 +55,15 @@ describe('ToolBuilder audio credit branches', () => {
     expect(q.creditsUsed).toBe(speechCost);
     expect(q.images).toEqual(['a.mp3']);
     expect(record).toHaveBeenCalledTimes(1);
+  });
+
+  it('tags each clip with the feature its direct endpoint writes: sound_effects or text_to_speech', () => {
+    // The Gears status unlocks its sound gear from sound_effects; a 'tool' row would not count.
+    const { builder, record } = makeBuilder();
+    builder.settleAudioCredits(quest(), sfxFinish('b.mp3'), true);
+    builder.settleAudioCredits(quest(), speechFinish('a.mp3'), true);
+    expect(record).toHaveBeenNthCalledWith(1, expect.objectContaining({ feature: 'sound_effects' }));
+    expect(record).toHaveBeenNthCalledWith(2, expect.objectContaining({ feature: 'text_to_speech' }));
   });
 
   it('settle reserves each call independently so speech + sfx sum, not double the later cost', () => {
@@ -105,5 +116,25 @@ describe('ToolBuilder audio credit branches', () => {
       builder.gateAudioCredits({ kind: 'speech', provider: 'openai', model: 'tts-1', characters: 1000 }, true)
     ).not.toThrow();
     expect(toolCreditsMap.has('audio_generation')).toBe(false);
+  });
+});
+
+describe('ToolBuilder audio ledger model attribution', () => {
+  it('records the resolved speech model, and qualifies a sound effect by provider', () => {
+    const { builder, toolCreditModels } = makeBuilder();
+    const q = quest();
+    builder.settleAudioCredits(q, speechFinish('a.mp3'), true);
+    expect(Array.from(toolCreditModels)).toEqual(['tts-1']);
+
+    // A sound effect has no model id of its own; the same qualified label the usage
+    // event carries is what the ledger row would name.
+    builder.settleAudioCredits(q, sfxFinish('b.mp3'), true);
+    expect(Array.from(toolCreditModels).sort()).toEqual(['elevenlabs-sound_effect', 'tts-1']);
+  });
+
+  it('records no charging model when enforcement is off', () => {
+    const { builder, toolCreditModels } = makeBuilder();
+    builder.settleAudioCredits(quest(), speechFinish('a.mp3'), false);
+    expect(toolCreditModels.size).toBe(0);
   });
 });

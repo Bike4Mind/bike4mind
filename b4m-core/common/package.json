@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/common",
-  "version": "10.1.0",
+  "version": "12.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -73,7 +73,8 @@
     "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "openapi:generate": "tsx src/openapi/generate.ts"
+    "openapi:generate": "tsx src/openapi/generate.ts",
+    "openapi:generate:deployment": "tsx src/openapi/generateDeployment.ts"
   },
   "devDependencies": {
     "@asteasolutions/zod-to-openapi": "^9.1.0",

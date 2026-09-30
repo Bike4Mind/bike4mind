@@ -1,11 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-const { mockTrackRedditEvent } = vi.hoisted(() => ({
+const { mockTrackRedditEvent, mockTrackMetaEvent } = vi.hoisted(() => ({
   mockTrackRedditEvent: vi.fn(),
+  mockTrackMetaEvent: vi.fn(),
 }));
 
 vi.mock('./redditPixel', () => ({
   trackRedditEvent: mockTrackRedditEvent,
+}));
+
+vi.mock('./metaPixel', () => ({
+  trackMetaEvent: mockTrackMetaEvent,
 }));
 
 import { trackSignupConversion } from './signupConversion';
@@ -26,16 +31,25 @@ describe('trackSignupConversion', () => {
     vi.stubGlobal('gtag', mockGtag);
     clearCookie('b4m-first-touch');
     clearCookie('b4m_utm');
+    clearCookie('b4m_app_first_touch');
+    clearCookie('b4m_last_touch');
+    localStorage.setItem('cookie_consent', 'granted');
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    localStorage.removeItem('cookie_consent');
   });
 
   it('fires GA4 sign_up and Reddit SignUp with the method', () => {
     trackSignupConversion('password');
     expect(mockGtag).toHaveBeenCalledWith('event', 'sign_up', { method: 'password' });
     expect(mockTrackRedditEvent).toHaveBeenCalledExactlyOnceWith('SignUp');
+  });
+
+  it("fires Meta's CompleteRegistration for the same conversion", () => {
+    trackSignupConversion('password');
+    expect(mockTrackMetaEvent).toHaveBeenCalledExactlyOnceWith('CompleteRegistration');
   });
 
   it('stamps first-touch and session-UTM attribution from the shared cookies', () => {
@@ -66,10 +80,11 @@ describe('trackSignupConversion', () => {
     expect(mockGtag).toHaveBeenCalledWith('event', 'sign_up', { method: 'password' });
   });
 
-  it('still fires the Reddit event when gtag is absent', () => {
+  it('still fires both ad-pixel events when gtag is absent', () => {
     vi.unstubAllGlobals();
     trackSignupConversion('password');
     expect(mockGtag).not.toHaveBeenCalled();
     expect(mockTrackRedditEvent).toHaveBeenCalledExactlyOnceWith('SignUp');
+    expect(mockTrackMetaEvent).toHaveBeenCalledExactlyOnceWith('CompleteRegistration');
   });
 });

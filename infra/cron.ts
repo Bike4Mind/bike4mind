@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { computeHelpCorpusHash } from '@bike4mind/infra';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
@@ -14,6 +14,7 @@ import {
   dataLakeTaxonomyQueue,
   fabFileChunkQueue,
   driveLakeIngestQueue,
+  dataLakeResearchQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
@@ -505,6 +506,27 @@ const deepAgentWakeCron = new sst.aws.Cron('deepAgentWakeCron', {
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+// Data Lake Research Schedule - fires research configs whose cadence is due, skipping any lake whose
+// pending-proposal queue is at the config's review limit. 15 minutes is plenty for a daily-at-most
+// cadence; self-host drives the same tick from apps/workers/src/selfhost/main.ts.
+const dataLakeResearchScheduleCron = new sst.aws.Cron('dataLakeResearchScheduleCron', {
+  schedule: 'rate(15 minutes)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/client/server/cron/dataLakeResearchSchedule.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, dataLakeResearchQueue],
+    timeout: '2 minutes',
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 /**
  * SRE Stale Dispatch Cleanup
  * Detects dispatches stuck in 'fixing' status (>60 minutes) and transitions them to 'failed'.
@@ -836,7 +858,7 @@ execSync('pnpm --filter @bike4mind/scripts help:build-index', { stdio: 'inherit'
 // it. The computation lives in @bike4mind/infra because nothing imports this file, so that is the
 // only place its failure modes can be tested - see helpCorpusHash.ts for which ones and why.
 const HELP_CORPUS_HASH = computeHelpCorpusHash({
-  readDocsTree: () => execSync('git ls-tree -r HEAD docs-site/docs').toString(),
+  readDocsTree: () => execFileSync('git', ['ls-tree', '-r', 'HEAD', 'docs-site/docs']).toString(),
   readIndex: () => readFileSync('apps/client/app/generated/help-index.json'),
 });
 
@@ -876,6 +898,79 @@ const helpDatalakeIngestCron = new sst.aws.Cron('helpDatalakeIngest', {
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+/**
+ * Lake Health Sweep - scheduled counterpart to the on-demand GET /api/data-lakes/:id/health.
+ * Computes computeLakeHealth for every active lake and persists one row per lake per day, so a
+ * degrading lake is visible as a trend instead of only when someone opens it.
+ *
+ * Schedule: daily, after dataLakeBatchReconcile (5am UTC) so a batch that reconciler just forced
+ * terminal is reflected in the same day's health.
+ */
+const lakeHealthSweepCron = new sst.aws.Cron('lakeHealthSweep', {
+  schedule: 'cron(0 6 * * ? *)', // Daily at 6am UTC
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/client/server/cron/lakeHealthSweep.handler',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    logging: {
+      retention: '1 week',
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
+/**
+ * Scheduled cross-document inconsistency detection over every active lake.
+ *
+ * Detection used to run only when a curator asked for it, so a contradiction appearing between
+ * visits stayed invisible. This grades every active lake on a schedule and persists each problem as
+ * a finding ROW, keyed so a repeat detection updates the existing row rather than duplicating it.
+ * Detect-only: nothing here gates ingest or removes content.
+ *
+ * Timeout is 15 minutes rather than the health sweep's 10: one pass reads up to 1000 chunk
+ * documents. The handler does not rely on this timeout to stop it - it holds its own wall-clock
+ * budget (RUN_BUDGET_MS) and stops a page short, so a long run reports a deferred remainder rather
+ * than being killed mid-write with only its first metric emitted.
+ *
+ * Schedule: daily at 4am UTC, BEFORE lakeHealthSweep (6am) - health renders the stored
+ * inconsistency summary rather than computing it, so the other order would make every daily health
+ * snapshot report counts a day old.
+ */
+const lakeInconsistencySweepCron = new sst.aws.Cron('lakeInconsistencySweep', {
+  schedule: 'cron(0 4 * * ? *)', // Daily at 4am UTC
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/client/server/cron/lakeInconsistencySweep.handler',
+    runtime: 'nodejs24.x',
+    timeout: '15 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    logging: {
+      retention: '1 week',
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 export {
   dailyUserActivityReport,
   weeklyUserActivityReport,
@@ -893,6 +988,7 @@ export {
   liveOpsTriageJobCleanupCron,
   securityScanSchedulerCron,
   deepAgentWakeCron,
+  dataLakeResearchScheduleCron,
   telemetryCleanupCron,
   creditLotSweepCron,
   sreStaleDispatchCron,
@@ -906,4 +1002,6 @@ export {
   spendReconciliationCron,
   driveLakeResyncPollCron,
   helpDatalakeIngestCron,
+  lakeHealthSweepCron,
+  lakeInconsistencySweepCron,
 };

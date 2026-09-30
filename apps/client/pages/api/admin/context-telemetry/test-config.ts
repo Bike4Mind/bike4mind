@@ -4,7 +4,7 @@ import { ForbiddenError, BadRequestError } from '@server/utils/errors';
 import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
 import { telemetryDryRunResultRepository, adminSettingsRepository, Quest } from '@bike4mind/database';
 import { z } from 'zod';
-import { ContextTelemetryAlertsSchema, type ContextTelemetry, ALERT_THRESHOLDS } from '@bike4mind/common';
+import { ApiKeyScope, ContextTelemetryAlertsSchema, type ContextTelemetry, ALERT_THRESHOLDS } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import {
   generateTelemetryFingerprint,
@@ -163,7 +163,7 @@ function generateSampleTelemetry(severity: 'critical' | 'high' | 'medium' | 'low
  * Triggers a test of the telemetry alert configuration.
  * Simulates what would happen without actually creating issues or sending alerts.
  */
-const handler = baseApi().post(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

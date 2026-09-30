@@ -6,7 +6,7 @@ import type {
   IDataLakeRepository,
   IFallbackLakeSettingsRepository,
 } from '@bike4mind/common';
-import { DATA_LAKES, DATALAKE_TAG_PREFIX, normalizeTagPrefix } from '@bike4mind/common';
+import { acceptsConnectorContent, DATA_LAKES, DATALAKE_TAG_PREFIX, normalizeTagPrefix } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { assertLakeAccess, assertLakeWritable, isFallbackLake } from './assertLakeAccess';
@@ -14,7 +14,7 @@ import { type LakeAccessLogger } from './resolveLakeReadAccess';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
 import { assertLakeAdmission, type AdmissionMember } from './lakeAdmissionGate';
-import { type ScopedSettingsDb } from '../settings/resolveScopedSetting';
+import { resolveScopedSetting, scopeForLake, type ScopedSettingsDb } from '../settings/resolveScopedSetting';
 
 export { canManageLake, type ManageActor } from './manageRule';
 
@@ -201,6 +201,7 @@ export const assertCanWriteDataLakeTags = async (
     db,
     members,
     logger,
+    unattended,
   }: {
     db: {
       dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
@@ -223,6 +224,15 @@ export const assertCanWriteDataLakeTags = async (
      */
     members?: readonly AdmissionMember[];
     logger?: Logger;
+    /**
+     * Set by an UNATTENDED writer (a scheduled connector sync), never by a human-initiated door.
+     * When set, a lake whose owner declared it `curated` refuses the write - regardless of
+     * privilege, because origin is a declaration about who may fill the lake, not an authorization
+     * rung an admin outranks. The one override is the `EnforceLakeOriginOnIngest` scoped setting (on by
+     * default; see its own description for the OFF/advisory behavior). Omitted means human, which
+     * is every existing caller.
+     */
+    unattended?: boolean;
   }
 ): Promise<void> => {
   const metaTags = extractDataLakeMetaTags(tagNames);
@@ -244,6 +254,22 @@ export const assertCanWriteDataLakeTags = async (
     targetLakes.push(lake);
   }
 
+  // Resolved only on the unattended path so the human doors pay no settings read. A static
+  // registry tag `continue`s in the loop above without ever entering `targetLakes` (it has no
+  // document and therefore no `origin`), so it never reaches this check.
+  if (unattended) {
+    for (const lake of targetLakes) {
+      // acceptsConnectorContent fails closed: only an explicit `connector-fed` is exempt.
+      if (acceptsConnectorContent(lake.origin)) continue;
+      const resolved = await resolveScopedSetting('EnforceLakeOriginOnIngest', scopeForLake(lake), db, { logger });
+      if (resolved.value === true) {
+        throw new BadRequestError(
+          `"${lake.name}" is curated, so scheduled ingest cannot add to it. Change the lake's origin to connector-fed to allow it.`
+        );
+      }
+    }
+  }
+
   // Authorization answered "may you write here"; the admission contract answers "will this content
   // be findable once it is here" (#1680). Same chokepoint on purpose: every door that writes a
   // CLIENT-SUPPLIED meta-tag already passes through here, so those cannot skip the contract.
@@ -251,7 +277,7 @@ export const assertCanWriteDataLakeTags = async (
   // It is NOT a chokepoint for the whole contract. A door that resolves its lake server-side and
   // stamps the meta-tag itself has no client meta-tag for this function to see, so it must call
   // `assertLakeAdmission` explicitly - `generate-presigned-urls-batch`, `data-lakes/batches` and the
-  // Drive folder sync (`driveLakeIngest`) each do. A new door of that shape needs its own call.
+  // connector syncs (`assertConnectorLakeWrite` in `lakeIngestShared`) each do. A new door of that shape needs its own call.
   //
   // The gate itself short-circuits (no settings read) when nothing is being admitted or no target
   // lake declares a passage policy - the common case - so this costs nothing on the ordinary path.

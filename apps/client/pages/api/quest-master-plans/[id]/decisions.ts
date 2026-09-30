@@ -1,5 +1,5 @@
 import { questMasterPlanRepository } from '@bike4mind/database';
-import { QuestDecision } from '@bike4mind/common';
+import { NotFoundError, QuestDecision } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -33,7 +33,9 @@ const handler = baseApi()
       madeAt: new Date(),
     };
 
-    const updatedPlan = await questMasterPlanRepository.addDecision(planId, decision);
+    const updatedPlan = await questMasterPlanRepository.addDecision(planId, req.user!.id, decision);
+
+    if (!updatedPlan) throw new NotFoundError('Quest plan not found');
 
     res.json({ success: true, plan: updatedPlan, decisionId: decision.id });
   });

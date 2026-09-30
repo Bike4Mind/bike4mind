@@ -27,6 +27,7 @@ const makeBuilder = ({
   hasCreditStore = true,
 }: { credits?: number; hasCreditStore?: boolean } = {}) => {
   const toolCreditsMap = new Map<string, number[]>();
+  const toolCreditModels = new Set<string>();
   const record = vi.fn().mockResolvedValue(undefined);
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
   const deps = {
@@ -37,8 +38,9 @@ const makeBuilder = ({
       usageEvents: { record },
     },
     toolCreditsMap,
+    toolCreditModels,
   } as unknown as ToolBuilderConfig;
-  return { builder: new ToolBuilder(deps), toolCreditsMap, record };
+  return { builder: new ToolBuilder(deps), toolCreditsMap, toolCreditModels, record };
 };
 
 const quest = () => ({ id: 'q1', sessionId: 's1', creditsUsed: 0, images: [] as string[] }) as never;
@@ -58,6 +60,15 @@ describe('ToolBuilder music credit branches', () => {
     expect(q.creditsUsed).toBe(shortCost);
     expect(q.images).toEqual(['a.mp3']);
     expect(record).toHaveBeenCalledTimes(1);
+  });
+
+  it('tags the usage event music_generation, the feature the direct endpoint writes', () => {
+    // The Gears status unlocks its music gear from this feature; a 'tool' row would not count.
+    const { builder, record } = makeBuilder();
+    builder.settleMusicCredits(quest(), finishData(SHORT, 'a.mp3'), true);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: 'music_generation', model: 'eleven_music_v1' })
+    );
   });
 
   it('settle reserves each call independently so two calls sum, not double the later cost', () => {
@@ -176,5 +187,19 @@ describe('ToolBuilder image credit reservation', () => {
       MODELS
     );
     expect(toolCreditsMap.has('image_generation')).toBe(false);
+  });
+});
+
+describe('ToolBuilder music ledger model attribution', () => {
+  it('records the music model that charged, not the quest chat model', () => {
+    const { builder, toolCreditModels } = makeBuilder();
+    builder.settleMusicCredits(quest(), finishData(SHORT, 'a.mp3'), true);
+    expect(Array.from(toolCreditModels)).toEqual(['eleven_music_v1']);
+  });
+
+  it('records no charging model when enforcement is off', () => {
+    const { builder, toolCreditModels } = makeBuilder();
+    builder.settleMusicCredits(quest(), finishData(SHORT, 'a.mp3'), false);
+    expect(toolCreditModels.size).toBe(0);
   });
 });

@@ -15,6 +15,7 @@ import { dayjs, isImageServeable } from '@bike4mind/common';
 import { v4 as uuidv4 } from 'uuid';
 import type { ILogger } from '@bike4mind/observability';
 import type {
+  AttachmentLakeAccess,
   IAgentDocument,
   IArtifactContentDocument,
   IArtifactDocument,
@@ -139,6 +140,18 @@ export interface NotebookExportAdapters {
   chatHistoryRepository: ExportReads<ChatMessageRow>;
   knowledgeRepository: ExportReads<KnowledgeRow> & {
     findOne(query: ExportQuery): Promise<KnowledgeRow | null>;
+    /** Owner, user/group share, global-read and lake arms - see IFabFileRepository.findAccessibleInIds. */
+    findAccessibleInIds(
+      ids: string[],
+      access: { userId: string; userGroups?: string[] },
+      lakeAccess?: AttachmentLakeAccess
+    ): Promise<KnowledgeRow[]>;
+  };
+  /** The exporter's groups and lake arms, for scoping knowledge files. Absent means ownership/share only. */
+  knowledgeAccess?: {
+    userGroups?: string[];
+    /** Called once per notebook that has knowledge; the caller should memoize it. */
+    resolveLakeAccess?: () => Promise<AttachmentLakeAccess>;
   };
   artifactRepository: ExportReads<ArtifactRow>;
   /** Separate from the artifact itself: an artifact row carries no body. */
@@ -289,7 +302,9 @@ export class NotebookExportService {
     const chatHistory = await this.exportChatHistory(session.id, options);
 
     // Export attachments based on options
-    const knowledge = options.includeKnowledge ? await this.exportKnowledge(session.knowledgeIds || [], options) : [];
+    const knowledge = options.includeKnowledge
+      ? await this.exportKnowledge(session.knowledgeIds || [], options, userId)
+      : [];
 
     const artifacts = options.includeArtifacts
       ? await this.exportArtifacts(session.artifactIds || [], session.id, options, userId)
@@ -380,14 +395,35 @@ export class NotebookExportService {
 
   private async exportKnowledge(
     knowledgeIds: string[],
-    options: NotebookExportOptions
+    options: NotebookExportOptions,
+    userId: string
   ): Promise<ExportedKnowledgeFile[]> {
     const usableIds = usableSessionIds(knowledgeIds, 'knowledge', this.adapters.logger);
     if (usableIds.length === 0) return [];
 
-    const knowledgeFiles = await this.adapters.knowledgeRepository.find({
-      _id: { $in: usableIds },
-    });
+    // Access-scoped for the same reason as exportArtifacts below: `getSessionsToExport` scopes
+    // SESSIONS by userId and stops there, and `session.knowledgeIds` historically took client ids
+    // unvalidated, so a stored id is not necessarily a file the exporter may read. An inaccessible
+    // file gets no entry at all - its name, size and URL are as much a leak as its bytes. A lake
+    // resolution failure leaves ownership-only arms, so a lake file drops out of this export rather
+    // than widening it. Visible consequence: a participant's file the exporter cannot read now
+    // leaves a collaborative session's export, exactly as it would 403 on a direct read.
+    const { knowledgeAccess } = this.adapters;
+    const lakeAccess = await knowledgeAccess?.resolveLakeAccess?.();
+    const knowledgeFiles = await this.adapters.knowledgeRepository.findAccessibleInIds(
+      usableIds,
+      { userId, userGroups: knowledgeAccess?.userGroups },
+      lakeAccess
+    );
+
+    // Deliberately does not separate deleted from inaccessible - see the artifact warning below.
+    const notExported = usableIds.filter(id => !knowledgeFiles.some((f: KnowledgeRow) => f.id === id));
+    if (notExported.length > 0) {
+      this.adapters.logger.warn('Some knowledge files were not exported', {
+        notExported,
+        ...(lakeAccess?.resolutionFailed ? { lakeAccessResolutionFailed: true } : {}),
+      });
+    }
 
     return Promise.all(
       knowledgeFiles.map(async (file: KnowledgeRow) => {
@@ -715,6 +751,16 @@ export class NotebookExportService {
         // export has never contained, and that `anonymize` does not strip.
         performance: performance && { totalResponseTime: performance.totalResponseTime },
         context: context && { contextWindowUsage: context.contextWindowUsage },
+      };
+    }
+
+    // citables resolve b4m_map fences in the reply text this export already includes, unlike the
+    // rest of promptMeta which is opt-in metadata about the reply - so it must not share the
+    // includeMetadata gate, or turning that toggle off silently drops the place list.
+    if (message.promptMeta?.citables) {
+      exportedMessage.promptMeta = {
+        ...exportedMessage.promptMeta,
+        citables: message.promptMeta.citables,
       };
     }
 

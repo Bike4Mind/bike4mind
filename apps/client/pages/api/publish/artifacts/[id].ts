@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
-import { PublishedArtifact } from '@bike4mind/database';
+import { PublishedArtifact, liveShareTokens } from '@bike4mind/database';
 import {
   VisibilitySchema,
   CommentPolicySchema,
@@ -25,9 +25,10 @@ import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 
 /**
- * Access gate on top of `visibility: 'public'` (issue #383). The passphrase
- * arrives in plaintext ONCE here and is bcrypt-hashed before it touches the
- * document; `null` clears the gate. Only valid while visibility is public.
+ * Access gate on top of an ENFORCING surface (issue #383). The passphrase arrives
+ * in plaintext ONCE here and is bcrypt-hashed before it touches the document;
+ * `null` clears the gate. Valid while visibility is public OR while an active
+ * share token exists - see the surface check in the PATCH handler below.
  */
 const AccessGatePatchSchema = z.union([
   z.object({
@@ -104,7 +105,7 @@ const handler = baseApi()
     // Exclude the share-token capability: this GET is reachable by ANY viewer of a public
     // artifact, and .lean() bypasses the schema's toJSON strip - so project it out here.
     const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null })
-      .select('-shareToken -shareTokenUpdatedAt')
+      .select('-shareToken -shareTokenUpdatedAt -shareTokens.token')
       .lean<(Record<string, unknown> & { ownerId: string; visibility: string }) | null>();
     if (!artifact) {
       return res.status(404).json({ error: 'Artifact not found' });
@@ -186,12 +187,39 @@ const handler = baseApi()
         };
       }
     }
-    // A gate only means something on the public tier - reject a combination that
-    // would silently never apply (fail loud beats a gate the owner thinks is on).
-    if (artifact.accessGate && artifact.visibility !== 'public') {
+    // A gate is only meaningful where something ENFORCES it - reject a combination that
+    // would silently never apply (fail loud beats a gate the owner thinks is on). There
+    // are TWO enforcing surfaces, not one:
+    //   - `visibility: 'public'` (/p/*, /uc/*) -> checkVisibility applies the gate.
+    //   - an active `shareToken` (/a/<token>) -> checkShareGrant applies the SAME
+    //     checkAccessGate on top of token possession, at ANY visibility (#383), and
+    //     POST /api/publish/gate/passphrase resolves a `share` path by shareToken with
+    //     no visibility requirement. So a passphrase on a private-but-token-shared
+    //     artifact is fully enforced end to end.
+    // This check predates the share-token surface and keyed on visibility alone, which
+    // blocked the enforceable private+token case (b4m-bob#275). It now keys on the real
+    // invariant: does this gate have a surface that will honor it? A private artifact
+    // with NO share token still fails loud - only the owner/admin can reach it, and they
+    // pass their own gate, so the gate would genuinely never apply.
+    // SCOPED to requests that touch the gate or the visibility, deliberately: the check
+    // reads the document's STORED state, so an artifact that reached the bad state by some
+    // other door (finalize can $set a private visibility over a preserved gate) would have
+    // every unrelated PATCH - a title rename - rejected with an access-gate error it can't
+    // act on. Unscoped, a stored inconsistency holds title/description/tags hostage.
+    const touchesGateSurface = parsed.data.accessGate !== undefined || parsed.data.visibility !== undefined;
+    // Reads the ARRAY, not the legacy scalar (#3255 step 3): with several links per artifact
+    // the enforcing surface is "at least one LIVE link", and liveShareTokens() still folds in
+    // a pre-backfill scalar-only link.
+    if (
+      touchesGateSurface &&
+      artifact.accessGate &&
+      artifact.visibility !== 'public' &&
+      liveShareTokens(artifact).length === 0
+    ) {
       return res.status(400).json({
-        error: 'An access gate requires visibility "public" - clear the gate or set visibility to public',
-        code: 'GATE_REQUIRES_PUBLIC',
+        error:
+          'An access gate requires visibility "public" or an active share link - clear the gate, set visibility to public, or create a share link first',
+        code: 'GATE_REQUIRES_ENFORCING_SURFACE',
       });
     }
     if (parsed.data.commentPolicy !== undefined) artifact.commentPolicy = parsed.data.commentPolicy;

@@ -52,7 +52,8 @@ function stableStringify(value: unknown): string {
 /**
  * Seed the model catalog from the checked-in, PR-reviewed seed file.
  *
- * Three provenance tiers, operator > discovery > adapter-seed. Per entry,
+ * Three provenance tiers, operator > discovery > adapter-seed (presentation:
+ * operator > adapter-seed > discovery). Per entry,
  * against the newest existing row for the model:
  *
  * - no row                                       -> append at the seed version's effectiveFrom
@@ -66,8 +67,9 @@ function stableStringify(value: unknown): string {
  * Superseding an OLDER discovery row mirrors seedModelPrices: without it a
  * single automated row would freeze seed corrections for that model forever,
  * fixable only by hand. One limit worth knowing: merge-time precedence still
- * ranks discovery above seed per FIELD GROUP (mergeCatalog.outranks), so the
- * appended row only takes effect for the groups the discovery row does not own.
+ * ranks discovery above seed per FIELD GROUP (mergeCatalog.outranks; presentation
+ * is the exception, where seed ranks first), so the appended row only takes
+ * effect for the groups the discovery row does not own.
  * Correcting a group discovery owns remains an operator patch, deliberately -
  * recency beating rank at merge time would let any stale discovery row shadow
  * operator intent.

@@ -6,6 +6,9 @@
  * Flow:
  * 1. External product (VibesWire, VibesTrader...) redirects user here with PKCE params.
  * 2. If the user is already logged in -> generate auth code -> redirect back to the product.
+ *    - First-party clients (and relying-party clients with a remembered consent) redirect
+ *      silently. A relying-party client with no covering grant gets an Allow/Deny consent screen
+ *      first; only Allow mints the code.
  * 3. If the user is NOT logged in -> send to /login with this URL as `redirectTo`.
  *    - Email/password login reads `redirectTo` from the URL and returns here.
  *    - Social/SSO login leaves the SPA, so MultiStepLogin appends `redirectTo`
@@ -18,15 +21,24 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
-import { CircularProgress, Box, Typography, Button } from '@mui/joy';
+import { CircularProgress, Box, Typography, Button, List, ListItem, Sheet } from '@mui/joy';
+import useGetLogo from '@client/app/hooks/useGetLogo';
+import { toConsentScopes } from './consentScopes';
+
+interface ConsentInfo {
+  clientName: string;
+  scopes: string[];
+}
 
 const OAuthAuthorizePage = () => {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, string | undefined>;
   const { accessToken, resetTokens } = useAccessToken();
+  const logoUrl = useGetLogo();
 
-  const [status, setStatus] = useState<'idle' | 'authorizing' | 'error'>('idle');
+  const [status, setStatus] = useState<'idle' | 'authorizing' | 'consent' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [consentInfo, setConsentInfo] = useState<ConsentInfo | null>(null);
   const didRun = useRef(false);
 
   const {
@@ -38,25 +50,17 @@ const OAuthAuthorizePage = () => {
     code_challenge,
     code_challenge_method,
     nonce,
+    prompt,
   } = search;
 
   // Basic param validation
   // PKCE is optional - confidential clients (e.g. Cognito) use client_secret instead
   const paramsValid = client_id && redirect_uri && response_type === 'code';
 
-  useEffect(() => {
-    if (!paramsValid) return;
-
-    if (!accessToken) {
-      const currentUrl = window.location.pathname + window.location.search;
-      navigate({ to: '/login', search: { redirectTo: currentUrl } });
-      return;
-    }
-
-    if (status !== 'idle' || didRun.current) return;
-    didRun.current = true;
+  // Request an auth code. `consent` is true only after the user clicks Allow. A relying-party
+  // client with no covering grant comes back with { consent_required } instead of a code.
+  const requestCode = (consent?: boolean) => {
     setStatus('authorizing');
-
     fetch('/api/oauth/code', {
       method: 'POST',
       headers: {
@@ -71,6 +75,8 @@ const OAuthAuthorizePage = () => {
         code_challenge,
         code_challenge_method,
         nonce,
+        prompt,
+        ...(consent ? { consent: true } : {}),
       }),
     })
       .then(async r => {
@@ -88,10 +94,15 @@ const OAuthAuthorizePage = () => {
       .then(result => {
         if (!result) return; // Redirecting to login after token reset
 
-        const { code, error, error_description } = result;
+        const { code, consent_required, client_name, scopes, error, error_description } = result;
         if (error) {
           setStatus('error');
           setErrorMsg(error_description || error);
+          return;
+        }
+        if (consent_required) {
+          setConsentInfo({ clientName: client_name || client_id!, scopes: scopes || [] });
+          setStatus('consent');
           return;
         }
 
@@ -104,6 +115,28 @@ const OAuthAuthorizePage = () => {
         setStatus('error');
         setErrorMsg(err.message);
       });
+  };
+
+  // OAuth 4.1.2.1: a denied consent returns the user to the client with error=access_denied.
+  const denyConsent = () => {
+    const url = new URL(redirect_uri!);
+    url.searchParams.set('error', 'access_denied');
+    if (state) url.searchParams.set('state', state);
+    window.location.href = url.toString();
+  };
+
+  useEffect(() => {
+    if (!paramsValid) return;
+
+    if (!accessToken) {
+      const currentUrl = window.location.pathname + window.location.search;
+      navigate({ to: '/login', search: { redirectTo: currentUrl } });
+      return;
+    }
+
+    if (status !== 'idle' || didRun.current) return;
+    didRun.current = true;
+    requestCode();
   }, [accessToken, status, paramsValid]);
 
   if (!paramsValid) {
@@ -144,10 +177,93 @@ const OAuthAuthorizePage = () => {
         <Typography level="h4" color="danger">
           Authorization failed
         </Typography>
-        <Typography level="body-sm">{errorMsg}</Typography>
+        {/* Same reason as the scope label below: the body-sm default lands on text.tertiary,
+            which measures 2.27:1 here. An error the user cannot read is the worst one. */}
+        <Typography level="body-sm" textColor="text.primary" data-testid="oauth-error-message">
+          {errorMsg}
+        </Typography>
         <Button variant="outlined" onClick={() => window.history.back()}>
           Go back
         </Button>
+      </Box>
+    );
+  }
+
+  if (status === 'consent' && consentInfo) {
+    return (
+      <Box
+        sx={theme => ({
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: '100vh',
+          px: 2,
+          py: 4,
+          backgroundColor: theme.palette.background.panel,
+        })}
+      >
+        {/* Same logo treatment and 56px box as the login screen, so a user arriving here from a
+            satellite app sees the brand they are about to authorize against, not a bare page. */}
+        {/* Plain img, not next/image: this is a Tanstack SPA route and the optimizer endpoint
+            buys nothing for a 56px logo. alt="" because the heading below already names the app. */}
+        <Box component="img" src={logoUrl} alt="" sx={{ width: 56, height: 56, objectFit: 'contain', mb: 2 }} />
+
+        <Sheet
+          variant="outlined"
+          sx={{
+            width: '100%',
+            maxWidth: 420,
+            borderRadius: 'md',
+            p: 3,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+          }}
+        >
+          <Box>
+            <Typography level="h4" component="h1">
+              Authorize {consentInfo.clientName}
+            </Typography>
+            <Typography level="body-sm" color="neutral" sx={{ mt: 0.5 }}>
+              {consentInfo.clientName} is requesting access to your Bike4Mind account:
+            </Typography>
+          </Box>
+
+          <List sx={{ '--ListItem-paddingX': '0px' }} data-testid="oauth-consent-scopes">
+            {toConsentScopes(consentInfo.scopes).map(({ id, label }) => (
+              <ListItem key={id} data-testid="oauth-consent-scope">
+                <Box>
+                  {/* An unmapped scope shows its raw id as the heading rather than being skipped:
+                      never show fewer permissions than the client is actually granted. */}
+                  {/* textColor is explicit because Joy resolves body-sm to text.tertiary, which this
+                      theme defines at 50% alpha - 2.23:1 on the card in light mode, under WCAG AA.
+                      That left the plain-language line dimmer than the raw id below it, inverting
+                      the hierarchy: the explanation must stay the most readable text in the row. */}
+                  <Typography level="body-sm" textColor="text.primary" data-testid="oauth-consent-scope-label">
+                    {label ?? id}
+                  </Typography>
+                  {label && (
+                    <Typography level="body-xs" color="neutral" data-testid="oauth-consent-scope-id">
+                      {id}
+                    </Typography>
+                  )}
+                </Box>
+              </ListItem>
+            ))}
+          </List>
+
+          {/* Directly under the list rather than floating at the viewport bottom, so the action
+              reads as applying to the permissions above it. */}
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
+            <Button variant="plain" color="neutral" data-testid="oauth-consent-deny-btn" onClick={denyConsent}>
+              Deny
+            </Button>
+            <Button variant="solid" data-testid="oauth-consent-allow-btn" onClick={() => requestCode(true)}>
+              Allow
+            </Button>
+          </Box>
+        </Sheet>
       </Box>
     );
   }
@@ -165,7 +281,7 @@ const OAuthAuthorizePage = () => {
     >
       <CircularProgress size="lg" />
       <Typography level="body-sm" color="neutral">
-        {status === 'authorizing' ? 'Authorizing…' : 'Signing you in…'}
+        {status === 'authorizing' ? 'Authorizing...' : 'Signing you in...'}
       </Typography>
     </Box>
   );

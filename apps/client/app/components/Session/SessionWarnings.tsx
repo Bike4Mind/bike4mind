@@ -1,4 +1,4 @@
-import { Box, IconButton, Typography, useTheme } from '@mui/joy';
+import { Box, Button, Divider, IconButton, Typography, useTheme } from '@mui/joy';
 import { keyframes } from '@mui/system';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded';
@@ -14,33 +14,14 @@ const fadeIn = keyframes`
   }
 `;
 
-// Attention-grabbing pulse animation for the warning container
-const pulseGlow = keyframes`
-  0%, 100% {
-    box-shadow: 0 0 8px rgba(200, 50, 50, 0.4), inset 0 0 20px rgba(200, 50, 50, 0.05);
-  }
-  50% {
-    box-shadow: 0 0 20px rgba(200, 50, 50, 0.6), inset 0 0 30px rgba(200, 50, 50, 0.1);
-  }
-`;
-
-// Subtle icon pulse
-const iconPulse = keyframes`
-  0%, 100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-  50% {
-    transform: scale(1.1);
-    opacity: 0.85;
-  }
-`;
-
 interface NoModelsWarningProps {
   show: boolean;
+  /** The model list failed to load - a transient fault, not a permissions problem. */
+  loadError?: boolean;
+  onRetry?: () => void;
 }
 
-export function NoModelsWarning({ show }: NoModelsWarningProps) {
+export function NoModelsWarning({ show, loadError = false, onRetry }: NoModelsWarningProps) {
   const theme = useTheme();
   const isDarkMode = theme.palette.mode === 'dark';
 
@@ -80,13 +61,20 @@ export function NoModelsWarning({ show }: NoModelsWarningProps) {
             fontWeight="bold"
             sx={{ color: isDarkMode ? 'danger.400' : 'danger.500' }}
           >
-            You don&apos;t have access to any AI models.
+            {loadError ? <>Couldn&apos;t load AI models.</> : <>You don&apos;t have access to any AI models.</>}
           </Typography>
           <Typography fontSize="10px" sx={{ color: 'text.secondary' }}>
-            Please contact your administrator to request the appropriate permissions.
+            {loadError
+              ? 'Check your connection and try again.'
+              : 'Please contact your administrator to request the appropriate permissions.'}
           </Typography>
         </Box>
       </Box>
+      {loadError && onRetry && (
+        <Button size="sm" variant="soft" color="danger" onClick={onRetry} data-testid="no-models-retry-btn">
+          Retry
+        </Button>
+      )}
     </Box>
   );
 }
@@ -194,82 +182,61 @@ export function LowCreditsWarning({ show, currentCredits, onDismiss }: LowCredit
   );
 }
 
+/**
+ * Out of credits: takes the place of the message box rather than covering it.
+ * There is nothing to type into, so the box is not drawn at all - the block
+ * sits above the toolbar, divided from it, and says what happened and what to
+ * do in the same calm register as the rest of the composer.
+ */
 export function CreditsWarning({ show }: CreditsWarningProps) {
-  const theme = useTheme();
-  const isDarkMode = theme.palette.mode === 'dark';
-
   if (!show) return null;
 
   return (
-    <Box
-      data-testid="session-credits-warning"
-      sx={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        background: isDarkMode
-          ? 'linear-gradient(135deg, rgba(120, 30, 30, 0.95) 0%, rgba(80, 20, 20, 0.98) 100%)'
-          : 'linear-gradient(135deg, rgba(254, 226, 226, 0.98) 0%, rgba(254, 202, 202, 0.98) 100%)',
-        borderRadius: '8px',
-        border: isDarkMode ? '2px solid rgba(239, 68, 68, 0.6)' : '2px solid rgba(220, 38, 38, 0.4)',
-        px: 2,
-        py: 1,
-        zIndex: 1000,
-        animation: `${pulseGlow} 2s ease-in-out infinite`,
-      }}
-    >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-        <WarningAmberRoundedIcon
-          data-testid="credits-warning-icon"
-          sx={{
-            fontSize: '28px',
-            color: isDarkMode ? '#fbbf24' : '#dc2626',
-            animation: `${iconPulse} 2s ease-in-out infinite`,
-            filter: isDarkMode ? 'drop-shadow(0 0 6px rgba(251, 191, 36, 0.5))' : 'none',
-          }}
-        />
-        <Box>
+    // The 10px top padding matches the message row this replaces, which carries the
+    // same padding to clear the grid's negative margin above it.
+    <Box data-testid="session-credits-warning" sx={{ width: '100%', pt: '10px' }}>
+      {/* One row on desktop. On a phone the row is too narrow for the copy and two
+          buttons side by side, so the copy goes on top and the buttons share a full-width
+          row under it, split evenly. */}
+      <Box
+        sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', sm: 'row' },
+          alignItems: { xs: 'stretch', sm: 'center' },
+          justifyContent: 'space-between',
+          gap: { xs: '12px', sm: 2 },
+          py: '12px',
+        }}
+      >
+        <Box sx={{ minWidth: 0 }}>
           <Typography
             data-testid="credits-warning-text"
-            sx={{
-              fontSize: '18px',
-              fontWeight: 700,
-              color: isDarkMode ? '#fecaca' : '#991b1b',
-              letterSpacing: '-0.01em',
-              textShadow: isDarkMode ? '0 1px 2px rgba(0,0,0,0.3)' : 'none',
-            }}
+            level="title-sm"
+            sx={{ fontSize: '14px', fontWeight: 500, color: 'danger.softColor' }}
           >
             Out of Credits
           </Typography>
-          <Typography
-            sx={{
-              fontSize: '13px',
-              color: isDarkMode ? 'rgba(254, 202, 202, 0.85)' : '#b91c1c',
-              mt: 0.25,
-            }}
-          >
+          <Typography level="body-sm" sx={{ mt: '2px', fontSize: '13px', color: 'text.tertiary' }}>
             Add credits or subscribe to continue
           </Typography>
         </Box>
-      </Box>
-      <Box data-testid="credits-warning-actions" display="flex" gap={1.5} alignItems="center">
-        <SubscribeButton />
-        <Typography
+        {/* Subscribe is the one primary action; topping up is the fallback. */}
+        <Box
+          data-testid="credits-warning-actions"
           sx={{
-            fontSize: '13px',
-            color: isDarkMode ? 'rgba(254, 202, 202, 0.7)' : '#7f1d1d',
-            fontWeight: 500,
+            // Two equal grid columns on a phone rather than flex: flex never shrinks an
+            // item below its padding and border, so the outlined button came out 2px wider.
+            display: { xs: 'grid', sm: 'flex' },
+            gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+            gap: 1,
+            flexShrink: 0,
           }}
         >
-          or
-        </Typography>
-        <SessionCreditsButton />
+          <SessionCreditsButton secondary />
+          <SubscribeButton />
+        </Box>
       </Box>
+      <Divider />
     </Box>
   );
 }

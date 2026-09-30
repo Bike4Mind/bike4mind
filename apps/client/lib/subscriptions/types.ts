@@ -3,6 +3,7 @@ import BaseRepository from '@bike4mind/database';
 import { StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
 import Stripe from 'stripe';
 import { z } from 'zod';
+import type { AcquisitionTouch, AcquisitionTouches } from './acquisition';
 
 export enum SubscriptionOwnerType {
   User = 'User',
@@ -99,6 +100,12 @@ export const DELINQUENT_SUBSCRIPTION_STATUSES: ReadonlySet<Stripe.Subscription.S
 export const isDelinquentSubscriptionStatus = (status: Stripe.Subscription.Status): boolean =>
   DELINQUENT_SUBSCRIPTION_STATUSES.has(status);
 
+/** One campaign touch: the utm_* fields of a landing. `source` is always present. */
+export type SubscriptionAcquisitionTouch = AcquisitionTouch;
+
+/** Where a subscription's customer came from, recorded at checkout. */
+export type SubscriptionAcquisition = AcquisitionTouches;
+
 export interface ISubscription {
   ownerType: SubscriptionOwnerType;
   /** The document ID of the owner of the subscription */
@@ -122,6 +129,11 @@ export interface ISubscription {
   grantedBy?: string;
   /** Free-text reason the grant was issued (audit). */
   grantedReason?: string;
+  /**
+   * The first and last campaign touch before checkout, when the browser carried any. Absent on
+   * rows created before checkout recorded it, and on admin grants.
+   */
+  acquisition?: SubscriptionAcquisition;
   /**
    * This field is used to store the date when the subscription was canceled.
    */

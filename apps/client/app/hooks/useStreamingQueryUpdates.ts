@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { replaceQueryData, updateSingleQueryDataFast } from '../utils/react-query';
+import { isTerminalQuestStatus } from './chatCompletionState';
 
 /**
  * useStreamingQueryUpdates - owns the React Query cache updates applied as
@@ -39,7 +40,10 @@ export function useStreamingQueryUpdates(params: {
 
   // Streaming React Query updates that drive UI updates mid-stream (mainly the quest reply).
   const updateStreamingQuest = useCallback(
-    (quest: any, isComplete = false, statusMessage?: string | null) => {
+    (quest: any, isCompleteArg = false, statusMessage?: string | null) => {
+      // Any ended status completes the turn, not just 'done' - a 'stopped' frame
+      // must not leave `completed: false` behind.
+      const isComplete = isCompleteArg || isTerminalQuestStatus(quest?.status);
       const stream = streamRef.current;
       const now = Date.now();
       // To avoid UI update stutters we dont include empty replies or replies that are shorter than the previous quest

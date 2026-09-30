@@ -15,6 +15,8 @@ import {
   ICreditTransactionDocument,
   IAuthSessionRepository,
   IAuthSessionDocument,
+  ISessionAgentConfigRepository,
+  ISessionAgentConfigDocument,
 } from '@bike4mind/common';
 import {
   IResearchTask,
@@ -50,16 +52,31 @@ export const createMockShareableRepository = <T>(): IShareableStaticMethods<T> =
 export const createMockProjectRepository = (): IProjectRepository => ({
   ...createMockRepository<IProjectDocument>(),
   shareable: createMockShareableRepository<IProjectDocument>(),
+  // Echoes the patch so a test that does not care about the write-time re-check sees a success.
+  updateWithUpdateAccess: vi.fn(async (_user, data) => data as IProjectDocument),
   findByIdAndUserId: vi.fn(),
   searchAccessible: vi.fn(),
   removeSession: vi.fn(),
   findAllBySessionId: vi.fn(),
 });
 
+export const createMockSessionAgentConfigRepository = (): ISessionAgentConfigRepository => ({
+  ...createMockRepository<ISessionAgentConfigDocument>(),
+  findBySessionAndAgent: vi.fn(),
+  updateBySessionAndAgent: vi.fn(),
+  findBySessionId: vi.fn(),
+  findAllWithProactiveMessagingEnabled: vi.fn(),
+  updateLastProactiveMessageAt: vi.fn(),
+  deleteBySessionId: vi.fn(),
+  deleteBySessionAndAgent: vi.fn(),
+});
+
 export const createMockFabFileRepository = (): IFabFileRepository => ({
   ...createMockRepository<IFabFileDocument>(),
   shareable: createMockShareableRepository<IFabFileDocument>(),
   getAccessibleFiles: vi.fn(),
+  setLakeSupersession: vi.fn(),
+  clearLakeSupersession: vi.fn(),
   // Default true ("I still own my claim") rather than the vi.fn() default of undefined/falsy,
   // which would otherwise silently read as "claim lost" for any test that reaches this guard
   // through the shared mock without overriding it.
@@ -84,11 +101,13 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   countDataLakeTagsByPrefix: vi.fn(),
   countDataLakeUniqueFilesByPrefix: vi.fn(),
   countUniqueFilesByNamespaceForUser: vi.fn(),
+  claimTagRewriteByUserId: vi.fn().mockResolvedValue(null),
   removeTagByUserId: vi.fn(),
   updateTagsByUserId: vi.fn(),
   dedupeTagByUserId: vi.fn(),
   pullTagsByFabFileId: vi.fn(),
   pushTagsByFabFileId: vi.fn(),
+  pushTagReturningPriorState: vi.fn().mockResolvedValue(null),
   bulkUpdateTags: vi.fn(),
   findByContentHashes: vi.fn(),
   findByContentHashesInDataLake: vi.fn(),
@@ -96,6 +115,8 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   isLiveDataLakeMember: vi.fn(),
   findByDriveFileIdsInDataLake: vi.fn(),
   findByDriveConnectionIdInDataLake: vi.fn(),
+  countByDriveConnectionIdInDataLake: vi.fn(),
+  findByGitHubConnectionIdInDataLake: vi.fn(),
   findDriveFileIdsByBatchId: vi.fn(),
   markUploaded: vi.fn(),
   markFailedIfNotAlready: vi.fn(),
@@ -145,6 +166,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   hardDeleteByIds: vi.fn(),
   hardDeleteOneById: vi.fn(),
   findIdsByDataLakeTag: vi.fn(),
+  findLiveMembersByDataLakeTag: vi.fn(),
   findByUserId: vi.fn(),
   sumFileSizeByUserId: vi.fn(),
 });
@@ -167,11 +189,13 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
   vi.mocked({
     ...createMockRepository<ISessionDocument>(),
     shareable: createMockShareableRepository<ISessionDocument>(),
+    updateWithUpdateAccess: vi.fn(),
     upsertByOpenaiConversationId: vi.fn() as MockedFunction<ISessionRepository['upsertByOpenaiConversationId']>,
     upsertByClaudeConversationId: vi.fn() as MockedFunction<ISessionRepository['upsertByClaudeConversationId']>,
     search: vi.fn(),
     findByIdAndUserId: vi.fn(),
     findAllWithKnowledgeId: vi.fn(),
+    pullKnowledgeIds: vi.fn(),
     searchByUserId: vi.fn(),
     findRecentlyUpdatedByUserId: vi.fn(),
     findAllByIds: vi.fn(),

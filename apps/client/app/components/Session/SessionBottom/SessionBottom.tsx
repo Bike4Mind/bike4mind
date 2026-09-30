@@ -7,7 +7,8 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 
 import { useLLM } from '@client/app/contexts/LLMContext';
-import { useWebsocket } from '@client/app/contexts/WebsocketContext';
+import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
+import { isChatCompletionActiveFor } from '@client/app/hooks/chatCompletionState';
 import {
   useSessions,
   useSystemPromptFiles,
@@ -29,6 +30,7 @@ import { MessageFileThumbnails } from '@client/app/components/Session/MessageFil
 import { useNotebookFilepond } from '@client/app/components/Session/NotebookFilepondProvider';
 import { setKnowledgeViewer } from '@client/app/components/Knowledge/KnowledgeViewer';
 import { useGetAgents, useGetSessionAgents } from '@client/app/hooks/data/agents';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { useGetSessionQuests } from '@client/app/hooks/data/sessions';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useChatInput, NEW_NOTEBOOK_DRAFT_KEY } from '@client/app/hooks/useChatInput';
@@ -58,17 +60,21 @@ import { ContextCompactionNote } from '../ContextCompactionNote';
 import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
 import { deleteFileUtility, getFabFilesFromServerByIds } from '@client/app/utils/filesAPICalls';
 import { useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
 import { LexicalChatInput, LexicalChatInputRef } from '../LexicalChatInput';
 import { useModelInfo } from '../../../hooks/data/useModelInfo';
 import { useAccessibleModels } from '../../../hooks/useAccessibleModels';
 import { NoModelsWarning, CreditsWarning, LowCreditsWarning } from '../SessionWarnings';
 import { LOW_CREDITS_THRESHOLD } from '../CreditButton';
+import { getComposerCreditUi } from './composerCreditUi';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useMcpServerSync } from './useMcpServerSync';
 import { useMessageDraft } from './useMessageDraft';
 import { useSessionFiles } from './useSessionFiles';
 import { useSendMessage } from './useSendMessage';
+import { createBlockedSendToastGate, getSendBlockedLabel, getSendBlockedReason } from './sendBlockedReason';
+import { useModerationScanFallback } from './useModerationScanFallback';
 import { useRollDice } from './useRollDice';
 import { useModalState } from './useModalState';
 import { useVoiceState } from './useVoiceState';
@@ -169,7 +175,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const setSessionFilesOpen = useAdvancedAISettings(state => state.setSessionFilesOpen);
   const [stream, setStream] = useState<boolean>(true);
   const { data: modelInfo } = useModelInfo();
-  const { accessibleModels, isLoading: isModelsLoading } = useAccessibleModels();
+  const { accessibleModels, isLoading: isModelsLoading, isModelsError, refetchModels } = useAccessibleModels();
   const hasModels = !!accessibleModels && accessibleModels.length > 0;
 
   // Keeps enabledMcpServers in sync with the database (init + stale-server cleanup)
@@ -244,10 +250,16 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const maxFileSize = Number(useGetSettingsValue('MaxFileSize')) || 30;
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
 
-  // Credit warning conditions - extracted for readability
-  const creditsExhausted = effectiveCredits <= 0 || creditsExhaustedByVoice;
-  const isLowCredits = effectiveCredits > 0 && effectiveCredits < LOW_CREDITS_THRESHOLD && !creditsExhaustedByVoice;
-  const showCreditOverlay = enforceCredits && (creditsExhausted || (isLowCredits && !lowCreditsWarningDismissed));
+  // Out of credits replaces the message box outright (see CreditsWarning); only the
+  // low-credits notice still overlays it, so only that one needs the box to hold its height.
+  const creditUi = getComposerCreditUi({
+    enforceCredits,
+    effectiveCredits,
+    exhaustedByVoice: creditsExhaustedByVoice,
+    hasModels,
+    lowWarningDismissed: lowCreditsWarningDismissed,
+    lowThreshold: LOW_CREDITS_THRESHOLD,
+  });
 
   // FilePond expects the max file size as an MB string, e.g. '100MB'
   const maxFileSizeForFilePond = `${maxFileSize}MB`;
@@ -290,13 +302,11 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const bothPanelsClosed = !isKnowledgeViewerBesideChat && !isSideNavOpen;
   const promptBarMaxWidth = isDockedLayout || isFloatingLayout ? 'none' : bothPanelsClosed ? '1200px' : '950px';
 
-  // Determine if the stop button should be shown
-  const shouldShowStopButton = useMemo(() => {
-    // Show stop button if chat completion is in progress
-    const isChatCompletionActive =
-      !chatCompletion.completed && (chatCompletion.statusMessage || chatCompletion.quest?.status === 'running');
-    return isChatCompletionActive;
-  }, [chatCompletion.completed, chatCompletion.statusMessage, chatCompletion.quest?.status]);
+  // Another session's in-flight quest must not put Stop on this composer.
+  const shouldShowStopButton = useMemo(
+    () => isChatCompletionActiveFor(chatCompletion, currentSessionId),
+    [chatCompletion, currentSessionId]
+  );
 
   // Check if there are active file uploads or images still pending a content-moderation
   // scan - the Send button must stay disabled until the scan clears, otherwise
@@ -361,16 +371,31 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     chatInputRef,
     clearFiles,
     stream,
+    chatCompletion,
     setChatCompletion,
     onAgentsAttached: () => setAgentBenchCollapsed(false),
   });
 
+  const sendBlockedReason = getSendBlockedReason({
+    isGenerating: shouldShowStopButton,
+    submitting,
+    isModelsLoading,
+    isModelsError,
+    hasModels,
+    isSocketOpen: readyState === ReadyState.OPEN,
+    hasActiveUploads,
+  });
+
+  const [shouldToastBlockedSend] = useState(() => createBlockedSendToastGate());
   const handleEditorSubmit = useCallback(async () => {
-    // Block Enter-to-send while a response is still streaming
-    // or while files are still uploading/scanning.
-    if (shouldShowStopButton || submitting || hasActiveUploads) return;
+    // Same gate as the Send button: Enter must not send what the button would refuse. The
+    // tooltip explaining why is out of sight while typing, so say it here too.
+    if (sendBlockedReason) {
+      if (shouldToastBlockedSend(sendBlockedReason)) toast.info(getSendBlockedLabel(sendBlockedReason, t));
+      return;
+    }
     await handleSendClick();
-  }, [shouldShowStopButton, submitting, hasActiveUploads, handleSendClick]);
+  }, [sendBlockedReason, handleSendClick, shouldToastBlockedSend, t]);
 
   // Expose handleSendClick for programmatic use (e.g., InteractiveChessBoard)
   const sendPromptCallback = useCallback(
@@ -432,7 +457,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
 
       // Also invalidate fab files if needed
       await queryClient.invalidateQueries({
-        queryKey: ['fabFiles'],
+        queryKey: fabFileKeys.all,
         exact: false,
       });
     };
@@ -453,6 +478,35 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // swapped in the real FabFile id yet (upload still resolving) - see SessionFilePond's
   // consumeBufferedModerationStatus reconciliation on that swap - so a ws event that beats
   // the id-swap doesn't strand the item on the 'scanning' placeholder forever.
+  // Shared by the websocket event and the polling fallback (useModerationScanFallback),
+  // which can both report the same scan, so an already-applied clean result is skipped.
+  const applyModerationResult = useCallback(
+    (fabFileId: string, moderationStatus: 'pending' | 'clean' | 'blocked', fileUrl?: string) => {
+      if (moderationStatus !== 'clean') {
+        recordModerationStatus(fabFileId, moderationStatus);
+        return;
+      }
+      const existing = useSessionLayout.getState().pendingMessageFiles.find(item => item.fabFile.id === fabFileId);
+      if (existing?.status === 'complete') return;
+      recordModerationStatus(fabFileId, 'clean', fileUrl);
+
+      // An image the user explicitly scoped to the notebook is held back at upload
+      // time and promoted only here, once the scan clears. A knowledgeIds entry
+      // survives into clones, exports and (when propagation is on) projects, so a
+      // blocked image must never acquire one. Read from the store rather than a
+      // closure: this effect is subscribed once and would capture a stale list.
+      const promoted = useSessionLayout.getState().pendingMessageFiles.find(item => item.fabFile.id === fabFileId);
+      if (promoted?.scope === 'notebook') {
+        void addToNotebookContext(promoted.uploadSessionId, promoted.fabFile, { propagateToProjects: false }).catch(
+          () => {
+            // Already rolled back and surfaced by the hook.
+          }
+        );
+      }
+    },
+    [addToNotebookContext]
+  );
+
   useEffect(() => {
     const unsubscribe = subscribeToAction('image_moderation_status', async msg => {
       if (msg.action !== 'image_moderation_status') return;
@@ -466,32 +520,20 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           // Fall through - the reducer still flips status to 'complete'; a page refresh
           // (File Manager / message stream) self-heals by refetching a valid fileUrl.
         }
-        recordModerationStatus(msg.fabFileId, 'clean', fileUrl);
-
-        // An image the user explicitly scoped to the notebook is held back at upload
-        // time and promoted only here, once the scan clears. A knowledgeIds entry
-        // survives into clones, exports and (when propagation is on) projects, so a
-        // blocked image must never acquire one. Read from the store rather than a
-        // closure: this effect is subscribed once and would capture a stale list.
-        const promoted = useSessionLayout
-          .getState()
-          .pendingMessageFiles.find(item => item.fabFile.id === msg.fabFileId);
-        if (promoted?.scope === 'notebook') {
-          void addToNotebookContext(promoted.uploadSessionId, promoted.fabFile, { propagateToProjects: false }).catch(
-            () => {
-              // Already rolled back and surfaced by the hook.
-            }
-          );
-        }
+        applyModerationResult(msg.fabFileId, 'clean', fileUrl);
       } else {
-        recordModerationStatus(msg.fabFileId, msg.moderationStatus);
+        applyModerationResult(msg.fabFileId, msg.moderationStatus);
       }
     });
 
     return () => {
       unsubscribe();
     };
-  }, [subscribeToAction, addToNotebookContext]);
+  }, [subscribeToAction, applyModerationResult]);
+
+  // The websocket event above is the only other thing that clears 'scanning'; if it is
+  // lost, poll the server, and give up to an error state rather than hang the composer.
+  useModerationScanFallback(pendingMessageFiles, applyModerationResult);
 
   const { setOpen: setFileBrowserOpen } = useFileBrowser();
 
@@ -559,7 +601,11 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                   position: 'relative',
                 }}
               >
-                <NoModelsWarning show={!isModelsLoading && (!accessibleModels || accessibleModels.length === 0)} />
+                <NoModelsWarning
+                  show={!isModelsLoading && (!accessibleModels || accessibleModels.length === 0)}
+                  loadError={isModelsError}
+                  onRetry={() => void refetchModels()}
+                />
                 {contextUsage && (
                   <ContextUsageWarning
                     show={showContextWarning}
@@ -583,118 +629,121 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                   turns={compactedTurns}
                   onDismiss={() => setCompactionNoteDismissed(true)}
                 />
-                <Stack
-                  className="session-bottom-input-row"
-                  direction="row"
-                  spacing={2}
-                  alignItems="center"
-                  sx={{ position: 'relative', paddingTop: '10px' }}
-                >
-                  <Box
-                    className="session-bottom-editor-wrapper"
-                    sx={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      width: '100%',
-                      padding: '8px 0px',
-                      flex: 1,
-                      overflow: 'visible',
-                      position: 'relative',
-                      minHeight: showCreditOverlay ? '60px' : undefined,
-                      transition: 'box-shadow 300ms, outline 300ms',
-                      boxShadow: rephraseGlow
-                        ? '0 0 0 2px rgba(59,130,246,0.3), 0 0 12px rgba(59,130,246,0.45)'
-                        : undefined,
-                      outline: rephraseGlow ? '2px solid rgba(59,130,246,0.35)' : undefined,
-                      borderRadius: '8px',
-                    }}
+                {creditUi.replaceComposer ? (
+                  <CreditsWarning show />
+                ) : (
+                  <Stack
+                    className="session-bottom-input-row"
+                    direction="row"
+                    spacing={2}
+                    alignItems="center"
+                    sx={{ position: 'relative', paddingTop: '10px' }}
                   >
-                    <CreditsWarning show={creditsExhausted && enforceCredits && hasModels} />
-                    <LowCreditsWarning
-                      show={isLowCredits && !lowCreditsWarningDismissed && enforceCredits && hasModels}
-                      currentCredits={effectiveCredits}
-                      onDismiss={() => setLowCreditsWarningDismissed(true)}
-                    />
-                    {/* Slash command suggestions */}
-                    {showSlashSuggestions && (
-                      <SlashCommandSuggestions
-                        input={chatInputValue}
-                        onSelectSuggestion={(suggestion: string, selectionRange?: { start: number; end: number }) => {
-                          setChatInputValue(suggestion);
-                          setShowSlashSuggestions(false);
-
-                          // If there's a selection range (placeholder), select it after React and Lexical update
-                          if (selectionRange && lexicalInputRef.current) {
-                            // Use longer timeout to ensure Lexical has fully synced the new value
-                            setTimeout(() => {
-                              lexicalInputRef.current?.focus();
-                              lexicalInputRef.current?.setSelection(selectionRange.start, selectionRange.end);
-                            }, 50);
-                          } else {
-                            // No selection range, just focus at the end
-                            setTimeout(() => {
-                              lexicalInputRef.current?.focus();
-                            }, 50);
-                          }
-                        }}
-                        onVisibilityChange={() => {}}
+                    <Box
+                      className="session-bottom-editor-wrapper"
+                      sx={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        width: '100%',
+                        padding: '8px 0px',
+                        flex: 1,
+                        overflow: 'visible',
+                        position: 'relative',
+                        minHeight: creditUi.lowCreditsNotice ? '60px' : undefined,
+                        transition: 'box-shadow 300ms, outline 300ms',
+                        boxShadow: rephraseGlow
+                          ? '0 0 0 2px rgba(59,130,246,0.3), 0 0 12px rgba(59,130,246,0.45)'
+                          : undefined,
+                        outline: rephraseGlow ? '2px solid rgba(59,130,246,0.35)' : undefined,
+                        borderRadius: '8px',
+                      }}
+                    >
+                      <LowCreditsWarning
+                        show={creditUi.lowCreditsNotice}
+                        currentCredits={effectiveCredits}
+                        onDismiss={() => setLowCreditsWarningDismissed(true)}
                       />
-                    )}
+                      {/* Slash command suggestions */}
+                      {showSlashSuggestions && (
+                        <SlashCommandSuggestions
+                          input={chatInputValue}
+                          onSelectSuggestion={(suggestion: string, selectionRange?: { start: number; end: number }) => {
+                            setChatInputValue(suggestion);
+                            setShowSlashSuggestions(false);
 
-                    <LexicalChatInput
-                      ref={lexicalInputRef}
-                      value={chatInputValue}
-                      onChange={handleInputChange}
-                      onSubmit={handleEditorSubmit}
-                      onPaste={handlePaste}
-                      placeholder={`${t('session.typeYourMessage')}...`}
-                      agents={lexicalAgents}
-                    />
+                            // If there's a selection range (placeholder), select it after React and Lexical update
+                            if (selectionRange && lexicalInputRef.current) {
+                              // Use longer timeout to ensure Lexical has fully synced the new value
+                              setTimeout(() => {
+                                lexicalInputRef.current?.focus();
+                                lexicalInputRef.current?.setSelection(selectionRange.start, selectionRange.end);
+                              }, 50);
+                            } else {
+                              // No selection range, just focus at the end
+                              setTimeout(() => {
+                                lexicalInputRef.current?.focus();
+                              }, 50);
+                            }
+                          }}
+                          onVisibilityChange={() => {}}
+                        />
+                      )}
 
-                    {contextMeter.show ? (
-                      <Box
-                        sx={{
-                          position: 'absolute',
-                          mr: 20,
-                          // Passive readout: must stay below composer popovers (attach
-                          // menu zIndex 1000 in AttachFileButton.tsx, slash/mention
-                          // suggestions), or it intercepts their clicks.
-                          zIndex: 1,
-                          backgroundColor: 'background.surface',
-                          borderRadius: '6px',
-                          padding: '4px 8px',
-                        }}
-                      >
-                        <Tooltip title="Assembled context size for this notebook (last turn)">
-                          <Typography
-                            sx={theme => ({
-                              color: contextMeter.danger ? 'red' : theme.palette.text.primary,
-                              textAlign: 'right',
-                              leadingTrim: 'both',
-                              textEdge: 'cap',
-                              fontSize: '14px',
-                              fontStyle: 'normal',
-                              fontWeight: '400',
-                              lineHeight: '100%',
-                              display: 'flex',
-                              flexDirection: 'column',
-                              alignItems: 'flex-end',
-                            })}
-                            variant="plain"
-                            level="body-xs"
-                          >
-                            <Box component="span" sx={{ fontWeight: '500' }}>
-                              {contextMeter.primary}
-                            </Box>
-                            <Box component="span" sx={{ opacity: 0.7, fontSize: '12px', mt: 0.5 }}>
-                              {contextMeter.secondary}
-                            </Box>
-                          </Typography>
-                        </Tooltip>
-                      </Box>
-                    ) : null}
-                  </Box>
-                </Stack>
+                      <LexicalChatInput
+                        ref={lexicalInputRef}
+                        value={chatInputValue}
+                        onChange={handleInputChange}
+                        onSubmit={handleEditorSubmit}
+                        onPaste={handlePaste}
+                        placeholder={`${t('session.typeYourMessage')}...`}
+                        agents={lexicalAgents}
+                      />
+
+                      {contextMeter.show ? (
+                        <Box
+                          sx={{
+                            position: 'absolute',
+                            mr: 20,
+                            // Passive readout: must stay below composer popovers (attach
+                            // menu zIndex 1000 in AttachFileButton.tsx, slash/mention
+                            // suggestions), or it intercepts their clicks.
+                            zIndex: 1,
+                            backgroundColor: 'background.surface',
+                            borderRadius: '6px',
+                            padding: '4px 8px',
+                          }}
+                        >
+                          <Tooltip title="Assembled context size for this notebook (last turn)">
+                            <Typography
+                              sx={theme => ({
+                                color: contextMeter.danger ? 'red' : theme.palette.text.primary,
+                                textAlign: 'right',
+                                leadingTrim: 'both',
+                                textEdge: 'cap',
+                                fontSize: '14px',
+                                fontStyle: 'normal',
+                                fontWeight: '400',
+                                lineHeight: '100%',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'flex-end',
+                              })}
+                              variant="plain"
+                              level="body-xs"
+                            >
+                              <Box component="span" sx={{ fontWeight: '500' }}>
+                                {contextMeter.primary}
+                              </Box>
+                              <Box component="span" sx={{ opacity: 0.7, fontSize: '12px', mt: 0.5 }}>
+                                {contextMeter.secondary}
+                              </Box>
+                            </Typography>
+                          </Tooltip>
+                        </Box>
+                      ) : null}
+                    </Box>
+                  </Stack>
+                )}
               </Box>
             </Grid>
           </Grid>
@@ -790,13 +839,11 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           handleSendClick={handleSendClick}
           handleStopMessage={handleStopMessage}
           pendingAutoSubmitGoal={pendingAutoSubmitGoal}
-          readyState={readyState}
-          hasActiveUploads={hasActiveUploads}
-          accessibleModels={accessibleModels}
+          sendBlockedReason={sendBlockedReason}
           isModelsLoading={isModelsLoading}
           isVoiceSessionEnabled={isVoiceSessionEnabled}
           voiceEngine={voiceEngine}
-          creditsBlocked={creditsExhausted && enforceCredits}
+          creditsBlocked={creditUi.toolbarBlocked}
           setDebugDrawerOpen={setDebugDrawerOpen}
         />
       </Stack>

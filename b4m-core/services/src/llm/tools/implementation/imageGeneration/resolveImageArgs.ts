@@ -1,5 +1,5 @@
-import { GenerateImageToolCall, ImageModels, type OpenAIImageQuality } from '@bike4mind/common';
-import { isPriceableImageSize } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
+import { GenerateImageToolCall, ImageModels, isGPTImageModel, type OpenAIImageQuality } from '@bike4mind/common';
+import { isPriceableImageSize, OMITTED_QUALITY_TIER } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 
 /** Tool-call args that may override the client's saved image selections. Nulls are
  *  accepted because the OpenAI SDK types them that way; the resolver normalizes them out. */
@@ -40,6 +40,14 @@ export interface ResolvedImageArgs {
  * back to 512x512), so this stays one rule rather than a per-provider branch. Gate on the
  * resolved model here if a self-hosted install ever needs sizes outside that set.
  *
+ * `quality` is the third exception, for GPT-Image models only: when neither side names a tier
+ * it is pinned to `OMITTED_QUALITY_TIER` rather than left undefined (#3007). An undefined
+ * quality is dropped from the OpenAI call, OpenAI then applies its own `'auto'` and can render
+ * at high effort, while the reservation below has already held the medium price - and image
+ * credits are never reconciled after the call. The pin is exactly the tier already billed, so
+ * no reservation changes; a caller wanting OpenAI's dynamic effort names `'auto'`, which bills
+ * at the ceiling. Other providers have no tier concept and keep the undefined.
+ *
  * Both the credit reservation (`ToolBuilder.reserveImageCredits` reads the `onStart`
  * payload) and the provider dispatch read this output, so the two can never disagree about
  * which args an image ran with. Note that this is an agreement about args, not about price: a
@@ -57,10 +65,12 @@ export function resolveImageArgs(
 
   const modelSuppliedSize = isPriceableImageSize(toolArgs.size) ? toolArgs.size : undefined;
 
+  const requestedQuality = toolArgs.quality ?? imageConfig?.quality;
+
   return {
     model,
     n: toolArgs.n ?? imageConfig?.n ?? 1,
     size: modelSuppliedSize ?? imageConfig?.size,
-    quality: toolArgs.quality ?? imageConfig?.quality,
+    quality: requestedQuality ?? (isGPTImageModel(model) ? OMITTED_QUALITY_TIER : undefined),
   };
 }

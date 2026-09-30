@@ -2,7 +2,7 @@ import { gearStampRepository } from '@bike4mind/database';
 
 /**
  * Gears - stamp keys for actions that leave no other queryable trace.
- * Everything else is DERIVED (see pages/api/gears/status.ts); add a key here
+ * Everything else is DERIVED (see server/services/gears/catalog.ts); add a key here
  * only when derivation is genuinely impossible.
  */
 export type StampedGearKey =

@@ -64,6 +64,11 @@ const SANDBOX_HTML = `<!DOCTYPE html>
 </head>
 <body>
 <script>
+  // Everything below is closure-scoped. document.write runs the artifact's own scripts in
+  // THIS window, so anything left on the global object is something an artifact can replace:
+  // a page defining its own reportHeight or watchHeight would otherwise take over the
+  // reporter. Left un-indented so the diff stays readable.
+  (function () {
   // event.origin is intentionally not checked: this iframe runs with an
   // opaque origin (sandbox="allow-scripts", no allow-same-origin), so the
   // parent must postMessage with targetOrigin '*' — no other window can
@@ -72,6 +77,118 @@ const SANDBOX_HTML = `<!DOCTYPE html>
   // (not { once: true }) so unrelated postMessages from browser extensions or
   // dev tooling cannot silently consume the listener before the parent posts.
   window.parent.postMessage({ type: 'artifact-sandbox-ready' }, '*');
+  // Report the written page's height so the parent can size the frame to its content
+  // rather than to a fixed guess. A cross-origin iframe cannot be measured from outside,
+  // so the measurement has to originate here. Set up AFTER document.write, which replaces
+  // the document (and with it the old body) wholesale.
+  var lastReportedHeight = 0;
+  var lastViewport = 0;
+  // Once the page is known to track the frame, the constant distance between its measurement
+  // and the viewport. Null until an echo proves it.
+  var trackedDelta = null;
+  // Measure how far the content reaches, NOT scrollHeight. documentElement.scrollHeight is
+  // never smaller than the viewport, and the viewport is the frame the parent sizes from
+  // this number - so a body with min-height 100vh reports frame height + margins, the parent
+  // grows the frame, the body grows with it, and the ResizeObserver below reports again.
+  // The bottom edge of the body's children carries no viewport term for that shape, so it is
+  // stable under a resize. Fixed-position children are skipped for the same reason: their
+  // rects are viewport-anchored. A viewport-tall CHILD still tracks the frame - see the echo
+  // check in reportHeight, which catches every such shape without enumerating them.
+  function contentHeight() {
+    var body = document.body;
+    if (!body) return 0;
+    var scrollY = window.scrollY || window.pageYOffset || 0;
+    var bottom = 0;
+    var children = body.children;
+    for (var i = 0; i < children.length; i++) {
+      var child = children[i];
+      var position = '';
+      try {
+        position = window.getComputedStyle(child).position;
+      } catch (e) {
+        position = '';
+      }
+      if (position === 'fixed') continue;
+      var childBottom = child.getBoundingClientRect().bottom + scrollY;
+      if (childBottom > bottom) bottom = childBottom;
+    }
+    // Nothing measurable (no children, or every child is fixed): fall back to the old
+    // measurement. Such a page has no content to grow into, so the loop cannot start.
+    if (bottom <= 0) return Math.max(body.scrollHeight, document.documentElement.scrollHeight);
+    var style;
+    try {
+      style = window.getComputedStyle(body);
+    } catch (e) {
+      style = null;
+    }
+    if (style) {
+      bottom += (parseFloat(style.paddingBottom) || 0) + (parseFloat(style.marginBottom) || 0);
+    }
+    return bottom;
+  }
+  // The body's own vertical margin and padding. A child's rect sits inside this, so it is
+  // space the page reserves around its content rather than content to scroll to.
+  function bodyBoxSlack() {
+    var style;
+    try {
+      style = window.getComputedStyle(document.body);
+    } catch (e) {
+      return 0;
+    }
+    if (!style) return 0;
+    return (
+      (parseFloat(style.marginTop) || 0) +
+      (parseFloat(style.marginBottom) || 0) +
+      (parseFloat(style.paddingTop) || 0) +
+      (parseFloat(style.paddingBottom) || 0)
+    );
+  }
+  function reportHeight() {
+    var viewport = window.innerHeight || 0;
+    var measured = Math.ceil(contentHeight());
+    if (!measured) return;
+
+    // Echo check. Measuring the children holds still for a viewport-tall <body>, but not for
+    // a viewport-tall CHILD - a div with min-height 100vh is the standard full-screen
+    // wrapper, and its rect grows with the frame this number sizes. Whatever the shape, a
+    // measurement whose distance from the viewport is unchanged while the viewport itself
+    // HAS changed is the frame's own growth arriving back here, not new content. Ending the
+    // loop needs that distance REMEMBERED, not just compared against the previous tick:
+    // after one drop the viewport stops changing, so the next tick would otherwise look
+    // like an ordinary measurement and report the same inflated number.
+    var delta = measured - viewport;
+    if (trackedDelta !== null) {
+      if (delta === trackedDelta) return;
+      // The distance moved, so the content itself changed. Measure it afresh.
+      trackedDelta = null;
+    } else if (lastReportedHeight && viewport !== lastViewport && delta === lastReportedHeight - lastViewport) {
+      trackedDelta = delta;
+      lastViewport = viewport;
+      return;
+    }
+
+    // A page that clears the viewport only by the body's own margin and padding has nothing
+    // further to show. Reporting the overshoot puts a "Show more" on a page that fits, and
+    // the reader gets blank space for the click. Only ever clamps DOWN: a short page keeps
+    // its own height so its card stays snug.
+    var overshootsWithinBodyBox = measured > viewport && measured <= viewport + bodyBoxSlack();
+    var height = viewport && overshootsWithinBodyBox ? viewport : measured;
+
+    lastViewport = viewport;
+    if (Math.abs(height - lastReportedHeight) < 2) return;
+    lastReportedHeight = height;
+    window.parent.postMessage({ type: 'artifact-sandbox-height', height: height }, '*');
+  }
+  function watchHeight() {
+    reportHeight();
+    // Late arrivals: webfonts and images land after the document closes.
+    setTimeout(reportHeight, 250);
+    setTimeout(reportHeight, 1200);
+    if (typeof ResizeObserver !== 'undefined' && document.body) {
+      new ResizeObserver(reportHeight).observe(document.body);
+    }
+  }
+
   function handleArtifactMessage(event) {
     if (event.source !== window.parent) return;
     if (!event.data || event.data.type !== 'artifact-html') return;
@@ -79,8 +196,10 @@ const SANDBOX_HTML = `<!DOCTYPE html>
     document.open();
     document.write(event.data.content);
     document.close();
+    watchHeight();
   }
   window.addEventListener('message', handleArtifactMessage);
+  })();
 </script>
 </body>
 </html>`;

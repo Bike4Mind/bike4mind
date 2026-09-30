@@ -167,9 +167,10 @@ async function readSetting(name: string): Promise<string | null> {
 /**
  * Write a setting and drop the in-process settings caches, exactly as recall-probe.ts's
  * `writeSetting` does - including the hard-delete path, for the same reason: the soft-delete
- * plugin does not hook `updateOne`/`findOneAndUpdate`, so a plain `deleteOne` would tombstone a row
- * that still carries this probe's last value and break every future read AND write of this setting
- * on the stage. See `AdminSettingsModel.ts` (`softDeletePlugin`) and `db-core/src/utils/mongo.ts`.
+ * plugin's update hook skips upserts that leave `deletedAt` alone, so a plain `deleteOne` would
+ * tombstone a row that still carries this probe's last value and break every future read AND write
+ * of this setting on the stage. The upsert needs `includeDeleted` to recover such a row (see there).
+ * See `AdminSettingsModel.ts` (`softDeletePlugin`) and `db-core/src/utils/mongo.ts`.
  */
 async function writeSetting(name: string, value: string | null): Promise<void> {
   if (value === null) {
@@ -179,7 +180,7 @@ async function writeSetting(name: string, value: string | null): Promise<void> {
       { settingName: name },
       { $set: { settingValue: value, deletedAt: null } },
       { upsert: true }
-    );
+    ).setOptions({ includeDeleted: true });
   }
   invalidateSettingsCache();
   invalidateScopedSettingsCache();
@@ -354,6 +355,9 @@ async function findOrCreateProbeLake(userId: string): Promise<{ lakeId: string }
     datalakeTag: DATALAKE_TAG,
     createdByUserId: userId,
     status: 'active',
+    // Unlike the help-corpus cron, this lake is only ever seeded by a developer running this
+    // script by hand - never on a schedule - so 'curated' is the accurate declaration here.
+    origin: 'curated',
   });
   logger.log(`Created data lake "${LAKE_SLUG}" (${created.id}).`);
   return { lakeId: created.id };

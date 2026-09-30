@@ -382,6 +382,11 @@ describe('mergeRetrievalSummary', () => {
       expect(merged && 'preauthorizedLakeIdsUsed' in merged).toBe(false);
     });
 
+    it('is present-and-empty when a side ran but reached no pre-authorized lake', () => {
+      const merged = mergeRetrievalSummary(base(), base({ preauthorizedLakeIdsUsed: [] }));
+      expect(merged?.preauthorizedLakeIdsUsed).toEqual([]);
+    });
+
     it('survives a side that never asserted the field', () => {
       const merged = mergeRetrievalSummary(base({ preauthorizedLakeIdsUsed: ['lake1'] }), base());
       expect(merged?.preauthorizedLakeIdsUsed).toEqual(['lake1']);
@@ -402,6 +407,11 @@ describe('mergeRetrievalSummary', () => {
       expect(merged && 'grantedLakeIdsUsed' in merged).toBe(false);
     });
 
+    it('is present-and-empty when a side ran but reached no lake by grant', () => {
+      const merged = mergeRetrievalSummary(base(), base({ grantedLakeIdsUsed: [] }));
+      expect(merged?.grantedLakeIdsUsed).toEqual([]);
+    });
+
     it('survives a side that never asserted the field', () => {
       const merged = mergeRetrievalSummary(base({ grantedLakeIdsUsed: ['lake1'] }), base());
       expect(merged?.grantedLakeIdsUsed).toEqual(['lake1']);
@@ -416,6 +426,31 @@ describe('mergeRetrievalSummary', () => {
       );
       expect(merged?.grantedLakeIdsUsed).toEqual(['both', 'granted']);
       expect(merged?.preauthorizedLakeIdsUsed).toEqual(['both']);
+    });
+  });
+
+  describe('readerOptInLakeIdsUsed', () => {
+    it('unions ids without duplicates, independent of injectedLakePromptIds', () => {
+      const merged = mergeRetrievalSummary(
+        base({ injectedLakePromptIds: ['lake1'], readerOptInLakeIdsUsed: ['lake1'] }),
+        base({ injectedLakePromptIds: ['lake1', 'lake2'], readerOptInLakeIdsUsed: ['lake2'] })
+      );
+      expect(merged?.readerOptInLakeIdsUsed).toEqual(['lake1', 'lake2']);
+    });
+
+    it('stays absent when neither side used the reader opt-in arm', () => {
+      const merged = mergeRetrievalSummary(base(), base());
+      expect(merged && 'readerOptInLakeIdsUsed' in merged).toBe(false);
+    });
+
+    it('is present-and-empty when a side ran but the reader opt-in arm admitted nothing', () => {
+      const merged = mergeRetrievalSummary(base(), base({ readerOptInLakeIdsUsed: [] }));
+      expect(merged?.readerOptInLakeIdsUsed).toEqual([]);
+    });
+
+    it('survives a side that never asserted the field', () => {
+      const merged = mergeRetrievalSummary(base({ readerOptInLakeIdsUsed: ['lake1'] }), base());
+      expect(merged?.readerOptInLakeIdsUsed).toEqual(['lake1']);
     });
   });
 
@@ -469,6 +504,40 @@ describe('mergeRetrievalSummary', () => {
     it('does not union the two sides - a surface must not widen the recorded scope', () => {
       const merged = mergeRetrievalSummary(base({ lakeScope: ['datalake:a'] }), base({ lakeScope: ['datalake:b'] }));
       expect(merged?.lakeScope).toEqual(['datalake:a']);
+    });
+  });
+
+  // #3055: same seed and same reasoning as lakeScope - both come off one getAccessibleDataLakeAccess
+  // call, so existing-wins pass-through is correct rather than a sum (a second write would double
+  // the identical exclusion, not report a new one).
+  describe('excludedLakes', () => {
+    it('survives a later surface write that carries none', () => {
+      const merged = mergeRetrievalSummary(
+        base({ excludedLakes: { count: 2, reason: 'access' } }),
+        base({ surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['datalake:acme:handbook'] })
+      );
+      expect(merged?.excludedLakes).toEqual({ count: 2, reason: 'access' });
+    });
+
+    it('stays absent on a turn nothing seeded', () => {
+      const merged = mergeRetrievalSummary(base(), base());
+      expect(merged && 'excludedLakes' in merged).toBe(false);
+    });
+
+    it('does not sum the two sides - a later write must not double the same exclusion', () => {
+      const merged = mergeRetrievalSummary(
+        base({ excludedLakes: { count: 2, reason: 'access' } }),
+        base({ excludedLakes: { count: 5, reason: 'access' } })
+      );
+      expect(merged?.excludedLakes).toEqual({ count: 2, reason: 'access' });
+    });
+
+    // The production direction: ChatCompletionProcess's seed calls this with the seed as
+    // `incoming` onto whatever a tool arm already wrote as `existing`, so "existing absent,
+    // incoming has it" must not be silently dropped.
+    it('picks it up from the incoming side when the existing side never wrote one', () => {
+      const merged = mergeRetrievalSummary(base(), base({ excludedLakes: { count: 2, reason: 'access' } }));
+      expect(merged?.excludedLakes).toEqual({ count: 2, reason: 'access' });
     });
   });
 });

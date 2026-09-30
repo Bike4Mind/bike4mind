@@ -110,7 +110,7 @@ export const sendToQueue = async (queueUrl: string, message: Record<string, unkn
  *
  * `waitTimeSeconds` defaults to 0 (short polling, immediate response) to preserve
  * existing callers. Pass up to 20 for long polling - used by the self-host worker's
- * poller loop (server/worker/selfHostWorker.ts) so it blocks instead of busy-spinning.
+ * poller loop (apps/workers/src/selfhost/selfHostWorker.ts) so it blocks instead of busy-spinning.
  */
 export const receiveFromQueue = async (
   queueUrl: string,
