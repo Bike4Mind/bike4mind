@@ -7,7 +7,8 @@ vi.mock('../../../../dataLakeService/assertLakeAccess', async importOriginal => 
   assertLakeAccessWithGrants: (...args: unknown[]) => assertLakeAccessWithGrantsMock(...args),
 }));
 const canManageLakeMock = vi.fn();
-vi.mock('../../../../dataLakeService/manageRule', () => ({
+vi.mock('../../../../dataLakeService/manageRule', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../../../dataLakeService/manageRule')>()),
   canManageLake: (...args: unknown[]) => canManageLakeMock(...args),
 }));
 const assertLakeAdmissionMock = vi.fn();
@@ -30,11 +31,15 @@ import type { ToolContext } from '../../base/types';
 const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
 const activeLake = { id: 'lake1', name: 'Research', status: 'active' };
 
-function makeContext({ enabled = true, withAudit = true }: { enabled?: boolean; withAudit?: boolean } = {}) {
+function makeContext({
+  enabled = true,
+  withAudit = true,
+  isAdmin = false,
+}: { enabled?: boolean; withAudit?: boolean; isAdmin?: boolean } = {}) {
   const statusUpdate = vi.fn().mockResolvedValue(undefined);
   const context = {
     userId: 'u1',
-    user: { id: 'u1' },
+    user: { id: 'u1', isAdmin },
     logger,
     statusUpdate,
     storage: { upload: vi.fn(), getSignedUrl: vi.fn() },
@@ -120,6 +125,21 @@ describe('save_content_to_data_lake', () => {
 
     await expect(run(context)).resolves.toContain('cannot add files');
     expect(createFabFileMock).not.toHaveBeenCalled();
+  });
+
+  // Mirrors list_my_data_lakes (isAssistantWriteTarget), so save never accepts a lake the list omits.
+  it('creates no file when a platform admin targets a lake they do not own', async () => {
+    const { context } = makeContext({ isAdmin: true });
+
+    await expect(run(context)).resolves.toContain('cannot add files');
+    expect(createFabFileMock).not.toHaveBeenCalled();
+  });
+
+  it('saves when a platform admin targets a lake they own', async () => {
+    assertLakeAccessWithGrantsMock.mockResolvedValue({ lake: { ...activeLake, createdByUserId: 'u1' }, grants: [] });
+    const { context } = makeContext({ isAdmin: true });
+
+    await expect(run(context)).resolves.toContain('Saved "notes.md"');
   });
 
   it('creates no file for a built-in lake', async () => {
@@ -245,6 +265,12 @@ describe('resolveFileNameAndType', () => {
   it('ignores trailing dots instead of reading them as an empty extension', () => {
     expect(resolveFileNameAndType('notes.md.')).toEqual({ fileName: 'notes.md', mimeType: 'text/markdown' });
     expect(resolveFileNameAndType('report.csv.')).toEqual({ fileName: 'report.csv', mimeType: 'text/csv' });
+  });
+
+  it('drops whitespace before or after trailing dots so the extension is still recognized', () => {
+    expect(resolveFileNameAndType('notes.md .')).toEqual({ fileName: 'notes.md', mimeType: 'text/markdown' });
+    expect(resolveFileNameAndType('notes.md. ')).toEqual({ fileName: 'notes.md', mimeType: 'text/markdown' });
+    expect(resolveFileNameAndType('report.csv  ')).toEqual({ fileName: 'report.csv', mimeType: 'text/csv' });
   });
 
   it('strips path separators', () => {

@@ -2334,6 +2334,87 @@ describe('ChatCompletionProcess', () => {
           expect(names).toContain('list_my_data_lakes');
           for (const toolName of DATA_LAKE_WRITE_TOOL_NAMES) expect(names).not.toContain(toolName);
         });
+
+        // The local-model (Ollama) trim (ChatCompletionProcess.ts's `modelInfo.backend ===
+        // ModelBackend.Ollama` block, ~line 3073) strips every AUTO_ADDED_TOOL_NAMES entry the user
+        // didn't select. The data-lake trio is in that list, so it must survive the trim when the
+        // caller explicitly selected save_content_to_data_lake - resolveEnabledTools' companion
+        // pairing (list_my_data_lakes, create_data_lake) counts as "selected" too - while an
+        // unrelated auto-added tool (blog_draft) the user never asked for still gets dropped, even
+        // though its own intent is in the message.
+        describe('local-model (Ollama) auto-added-tool trim', () => {
+          const mockOllamaModel = () => {
+            mockTextModel();
+            mockedGetAvailableModels.mockResolvedValue([
+              {
+                id: ChatModels.GPT4,
+                type: 'text',
+                name: 'Local Model',
+                backend: ModelBackend.Ollama,
+                max_tokens: 100,
+                contextWindow: 1000,
+                can_stream: false,
+                pricing: {},
+                supportsImageVariation: false,
+              },
+            ]);
+          };
+
+          // Blog intent in the message (to prove blog_draft would otherwise be offered) plus an
+          // explicit save-to-lake tool selection (to prove its companions survive the trim).
+          const trimBody = () =>
+            lakeBody({
+              message: 'Turn this conversation into a blog post',
+              tools: ['save_content_to_data_lake'],
+            });
+
+          // Control: same body, non-Ollama backend. Both the data-lake trio and the unrelated
+          // blog_draft are offered - proves the trim (not the gate or the selection) is what removes
+          // blog_draft on the Ollama path below.
+          it('offers the data-lake trio and the unrelated blog_draft on a non-Ollama model', async () => {
+            (service as any).user.isAdmin = true;
+            try {
+              mockTextModel();
+              await service.process({ body: trimBody(), logger: mockLogger });
+              const names = offeredNames();
+              expect(names).toEqual(
+                expect.arrayContaining([
+                  'save_content_to_data_lake',
+                  'list_my_data_lakes',
+                  'create_data_lake',
+                  'blog_draft',
+                ])
+              );
+            } finally {
+              delete (service as any).user.isAdmin;
+            }
+          });
+
+          it('keeps the selected save tool and its list/create companions on an Ollama model', async () => {
+            (service as any).user.isAdmin = true;
+            try {
+              mockOllamaModel();
+              await service.process({ body: trimBody(), logger: mockLogger });
+              const names = offeredNames();
+              expect(names).toEqual(
+                expect.arrayContaining(['save_content_to_data_lake', 'list_my_data_lakes', 'create_data_lake'])
+              );
+            } finally {
+              delete (service as any).user.isAdmin;
+            }
+          });
+
+          it('drops the unrelated blog_draft on an Ollama model despite its intent in the message', async () => {
+            (service as any).user.isAdmin = true;
+            try {
+              mockOllamaModel();
+              await service.process({ body: trimBody(), logger: mockLogger });
+              expect(offeredNames()).not.toContain('blog_draft');
+            } finally {
+              delete (service as any).user.isAdmin;
+            }
+          });
+        });
       });
 
       // Reviewer finding: both resolveCorpusInlinePlan's `knowledgeSearchDisabled` input (site

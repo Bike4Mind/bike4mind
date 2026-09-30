@@ -3,18 +3,23 @@ import type { ToolDefinition } from '../../base/types';
 import { listDataLakes } from '../../../../dataLakeService/listDataLakes';
 import { isFallbackLake } from '../../../../dataLakeService/assertLakeAccess';
 import { buildToolAccessContext } from '../../helpers/toolAccessContext';
-import { DATA_LAKES_DISABLED_MESSAGE, NOT_AVAILABLE_MESSAGE, dataLakesEnabled, listLakesAdapters } from './adapters';
+import {
+  DATA_LAKES_DISABLED_MESSAGE,
+  NOT_AVAILABLE_MESSAGE,
+  dataLakesEnabled,
+  isAssistantWriteTarget,
+  listLakesAdapters,
+} from './adapters';
 
 const TOOL_NAME = 'list_my_data_lakes';
 
 /**
- * A lake this caller can put a file into: manageable, backed by a document (a built-in lake is
- * read-only - the same predicate assertLakeWritable uses), and not archived. A platform admin
- * manages every lake on the platform, so for them the list narrows to lakes they actually own.
+ * A lake this caller can put a file into: an assistant write target (see isAssistantWriteTarget),
+ * backed by a document (a built-in lake is read-only - the same predicate assertLakeWritable uses),
+ * and not archived.
  */
 function isWritableTarget(lake: ManageableDataLakeConfig, isAdmin: boolean): boolean {
-  if (!lake.canManage || isFallbackLake(lake)) return false;
-  if (isAdmin && !lake.isOwn) return false;
+  if (!isAssistantWriteTarget(lake, isAdmin) || isFallbackLake(lake)) return false;
   return (LAKE_ATTACHABLE_STATUSES as readonly string[]).includes(lake.status ?? 'active');
 }
 

@@ -9,6 +9,16 @@ export const NOT_AVAILABLE_MESSAGE =
 export const DATA_LAKES_DISABLED_MESSAGE =
   'Data lakes are not enabled on this platform, so nothing can be saved to one. Tell the user so.';
 
+/**
+ * Whether the assistant may save into a lake - the one rule list_my_data_lakes offers by and
+ * save_content_to_data_lake accepts by, so the list can never under-report relative to save. A
+ * platform admin manages every lake on the platform; the assistant narrows them to lakes they own
+ * rather than writing platform-wide on their behalf.
+ */
+export function isAssistantWriteTarget(lake: { canManage?: boolean; isOwn?: boolean }, isAdmin: boolean): boolean {
+  return !!lake.canManage && (!isAdmin || !!lake.isOwn);
+}
+
 function hasMethods<T extends object, K extends keyof T>(
   target: T | undefined,
   keys: readonly K[]

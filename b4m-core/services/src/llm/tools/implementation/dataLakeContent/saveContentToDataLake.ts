@@ -9,7 +9,7 @@ import {
 import { getMimeTypeByExtension } from '@bike4mind/utils';
 import type { ToolContext, ToolDefinition } from '../../base/types';
 import { assertLakeAccessWithGrants, assertLakeWritable } from '../../../../dataLakeService/assertLakeAccess';
-import { canManageLake } from '../../../../dataLakeService/manageRule';
+import { canManageLake, isEffectiveOwner } from '../../../../dataLakeService/manageRule';
 import { assertLakeAdmission } from '../../../../dataLakeService/lakeAdmissionGate';
 import { addFileToDataLake } from '../../../../dataLakeService/addFileToDataLake';
 import { createFabFile } from '../../../../fabFileService/create';
@@ -19,6 +19,7 @@ import {
   NOT_AVAILABLE_MESSAGE,
   dataLakesEnabled,
   describeFailure,
+  isAssistantWriteTarget,
   saveContentAdapters,
 } from './adapters';
 
@@ -72,8 +73,9 @@ export function resolveFileNameAndType(
   rawFileName: string,
   requested?: SavableMimeType
 ): { fileName: string; mimeType: SavableMimeType } {
-  // Trailing dots are dropped first so `notes.md.` reads as `notes.md`, not an empty extension.
-  const baseName = rawFileName.replace(/[\\/]/g, '-').replace(/\.+$/, '');
+  // Trailing dots (and any whitespace around them) are dropped first so `notes.md .` reads as
+  // `notes.md`, not an empty or `md ` extension.
+  const baseName = rawFileName.replace(/[\\/]/g, '-').replace(/[\s.]+$/, '');
   const dot = baseName.lastIndexOf('.');
   const extension = dot >= 0 ? baseName.slice(dot + 1) : '';
   const extensionType = mimeTypeForExtension(extension.toLowerCase());
@@ -163,7 +165,11 @@ export const saveContentToDataLakeTool: ToolDefinition = {
         });
         lake = resolved.lake;
         assertLakeWritable(lake);
-        if (!canManageLake(lake, ctx, resolved.grants)) {
+        const writeRights = {
+          canManage: canManageLake(lake, ctx, resolved.grants),
+          isOwn: isEffectiveOwner(lake, ctx, resolved.grants),
+        };
+        if (!isAssistantWriteTarget(writeRights, ctx.isAdmin)) {
           return `Nothing was saved: the user cannot add files to the data lake "${lake.name}". Use list_my_data_lakes to find one they can.`;
         }
         if (lake.status && !(LAKE_ATTACHABLE_STATUSES as readonly string[]).includes(lake.status)) {

@@ -7,6 +7,7 @@ vi.mock('../../../../dataLakeService/createDataLake', () => ({
 }));
 
 import { createDataLakeTool, prefixCandidate } from './createDataLake';
+import { TAG_PREFIX_UNAVAILABLE_CODE } from '../../../../dataLakeService/tagPrefixCollision';
 import { NOT_AVAILABLE_MESSAGE, DATA_LAKES_DISABLED_MESSAGE } from './adapters';
 import type { ToolContext } from '../../base/types';
 
@@ -82,7 +83,9 @@ describe('create_data_lake', () => {
 
   it('retries with a disambiguated prefix when the first one collides', async () => {
     createDataLakeMock
-      .mockRejectedValueOnce(new BadRequestError('Tag prefix "research:" overlaps the lake "Other"'))
+      .mockRejectedValueOnce(
+        new BadRequestError('Tag prefix "research:" overlaps the lake "Other"', { code: TAG_PREFIX_UNAVAILABLE_CODE })
+      )
       .mockResolvedValueOnce({ id: 'lake9', name: 'Research' });
 
     const result = await run(makeContext(), { name: 'Research' });
@@ -98,6 +101,7 @@ describe('create_data_lake', () => {
     const foreign = Object.assign(new Error('Tag prefix "research:" is reserved'), {
       name: 'BadRequestError',
       statusCode: 400,
+      additionalInfo: { code: TAG_PREFIX_UNAVAILABLE_CODE },
     });
     createDataLakeMock.mockRejectedValueOnce(foreign).mockResolvedValueOnce({ id: 'lake9', name: 'Research' });
 
@@ -117,12 +121,23 @@ describe('create_data_lake', () => {
   });
 
   it('gives up after repeated collisions without creating anything', async () => {
-    createDataLakeMock.mockRejectedValue(new BadRequestError('Tag prefix "research:" is reserved'));
+    createDataLakeMock.mockRejectedValue(
+      new BadRequestError('Tag prefix "research:" is reserved', { code: TAG_PREFIX_UNAVAILABLE_CODE })
+    );
 
     const result = await run(makeContext(), { name: 'Research' });
 
     expect(createDataLakeMock).toHaveBeenCalledTimes(5);
     expect(result).toContain('Could not find a free tag prefix');
+  });
+
+  it('does not retry a prefix-worded 400 that lacks the collision code', async () => {
+    createDataLakeMock.mockRejectedValue(new BadRequestError('Tag prefix "research:" overlaps the lake "Other"'));
+
+    const result = await run(makeContext(), { name: 'Research' });
+
+    expect(createDataLakeMock).toHaveBeenCalledTimes(1);
+    expect(result).toBe('The data lake was not created: Tag prefix "research:" overlaps the lake "Other".');
   });
 
   it('does not retry an unrelated failure and hides server internals', async () => {

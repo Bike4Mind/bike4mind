@@ -79,7 +79,10 @@ export const DATA_LAKE_WRITE_TOOL_NAMES = [
 export const DATA_LAKE_READ_TOOL_NAMES = ['list_my_data_lakes'] as const satisfies readonly B4MLLMTools[];
 
 /** Every data-lake tool - offered, trimmed and paired together (see resolveEnabledTools in services). */
-export const DATA_LAKE_TOOL_NAMES: readonly string[] = [...DATA_LAKE_READ_TOOL_NAMES, ...DATA_LAKE_WRITE_TOOL_NAMES];
+export const DATA_LAKE_TOOL_NAMES = [
+  ...DATA_LAKE_READ_TOOL_NAMES,
+  ...DATA_LAKE_WRITE_TOOL_NAMES,
+] as const satisfies readonly B4MLLMTools[];
 
 export const B4MLLMToolsList = b4mLLMTools.options.map(tool => tool);
 

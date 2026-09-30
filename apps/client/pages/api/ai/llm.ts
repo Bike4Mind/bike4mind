@@ -29,6 +29,9 @@ import { Request } from 'express';
 // accept AI_GENERATE only to preserve legacy completions behavior; that rationale does not
 // extend here, since this route is in no contract. Scope checks apply only to API-key requests;
 // browser/JWT sessions fall through untouched (see apiKeyAuth).
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every(item => typeof item === 'string');
+
 const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
   .use(
     rateLimit({
@@ -106,8 +109,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     const effectiveOrgId = await resolveBillingOrgId(req, invokeParams.organizationId);
 
     // Unioned and placed after the spread, so a client value can only ADD denials; the key's own
-    // scope gaps always win.
-    const deniedTools = [...(invokeParams.deniedTools ?? []), ...dataLakeToolsDeniedFor(req)];
+    // scope gaps always win. invokeParams is the unparsed body: a malformed value is left in place
+    // (not spread, not replaced) so ChatCompletionInvokeParamsSchema rejects it with a 422.
+    const requestedDenials: unknown = invokeParams.deniedTools;
+    const clientDenials: string[] | undefined =
+      requestedDenials === undefined ? [] : isStringArray(requestedDenials) ? requestedDenials : undefined;
+    const deniedTools = clientDenials ? [...clientDenials, ...dataLakeToolsDeniedFor(req)] : [];
 
     const quest = await chatCompletion.invoke({
       body: {

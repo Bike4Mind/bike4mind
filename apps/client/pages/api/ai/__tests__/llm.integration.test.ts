@@ -254,6 +254,16 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       ]);
     });
 
+    // invoke is mocked, so this pins the handler's half: no TypeError from the spread, and the raw
+    // value reaches ChatCompletionInvokeParamsSchema (which 422s it) instead of being replaced.
+    it('forwards a non-array deniedTools untouched rather than crashing on the merge', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { deniedTools: 5 } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedDenied()).toBe(5);
+    });
+
     it('denies nothing to a key that holds datalake:write', async () => {
       validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE]);
       const { req, res } = fire();

@@ -8,6 +8,7 @@ import {
 } from '@bike4mind/common';
 import type { ToolDefinition } from '../../base/types';
 import { createDataLake } from '../../../../dataLakeService/createDataLake';
+import { TAG_PREFIX_UNAVAILABLE_CODE } from '../../../../dataLakeService/tagPrefixCollision';
 import { buildToolAccessContext } from '../../helpers/toolAccessContext';
 import {
   DATA_LAKES_DISABLED_MESSAGE,
@@ -27,15 +28,18 @@ const CreateDataLakeArgsSchema = z.object({
 
 /**
  * createDataLake refuses (rather than auto-suffixes) a tag prefix that overlaps another lake or a
- * built-in one - see its assertPrefixAvailable, whose two messages this matches. The user never
- * saw a prefix here, so a disambiguated one is fine to mint on their behalf. Matched by name, not
- * `instanceof` - see httpStatusOf.
+ * built-in one, tagging the error with TAG_PREFIX_UNAVAILABLE_CODE. The user never saw a prefix
+ * here, so a disambiguated one is fine to mint on their behalf. Matched by name, not `instanceof` -
+ * see httpStatusOf.
  */
 function isPrefixCollision(error: unknown): boolean {
+  if (!(error instanceof Error) || error.name !== 'BadRequestError' || !('additionalInfo' in error)) return false;
+  const { additionalInfo } = error;
   return (
-    error instanceof Error &&
-    error.name === 'BadRequestError' &&
-    /^Tag prefix ".*" (overlaps|is reserved)/.test(error.message)
+    typeof additionalInfo === 'object' &&
+    additionalInfo !== null &&
+    'code' in additionalInfo &&
+    additionalInfo.code === TAG_PREFIX_UNAVAILABLE_CODE
   );
 }
 
