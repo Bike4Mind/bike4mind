@@ -208,8 +208,25 @@ describe('import containment', () => {
   });
 
   it('refuses a credential store reached through a symlink inside the project', async () => {
+    await mkdir(join(homedir(), '.ssh'), { recursive: true });
+    await writeFile(join(homedir(), '.ssh', 'id_rsa.md'), 'SECRET PAYLOAD', 'utf8');
     await symlink(join(homedir(), '.ssh'), join(project, 'keys'));
-    expect(await refusalFor('@keys/id_rsa.md')).toContain('refused');
+    const text = await refusalFor('@keys/id_rsa.md');
+    expect(text).not.toContain('SECRET PAYLOAD');
+    expect(text).toContain('refused');
+  });
+
+  it('refuses a credential store that lies inside the project tree itself', async () => {
+    // Containment alone would allow this one - the home directory is the project - so it is the
+    // credentialPaths() deny list, and nothing else, that has to refuse it.
+    const home = homedir();
+    await mkdir(join(home, '.ssh'), { recursive: true });
+    await writeFile(join(home, '.ssh', 'id_rsa.md'), 'SECRET PAYLOAD', 'utf8');
+    await writeFile(join(home, 'CLAUDE.md'), '@.ssh/id_rsa.md', 'utf8');
+
+    const blocks = await loadInstructions(home, home, userRoot);
+    expect(blocks[0].text).not.toContain('SECRET PAYLOAD');
+    expect(blocks[0].text).toContain('refused, a protected path');
   });
 
   it('refuses a non-markdown import, which is what keeps ~/.claude/.credentials.json out', async () => {

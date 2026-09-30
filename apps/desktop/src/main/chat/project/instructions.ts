@@ -70,10 +70,18 @@ class Budget {
   }
 }
 
-interface ImportContext {
+interface Allowed {
   /** Real paths an import may resolve inside. */
   roots: readonly string[];
   denied: readonly string[];
+}
+
+interface ImportContext {
+  /**
+   * Resolved on the first import and then reused. Almost no instruction file has one, and this
+   * runs for every session, so the dozen realpath calls are not worth making up front.
+   */
+  allowed: () => Promise<Allowed>;
   budget: Budget;
 }
 
@@ -89,13 +97,9 @@ export async function loadInstructions(
   userInstructionsRoot: string
 ): Promise<InstructionBlock[]> {
   const directories = [workingDirectory, projectDirectory].filter((value): value is string => !!value);
+  let allowed: Promise<Allowed> | null = null;
   const context: ImportContext = {
-    roots: await realRoots([...directories, userInstructionsRoot]),
-    // `credentialPaths()` lists ~/.claude, which is also where the user's instructions live, so
-    // that one entry cannot stand: the feature is reading a file inside it. Every other store -
-    // ~/.ssh, ~/.aws, the app's own token vault - still applies, and what replaces the blanket
-    // denial over ~/.claude is the .md rule in `resolveImport`, which keeps .credentials.json out.
-    denied: credentialPaths().filter(path => path !== userInstructionsRoot),
+    allowed: () => (allowed ??= resolveAllowed(directories, userInstructionsRoot)),
     budget: new Budget(MAX_INSTRUCTIONS_BYTES),
   };
 
@@ -106,8 +110,25 @@ export async function loadInstructions(
   return [user, project].filter((block): block is InstructionBlock => block !== null);
 }
 
-async function realRoots(roots: readonly string[]): Promise<string[]> {
-  const resolved = await Promise.all(roots.map(root => realpath(root).catch(() => resolve(root))));
+async function resolveAllowed(directories: readonly string[], userInstructionsRoot: string): Promise<Allowed> {
+  const [roots, denied] = await Promise.all([
+    realPaths([...directories, userInstructionsRoot]),
+    // `credentialPaths()` lists ~/.claude, which is also where the user's instructions live, so
+    // that one entry cannot stand: the feature is reading a file inside it. Every other store -
+    // ~/.ssh, ~/.aws, the app's own token vault - still applies, and what replaces the blanket
+    // denial over ~/.claude is the .md rule in `resolveImport`, which keeps .credentials.json out.
+    //
+    // Resolved like the roots are, and for the same reason sandbox.ts resolves its own copies:
+    // the candidate is compared after symlinks are collapsed, so a deny entry left in its
+    // unresolved spelling would never match one - and would fail open.
+    realPaths(credentialPaths().filter(path => path !== userInstructionsRoot)),
+  ]);
+  return { roots, denied };
+}
+
+/** Each path with symlinks collapsed, falling back to the lexical form when it does not exist. */
+async function realPaths(paths: readonly string[]): Promise<string[]> {
+  const resolved = await Promise.all(paths.map(path => realpath(path).catch(() => resolve(path))));
   return [...new Set(resolved)];
 }
 
@@ -234,10 +255,11 @@ async function resolveImport(spec: string, importerPath: string, context: Import
   // rather than by whether it is there - the reason it was refused must not answer "does
   // /Users/someone/secrets exist" for anything outside the roots.
   const real = await realpathNearest(lexical);
-  if (!context.roots.some(root => isWithin(root, real))) {
+  const { roots, denied } = await context.allowed();
+  if (!roots.some(root => isWithin(root, real))) {
     throw new Error('refused, outside this project and your instructions folder');
   }
-  if (context.denied.some(path => isWithin(path, real))) throw new Error('refused, a protected path');
+  if (denied.some(path => isWithin(path, real))) throw new Error('refused, a protected path');
 
   // The lexical spelling is what gets read: `real` may be a symlink's target, and reading that
   // would quietly follow a link somewhere other than where the file says. Safe only because the

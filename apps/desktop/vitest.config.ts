@@ -12,6 +12,7 @@ export default defineConfig({
   test: {
     ...sharedTest,
     environment: 'node',
+    setupFiles: [resolve(__dirname, 'vitest.setup.ts')],
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
   },
 });
