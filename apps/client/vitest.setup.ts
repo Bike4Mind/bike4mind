@@ -62,6 +62,7 @@ vi.mock('sst', () => ({
     GITHUB_LAKE_APP_ID: { value: '123456' },
     GITHUB_LAKE_APP_PRIVATE_KEY: { value: 'test-github-lake-app-private-key' },
     GITHUB_LAKE_APP_SLUG: { value: 'test-lake-app' },
+    githubLakeIngestQueue: { url: 'https://sqs.test/githubLakeIngestQueue' },
     GITHUB_MCP_CLIENT_ID: { value: 'test-github-mcp-client-id' },
     GITHUB_MCP_CLIENT_SECRET: { value: 'test-github-mcp-client-secret' },
     STRIPE_WEBHOOK_SECRET: { value: 'test-stripe-webhook-secret' },

@@ -4,35 +4,29 @@ import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import {
   User,
   adminSettingsRepository,
-  changeStorageSize,
   dataLakeRepository,
   dataLakeBatchRepository,
-  fabFileChunkRepository,
   fabFileRepository,
   lakeMembershipChangeEventRepository,
   orgGoogleDriveConnectionRepository,
-  scopedSettingsRepository,
-  sessionRepository,
-  userRepository,
-  withTransaction,
 } from '@bike4mind/database';
 import {
   BATCH_NON_TERMINAL_STATUSES,
   DATALAKE_TAG_STRENGTH,
   KnowledgeType,
   FabFileSourceType,
-  isDataLakeTagName,
-  matchesTagPrefixArm,
   type IUserDocument,
   isLakeIngestable,
 } from '@bike4mind/common';
 import { BadRequestError, checkStorageLimit, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { dataLakeService, fabFilesService } from '@bike4mind/services';
-import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
-import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
-import { createFabFile } from '@server/managers/fabFileManager';
+import { dataLakeService } from '@bike4mind/services';
 import defineAbilitiesFor from '@server/auth/ability';
-import { getFilesStorage } from '@server/utils/storage';
+import {
+  assertConnectorLakeWrite,
+  createLakeIngestRetirer,
+  ingestLakeFile,
+  settleLakeIngestBatch,
+} from '@server/queueHandlers/lakeIngestShared';
 import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
 import {
   disableDriveConnectionForLake,
@@ -458,32 +452,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
      * user can even be resolved - a deleted connection, a purged lake) can still settle the batch it
      * was adopting. Takes only a batch id, not the resolved `adoptedBatch`, for exactly that reason.
      */
-    const settleChainedBatch = async (batchId: string) => {
-      const current = await dataLakeBatchRepository.findById(batchId);
-      if (!current) return;
-      // A manifest entry and a skippedFiles increment are NOT disjoint: objectCreated.ts marks an
-      // audio file (or every file with enableAutoChunk off) 'skipped' on an entry THIS handler already
-      // appended before upload, incrementing skippedFiles on top of it. Counting entries.length whole
-      // would double-count that file - once via the manifest, once via the counter - and the re-planned
-      // totalFiles would then sit one too high for the finalize gate to ever reach it. Only THIS
-      // handler's own skip() (drive-side: oversized/unsupported/fetch-failed) mints no manifest entry
-      // at all, so those are the only skippedFiles that need adding back in.
-      const produced = (current.files?.filter(f => f.status !== 'skipped').length ?? 0) + (current.skippedFiles ?? 0);
-      // What the chain PLANNED minus what it produced is exactly the work it gave up on, and it is
-      // derivable here at every exit - including the ones that cannot know a count (a continuation whose
-      // connection or lake was deleted mid-chain settles a batch it never got to walk). Recording it is
-      // what keeps the re-plan below honest: dropping totalFiles to `produced` is what lets the finalize
-      // gate be reached at all, but on its own it rewrites a chain that ingested 3 of 500 files into a
-      // clean 3-of-3 success, and in the degenerate case (throttled before the first file on every
-      // slice) into an empty folder. `max` because a mid-chain walk that finds MORE files raises the
-      // plan, never lowers it, so produced can never legitimately exceed it.
-      const deferredFiles = Math.max(0, current.totalFiles - produced);
-      const settled =
-        produced === current.totalFiles
-          ? current
-          : await dataLakeBatchRepository.setTotalFilesIfActive(batchId, produced, deferredFiles);
-      await finalizeBatchIfComplete(settled ?? current, logger);
-    };
+    const settleChainedBatch = (batchId: string) => settleLakeIngestBatch(batchId, logger);
 
     /**
      * End this run's claim: heal the connection back to 'connected' (or record why the sync stopped)
@@ -888,241 +857,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
       });
 
-    // Bytes reclaimed by the full deletes below, accumulated PER OWNER: after a reconnect the copies
-    // one run retires can belong to more than one user (see retireSupersededCopy), and each one's
-    // quota has to be given back to the right document.
-    const reclaimedBytesByUserId = new Map<string, number>();
-
-    // Every lake whose PREFIX arm could reach a file owned by anyone in this connection's stored set,
-    // or by whoever is connected now. Memoized: resolved ONCE for the whole run rather than per retire,
-    // and not at all on a run that retires nothing - the common poll outcome. Membership is still
-    // re-asserted per lake, per owner, inside findOtherLakeClaims.
-    let candidateLakesOnce: ReturnType<typeof dataLakeService.loadPrefixArmCandidateLakes> | undefined;
-    const prefixArmCandidateLakes = () =>
-      (candidateLakesOnce ??= dataLakeService.loadPrefixArmCandidateLakes(
-        [connection.connectedBy, ...existingDocs.map(doc => doc.userId)],
-        { db: { dataLakes: dataLakeRepository } }
-      ));
-
-    // deleteFabFile throws when its actor no longer exists, which would fail the whole reconcile on a
-    // deterministic condition (an owner deleted since ingest) - retried to the DLQ, never converging.
-    // Resolve once per owner and skip that copy instead.
-    const ownerExists = new Map<string, boolean>();
-    const ownerStillExists = async (ownerId: string) => {
-      const cached = ownerExists.get(ownerId);
-      if (cached !== undefined) return cached;
-      const exists = !!(await userRepository.findById(ownerId));
-      ownerExists.set(ownerId, exists);
-      return exists;
-    };
-
-    /**
-     * Move what the hard delete is about to destroy onto the fresh copy superseding it: the notebook
-     * attachments (deleteFabFile strips the retired id from every session's `knowledgeIds`) and the
-     * tags a human applied by hand (the replacement is minted with this lake's tags only).
-     *
-     * Only ever called on the delete branch. On the unpicked branch the retired copy keeps living
-     * with its links and tags intact, so there is nothing to carry - and attaching the replacement
-     * alongside it would put the same document in a notebook twice.
-     */
-    const carryForwardToReplacement = async (
-      retiredCopy: (typeof existingDocs)[number],
-      replacementFabFileId: string
-    ) => {
-      // Link the replacement BEFORE the delete unlinks the stale id: deleteFabFile filters only the
-      // retired id out of `knowledgeIds`, so an entry appended here survives that same write.
-      const attached = await sessionRepository.findAllWithKnowledgeId(retiredCopy.id);
-      for (const notebook of attached) {
-        const knowledgeIds = notebook.knowledgeIds ?? [];
-        if (knowledgeIds.includes(replacementFabFileId)) continue;
-        await sessionRepository.update({ id: notebook.id, knowledgeIds: [...knowledgeIds, replacementFabFileId] });
-      }
-
-      // A meta-tag is membership, not content: this lake's was just pulled, the gate proved no other
-      // lake holds one, and a non-canonical leftover names no lake at all. None of them carry over.
-      //
-      // Nor may a carried tag enrol the REPLACEMENT in a lake of its own. The gate cleared the
-      // RETIRED copy's owner, and after a reconnect the replacement's owner differs (it is minted as
-      // connection.connectedBy), so a tag that conferred nothing there can still match a prefix arm
-      // of a lake the new owner created. Dropping those keeps this a pure carry-over, and keeps it
-      // out of the membership doors (reconcileLakeTags) a real join would have to go through.
-      const replacementOwnerLakes = (await prefixArmCandidateLakes()).filter(
-        candidate => candidate.createdByUserId === connection.connectedBy
-      );
-      const carried: { name: string; strength: number }[] = [];
-      for (const tag of retiredCopy.tags ?? []) {
-        const name = tag?.name;
-        if (typeof name !== 'string' || isDataLakeTagName(name)) continue;
-        if (replacementOwnerLakes.some(candidate => matchesTagPrefixArm([name], candidate.fileTagPrefix))) continue;
-        carried.push({ name, strength: typeof tag.strength === 'number' ? tag.strength : 0 });
-      }
-      // Grouped because pushTagsByFabFileId applies ONE strength per call, and a carried tag keeps
-      // the strength a human gave it rather than being flattened to the default.
-      const namesByStrength = new Map<number, string[]>();
-      for (const { name, strength } of carried) {
-        const names = namesByStrength.get(strength);
-        if (names) names.push(name);
-        else namesByStrength.set(strength, [name]);
-      }
-      for (const [strength, names] of namesByStrength) {
-        await fabFileRepository.pushTagsByFabFileId(replacementFabFileId, names, strength);
-      }
-    };
-
-    /**
-     * Retire a superseded copy of a Drive file: unpick it from THIS lake, then delete it outright
-     * only when nothing else claims it - no other lake under either membership arm, and no share
-     * granting a reader other than its owner. `replacementFabFileId`
-     * is the fresh copy that supersedes this one, and inherits its links and tags. The header covers
-     * why the two steps cannot collapse into one soft-delete, why both arms have to be tested, and
-     * why the actor is the row's own owner. Returns what it did, for the log.
-     */
-    const retireSupersededCopy = async (staleCopy: (typeof existingDocs)[number], replacementFabFileId: string) => {
-      // Per-lake by construction: clears this lake's meta-tag and prefixed content tags, nothing else.
-      await dataLakeService.removeFileFromLake(
-        membershipActor,
-        lake,
-        staleCopy.id,
-        { db: { fabFiles: fabFileRepository, ...membershipAuditDb }, logger },
-        { origin: 'connector' }
-      );
-
-      // Re-read AFTER the unpick, so the gate runs against the tags that actually SURVIVE it. The
-      // question a hard delete must answer is "now that this file has left THIS lake, does any other
-      // lake still hold it", and only the stored document answers that without re-deriving which
-      // signals removeFileFromLake chose to pull.
-      const retiredCopy = await fabFileRepository.findById(staleCopy.id);
-      if (!retiredCopy) {
-        logger.warn('[driveLakeIngest] superseded copy vanished before retire; unpicked only', {
-          fabFileId: staleCopy.id,
-        });
-        return 'unpicked' as const;
-      }
-
-      // A grant to anyone other than the owner is a claim too, and the same argument the other-lake
-      // branch makes below applies: the delete is global, so it would take the share vector with it
-      // and leave the sharee holding a notebook reference they can no longer resolve - silently,
-      // because getAccessibleFiles just drops an id the reader has no grant on. The replacement
-      // carries no shares (it is minted for connection.connectedBy alone), so there is nothing to
-      // hand them instead. Keep the retired copy alive and merely unpicked: the sharee sees the
-      // PRE-EDIT content, which they can re-request, rather than losing the file outright.
-      const shareClaims = {
-        users: (retiredCopy.users ?? []).length,
-        groups: (retiredCopy.groups ?? []).length,
-        globalRead: !!retiredCopy.isGlobalRead,
-      };
-      if (shareClaims.users > 0 || shareClaims.groups > 0 || shareClaims.globalRead) {
-        logger.info('[driveLakeIngest] superseded copy is shared outside its owner; unpicked only', {
-          fabFileId: staleCopy.id,
-          ...shareClaims,
-        });
-        return 'unpicked' as const;
-      }
-
-      const tagNames = (retiredCopy.tags ?? [])
-        .map(tag => tag?.name)
-        .filter((name): name is string => typeof name === 'string');
-
-      const claims = await dataLakeService.findOtherLakeClaims({ userId: retiredCopy.userId, tagNames }, lake, {
-        db: { dataLakes: dataLakeRepository },
-        candidateLakes: await prefixArmCandidateLakes(),
-      });
-      if (dataLakeService.hasOtherLakeClaim(claims)) {
-        // Someone curated this file into another lake - by that lake's meta-tag, or by a tag under
-        // its fileTagPrefix. It leaves the Drive lake and keeps living there; deleting it would evict
-        // it from a lake this poll has no business touching. The consequence, deliberately: that lake
-        // keeps the PRE-EDIT copy, because the fresh replacement is tagged into this lake only.
-        // Propagating an edit into a hand-curated lake is a decision for whoever curated it, not for
-        // a background poll - and holding stale content is recoverable (re-add the new copy), whereas
-        // a silent eviction is not.
-        logger.info('[driveLakeIngest] superseded copy belongs to another lake; unpicked only', {
-          fabFileId: staleCopy.id,
-          otherLakeTags: claims.metaTagNames,
-          otherLakeIds: claims.prefixArmLakes.map(other => other.id),
-        });
-        return 'unpicked' as const;
-      }
-
-      const ownerId = retiredCopy.userId;
-      if (!ownerId || !(await ownerStillExists(ownerId))) {
-        logger.warn('[driveLakeIngest] superseded copy has no living owner; left unpicked', {
-          fabFileId: staleCopy.id,
-          ownerId,
-        });
-        return 'unpicked' as const;
-      }
-
-      await carryForwardToReplacement(retiredCopy, replacementFabFileId);
-
-      // Sole-lake copy: delete for real, so the chunks, search-index docs, notebook links, S3 object
-      // and storage quota go with it.
-      const { action } = await fabFilesService.deleteFabFile(
-        ownerId,
-        { id: staleCopy.id },
-        {
-          db: {
-            fabFiles: fabFileRepository,
-            fabFileChunks: fabFileChunkRepository,
-            users: userRepository,
-            sessions: sessionRepository,
-            dataLakes: dataLakeRepository,
-            ...membershipAuditDb,
-          },
-          storage: getFilesStorage(),
-          onDeleteComplete: async (_fabFile, size) => {
-            reclaimedBytesByUserId.set(ownerId, (reclaimedBytesByUserId.get(ownerId) ?? 0) + size);
-          },
-          searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
-          logger,
-          // This is the sole-lake-copy hard delete, reached only after removeFileFromLake above
-          // already unpicked it from `lake` and confirmed no other lake claims it - so this
-          // normally finds zero remaining membership. Wired anyway so a future claim this poll
-          // does not yet know about still gets a 'removed' row instead of a silent gap.
-          origin: 'connector',
-        }
-      );
-      if (action !== 'deleted') {
-        logger.warn('[driveLakeIngest] superseded copy could not be deleted; left unpicked', {
-          fabFileId: staleCopy.id,
-          action,
-        });
-      }
-      return action;
-    };
-
-    // Best-effort, and deliberately non-fatal: the files are already gone, so a failed quota write
-    // must not throw the whole reconcile into an SQS retry that would re-walk and re-ingest.
-    const flushReclaimedStorage = async () => {
-      if (reclaimedBytesByUserId.size === 0) return;
-      // Drain before deducting: this also runs from a `finally`, and a partial failure must not leave
-      // bytes staged for a later flush to deduct a second time.
-      const pending = [...reclaimedBytesByUserId.entries()];
-      reclaimedBytesByUserId.clear();
-      for (const [ownerId, bytes] of pending) {
-        if (bytes <= 0) continue;
-        try {
-          // Load the owner HERE, never the document read at the top of this handler. changeStorageSize
-          // mutates in memory and save() writes an ABSOLUTE currentStorageSize, so a document read
-          // before the loop would overwrite the increments every storage.upload in it just made
-          // through objectCreated - which loads and saves its own copy of the same user. Same reason
-          // bulk-delete.ts re-reads immediately before deducting; the transaction makes this
-          // read-modify-write conflict-checked rather than merely narrow.
-          await withTransaction(async () => {
-            const owner = await User.findById(ownerId);
-            if (!owner) return;
-            await changeStorageSize(owner, -bytes);
-            await owner.save();
-          });
-        } catch (e) {
-          logger.error('[driveLakeIngest] failed to deduct reclaimed storage', {
-            connectionId,
-            ownerId,
-            bytes,
-            error: e instanceof Error ? e.message : String(e),
-          });
-        }
-      }
-    };
+    const { retireSupersededCopy, flushReclaimedStorage, stagedReclaimFor } = createLakeIngestRetirer({
+      lake,
+      membershipActor,
+      replacementOwnerId: connection.connectedBy,
+      candidateOwnerIds: [connection.connectedBy, ...existingDocs.map(doc => doc.userId)],
+      logTag: '[driveLakeIngest]',
+      logger,
+    });
 
     // 3) Enforce the candidate cap FIRST, before any membership write. Gated on walked.length and
     //    existingDocs.length - not candidates.length - because those are the two quantities that are
@@ -1227,31 +969,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // A refusal is DETERMINISTIC - retrying re-reads the same lever and the same policy - so it is
       // recorded as guidance and returned cleanly rather than rethrown into an SQS retry that would
       // spin to the DLQ. Same treatment as the candidate cap above.
-      // Both gates below read the same admin/scoped settings repositories; the second also needs
-      // dataLakes for the origin check.
-      const gateDb = { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository };
       try {
-        await dataLakeService.assertLakeAdmission([lake], [{ userId: connection.connectedBy }], {
-          db: gateDb,
-          logger,
-        });
-
-        // The origin check this door has always skipped, now that a curated lake must refuse a
-        // scheduled sync. Once per sync, matching the admission call above: lake and owner-to-be are
-        // the same for every candidate, so a refusal is a property of the connection, not of one file.
-        // Same placement, same scope as the admission gate above: it covers ADDITIONS only, so the
-        // retire sweep and the zero-candidate cursor advancement already ran unaffected by origin -
-        // refusing a removal would strand the lake out of sync with no way to converge.
-        //
-        // isAdmin is synthetic, same reasoning as membershipActor above (see its comment) - it short-
-        // circuits the manage rung (canManageLake in manageRule.ts), so what this call actually adds
-        // beyond that is the origin check below plus a newly-caught purged lake (`!lake`). The origin
-        // check itself is privilege-blind, so the synthetic admin does not weaken it.
-        await dataLakeService.assertCanWriteDataLakeTags(membershipActor, [lake.datalakeTag], {
-          db: { dataLakes: dataLakeRepository, ...gateDb },
-          logger,
-          unattended: true,
-        });
+        await assertConnectorLakeWrite(lake, membershipActor, connection.connectedBy, logger);
       } catch (refusalError) {
         if (!(refusalError instanceof BadRequestError)) throw refusalError;
         logger.warn('[driveLakeIngest] data lake refused this sync at admission or authorization', {
@@ -1313,7 +1032,6 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         db: { dataLakes: dataLakeRepository },
         logger,
       });
-      const storage = getFilesStorage();
       let uploaded = 0;
       let skipped = 0;
 
@@ -1404,9 +1122,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         // Checked against the user, not the connection's org: objectCreated debits the
         // uploading user, and this handler's own reclaim path deducts from that same counter,
         // so an org-scoped check here could never fire.
-        // Retires so far this run are already deleted, but their bytes are only staged in
-        // reclaimedBytesByUserId until flushReclaimedStorage after the loop - credit them now.
-        const stagedReclaim = reclaimedBytesByUserId.get(user.id) ?? 0;
+        // Retires so far this run are already deleted, but their bytes are only staged in the
+        // retirer until flushReclaimedStorage after the loop - credit them now.
+        const stagedReclaim = stagedReclaimFor(user.id);
         try {
           await checkStorageLimit(user, Math.max(0, acceptedBytes + bytes.length - stagedReclaim));
         } catch (error) {
@@ -1419,8 +1137,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         const fileKey = `${uuidv4()}${ext ? `.${ext}` : ''}`;
         const tags = await applyFallbackTags([{ name: datalakeTag, strength: DATALAKE_TAG_STRENGTH }]);
 
-        const fabFile = await createFabFile(
-          {
+        const fabFile = await ingestLakeFile({
+          data: {
             userId: connection.connectedBy,
             filePath: fileKey,
             fileSize: bytes.length,
@@ -1431,52 +1149,30 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             batchId: batch.id,
             relativePath: file.relativePath,
             status: 'pending',
-            // Drive provenance (#1589): dedup key + change detection + source.
+            // Drive provenance: dedup key + change detection + source.
             sourceType: FabFileSourceType.GOOGLE_DRIVE,
             driveFileId: file.id,
             ...(file.modifiedTime && { driveModifiedTime: new Date(file.modifiedTime) }),
-            // Document vintage (#3048), present only for a file Drive itself authored. An uploaded
+            // Document vintage, present only for a file Drive itself authored. An uploaded
             // binary's vintage comes from its own embedded metadata during chunking instead.
             ...driveDocumentVintage(file),
             ...(file.md5Checksum && { driveMd5Checksum: file.md5Checksum }),
             sourceLakeId: connection.targetDataLakeId,
             driveConnectionId: connectionId,
           },
-          ability
-        );
-
-        // This door stamps the lake's meta-tag directly into `tags` at creation (above) rather than
-        // going through `addFileToLake` - there is no FabFile yet for that door to gate on when the
-        // tags are decided - so the membership event has to be recorded explicitly here instead of
-        // riding along inside that shared write.
-        await dataLakeService.recordLakeMembershipChange(
-          { actor: membershipActor, lake, fabFileId: fabFile.id, action: 'added', origin: 'connector' },
-          { db: membershipAuditDb, logger }
-        );
-
-        // Manifest entry BEFORE the bytes land - the upload fires objectCreated synchronously and its
-        // downstream claims need this entry to already exist (ordering is load-bearing; see header).
-        await dataLakeBatchRepository.appendFiles(batch.id, [
-          {
-            fabFileId: fabFile.id,
-            fileName: file.name,
-            relativePath: file.relativePath,
-            status: 'pending',
-          },
-        ]);
-
-        await storage.upload(bytes, fileKey, { ContentType: mimeType });
+          ability,
+          lake,
+          membershipActor,
+          batchId: batch.id,
+          bytes,
+          fileKey,
+          logger,
+        });
         uploaded++;
         acceptedBytes += bytes.length;
 
-        // Confirm the upload SYNCHRONOUSLY, right here - not left to the async S3 objectCreated
-        // event. findDriveFileIdsByBatchId (what a resumed slice subtracts) excludes 'pending' rows
-        // precisely so a FabFile whose storage.upload threw is not mistaken for an uploaded one; a
-        // continuation enqueued moments after this call cannot be trusted to race that event first.
-        await fabFileRepository.markUploaded(fabFile.id);
-
         // Edited file: its fresh replacement is now durably uploaded, so retire the superseded copy
-        // (see retireSupersededCopy, and the header for the invariants it keeps). Done PER-FILE right
+        // (see retireSupersededCopy in lakeIngestShared.ts, and the header for the invariants it keeps). Done PER-FILE right
         // after the upload, not batched at the end: a later file throwing then leaves every
         // already-processed edit fully reconciled (old retired, new uploaded) instead of stranding the
         // old copy as a duplicate lake member the next walk can no longer see (both share

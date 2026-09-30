@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   archiveDataLake: vi.fn(),
   toAccessContext: vi.fn(),
   disableDriveConnectionForLake: vi.fn(),
+  disableGitHubConnectionForLake: vi.fn(),
   openSearchRetrievalIndex: vi.fn(() => ({ removeForDataLake: vi.fn() })),
   selfHostOpenSearchEnabled: vi.fn(() => false),
 }));
@@ -54,6 +55,9 @@ vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpen
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@server/integrations/google/drive/common', () => ({
   disableDriveConnectionForLake: h.disableDriveConnectionForLake,
+}));
+vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
+  disableGitHubConnectionForLake: h.disableGitHubConnectionForLake,
 }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
@@ -99,6 +103,16 @@ describe("DELETE /api/data-lakes/[id] - the archive door's Drive-connection port
     await opts.disableDriveConnection!({ dataLakeId: 'lake1' });
     expect(h.disableDriveConnectionForLake).toHaveBeenCalledWith('lake1');
     expect(json.mock.calls[0][0]).toMatchObject({ status: 'archived' });
+  });
+
+  it('passes a disableGitHubConnection port that reaches the real disable helper', async () => {
+    const { res } = makeRes();
+    await run(del({ user: { id: 'owner' } }), res);
+    const opts = h.archiveDataLake.mock.calls[0][2] as {
+      disableGitHubConnection?: (args: { dataLakeId: string }) => Promise<void>;
+    };
+    await opts.disableGitHubConnection!({ dataLakeId: 'lake1' });
+    expect(h.disableGitHubConnectionForLake).toHaveBeenCalledWith('lake1');
   });
 
   it('archives with the writability gate ahead of the service, as the lifecycle door does', async () => {
