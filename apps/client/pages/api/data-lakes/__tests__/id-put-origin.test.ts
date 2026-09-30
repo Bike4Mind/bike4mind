@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   assertLakeWritable: vi.fn(),
   updateDataLake: vi.fn(),
   toAccessContext: vi.fn(),
+  inTransaction: [] as string[],
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -26,6 +27,14 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: async (fn: () => unknown) => {
+    h.inTransaction.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.inTransaction.push('exit');
+    }
+  },
   dataLakeRepository: {},
   // The config-audit repos this route wires (see lakeConfigAuditDb). Stubbed rather than
   // omitted because the mock replaces the whole module: a missing export is an import-time
@@ -75,6 +84,7 @@ const run = (req: unknown, res: unknown) => (handler as (req: unknown, res: unkn
 describe('PUT /api/data-lakes/[id] - origin', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.inTransaction.length = 0;
     h.toAccessContext.mockResolvedValue({ userId: 'owner', isAdmin: false, userTags: [] });
     h.assertLakeAccess.mockResolvedValue({ id: 'lake1', createdByUserId: 'owner' });
     h.updateDataLake.mockResolvedValue({ id: 'lake1', origin: 'connector-fed' });
@@ -89,6 +99,22 @@ describe('PUT /api/data-lakes/[id] - origin', () => {
       expect.objectContaining({ origin: 'connector-fed' }),
       expect.anything()
     );
+  });
+
+  it('runs the gates and the write inside ONE transaction, so a retry re-reads the grants', async () => {
+    h.assertLakeAccess.mockImplementation(async () => {
+      h.inTransaction.push('gate');
+      return { id: 'lake1', createdByUserId: 'owner' };
+    });
+    h.assertLakeWritable.mockImplementation(() => void h.inTransaction.push('writable'));
+    h.updateDataLake.mockImplementation(async () => {
+      h.inTransaction.push('write');
+      return { id: 'lake1' };
+    });
+    const { res } = makeRes();
+    await run(put({ origin: 'connector-fed' }), res);
+
+    expect(h.inTransaction).toEqual(['enter', 'gate', 'writable', 'write', 'exit']);
   });
 
   it('rejects an unknown origin before touching the service', async () => {

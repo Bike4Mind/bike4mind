@@ -109,13 +109,13 @@ function assertManageableLake(lake: IDataLakeDocument, actor: ManageActor, grant
  * SERIALIZATION against every other manage write on the same lake. A real grant change also writes
  * the lake DOCUMENT (the actor stamp), and the route runs the gate and this door inside
  * `withTransaction`, gate inside the callback. So a curator's revoke and a concurrent manage write
- * by that curator (another grant, visibility, promote/demote - which all write the lake doc) touch a
+ * by that curator (another grant, PUT, visibility, promote/demote - which all write the lake doc) touch a
  * common document, Mongo aborts whichever commits second, and its retry re-reads the grants. Same
  * shape as `lapseDepartedMemberLakeAccess` vs `transferLakeOwnership`. Holds only while the actor is
  * attributable (`lakeConfigWriteStamp` returns `{}` for a blank id); the sole caller is a route
  * passing `req.user.id`. The stamp bumps `updatedAt` on purpose, including on a transitional lake
  * (see `strandedCutoffMsFor`): skipping it there would let a revoked curator's grant land unserialized.
- * The manage writes that are NOT serialized this way are listed on `canManageLake`.
+ * What is NOT serialized this way is stated on `canManageLake` (WRITE-TIME RESIDUAL).
  *
  * Order is grant row -> stamp -> audit, so the audit can never claim a grant that failed.
  *
@@ -203,7 +203,7 @@ export async function grantLakeAccess(
     ...(expiresAt !== undefined ? { expiresAt } : {}),
   });
   // A no-op re-grant changed nothing, so it needs no serialization and should not move the last-editor.
-  if (change) await stampLake(lake, actor, db);
+  if (change) await stampLake(lake, actor, adapters);
 
   await recordLakeConfigChange(
     {
@@ -249,7 +249,7 @@ export async function revokeLakeAccess(
 
   const revoked = await db.dataLakeAccessGrants.removeGrant(lake.id, input.principalType, input.principalId);
   if (!revoked) return { revoked: false };
-  await stampLake(lake, actor, db);
+  await stampLake(lake, actor, adapters);
 
   await recordLakeConfigChange(
     {
@@ -271,10 +271,19 @@ export async function revokeLakeAccess(
   return { revoked: true };
 }
 
-/** The lake-document write the SERIALIZATION note on `grantLakeAccess` depends on. */
-async function stampLake(lake: IDataLakeDocument, actor: ManageActor, db: ManageLakeGrantAdapters['db']) {
+/**
+ * The lake-document write the SERIALIZATION note on `grantLakeAccess` depends on. A `null` result
+ * (the lake vanished inside the snapshot) warns rather than throws, matching the stamp in
+ * `lapseDepartedMemberLakeAccess`, so a write that collides with nothing is never silent.
+ */
+async function stampLake(lake: IDataLakeDocument, actor: ManageActor, { db, logger }: ManageLakeGrantAdapters) {
   const stamp = lakeConfigWriteStamp(actor);
-  if (stamp.lastUpdatedByUserId) await db.dataLakes.update({ id: lake.id, ...stamp });
+  if (!stamp.lastUpdatedByUserId) return;
+  const stamped = await db.dataLakes.update({ id: lake.id, ...stamp });
+  if (!stamped) {
+    const warn = (msg: string, meta: unknown) => (logger?.warn ? logger.warn(msg, meta) : console.warn(msg, meta));
+    warn('[dataLakes] grant changed but the lake was not found for the actor stamp', { dataLakeId: lake.id });
+  }
 }
 
 /**

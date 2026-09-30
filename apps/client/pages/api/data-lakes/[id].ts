@@ -3,6 +3,7 @@ import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLak
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
+  withTransaction,
   dataLakeRepository,
   dataLakeBatchRepository,
   dataLakeAccessGrantRepository,
@@ -109,22 +110,27 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       throw new BadRequestError(`"${params.preferredSystemPromptId}" is not a valid preferred system prompt`);
     }
     const ctx = await toAccessContext(req);
-    // Gate first (org-aware, not-found-style denial) so this write path can't be used
-    // to probe existence or act cross-org - consistent with the lifecycle endpoint.
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
-    dataLakeService.assertLakeWritable(lake);
-
     // An API-key PUT is attributed to the KEY, with its owner kept findable in the audit row.
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
-    const updated = await dataLakeService.updateDataLake(actor, lake.id, params, {
-      db: {
-        dataLakes: dataLakeRepository,
-        dataLakeAccessGrants: dataLakeAccessGrantRepository,
-        ...lakeConfigAuditDb,
-      },
-      logger: req.logger,
+
+    // Inside a transaction so a grant revoke committing mid-request collides on the lake doc and the
+    // retry re-runs the gates against live grants (see the SERIALIZATION note on grantLakeAccess).
+    const updated = await withTransaction(async () => {
+      // Gate first (org-aware, not-found-style denial) so this write path can't be used
+      // to probe existence or act cross-org - consistent with the lifecycle endpoint.
+      const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      });
+      dataLakeService.assertLakeWritable(lake);
+
+      return dataLakeService.updateDataLake(actor, lake.id, params, {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          ...lakeConfigAuditDb,
+        },
+        logger: req.logger,
+      });
     });
 
     return res.json(updated);

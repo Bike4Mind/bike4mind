@@ -181,6 +181,40 @@ describe('lake manage writes vs a concurrent grant revoke (replica set)', () => 
     expect(await dataLakeAccessGrantRepository.findGrant(lake.id, 'user', curator.id)).toBeNull();
   });
 
+  it('aborts a curator metadata PUT whose grant was revoked mid-request, and the retry refuses it', async () => {
+    const { owner, curator, lake } = await seed('active');
+    const { repo, atGate, release } = pausingGrants();
+    let attempts = 0;
+
+    const update = withTransaction(async () => {
+      attempts++;
+      return dataLakeService.updateDataLake(
+        ctxFor(curator.id),
+        lake.id,
+        { description: 'edited by a revoked curator' },
+        {
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: repo,
+            lakeConfigChangeEvents: lakeConfigChangeEventRepository,
+          },
+        }
+      );
+    });
+    const outcome = update.then(
+      () => null,
+      (e: unknown) => e
+    );
+
+    await atGate;
+    await expect(revokeAsOwner(owner, lake.id, curator.id)).resolves.toEqual({ revoked: true });
+    release();
+
+    expect(String(await outcome)).toMatch(/You do not have permission to update this data lake/);
+    expect(attempts).toBeGreaterThanOrEqual(2);
+    expect((await dataLakeRepository.findById(lake.id))?.description).toBeUndefined();
+  });
+
   it('aborts a curator grant whose own grant was revoked mid-request, leaving no row for the grantee', async () => {
     const { owner, curator, reader, lake } = await seed('active');
     const { repo, atGate, release } = pausingGrants();
@@ -222,5 +256,19 @@ describe('lake manage writes vs a concurrent grant revoke (replica set)', () => 
     expect(attempts).toBeGreaterThanOrEqual(2);
     expect(await dataLakeAccessGrantRepository.findGrant(lake.id, 'user', reader.id)).toBeNull();
     expect(await dataLakeAccessGrantRepository.findGrant(lake.id, 'user', curator.id)).toBeNull();
+  });
+
+  // The collision needs the stamp to be a REAL write even when `lastUpdatedByUserId` already names
+  // the actor (an owner revoking twice in a row). It is, because `timestamps: true` moves updatedAt.
+  it('a same-value stamp still changes the lake document', async () => {
+    const { owner, lake } = await seed('active');
+    await dataLakeRepository.update({ id: lake.id, lastUpdatedByUserId: owner.id });
+    const before = (await dataLakeRepository.findById(lake.id))!.updatedAt;
+    await new Promise(r => setTimeout(r, 5));
+
+    await dataLakeRepository.update({ id: lake.id, lastUpdatedByUserId: owner.id });
+
+    const after = (await dataLakeRepository.findById(lake.id))!.updatedAt;
+    expect(new Date(after!).getTime()).toBeGreaterThan(new Date(before!).getTime());
   });
 });

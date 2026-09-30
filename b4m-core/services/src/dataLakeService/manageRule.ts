@@ -157,13 +157,19 @@ function isGrantOrgContained(grant: LakeGrant, lakeOrg: string | undefined): boo
  * that has not threaded grants yet still gets rungs 1, 2 (via creator) and 4.
  *
  * WRITE-TIME RESIDUAL. Every manage write decides from a grant read and then writes, so a revoke can
- * commit in between. The grants door, visibility, promote and demote are serialized against grant
- * writes (see the SERIALIZATION note on `grantLakeAccess`). Archive/unarchive/restore/delete/cleanup
- * and file membership are not: each gates immediately before its first irreversible write, so the
- * window is one request's gate-read -> claim, and a revoke committing after the claim is ordered
- * after the decision (re-checking post-claim would strand the lake mid-status). `administeredOrgIds`
- * and `isAdmin` are request snapshots; current-membership enforcement for the org rungs is a
- * separate, known gap (see the KNOWN LIMITATION in `lapseDepartedMemberLakeAccess.ts`).
+ * commit in between. The rule, rather than a list that drifts: a manage write is serialized against
+ * a revoke ONLY when it writes the lake DOCUMENT inside `withTransaction` with its gate inside the
+ * callback (see the SERIALIZATION note on `grantLakeAccess`). Today that is the grants door, the lake
+ * PUT, visibility, promote and demote. Every other manage-gated write - lifecycle cascades, file
+ * membership and tags, proposals, findings, research, batches and taxonomy, rebuild queues - is gated
+ * once per request, and a revoke committing after that gate does not abort it. For the lifecycle
+ * claims that is deliberate: re-checking after the claim would strand the lake mid-status.
+ *
+ * Two kinds of access loss collide with nothing, even against the serialized writes: a departure lapse
+ * (`lapseDepartedMemberLakeAccess` phase 1 expires the member's grant rows without writing the lake
+ * doc), and loss of an org role, since `administeredOrgIds`/`isAdmin` are request snapshots -
+ * current-membership enforcement for the org rungs is a separate, known gap (see the KNOWN
+ * LIMITATION in `lapseDepartedMemberLakeAccess.ts`).
  */
 export function canManageLake(
   lake: Pick<IDataLakeDocument, 'createdByUserId' | 'organizationId'>,

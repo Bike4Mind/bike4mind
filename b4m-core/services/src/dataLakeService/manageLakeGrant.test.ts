@@ -578,4 +578,25 @@ describe('lake-document stamp', () => {
     await expect(grantLakeAccess(owner, ...lakeArgs, grantInput, adapters)).rejects.toThrow('write conflict');
     expect(record).not.toHaveBeenCalled();
   });
+
+  it('propagates a stamp failure on revoke too, and records no audit', async () => {
+    const { adapters, lakeArgs, record } = makeAdapters({
+      existing: grantRow({ principalId: 'u1', role: 'reader' }),
+      stampError: new Error('write conflict'),
+    });
+    await expect(revokeLakeAccess(owner, ...lakeArgs, revokeInput, adapters)).rejects.toThrow('write conflict');
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('warns, and still audits, when the stamp finds no lake', async () => {
+    const { adapters, lakeArgs, updateLake, record } = makeAdapters({ grants: curatorGrants });
+    updateLake.mockResolvedValueOnce(null as never);
+    const warn = vi.fn();
+    await grantLakeAccess(curator, ...lakeArgs, grantInput, { ...(adapters as object), logger: { warn } } as never);
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('not found for the actor stamp'), {
+      dataLakeId: 'lake1',
+    });
+    expect(record).toHaveBeenCalled();
+  });
 });
