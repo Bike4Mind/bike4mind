@@ -104,6 +104,9 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
    *
    * `options` is forwarded to `findOneAndUpdate` except for the reserved `unset` key; see
    * UNSET_OPTION for why clearing a field needs it.
+   *
+   * On a softDeletePlugin model a soft-deleted doc is skipped: the tombstone silently wins and this
+   * resolves `null`. Pass `{ includeDeleted: true }` to write to it.
    */
   async update(data: Partial<T>, options?: Record<string, unknown>): Promise<T | null> {
     if (!data.id) {
@@ -124,6 +127,9 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
    * HAZARD for callers: a function that calls `updateGuarded` on the SAME in-memory doc twice without
    * refreshing it between calls makes the second call carry a stale `__v` and throw. Capture the
    * returned (version-bumped) doc between writes: `doc = await repo.updateGuarded(doc)`.
+   *
+   * On a softDeletePlugin model a doc soft-deleted after the read resolves `null`, not a conflict:
+   * the tombstone silently wins. Pass `{ includeDeleted: true }` to write to it.
    */
   async updateGuarded(data: Partial<T>, options?: Record<string, unknown>): Promise<T | null> {
     if (!data.id) {
@@ -209,7 +215,8 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
   }
   async updateMany(filter: Record<string, unknown>, data: Partial<T>, options?: Record<string, unknown>) {
     // Last-writer-wins, like `update`: a `$set` with no version precondition. There is no bulk
-    // guarded variant - `updateGuarded` is per-document by design.
+    // guarded variant - `updateGuarded` is per-document by design. On a softDeletePlugin model
+    // tombstones are silently skipped unless `options` carries `includeDeleted: true`.
     const query = this.model.updateMany(filter, { $set: data }, options);
     // See `_plainUpdate` above: explicit `.session(null)` would defeat ALS propagation.
     if (this._txn) {
