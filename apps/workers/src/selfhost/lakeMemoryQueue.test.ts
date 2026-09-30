@@ -29,7 +29,7 @@ describe('registerLakeMemoryQueue', () => {
       'lakeMemoryQueue',
       'http://sqs/lake-memory',
       expect.any(Function),
-      { batchSize: 1, visibilityTimeoutSec: 960, maxReceiveCount: 2 }
+      { batchSize: 1, visibilityTimeoutSec: 1020, maxReceiveCount: 2 }
     );
     const handler = worker.registerQueueHandler.mock.calls[0][2];
     vi.useFakeTimers();

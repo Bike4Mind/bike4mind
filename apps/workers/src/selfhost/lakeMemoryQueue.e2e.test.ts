@@ -184,6 +184,28 @@ describe('local lake-memory registered consumer', () => {
     expect((await dataLakeRepository.findById(lakeId))?.lakeMemoryExtractionAt).toBeNull();
   });
 
+  it('recovers a crash after ninety seconds of pre-claim work with the configured visibility', async () => {
+    const registration = { registerQueueHandler: vi.fn() };
+    registerLakeMemoryQueue(registration, 'http://sqs/lake-memory', logger);
+    const { visibilityTimeoutSec } = registration.registerQueueHandler.mock.calls[0][3];
+    const claimDelaySec = 90;
+    const receiveAt = Date.now();
+    await DataLakeModel.updateOne(
+      { _id: lakeId },
+      { $set: { lakeMemoryExtractionAt: new Date(receiveAt - (960 - claimDelaySec) * 1000) } }
+    );
+    await deliver(payload(), 2);
+    expect(await beliefs()).toEqual([]);
+    expect(remove).toHaveBeenCalledWith('http://sqs/lake-memory', 'receipt-2');
+    await DataLakeModel.updateOne(
+      { _id: lakeId },
+      { $set: { lakeMemoryExtractionAt: new Date(receiveAt - (visibilityTimeoutSec - claimDelaySec) * 1000) } }
+    );
+    await deliver(payload(), 2);
+    expect(await beliefs()).toHaveLength(2);
+    expect((await dataLakeRepository.findById(lakeId))?.lakeMemoryExtractionAt).toBeNull();
+  });
+
   it('yields at the decreasing deadline and resumes the persisted cursor after a failed continuation send', async () => {
     const realNow = Date.now.bind(Date);
     let elapsed = 0;

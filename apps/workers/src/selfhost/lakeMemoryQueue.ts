@@ -23,8 +23,8 @@ export function registerLakeMemoryQueue(
     },
     {
       batchSize: 1,
-      // A crashed extraction holds a 15-minute lease; retry must arrive after it expires.
-      visibilityTimeoutSec: 960,
+      // Visibility starts at receive; allow two minutes before the 15-minute lease is claimed.
+      visibilityTimeoutSec: 1020,
       maxReceiveCount: 2,
     }
   );
