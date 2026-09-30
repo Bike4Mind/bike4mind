@@ -3669,10 +3669,10 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
 
   /**
    * candidateCapReached after the >100-file candidate pick. The listing itself is whole here
-   * (`hasMore: false`), so only the pick decides the value: a relevance pick ranked every listed
-   * file (not a partial-coverage turn), while the by-name fallback trimmed the servable set, which
-   * is a cut the row has to own. Vector search stays on in both, so the listing limit (1000) is
-   * the same and the ANN outcome is the only variable.
+   * (`hasMore: false`), so only the pick decides the value: a relevance pick chose the candidates
+   * by ANN rank over the whole listing, so no file was cut by name, while the by-name fallback
+   * trimmed the servable set, which is a cut the row has to own. Vector search stays on in both, so
+   * the listing limit (1000) is the same and the ANN outcome is the only variable.
    */
   describe('candidateCapReached after candidate selection', () => {
     const lakeFiles = Array.from({ length: 150 }, (_, i) => {
@@ -3717,6 +3717,12 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
 
       // Guards that the >100 pick ran (not the 'all' shortcut) and that the intended row fired.
       expect(annDb.vectorSearch).toHaveBeenCalled();
+      const warnMessages = vi.mocked(ctx.logger.warn).mock.calls.map(([message]) => String(message));
+      if (pick === 'by-name fallback') {
+        expect(warnMessages).toContainEqual(expect.stringContaining('ANN candidate pick failed'));
+      } else {
+        expect(warnMessages.filter(m => m.includes('ANN candidate pick'))).toEqual([]);
+      }
       const input = recordedInput();
       if (servedNothing) expect(input).toMatchObject({ servedNothing: true });
       else expect(input).not.toHaveProperty('servedNothing');
