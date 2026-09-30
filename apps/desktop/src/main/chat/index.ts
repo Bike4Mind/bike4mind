@@ -21,6 +21,7 @@ import type { McpMutationResult, McpServerInput, McpServersState } from '@shared
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { AttachmentStore } from './AttachmentStore';
+import { BrowserManager } from './browser/BrowserManager';
 import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
 import { ArtifactLibrary } from './artifacts/ArtifactLibrary';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
@@ -42,6 +43,7 @@ import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { DependencyInstaller } from './project/dependencyInstall';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
+import { appWindows } from '../windows';
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 
@@ -106,6 +108,8 @@ export interface RegisteredChat {
   background: BackgroundProcessRegistry;
   /** MCP connections, torn down on the same two quit passes for the same reason. */
   mcp: McpManager;
+  /** The agent's hidden browser windows, closed with the last app window and on quit. */
+  browser: BrowserManager;
 }
 
 /**
@@ -164,7 +168,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
   });
 
   const send = (channel: string, payload: unknown) => {
-    for (const window of BrowserWindow.getAllWindows()) {
+    for (const window of appWindows()) {
       window.webContents.send(channel, payload);
     }
   };
@@ -202,6 +206,8 @@ export function registerChat(auth: AuthService): RegisteredChat {
     (state: McpServersState) => send(IPC_CHANNELS.mcpServersChanged, state)
   );
 
+  const browser = new BrowserManager();
+
   const service = new ChatService({
     store,
     access,
@@ -215,6 +221,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     media,
     activity,
     mcp,
+    browser,
     artifacts,
     queue,
     skills,
@@ -405,7 +412,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     roots: await access.revoke(root),
   }));
 
-  return { service, background, mcp };
+  return { service, background, mcp, browser };
 }
 
 export { ChatService } from './ChatService';

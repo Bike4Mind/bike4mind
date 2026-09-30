@@ -72,6 +72,7 @@ async function harness(options: { imageModels?: string[]; remoteSessionId?: stri
         label: () => undefined,
         diff: () => undefined,
         detail: () => undefined,
+        image: () => undefined,
       },
     },
   };

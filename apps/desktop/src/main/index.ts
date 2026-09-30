@@ -9,6 +9,7 @@ import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
 import { isExternallyOpenable } from './externalLinks';
 import { registerUpdates } from './update';
+import { appWindows } from './windows';
 
 // electron-vite sets this in dev only; a packaged build loads the renderer off disk.
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL;
@@ -27,6 +28,9 @@ function buildAppInfo(): AppInfo {
   };
 }
 
+/** Set once chat is registered; closes the agent's hidden browsers. */
+let closeAgentBrowsers = (): void => undefined;
+
 function createWindow(): void {
   const window = new BrowserWindow({
     width: 1280,
@@ -44,6 +48,10 @@ function createWindow(): void {
 
   // Showing only once the renderer has painted avoids a flash of empty chrome.
   window.once('ready-to-show', () => window.show());
+  // Hidden agent browsers would otherwise keep the app alive and `window-all-closed` from firing.
+  window.on('closed', () => {
+    if (appWindows().length === 0) closeAgentBrowsers();
+  });
 
   // A window opened in-app would inherit this app's session and privileges, so hand
   // every outbound link to the user's real browser instead.
@@ -87,7 +95,8 @@ void app.whenReady().then(async () => {
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
   registerAccount(auth);
-  const { service: chat, background, mcp } = registerChat(auth);
+  const { service: chat, background, mcp, browser } = registerChat(auth);
+  closeAgentBrowsers = () => browser.closeAll();
 
   // Set by whichever path starts the teardown, so the `before-quit` veto below runs at most
   // once. Declared here because the updater's install path does that teardown itself and must
@@ -147,6 +156,7 @@ void app.whenReady().then(async () => {
     // grace period above must not leave a process group behind.
     background.shutdownSync();
     mcp.shutdownSync();
+    browser.closeAll();
   });
 
   // Ctrl-C in a dev terminal, or a `kill` of the app. Our children are detached into their own
@@ -168,7 +178,7 @@ void app.whenReady().then(async () => {
   void auth.initialize();
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (appWindows().length === 0) createWindow();
   });
 });
 

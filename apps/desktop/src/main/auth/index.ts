@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { app, BrowserWindow, ipcMain, safeStorage, shell } from 'electron';
+import { app, ipcMain, safeStorage, shell } from 'electron';
 import type { AccountPage, EnvironmentSelection } from '@shared/auth';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { MediaStore } from '../chat/media/MediaStore';
@@ -8,6 +8,7 @@ import { createMainLogger } from '../logger';
 import { AuthService } from './AuthService';
 import { ProfilePhotoCache, type PhotoRecordFile } from './profilePhoto';
 import { TokenVault, type VaultFile } from './tokenVault';
+import { appWindows } from '../windows';
 
 /**
  * Debug logging is opt-in rather than on in dev: the shared HTTP client debug-logs request
@@ -83,7 +84,7 @@ export function registerAuth(): AuthService {
     userAgent: `b4m-desktop/${app.getVersion()}`,
     profilePhotos,
     onStateChanged: state => {
-      for (const window of BrowserWindow.getAllWindows()) {
+      for (const window of appWindows()) {
         window.webContents.send(IPC_CHANNELS.authStateChanged, state);
       }
     },

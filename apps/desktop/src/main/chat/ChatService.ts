@@ -82,6 +82,8 @@ import {
   outputCapFor,
   type ApprovalOption,
   type ApprovalPrompt,
+  type BrowserContext,
+  type BrowserProvider,
   type ExploreContext,
   type HostContext,
   type HostSessionView,
@@ -251,6 +253,8 @@ export interface ChatServiceDeps {
    * MCP tools at all - the same "an undeclared tool is a cleaner no" rule the local tools follow.
    */
   mcp?: McpManager;
+  /** The agent's hidden browser. Absent in tests that do not exercise it; the tools are then not declared. */
+  browser?: BrowserProvider;
   /** Paths kept out of reach of shell commands whatever the user granted. Enforced by the file tools, and by the shell only when SANDBOX_SHELL_COMMANDS is on. */
   protectedPaths?: readonly string[];
   /**
@@ -380,6 +384,8 @@ export class ChatService {
 
   /** Instructions and file tree per session, frozen so the cached system prompt never moves. */
   private readonly projectContext = new ProjectContextCache();
+  /** Images a running call reported for the model, keyed by call id until its round is sent. */
+  private readonly pendingImages = new Map<string, { mediaType: string; data: string }[]>();
 
   /** Resolved serverConfig fields, cached per environment URL (it is one round trip). */
   private serverConfigCache: { environmentUrl: string; config: ResolvedServerConfig } | null = null;
@@ -723,6 +729,7 @@ export class ChatService {
     this.stop(sessionId);
     this.deps.approvals?.forgetSession(sessionId);
     await this.deps.background?.killSession(sessionId);
+    await this.deps.browser?.closeSession(sessionId);
     await this.deps.attachments?.deleteSession(sessionId);
     // The generated media goes with it: nothing else references those files once the
     // conversation that displayed them is gone, and they are the largest thing this app writes.
@@ -1140,6 +1147,10 @@ export class ChatService {
       const { roots, workingDirectory } = await this.resolveToolScope(session);
       const media = this.buildMediaContext(session, api, serverConfig.cdnUrl);
       const host = this.buildHostContext(session);
+      const browser =
+        host && this.deps.browser
+          ? this.deps.browser.context(sessionId, (bytes, caption) => this.keepScreenshot(sessionId, bytes, caption))
+          : undefined;
       // Awaited, not fired and forgotten: the tool list the model is shown has to be the real
       // one. A server that fails to come up is marked failed and the turn goes on without it.
       await this.deps.mcp?.ensureConnected();
@@ -1147,6 +1158,8 @@ export class ChatService {
       const catalog = await this.deps.models?.list();
       const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
       const maxTokens = catalog?.models.find(option => option.id === session.model)?.maxOutputTokens;
+      // Silence is not "no": see ChatModelOption.supportsVision.
+      const vision = catalog?.models.find(option => option.id === session.model)?.supportsVision !== false;
       const explore =
         roots.length > 0 && shouldOfferExplore(catalog?.models ?? [], session.model)
           ? buildExploreContext({
@@ -1165,6 +1178,7 @@ export class ChatService {
         media: !!media,
         host: !!host,
         explore: !!explore,
+        browser: !!browser,
         mcp: mcpTools.map(binding => binding.definition.schema),
       });
       const wire = await toCompletionMessages(
@@ -1184,9 +1198,12 @@ export class ChatService {
           this.deps.mcp?.connectedServerNames() ?? [],
           session.project,
           this.deps.dependencies?.promptLines(session.id) ?? [],
-          projectContext
+          projectContext,
+          !!browser
         )
       );
+      // Wire positions of the screenshot messages this turn added, oldest first; see pruneScreenshots.
+      const screenshotTurns: number[] = [];
 
       for (let roundIndex = 0; roundIndex < limits.rounds; roundIndex++) {
         const requested: RequestedTool[] = [];
@@ -1290,7 +1307,7 @@ export class ChatService {
         thinking = turnThinking;
         const settled = await this.runTools(
           requested,
-          { roots, workingDirectory, media, host, explore, title: session.title },
+          { roots, workingDirectory, media, host, explore, browser, title: session.title },
           sessionId,
           replyId,
           controller.signal
@@ -1318,6 +1335,23 @@ export class ChatService {
             ...(call.error ? { is_error: true } : {}),
           })),
         });
+        const shots = settled.flatMap(call => this.takeImages(call.id));
+        if (shots.length > 0 && vision) {
+          // Its own user turn, not blocks beside the tool results: the OpenAI conversion keeps only
+          // the tool_result blocks of such a turn and would drop the image silently.
+          wire.push({
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Screenshot from the browser_screenshot call above.' },
+              ...shots.map(shot => ({
+                type: 'image',
+                source: { type: 'base64', media_type: shot.mediaType, data: shot.data },
+              })),
+            ],
+          });
+          screenshotTurns.push(wire.length - 1);
+          pruneScreenshots(wire, screenshotTurns);
+        }
 
         // Checked after a round rather than before one, so a turn is never cut between asking
         // for a tool and reporting what it returned.
@@ -1536,6 +1570,20 @@ export class ChatService {
     });
   }
 
+  /** Images a finished call asked to show the model, handed over once. */
+  private takeImages(callId: string): { mediaType: string; data: string }[] {
+    const images = this.pendingImages.get(callId) ?? [];
+    this.pendingImages.delete(callId);
+    return images;
+  }
+
+  private async keepScreenshot(sessionId: string, bytes: Buffer, caption: string): Promise<ChatMedia | undefined> {
+    const store = this.deps.media;
+    if (!store) return undefined;
+    const stored = await store.save(sessionId, bytes, 'image/png');
+    return { kind: 'image', url: stored.url, mimeType: stored.mimeType, byteLength: stored.byteLength, caption };
+  }
+
   /**
    * Run every tool the model asked for, in parallel, reporting each to the UI as it starts and
    * finishes. A tool that throws is reported back to the MODEL as a failed result rather than
@@ -1549,6 +1597,7 @@ export class ChatService {
       media: MediaContext | undefined;
       host: HostContext | undefined;
       explore: ExploreContext | undefined;
+      browser: BrowserContext | undefined;
       /** The conversation's title, so a cross-session approval names it rather than its id. */
       title: string;
     },
@@ -1556,7 +1605,7 @@ export class ChatService {
     messageId: string,
     signal: AbortSignal
   ): Promise<ChatToolCall[]> {
-    const { roots, workingDirectory, media, host, explore } = scope;
+    const { roots, workingDirectory, media, host, explore, browser } = scope;
     return Promise.all(
       requested.map(async request => {
         const call: ChatToolCall = {
@@ -1599,6 +1648,11 @@ export class ChatService {
           detail: value => {
             detail = value;
           },
+          image: (bytes, mimeType) => {
+            const images = this.pendingImages.get(call.id) ?? [];
+            images.push({ mediaType: mimeType, data: bytes.toString('base64') });
+            this.pendingImages.set(call.id, images);
+          },
         };
         let startedAt = Date.now();
         const decorate = (settled: ChatToolCall): ChatToolCall => ({
@@ -1627,6 +1681,7 @@ export class ChatService {
           ...(media ? { media } : {}),
           ...(host ? { host } : {}),
           ...(explore ? { explore } : {}),
+          ...(browser ? { browser } : {}),
           report,
         };
 
@@ -2143,6 +2198,7 @@ export class ChatService {
     // denial the user is invited to click through is not a denial.
     let prompt: ApprovalPrompt;
     try {
+      if (tool.needsApproval && !(await tool.needsApproval(call.input, context))) return { input: call.input };
       prompt = await tool.approval(call.input, context);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -2497,7 +2553,8 @@ function buildSystemMessage(
   mcpServers: readonly string[],
   project?: ChatProject,
   dependencyLines: readonly string[] = [],
-  projectContext = ''
+  projectContext = '',
+  browser = false
 ): CompletionMessage {
   if (roots.length === 0) {
     return {
@@ -2575,6 +2632,12 @@ function buildSystemMessage(
       'bash_execute. Background processes belong to this conversation, are all killed when the app',
       'quits, and none survive a restart - so check bash_list rather than assuming one from an',
       'earlier session is still up, and stop what you no longer need with bash_kill.',
+      'To test a running app, drive the app itself: take its URL from bash_list and bash_output or',
+      'the user, read code only for the routes, request bodies and test credentials you need, then',
+      'exercise it (curl with a cookie jar, or a short script) and report the responses you saw.',
+      'Make the first request early and let the app correct your assumptions, rather than reading',
+      'the whole feature first. Unit tests passing is not an end-to-end result.',
+      ...(browser ? BROWSER_GUIDANCE : []),
       'Never invent a file name, size or contents, or the output of a command: if a tool did not',
       'return it, you do not know it.',
       ...(media ? MEDIA_GUIDANCE : []),
@@ -2619,6 +2682,33 @@ function mcpGuidance(servers: readonly string[]): string[] {
  * the USER, not into the conversation - a model that has just "generated an image" will
  * otherwise describe what is in it, which it cannot possibly know.
  */
+/** Only the latest screenshots stay as pixels; each one is resent every round until the turn ends. */
+const KEPT_SCREENSHOTS = 2;
+
+function pruneScreenshots(wire: CompletionMessage[], turns: number[]): void {
+  while (turns.length > KEPT_SCREENSHOTS) {
+    const index = turns.shift();
+    if (index === undefined) break;
+    wire[index] = {
+      role: 'user',
+      content: [
+        { type: 'text', text: '[An earlier screenshot was here. Take a new one if you need to see the page.]' },
+      ],
+    };
+  }
+}
+
+const BROWSER_GUIDANCE: readonly string[] = [
+  'You also have a browser (browser_navigate, browser_click, browser_type, browser_screenshot and',
+  'the rest): a real Chromium window with its own cookies. To test a web app, open it and use it',
+  'the way a user would - sign in, go through the flow, check what the page shows - rather than',
+  'predicting its behaviour from the code. Each action returns the new page snapshot with [ref]',
+  'numbers and any console errors or failed requests, so do not call browser_snapshot after it.',
+  'Take a browser_screenshot at the states worth showing; the user sees it in the conversation.',
+  'browser_evaluate runs JavaScript in the page with its cookies, for reading state or calling',
+  'the app API as the signed-in user.',
+];
+
 const MEDIA_GUIDANCE: readonly string[] = [
   'You can also generate images and audio on the Bike4Mind server with generate_image,',
   'generate_speech, generate_sound_effect and generate_music.',

@@ -1,9 +1,10 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { UpdateBusyReport, UpdateState } from '@shared/update';
 import { resolveFeedUrl } from './feed';
 import { UpdateService, type UpdaterPort } from './UpdateService';
+import { appWindows } from '../windows';
 
 /**
  * Baked in at build time; see feed.ts for why it cannot live in this repo. The expression is
@@ -58,7 +59,7 @@ export function registerUpdates(deps: UpdateDeps): RegisteredUpdates {
   const enabled = app.isPackaged && feedUrl !== null;
 
   const send = (state: UpdateState) => {
-    for (const window of BrowserWindow.getAllWindows()) {
+    for (const window of appWindows()) {
       window.webContents.send(IPC_CHANNELS.updateStateChanged, state);
     }
   };

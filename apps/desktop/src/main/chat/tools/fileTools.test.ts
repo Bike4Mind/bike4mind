@@ -156,6 +156,16 @@ describe('file tools', () => {
       expect(result).toContain(join('sub', 'deep.txt'));
     });
 
+    it('searches a single file when the path is a file', async () => {
+      const result = await grepSearch.run({ pattern: '^beta', path: join(root, 'notes.md'), context: 1 }, context);
+      expect(result).toContain('1 matching line(s) in 1 file(s)');
+      expect(result).toContain('  2: beta gamma');
+      expect(result).not.toContain('deep.txt');
+      await expect(
+        grepSearch.run({ pattern: 'beta', path: join(root, 'notes.md'), include: '*.txt' }, context)
+      ).resolves.toContain('beta gamma');
+    });
+
     it('honours the case-insensitive flag', async () => {
       await expect(grepSearch.run({ pattern: 'BETA' }, context)).resolves.toMatch(/No matches/);
       await expect(grepSearch.run({ pattern: 'BETA', ignoreCase: true }, context)).resolves.toContain(
