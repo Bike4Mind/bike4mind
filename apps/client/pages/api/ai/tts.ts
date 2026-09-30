@@ -188,12 +188,11 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
         .json({ error: error.message, errorCode: 'provider_not_configured' satisfies ApiErrorCode });
     }
 
-    // Pass through client-actionable upstream errors (bad voice/param, invalid
-    // key, rate limit) with a generic body so the provider's raw error text
-    // never leaks; treat everything else as an upstream (502) failure.
+    // Client-actionable upstream errors get a generic body so the provider's raw
+    // error text never leaks; treat everything else as an upstream (502) failure.
     const status = upstreamStatus(error);
     if (typeof status === 'number' && status >= 400 && status < 500) {
-      return res.status(status).json({
+      return res.status(documentedStatusForUpstream4xx(error, status)).json({
         error: `TTS request rejected by the ${vendor} provider`,
         provider: vendor,
         // Reaching here on a credential rejection means no alternate could
@@ -206,6 +205,18 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
     return res.status(502).json({ error: 'Failed to generate speech', provider: vendor });
   }
 });
+
+/**
+ * Folds a provider 4xx onto a status tts.contract.ts documents, so a generated
+ * client has a case for every response: a credential rejection (401 or 403) is a
+ * 401, a provider rate limit stays a 429, and any other rejection of the request
+ * (bad voice, bad parameter, oversized input) is a 422.
+ */
+function documentedStatusForUpstream4xx(error: unknown, status: number): 401 | 422 | 429 {
+  if (isCredentialRejection(error)) return 401;
+  if (status === 429) return 429;
+  return 422;
+}
 
 export const config = {
   api: {
