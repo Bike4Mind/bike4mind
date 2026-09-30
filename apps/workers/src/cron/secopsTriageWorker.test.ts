@@ -63,7 +63,7 @@ vi.mock('sst', () => ({
 }));
 
 // Passthrough so we can invoke the inner handler directly with (event, context, logger)
-vi.mock('../queueHandlers/utils', () => ({
+vi.mock('@server/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 

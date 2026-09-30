@@ -10,6 +10,8 @@
     "test:integration": "WORKERS_TEST_LANE=integration vitest run"
   },
   "dependencies": {
+    "@aws-sdk/client-cloudwatch": "^3.1080.0",
+    "@aws-sdk/client-lambda": "^3.1080.0",
     "@aws-sdk/client-sqs": "^3.1080.0",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/database": "workspace:*",
@@ -19,13 +21,16 @@
     "@bike4mind/memory": "workspace:*",
     "@bike4mind/observability": "workspace:*",
     "@bike4mind/resource": "workspace:*",
+    "@bike4mind/scripts": "workspace:*",
     "@bike4mind/services": "workspace:*",
     "@bike4mind/slack": "workspace:*",
     "@bike4mind/utils": "workspace:*",
+    "axios": "1.20.0",
     "dayjs": "^1.11.23",
     "mongoose": "^8.24.1",
     "sst": "4.17.1",
-    "uuid": "^14.0.2"
+    "uuid": "^14.0.2",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@bike4mind/typescript-config": "workspace:*",

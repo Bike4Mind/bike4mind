@@ -28,7 +28,7 @@ import { createIssueTracker } from '@server/services/issueTrackers';
 import { resolveSlackBotToken } from '@server/services/liveopsConnectionResolver';
 import { emitMetric } from '@server/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { dispatchWithLogger } from '../queueHandlers/utils';
+import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { Resource } from 'sst';
 import { z } from 'zod';
 import type { LiveOpsTriageJobMessage } from '@server/utils/liveopsTriageJobMessage';
