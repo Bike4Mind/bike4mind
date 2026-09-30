@@ -100,6 +100,13 @@ export function clearStateNonce(res: CookieResponse, slot?: string): void {
   expireFlowCookie(res, nonceCookieName(slot));
 }
 
+/** Single-use read: burns the nonce cookie before the caller verifies or does any work. */
+export function consumeStateNonce(req: Pick<Request, 'headers'>, res: CookieResponse, slot?: string): string | null {
+  const nonceHash = readStateNonceHash(req, slot);
+  clearStateNonce(res, slot);
+  return nonceHash;
+}
+
 /** Store the PKCE code_verifier (Okta) in a browser-bound HttpOnly cookie at flow-start. */
 export function setPkceVerifierCookie(res: Response, verifier: string): void {
   setFlowCookie(res, OKTA_PKCE_COOKIE_NAME, verifier);

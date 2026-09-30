@@ -51,6 +51,7 @@ import errorHandler from '@server/middlewares/errorHandler';
 import { getTokens } from '@server/integrations/google/drive/common';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { createStateToken } from '@server/auth/jwtStateStore';
+import { Config } from '@server/utils/config';
 import { GOOGLE_DRIVE_STATE_OPTIONS } from '@server/integrations/google/drive/common';
 
 /** Mint a genuine state token bound to a fresh nonce, returning both the state and the browser's cookie. */
@@ -234,6 +235,25 @@ describe('google-drive callback browser-binding', () => {
     (req as any).user = { id: 'user-1' };
 
     await expect(handler(req as any, res as any)).rejects.toThrow('db down');
+    expect(burned(res)).toBe(true);
+  });
+
+  it('burns the drive nonce even when state verification throws synchronously', async () => {
+    const { state, nonceCookie } = mintStateWithCookie();
+    const { req, res } = createMocks({
+      method: 'GET',
+      query: { code: 'auth-code', state },
+      headers: { cookie: nonceCookie },
+    });
+    (req as any).user = { id: 'user-1' };
+    const jwtSecret = Config.JWT_SECRET;
+    (Config as { JWT_SECRET?: string }).JWT_SECRET = '';
+
+    try {
+      await expect(handler(req as any, res as any)).rejects.toThrow(/Missing JWT_SECRET/);
+    } finally {
+      (Config as { JWT_SECRET?: string }).JWT_SECRET = jwtSecret;
+    }
     expect(burned(res)).toBe(true);
   });
 });

@@ -8,6 +8,7 @@ import {
   readStateNonceHash,
   stateNonceMatches,
   clearStateNonce,
+  consumeStateNonce,
   setPkceVerifierCookie,
   readPkceVerifierCookie,
 } from './oauthFlowCookie';
@@ -91,6 +92,29 @@ describe('oauthFlowCookie', () => {
     const { res, cookies } = makeRes();
     clearStateNonce(res);
     expect(cookies[0]).toMatch(new RegExp(`${STATE_NONCE_COOKIE_NAME}=; .*Max-Age=0`));
+  });
+
+  it('clears the slot-suffixed nonce cookie for a slot', () => {
+    const { res, cookies } = makeRes();
+    clearStateNonce(res, NONCE_SLOT.slackAppInstall);
+    expect(cookies[0]).toMatch(/^b4m_oauth_nonce_slack-app-install=; .*Max-Age=0/);
+  });
+
+  it('consumeStateNonce returns the hash of a present cookie and burns it', () => {
+    const { res: issueRes, cookies: issued } = makeRes();
+    const hash = issueStateNonce(issueRes, NONCE_SLOT.driveConnect);
+    const name = `${STATE_NONCE_COOKIE_NAME}_${NONCE_SLOT.driveConnect}`;
+    const req = reqWith(`${name}=${cookieValue(issued[0], name)}`);
+    const { res, cookies } = makeRes();
+
+    expect(consumeStateNonce(req, res, NONCE_SLOT.driveConnect)).toBe(hash);
+    expect(cookies[0]).toMatch(new RegExp(`^${name}=; .*Max-Age=0`));
+  });
+
+  it('consumeStateNonce returns null with no cookie and still burns', () => {
+    const { res, cookies } = makeRes();
+    expect(consumeStateNonce(reqWith(undefined), res, NONCE_SLOT.driveConnect)).toBeNull();
+    expect(cookies[0]).toMatch(/^b4m_oauth_nonce_google-drive=; .*Max-Age=0/);
   });
 
   it('does not touch cookies once headers are already sent', () => {

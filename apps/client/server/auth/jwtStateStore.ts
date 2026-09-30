@@ -103,9 +103,9 @@ export function createStateToken<T extends Record<string, unknown>>(
  * @param expectedNonceHash - Browser-binding enforcement. When provided (login
  *   paths pass readStateNonceHash(req), a string or null), the token's `nh` claim
  *   MUST be present and equal it - a token minted in another browser, or with no
- *   nonce cookie on this request, is rejected. Omit (undefined) to opt out: the
- *   injected Slack state verifier and unit tests keep the pre-binding behavior and
- *   enforce the nonce at their own callback layer instead.
+ *   nonce cookie on this request, is rejected. Omit (undefined) to opt out: for
+ *   re-reading a state already verified upstream (auth/[strategy]/callback.ts reads
+ *   redirectTo this way) and for unit tests.
  * @returns Verification result with payload or error reason
  */
 export function verifyStateToken<T extends BaseStatePayload>(

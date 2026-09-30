@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { readStateNonceHash, clearStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { consumeStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { getGitHubLakeAppConfig } from '@server/integrations/github/dataLake/lakeAppClient';
 import {
   completeGitHubLakeConnection,
@@ -32,9 +32,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .use(requireFeatureEnabled('EnableDataLakeGitHub'))
   .post(async (req: Request, res) => {
+    const nonceHash = consumeStateNonce(req, res, NONCE_SLOT.githubLakeConnect); // burn before parse, which can 400
     const { state, code, installationId } = parseOrBadRequest(Body, req.body);
-    const nonceHash = readStateNonceHash(req, NONCE_SLOT.githubLakeConnect);
-    clearStateNonce(res, NONCE_SLOT.githubLakeConnect); // single-use: burn on every exit, before verify or any work
     const dataLakeId = verifyGitHubLakeState(state, nonceHash, req.user.id);
     const conn = await completeGitHubLakeConnection({
       config: requireGitHubLakeAppConfig(getGitHubLakeAppConfig()),

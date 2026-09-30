@@ -15,7 +15,7 @@ vi.mock('@bike4mind/slack', () => ({
 import handler from '@pages/api/slack/oauth/authorize';
 import { readStateNonceHash, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 
-const call = async (isAdmin: boolean, query: Record<string, string> = { workspaceId: 'ws-1' }) => {
+const call = async (isAdmin: boolean, query: Record<string, string | string[]> = { workspaceId: 'ws-1' }) => {
   const { req, res } = createMocks({ method: 'GET', query });
   Object.assign(req, {
     user: { id: 'u1', isAdmin },
@@ -82,5 +82,28 @@ describe('GET /api/slack/oauth/authorize', () => {
 
     expect(res._getStatusCode()).toBe(500);
     expect(setCookies(res).some(isExpiry)).toBe(true);
+  });
+
+  it('rejects a repeated workspaceId with 400 and sets no cookie', async () => {
+    const res = await call(true, { workspaceId: ['ws-1', 'ws-2'] });
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(setCookies(res)).toEqual([]);
+    expect(mockCreateInstallProvider).not.toHaveBeenCalled();
+  });
+
+  it('expires the nonce when generateInstallUrl fails after it was issued', async () => {
+    mockCreateInstallProvider.mockResolvedValue({
+      generateInstallUrl: async () => {
+        throw new Error('slack down');
+      },
+    });
+    const res = await call(true);
+
+    expect(res._getStatusCode()).toBe(500);
+    const cookies = setCookies(res);
+    expect(cookies.length).toBeGreaterThanOrEqual(2);
+    expect(cookies[0]).toMatch(/^b4m_oauth_nonce_slack-app-install=[^;]+;.*Max-Age=600/);
+    expect(isExpiry(cookies[cookies.length - 1])).toBe(true);
   });
 });
