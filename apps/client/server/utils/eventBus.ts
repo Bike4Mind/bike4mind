@@ -13,12 +13,9 @@ import {
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
-// Self-host has no EventBridge. Deliver email.send straight to the mailer, and route
-// everything else to the SELF_HOST_EVENT_QUEUE for the background worker to consume
-// (apps/workers/src/selfhost/eventDispatch.ts). These events feed async enrichment (naming,
-// summaries, tags, memento embedding), so a delivery failure must degrade the feature,
-// not 500 the caller - hence warn-and-drop, never throw.
-async function publishSelfHost(eventName: string, detail: unknown): Promise<void> {
+// Enrichment remains best-effort; explicit submissions can require broker acceptance.
+// Queued events are consumed by apps/workers/src/selfhost/eventDispatch.ts.
+async function publishSelfHost(eventName: string, detail: unknown, requiredAcceptance = false): Promise<void> {
   const logger = new Logger({ metadata: { service: 'eventBus' } });
 
   if (eventName === 'email.send') {
@@ -43,6 +40,7 @@ async function publishSelfHost(eventName: string, detail: unknown): Promise<void
 
   const queueUrl = process.env.SELF_HOST_EVENT_QUEUE;
   if (!queueUrl) {
+    if (requiredAcceptance) throw new Error('SELF_HOST_EVENT_QUEUE is required for event submission');
     logger.warn(`Self-host: SELF_HOST_EVENT_QUEUE unset; dropping event ${eventName} (enrichment will not run)`);
     return;
   }
@@ -51,6 +49,7 @@ async function publishSelfHost(eventName: string, detail: unknown): Promise<void
     const { sendToQueue } = await import('./sqs');
     await sendToQueue(queueUrl, { detailType: eventName, detail });
   } catch (error) {
+    if (requiredAcceptance) throw error;
     logger.warn(`Self-host: failed to enqueue event ${eventName}`, {
       error: error instanceof Error ? error.message : String(error),
     });
@@ -66,11 +65,15 @@ function createEventBuilder({
   source?: string;
   region?: string;
 }) {
-  return function event<EventName extends string, Schema extends z.ZodType>(eventName: EventName, schema: Schema) {
+  return function event<EventName extends string, Schema extends z.ZodType>(
+    eventName: EventName,
+    schema: Schema,
+    options: { requireSelfHostAcceptance?: boolean } = {}
+  ) {
     return {
       publish: (detail: z.infer<typeof schema>) => {
         if (process.env.B4M_SELF_HOST === 'true') {
-          return publishSelfHost(eventName, detail);
+          return publishSelfHost(eventName, detail, options.requireSelfHostAcceptance);
         }
         // Create client on each publish to ensure fresh AWS credentials
         // Lambda containers can stay warm for extended periods, causing module-level
@@ -374,7 +377,8 @@ export const NotebookCurationEvents = {
         .optional(),
       exportFormat: z.enum(['markdown', 'txt', 'html']).optional(),
       customNotebookName: z.string().optional(),
-    })
+    }),
+    { requireSelfHostAcceptance: true }
   ),
   Progress: event(
     'notebook.curation.progress',

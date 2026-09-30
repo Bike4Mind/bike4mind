@@ -1006,3 +1006,13 @@ VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/telemetryCle
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/telemetryCleanup.test.ts
 TZ=America/New_York VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/telemetryCleanup.retention.e2e.test.ts
 ```
+
+## Notebook submission errors
+
+Notebook curation start submissions require acceptance by the configured local event queue. A missing queue URL or rejected enqueue now reaches the API's existing error response instead of returning 202. Other background enrichment events retain their existing best-effort delivery, and the hosted publisher contract is unchanged.
+
+A 202 response establishes broker acceptance only. The current local worker still lacks the notebook start-event route and curation consumer, so this change does not establish export completion. No pending job row is created by the submission endpoint; job IDs exist only in the request/event payload at this stage.
+
+Batch submission is not atomic. If one enqueue fails after another succeeds, the API returns an error while the accepted event remains queued. A lost acknowledgement can likewise leave accepted work behind. Retrying creates new submission IDs; this change does not promise rollback, deduplicated retries or exactly-once processing.
+
+Focused verification uses the real endpoint body and Mongo session lookup with a controlled broker boundary. It proves rejected/missing-queue errors, deferred acceptance, fresh-ID retry and mixed-batch behavior, with no persisted pending job rows. It does not exercise authentication middleware, a live broker, consumer execution or Kubernetes.
