@@ -352,6 +352,11 @@ export function ChatShell({ account }: { account?: ReactNode }) {
             onRespond={conversation.respondToApproval}
             onContinue={() => void conversation.continueReply()}
             status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
+            // At the foot of the thread rather than above the composer: a background command is
+            // something this conversation started, so it reads as the last thing that happened
+            // in it. It scrolls with the transcript, which is the trade - the panel is reached
+            // from the bottom of the thread, not from a bar that is always on screen.
+            footer={<BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />}
           />
 
           {conversation.sendError && (
@@ -398,11 +403,6 @@ export function ChatShell({ account }: { account?: ReactNode }) {
           {conversation.session?.mode === 'code' && (
             <SessionChips project={conversation.session.project ?? null} binding={conversation.project} />
           )}
-
-          {/* The count sits here rather than inside the composer so that a long-running command
-            is visible from the one place the user looks before sending the next turn, and it is
-            the only way back to a panel that has been closed. */}
-          <BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />
 
           <Composer
             sessionId={activeId}
