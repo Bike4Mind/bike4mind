@@ -1,4 +1,4 @@
-import type { ChatToolCall, ChatUsage } from '@shared/chat';
+import type { ChatMessage, ChatToolCall, ChatUsage } from '@shared/chat';
 import { pendingCodePhrase, type PendingCode } from './codeStream';
 import { activePhrase } from './toolRows';
 
@@ -23,6 +23,9 @@ export interface TurnProgress {
  * New input, cache writes and output. Cache reads are left out: a long tool loop re-reads the
  * same context every round, which inflates the figure into the millions while costing a tenth
  * of fresh input. They stay in the tooltip split, and the cost figure already prices them.
+ *
+ * NOT the number to measure the context window with - see `inputSide`, which is the other half
+ * of this distinction and includes exactly what this drops.
  */
 export function totalTokens(usage: ChatUsage | undefined): number | null {
   if (!usage) return null;
@@ -102,4 +105,166 @@ export function statusFields(turn: TurnProgress, now: number, activity: string):
     ...(formatCost(turn.usage) ? [formatCost(turn.usage) as string] : []),
     activity,
   ];
+}
+
+/**
+ * How full the model's context window is, and what the account has left to spend.
+ *
+ * Every field is nullable and every null means NOT KNOWN rather than zero: a fresh conversation
+ * has measured no request, a backend may state no window, and `/api/v1/me` can be unreachable.
+ * A stand-in zero in any of the three reads as a fact the server never stated.
+ */
+export interface ComposerUsage {
+  /**
+   * The whole input side of the LATEST request - cache reads included. See contextTokens: this
+   * is window occupancy, which is not the same quantity as `totalTokens` above.
+   */
+  contextTokens: number | null;
+  /** The active model's window, from the server's catalog. Null when it states none. */
+  contextWindow: number | null;
+  /** The account's personal credit balance. Null when it could not be read. */
+  credits: number | null;
+  /** Why the balance is null, for the tooltip. Never set alongside a real balance. */
+  creditsError?: string;
+  /** What the last completed turn cost, for the tooltip's split. Deliberately a SEPARATE figure. */
+  lastTurn?: ChatUsage | null;
+}
+
+/** Stands in for a figure nobody has stated, so the row keeps its shape and reads as unknown. */
+const UNKNOWN = '--';
+
+/**
+ * The input side of one request: everything that occupied the context window to serve it.
+ *
+ * Cache reads are INCLUDED here and excluded from `totalTokens`, and the difference is the
+ * whole point of the two functions. `totalTokens` is a COST proxy, so it drops the tokens that
+ * were served cheaply from cache; this is an OCCUPANCY measure, and a cached token takes up
+ * exactly as much of the window as a fresh one. Folding the two together makes the status line
+ * either overprice a tool loop or understate how full it is.
+ */
+export function inputSide(usage: ChatUsage | null | undefined): number | null {
+  if (!usage) return null;
+  const parts = [usage.inputTokens, usage.cacheReadInputTokens, usage.cacheCreationInputTokens];
+  if (parts.every(part => part === undefined)) return null;
+  return parts.reduce((sum: number, part) => sum + (part ?? 0), 0);
+}
+
+/**
+ * How full the window was when this reply's last request went out.
+ *
+ * The LAST ROUND's input, never a sum over the rounds. An agent turn makes one request per tool
+ * round and each one re-sends the conversation so far, so summing them counts the same context
+ * dozens of times over and sails past 100% in any real tool loop. The message's own `usage` is
+ * that sum - it is the turn's BILL, and it is the wrong number for this.
+ *
+ * A message with tool calls but no rounds was stored before rounds were recorded: its per-round
+ * inputs were never kept, so the answer is unknown rather than its summed bill.
+ */
+export function contextTokens(message: ChatMessage | null | undefined): number | null {
+  if (!message || message.role !== 'assistant') return null;
+
+  const rounds = message.rounds;
+  if (rounds?.length) {
+    for (let index = rounds.length - 1; index >= 0; index--) {
+      const measured = inputSide(rounds[index].usage);
+      if (measured !== null) return measured;
+    }
+    return null;
+  }
+
+  if (message.toolCalls?.length) return null;
+  return inputSide(message.usage);
+}
+
+/**
+ * The reply whose request the context figure describes: the most recent assistant message.
+ *
+ * Messages typed since are deliberately skipped rather than counted - they will occupy the
+ * window on the next request, and this reports what the last one actually used.
+ */
+export function latestReply(messages: readonly ChatMessage[]): ChatMessage | null {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index].role === 'assistant') return messages[index];
+  }
+  return null;
+}
+
+/** "22" for a window that is 22% full; null when either half of the fraction is unknown. */
+export function contextPercent(tokens: number | null, window: number | null): number | null {
+  if (tokens === null || window === null || window <= 0) return null;
+  return Math.round((tokens / window) * 100);
+}
+
+/**
+ * How full the window reads on the indicator: "22%", or "<1%" for a real but tiny occupancy.
+ *
+ * A million-token window sits under half a percent for the first several turns, and rounding
+ * that to "0%" renders a measured context identically to no context at all - the same
+ * something-shown-as-nothing this file avoids everywhere else.
+ */
+function formatOccupancy(percent: number, tokens: number): string {
+  if (percent === 0 && tokens > 0) return '<1%';
+  return `${percent}%`;
+}
+
+/**
+ * The composer's idle indicator: how full the context window is, in one short field.
+ *
+ * The balance is deliberately NOT here. It belongs to the account rather than to this
+ * conversation, it is the slower-moving of the two, and putting both on a row that already
+ * carries the approval pill and the model picker is what would squeeze the line. It is one
+ * hover away instead - see describeUsage.
+ *
+ * `--` rather than an omitted field when the window figure is unknown, so the row holds its
+ * shape and the hover target stays where the user last found it. Null only when NEITHER figure
+ * is known, which is the caller's cue to fall back to its own word.
+ */
+export function usageLabel(usage: ComposerUsage): string | null {
+  const percent = contextPercent(usage.contextTokens, usage.contextWindow);
+  if (percent === null && usage.credits === null) return null;
+
+  return `Context ${percent === null ? UNKNOWN : formatOccupancy(percent, usage.contextTokens ?? 0)}`;
+}
+
+/** "31,667" - the balance as the server stated it, grouped so a five-figure number stays readable. */
+export function formatCredits(balance: number): string {
+  return Math.round(balance).toLocaleString('en-US');
+}
+
+/**
+ * The tooltip behind that line: the same two figures in full, plus what the last turn cost.
+ *
+ * Context and cost are named apart on purpose. They are computed from different sides of the
+ * same reports and a reader who takes one for the other will conclude the window is far fuller
+ * than it is - see inputSide.
+ */
+export function describeUsage(usage: ComposerUsage): string | null {
+  const lines: string[] = [];
+
+  if (usage.contextTokens === null) {
+    lines.push('Context - nothing measured in this conversation yet');
+  } else if (usage.contextWindow === null) {
+    // No percentage, rather than a percentage of a window this client made up.
+    lines.push(`Context ${formatTokens(usage.contextTokens)} used - this model reports no window size`);
+  } else {
+    const percent = contextPercent(usage.contextTokens, usage.contextWindow) ?? 0;
+    const share = formatOccupancy(percent, usage.contextTokens);
+    lines.push(`Context ${formatTokens(usage.contextTokens)} / ${formatTokens(usage.contextWindow)} (${share})`);
+  }
+
+  lines.push(
+    usage.credits === null
+      ? `Credits - ${usage.creditsError ?? 'not available'}`
+      : // Named as personal because it is: a turn billed to an organization draws on a pool
+        // this number does not describe, per the endpoint's own contract.
+        `Credits ${formatCredits(usage.credits)} personal balance`
+  );
+
+  const split = describeSplit(usage.lastTurn);
+  if (split) {
+    const cost = formatCost(usage.lastTurn);
+    lines.push(`Last turn ${split}${cost ? ` - ${cost}` : ''}`);
+  }
+
+  return lines.join('\n');
 }
