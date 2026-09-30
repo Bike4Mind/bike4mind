@@ -53,6 +53,39 @@ const track = (p: Promise<void>) => {
   void p.finally(() => inFlight.delete(p));
 };
 
+interface DrainLogger {
+  error(message: string, metadata?: Record<string, unknown>): void;
+}
+
+/**
+ * Wait for the tracked in-flight work to settle, bounded by `drainTimeoutMs`. Exported
+ * so a test can drive the cut-off branch without booting the service. Returns whether the
+ * work drained or the window won; on the cut-off branch it emits an error naming the count
+ * so LiveOps triage sees the quests a deploy/scale-in is about to SIGKILL (the WARN/INFO
+ * line this replaces was invisible to the ERROR-level log subscription).
+ */
+export async function drainInFlight({
+  inFlight,
+  logger,
+  drainTimeoutMs = DRAIN_TIMEOUT_MS,
+}: {
+  inFlight: Set<Promise<void>>;
+  logger: DrainLogger;
+  drainTimeoutMs?: number;
+}): Promise<'drained' | 'timed-out'> {
+  const drainTimeout = new Promise<'timed-out'>(resolve => setTimeout(() => resolve('timed-out'), drainTimeoutMs));
+  const settled = Promise.allSettled([...inFlight]).then(() => 'drained' as const);
+  const outcome = await Promise.race([settled, drainTimeout]);
+
+  // `allSettled` winning means every promise's `track` cleanup already ran, so a non-empty
+  // set here can only mean the timeout won with work still running.
+  if (outcome === 'timed-out' && inFlight.size > 0) {
+    logger.error('Drain window expired with in-flight quests - they will be cut off', { count: inFlight.size });
+  }
+
+  return outcome;
+}
+
 /**
  * Build the Express app (no `listen`, no DB connect, no signal handlers). Split out from
  * `main()` so tests can exercise the real middleware chain (auth gate -> body parser ->
@@ -127,8 +160,7 @@ async function main() {
   const shutdown = (signal: string) => {
     bootLogger.info(`${signal} received - draining ${inFlight.size} in-flight request(s)`);
     server.close();
-    const drainTimeout = new Promise<void>(resolve => setTimeout(resolve, DRAIN_TIMEOUT_MS));
-    Promise.race([Promise.allSettled([...inFlight]), drainTimeout]).finally(() => {
+    void drainInFlight({ inFlight, logger: bootLogger }).finally(() => {
       bootLogger.info('Drain complete - exiting');
       process.exit(0);
     });

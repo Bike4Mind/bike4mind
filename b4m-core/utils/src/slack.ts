@@ -58,7 +58,13 @@ export const notifyEventLogsToSlack = async ({
       let metadata: Record<string, string>;
 
       try {
-        const logEventData = JSON.parse(logEvent.message.split('\t')[3]);
+        // Lambda lines are `ts\treqId\tLEVEL\tjsonPayload`; take the payload field.
+        // Fargate lines (ChatCompletion) have no prefix at all - the message IS the
+        // logger's raw JSON - so fall back to parsing the whole message instead of
+        // dropping a real error into the `source: 'AWS'` bucket.
+        const tabSeparatedParts = logEvent.message.split('\t');
+        const payload = tabSeparatedParts.length > 1 ? tabSeparatedParts[3] : logEvent.message;
+        const logEventData = JSON.parse(payload);
         message = logEventData.message;
         severity = logEventData.severity;
         metadata = logEventData;
