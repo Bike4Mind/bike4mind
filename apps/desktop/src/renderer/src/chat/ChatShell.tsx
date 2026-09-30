@@ -7,7 +7,8 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatProject, ChatSessionMode } from '@shared/chat';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
-import { BackgroundProcessPanel } from './BackgroundProcessPanel';
+import { BackgroundTaskChip, BackgroundTaskPanel } from './BackgroundTaskPanel';
+import { readPanelFlag, writePanelFlag } from './backgroundTasks';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
 import { CustomizePanel } from './CustomizePanel';
@@ -118,8 +119,24 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   const pendingApprovals = usePendingApprovals();
   const [collapsed, setCollapsed] = useState(false);
   const [showArtifacts, setShowArtifacts] = useState(false);
+  // Window chrome, so it is remembered per machine rather than per conversation. Seeded from
+  // storage on the first render and written back on every change, which is the whole of the
+  // persistence - see backgroundTasks.ts for the keys and the blocked-storage fallback.
+  const [tasksOpen, setTasksOpen] = useState(() => readPanelFlag('open'));
+  const [tasksWide, setTasksWide] = useState(() => readPanelFlag('wide'));
   const draft = useAttachmentDraft(activeId);
   const nextPrompt = usePromptSuggestion(activeId);
+
+  const setTasksPanelOpen = useCallback((next: boolean) => {
+    setTasksOpen(next);
+    writePanelFlag('open', next);
+  }, []);
+  const toggleTasksWide = useCallback(() => {
+    setTasksWide(current => {
+      writePanelFlag('wide', !current);
+      return !current;
+    });
+  }, []);
 
   const onFilesDropped = useCallback(
     (files: File[]) => {
@@ -363,8 +380,6 @@ export function ChatShell({ account }: { account?: ReactNode }) {
             onOpenSession={setActiveId}
           />
 
-          <BackgroundProcessPanel processes={background.processes} onStop={background.stop} />
-
           {codeError && (
             <Alert
               size="sm"
@@ -383,6 +398,11 @@ export function ChatShell({ account }: { account?: ReactNode }) {
           {conversation.session?.mode === 'code' && (
             <SessionChips project={conversation.session.project ?? null} binding={conversation.project} />
           )}
+
+          {/* The count sits here rather than inside the composer so that a long-running command
+            is visible from the one place the user looks before sending the next turn, and it is
+            the only way back to a panel that has been closed. */}
+          <BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />
 
           <Composer
             sessionId={activeId}
@@ -420,6 +440,24 @@ export function ChatShell({ account }: { account?: ReactNode }) {
             }
           />
         </Stack>
+      )}
+
+      {/* The third column: a sibling of the conversation in the shell's flex row, not an
+        overlay. The conversation keeps `flex: 1, minWidth: 0` and its reading column keeps
+        `mx: 'auto'`, so opening this re-centres the transcript and the composer together -
+        they share contentColumnSx, and neither one is told the panel exists.
+
+        It is mounted only when there is something to show, so a panel left open never eats
+        width on a conversation that has no background commands. */}
+      {tasksOpen && background.processes.length > 0 && (
+        <BackgroundTaskPanel
+          processes={background.processes}
+          wide={tasksWide}
+          onToggleWide={toggleTasksWide}
+          onClose={() => setTasksPanelOpen(false)}
+          onStop={background.stop}
+          onClearFinished={background.clearFinished}
+        />
       )}
     </Box>
   );

@@ -196,6 +196,49 @@ export function ContrastIcon() {
   );
 }
 
+/** The background-task panel's collapse toggle: a panel with its right column marked off. */
+export function PanelRightIcon() {
+  return (
+    <Glyph>
+      <rect x="2" y="3" width="12" height="10" rx="2" />
+      <path d="M9.5 3v10" />
+    </Glyph>
+  );
+}
+
+/** Widen the task panel, or put it back: arrows out when narrow, in when already wide. */
+export function ExpandIcon({ expanded }: { expanded: boolean }) {
+  return (
+    <Glyph>
+      {expanded ? (
+        <path d="M6.5 2.5V6.5H2.5M6.5 6.5 2.5 2.5M9.5 13.5V9.5h4M9.5 9.5l4 4" />
+      ) : (
+        <path d="M2.5 6.5v-4h4M2.5 2.5l4 4M13.5 9.5v4h-4M13.5 13.5l-4-4" />
+      )}
+    </Glyph>
+  );
+}
+
+/** Stop one running task. A filled square, the universal stop mark, not an X. */
+export function StopIcon() {
+  return (
+    <Glyph>
+      <rect x="4.5" y="4.5" width="7" height="7" rx="1.2" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+/** Clear the finished list. Only ever offered beside tasks that have already ended. */
+export function TrashIcon() {
+  return (
+    <Glyph>
+      <path d="M2.75 4.5h10.5M6.5 4.5V3.25a.75.75 0 0 1 .75-.75h1.5a.75.75 0 0 1 .75.75V4.5" />
+      <path d="M4 4.5v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-8" />
+      <path d="M6.75 7v4M9.25 7v4" />
+    </Glyph>
+  );
+}
+
 /** Suggested next prompt: a four-point spark, with a smaller one beside it. */
 export function SparkIcon() {
   return (
