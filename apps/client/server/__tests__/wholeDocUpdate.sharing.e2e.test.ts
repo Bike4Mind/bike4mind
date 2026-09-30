@@ -12,7 +12,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { FabFile, Project, fabFileRepository, projectRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
-import { KnowledgeType, Permission, type IUserDocument } from '@bike4mind/common';
+import { KnowledgeType, NotFoundError, Permission, type IUserDocument } from '@bike4mind/common';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -81,11 +81,11 @@ describe('sharing: projectService.addFiles', () => {
     expect(after?.fileIds).toEqual([fileId]);
   });
 
-  it('does not resurrect a project soft-deleted after its read', async () => {
+  it('refuses, and does not resurrect, a project soft-deleted after its read', async () => {
     const { projectId, fileId } = await seed();
     const deletedAt = new Date();
 
-    await projectService.addFiles(
+    const write = projectService.addFiles(
       OWNER,
       { projectId, fileIds: [fileId] },
       {
@@ -97,9 +97,12 @@ describe('sharing: projectService.addFiles', () => {
         },
       }
     );
+    await expect(write).rejects.toThrow(NotFoundError);
 
     // Raw collection read: the soft-delete plugin hides deleted rows from model finds.
     const after = await Project.collection.findOne({ _id: new mongoose.Types.ObjectId(projectId) });
     expect(after?.deletedAt).toEqual(deletedAt);
+    expect(after?.fileIds).toEqual([]);
+    expect((await FabFile.findById(fileId).lean())?.users ?? []).toEqual([]);
   });
 });
