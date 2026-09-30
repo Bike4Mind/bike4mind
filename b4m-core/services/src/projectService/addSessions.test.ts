@@ -89,21 +89,25 @@ describe('projectService - addSessions', () => {
       groups: [],
     }));
 
-    const mockFiles = knowledgeFileIds.map(id => ({
-      id,
-      name: `File ${id}`,
-      userId: contributorId,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      isGlobalRead: false,
-      isGlobalWrite: false,
-      users: [],
-      groups: [],
-    }));
+    // A fresh set per session lookup, so each session's file writes are checked on their own objects.
+    const makeFiles = () =>
+      knowledgeFileIds.map(id => ({
+        id,
+        name: `File ${id}`,
+        userId: contributorId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        isGlobalRead: false,
+        isGlobalWrite: false,
+        users: [],
+        groups: [],
+      }));
 
     (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce(mockProject);
     (mockSessionRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValueOnce(mockSessions);
-    (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValue(mockFiles);
+    (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock)
+      .mockResolvedValueOnce(makeFiles())
+      .mockResolvedValueOnce(makeFiles());
 
     const result = await addSessions(mockContributor, { projectId, sessionIds }, adapters);
 
