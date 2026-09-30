@@ -1,8 +1,7 @@
 /**
- * Shared regression suite for the OpenAI-compatible backends that never stream a tool's artifact
- * live (Kimi, xAI, DeepSeek). The client renders an emitter's artifact through the services-layer
- * tool_result extraction, so if the raw `<artifact>` tag also re-enters history the model can echo
- * it and the reply parser renders a second card. See anthropicBackend.artifactDedupe.test.ts for
+ * Shared regression suite for the OpenAI-compatible backends (Kimi, xAI, DeepSeek). An emitter's
+ * artifact streams live on the tool-artifact channel and history gets a placeholder instead, so the
+ * model cannot echo the tag into a second card. See anthropicBackend.artifactDedupe.test.ts for
  * the full mechanism.
  */
 import { describe, expect, it, vi } from 'vitest';
@@ -12,6 +11,9 @@ import type { CompletionInfo, ICompletionBackend, ICompletionOptionTools } from 
 
 const MERMAID_ARTIFACT =
   '<artifact identifier="mermaid-1" type="application/vnd.ant.mermaid" title="Flow">graph TD;A-->B</artifact>';
+
+const NESTED_RECHARTS_ARTIFACT =
+  '<artifact identifier="chart-1" type="application/vnd.ant.recharts" title="Chart">{"a":"<artifact"}</artifact>';
 
 const tool = (name: string, output: string): ICompletionOptionTools => ({
   toolSchema: { name, description: name, parameters: { type: 'object', properties: {} } },
@@ -53,16 +55,16 @@ const toolCallTurn = (name: string, stream: boolean) =>
         usage: { prompt_tokens: 10, completion_tokens: 5 },
       };
 
-const answerTurn = (stream: boolean) =>
+const answerTurn = (stream: boolean, body = 'Here is your diagram.') =>
   stream
     ? [
         {
-          choices: [{ index: 0, delta: { content: 'Here is your diagram.' }, finish_reason: 'stop' }],
+          choices: [{ index: 0, delta: { content: body }, finish_reason: 'stop' }],
           usage: { prompt_tokens: 12, completion_tokens: 6 },
         },
       ]
     : {
-        choices: [{ index: 0, message: { content: 'Here is your diagram.' }, finish_reason: 'stop' }],
+        choices: [{ index: 0, message: { content: body }, finish_reason: 'stop' }],
         usage: { prompt_tokens: 12, completion_tokens: 6 },
       };
 
@@ -70,11 +72,12 @@ async function runToolTurn(
   backend: ICompletionBackend,
   model: string,
   toolDef: ICompletionOptionTools,
-  stream: boolean
+  stream: boolean,
+  replyBody?: string
 ) {
   const toolName = toolDef.toolSchema.name;
   const requests: string[] = [];
-  const turns = [toolCallTurn(toolName, stream), answerTurn(stream)];
+  const turns = [toolCallTurn(toolName, stream), answerTurn(stream, replyBody)];
   const create = vi.fn().mockImplementation(async (params: unknown) => {
     // Serialized now: the backend keeps mutating the same messages array across turns.
     requests.push(JSON.stringify(params));
@@ -137,6 +140,33 @@ export function describeOpenAICompatibleArtifactDedupe(
         const artifactFrames = frames.filter(f => f.info?.channel === 'tool-artifact');
         expect(artifactFrames).toHaveLength(1);
         expect(artifactFrames[0].results.join('')).toBe(MERMAID_ARTIFACT);
+      });
+
+      it(`does not claim delivery when the pinned body cannot be streamed (${mode})`, async () => {
+        const { requests, frames } = await runToolTurn(
+          makeBackend(),
+          model,
+          tool('recharts', NESTED_RECHARTS_ARTIFACT),
+          stream
+        );
+
+        expect(frames.filter(f => f.info?.channel === 'tool-artifact')).toHaveLength(0);
+        expect(requests[1]).toContain(ARTIFACT_REMOVED_PLACEHOLDER);
+        expect(requests[1]).not.toContain(ARTIFACT_DELIVERED_PLACEHOLDER);
+      });
+
+      it(`renders one card when the model echoes the artifact on the next turn (${mode})`, async () => {
+        const { frames } = await runToolTurn(
+          makeBackend(),
+          model,
+          tool('mermaid_chart', MERMAID_ARTIFACT),
+          stream,
+          `Here is your diagram:\n\n${MERMAID_ARTIFACT}`
+        );
+
+        const allText = frames.map(f => f.results.join('')).join('');
+        expect(allText.match(/<artifact\b/g) ?? []).toHaveLength(1);
+        expect(frames.filter(f => f.info?.outputTokens !== undefined && f.results.join('') !== '')).toHaveLength(1);
       });
 
       it(`replaces a non-emitter's artifact markup with the removed placeholder (${mode})`, async () => {

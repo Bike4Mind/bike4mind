@@ -361,11 +361,13 @@ export class DeepSeekBackend implements ICompletionBackend {
                 // For tools that return artifacts (like recharts), stream the result directly -
                 // DeepSeek never echoes the tool result verbatim once it is stripped below, so
                 // without this the client never sees the artifact at all.
+                let emitted = false;
                 await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
+                  emitted = true;
                   if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
                   await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
                 });
-                const resultStr = stripUnstreamedToolResult(outcome.name, outcome.result.toString());
+                const resultStr = stripUnstreamedToolResult(outcome.name, outcome.result.toString(), emitted);
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
                 this.pushToolMessages(
                   messages,
@@ -680,11 +682,13 @@ export class DeepSeekBackend implements ICompletionBackend {
             // For tools that return artifacts (like recharts), stream the result directly -
             // DeepSeek never echoes the tool result verbatim once it is stripped below, so
             // without this the client never sees the artifact at all.
+            let emitted = false;
             await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
+              emitted = true;
               if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
               await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
             });
-            const resultStr = stripUnstreamedToolResult(outcome.name, outcome.result.toString());
+            const resultStr = stripUnstreamedToolResult(outcome.name, outcome.result.toString(), emitted);
             recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
             this.pushToolMessages(
               messages,

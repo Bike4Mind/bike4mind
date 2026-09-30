@@ -392,11 +392,13 @@ export class OllamaBackend implements ICompletionBackend {
           // For tools that return artifacts (like recharts), stream the result directly -
           // Ollama never echoes the tool result verbatim once it is stripped below, so
           // without this the client never sees the artifact at all.
+          let emitted = false;
           await handleToolResultStreaming(tc.name, outcome.result, async (results, artifactInfo) => {
+            emitted = true;
             if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
             await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
           });
-          observations[i] = stripUnstreamedToolResult(tc.name, outcome.result);
+          observations[i] = stripUnstreamedToolResult(tc.name, outcome.result, emitted);
           this.pushToolMessages(messages, { id: tc.id, name: tc.name, parameters: params }, observations[i]);
         } else {
           // A denied permission must abort, not be fed back as a result.

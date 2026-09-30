@@ -8,14 +8,9 @@ import { scanArtifactTags } from './scanArtifactTags';
 // and the delivered-vs-removed placeholder every backend puts in history); a new artifact-emitting
 // tool must be added here or its artifact is dropped on both paths.
 //
-// Gating status: every backend (Anthropic, Gemini, Bedrock, OpenAI via #3253/#3329/#3354, and
-// kimi/xai/deepseek/ollama here) now strips the raw <artifact> tag out of a tool result before it
-// enters history, so the model can no longer echo it back verbatim - closing #3253's duplicate-card
-// bug everywhere. What remains backend-specific: only Anthropic/Gemini/Bedrock/OpenAI also wire
-// createRecursiveArtifactGuard (OpenAI additionally calls its markDelivered, since its Responses
-// path never streams a tool artifact live), which catches a model that reconstructs the tag from
-// memory instead of echoing it. kimi/xai/deepseek/ollama don't wire that guard yet, so a
-// memory-reconstructed echo can still slip through on those four; that is the remaining follow-up.
+// Gating status: every backend strips tool-result artifact markup before it enters history, and
+// every backend wires createRecursiveArtifactGuard to catch a model that reconstructs the tag.
+// Only OpenAI's Responses path, which never streams a tool artifact live, also calls markDelivered.
 export const TOOL_ARTIFACT_EMITTERS: ReadonlyMap<string, string> = new Map([
   ['recharts', ClaudeArtifactMimeTypes.RECHARTS],
   ['mermaid_chart', ClaudeArtifactMimeTypes.MERMAID],

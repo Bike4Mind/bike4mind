@@ -33,18 +33,14 @@ export async function handleToolResultStreaming(
 }
 
 /**
- * Strips artifact markup from a tool result before it re-enters history, for a backend that never
- * streams tool artifacts live. An emitter's artifact still reaches the user through the services
- * sharedToolBuilder tool_result extraction, so the model is told it was delivered rather than
- * shown markup it could echo into a second card.
+ * Strips artifact markup from a tool result before it re-enters history, so the model cannot echo
+ * it into a second card. Live-emitting backends pass `delivered` = whether their tool-artifact
+ * emit fired. The `hasDeliverablePinnedArtifact` fallback is for the OpenAI Responses path, whose
+ * artifact reaches the client through sharedToolBuilder extraction instead.
  *
- * The delivered/removed choice is made once per result and stamped on every block it contains, not
- * decided per block - latent today because every emitter's own result carries exactly one pinned
- * block (extraction always delivers the whole result or none of it), but a result mixing a foreign-
- * type block alongside a pinned one would label both DELIVERED even though only the pinned one is.
- *
- * `delivered` lets a caller that already computed `hasDeliverablePinnedArtifact` (e.g. to gate
- * `artifactGuard.markDelivered`) pass the answer in rather than have this re-scan the same result.
+ * The delivered/removed choice is made once per result and stamped on every block it contains.
+ * That holds because each emitter emits one pinned block; a result mixing a foreign-type block
+ * with a pinned one would label both DELIVERED.
  */
 export function stripUnstreamedToolResult(toolName: string, result: string, delivered?: boolean): string {
   return stripToolArtifactMarkup(
