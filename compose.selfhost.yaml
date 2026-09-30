@@ -104,7 +104,9 @@ services:
   # touched. The history-import bucket gets an unprefixed 7-day rule, matching the hosted
   # lifecycle on that bucket: an archive whose import is abandoned (a second import was
   # already running) is otherwise never deleted, and self-host had no equivalent reaper.
-  # Both rules are idempotent (skipped if a lifecycle config already exists) and
+  # The FabFile bucket gets a 1-day rule on the exports/ prefix: notebook export downloads
+  # are served via a short-lived signed URL and never deleted by the app.
+  # All three rules are idempotent (skipped if a lifecycle config already exists) and
   # best-effort (an mc build without ilm support just skips them). Hosted gets the same
   # cleanup from S3 lifecycle rules; this is the MinIO equivalent. If you point object
   # storage at a different S3 backend, add equivalent rules there.
@@ -126,7 +128,8 @@ services:
         [ -n "$$FAB_FILE_BUCKET" ] && mc event add "local/$$FAB_FILE_BUCKET" arn:minio:sqs::primary:webhook --event put --ignore-existing || true;
         [ -n "$$HISTORY_IMPORT_BUCKET" ] && mc event add "local/$$HISTORY_IMPORT_BUCKET" arn:minio:sqs::primary:webhook --event put --ignore-existing || true;
         { [ -n "$$PUBLISHED_ARTIFACTS_BUCKET" ] && { mc ilm rule ls "local/$$PUBLISHED_ARTIFACTS_BUCKET" >/dev/null 2>&1 || mc ilm rule add --expire-days 7 --prefix "drafts/" "local/$$PUBLISHED_ARTIFACTS_BUCKET"; }; };
-        { [ -n "$$HISTORY_IMPORT_BUCKET" ] && { mc ilm rule ls "local/$$HISTORY_IMPORT_BUCKET" >/dev/null 2>&1 || mc ilm rule add --expire-days 7 "local/$$HISTORY_IMPORT_BUCKET"; }; }; true
+        { [ -n "$$HISTORY_IMPORT_BUCKET" ] && { mc ilm rule ls "local/$$HISTORY_IMPORT_BUCKET" >/dev/null 2>&1 || mc ilm rule add --expire-days 7 "local/$$HISTORY_IMPORT_BUCKET"; }; };
+        { [ -n "$$FAB_FILE_BUCKET" ] && { mc ilm rule ls "local/$$FAB_FILE_BUCKET" >/dev/null 2>&1 || mc ilm rule add --expire-days 1 --prefix "exports/" "local/$$FAB_FILE_BUCKET"; }; }; true
 
   # SQS-compatible queue. Queues are predeclared in elasticmq.conf; the URL
   # format there matches the *_QUEUE URLs in .env.selfhost.example.
