@@ -21,8 +21,8 @@ type OrgStripeCustomerTarget = {
  * loser adopts the winner's id instead.
  *
  * `deletedAt: null` in the filter follows this model's own convention (`OrganizationModel.ts:247`):
- * `softDeletePlugin` hooks `find`/`findOne` but NOT `findOneAndUpdate`, so without it a delete
- * landing between the gate's read and this write would stamp a customer onto a dead tenant.
+ * a delete landing between the gate's read and this write must not stamp a customer onto a dead
+ * tenant. `softDeletePlugin`'s update hook adds the same filter; this one is redundant but explicit.
  * `verifyOrgOwner` already rejects a soft-deleted org (its `findById` is hooked), so this only
  * covers that race - and when it fires, the reload below misses too and the caller gets the
  * BadRequestError rather than a checkout session against an organization that no longer exists.
@@ -33,7 +33,8 @@ type OrgStripeCustomerTarget = {
  * Sole caller today is `organizations/subscriptions/subscribe.ts`. Three copies of this dance
  * survive elsewhere and are deliberately NOT folded in here:
  * - `stripe/portal.ts:57-81` and `admin/organizations/[id]/convert-to-paid.ts:61-87` run the same
- *   org-model dance; both still lack the `deletedAt: null` guard described above.
+ *   org-model dance; they carry no explicit `deletedAt: null`, but the plugin's update hook
+ *   guards them the same way.
  * - `stripe/portal.ts:101+` runs it for a USER's customer id against the User model, where the
  *   model, the type and the error wording all differ.
  * Folding them is the right end state but wants its own PR: `portal.ts` holds the pattern twice,

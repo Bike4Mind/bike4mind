@@ -302,8 +302,8 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   /**
    * Partial update that matches only while `user` still holds update access and the session is not
    * soft-deleted, so a revocation or delete landing between the authorizing read and this write
-   * makes it a no-op (null) instead of a write. `deletedAt: null` is explicit because
-   * softDeletePlugin does not hook findOneAndUpdate.
+   * makes it a no-op (null) instead of a write. softDeletePlugin's update hook already adds
+   * `deletedAt: null`; the explicit filter is redundant but keeps the contract visible here.
    */
   async updateWithUpdateAccess(
     user: Pick<IUserDocument, 'id' | 'groups'>,

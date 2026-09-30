@@ -64,9 +64,10 @@ describe('DELETE /api/files scoping', () => {
     vi.mocked(FabFile.deleteMany)
       .mockReset()
       .mockResolvedValue({ deletedCount: 1 } as never);
+    // The handler chains `.setOptions({ includeDeleted: true })` onto the grant removal.
     vi.mocked(FabFile.updateMany)
       .mockReset()
-      .mockResolvedValue({ modifiedCount: 1 } as never);
+      .mockReturnValue({ setOptions: vi.fn().mockResolvedValue({ modifiedCount: 1 }) } as never);
     // Only the caller's own file comes back from the owned lookup.
     vi.mocked(FabFile.find)
       .mockReset()

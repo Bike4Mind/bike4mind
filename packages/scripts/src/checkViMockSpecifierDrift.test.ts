@@ -91,7 +91,8 @@ function loadEntries(): Map<string, PackageEntry> {
 function loadMockFiles(): { path: string; text: string }[] {
   const listed = execSync(
     `grep -rl "vi\\.mock(" --include="*.ts" --include="*.tsx" ${EXCLUDES} ${SEARCH_DIRS} || true`,
-    { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }
+    // timeout: a sync call blocks the event loop, so the test's own timeout could never interrupt it (ms).
+    { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 60_000 }
   );
   return listed
     .split('\n')
@@ -100,6 +101,8 @@ function loadMockFiles(): { path: string; text: string }[] {
 }
 
 describe('vi.mock specifiers match what the mocked module exports', () => {
+  // Whole-tree scan (~25s on CI and growing with the mock count), so it outgrows the package's
+  // 30s per-test budget; give it its own ceiling rather than raising the budget for every test.
   it('has no mock stubbing a symbol its specifier does not export', () => {
     const entries = loadEntries();
     const files = loadMockFiles();
@@ -126,7 +129,6 @@ describe('vi.mock specifiers match what the mocked module exports', () => {
       checked,
       'the guard compared far fewer mocks than this tree has - has the scan or the build broken?'
     ).toBeGreaterThan(MIN_CHECKED_CALLS);
-    // Sync whole-tree scan: ~2s alone, but 25-34s when the CI misc leg runs it beside other packages.
   }, 120_000);
 
   it('can enumerate the exports of every entry point it guards', () => {
