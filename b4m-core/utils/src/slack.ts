@@ -65,8 +65,11 @@ export const notifyEventLogsToSlack = async ({
         const tabSeparatedParts = logEvent.message.split('\t');
         const payload = tabSeparatedParts.length > 1 ? tabSeparatedParts[3] : logEvent.message;
         const logEventData = JSON.parse(payload);
-        message = logEventData.message;
-        severity = logEventData.severity;
+        // A structured line without a `message` field (e.g. a raw Fargate payload that is not a
+        // logger record) would leave this undefined and throw below on `.includes`, silently
+        // dropping the alert - fall back to the raw line instead.
+        message = logEventData.message ?? logEvent.message;
+        severity = logEventData.severity ?? 'error';
         metadata = logEventData;
       } catch (error) {
         message = logEvent.message;

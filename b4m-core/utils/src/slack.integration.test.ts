@@ -154,6 +154,36 @@ describe('Slack Error Integration', () => {
       );
     });
 
+    it('does not drop a parsed line whose payload has no message field', async () => {
+      // The Fargate filter matches on `severity`, which can appear without a `message`; an
+      // undefined message must fall back to the raw line rather than throw and drop the post.
+      const noMessage = JSON.stringify({ severity: 'error', code: 'E_DRAIN' });
+
+      const event = createMockCloudWatchEvent([
+        {
+          id: 'event-no-message',
+          timestamp: 1704067200000,
+          message: noMessage,
+        },
+      ]);
+
+      await notifyEventLogsToSlack({
+        event,
+        stage: 'production',
+        slackUrl: 'https://hooks.slack.com/test',
+      });
+
+      expect(mockHandleErrorNotification).toHaveBeenCalledWith(
+        noMessage,
+        'error',
+        expect.objectContaining({ severity: 'error', code: 'E_DRAIN' }),
+        expect.any(Object),
+        expect.any(Object),
+        'production',
+        'https://hooks.slack.com/test'
+      );
+    });
+
     it('forwards a Lambda task-timeout line with fallback error severity', async () => {
       // The "kills" subscription matches runtime timeout lines that carry no ERROR token;
       // they are unstructured but must still reach Slack as errors, not be dropped.
