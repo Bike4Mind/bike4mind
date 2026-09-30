@@ -1,4 +1,5 @@
-// Tab strip layout for the /profile tab list.
+// Tab strip layout for the page-level tab lists: /profile, Gears (via pageTabListSx) and
+// the deep research progress tabs.
 //
 // `gap: 1` (8px theme spacing) keeps visible whitespace between tabs so a tab's
 // leading icon never abuts the previous tab's text; a smaller gap (e.g. 2px)

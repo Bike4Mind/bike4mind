@@ -262,6 +262,21 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     expect(status).toHaveBeenCalledWith(202);
   });
 
+  it('409s a reconnect while the folder disconnect purge is still queued, without re-enabling it', async () => {
+    h.connFindByDriveFolderId.mockResolvedValue({
+      id: 'conn1',
+      targetDataLakeId: 'lake1',
+      disconnectRequestedAt: new Date(),
+    });
+    const { res, status, json } = makeRes();
+    await run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res);
+
+    expect(status).toHaveBeenCalledWith(409);
+    expect(json).toHaveBeenCalledWith({ error: expect.stringMatching(/still being disconnected/) });
+    expect(h.connUpdateCredential).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
   it('409s (not a false 202) when the reuse-branch credential update matches nothing', async () => {
     // updateCredential is org-scoped; a null return means the folder's connection belongs to another
     // org. The route must not report success for a write that changed nothing.

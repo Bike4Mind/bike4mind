@@ -64,6 +64,12 @@ describe('describeDriveConnection', () => {
     expect(describeDriveConnection(rogue).color).toBe('warning');
   });
 
+  it('reports a pending disconnect ahead of any status or error', () => {
+    const { label, color } = describeDriveConnection(conn({ disconnecting: true, lastError: 'old failure' }));
+    expect(label).toBe('Disconnecting');
+    expect(color).toBe('warning');
+  });
+
   it('falls back to the folder id when Drive gave us no folder name', () => {
     expect(describeDriveConnection(conn({ folderName: null })).title).toContain('"FOLDER"');
   });

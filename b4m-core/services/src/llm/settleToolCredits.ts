@@ -62,8 +62,9 @@ export const UNATTRIBUTED_TOOL_CHARGE = '(unattributed)';
  * and the ledger renders an absent model plainly; it is never the quest's own chat model,
  * which is what the row used to carry regardless of which tool incurred the cost.
  *
- * Per-call provider/model attribution is not lost either way: it lives on the
- * `feature: 'tool'` usage events (ToolBuilder.buildToolUsageEvent).
+ * Per-call provider/model attribution is not lost either way: it lives on the tool
+ * usage events (ToolBuilder.buildToolUsageEvent) - `feature: 'tool'`, or the media
+ * feature for the music and audio tools.
  */
 export function resolveAggregateToolModel(chargedModels: Iterable<string>): string | undefined {
   const distinct = Array.from(new Set(chargedModels));

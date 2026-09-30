@@ -145,16 +145,19 @@ export const purgeDataLakeConnectionFiles = async (
 
   const isStorageKey = (path: unknown): path is string => typeof path === 'string' && path.length > 0;
   let storageObjectsDeleted = 0;
-  const deletedFiles: DataLakeSweptFile[] = [];
+  let filesPurged = 0;
 
-  try {
-    for (let i = 0; i < files.length; i += chunkSize) {
-      const slice = files.slice(i, i + chunkSize);
+  for (let i = 0; i < files.length; i += chunkSize) {
+    const slice = files.slice(i, i + chunkSize);
+    const deletedFiles: DataLakeSweptFile[] = [];
+    try {
       // BEFORE the slice's rows go, mirroring cleanupDeletedDataLake's own ordering: once a row is
       // hard-deleted its id is no longer resolvable by any finder, so a findings sweep placed
       // after would permanently miss whatever this slice removes on the next call.
       await db.dataLakeFindings?.deleteForPurgedDocuments(slice.map(file => file.id));
-      await Promise.all(
+      // allSettled, not all: every task in the chunk must have settled before the refund below
+      // reads deletedFiles, or a sibling still running past a rejection would miss it.
+      const settled = await Promise.allSettled(
         slice.map(async file => {
           if (storage) {
             const currentKey = isStorageKey(file.filePath) ? file.filePath : null;
@@ -173,8 +176,10 @@ export const purgeDataLakeConnectionFiles = async (
             }
           }
           const deletedByThisCall = await db.fabFiles.hardDeleteOneById(file.id);
-          await db.fabFileChunks.deleteManyByFabFileId(file.id);
           if (deletedByThisCall) {
+            // Recorded (and shredded/unlinked) BEFORE the chunk delete: the row has no retry door
+            // once hard-deleted, so a chunk-delete throw below must not cost this file its refund,
+            // shred or session unlink too.
             deletedFiles.push({ id: file.id, userId: file.userId, fileSize: file.fileSize });
             const tagNames = (file.tags ?? [])
               .map(tag => tag?.name)
@@ -192,17 +197,19 @@ export const purgeDataLakeConnectionFiles = async (
               });
             }
           }
+          await db.fabFileChunks.deleteManyByFabFileId(file.id);
         })
       );
+      const failure = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failure) throw failure.reason;
+    } finally {
+      // Per chunk, not once per call: a run killed mid-sweep (a Lambda timeout) never reaches a
+      // final refund, so each chunk refunds the rows it hard-deleted as soon as it settles.
+      // `deletedFiles` only holds rows this call actually removed (hardDeleteOneById's return).
+      filesPurged += deletedFiles.length;
+      await bestEffortAdjustOwnerStorage(db.users, groupStorageDeltaByOwner(deletedFiles, -1), logger);
     }
-  } finally {
-    // In `finally`, not after the loop: a throw partway (an uncaught storage.delete failure, or a
-    // later chunk failing) must not cost the refund for files earlier chunks - or earlier-settled
-    // tasks in the same failing chunk's Promise.all - already hard-deleted. `deletedFiles` only
-    // ever holds rows this call actually removed, so refunding whatever it has so far is correct
-    // whether the loop finished or not.
-    await bestEffortAdjustOwnerStorage(db.users, groupStorageDeltaByOwner(deletedFiles, -1), logger);
   }
 
-  return { filesPurged: deletedFiles.length, storageObjectsDeleted };
+  return { filesPurged, storageObjectsDeleted };
 };

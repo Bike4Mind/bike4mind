@@ -29,7 +29,7 @@ vi.mock('@client/app/utils/uploadFileToUrl', () => ({ uploadFileToUrl: uploadFil
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
   useWebsocket: () => ({ subscribeToAction }),
 }));
-// Create mode reads the active org and reveals nav slots after the first upload -
+// Create mode reads the active org and refreshes the gears after the first upload -
 // both reached only once a test runs past the offline short-circuit.
 vi.mock('@client/app/hooks/data/dataLakes', () => ({ activeOrgId: () => undefined }));
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileLocked: () => {} }));

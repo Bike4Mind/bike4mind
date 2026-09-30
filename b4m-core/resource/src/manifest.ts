@@ -100,6 +100,10 @@ export const DEFAULT_MANIFEST = {
   // failure that needs a manual row deletion. webhookDeliveryQueue's two sites catch and return
   // a clean 503, so there the silent no-op really is the worse of the two.
   driveLakeIngestQueue: { kind: 'queue' },
+  // Read by the Drive disconnect route (via sourceQueueUrls) and by its consumer's own slice
+  // re-enqueue. Optional so an install that upgraded without the env var keeps the worker up; the
+  // route then rolls the disconnect back and fails instead of accepting work nothing consumes.
+  driveDisconnectPurgeQueue: { kind: 'queue', optional: true },
   emailAnalysisQueue: { kind: 'queue', optional: true },
   emailBatchQueue: { kind: 'queue' },
   emailIngestionQueue: { kind: 'queue' },
