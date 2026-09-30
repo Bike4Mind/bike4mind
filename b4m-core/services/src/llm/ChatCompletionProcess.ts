@@ -1789,6 +1789,8 @@ export class ChatCompletionProcess {
             `💾 [saveQuest] Saving quest ${quest.id} with ${quest.researchModeResults.length} Research Mode results`
           );
         }
+        // Deliberate whole-doc write: this is the streaming owner of `quest`, mutated across the
+        // pipeline and by tools, so no fixed field list exists. Narrowing needs a snapshot-diff.
         const result = await this.db.quests.update(quest);
         return result;
       });

@@ -42,17 +42,17 @@ describe('verifyEmailChange', () => {
     await verifyEmailChange(baseParams, mockAdapters);
 
     expect(mockAdapters.db.users.findByPendingEmailToken).toHaveBeenCalledWith(baseParams.token);
-    expect(mockAdapters.db.users.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        email: 'newemail@example.com',
-        pendingEmail: null,
-        pendingEmailToken: null,
-        pendingEmailSentAt: null,
-        pendingEmailExpires: null,
-        emailVerified: true,
-        emailVerifiedAt: expect.any(Date),
-      })
-    );
+    expect(mockAdapters.db.users.update).toHaveBeenCalledWith({
+      id: 'userId123',
+      pendingEmailUsed: true,
+      email: 'newemail@example.com',
+      pendingEmail: null,
+      pendingEmailToken: null,
+      pendingEmailSentAt: null,
+      pendingEmailExpires: null,
+      emailVerified: true,
+      emailVerifiedAt: expect.any(Date),
+    });
 
     // Check that verifiedAt timestamp is recent
     const updatedUser = mockAdapters.db.users.update.mock.calls[0][0];

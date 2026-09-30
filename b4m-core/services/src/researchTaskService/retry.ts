@@ -38,7 +38,12 @@ export const retry = async (parameters: ResearchTaskRetryParameters, adapters: R
     researchTask.status = ResearchTaskStatus.PROCESSING;
     researchTask.statusFailedAt = null;
     researchTask.statusFailedMessage = null;
-    await db.researchTasks.update(researchTask);
+    await db.researchTasks.update({
+      id: researchTask.id,
+      status: researchTask.status,
+      statusFailedAt: researchTask.statusFailedAt,
+      statusFailedMessage: researchTask.statusFailedMessage,
+    });
 
     Logger.globalInstance.log(`🔄 [RETRY_RESET] Task ${researchTask.id} status reset to PROCESSING for retry`);
 

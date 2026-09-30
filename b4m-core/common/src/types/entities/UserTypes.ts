@@ -608,6 +608,8 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   addGroupToUser: (userId: string, groupId: string) => Promise<void>;
   /** Remove a single group id from one user's `groups[]` (used when unassigning a member). */
   removeGroupFromUser: (userId: string, groupId: string) => Promise<void>;
+  /** Charge `count` referrals (floored at zero) and add the invites they created to `regInvites`. */
+  recordReferrals: (userId: string, count: number, newInviteIds: string[]) => Promise<void>;
   /**
    * Remove several group ids from ONE user's `groups[]` (idempotent $pull). Used when a member
    * leaves or is removed from an org, to strip that org's group ids from just that member.

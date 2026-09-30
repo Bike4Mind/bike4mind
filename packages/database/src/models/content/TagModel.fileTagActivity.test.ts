@@ -177,3 +177,16 @@ describe('FileTagRepository after the fileCount removal', () => {
     expect((read as unknown as { fileCount?: number }).fileCount).toBe(999);
   });
 });
+
+describe('FileTagRepository.updateMany', () => {
+  it('honours the reserved unset option instead of forwarding it to mongoose', async () => {
+    const userId = 'u-tag-update-many';
+    await seed('invoices', userId, { description: 'old', color: 'red' });
+
+    await fileTagRepository.updateMany({ userId }, { color: 'blue' }, { unset: ['description'] });
+
+    const stored = await tags().findOne({ name: 'invoices', userId });
+    expect(stored!.color).toBe('blue');
+    expect('description' in stored!).toBe(false);
+  });
+});

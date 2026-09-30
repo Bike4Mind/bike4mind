@@ -42,10 +42,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
         }
 
         // Update user email verification status
-        user.emailVerified = false;
-        user.emailVerifiedAt = null;
-
-        await userRepository.update(user);
+        await userRepository.update({ id: user.id, emailVerified: false, emailVerifiedAt: null });
 
         // Log admin action with audit trail
         await logAuditEvent(

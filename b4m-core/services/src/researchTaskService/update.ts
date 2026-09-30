@@ -1,5 +1,11 @@
 import { secureParameters, UnprocessableEntityError } from '@bike4mind/utils';
-import { IResearchTaskRepository, ResearchTaskStatus, ResearchTaskType, IResearchTask } from '@bike4mind/common';
+import {
+  IResearchTaskRepository,
+  ResearchTaskStatus,
+  ResearchTaskType,
+  IResearchTask,
+  IResearchTaskScrape,
+} from '@bike4mind/common';
 import { z } from 'zod';
 import { IUserDocument } from '@bike4mind/common';
 
@@ -42,14 +48,17 @@ export const update = async (
 
   researchTask.title = title;
   researchTask.description = description;
+  const base: Pick<IResearchTask, 'id' | 'title' | 'description'> = { id: researchTask.id, title, description };
+  let changes: Partial<IResearchTask> = base;
 
   if (researchTask.type === ResearchTaskType.SCRAPE) {
     const { urls, canDiscoverLinks } = secureParameters(parameters, researchTaskScrapeUpdateSchema);
     researchTask.urls = urls;
     researchTask.canDiscoverLinks = canDiscoverLinks;
+    changes = { ...base, urls, canDiscoverLinks } satisfies Partial<IResearchTaskScrape>;
   }
 
-  await adapters.db.researchTasks.update(researchTask);
+  await adapters.db.researchTasks.update(changes);
 
   return researchTask;
 };

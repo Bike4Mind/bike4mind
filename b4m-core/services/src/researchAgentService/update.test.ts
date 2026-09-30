@@ -61,7 +61,7 @@ describe('researchAgentService - update', () => {
     expect(result).toEqual(expectedAgent);
     expect(mockResearchAgentRepo.findByIdAndUserId).toHaveBeenCalledWith(agentId, mockUser.id);
     expect(mockResearchAgentRepo.update).toHaveBeenCalledWith({
-      ...existingAgent,
+      id: agentId,
       name: updateParams.name,
       description: updateParams.description,
       updatedAt: expect.any(Date),

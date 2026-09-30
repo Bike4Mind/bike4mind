@@ -132,7 +132,7 @@ export async function setSeats(orgId: string, newSeats: number, actor: SeatChang
     validateSeatChange(organization, newSeats, actor, pendingInviteCount);
 
     organization.seats = newSeats;
-    await organizationRepository.update(organization);
+    await organizationRepository.update({ id: organization.id, seats: newSeats });
 
     const activeSubs = await subscriptionRepository.findActiveSubscriptionsByOwner(
       SubscriptionOwnerType.Organization,

@@ -121,7 +121,7 @@ describe('customerSubscriptionUpdated — resilient seat sync', () => {
     await handler({ properties: { subscriptionId: 'sub_stripe_a' } } as any, logger as any);
 
     // Despite the validation failure, we must reflect Stripe's quantity locally.
-    expect(organizationRepository.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'org-a', seats: 3 }));
+    expect(organizationRepository.update).toHaveBeenCalledWith({ id: 'org-a', seats: 3 });
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Force-syncing'));
   });
 

@@ -368,7 +368,13 @@ export class ImageGenerationService {
         quest.promptEnhancement = promptEnhancement;
       }
 
-      await this.db.quests.update(quest);
+      await this.db.quests.update({
+        id: quest.id,
+        images: quest.images,
+        replies: quest.replies,
+        promptMeta: quest.promptMeta,
+        promptEnhancement: quest.promptEnhancement,
+      });
     } else {
       // Persist the user's literal prompt on the quest so the chat bubble shows what they actually
       // typed. The body's `prompt` carries the resolver's rewritten version (used by `process()` for
@@ -1074,7 +1080,14 @@ export class ImageGenerationService {
             };
 
             this.addStatusToQuest(quest, 'Clarification requested', userId);
-            await this.db.quests.update(quest);
+            await this.db.quests.update({
+              id: quest.id,
+              reply: quest.reply,
+              type: quest.type,
+              status: quest.status,
+              promptMeta: quest.promptMeta,
+              creditsUsed: quest.creditsUsed,
+            });
             await clientMessageSender.sendToClient(userId, wsEndpoint, {
               action: 'streamed_chat_completion',
               quest: parseQuestToStreamPayload(quest),
@@ -1464,7 +1477,15 @@ export class ImageGenerationService {
         totalResponseTime,
       });
 
-      await this.db.quests.update(quest);
+      await this.db.quests.update({
+        id: quest.id,
+        reply: quest.reply,
+        replies: quest.replies,
+        images: quest.images,
+        status: quest.status,
+        promptMeta: quest.promptMeta,
+        creditsUsed: quest.creditsUsed,
+      });
 
       if (this.invokeSessionAutoNaming) {
         await this.invokeSessionAutoNaming(sessionId, userId);

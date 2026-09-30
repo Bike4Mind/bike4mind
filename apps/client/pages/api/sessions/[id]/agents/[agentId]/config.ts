@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { sessionRepository, agentRepository, sessionAgentConfigRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertSessionAccess } from '@server/utils/sessionAccess';
+import type { ISessionAgentConfigDocument, RepositoryPatch } from '@bike4mind/common';
 import { z } from 'zod';
 
 const proactiveMessagingSchema = z.object({
@@ -97,13 +98,20 @@ const handler = baseApi()
       // it must always be whoever last authored proactiveMessaging.systemPrompt, never whoever
       // happened to create the row first - otherwise a session write-sharee could rewrite the
       // prompt while leaving it to run under the original owner's identity, keys, and tools.
-      config = await sessionAgentConfigRepository.updateBySessionAndAgent(sessionId, agentId, {
+      // Leaf paths, so the worker's concurrent `proactiveMessaging.lastProactiveMessageAt` stamp is not
+      // rewound to the read-time value; omitted optionals are cleared, as a whole-object write would.
+      const proactive = validatedData.proactiveMessaging;
+      const patch: RepositoryPatch<ISessionAgentConfigDocument> = {
+        id: existingConfig.id,
         userId: req.user!.id,
-        proactiveMessaging: {
-          ...validatedData.proactiveMessaging,
-          // Preserve lastProactiveMessageAt if not being reset
-          lastProactiveMessageAt: existingConfig.proactiveMessaging.lastProactiveMessageAt,
-        },
+      };
+      for (const [key, value] of Object.entries(proactive)) {
+        patch[`proactiveMessaging.${key}`] = value;
+      }
+      config = await sessionAgentConfigRepository.update(patch, {
+        unset: (['systemPrompt', 'minIntervalHours'] as const)
+          .filter(key => proactive[key] === undefined)
+          .map(key => `proactiveMessaging.${key}` as const),
       });
     } else {
       // Create new config
