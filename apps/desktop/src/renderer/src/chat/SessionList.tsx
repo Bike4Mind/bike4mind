@@ -21,6 +21,36 @@ import { SessionBadge } from './SessionBadge';
 
 export const SIDEBAR_WIDTH = 280;
 
+/**
+ * Shared by every session list in the sidebar so the four of them cannot drift apart.
+ * The height comes down through --ListItem-minHeight because that is what governs here:
+ * a row is one line of 0.8125rem text, well under Joy's 2rem floor, so --ListItem-paddingY
+ * never reaches it on its own. 28px still draws a band rather than a stripe and is still a
+ * comfortable pointer target across the full 280px. --List-padding replaces the 0.25rem Joy
+ * insets every list by, which also brings a row's content into line with the group header
+ * above it - both now start 16px from the sidebar's edge.
+ */
+const SESSION_LIST_SX = {
+  '--ListItem-radius': '6px',
+  '--ListItem-minHeight': '28px',
+  '--ListItem-paddingY': '2px',
+  '--List-padding': '0px',
+  gap: 0.25,
+};
+
+/** Both kinds of group header, so a project group and a plain label sit identically. */
+const GROUP_HEADER_SX = { px: 1, pt: 1, pb: 0.25 };
+
+/** Joy's sm IconButton, which is what the row's menu button is. */
+const MENU_BUTTON_WIDTH = '2rem';
+
+/**
+ * Alpha only - the colour is immaterial - so the same declaration holds against the row's
+ * default, hovered and selected backgrounds in either theme. A gradient Box laid over the
+ * title would have to match each of those and would seam on the ones it got wrong.
+ */
+const TITLE_FADE = 'linear-gradient(to right, #000 calc(100% - 24px), transparent)';
+
 /** A primary nav entry: leading icon, label, and whatever trailing affordance it needs. */
 export function NavItem({
   icon,
@@ -62,11 +92,36 @@ interface RowProps {
   onToggleArchived: (session: ChatSessionSummary) => void;
 }
 
+/**
+ * Whether the title is wider than the box drawing it. Watched rather than measured once:
+ * the row takes 2rem away from the title when its menu button appears and hands it back
+ * when it goes, so the answer changes without the text changing.
+ */
+function useTitleClipped(title: string) {
+  const ref = useRef<HTMLElement>(null);
+  const [clipped, setClipped] = useState(false);
+
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    // Both sides are whole pixels, so a box holding its text exactly can still report one
+    // more than it fits; a title over by a single pixel is not worth fading.
+    const measure = () => setClipped(node.scrollWidth - node.clientWidth > 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [title]);
+
+  return { ref, clipped };
+}
+
 function SessionRow({ session, activeId, statuses, onSelect, onDelete, onTogglePin, onToggleArchived }: RowProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const status = statuses.get(session.id) ?? 'done';
   const needsAction = status === 'needs-action';
   const spawned = !!session.origin;
+  const { ref: titleRef, clipped } = useTitleClipped(session.title);
 
   return (
     <ListItem
@@ -76,7 +131,14 @@ function SessionRow({ session, activeId, statuses, onSelect, onDelete, onToggleP
         // reach of the keyboard, and the open menu takes focus into a portal, so it has to
         // hold the row open by itself.
         '--row-actions-opacity': menuOpen ? 1 : 0,
-        '&:hover, &:focus-within': { '--row-actions-opacity': 1 },
+        // Joy's own reservation for an endAction, which it otherwise pins at 2.5rem whether
+        // the button is showing or not. Driven by the same three states as the opacity above,
+        // so the title owns the whole row until there is actually a button to run under.
+        '--ListItem-endActionWidth': menuOpen ? MENU_BUTTON_WIDTH : '0px',
+        '&:hover, &:focus-within': {
+          '--row-actions-opacity': 1,
+          '--ListItem-endActionWidth': MENU_BUTTON_WIDTH,
+        },
       }}
       endAction={
         <Box sx={{ opacity: 'var(--row-actions-opacity)', transition: 'opacity 120ms' }}>
@@ -113,9 +175,12 @@ function SessionRow({ session, activeId, statuses, onSelect, onDelete, onToggleP
       <ListItemButton
         selected={session.id === activeId}
         onClick={() => onSelect(session.id)}
-        // Room kept for the menu button, which Joy pins over the content: without it a long
-        // title runs underneath the moment the row is hovered.
-        sx={{ pr: 4, ...(needsAction && { boxShadow: 'inset 2px 0 0 var(--joy-palette-warning-solidBg)' }) }}
+        sx={{
+          // Paired with the opacity the button fades in on, so the title's edge travels with
+          // the button instead of snapping the moment the pointer lands.
+          transition: 'padding-inline-end 120ms',
+          ...(needsAction && { boxShadow: 'inset 2px 0 0 var(--joy-palette-warning-solidBg)' }),
+        }}
         data-testid="chat-session-item"
         data-session-status={status}
         data-session-spawned={spawned ? 'true' : undefined}
@@ -126,7 +191,22 @@ function SessionRow({ session, activeId, statuses, onSelect, onDelete, onToggleP
               which is bold, so the header outweighs the content it labels. The weight is spelled
               out because Joy's body-xs level carries fontWeight md, which drew every title
               heavier than the rest of the sidebar - a title is content, not a heading. */}
-          <Typography level="body-xs" noWrap sx={{ minWidth: 0, fontSize: '0.8125rem', fontWeight: 'normal' }}>
+          <Typography
+            ref={titleRef}
+            level="body-xs"
+            noWrap
+            sx={{
+              minWidth: 0,
+              fontSize: '0.8125rem',
+              fontWeight: 'normal',
+              // noWrap brings an ellipsis with it; the mask replaces it. Only when the text
+              // really is clipped - a fade over the last pixels of a short title reads as a
+              // rendering fault. The mask is on the title's own box, which ends before the
+              // `agent` marker, so it lands where the text clips and not under the marker.
+              textOverflow: 'clip',
+              ...(clipped && { WebkitMaskImage: TITLE_FADE, maskImage: TITLE_FADE }),
+            }}
+          >
             {session.title}
           </Typography>
           {/* A session the agent started is marked, because the user did not open it and will
@@ -151,7 +231,7 @@ function SessionRow({ session, activeId, statuses, onSelect, onDelete, onToggleP
 
 function SectionLabel({ children }: { children: ReactNode }) {
   return (
-    <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1, pt: 1.5, pb: 0.5, fontWeight: 'lg' }}>
+    <Typography level="body-xs" textColor="text.tertiary" sx={{ ...GROUP_HEADER_SX, fontWeight: 'lg' }}>
       {children}
     </Typography>
   );
@@ -187,7 +267,7 @@ function ProjectHeader({
   return (
     <Stack
       direction="row"
-      sx={{ alignItems: 'center', gap: 0.25, px: 1, pt: 1.5, pb: 0.5 }}
+      sx={{ alignItems: 'center', gap: 0.25, ...GROUP_HEADER_SX }}
       data-testid="project-group-header"
     >
       <Tooltip title={group.directory} size="sm" variant="soft" placement="top-start">
@@ -408,7 +488,7 @@ export function SessionList({
             {sections.pinned.length > 0 && (
               <Box data-testid="sidebar-pinned">
                 <SectionLabel>Pinned</SectionLabel>
-                <List size="sm" sx={{ '--ListItem-radius': '6px', gap: 0.25 }}>
+                <List size="sm" sx={SESSION_LIST_SX}>
                   {sections.pinned.map(session => (
                     <SessionRow key={session.id} session={session} {...rowProps} />
                   ))}
@@ -424,7 +504,7 @@ export function SessionList({
                   onSearch={target => setQuery(target.name)}
                   onSettings={target => onSelect(target.sessions[0].id)}
                 />
-                <List size="sm" sx={{ '--ListItem-radius': '6px', gap: 0.25 }}>
+                <List size="sm" sx={SESSION_LIST_SX}>
                   {group.sessions.map(session => (
                     <SessionRow key={session.id} session={session} {...rowProps} />
                   ))}
@@ -439,7 +519,7 @@ export function SessionList({
                 {(sections.pinned.length > 0 || sections.projects.length > 0) && (
                   <SectionLabel>{mode === 'code' ? 'No project' : 'Conversations'}</SectionLabel>
                 )}
-                <List size="sm" sx={{ '--ListItem-radius': '6px', gap: 0.25 }}>
+                <List size="sm" sx={SESSION_LIST_SX}>
                   {sections.loose.map(session => (
                     <SessionRow key={session.id} session={session} {...rowProps} />
                   ))}
@@ -464,7 +544,7 @@ export function SessionList({
                   <Box sx={{ flex: 1, textAlign: 'left' }}>Archived ({sections.archived.length})</Box>
                 </Button>
                 {archivedOpen && (
-                  <List size="sm" sx={{ '--ListItem-radius': '6px', gap: 0.25 }}>
+                  <List size="sm" sx={SESSION_LIST_SX}>
                     {sections.archived.map(session => (
                       <SessionRow key={session.id} session={session} {...rowProps} />
                     ))}
