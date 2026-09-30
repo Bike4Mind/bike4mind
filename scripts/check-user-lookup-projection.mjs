@@ -22,7 +22,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-const ROOTS = ['apps/client/pages', 'apps/client/server', 'b4m-core', 'packages'];
+const ROOTS = ['apps/client/pages', 'apps/client/server', 'apps/workers', 'b4m-core', 'packages'];
 const ALLOWLIST_FILE = 'scripts/user-lookup-projection-allowlist.txt';
 const SKIP_DIRS = new Set(['node_modules', 'dist', '__tests__', '__test__']);
 

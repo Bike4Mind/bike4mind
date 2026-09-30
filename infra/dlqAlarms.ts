@@ -38,6 +38,7 @@ import {
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueueDLQ,
   driveDisconnectPurgeQueueDLQ,
+  githubLakeIngestQueueDLQ,
   videoGenerationDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
@@ -97,7 +98,7 @@ if (isMonitoredStage) {
 
   dlqAlarmTopic!.subscribe(
     {
-      handler: 'apps/client/server/events/dlqAlarmToSlack.handler',
+      handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
       link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
       environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
       logging: { retention: '3 days' },
@@ -336,6 +337,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'DataLakeManagement',
     sourceQueue: 'driveDisconnectPurgeQueue',
     queue: driveDisconnectPurgeQueueDLQ,
+  },
+  {
+    label: 'github-lake-ingest',
+    displayName: 'GitHub Lake Ingest',
+    application: 'DataLakeManagement',
+    sourceQueue: 'githubLakeIngestQueue',
+    queue: githubLakeIngestQueueDLQ,
   },
   {
     label: 'video-generation',

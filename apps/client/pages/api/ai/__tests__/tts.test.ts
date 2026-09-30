@@ -152,7 +152,7 @@ describe('POST /api/ai/tts', () => {
     expect(mocks.deductTtsCredits).toHaveBeenCalledTimes(1);
   });
 
-  it('passes an upstream 4xx through with a generic body, without leaking provider text', async () => {
+  it('passes an upstream 429 through with a generic body, without leaking provider text', async () => {
     mocks.synthesizeTts.mockRejectedValue({ status: 429, message: 'raw provider detail' });
     const { res, promise } = run({ text: 'hi' });
     await promise;
@@ -172,6 +172,23 @@ describe('POST /api/ai/tts', () => {
     const body = res._getJSONData();
     expect(body.error).not.toContain('raw provider detail');
     expect(body).toMatchObject({ provider: 'openai', errorCode: 'provider_rejected' });
+  });
+
+  // The contract documents 401/422/429 only, so a raw provider 400/403/404 must
+  // not reach the caller as-is.
+  it.each([
+    { upstream: 403, expected: 401, errorCode: 'provider_rejected' },
+    { upstream: 400, expected: 422, errorCode: undefined },
+    { upstream: 404, expected: 422, errorCode: undefined },
+    { upstream: 413, expected: 422, errorCode: undefined },
+  ])('maps an upstream $upstream onto the documented $expected', async ({ upstream, expected, errorCode }) => {
+    mocks.synthesizeTts.mockRejectedValue({ status: upstream, message: 'raw provider detail' });
+    const { res, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(expected);
+    const body = res._getJSONData();
+    expect(body.error).not.toContain('raw provider detail');
+    expect(body.errorCode).toBe(errorCode);
   });
 
   it('maps a non-4xx provider failure to 502', async () => {

@@ -22,6 +22,7 @@ export const DEFAULT_MANIFEST = {
   GITHUB_LAKE_APP_ID: { kind: 'secret', optional: true },
   GITHUB_LAKE_APP_PRIVATE_KEY: { kind: 'secret', optional: true },
   GITHUB_LAKE_APP_SLUG: { kind: 'secret', optional: true },
+  GITHUB_LAKE_APP_WEBHOOK_SECRET: { kind: 'secret', optional: true },
   GITHUB_ZAP_REF: { kind: 'secret', optional: true },
   GOOGLE_CLIENT_ID: { kind: 'secret', optional: true },
   GOOGLE_CLIENT_SECRET: { kind: 'secret', optional: true },
@@ -104,6 +105,9 @@ export const DEFAULT_MANIFEST = {
   // re-enqueue. Optional so an install that upgraded without the env var keeps the worker up; the
   // route then rolls the disconnect back and fails instead of accepting work nothing consumes.
   driveDisconnectPurgeQueue: { kind: 'queue', optional: true },
+  // Read by the connect callback, the re-sync route and the ingest handler's own re-enqueues. Not optional: the
+  // connect path reads it after the binding row is written, the same hazard as driveLakeIngestQueue above.
+  githubLakeIngestQueue: { kind: 'queue' },
   emailAnalysisQueue: { kind: 'queue', optional: true },
   emailBatchQueue: { kind: 'queue' },
   emailIngestionQueue: { kind: 'queue' },

@@ -476,7 +476,7 @@ export const DataLakeBatchMetrics = {
  * `swept` = it ran (finding nothing is still a sweep), `failed` = it threw and the caller caught.
  *
  * Kept here rather than imported from the worker so a metrics module never depends on a worker:
- * `ChunkRescueSweepResult` in server/worker/chunkRescueSweep.ts declares the first two and the
+ * `ChunkRescueSweepResult` in server/s3/chunkRescueSweep.ts declares the first two and the
  * reconciler cron supplies the third, and assignability to this union is what keeps them in sync.
  */
 export type ChunkRescueOutcome = 'disabled' | 'swept' | 'failed';
@@ -591,7 +591,7 @@ export function buildChunkRescueSweepMetrics(
  * counters disagreeing with the outcome.
  *
  * Covers the HOSTED daily cron only. runChunkRescueSweep has a second driver, the self-host
- * worker tick in server/worker/main.ts, which deliberately emits nothing - there is no CloudWatch
+ * worker tick in apps/workers/src/selfhost/main.ts, which deliberately emits nothing - there is no CloudWatch
  * on a self-host install. So a zero here means the hosted cron found no work, never that no
  * install swept.
  *

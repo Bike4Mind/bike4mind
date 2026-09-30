@@ -15,4 +15,12 @@ export { createFileUploadContract, getFileContract } from './contracts/files.con
 export { createEmbeddingsContract } from './contracts/embeddings.contract';
 export { getQuestContract } from './contracts/quest.contract';
 export { createSessionContract } from './contracts/sessionCreate.contract';
+export {
+  listDataLakesContract,
+  getDataLakeContract,
+  getDataLakeFileContract,
+  addDataLakeFileContract,
+  removeDataLakeFileContract,
+  searchDataLakeContract,
+} from './contracts/dataLakes.contract';
 export { CONTRACTS } from './contracts';

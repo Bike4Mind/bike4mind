@@ -756,7 +756,7 @@ docker compose -f compose.selfhost.yaml --env-file .env.selfhost logs -f minio a
 
 Confirm both registrations include the `put` event and webhook target. If one is missing, correct the bucket environment values and rerun `createbuckets` with the same Compose files and environment. During a fresh import through the UI, inspect MinIO delivery failures and the app's webhook/import logs. Check that `INTERNAL_S3_WEBHOOK_SECRET` agrees between MinIO and the app, and that MinIO can reach the configured endpoint. When using host-side `next dev`, repoint the webhook as described in [Frontend dev mode](#frontend-dev-mode-host-next-dev); delivery to the stopped Compose app cannot trigger imports.
 
-The FabFile safety-net filter in `apps/client/server/worker/chunkScan.ts` (`buildFabFileChunkScanFilter`) scans FabFile records only. It does **not** recover history or notebook imports from missed notifications. A successful registration listing or notification delivered to a diagnostic sink proves configuration or delivery only. To prove a completed import, check its terminal application status and read the expected imported content after refreshing the app.
+The FabFile safety-net filter in `apps/client/server/s3/chunkScan.ts` (`buildFabFileChunkScanFilter`) scans FabFile records only. It does **not** recover history or notebook imports from missed notifications. A successful registration listing or notification delivered to a diagnostic sink proves configuration or delivery only. To prove a completed import, check its terminal application status and read the expected imported content after refreshing the app.
 
 ## Security notes
 

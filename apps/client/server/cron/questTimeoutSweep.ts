@@ -11,7 +11,7 @@
  *
  * Schedule: every 5 minutes
  * Enabled: production + dev
- * Self-host: the worker runs `runQuestTimeoutSweep` on the same cadence (server/worker/questTimeoutSweep.ts).
+ * Self-host: the worker runs `runQuestTimeoutSweep` on the same cadence (apps/workers/src/selfhost/questTimeoutSweep.ts).
  */
 
 import { connectDB, questRepository } from '@bike4mind/database';

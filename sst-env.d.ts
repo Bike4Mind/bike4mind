@@ -97,6 +97,10 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "GITHUB_LAKE_APP_WEBHOOK_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "GITHUB_ZAP_REF": {
       "type": "sst.sst.Secret"
       "value": string
@@ -431,6 +435,10 @@ declare module "sst" {
       "url": string
     }
     "driveDisconnectPurgeQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "githubLakeIngestQueue": {
       "type": "sst.aws.Queue"
       "url": string
     }

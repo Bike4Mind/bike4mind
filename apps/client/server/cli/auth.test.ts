@@ -141,6 +141,26 @@ describe('checkRateLimit (JWT per-user rate limiter)', () => {
     });
   });
 
+  describe('buckets', () => {
+    it('keeps a bucketed counter apart from the shared one, in both directions', async () => {
+      // A CLI session at 1000 on the shared counter must not spend the tools budget.
+      for (let i = 0; i < 1000; i++) {
+        await checkRateLimit(userId, 'cli');
+      }
+      await expect(checkRateLimit(userId, undefined, { bucket: 'tools' })).resolves.toBeUndefined();
+      expect(cacheStore.get(key)!.value).toBe(1000);
+      expect(cacheStore.get(`rate-limit:ws-auth:tools:${userId}`)!.value).toBe(1);
+    });
+
+    it('applies the source cap to the bucketed counter', async () => {
+      for (let i = 0; i < 100; i++) {
+        await checkRateLimit(userId, undefined, { bucket: 'tools' });
+      }
+      await expect(checkRateLimit(userId, undefined, { bucket: 'tools' })).rejects.toThrow(/Rate limit exceeded/);
+      expect(cacheStore.has(key)).toBe(false);
+    });
+  });
+
   describe('error message', () => {
     it('reports the remaining window in seconds (not a reset-to-full hour)', async () => {
       vi.useFakeTimers().setSystemTime(new Date('2026-01-01T00:00:00Z'));

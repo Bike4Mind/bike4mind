@@ -18,11 +18,11 @@ import { lakeMembershipScope } from './lakeMembershipScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
 import {
   bestEffortIndexRemove,
-  bestEffortSetDriveConnectionEnabled,
+  bestEffortSetConnectionEnabled,
   bestEffortAdjustOwnerStorage,
   groupStorageDeltaByOwner,
   type RetrievalIndexPort,
-  type DriveConnectionEnablePort,
+  type ConnectionEnablePort,
 } from './ports';
 
 interface DeleteDataLakeAdapters extends LakeConfigAuditAdapters, LakeMembershipAuditAdapters {
@@ -54,7 +54,9 @@ interface DeleteDataLakeAdapters extends LakeConfigAuditAdapters, LakeMembership
     };
   retrievalIndex?: RetrievalIndexPort;
   /** Disable the lake's Drive connection so the hourly poll stops enqueueing it. See ports.ts. */
-  disableDriveConnection?: DriveConnectionEnablePort;
+  disableDriveConnection?: ConnectionEnablePort;
+  /** Disable the lake's GitHub connection so a re-sync or redelivery stops ingesting. See ports.ts. */
+  disableGitHubConnection?: ConnectionEnablePort;
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
 }
 
@@ -68,7 +70,7 @@ interface DeleteDataLakeAdapters extends LakeConfigAuditAdapters, LakeMembership
 export const deleteDataLake = async (
   actor: ManageActor,
   dataLakeId: string,
-  { db, retrievalIndex, disableDriveConnection, logger }: DeleteDataLakeAdapters
+  { db, retrievalIndex, disableDriveConnection, disableGitHubConnection, logger }: DeleteDataLakeAdapters
 ): Promise<IDataLakeDocument> => {
   const existing = await db.dataLakes.findById(dataLakeId);
   if (!existing) {
@@ -200,7 +202,8 @@ export const deleteDataLake = async (
     );
   }
   // Stops the hourly poll from enqueueing this lake again - best-effort, see ports.ts.
-  await bestEffortSetDriveConnectionEnabled(disableDriveConnection, dataLakeId, logger);
+  await bestEffortSetConnectionEnabled(disableDriveConnection, dataLakeId, 'Drive', logger);
+  await bestEffortSetConnectionEnabled(disableGitHubConnection, dataLakeId, 'GitHub', logger);
   await recordLakeConfigChange(
     {
       actor,

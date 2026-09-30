@@ -19,7 +19,7 @@ import { DEFAULT_MANIFEST } from './manifest';
  * #2174 was exactly this class of gap: imageGenerationQueue was absent from all three, so image
  * generation could not run locally at all and nothing said so. Text-matched rather than
  * HOCON-parsed on purpose - the repo has no HOCON parser, and the queue block is a flat list of
- * `name { }` lines.
+ * top-level `name { ... }` entries.
  */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -28,7 +28,10 @@ function elasticMqQueueNames(): string[] {
   const contents = fs.readFileSync(path.join(REPO_ROOT, 'elasticmq.conf'), 'utf8');
   const block = /^queues\s*\{$([\s\S]*?)^\}$/m.exec(contents);
   if (!block) throw new Error('elasticmq.conf has no `queues { ... }` block - did its format change?');
-  return [...block[1].matchAll(/^\s*(\w+)\s*\{\s*\}\s*$/gm)].map(match => match[1]);
+  // Top-level entries only (two-space indent), with or without a body: a queue carrying its own
+  // settings (`defaultVisibilityTimeout = ...`) spans several lines, and a nested
+  // `deadLettersQueue { }` is that queue's DLQ setting, not a queue. Mirrors brokerQueues in index.test.ts.
+  return [...block[1].matchAll(/^ {2}([a-zA-Z][\w-]*)\s*\{/gm)].map(match => match[1]);
 }
 
 /** Queue names taken from the last path segment of each `*_QUEUE=` URL in the env template. */

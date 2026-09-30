@@ -495,6 +495,23 @@ describe('MoonshotBedrockBackend native tool-call tokens', () => {
     expect(usage).toEqual({ input_tokens: 40, output_tokens: 12 });
   });
 
+  it('streaming: monologue sharing a frame with a whole native call never leaks into its args', () => {
+    const { func } = drive([
+      {
+        choices: [
+          {
+            delta: {
+              content:
+                '<reasoning> Let me check. <|tool_calls_section_begin|> <|tool_call_begin|> functions.get_weather:0 <|tool_call_argument_begin|> {"city":"Paris"} <|tool_call_end|> <|tool_calls_section_end|></reasoning>',
+            },
+            finish_reason: 'stop',
+          },
+        ],
+      },
+    ]);
+    expect(func).toEqual([{ name: 'get_weather', id: 'functions.get_weather:0', parameters: '{"city":"Paris"}' }]);
+  });
+
   it('non-streaming: a native tool section becomes a TOOL_USE end with full args', () => {
     const { chunk } = backend.translateChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
       choices: [

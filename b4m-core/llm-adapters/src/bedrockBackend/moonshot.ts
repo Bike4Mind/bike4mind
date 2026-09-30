@@ -354,6 +354,16 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
           // in our real control markers below.
           const inner = escapeThinkMarkers(content.replace(/<\/?reasoning>/g, ''));
           const { text: safe, toolCalls: nativeCalls } = this.nativeToolStream.push(inner);
+          const think = safe + (choice.finish_reason ? this.nativeToolStream.flush() : '');
+          // Pushed ahead of the calls: they share index 0, and once base.ts has seen a tool
+          // name at an index it appends every later non-TOOL_USE chunkText there to its args.
+          choices.push({
+            status: ChoiceStatus.END,
+            statusEndReason: endReason,
+            index,
+            chunkText: think ? `<think>${think}</think>` : '',
+            ...usageForIndex,
+          });
           for (const call of nativeCalls) {
             // Same header + plain-argument-delta contract the structured path uses,
             // so base.ts accumulates the arguments (never TOOL_USE on the arg frame).
@@ -367,14 +377,6 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
               choices.push({ status: ChoiceStatus.STREAM, index: call.index, chunkText: call.arguments });
             }
           }
-          const think = safe + (choice.finish_reason ? this.nativeToolStream.flush() : '');
-          choices.push({
-            status: ChoiceStatus.END,
-            statusEndReason: endReason,
-            index,
-            chunkText: think ? `<think>${think}</think>` : '',
-            ...usageForIndex,
-          });
           continue;
         }
 

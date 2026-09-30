@@ -50,6 +50,8 @@ import {
   driveLakeIngestQueueDLQ,
   driveDisconnectPurgeQueue,
   driveDisconnectPurgeQueueDLQ,
+  githubLakeIngestQueue,
+  githubLakeIngestQueueDLQ,
   whatsNewGenerationQueue,
   whatsNewHighlightsQueue,
   notebookCurationQueue,
@@ -139,6 +141,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'lake-inconsistency-model': lakeInconsistencyModelQueueDLQ.url,
     'drive-lake-ingest': driveLakeIngestQueueDLQ.url,
     'drive-disconnect-purge': driveDisconnectPurgeQueueDLQ.url,
+    'github-lake-ingest': githubLakeIngestQueueDLQ.url,
   },
 });
 
@@ -197,6 +200,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     lakeInconsistencyModelQueue: lakeInconsistencyModelQueue.url,
     driveLakeIngestQueue: driveLakeIngestQueue.url,
     driveDisconnectPurgeQueue: driveDisconnectPurgeQueue.url,
+    githubLakeIngestQueue: githubLakeIngestQueue.url,
   },
 });
 
@@ -251,6 +255,7 @@ export const web = new sst.aws.Nextjs(
       // exports). Resource.dataLakeTaxonomyQueue.url resolves in both Lambdas this way.
       dataLakeTaxonomyQueue,
       driveLakeIngestQueue,
+      githubLakeIngestQueue,
       // Directly linked for the plainer reason: `POST /api/data-lakes/:id/research/runs` reads
       // Resource.dataLakeResearchQueue.url to enqueue the run. Via sourceQueueUrls alone the key is
       // only reachable as Resource.sourceQueueUrls.dataLakeResearchQueue, and sst's Resource proxy
@@ -404,10 +409,12 @@ export const web = new sst.aws.Nextjs(
       // greppable from infra; see docs/architecture/api-key-scope-rollout.md.
       API_KEY_SCOPE_STAGING: process.env.API_KEY_SCOPE_STAGING || '',
       // Grant-enforcement lever for the federated AI-token exchange (apps/client/pages/api/oauth/
-      // ai-token.ts). Empty (default) leaves the exchange in grace mode (logs a would-reject when a
-      // (user,client) grant is missing); 'true' enforces (403s it). Declared here so the lever is
-      // greppable from infra and can be flipped per stage, mirroring API_KEY_SCOPE_STAGING.
-      OAUTH_AI_TOKEN_ENFORCE_GRANT: process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT || '',
+      // ai-token.ts). Defaults to 'true' on production and dev stages; empty (grace mode) elsewhere.
+      // The env var is checked first so an explicit value (e.g. 'false') acts as a kill switch even
+      // on production -- the handler enforces only on the exact string 'true'. Mirroring
+      // API_KEY_SCOPE_STAGING: greppable from infra and flippable per stage without a code change.
+      OAUTH_AI_TOKEN_ENFORCE_GRANT:
+        process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT || (PRODUCTION_STAGES.includes($app.stage) ? 'true' : ''),
       APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
       // Direct SSE completions endpoint advertised to the CLI via /api/settings/serverConfig.
       // Local `sst dev` has no CloudFront router mapping /api/ai/v1/completions to the

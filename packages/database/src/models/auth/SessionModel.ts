@@ -91,7 +91,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     tags: { type: [TagSchema], required: false },
     // Pairs with `tags` the way `summaryAt` pairs with `summary`. The schema is strict, so WITHOUT
     // this declaration the field is dropped from every write and the `!session.taggedAt` gate in
-    // apps/client/server/events/spider.ts re-tags notebooks it already paid a completion to tag.
+    // apps/workers/src/events/spider.ts re-tags notebooks it already paid a completion to tag.
     taggedAt: { type: Date, required: false },
     // Same strict-schema hazard as `taggedAt` above: undeclared means silently dropped, and the
     // retry gate would read permanently unattempted. Records that a completion was spent and
@@ -532,7 +532,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
    * the spider itself already runs at.
    *
    * Must stay in step with the handler's gate (`determineSessionOperations` in
-   * apps/client/server/events/spider.ts): quest existence AND the retry backoff. Both halves of
+   * apps/client/server/utils/sessionOperations.ts): quest existence AND the retry backoff. Both halves of
    * the backoff are declared together in `@bike4mind/common` so they cannot drift.
    */
   async countTaggableNotebooks(userId: string): Promise<number> {

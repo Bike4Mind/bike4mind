@@ -29,7 +29,8 @@ export const createFileUploadContract = defineEndpoint({
     '`Authorization` header, the URL signature is the credential, and do send a `Content-Type` ' +
     'matching `mime_type`; (3) poll `GET /api/v1/files/{id}` until `moderation_status` is `clean` ' +
     '(usually a few seconds after the PUT), then pass `id` wherever an endpoint ' +
-    'takes a file id. Unsupported types, a size over the ' +
+    'takes a file id (for example `fabFileIds` and `referenceImageFabFileIds` on ' +
+    '`POST /api/v1/image-edits`). Unsupported types, a size over the ' +
     'upload limit, or a size that would exceed your storage quota are rejected with 400 before any ' +
     'URL is issued. Authenticate with an API key (`b4m_live_`) carrying `files:write`, or a JWT.',
   tags: ['Files'],

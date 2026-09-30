@@ -20,11 +20,7 @@ import {
 } from '@bike4mind/utils';
 import { filterRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { Logger } from '@bike4mind/observability';
-import {
-  supportsAtlasVectorSearch,
-  selfHostOpenSearchEnabled,
-  selfHostOpenSearchResidencyRequired,
-} from '@bike4mind/db-core';
+import { selfHostOpenSearchEnabled, selfHostOpenSearchResidencyRequired } from '@bike4mind/db-core';
 import {
   classifyLoadedChunk,
   createEmbeddingMismatchAccumulator,
@@ -56,7 +52,7 @@ import {
   type SupersessionReport,
 } from './supersession';
 import type { AttributableLake } from './attributeAccessedLakes';
-import { atlasVectorSearch, type AtlasVectorSearchAdapters } from './atlasVectorSearch';
+import { atlasVectorSearch, isAtlasVectorSearchAvailable, type AtlasVectorSearchAdapters } from './atlasVectorSearch';
 import { openSearchVectorSearch, type OpenSearchVectorSearchAdapters } from './openSearchVectorSearch';
 import { planAlternateAnnModels, runAlternateModelAnn, type AlternateAnnOutcome } from './alternateModelAnn';
 import { slowestAnnQueryMs, type AnnVectorSearchResult } from './annVectorSearch';
@@ -343,6 +339,13 @@ export interface SemanticDataLakeSearchParams {
   ownFilesOnly?: boolean;
   /** OPEN static-registry content-tag prefixes (e.g. 'opti:') - ownership-bypass by design. */
   dataLakeTagPrefixes: string[];
+  /**
+   * Rank ONLY lake members: drop the owner/shared/group base arms so the caller's own non-member
+   * files stay out, the same `restrictToDataLake` the single-lake browse uses. For a caller whose
+   * scope was already narrowed to one lake (the public per-lake search). Off by default, so every
+   * existing caller keeps the mixed corpus described on `collectScopedFiles`.
+   */
+  restrictToDataLake?: boolean;
   /**
    * One membership arm per SCOPED dynamic lake, each anchored to THAT lake's creator (see
    * `lakeMembershipsFrom`) - replaces the old caller-anchored `scopedTagPrefixes` prefix match, so
@@ -840,10 +843,11 @@ async function scanAndRank(args: {
  * Page fabfiles.search up to the file budget. A lake that fits in one page costs exactly one
  * query as before; a larger one is no longer silently cut off at the first page.
  *
- * `includeShared: true` is hardcoded below and `restrictToDataLake` is never set, so dropping the
- * old caller-anchored `scopedTagPrefixes` arm in favour of `lakeMemberships` is lossless here: the
- * caller's own files stay in scope via the base owner/share/group arms regardless of which lake
- * arm ran (see semanticDataLakeSearch's Approach property 1).
+ * `includeShared: true` is hardcoded below and `restrictToDataLake` is off unless the caller asks,
+ * so dropping the old caller-anchored `scopedTagPrefixes` arm in favour of `lakeMemberships` is
+ * lossless here: the caller's own files stay in scope via the base owner/share/group arms regardless
+ * of which lake arm ran (see semanticDataLakeSearch's Approach property 1). A caller that sets
+ * `restrictToDataLake` has opted out of exactly those base arms.
  */
 async function collectScopedFiles(args: {
   // The repository OBJECT, not a detached `search` reference: FabFileRepository.search calls
@@ -855,6 +859,7 @@ async function collectScopedFiles(args: {
   dataLakeTags: string[];
   dataLakeTagPrefixes: string[];
   lakeMemberships: DataLakeMembershipScope[];
+  restrictToDataLake: boolean;
   retrievalFilter: RetrievalExclusionOptions;
   maxFiles: number;
   filePageSize: number;
@@ -890,6 +895,7 @@ async function collectScopedFiles(args: {
         dataLakeTags: args.dataLakeTags,
         dataLakeTagPrefixes: args.dataLakeTagPrefixes,
         lakeMemberships: args.lakeMemberships,
+        ...(args.restrictToDataLake ? { restrictToDataLake: true } : {}),
         excludeContent: true,
         // supersededInLakes is select:false by default; this walk is the lake-scoped collapse's
         // own read, so it opts back in - see FabFileModel.executeSearch.
@@ -1097,11 +1103,7 @@ async function rankChunksForFiles(args: {
   // before this cutover existed.
   let annEligible: typeof rankable = [];
   let scanEligible = rankable;
-  const canUseAtlas =
-    args.vectorSearchEnabled &&
-    supportsAtlasVectorSearch() &&
-    !!args.fabfilechunks.vectorSearch &&
-    !!args.fabfilechunks.getAtlasIndexStatus;
+  const canUseAtlas = !!args.vectorSearchEnabled && isAtlasVectorSearchAvailable(args.fabfilechunks);
   // Atlas and self-host OpenSearch are mutually exclusive: getVectorBackend() resolves to exactly
   // one VectorBackend per deployment, so this is an if/else-if documenting that invariant, not two
   // independent guards that happen never to both fire.
@@ -1605,6 +1607,7 @@ async function lakeScopedSearch(
     dataLakeTags,
     dataLakeTagPrefixes,
     lakeMemberships = [],
+    restrictToDataLake = false,
     retrievalFilter = {},
     ownFilesOnly = false,
     logger,
@@ -1626,6 +1629,7 @@ async function lakeScopedSearch(
     dataLakeTags,
     dataLakeTagPrefixes,
     lakeMemberships,
+    restrictToDataLake,
     retrievalFilter,
     maxFiles: budgets.maxFiles,
     filePageSize: budgets.filePageSize,
