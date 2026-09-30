@@ -478,7 +478,9 @@ export const softDeletePlugin = (
     { document: false, query: true },
     function (next) {
       const opts = this.getOptions();
-      const isReplace = this.op === 'replaceOne' || this.op === 'findOneAndReplace';
+      // Query#op is set at runtime for every verb but missing from Mongoose's typings.
+      const { op } = this as unknown as { op: string };
+      const isReplace = op === 'replaceOne' || op === 'findOneAndReplace';
       // `!== undefined` rather than hasOwn: `deletedAt: undefined` constrains nothing once
       // ignoreUndefined drops it, so it must not count as the caller taking over.
       if (!opts.includeDeleted && (!opts.upsert || isReplace) && this.getFilter().deletedAt === undefined) {
