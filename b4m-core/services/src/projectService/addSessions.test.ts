@@ -271,6 +271,7 @@ describe('projectService - addSessions', () => {
     (mockSessionRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValueOnce([]);
 
     await expect(addSessions(mockUser, { projectId, sessionIds }, adapters)).rejects.toThrow(NotFoundError);
+    expect(mockProjectRepo.shareable.findUpdateAccessById).toHaveBeenCalledWith(mockUser, projectId);
     expect(mockProjectRepo.update).not.toHaveBeenCalled();
   });
 
