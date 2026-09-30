@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { HelpAccessLevel } from '../types';
-import { bundleHelpContent, main } from '../bundle-help-content';
+import { bundleHelpContent, runBundleCli } from '../bundle-help-content';
 import { MEDIA_SIZE_LIMITS } from '../validate-help-content';
 
 /**
@@ -163,7 +163,7 @@ describe('bundleHelpContent', () => {
     expect(await bundleHelpContent(opts())).toBe(0);
   });
 
-  describe('main (CLI body)', () => {
+  describe('runBundleCli (CLI body)', () => {
     let originalExitCode: typeof process.exitCode;
 
     beforeEach(() => {
@@ -180,7 +180,7 @@ describe('bundleHelpContent', () => {
       writeArticle('features/media/demo.mpg', 'mpeg-bytes');
       writeIndex(['features/a.md']);
 
-      await main(opts());
+      await runBundleCli(opts());
 
       expect(process.exitCode).toBe(1);
     });
@@ -189,8 +189,13 @@ describe('bundleHelpContent', () => {
       writeArticle('features/a.md', '# A\n');
       writeIndex(['features/a.md']);
 
-      await main(opts());
+      await runBundleCli(opts());
 
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it('propagates a missing help index instead of swallowing it', async () => {
+      await expect(runBundleCli(opts())).rejects.toThrow('help-index.json not found');
       expect(process.exitCode).toBeUndefined();
     });
   });
