@@ -220,6 +220,16 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
 
     const githubUser = await userResponse.json();
 
+    // Without a login we can't tell a same-account reconnect from a different one, and the fallback
+    // full replace would drop the stored webhook and repo selection.
+    if (!userResponse.ok || typeof githubUser.login !== 'string') {
+      req.logger.error('[GitHub OAuth] GitHub user lookup failed', { userId, status: userResponse.status });
+      auditLogger.failure('github_user_lookup_failed');
+      return res.redirect(
+        '/profile?tab=integrations&github_oauth=error&error=github_user_lookup_failed#github-integration'
+      );
+    }
+
     // Get granted scopes from the token response (logged for debugging)
     const grantedScopes = tokenData.scope?.split(',') || [];
 
@@ -251,22 +261,19 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       // Same account: write leaf paths so metadata.webhooks.github (the routing token baked into the
       // webhook URL registered on GitHub) and metadata.selectedRepositories survive, including a
       // concurrent lastDeliveryAt stamp. A different account starts clean: those belong to the old
-      // account's repos. A stored `metadata: null` can't take a dotted $set, so it falls through too,
-      // as does a missing login (a failed /user lookup must not match a doc that never stored one).
+      // account's repos. A stored `metadata: null` can't take a dotted $set, so it falls through too.
       const sameAccount =
-        typeof githubUser.login === 'string' &&
-        recentConnection.metadata != null &&
-        recentConnection.metadata.githubLogin === githubUser.login;
+        recentConnection.metadata != null && recentConnection.metadata.githubLogin === githubUser.login;
+      // Dotted paths aren't expressible in Partial<T>; update() $sets keys as given.
+      const leafUpdate: Partial<IMcpServerDocument> &
+        Record<'metadata.githubLogin' | 'metadata.connectedAt' | 'metadata.scope', string> = {
+        ...connectionFields,
+        'metadata.githubLogin': connectionMetadata.githubLogin,
+        'metadata.connectedAt': connectionMetadata.connectedAt,
+        'metadata.scope': connectionMetadata.scope,
+      };
       githubServer = sameAccount
-        ? await mcpServerRepository.update(
-            {
-              ...connectionFields,
-              'metadata.githubLogin': connectionMetadata.githubLogin,
-              'metadata.connectedAt': connectionMetadata.connectedAt,
-              'metadata.scope': connectionMetadata.scope,
-            } as Partial<IMcpServerDocument>, // dotted paths aren't expressible in Partial<T>; update() $sets keys as given
-            { unset: ['metadata.disconnectedAt'] }
-          )
+        ? await mcpServerRepository.update(leafUpdate)
         : await mcpServerRepository.update({ ...connectionFields, metadata: connectionMetadata });
       req.logger.info('[GitHub OAuth] Updated GitHub MCP server config', {
         userId,

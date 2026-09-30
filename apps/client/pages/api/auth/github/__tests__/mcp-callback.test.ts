@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 // Mock baseApi so `.get(fn)` returns the handler fn directly (invoke it ourselves).
@@ -44,6 +44,7 @@ import { mcpServerRepository, userRepository } from '@bike4mind/database';
 
 const mockFindOne = vi.mocked(mcpServerRepository.findOne);
 const mockUpdate = vi.mocked(mcpServerRepository.update);
+const mockCreate = vi.mocked(mcpServerRepository.create);
 
 const WEBHOOK = {
   routingToken: 'routing-token-1',
@@ -59,7 +60,7 @@ function existingServer(metadata: unknown) {
     id: 'server-1',
     userId: 'user-123',
     enabled: true,
-    // Outside the 30s idempotency window.
+    // Outside the 30s idempotency window (fixtures use a stale connectedAt).
     metadata,
   } as any;
 }
@@ -71,22 +72,27 @@ function makeReqRes() {
   return { req, res };
 }
 
-function stubGitHub(login: string | undefined) {
+function stubGitHub(login: string | undefined, userResponse: { ok: boolean; body?: unknown } = { ok: true }) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) =>
       url.includes('access_token')
-        ? { json: async () => ({ access_token: 'gho_token', scope: 'repo,read:user' }) }
-        : { json: async () => ({ login }) }
+        ? { ok: true, json: async () => ({ access_token: 'gho_token', scope: 'repo,read:user' }) }
+        : { ok: userResponse.ok, status: userResponse.ok ? 200 : 403, json: async () => userResponse.body ?? { login } }
     )
   );
 }
 
 describe('/api/auth/github/mcp-callback reconnect', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.mocked(userRepository.findById).mockResolvedValue({ id: 'user-123' } as any);
     mockUpdate.mockImplementation(async data => data as any);
+    mockCreate.mockImplementation(async data => ({ ...data, id: 'server-new' }) as any);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('same account: writes only metadata leaves so webhooks and selected repos survive', async () => {
@@ -116,7 +122,7 @@ describe('/api/auth/github/mcp-callback reconnect', () => {
       'metadata.scope': 'repo,read:user',
     });
     expect(data).not.toHaveProperty('metadata');
-    expect(options).toEqual({ unset: ['metadata.disconnectedAt'] });
+    expect(options).toBeUndefined();
   });
 
   it('different account: replaces metadata wholesale, dropping the old webhook and selection', async () => {
@@ -157,16 +163,49 @@ describe('/api/auth/github/mcp-callback reconnect', () => {
     expect(data).toMatchObject({ metadata: { githubLogin: 'octocat' } });
   });
 
-  it('missing GitHub login never counts as the same account, even when none was stored', async () => {
-    mockFindOne.mockResolvedValue(existingServer({ scope: 'repo', webhooks: { github: WEBHOOK } }));
-    stubGitHub(undefined);
+  it.each([
+    ['a non-2xx /user response', undefined, { ok: false, body: { message: 'API rate limit exceeded' } }],
+    ['a /user body without a login', undefined, { ok: true }],
+  ])('%s aborts before any write, keeping the stored webhook', async (_label, login, userResponse) => {
+    mockFindOne.mockResolvedValue(
+      existingServer({
+        githubLogin: 'octocat',
+        connectedAt: '2026-01-01T00:00:00.000Z',
+        webhooks: { github: WEBHOOK },
+      })
+    );
+    stubGitHub(login, userResponse);
 
     const { req, res } = makeReqRes();
     await handler(req, res);
 
-    const [data, options] = mockUpdate.mock.calls[0];
-    expect(data).toHaveProperty('metadata');
-    expect(data).not.toHaveProperty(['metadata.githubLogin']);
-    expect(options).toBeUndefined();
+    expect(res._getRedirectUrl()).toContain('github_oauth=error&error=github_user_lookup_failed');
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('a failed /user lookup on first connect creates nothing', async () => {
+    mockFindOne.mockResolvedValue(null);
+    stubGitHub(undefined, { ok: false, body: { message: 'Bad credentials' } });
+
+    const { req, res } = makeReqRes();
+    await handler(req, res);
+
+    expect(res._getRedirectUrl()).toContain('error=github_user_lookup_failed');
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('a callback within the 30s idempotency window redirects to success without writing', async () => {
+    mockFindOne.mockResolvedValue(
+      existingServer({ githubLogin: 'octocat', connectedAt: new Date().toISOString(), webhooks: { github: WEBHOOK } })
+    );
+    stubGitHub('octocat');
+
+    const { req, res } = makeReqRes();
+    await handler(req, res);
+
+    expect(res._getRedirectUrl()).toContain('github_oauth=success');
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 });

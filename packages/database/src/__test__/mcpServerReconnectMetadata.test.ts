@@ -13,11 +13,11 @@ describe('McpServer metadata leaf-path update (GitHub reconnect)', () => {
 
   beforeAll(async () => {
     mongoServer = await connectTestDB();
-  }, 30000);
+  });
 
   afterAll(async () => {
     await disconnectTestDB(mongoServer);
-  }, 30000);
+  });
 
   beforeEach(async () => {
     await McpServer.deleteMany({});
@@ -32,18 +32,15 @@ describe('McpServer metadata leaf-path update (GitHub reconnect)', () => {
   };
 
   const reconnect = (id: string) =>
-    mcpServerRepository.update(
-      {
-        id,
-        enabled: true,
-        envVariables: [{ key: 'GITHUB_ACCESS_TOKEN', value: 'new' }],
-        tools: [],
-        'metadata.githubLogin': 'octocat',
-        'metadata.connectedAt': '2026-09-30T00:00:00.000Z',
-        'metadata.scope': 'repo,read:user',
-      } as Partial<IMcpServerDocument>,
-      { unset: ['metadata.disconnectedAt'] }
-    );
+    mcpServerRepository.update({
+      id,
+      enabled: true,
+      envVariables: [{ key: 'GITHUB_ACCESS_TOKEN', value: 'new' }],
+      tools: [],
+      'metadata.githubLogin': 'octocat',
+      'metadata.connectedAt': '2026-09-30T00:00:00.000Z',
+      'metadata.scope': 'repo,read:user',
+    } as Partial<IMcpServerDocument>);
 
   it('keeps the webhook config and repo selection, and the routing token still resolves', async () => {
     const { insertedId } = await McpServer.collection.insertOne({
@@ -52,7 +49,6 @@ describe('McpServer metadata leaf-path update (GitHub reconnect)', () => {
         githubLogin: 'octocat',
         connectedAt: '2026-01-01T00:00:00.000Z',
         scope: 'repo',
-        disconnectedAt: '2026-02-01T00:00:00.000Z',
         selectedRepositories: [{ fullName: 'octo/repo', owner: 'octo', repo: 'repo' }],
         webhooks: {
           github: {
