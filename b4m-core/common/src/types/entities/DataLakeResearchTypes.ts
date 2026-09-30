@@ -64,7 +64,7 @@ export const RESEARCH_RUN_STOP_REASONS = [
   'time_budget',
   /**
    * The judge failed several times in a row before scoring anything, so the run stopped instead of
-   * paying for a judgment on every remaining candidate. The rest are counted in `totals.notJudged`.
+   * paying for a judgment on every remaining candidate. The rest are counted in `totals.notJudged`, or `totals.filteredBySource` if a source rule blocks them.
    */
   'judge_unavailable',
 ] as const;
@@ -304,8 +304,8 @@ export interface ResearchRunTotals {
   unusableSource: number;
   /**
    * Candidates never reached because the run stopped on `judge_unavailable`, which keeps that run's
-   * buckets summing to `searchHits`. It includes any a source rule would have blocked, since the
-   * run stops before checking them. Only that stop fills it: `cost_ceiling`, `time_budget` and
+   * buckets summing to `searchHits`. Unreached candidates a source rule blocks are still counted in
+   * `filteredBySource`, since source rules are free and are checked for them. Only that stop fills it: `cost_ceiling`, `time_budget` and
    * `proposal_limit` leave it 0, so their buckets can fall short. Older stored runs read it as 0.
    */
   notJudged: number;

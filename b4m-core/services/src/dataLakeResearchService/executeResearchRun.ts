@@ -141,7 +141,10 @@ export async function executeResearchRun(
       judgeError ??= judgement.error;
       // Only before the first score: once the judge has worked, a later failure is a blip, not an outage.
       if (scored === 0 && totals.judgeFailed >= JUDGE_BREAKER_FAILURES) {
-        totals.notJudged = candidates.length - index - 1;
+        for (const unreached of candidates.slice(index + 1)) {
+          if (classifySource(unreached.url, levers) !== 'allowed') totals.filteredBySource += 1;
+          else totals.notJudged += 1;
+        }
         return settle('judge_unavailable');
       }
       await ports.onProgress?.(spentMicroUsd, totals);

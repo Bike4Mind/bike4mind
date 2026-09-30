@@ -990,8 +990,8 @@ export function DataLakeResearchPanel({
                     {run.error}
                   </Typography>
                 )}
-                {/* A breaker-stopped run failed, but its totals are what show how far the judge got. */}
-                {(run.status === 'completed' || run.stopReason === 'judge_unavailable') && (
+                {/* A judge-failed run is `failed`, but its totals show how far the judge got. */}
+                {(run.status === 'completed' || (run.status === 'failed' && run.totals.judgeFailed > 0)) && (
                   <Typography level="body-xs" data-testid="datalake-research-run-totals">
                     {runOutcomeSummary(run)}
                   </Typography>

@@ -191,7 +191,7 @@ describe('executeResearchRun', () => {
       expect(calls.fetched).toEqual([]);
       expect(result.stopReason).toBe('judge_unavailable');
       expect(result).toMatchObject({ judgeStepFailed: true, judgeError: 'model access denied' });
-      expect(result.totals).toMatchObject({ searchHits: 10, filteredBySource: 2, judgeFailed: 3, notJudged: 5 });
+      expect(result.totals).toMatchObject({ searchHits: 10, filteredBySource: 3, judgeFailed: 3, notJudged: 4 });
       expect(bucketSum({ ...result.totals })).toBe(result.totals.searchHits);
     });
 
