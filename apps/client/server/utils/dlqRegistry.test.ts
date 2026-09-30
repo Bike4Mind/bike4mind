@@ -91,9 +91,9 @@ import { getDlqRegistry, getDlqByLabel, getSourceQueueUrl, getDlqUrl } from './d
 
 describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
-    it('returns all 35 DLQ entries', () => {
+    it('returns all 36 DLQ entries', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(35);
+      expect(registry).toHaveLength(36);
     });
 
     it('each entry has required fields', () => {
