@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AuthenticatedApiClient, DeviceFlowClient } from '@bike4mind/client-auth';
 import type { AuthState } from '@shared/auth';
-import { AuthService, DESKTOP_OAUTH_CLIENT_ID } from './AuthService';
+import { AuthService, DESKTOP_OAUTH_CLIENT_ID, readPhotoSource, toDesktopUser } from './AuthService';
 import { TokenVault, type SecretCipher, type VaultFile } from './tokenVault';
 
 const BAKED = 'B4M_DEFAULT_API_URL';
@@ -228,5 +228,43 @@ describe('AuthService', () => {
     });
 
     service.dispose();
+  });
+});
+
+describe('toDesktopUser', () => {
+  it('names the account from the identity response', () => {
+    expect(toDesktopUser({ _id: 'user-9', email: 'rider@example.com', nickname: 'Rider' }, 'fallback')).toEqual({
+      id: 'user-9',
+      email: 'rider@example.com',
+      username: undefined,
+      nickname: 'Rider',
+    });
+  });
+
+  it("falls back to the token's account id when the response carries no user", () => {
+    expect(toDesktopUser(null, 'user-1')).toEqual({ id: 'user-1' });
+  });
+
+  it("carries no photo: the renderable url is main's to produce, not the wire's", () => {
+    expect(toDesktopUser({ id: 'user-1', photoUrl: 'profile-photos/user-1/a.png' }, '')).not.toHaveProperty(
+      'photoUrl',
+      'profile-photos/user-1/a.png'
+    );
+  });
+});
+
+describe('readPhotoSource', () => {
+  it("reads the account's stored photo key", () => {
+    expect(readPhotoSource({ photoUrl: 'profile-photos/user-1/a.png' })).toBe('profile-photos/user-1/a.png');
+  });
+
+  it('ignores avatarUrl, which on this entity belongs to a Notion workspace owner', () => {
+    expect(readPhotoSource({ avatarUrl: 'https://notion.example.com/owner.png' })).toBeUndefined();
+  });
+
+  it('treats a cleared photo as no photo', () => {
+    expect(readPhotoSource({ photoUrl: null })).toBeUndefined();
+    expect(readPhotoSource({ photoUrl: '' })).toBeUndefined();
+    expect(readPhotoSource(undefined)).toBeUndefined();
   });
 });

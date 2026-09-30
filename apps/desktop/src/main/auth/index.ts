@@ -1,10 +1,12 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { app, BrowserWindow, ipcMain, safeStorage, shell } from 'electron';
 import type { AccountPage, EnvironmentSelection } from '@shared/auth';
 import { IPC_CHANNELS } from '@shared/ipc';
+import { MediaStore } from '../chat/media/MediaStore';
 import { createMainLogger } from '../logger';
 import { AuthService } from './AuthService';
+import { ProfilePhotoCache, type PhotoRecordFile } from './profilePhoto';
 import { TokenVault, type VaultFile } from './tokenVault';
 
 /**
@@ -34,6 +36,24 @@ function vaultFile(path: string): VaultFile {
   };
 }
 
+function photoRecordFile(path: string): PhotoRecordFile {
+  return {
+    async read() {
+      try {
+        return await readFile(path, 'utf8');
+      } catch {
+        return null;
+      }
+    },
+    write(contents) {
+      return writeFile(path, contents, 'utf8');
+    },
+    remove() {
+      return rm(path, { force: true });
+    },
+  };
+}
+
 /**
  * Build the auth service and expose it over IPC. Call only after `app.whenReady()`:
  * `safeStorage` is not usable before the ready event.
@@ -44,7 +64,16 @@ function vaultFile(path: string): VaultFile {
  */
 export function registerAuth(): AuthService {
   const logger = createMainLogger(VERBOSE);
-  const vault = new TokenVault(safeStorage, vaultFile(join(app.getPath('userData'), 'auth-vault.json')), logger);
+  const userData = app.getPath('userData');
+  const vault = new TokenVault(safeStorage, vaultFile(join(userData, 'auth-vault.json')), logger);
+  // The same media directory registerChat builds its store over, and deliberately so: that is
+  // the only directory the `b4m-media:` handler will serve, and the renderer's CSP admits no
+  // other origin for an image. MediaStore holds no state beyond the path, so a second instance
+  // over it is just a second door onto the same folder.
+  const profilePhotos = new ProfilePhotoCache(
+    new MediaStore(join(userData, 'media')),
+    photoRecordFile(join(userData, 'profile-photo.json'))
+  );
 
   const service = new AuthService({
     vault,
@@ -52,6 +81,7 @@ export function registerAuth(): AuthService {
     openExternal: url => shell.openExternal(url),
     devFallback: !app.isPackaged,
     userAgent: `b4m-desktop/${app.getVersion()}`,
+    profilePhotos,
     onStateChanged: state => {
       for (const window of BrowserWindow.getAllWindows()) {
         window.webContents.send(IPC_CHANNELS.authStateChanged, state);

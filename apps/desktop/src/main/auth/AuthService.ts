@@ -16,6 +16,7 @@ import type {
 } from '@shared/auth';
 import { hostedAvailable, normalizeSelection, resolveEnvironment, validateSelection } from './environment';
 import { classifyIdentifyFailure } from './identifyFailure';
+import { fetchProfilePhoto, type ProfilePhotoCache } from './profilePhoto';
 import { msUntilProactiveRefresh, msUntilRefreshRetry } from './refreshSchedule';
 import type { TokenVault } from './tokenVault';
 
@@ -40,6 +41,11 @@ interface IdentifyResponse {
   user?: Record<string, unknown> | null;
 }
 
+/** The one serverConfig field this service reads; everything else on that route is chat's. */
+interface ServerConfigResponse {
+  cdnUrl?: string;
+}
+
 export interface AuthServiceDeps {
   vault: TokenVault;
   logger: AuthLogger;
@@ -48,6 +54,11 @@ export interface AuthServiceDeps {
   devFallback: boolean;
   userAgent: string;
   onStateChanged(state: AuthState): void;
+  /**
+   * Where the signed-in user's picture is kept. Optional: without it the panel draws initials,
+   * which is also what every failure along the way falls back to.
+   */
+  profilePhotos?: ProfilePhotoCache;
   /** Overridable so tests can drive the flow without a network. */
   createDeviceFlowClient?: (baseUrl: string) => DeviceFlowClient;
   createApiClient?: (baseUrl: string, tokenStore: TokenStore) => AuthenticatedApiClient;
@@ -76,6 +87,17 @@ export class AuthService {
    * costs one request per 5 seconds, which the token endpoint's own rate limit tolerates.
    */
   private signInGeneration = 0;
+
+  /**
+   * Bumped whenever the photo on screen stops being the right one - a sign-out, an environment
+   * change, a fresh identity round-trip. The download runs detached from sign-in so a slow or
+   * dead CDN cannot hold the panel up, which means its result has to be checked for staleness
+   * on arrival rather than cancelled.
+   */
+  private photoGeneration = 0;
+
+  /** serverConfig's `cdnUrl`, cached per environment: it is one round trip and it never moves. */
+  private cdnUrlCache: { environmentUrl: string; cdnUrl: string } | null = null;
 
   constructor(private readonly deps: AuthServiceDeps) {
     this.state = {
@@ -166,6 +188,7 @@ export class AuthService {
 
   async signOut(): Promise<void> {
     this.signInGeneration++;
+    this.photoGeneration++;
     this.clearRefreshTimer();
     this.patch({ busy: 'signing-out' });
 
@@ -179,6 +202,9 @@ export class AuthService {
     }
 
     if (url) await this.deps.vault.clearTokens(url);
+    // The picture goes with the session: dropping `user` clears it from the panel, and this
+    // clears it from disk, so the next account does not inherit the last one's face.
+    await this.forgetProfilePhoto();
     this.patch({ status: 'signed-out', busy: 'idle', user: undefined, pending: undefined, error: undefined });
   }
 
@@ -188,6 +214,7 @@ export class AuthService {
 
     const normalized = normalizeSelection(selection);
     this.signInGeneration++;
+    this.photoGeneration++;
     this.clearRefreshTimer();
     await this.deps.vault.setEnvironment(normalized);
     await this.applyEnvironment(normalized);
@@ -214,6 +241,7 @@ export class AuthService {
 
   dispose(): void {
     this.signInGeneration++;
+    this.photoGeneration++;
     this.clearRefreshTimer();
   }
 
@@ -285,13 +313,11 @@ export class AuthService {
     try {
       const response = await api.get<IdentifyResponse>('/api/identify');
       const tokens = knownTokens ?? (await this.currentTokens());
-      this.patch({
-        status: 'signed-in',
-        busy: 'idle',
-        error: undefined,
-        user: toDesktopUser(response.user, tokens?.userId ?? ''),
-      });
+      const user = toDesktopUser(response.user, tokens?.userId ?? '');
+      this.patch({ status: 'signed-in', busy: 'idle', error: undefined, user });
       this.refreshAttempt = 0;
+      // Detached on purpose: this is a download, and sign-in must not wait on one.
+      void this.refreshProfilePhoto(user.id, readPhotoSource(response.user));
       await this.scheduleProactiveRefresh();
     } catch (err) {
       const failure = classifyIdentifyFailure(err);
@@ -322,6 +348,76 @@ export class AuthService {
       this.patch({ status: failure.outcome, busy: 'idle', error: failure.error });
       await this.scheduleProactiveRefresh();
     }
+  }
+
+  /**
+   * Put the signed-in account's picture on screen, if it has one and it can be had.
+   *
+   * Every exit is silent and leaves the panel on its initials: a missing avatar is not a
+   * failure anyone needs to read about, and this runs detached from sign-in, so surfacing an
+   * error here would also mean surfacing it long after the user got on with what they came for.
+   */
+  private async refreshProfilePhoto(userId: string, source: string | undefined): Promise<void> {
+    const cache = this.deps.profilePhotos;
+    const api = this.api;
+    const generation = ++this.photoGeneration;
+
+    if (!cache || !api || !userId) return;
+    if (!source) {
+      // The account cleared its picture; the cached bytes are now the wrong answer.
+      await this.forgetProfilePhoto();
+      return;
+    }
+
+    const cdnUrl = await this.resolveCdnUrl(api);
+    if (generation !== this.photoGeneration) return;
+
+    const url = await fetchProfilePhoto({
+      api,
+      cache,
+      logger: this.deps.logger,
+      userId,
+      source,
+      cdnUrl,
+      isCurrent: () => generation === this.photoGeneration,
+    });
+    if (!url || generation !== this.photoGeneration) return;
+    // Re-read the user off the state rather than closing over it: a refresh may have replaced
+    // it while this was downloading, and the photo belongs to whoever is signed in now.
+    if (this.state.status !== 'signed-in' || this.state.user?.id !== userId) return;
+    this.patch({ user: { ...this.state.user, photoUrl: url } });
+  }
+
+  private async forgetProfilePhoto(): Promise<void> {
+    try {
+      await this.deps.profilePhotos?.clear();
+    } catch (err) {
+      this.deps.logger.warn(
+        `AUTH: could not clear the profile photo: ${err instanceof Error ? err.message : 'unknown'}`
+      );
+    }
+  }
+
+  /**
+   * The deployment's CDN base, which is what turns a stored photo key into a URL. Absolute on
+   * hosted stages, the relative `/api/app-files/serve` proxy on self-host, and empty when the
+   * lookup fails - in which case a key-shaped photoUrl simply cannot be placed, and the panel
+   * keeps its initials.
+   */
+  private async resolveCdnUrl(api: AuthenticatedApiClient): Promise<string> {
+    const environmentUrl = this.endpointUrl();
+    if (this.cdnUrlCache?.environmentUrl === environmentUrl) return this.cdnUrlCache.cdnUrl;
+
+    let cdnUrl = '';
+    try {
+      cdnUrl = (await api.get<ServerConfigResponse>('/api/settings/serverConfig'))?.cdnUrl ?? '';
+    } catch (err) {
+      this.deps.logger.warn(`AUTH: serverConfig lookup failed: ${err instanceof Error ? err.message : 'unknown'}`);
+      return '';
+    }
+
+    this.cdnUrlCache = { environmentUrl, cdnUrl };
+    return cdnUrl;
   }
 
   private async currentTokens(): Promise<AuthTokens | null> {
@@ -473,7 +569,18 @@ function readString(source: Record<string, unknown>, key: string): string | unde
   return typeof value === 'string' && value ? value : undefined;
 }
 
-function toDesktopUser(raw: Record<string, unknown> | null | undefined, fallbackId: string): DesktopUser {
+/**
+ * The account's stored profile picture, as it comes off `/api/identify`.
+ *
+ * `photoUrl` on the User entity, which is a bucket KEY (`profile-photos/<id>/<uuid>.png`),
+ * not a loadable URL - resolving it is main's job, see ./profilePhoto.ts. Deliberately not
+ * `avatarUrl`, which on that entity belongs to a Notion integration's owner.
+ */
+export function readPhotoSource(raw: Record<string, unknown> | null | undefined): string | undefined {
+  return raw ? readString(raw, 'photoUrl') : undefined;
+}
+
+export function toDesktopUser(raw: Record<string, unknown> | null | undefined, fallbackId: string): DesktopUser {
   if (!raw) return { id: fallbackId };
 
   return {

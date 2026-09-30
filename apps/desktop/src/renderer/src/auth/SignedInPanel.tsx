@@ -65,7 +65,11 @@ export function SignedInPanel({ state }: { state: AuthState }) {
       )}
 
       <Stack direction="row" spacing={1} alignItems="center">
-        <Avatar size="sm" variant="soft" color="primary">
+        {/* `src` is a b4m-media: URL main wrote to disk, absent until (or unless) it arrives.
+            Joy falls back to the children when it is missing or fails to load, so the initials
+            below are both the placeholder and the permanent answer for an account with no
+            picture - there is no second state to track here. */}
+        <Avatar size="sm" variant="soft" color="primary" src={user?.photoUrl} alt="">
           {initials(displayName)}
         </Avatar>
         <Stack sx={{ flex: 1, minWidth: 0 }}>

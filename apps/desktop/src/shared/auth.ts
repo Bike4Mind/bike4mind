@@ -59,6 +59,14 @@ export interface DesktopUser {
   email?: string;
   username?: string;
   nickname?: string;
+  /**
+   * The profile picture, as a `b4m-media://` URL served by the main process out of this app's
+   * own media folder - never the backend's URL. The bytes are fetched once in main and written
+   * to disk there, because the renderer runs under a CSP that admits no remote origin (see
+   * src/renderer/index.html). Absent until it arrives, and for good if it never does: the
+   * panel draws initials instead.
+   */
+  photoUrl?: string;
 }
 
 /**
