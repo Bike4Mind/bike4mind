@@ -845,7 +845,7 @@ const googleDriveCallbackRoute = createRoute({
   },
 });
 
-// Data-lake GitHub App return: both its Setup URL and its OAuth Callback URL point here.
+// Data-lake GitHub App return: its OAuth Callback URL points here, and with OAuth-during-install on, the install return lands here too.
 const gitHubLakeCallbackRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/data-lakes/github/callback',
@@ -854,7 +854,6 @@ const gitHubLakeCallbackRoute = createRoute({
       <GitHubLakeCallbackPage />
     </Suspense>
   ),
-  // installation_id is String()-coerced: the default search parser has already turned it into a number.
   validateSearch: (search: Record<string, unknown>): GitHubLakeCallbackSearch => ({
     installation_id: optionalStringParam(search, 'installation_id'),
     code: optionalStringParam(search, 'code'),

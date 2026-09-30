@@ -1,5 +1,5 @@
 import { LinearProgress } from '@mui/joy';
-import { useNavigate, useSearch } from '@tanstack/react-router';
+import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { useCompleteLakeGitHubConnect } from '@client/app/hooks/data/githubLake';
@@ -19,7 +19,6 @@ import { resolveGitHubLakeCallbackStep, type GitHubLakeCallbackSearch } from '@c
  */
 const GitHubLakeCallbackPage = () => {
   const navigate = useNavigate();
-  const search = useSearch({ strict: false }) as GitHubLakeCallbackSearch;
   const openManager = useDataLakeWizardStore(s => s.openManager);
   const complete = useCompleteLakeGitHubConnect();
   // GitHub's `code` is single-use, so a second run (StrictMode, a re-render) must never re-post it.
@@ -29,6 +28,15 @@ const GitHubLakeCallbackPage = () => {
     if (handled.current) return;
     handled.current = true;
 
+    // Read the raw query: the router's default search parser JSON.parses values and would corrupt an all-digit code.
+    const raw = new URLSearchParams(window.location.search);
+    const search: GitHubLakeCallbackSearch = {
+      installation_id: raw.get('installation_id') ?? undefined,
+      code: raw.get('code') ?? undefined,
+      state: raw.get('state') ?? undefined,
+      error: raw.get('error') ?? undefined,
+      setup_action: raw.get('setup_action') ?? undefined,
+    };
     const handoff = readGitHubLakeConnectHandoff();
     const step = resolveGitHubLakeCallbackStep(search, handoff);
 
@@ -71,7 +79,7 @@ const GitHubLakeCallbackPage = () => {
         );
         return;
     }
-  }, [search, navigate, openManager, complete]);
+  }, [navigate, openManager, complete]);
 
   return <LinearProgress data-testid="github-lake-callback-progress" />;
 };

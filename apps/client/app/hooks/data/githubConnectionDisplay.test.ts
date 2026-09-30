@@ -36,6 +36,10 @@ describe('describeGitHubConnection', () => {
     expect(color).toBe('danger');
   });
 
+  it('reads an archived lake whose last sync failed as paused, not as re-syncable', () => {
+    expect(describeGitHubConnection(conn({ enabled: false, status: 'error' }))).toMatchObject({ label: 'Paused' });
+  });
+
   it('reads an archived lake as paused', () => {
     expect(describeGitHubConnection(conn({ enabled: false }))).toMatchObject({ label: 'Paused', color: 'neutral' });
   });

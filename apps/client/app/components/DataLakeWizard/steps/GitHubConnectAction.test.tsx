@@ -87,7 +87,7 @@ describe('GitHubConnectAction', () => {
   });
 
   it('does not leave for GitHub when the handoff cannot be saved, since the callback could not finish', () => {
-    h.saveHandoff.mockImplementation(() => {
+    h.saveHandoff.mockImplementationOnce(() => {
       throw new Error('SecurityError');
     });
     wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);

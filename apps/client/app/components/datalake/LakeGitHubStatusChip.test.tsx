@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   flag: { current: true },
   connection: { current: null as Record<string, unknown> | null },
   queryEnabled: vi.fn(),
+  ignoreEnabled: { current: false },
 }));
 
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
@@ -20,7 +21,7 @@ vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
 vi.mock('@client/app/hooks/data/githubLake', () => ({
   useLakeGitHubConnection: (_id: string, enabled: boolean) => {
     h.queryEnabled(enabled);
-    return { data: enabled ? h.connection.current : undefined };
+    return { data: enabled || h.ignoreEnabled.current ? h.connection.current : undefined };
   },
 }));
 
@@ -40,6 +41,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.flag.current = true;
   h.connection.current = connection;
+  h.ignoreEnabled.current = false;
 });
 
 describe('LakeGitHubStatusChip', () => {
@@ -58,6 +60,13 @@ describe('LakeGitHubStatusChip', () => {
     h.flag.current = false;
     wrap(<LakeGitHubStatusChip lakeId="lake1" organizationId="org-1" />);
     expect(h.queryEnabled).toHaveBeenCalledWith(false);
+    expect(screen.queryByTestId('datalake-github-status-chip-lake1')).toBeNull();
+  });
+
+  it('renders nothing with the flag off even when a stale cached connection is returned', () => {
+    h.flag.current = false;
+    h.ignoreEnabled.current = true;
+    wrap(<LakeGitHubStatusChip lakeId="lake1" organizationId="org-1" />);
     expect(screen.queryByTestId('datalake-github-status-chip-lake1')).toBeNull();
   });
 

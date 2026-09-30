@@ -16,7 +16,7 @@ import { getServerErrorField } from '@client/app/utils/error';
 import { saveGitHubLakeConnectHandoff } from '@client/app/utils/githubLakeConnectHandoff';
 
 /**
- * Why re-sync is off right now, or undefined when it can run. Mirrors sync.ts's 409s. 'error' stays
+ * Why re-sync is off right now, or undefined when it can run. Approximates sync.ts's 409s: the server also admits a 'syncing' row whose claim went stale, which this response cannot show. 'error' stays
  * re-syncable on purpose: claimForSync admits it so a re-sync can retry once access is restored.
  */
 function resyncBlockedReason(connection: LakeGitHubConnection): string | undefined {

@@ -12,11 +12,9 @@ import { describeGitHubConnection } from '@client/app/hooks/data/githubConnectio
  */
 export default function LakeGitHubStatusChip({ lakeId, organizationId }: { lakeId: string; organizationId?: string }) {
   const { isAdminFeatureEnabled } = useFeatureEnabled();
-  const { data: connection } = useLakeGitHubConnection(
-    lakeId,
-    !!organizationId && isAdminFeatureEnabled('EnableDataLakeGitHub')
-  );
-  if (!connection) return null;
+  const gitHubEnabled = !!organizationId && isAdminFeatureEnabled('EnableDataLakeGitHub');
+  const { data: connection } = useLakeGitHubConnection(lakeId, gitHubEnabled);
+  if (!gitHubEnabled || !connection) return null;
 
   const { title, color } = describeGitHubConnection(connection);
 

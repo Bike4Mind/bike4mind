@@ -22,6 +22,9 @@ export function describeGitHubConnection(connection: DescribableGitHubConnection
   const repo = connection.repositoryFullName;
   const detail = connection.lastError ? ` - ${connection.lastError}` : '';
 
+  if (!connection.enabled) {
+    return { label: 'Paused', title: `Syncing ${repo} is paused while the lake is archived`, color: 'neutral' };
+  }
   // 'error' stays re-syncable (claimForSync admits it), so the copy offers a retry before a reconnect.
   if (connection.status === 'error') {
     return {
@@ -29,9 +32,6 @@ export function describeGitHubConnection(connection: DescribableGitHubConnection
       title: `GitHub repository ${repo}: sync failed${detail}. Re-sync to retry, or reconnect if access was removed.`,
       color: 'danger',
     };
-  }
-  if (!connection.enabled) {
-    return { label: 'Paused', title: `Syncing ${repo} is paused while the lake is archived`, color: 'neutral' };
   }
   // A run is in flight, so any lastError belongs to the previous one.
   if (connection.status === 'syncing') {

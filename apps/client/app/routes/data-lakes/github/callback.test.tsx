@@ -5,7 +5,6 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const h = vi.hoisted(() => ({
-  search: { current: {} as Record<string, string> },
   navigate: vi.fn(),
   openManager: vi.fn(),
   completeMutate: vi.fn(),
@@ -15,7 +14,6 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => h.navigate,
-  useSearch: () => h.search.current,
 }));
 vi.mock('@client/app/stores/useDataLakeWizardStore', () => ({
   useDataLakeWizardStore: (selector: (s: { openManager: typeof h.openManager }) => unknown) =>
@@ -37,6 +35,10 @@ import { readGitHubLakeConnectHandoff, saveGitHubLakeConnectHandoff } from '@cli
 
 const AUTHORIZE_URL = 'https://github.com/login/oauth/authorize?client_id=c&state=s1';
 const assign = vi.fn();
+let currentSearch = '';
+const setSearch = (params: Record<string, string>) => {
+  currentSearch = `?${new URLSearchParams(params).toString()}`;
+};
 const RESTART_NOTICE = 'The GitHub connection could not be completed. Start it again from the data lake.';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -51,7 +53,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   sessionStorage.clear();
   saveGitHubLakeConnectHandoff({ dataLakeId: 'lake1', authorizeUrl: AUTHORIZE_URL });
-  vi.stubGlobal('location', { ...window.location, assign });
+  currentSearch = '';
+  vi.stubGlobal('location', {
+    assign,
+    get search() {
+      return currentSearch;
+    },
+  });
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -59,7 +67,7 @@ afterEach(() => {
 
 describe('GitHubLakeCallbackPage', () => {
   it('posts the single-use code exactly once, even under StrictMode double effects', () => {
-    h.search.current = { installation_id: '42', code: 'c1', state: 's1' };
+    setSearch({ installation_id: '42', code: 'c1', state: 's1' });
     render(
       <StrictMode>
         <CssVarsProvider theme={appTheme}>
@@ -71,8 +79,26 @@ describe('GitHubLakeCallbackPage', () => {
     expect(h.completeMutate).toHaveBeenCalledWith({ state: 's1', code: 'c1', installationId: 42 }, expect.any(Object));
   });
 
+  it('passes an all-digit code through as the exact string, not a JSON-parsed number', () => {
+    setSearch({ installation_id: '42', code: '12345678901234567890', state: 's1' });
+    renderPage();
+    expect(h.completeMutate).toHaveBeenCalledWith(
+      { state: 's1', code: '12345678901234567890', installationId: 42 },
+      expect.any(Object)
+    );
+  });
+
+  it('passes a digits-and-e code through intact', () => {
+    setSearch({ installation_id: '42', code: '0e12345678901234567', state: 's1' });
+    renderPage();
+    expect(h.completeMutate).toHaveBeenCalledWith(
+      { state: 's1', code: '0e12345678901234567', installationId: 42 },
+      expect.any(Object)
+    );
+  });
+
   it('lands on the lake in the manager and clears the handoff once the connect settles', () => {
-    h.search.current = { installation_id: '42', code: 'c1', state: 's1' };
+    setSearch({ installation_id: '42', code: 'c1', state: 's1' });
     renderPage();
 
     const [, options] = h.completeMutate.mock.calls[0];
@@ -86,7 +112,7 @@ describe('GitHubLakeCallbackPage', () => {
   });
 
   it("shows the server's reason when binding fails", () => {
-    h.search.current = { installation_id: '42', code: 'c1', state: 's1' };
+    setSearch({ installation_id: '42', code: 'c1', state: 's1' });
     renderPage();
 
     const [, options] = h.completeMutate.mock.calls[0];
@@ -98,7 +124,7 @@ describe('GitHubLakeCallbackPage', () => {
   });
 
   it('falls back to a generic notice when the server gives no reason', () => {
-    h.search.current = { installation_id: '42', code: 'c1', state: 's1' };
+    setSearch({ installation_id: '42', code: 'c1', state: 's1' });
     renderPage();
 
     const [, options] = h.completeMutate.mock.calls[0];
@@ -107,7 +133,7 @@ describe('GitHubLakeCallbackPage', () => {
   });
 
   it('asks for a restart and returns to the lake when GitHub sends back no state', () => {
-    h.search.current = {};
+    setSearch({});
     renderPage();
 
     expect(h.toastError).toHaveBeenCalledWith(RESTART_NOTICE);
@@ -119,7 +145,7 @@ describe('GitHubLakeCallbackPage', () => {
 
   it('asks for a restart without opening a lake when the handoff is gone', () => {
     sessionStorage.clear();
-    h.search.current = { installation_id: '42', code: 'c1', state: 's1' };
+    setSearch({ installation_id: '42', code: 'c1', state: 's1' });
     renderPage();
 
     expect(h.toastError).toHaveBeenCalledWith(RESTART_NOTICE);
@@ -129,7 +155,7 @@ describe('GitHubLakeCallbackPage', () => {
   });
 
   it('bounces an install with no code through authorize, keeping the installation id', () => {
-    h.search.current = { installation_id: '42', state: 's1' };
+    setSearch({ installation_id: '42', state: 's1' });
     renderPage();
 
     expect(assign).toHaveBeenCalledWith(AUTHORIZE_URL);
@@ -139,7 +165,7 @@ describe('GitHubLakeCallbackPage', () => {
   });
 
   it('returns to the lake with a cancel notice when the user declines on GitHub', () => {
-    h.search.current = { error: 'access_denied', state: 's1' };
+    setSearch({ error: 'access_denied', state: 's1' });
     renderPage();
 
     expect(h.toastError).toHaveBeenCalledWith('GitHub connection cancelled.');
@@ -148,7 +174,7 @@ describe('GitHubLakeCallbackPage', () => {
   });
 
   it('shows a failure notice and returns to the lake when the install needs org-owner approval', () => {
-    h.search.current = { setup_action: 'request', state: 's1' };
+    setSearch({ setup_action: 'request', state: 's1' });
     renderPage();
 
     expect(h.toastError).toHaveBeenCalledWith(
@@ -161,7 +187,7 @@ describe('GitHubLakeCallbackPage', () => {
   });
 
   it('shows a storage-blocked notice when the authorize handoff cannot be saved', () => {
-    h.search.current = { installation_id: '42', state: 's1' };
+    setSearch({ installation_id: '42', state: 's1' });
     vi.mocked(saveGitHubLakeConnectHandoff).mockImplementationOnce(() => {
       throw new Error('blocked');
     });
