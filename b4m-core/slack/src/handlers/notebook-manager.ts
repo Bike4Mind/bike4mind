@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import { Logger } from '@bike4mind/observability';
-import { ISessionDocument, IKeywordRoutingRule } from '@bike4mind/common';
+import { ISessionDocument, IKeywordRoutingRule, canUpdateShareable } from '@bike4mind/common';
 import { projectService } from '@bike4mind/services';
 import { getSlackDeps, getSlackDb } from '../di/registry';
 
@@ -34,6 +34,29 @@ function findMatchingKeywordRule(text: string, rules: IKeywordRoutingRule[]): st
 }
 
 /**
+ * Resolves a saved notebook id (agent routing, slack default, web last notebook) to one the
+ * user can still write to: it must exist, not be deleted, and be owned by or update-shared
+ * with the user. Returns null otherwise so the caller falls through; never throws.
+ */
+// any: getSlackDb() exposes the Session model untyped, as elsewhere in this file
+async function resolveAccessibleNotebookId(Session: any, notebookId: unknown, userId: string): Promise<string | null> {
+  if (!notebookId || !mongoose.Types.ObjectId.isValid(String(notebookId))) return null;
+
+  try {
+    const notebook = await Session.findOne({ _id: String(notebookId), deletedAt: { $exists: false } });
+    if (canUpdateShareable(notebook, userId)) return notebook.id;
+
+    Logger.warn('[Slack Notebook Lookup] Ignoring saved notebook id the user cannot write to', {
+      notebookId: String(notebookId),
+      userId,
+    });
+  } catch (error) {
+    Logger.warn('[Slack Notebook Lookup] Error checking saved notebook id', { notebookId: String(notebookId), error });
+  }
+  return null;
+}
+
+/**
  * Helper function to update user's slack settings
  */
 export async function updateUserSlackSettings(userId: string, slackSettings: any) {
@@ -56,7 +79,7 @@ export function determineThreadStrategy(event: { thread_ts?: string; ts: string 
  * Helper function to get or create notebook for slack user
  * Implements race condition handling with retry logic (3 attempts)
  * Supports thread-aware notebook mapping via channelId + threadTs
- * Supports per-agent notebook routing (Priority 0)
+ * Supports per-agent notebook routing (Priority 0); saved notebook ids are access-checked
  */
 export async function getOrCreateNotebookForSlackUser(
   userId: string,
@@ -79,9 +102,8 @@ export async function getOrCreateNotebookForSlackUser(
   if (agentName && slackSettings.agentNotebookRouting) {
     const agentNotebookId =
       slackSettings.agentNotebookRouting[agentName as keyof typeof slackSettings.agentNotebookRouting];
-    if (agentNotebookId) {
-      return agentNotebookId.toString();
-    }
+    const accessibleId = await resolveAccessibleNotebookId(Session, agentNotebookId, userId);
+    if (accessibleId) return accessibleId;
   }
 
   // PRIORITY 1: Keyword routing rules
@@ -262,14 +284,12 @@ export async function getOrCreateNotebookForSlackUser(
   }
 
   // PRIORITY 3: Fallback to user's slack default notebook (set via /notebook set)
-  if (slackSettings.defaultNotebookId) {
-    return slackSettings.defaultNotebookId.toString();
-  }
+  const defaultNotebookId = await resolveAccessibleNotebookId(Session, slackSettings.defaultNotebookId, userId);
+  if (defaultNotebookId) return defaultNotebookId;
 
   // PRIORITY 4: Fallback to user's last notebook (from web app)
-  if (user.lastNotebookId) {
-    return user.lastNotebookId.toString();
-  }
+  const lastNotebookId = await resolveAccessibleNotebookId(Session, user.lastNotebookId, userId);
+  if (lastNotebookId) return lastNotebookId;
 
   // PRIORITY 5: Create a default notebook as last resort
   const fallbackNotebookName = threadTs
