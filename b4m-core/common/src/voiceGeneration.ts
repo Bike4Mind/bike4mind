@@ -160,9 +160,10 @@ export const TTS_ERROR_CODES = [
  * - 401: thrown by apiKeyAuth on a rejected key; written by `auth` when no
  *   credential was presented at all, and by the handler for
  *   `provider_not_configured` and for an upstream credential rejection
- *   (`provider_rejected`).
+ *   (`provider_rejected`, from an upstream 401 or 403).
  * - 422: thrown by request validation and by the char-limit / format guards;
- *   written by the handler for `insufficient_credits` and for an upstream 422.
+ *   written by the handler for `insufficient_credits` and for every upstream 4xx
+ *   that is neither a credential rejection nor a 429.
  * - 429: thrown by apiKeyRateLimit; written by the handler on an upstream 429.
  * - 502: only ever written.
  *

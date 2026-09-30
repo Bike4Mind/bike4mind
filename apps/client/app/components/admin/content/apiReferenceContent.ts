@@ -230,6 +230,30 @@ GET /api/v1/agent-executions/[id]
 
 ---
 
+### Data Lakes
+
+List and inspect the data lakes you can reach, manage which files belong to one, and run
+semantic search over a single lake. Every route answers 403 when Data Lakes are disabled on the
+deployment.
+
+**Required API-key scope:** \`datalake:read\` (or \`datalake:write\` / \`datalake:query\`) to read,
+\`datalake:write\` to change membership, \`datalake:query\` to search.
+
+> **These endpoints are generated from their contracts.** The full reference lives in the
+> [generated API docs](/api/v1/docs) under the Data Lakes tag. Adding a file does not ingest it:
+> poll the file endpoint until \`ingestion_status\` is \`ready\` before relying on it in search.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /api/v1/data-lakes | List lakes (cursor-paginated) |
+| GET | /api/v1/data-lakes/[id] | Get one lake by id or slug |
+| GET | /api/v1/data-lakes/[id]/files/[file_id] | A member file's ingestion status |
+| POST | /api/v1/data-lakes/[id]/files/[file_id] | Add a file to the lake |
+| DELETE | /api/v1/data-lakes/[id]/files/[file_id] | Remove a file from the lake |
+| POST | /api/v1/data-lakes/[id]/search | Semantic search over the lake |
+
+---
+
 ### Files (FabFiles)
 
 Manage uploaded files, trigger chunking for RAG, and search file content.

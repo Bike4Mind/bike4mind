@@ -6,7 +6,7 @@
  * covers the fresh boot, and only that.
  *
  * B4M_DISCOVERY_DRIVER gates the whole of discovery on a long-lived process -
- * this leg and the recurring interval task alike (server/worker/main.ts) - so
+ * this leg and the recurring interval task alike (apps/workers/src/selfhost/main.ts) - so
  * an install that never sets it makes no discovery request at all.
  *
  * Not B4M_SELF_HOST. "Is this a self-host install" and "is this process allowed

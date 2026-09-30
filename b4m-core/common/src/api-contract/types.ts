@@ -103,7 +103,7 @@ export type CodeSample = {
  * already excuses that rule per-RESPONSE, so a contract-wide version would only
  * ever be the blunter way to say the same thing.
  */
-export type ConventionRule = 'status-table' | 'scope-required' | 'version-root';
+export type ConventionRule = 'status-table' | 'scope-required' | 'version-root' | 'pagination';
 
 /**
  * Exemptions from {@link ConventionRule}, each carrying WHY.
@@ -124,6 +124,8 @@ export type ConventionExemptions = {
   'status-table'?: Readonly<Record<number, string>>;
   'scope-required'?: string;
   'version-root'?: string;
+  /** Why this GET's array `data` response is not cursor-paginated. */
+  pagination?: string;
 };
 
 export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
