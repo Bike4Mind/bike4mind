@@ -20,6 +20,7 @@ import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscove
 import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { runResearchScheduleTick } from '@server/cron/dataLakeResearchSchedule';
 import { SelfHostWorker } from './selfHostWorker';
+import { registerLakeMemoryQueue } from './lakeMemoryQueue';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
@@ -147,6 +148,8 @@ async function main() {
   } else {
     bootLogger.warn('dataLakeTaxonomyQueue not configured; background AI tag suggestion will not run');
   }
+
+  registerLakeMemoryQueue(worker, Resource.lakeMemoryQueue?.url, bootLogger);
 
   // User-triggered research runs (#1682). Optional in the self-host manifest for the same reason as
   // taxonomy: an install that never set the env var simply cannot start a run, and the API refuses
