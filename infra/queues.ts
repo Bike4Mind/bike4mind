@@ -12,7 +12,7 @@ import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
 import { mcpHandler } from './mcp';
-import { router, whatsNewDistributionId, appUrlForLambdaEnv } from './router';
+import { router, whatsNewDistributionId, appUrlForLambdaEnv, cdnUrlForLambdaEnv } from './router';
 
 // Data Lake Taxonomy Analysis Queue - declared before the chunk/vectorize queues below
 // because both of those Lambdas now need to link it too (finalizeBatchIfComplete, which they
@@ -728,6 +728,8 @@ const questExportQueueSubscription = questExportQueue.subscribe(
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      // Recognizes `<cdnUrl>/generated/<key>` image URLs embedded in exported plans.
+      NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
     },
     permissions: [
       {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /**
  * Regression guard for the shared-plan export image leak/loss: when a COLLABORATOR (in the plan's
@@ -49,7 +49,8 @@ const h = vi.hoisted(() => {
     fabFileFindOne: vi.fn(async ({ filePath }: { filePath: string }) =>
       filePath === OWNER_IMAGE_KEY ? { id: OWNER_FILE_ID, filePath, moderationStatus: 'clean' } : null
     ),
-    download: vi.fn(async () => Buffer.from('image-bytes')),
+    filesDownload: vi.fn(async () => Buffer.from('image-bytes')),
+    generatedDownload: vi.fn(async () => Buffer.from('generated-bytes')),
     canAccessGeneratedImage: vi.fn(async () => false),
     createZipBuffer: vi.fn(async () => Buffer.from('zip')),
   };
@@ -124,8 +125,8 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
 }));
 
 vi.mock('@server/utils/storage', () => ({
-  getFilesStorage: () => ({ download: h.download }),
-  getGeneratedImageStorage: () => ({ download: h.download }),
+  getFilesStorage: () => ({ download: h.filesDownload }),
+  getGeneratedImageStorage: () => ({ download: h.generatedDownload }),
 }));
 
 vi.mock('@server/utils/generatedImageAccess', () => ({
@@ -188,7 +189,7 @@ describe('questExport image access subject', () => {
 
     // The access check ran against the OWNER (fix), so the owner-uploaded figure was retained...
     expect(h.findAccessibleById).toHaveBeenCalledWith(expect.objectContaining({ id: h.OWNER_ID }), h.OWNER_FILE_ID);
-    expect(h.download).toHaveBeenCalledWith(h.OWNER_IMAGE_KEY);
+    expect(h.filesDownload).toHaveBeenCalledWith(h.OWNER_IMAGE_KEY);
 
     // ...and reached the zip instead of degrading to a breadcrumb.
     expect(h.createZipBuffer).toHaveBeenCalledTimes(1);
@@ -199,50 +200,100 @@ describe('questExport image access subject', () => {
 });
 
 describe('questExport untracked image keys', () => {
+  const CDN_URL = 'https://app.example.com';
   const FOREIGN_FILES_URL = 'https://x-fabfilebucket-y.s3.amazonaws.com/exports/abc/foreign.png';
-  const GENERATED_URL = 'https://x-generatedimages-y.s3.amazonaws.com/gen-1.png';
+  const GENERATED_KEY = 'gen-1.png';
+  // The shapes a generated image reaches a plan in: copied from the UI (`<cdnUrl>/generated/<key>`,
+  // on a custom domain or a bare CloudFront host) or a raw generated-bucket URL (both spellings).
+  const GENERATED_URLS = [
+    `${CDN_URL}/generated/${GENERATED_KEY}`,
+    `https://d1abc.cloudfront.net/generated/${GENERATED_KEY}`,
+    `https://x-generatedimages-y.s3.amazonaws.com/${GENERATED_KEY}`,
+    `https://x-generated-images-y.s3.amazonaws.com/${GENERATED_KEY}`,
+  ];
+
+  const seedReply = (reply: string) =>
+    h.questFind.mockReturnValueOnce({
+      lean: async () => [{ _id: 'q1', sessionId: h.SESSION_ID, reply, images: [] }],
+    });
 
   beforeEach(() => {
     vi.clearAllMocks();
-    h.questFind.mockReturnValueOnce({
-      lean: async () => [
-        {
-          _id: 'q1',
-          sessionId: h.SESSION_ID,
-          reply: `![a](${FOREIGN_FILES_URL}) ![b](${GENERATED_URL})`,
-          images: [],
-        },
-      ],
-    });
+    // mockReset drops an unconsumed *Once so a failing case can't leak into the next one; the
+    // spies fall back to their original vi.fn implementations.
+    h.canAccessGeneratedImage.mockReset();
+    h.fabFileFindOne.mockReset();
+    h.findUserById.mockReset();
+    vi.stubEnv('NEXT_PUBLIC_CDN_URL', `${CDN_URL}/`);
   });
+  afterEach(() => vi.unstubAllEnvs());
 
   const zipOutput = () => h.createZipBuffer.mock.calls[0] as unknown as [string, { filename: string }[]];
 
   it('skips an untracked files-bucket key without consulting the generated-image check', async () => {
+    seedReply(`![a](${FOREIGN_FILES_URL})`);
     await runExport(h.COLLABORATOR_ID);
 
-    expect(h.download).not.toHaveBeenCalledWith('exports/abc/foreign.png');
-    expect(h.canAccessGeneratedImage).not.toHaveBeenCalledWith('exports/abc/foreign.png', expect.anything());
-    expect(zipOutput()[0]).toContain('Image unavailable: foreign.png');
+    expect(h.filesDownload).not.toHaveBeenCalled();
+    expect(h.canAccessGeneratedImage).not.toHaveBeenCalled();
+    expect(zipOutput()[0]).toContain('> \u26a0\ufe0f Image unavailable: foreign.png. Reason: Image is not available.');
   });
 
-  it('keeps an untracked generated image the plan owner can reach, checked against the owner', async () => {
-    h.canAccessGeneratedImage.mockResolvedValueOnce(true);
+  it.each(GENERATED_URLS)(
+    'keeps an untracked generated image the plan owner can reach, by its bare key: %s',
+    async url => {
+      seedReply(`![b](${url})`);
+      h.canAccessGeneratedImage.mockResolvedValueOnce(true);
+      await runExport(h.COLLABORATOR_ID);
+
+      expect(h.canAccessGeneratedImage).toHaveBeenCalledWith(GENERATED_KEY, h.OWNER_ID);
+      expect(h.generatedDownload).toHaveBeenCalledWith(GENERATED_KEY);
+      expect(h.filesDownload).not.toHaveBeenCalled();
+      const [markdown, imageBuffers] = zipOutput();
+      expect(imageBuffers.map(b => b.filename)).toEqual(['images/fig-1.png']);
+      expect(markdown).toContain('](images/fig-1.png)');
+      expect(markdown).not.toContain('Image unavailable');
+    }
+  );
+
+  it.each(GENERATED_URLS)('skips an untracked generated image the plan owner cannot reach: %s', async url => {
+    seedReply(`![b](${url})`);
     await runExport(h.COLLABORATOR_ID);
 
-    expect(h.canAccessGeneratedImage).toHaveBeenCalledWith('gen-1.png', h.OWNER_ID);
-    expect(h.download).toHaveBeenCalledWith('gen-1.png');
-    const [markdown, imageBuffers] = zipOutput();
-    expect(imageBuffers.map(b => b.filename)).toEqual(['images/fig-2.png']);
-    expect(markdown).not.toContain('Image unavailable: gen-1.png');
+    expect(h.canAccessGeneratedImage).toHaveBeenCalledWith(GENERATED_KEY, h.OWNER_ID);
+    expect(h.generatedDownload).not.toHaveBeenCalled();
+    expect(zipOutput()[0]).toContain('> \u26a0\ufe0f Image unavailable: gen-1.png. Reason: Image is not available.');
   });
 
-  it('skips an untracked generated image the plan owner cannot reach', async () => {
+  it('skips a generated image without consulting the check when the plan owner cannot be loaded', async () => {
+    seedReply(`![b](${GENERATED_URLS[0]})`);
+    h.findUserById.mockResolvedValueOnce(null as never);
     await runExport(h.COLLABORATOR_ID);
 
-    expect(h.canAccessGeneratedImage).toHaveBeenCalledWith('gen-1.png', h.OWNER_ID);
-    expect(h.download).not.toHaveBeenCalled();
-    expect(zipOutput()[0]).toContain('Image unavailable: gen-1.png');
+    expect(h.canAccessGeneratedImage).not.toHaveBeenCalled();
+    expect(h.generatedDownload).not.toHaveBeenCalled();
+    expect(zipOutput()[0]).toContain('Image unavailable: gen-1.png. Reason: Image is not available.');
+  });
+
+  it('authorizes a tracked FabFile on a generated key through the FabFile ACL, not the generated check', async () => {
+    seedReply(`![b](${GENERATED_URLS[0]})`);
+    h.fabFileFindOne.mockResolvedValueOnce({ id: 'file-gen', filePath: GENERATED_KEY, moderationStatus: 'clean' });
+    await runExport(h.COLLABORATOR_ID);
+
+    expect(h.fabFileFindOne).toHaveBeenCalledWith({ filePath: GENERATED_KEY });
+    expect(h.findAccessibleById).toHaveBeenCalledWith(expect.objectContaining({ id: h.OWNER_ID }), 'file-gen');
+    expect(h.canAccessGeneratedImage).not.toHaveBeenCalled();
+    expect(h.generatedDownload).toHaveBeenCalledWith(GENERATED_KEY);
+  });
+
+  it('leaves a /generated/ URL on a foreign host untouched', async () => {
+    const foreign = `https://evil.example.org/generated/${GENERATED_KEY}`;
+    seedReply(`![b](${foreign})`);
+    await runExport(h.COLLABORATOR_ID);
+
+    expect(h.canAccessGeneratedImage).not.toHaveBeenCalled();
+    expect(h.generatedDownload).not.toHaveBeenCalled();
+    expect(zipOutput()[1]).toEqual([]);
   });
 });
 
