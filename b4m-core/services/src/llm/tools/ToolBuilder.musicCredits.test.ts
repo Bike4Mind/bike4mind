@@ -62,6 +62,15 @@ describe('ToolBuilder music credit branches', () => {
     expect(record).toHaveBeenCalledTimes(1);
   });
 
+  it('tags the usage event music_generation, the feature the direct endpoint writes', () => {
+    // The Gears status unlocks its music gear from this feature; a 'tool' row would not count.
+    const { builder, record } = makeBuilder();
+    builder.settleMusicCredits(quest(), finishData(SHORT, 'a.mp3'), true);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: 'music_generation', model: 'eleven_music_v1' })
+    );
+  });
+
   it('settle reserves each call independently so two calls sum, not double the later cost', () => {
     const { builder, toolCreditsMap } = makeBuilder();
     const q = quest();

@@ -4,10 +4,10 @@ import {
   CurationOptions,
   IChatHistoryItem,
   mapMimeTypeToArtifactType as mapMimeTypeToSharedArtifactType,
+  scanArtifactTags,
   SEARCH_RESULT_CARDS_LANGUAGE,
   LOCATION_MAP_LANGUAGE,
 } from '@bike4mind/common';
-import { scanArtifactTags } from '../utils/scanArtifactTags';
 
 /**
  * The loaded `IChatHistoryItem` plus the mongo `_id` that document/lean-form items

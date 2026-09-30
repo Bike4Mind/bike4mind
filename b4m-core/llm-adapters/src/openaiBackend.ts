@@ -40,7 +40,11 @@ import {
   replaceLastToolResultObservationOpenAI,
   getLatestToolCallIdOpenAI,
 } from './backend';
-import { handleToolResultStreaming, createRecursiveArtifactGuard } from './toolStreamingHelper';
+import {
+  handleToolResultStreaming,
+  createRecursiveArtifactGuard,
+  stripUnstreamedToolResult,
+} from './toolStreamingHelper';
 import { DispatchModel } from './dispatchModel';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
@@ -49,7 +53,7 @@ import {
   isUserInitiatedAbort,
   isRetryableError,
   stripToolArtifactMarkup,
-  TOOL_ARTIFACT_EMITTERS,
+  hasDeliverablePinnedArtifact,
   ARTIFACT_DELIVERED_PLACEHOLDER,
   ARTIFACT_REMOVED_PLACEHOLDER,
 } from '@bike4mind/common';
@@ -2187,16 +2191,14 @@ export class OpenAIBackend implements ICompletionBackend {
       const r = resolved[i];
       if (outcome.ok) {
         const rawResult = outcome.result.result.toString();
-        if (TOOL_ARTIFACT_EMITTERS.has(r.name)) {
+        const delivered = hasDeliverablePinnedArtifact(r.name, rawResult);
+        if (delivered) {
           if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
           artifactGuard.markDelivered(rawResult);
         }
         // This path never streams, but an emitter's artifact still reaches the user via tool_result
         // extraction in services sharedToolBuilder; strip it so GPT cannot echo a second copy.
-        const resultStr = stripToolArtifactMarkup(
-          rawResult,
-          TOOL_ARTIFACT_EMITTERS.has(r.name) ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
-        );
+        const resultStr = stripUnstreamedToolResult(r.name, rawResult, delivered);
         recordToolResult(toolsUsed, { id: r.callId, name: r.name }, resultStr, true);
         this.pushToolMessages(messages, { id: r.callId, name: r.name, parameters: r.args }, resultStr);
       } else {

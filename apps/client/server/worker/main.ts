@@ -12,6 +12,7 @@ import { dispatch as fabFileChunkDispatch } from '@server/queueHandlers/fabFileC
 import { dispatch as fabFileVectorizeDispatch } from '@server/queueHandlers/fabFileVectorize';
 import { dispatch as dataLakeTaxonomyAnalysisDispatch } from '@server/queueHandlers/dataLakeTaxonomyAnalysis';
 import { dispatch as dataLakeResearchRunDispatch } from '@server/queueHandlers/dataLakeResearchRun';
+import { dispatch as driveDisconnectPurgeDispatch } from '@server/queueHandlers/driveDisconnectPurge';
 import { dispatch as imageGenerationDispatch } from '@server/queueHandlers/imageGeneration';
 import { dispatch as imageEditDispatch } from '@server/queueHandlers/imageEdit';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
@@ -53,6 +54,8 @@ const FAB_FILE_VISIBILITY_TIMEOUT_SEC = 300;
  *  which sits above their 10-minute handler timeout so a slow render is never redelivered
  *  mid-flight - a duplicate would charge the user's credits a second time. */
 const IMAGE_VISIBILITY_TIMEOUT_SEC = 660;
+/** Matches hosted's 12-minute visibility over the purge handler's 10-minute timeout (infra/queues.ts). */
+const DRIVE_DISCONNECT_PURGE_VISIBILITY_TIMEOUT_SEC = 720;
 /** Scheduler cadence (hosted cron runs on a schedule; self-host polls the schedule table). */
 const SCHEDULER_INTERVAL_MS = 5 * 60_000;
 /** Research schedule tick, matching the hosted dataLakeResearchScheduleCron's rate. */
@@ -155,6 +158,21 @@ async function main() {
     });
   } else {
     bootLogger.warn('dataLakeResearchQueue not configured; data-lake research runs will not run');
+  }
+
+  const driveDisconnectPurgeQueueUrl = Resource.driveDisconnectPurgeQueue?.url;
+  if (driveDisconnectPurgeQueueUrl) {
+    worker.registerQueueHandler(
+      'driveDisconnectPurgeQueue',
+      driveDisconnectPurgeQueueUrl,
+      driveDisconnectPurgeDispatch,
+      {
+        visibilityTimeoutSec: DRIVE_DISCONNECT_PURGE_VISIBILITY_TIMEOUT_SEC,
+        maxReceiveCount: 3,
+      }
+    );
+  } else {
+    bootLogger.warn('driveDisconnectPurgeQueue not configured; Google Drive disconnects will be refused');
   }
 
   // Enrichment events (naming, summaries, tags, memento embedding) arrive here from
