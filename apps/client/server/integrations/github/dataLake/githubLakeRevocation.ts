@@ -17,7 +17,7 @@ export type GitHubLakeRevocation = { installationId: number; connectionIds: stri
 export type GitHubLakeRevocationResult = GitHubLakeRevocation | { malformed: string } | null;
 
 /**
- * The lake connections a data-lake App webhook delivery revokes (webhooks/github-lake-app.ts), or
+ * The lake connections a data-lake App webhook delivery revokes (webhooks/github/lake.ts), or
  * null when the event/action is not one we act on: `installation.deleted` revokes every binding of
  * the installation, `installation_repositories.removed` only the bindings of the removed repositories.
  */

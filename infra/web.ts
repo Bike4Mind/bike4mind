@@ -260,7 +260,7 @@ export const web = new sst.aws.Nextjs(
       dataLakeTaxonomyQueue,
       driveLakeIngestQueue,
       githubLakeIngestQueue,
-      // The App's own webhook (github-lake-app.ts) reads Resource.githubLakeRevokeQueue.url directly
+      // The App's webhook (pages/api/webhooks/github/lake.ts) reads Resource.githubLakeRevokeQueue.url directly
       // to enqueue one purge message per affected connection, the same reason githubLakeIngestQueue
       // above is linked directly rather than only through sourceQueueUrls.
       githubLakeRevokeQueue,

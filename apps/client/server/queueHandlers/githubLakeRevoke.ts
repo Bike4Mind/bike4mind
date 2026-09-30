@@ -8,7 +8,7 @@ const Payload = z.object({ connectionId: z.string(), installationId: z.number() 
 
 /**
  * Purges what one GitHub lake connection ingested once the data-lake App loses access to it
- * (github-lake-app.ts: installation deleted, or the repository dropped from the installation's
+ * (webhooks/github/lake.ts: installation deleted, or the repository dropped from the installation's
  * selection). One message per connection. A live sync's ConflictError is left to throw so SQS
  * retries the message once the sync releases its claim, rather than dropping a delivery GitHub
  * will not resend on its own.

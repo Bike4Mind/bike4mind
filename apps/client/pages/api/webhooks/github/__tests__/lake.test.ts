@@ -57,6 +57,19 @@ function pushPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function installationPayload(overrides: Record<string, unknown> = {}) {
+  return { action: 'deleted', installation: { id: INSTALLATION_ID }, ...overrides };
+}
+
+function installationRepositoriesPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    action: 'removed',
+    installation: { id: INSTALLATION_ID },
+    repositories_removed: [{ id: REPOSITORY_ID }],
+    ...overrides,
+  };
+}
+
 const sign = (rawBody: string, secret: string = SECRET) =>
   'sha256=' + crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
 
@@ -182,11 +195,11 @@ describe('POST /api/webhooks/github/lake', () => {
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
-  it('acknowledges a signed non-push event without queueing', async () => {
+  it('acknowledges a signed non-push, non-revocation event without queueing', async () => {
     const { status, json } = await deliver({ event: 'ping', body: { zen: 'Keep it logically awesome.' } });
 
     expect(status).toBe(200);
-    expect(json).toMatchObject({ status: 'ignored' });
+    expect(json).toEqual({ status: 'ignored', reason: 'not a handled event' });
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
@@ -261,6 +274,131 @@ describe('POST /api/webhooks/github/lake', () => {
 
     expect(status).toBe(400);
     expect(json).toEqual({ message: 'Missing x-github-event header' });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('revokes every connection bound to the installation on installation.deleted', async () => {
+    h.findByInstallationId.mockResolvedValue([
+      { id: 'conn1', installationId: INSTALLATION_ID, repositoryId: 100, enabled: true },
+      { id: 'conn2', installationId: INSTALLATION_ID, repositoryId: 200, enabled: true },
+    ]);
+    const { status, json } = await deliver({ event: 'installation', body: installationPayload() });
+
+    expect(status).toBe(202);
+    expect(json).toEqual({ status: 'queued', count: 2 });
+    expect(h.connectDB).toHaveBeenCalledTimes(1);
+    expect(h.findByInstallationId).toHaveBeenCalledWith(INSTALLATION_ID);
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', {
+      connectionId: 'conn1',
+      installationId: INSTALLATION_ID,
+    });
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', {
+      connectionId: 'conn2',
+      installationId: INSTALLATION_ID,
+    });
+  });
+
+  it('revokes only the removed repositories on installation_repositories.removed', async () => {
+    h.findByInstallationId.mockResolvedValue([
+      { id: 'conn1', installationId: INSTALLATION_ID, repositoryId: REPOSITORY_ID, enabled: true },
+      { id: 'conn2', installationId: INSTALLATION_ID, repositoryId: 200, enabled: true },
+    ]);
+    const { status, json } = await deliver({
+      event: 'installation_repositories',
+      body: installationRepositoriesPayload(),
+    });
+
+    expect(status).toBe(202);
+    expect(json).toEqual({ status: 'queued', count: 1 });
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', {
+      connectionId: 'conn1',
+      installationId: INSTALLATION_ID,
+    });
+  });
+
+  it('ignores installation_repositories.added, touching no repository', async () => {
+    const { status, json } = await deliver({
+      event: 'installation_repositories',
+      body: { action: 'added', installation: { id: INSTALLATION_ID }, repositories_added: [{ id: REPOSITORY_ID }] },
+    });
+
+    expect(status).toBe(200);
+    expect(json).toEqual({ status: 'ignored', reason: 'not a revoking action' });
+    expect(h.findByInstallationId).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('ignores installation.suspend (reversible, not a revoke)', async () => {
+    const { status, json } = await deliver({
+      event: 'installation',
+      body: installationPayload({ action: 'suspend' }),
+    });
+
+    expect(status).toBe(200);
+    expect(json).toEqual({ status: 'ignored', reason: 'not a revoking action' });
+    expect(h.findByInstallationId).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('400s a malformed installation.deleted payload missing the installation id', async () => {
+    const { status, json } = await deliver({ event: 'installation', body: { action: 'deleted' } });
+
+    expect(status).toBe(400);
+    expect(json).toEqual({ message: 'Malformed payload' });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('400s a removed delivery that names no repository, rather than acknowledging it as queued: 0', async () => {
+    const { status, json } = await deliver({
+      event: 'installation_repositories',
+      body: installationRepositoriesPayload({ repositories_removed: [] }),
+    });
+
+    expect(status).toBe(400);
+    expect(json).toEqual({ message: 'Malformed payload' });
+    expect(h.findByInstallationId).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('queues count: 0 and enqueues nothing when a handled event matches no binding', async () => {
+    h.findByInstallationId.mockResolvedValue([
+      { id: 'conn1', installationId: INSTALLATION_ID, repositoryId: 999, enabled: true },
+    ]);
+    const { status, json } = await deliver({
+      event: 'installation_repositories',
+      body: installationRepositoriesPayload(),
+    });
+
+    expect(status).toBe(202);
+    expect(json).toEqual({ status: 'queued', count: 0 });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('500s when the revoke enqueue fails, without throwing', async () => {
+    h.findByInstallationId.mockResolvedValue([
+      { id: 'conn1', installationId: INSTALLATION_ID, repositoryId: REPOSITORY_ID, enabled: true },
+    ]);
+    h.sendToQueue.mockRejectedValue(new Error('SQS down'));
+    const { status, json } = await deliver({ event: 'installation', body: installationPayload() });
+
+    expect(status).toBe(500);
+    expect(json).toEqual({ message: 'Could not queue the revoke' });
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', {
+      connectionId: 'conn1',
+      installationId: INSTALLATION_ID,
+    });
+  });
+
+  it('rejects an installation event with an invalid signature', async () => {
+    const { status } = await deliver({
+      event: 'installation',
+      body: installationPayload(),
+      signature: 'sha256=deadbeef',
+    });
+
+    expect(status).toBe(401);
+    expect(h.findByInstallationId).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 });

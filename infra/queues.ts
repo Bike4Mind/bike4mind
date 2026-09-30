@@ -97,7 +97,7 @@ const githubLakeIngestQueue = new sst.aws.Queue('githubLakeIngestQueue', {
   },
 });
 
-// GitHub data-lake App access revoked -> purge and release the connection (github-lake-app.ts).
+// GitHub data-lake App access revoked -> purge and release the connection (pages/api/webhooks/github/lake.ts).
 // SQS is the retry: GitHub never redelivers on its own, and a live sync makes the purge 409.
 const githubLakeRevokeQueueDLQ = new sst.aws.Queue('githubLakeRevokeQueueDLQ', {});
 const githubLakeRevokeQueue = new sst.aws.Queue('githubLakeRevokeQueue', {
