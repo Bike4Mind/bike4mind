@@ -254,7 +254,11 @@ async function checkAvailability(
   ctx: DiscoveryFetchContext
 ): Promise<Map<string, BedrockAvailability>> {
   const alreadyActive = (await options.activeModelIds?.()) ?? new Set<string>();
+  // A model this listing already shows as not on demand is disabled whatever availability says, so the
+  // call would buy nothing. The listing is re-read every run, so the model is asked the same run
+  // ON_DEMAND appears, which is when isConfirmedInvocable needs the answer to lift the disable.
   const pending = summaries
+    .filter(summary => !isNotOnDemand(summary))
     .map(summary => text(summary?.modelId))
     .filter((id): id is string => id !== undefined && !alreadyActive.has(id));
 
