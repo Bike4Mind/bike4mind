@@ -374,7 +374,7 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     );
   });
 
-  it('per-user key cap → 400 invalid_request, OAuth-shaped, no audit', async () => {
+  it('per-user key cap -> 400 invalid_request, OAuth-shaped, no audit', async () => {
     // The service tags the cap refusal so the exchange answers in OAuth shape instead
     // of letting baseApi render a bare 400 the client cannot parse.
     mockCreateUserApiKey.mockRejectedValue(
