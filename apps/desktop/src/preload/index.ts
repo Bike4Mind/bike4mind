@@ -49,6 +49,9 @@ const api: DesktopApi = {
       return () => ipcRenderer.removeListener(IPC_CHANNELS.authStateChanged, handler);
     },
   },
+  account: {
+    getCredits: () => ipcRenderer.invoke(IPC_CHANNELS.accountGetCredits),
+  },
   chat: {
     listModels: (force?: boolean) => ipcRenderer.invoke(IPC_CHANNELS.chatListModels, force ?? false),
     setSessionModel: (sessionId: string, model: string) =>

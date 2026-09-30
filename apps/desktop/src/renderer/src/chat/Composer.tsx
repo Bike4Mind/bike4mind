@@ -22,6 +22,7 @@ import { QueuedMessageList } from './QueuedMessageList';
 import { mergeIntoDraft } from './queuedMessages';
 import { matchSkills, skillQuery } from './skillMenu';
 import { SkillPicker } from './SkillPicker';
+import { describeUsage, usageLabel, type ComposerUsage } from './statusLine';
 import { toAttachmentInputs, type AttachmentDraft } from './useAttachments';
 import type { SkillsController } from './useSkills';
 
@@ -32,6 +33,7 @@ export function Composer({
   attachments,
   blockedReason,
   notReady,
+  usage,
   placeholder = 'Send a message...',
   onSend,
   onStop,
@@ -64,6 +66,12 @@ export function Composer({
    * noise. Main refuses the turn regardless; this is so the button agrees with it.
    */
   notReady?: string | null;
+  /**
+   * What the idle indicator says INSTEAD of a bare "Ready": how full the window is and what is
+   * left to spend. Only the idle case - the three states above all name something the user may
+   * need to act on, and those still win.
+   */
+  usage?: ComposerUsage | null;
   onSend: (text: string) => void;
   onStop: () => void;
   /** Typed ahead of the live turn, waiting to be sent. Drawn above the input. */
@@ -107,6 +115,13 @@ export function Composer({
 
   const hasContent = text.trim().length > 0 || attachments.attachments.length > 0;
   const blocked = !!blockedReason || !!notReady;
+
+  // Only ever read by the idle branch of the indicator below. A turn in flight has its own line
+  // under the transcript (see TurnStatus) and the dot says "Working"; a second reading of a
+  // half-finished turn here would be two elements answering the same question.
+  const idleUsage = !streaming && !disabled && !notReady ? (usage ?? null) : null;
+  const idleLabel = idleUsage && usageLabel(idleUsage);
+  const idleDetail = idleUsage && idleLabel ? describeUsage(idleUsage) : null;
 
   // See composerInput.ts for what wins here and why.
   const shown = shownSuggestion({ disabled, text, suggestion });
@@ -431,25 +446,44 @@ export function Composer({
             They are not redundant either: this dot knows about a turn the window never saw
             start (a reload mid-reply), where the transcript line has no clock or token count to
             show and correctly shows nothing. */}
-        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }} data-testid="composer-status">
-          <Box
-            sx={{
-              width: 7,
-              height: 7,
-              borderRadius: '50%',
-              bgcolor: streaming
-                ? 'primary.solidBg'
-                : disabled
-                  ? 'neutral.softBg'
-                  : notReady
-                    ? 'warning.solidBg'
-                    : 'success.solidBg',
-            }}
-          />
-          <Typography level="body-xs" textColor="text.tertiary" noWrap>
-            {streaming ? 'Working' : disabled ? 'No session' : (notReady ?? 'Ready')}
-          </Typography>
-        </Stack>
+        <Tooltip
+          title={idleDetail ?? ''}
+          placement="top"
+          variant="soft"
+          size="sm"
+          disableHoverListener={!idleDetail}
+          // Preserved so the tooltip keeps the one-fact-per-line shape it is built with.
+          sx={{ whiteSpace: 'pre-line', maxWidth: 360 }}
+        >
+          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }} data-testid="composer-status">
+            <Box
+              sx={{
+                width: 7,
+                height: 7,
+                borderRadius: '50%',
+                bgcolor: streaming
+                  ? 'primary.solidBg'
+                  : disabled
+                    ? 'neutral.softBg'
+                    : notReady
+                      ? 'warning.solidBg'
+                      : 'success.solidBg',
+              }}
+            />
+            {/* Tabular figures so the row cannot reflow as the numbers move: the balance drops
+                by a few credits every turn, and proportional digits would shuffle the whole
+                line each time one of them changed. */}
+            <Typography
+              level="body-xs"
+              textColor="text.tertiary"
+              noWrap
+              sx={{ fontVariantNumeric: 'tabular-nums' }}
+              data-testid="composer-status-text"
+            >
+              {streaming ? 'Working' : disabled ? 'No session' : (notReady ?? idleLabel ?? 'Ready')}
+            </Typography>
+          </Stack>
+        </Tooltip>
       </Stack>
     </Box>
   );

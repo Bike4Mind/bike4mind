@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { IPC_CHANNELS, type AppInfo } from '@shared/ipc';
 import appIcon from '../../build/icon.png?asset';
+import { registerAccount } from './account';
 import { registerAuth } from './auth';
 import { registerChat } from './chat';
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
@@ -85,6 +86,7 @@ void app.whenReady().then(async () => {
   // After ready, not before: safeStorage is only usable once the app is ready, and the vault
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
+  registerAccount(auth);
   const { service: chat, background, mcp } = registerChat(auth);
 
   // Set by whichever path starts the teardown, so the `before-quit` veto below runs at most

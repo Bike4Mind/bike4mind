@@ -305,6 +305,11 @@ export interface ConversationController {
    */
   returned: { id: number; messages: ChatQueuedMessage[] } | null;
   clearReturned: () => void;
+  /**
+   * Replies this window has watched end, in ANY conversation. Monotonic, and a trigger rather
+   * than a statistic: it is what tells the credit balance it is worth re-reading.
+   */
+  settledTurns: number;
   rename: (title: string) => Promise<void>;
   /** Pin this conversation to a model; it is used from the next turn on. */
   setModel: (model: string) => Promise<void>;
@@ -340,6 +345,7 @@ export function useConversation(
   const [projectError, setProjectError] = useState<ProjectBindingError | null>(null);
   const [queued, setQueued] = useState<ChatQueuedMessage[]>([]);
   const [returned, setReturned] = useState<{ id: number; messages: ChatQueuedMessage[] } | null>(null);
+  const [settledTurns, setSettledTurns] = useState(0);
   /**
    * Batch counter for returned text, monotonic for the life of this hook.
    *
@@ -429,7 +435,12 @@ export function useConversation(
 
   useEffect(() => {
     return window.b4m.chat.onStreamEvent(event => {
-      if (event.type === 'done' || event.type === 'error') settledReplies.current.add(event.messageId);
+      if (event.type === 'done' || event.type === 'error') {
+        settledReplies.current.add(event.messageId);
+        // Counted before the session filter below, and deliberately: a reply running in a
+        // background conversation spends from the same balance as this one.
+        setSettledTurns(count => count + 1);
+      }
       if (event.sessionId !== activeSessionId.current) return;
 
       if (event.type === 'start') {
@@ -743,6 +754,7 @@ export function useConversation(
     cancelQueued,
     returned,
     clearReturned,
+    settledTurns,
     rename,
     setModel,
     setApprovalMode,

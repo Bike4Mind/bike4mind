@@ -1,13 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import type { ChatToolCall, ChatToolStatus } from '@shared/chat';
+import type { ChatMessage, ChatReplyRound, ChatToolCall, ChatToolStatus } from '@shared/chat';
 import {
+  contextPercent,
+  contextTokens,
   describeActivity,
   describeSplit,
+  describeUsage,
   formatCost,
   formatElapsed,
   formatTokens,
+  inputSide,
+  latestReply,
   statusFields,
   totalTokens,
+  usageLabel,
+  type ComposerUsage,
 } from './statusLine';
 
 function call(name: string, status: ChatToolStatus, progress?: string): ChatToolCall {
@@ -162,5 +169,218 @@ describe('statusFields', () => {
       '1.1k tokens',
       'Running tools...',
     ]);
+  });
+});
+
+/**
+ * A four-round tool loop, shaped the way a real one is: each request re-sends the conversation
+ * so far, so the cached input grows every round while the WINDOW holds only the latest one.
+ *
+ * The rounds' inputs sum to well past a 200k window - which is what a status line that added
+ * them up would report, and the reason this fixture has four of them rather than one.
+ */
+function toolLoop(): ChatMessage {
+  const round = (cacheRead: number, input: number): ChatReplyRound => ({
+    text: '',
+    toolCallIds: [],
+    usage: { inputTokens: input, cacheReadInputTokens: cacheRead, outputTokens: 400 },
+  });
+  return {
+    id: 'reply',
+    role: 'assistant',
+    content: 'done',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    toolCalls: [{ id: 'a', name: 'file_read', input: {}, status: 'done' }],
+    rounds: [round(120_000, 2_000), round(150_000, 1_200), round(180_000, 900), round(190_000, 800)],
+    usage: { inputTokens: 4900, cacheReadInputTokens: 640_000, outputTokens: 1600 },
+  };
+}
+
+function reply(over: Partial<ChatMessage>): ChatMessage {
+  return { id: 'reply', role: 'assistant', content: '', createdAt: '2026-01-01T00:00:00.000Z', ...over };
+}
+
+describe('inputSide', () => {
+  it('counts cache reads, because a cached token fills the window like any other', () => {
+    expect(inputSide({ inputTokens: 2000, cacheReadInputTokens: 120_000, cacheCreationInputTokens: 4000 })).toBe(
+      126_000
+    );
+  });
+
+  it('is a different quantity from the cost proxy, which drops exactly those reads', () => {
+    const usage = { inputTokens: 2000, cacheReadInputTokens: 120_000, outputTokens: 500 };
+    expect(inputSide(usage)).toBe(122_000);
+    expect(totalTokens(usage)).toBe(2500);
+  });
+
+  it('says nothing rather than zero when the server reported no input at all', () => {
+    expect(inputSide({ outputTokens: 500 })).toBeNull();
+    expect(inputSide(undefined)).toBeNull();
+  });
+});
+
+describe('contextTokens', () => {
+  it('takes the last round only, so a long tool loop does not inflate past the window', () => {
+    const message = toolLoop();
+    expect(contextTokens(message)).toBe(190_800);
+    expect(contextPercent(contextTokens(message), 200_000)).toBe(95);
+    expect(contextPercent(contextTokens(message), 200_000)).toBeLessThanOrEqual(100);
+  });
+
+  it('is emphatically not the turn bill, which is what summing the rounds would give', () => {
+    const message = toolLoop();
+    const summed = message.rounds!.reduce((sum, round) => sum + (inputSide(round.usage) ?? 0), 0);
+    expect(contextPercent(summed, 200_000)).toBeGreaterThan(100);
+    expect(contextTokens(message)).toBeLessThan(summed);
+  });
+
+  it('falls back through rounds the server reported nothing for', () => {
+    const message = reply({
+      toolCalls: [{ id: 'a', name: 'file_read', input: {}, status: 'done' }],
+      rounds: [
+        { text: '', toolCallIds: [], usage: { inputTokens: 900, cacheReadInputTokens: 40_000 } },
+        { text: '', toolCallIds: [] },
+      ],
+    });
+    expect(contextTokens(message)).toBe(40_900);
+  });
+
+  it('reads a plain one-request reply off the message itself', () => {
+    expect(contextTokens(reply({ usage: { inputTokens: 1200, cacheReadInputTokens: 8000 } }))).toBe(9200);
+  });
+
+  // A message stored before rounds were recorded: `usage` is the summed bill of several
+  // requests, and reporting it as occupancy is the exact overstatement this guards.
+  it('gives up on a legacy multi-round reply rather than reporting its summed bill', () => {
+    const message = reply({
+      toolCalls: [{ id: 'a', name: 'file_read', input: {}, status: 'done' }],
+      usage: { inputTokens: 4900, cacheReadInputTokens: 650_000 },
+    });
+    expect(contextTokens(message)).toBeNull();
+  });
+
+  it('describes replies, not prompts', () => {
+    expect(contextTokens({ ...reply({}), role: 'user', usage: { inputTokens: 10 } })).toBeNull();
+    expect(contextTokens(null)).toBeNull();
+  });
+});
+
+describe('latestReply', () => {
+  it('reports the last reply, skipping anything typed since', () => {
+    const older = reply({ id: 'first', usage: { inputTokens: 100 } });
+    const newer = reply({ id: 'second', usage: { inputTokens: 900 } });
+    const typed: ChatMessage = { id: 'typed', role: 'user', content: 'hi', createdAt: '2026-01-01T00:00:01.000Z' };
+    expect(latestReply([older, newer, typed])?.id).toBe('second');
+  });
+
+  it('has nothing to report in a conversation with no reply yet', () => {
+    expect(latestReply([])).toBeNull();
+  });
+});
+
+describe('contextPercent', () => {
+  it('is null when either half of the fraction is missing, never a percentage of a guess', () => {
+    expect(contextPercent(null, 200_000)).toBeNull();
+    expect(contextPercent(44_000, null)).toBeNull();
+    expect(contextPercent(44_000, 0)).toBeNull();
+  });
+});
+
+describe('usageLabel', () => {
+  const known: ComposerUsage = { contextTokens: 44_000, contextWindow: 200_000, credits: 31_667 };
+
+  it('carries the window figure alone; the balance is a hover away', () => {
+    expect(usageLabel(known)).toBe('Context 22%');
+    expect(usageLabel(known)).not.toContain('credits');
+  });
+
+  it('keeps its shape when the window figure is missing, so the row does not jump', () => {
+    expect(usageLabel({ ...known, contextTokens: null })).toBe('Context --');
+    expect(usageLabel({ ...known, contextWindow: null })).toBe('Context --');
+  });
+
+  // The hover target has to survive a balance this client could not read, and a window figure
+  // it has not measured - otherwise the one field that still knows something is unreachable.
+  it('still shows a field while either figure is known', () => {
+    expect(usageLabel({ ...known, credits: null })).toBe('Context 22%');
+    expect(usageLabel({ contextTokens: null, contextWindow: null, credits: 0 })).toBe('Context --');
+  });
+
+  it('says nothing when it knows nothing, leaving the caller its own fallback', () => {
+    expect(usageLabel({ contextTokens: null, contextWindow: null, credits: null })).toBeNull();
+  });
+});
+
+describe('describeUsage', () => {
+  it('spells both figures out and names them apart from what the turn cost', () => {
+    const detail = describeUsage({
+      contextTokens: 44_000,
+      contextWindow: 200_000,
+      credits: 31_667,
+      lastTurn: { inputTokens: 2000, cacheReadInputTokens: 120_000, outputTokens: 500, usdCost: 0.42 },
+    });
+    expect(detail).toContain('Context 44k / 200k (22%)');
+    expect(detail).toContain('Credits 31,667 personal balance');
+    expect(detail).toContain('Last turn 2.0k new input, 120k cached, 500 output - $0.42');
+  });
+
+  it('reports the tokens without inventing a window when the model states none', () => {
+    const detail = describeUsage({ contextTokens: 44_000, contextWindow: null, credits: 12 });
+    expect(detail).toContain('Context 44k used - this model reports no window size');
+    expect(detail).not.toContain('%');
+  });
+
+  it('says why the balance is missing rather than showing a zero', () => {
+    const detail = describeUsage({
+      contextTokens: null,
+      contextWindow: 200_000,
+      credits: null,
+      creditsError: 'Could not read your balance from this server.',
+    });
+    expect(detail).toContain('Context - nothing measured in this conversation yet');
+    expect(detail).toContain('Credits - Could not read your balance from this server.');
+    expect(detail).not.toContain('Credits 0');
+  });
+});
+
+describe('a real turn against a very large window', () => {
+  // The figures a gpt-5 turn actually produced against its 1.05M window: two rounds, the second
+  // re-reading the first from cache. The naive sum of both rounds' inputs is nearly twice the
+  // real occupancy after only two rounds, which is how fast that mistake compounds.
+  const rounds: ChatReplyRound[] = [
+    { text: '', toolCallIds: [], usage: { inputTokens: 3935, outputTokens: 99 } },
+    { text: '', toolCallIds: [], usage: { inputTokens: 258, cacheReadInputTokens: 3932, outputTokens: 53 } },
+  ];
+  const message = reply({
+    toolCalls: [{ id: 'a', name: 'file_search', input: {}, status: 'done' }],
+    rounds,
+    usage: { inputTokens: 4193, cacheReadInputTokens: 3932, outputTokens: 152, creditsUsed: 54 },
+  });
+
+  it('reads occupancy off the last round, not off the turn bill', () => {
+    expect(contextTokens(message)).toBe(4190);
+    expect(inputSide(message.usage)).toBe(8125);
+  });
+
+  // Under half a percent of a 1.05M window. "0%" would render a measured context exactly like
+  // no context at all, which is the one thing every other field here refuses to do.
+  it('says <1% rather than 0% for an occupancy that is real but tiny', () => {
+    const usage: ComposerUsage = { contextTokens: 4190, contextWindow: 1_050_000, credits: 1991 };
+    expect(usageLabel(usage)).toBe('Context <1%');
+    expect(describeUsage(usage)).toContain('Context 4.2k / 1.1M (<1%)');
+  });
+
+  it('still says 0% when there is genuinely nothing in the window', () => {
+    expect(usageLabel({ contextTokens: 0, contextWindow: 1_050_000, credits: 1991 })).toBe('Context 0%');
+  });
+
+  // A turn costs tens of credits against a balance in the thousands. Compacting the balance
+  // would leave the field reading "2.0k" for twenty turns running.
+  // Exact rather than compacted, because the balance only appears on hover now and a reader
+  // who went looking for it wants the figure, not a rounded "2.0k" that a turn cannot move.
+  it('moves the balance on hover after a single turn', () => {
+    const at = (credits: number) => describeUsage({ contextTokens: 4190, contextWindow: 1_050_000, credits });
+    expect(at(2045)).toContain('Credits 2,045 personal balance');
+    expect(at(1991)).toContain('Credits 1,991 personal balance');
   });
 });

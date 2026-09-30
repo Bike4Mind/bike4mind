@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Input from '@mui/joy/Input';
@@ -21,7 +21,8 @@ import { SessionList } from './SessionList';
 import { TurnStatus } from './TurnStatus';
 import { presentReply } from './codeStream';
 import { roundsOf } from './replyRounds';
-import { describeActivity } from './statusLine';
+import { contextTokens, describeActivity, latestReply, type ComposerUsage } from './statusLine';
+import { useAccountCredits } from './useAccountCredits';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
 import { useConversation, useModelCatalog, usePendingApprovals, useSessionStatuses, useSessions } from './useChat';
@@ -171,6 +172,28 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   // send?". Main's refusal stays as the guard, and surfaces through chat-send-error if a turn
   // ever reaches it.
   const unbound = conversation.session?.mode === 'code' && !conversation.session.project;
+
+  // Re-read when a reply ends anywhere, which is the only moment this window knows the balance
+  // moved. See useAccountCredits for why it is not polled.
+  const credits = useAccountCredits(conversation.settledTurns);
+
+  /**
+   * What the composer's idle indicator reports: how full the window is, and what is left.
+   *
+   * The context figure comes from the last reply's LAST request, never from the turn's summed
+   * usage - see contextTokens. `contextWindow` falls back to null rather than to a default,
+   * because a percentage of a made-up window is a number the user cannot tell is wrong.
+   */
+  const composerUsage: ComposerUsage = useMemo(() => {
+    const reply = latestReply(conversation.messages);
+    return {
+      contextTokens: contextTokens(reply),
+      contextWindow: modelOption?.contextWindow ?? null,
+      credits: credits.balance,
+      ...(credits.error ? { creditsError: credits.error } : {}),
+      lastTurn: reply?.usage ?? null,
+    };
+  }, [conversation.messages, modelOption?.contextWindow, credits.balance, credits.error]);
 
   /**
    * Whether this conversation has a turn open, for the composer's controls.
@@ -425,6 +448,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
             attachments={draft}
             blockedReason={blockedReason}
             notReady={unbound ? 'No folder' : null}
+            usage={composerUsage}
             placeholder={
               conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'
             }
