@@ -310,7 +310,7 @@ const handler = baseApi({ auth: false })
       // The per-user active-key cap is a client-visible refusal: answer it in OAuth
       // shape like every other gate above rather than letting baseApi render a bare
       // 400. Any other error is not ours to relabel - rethrow for the generic handler.
-      if (err instanceof BadRequestError && err.additionalInfo?.code === API_KEY_USER_CAP_ERROR_CODE) {
+      if (err instanceof BadRequestError && err.additionalInfo?.errorCode === API_KEY_USER_CAP_ERROR_CODE) {
         req.logger.warn(
           `[OAUTH_AI_TOKEN] per-user active API key cap reached for user ${b4mUserId} via client ${client_id}`
         );

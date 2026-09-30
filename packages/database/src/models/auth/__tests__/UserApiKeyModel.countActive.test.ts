@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../../__test__/createMongoServer';
@@ -19,6 +19,7 @@ afterAll(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   // Raw-driver hard delete on purpose. The model's deleteMany is the soft-delete
   // plugin (sets deletedAt), and countDocuments does not apply the plugin's
   // `deletedAt: null` pre-hook - leaving rows behind would inflate later counts.
@@ -58,9 +59,22 @@ describe('UserApiKeyRepository.countActiveByUserId', () => {
     await expect(userApiKeyRepository.countActiveByUserId(userId)).resolves.toBe(5);
   });
 
-  it('counts a key expiring exactly now as expired (boundary)', async () => {
-    await createKey({ userId, expiresAt: new Date(Date.now() - 1) });
-    await expect(userApiKeyRepository.countActiveByUserId(userId)).resolves.toBe(0);
+  it.each([
+    ['one millisecond before expiry', -1, 1],
+    ['exactly at expiry', 0, 0],
+    ['one millisecond after expiry', 1, 0],
+  ])('counts correctly %s', async (_label, offset, expectedCount) => {
+    const expiresAt = new Date('2026-01-01T00:00:00.000Z');
+    await createKey({ userId, expiresAt });
+    // Keep MongoDB's I/O timers real; only the repository's clock is pinned.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(expiresAt.getTime() + offset));
+    await expect(userApiKeyRepository.countActiveByUserId(userId)).resolves.toBe(expectedCount);
+  });
+
+  it('counts an explicitly null expiry as never expiring', async () => {
+    await createKey({ userId, expiresAt: null });
+    await expect(userApiKeyRepository.countActiveByUserId(userId)).resolves.toBe(1);
   });
 
   it('returns 0 for a user with no keys', async () => {

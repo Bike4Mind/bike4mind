@@ -1,4 +1,5 @@
 import {
+  API_KEY_USER_CAP_ERROR_CODE,
   ApiKeyBillingOwnerType,
   ApiKeyScope,
   ApiKeyStatus,
@@ -26,12 +27,7 @@ import { generateCallbackSigningSecret } from './callbackSigningSecret';
 // path (setEmbedKeySpendCap).
 export const EMBED_SPEND_CAP_MAX_CREDITS = 100_000_000;
 
-/**
- * Machine-readable tag on the per-user active-key cap rejection. Callers that must
- * present that refusal in their own protocol shape (the OAuth ai-token exchange)
- * match on this code rather than the human message, which is free to change.
- */
-export const API_KEY_USER_CAP_ERROR_CODE = 'API_KEY_USER_CAP';
+export { API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/common';
 
 const createUserApiKeySchema = z.object({
   name: z.string().min(1).max(100),
@@ -257,7 +253,7 @@ export const createUserApiKey = async (
     const activeCount = await db.userApiKeys.countActiveByUserId(userId);
     if (activeCount >= MAX_ACTIVE_KEYS_PER_USER) {
       throw new BadRequestError(`Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`, {
-        code: API_KEY_USER_CAP_ERROR_CODE,
+        errorCode: API_KEY_USER_CAP_ERROR_CODE,
       });
     }
   }

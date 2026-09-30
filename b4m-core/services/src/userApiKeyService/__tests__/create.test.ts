@@ -104,7 +104,7 @@ describe('createUserApiKey — overwatch ingest scope', () => {
     expect(error).toBeInstanceOf(BadRequestError);
     expect((error as BadRequestError).message).toBe('Maximum 10 active API keys allowed per user');
     // The tag is the contract the OAuth ai-token route matches on; the message is not.
-    expect((error as BadRequestError).additionalInfo?.code).toBe(API_KEY_USER_CAP_ERROR_CODE);
+    expect((error as BadRequestError).additionalInfo).toEqual({ errorCode: API_KEY_USER_CAP_ERROR_CODE });
     expect(repo.create).not.toHaveBeenCalled();
   });
 

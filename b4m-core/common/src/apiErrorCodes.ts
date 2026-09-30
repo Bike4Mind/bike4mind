@@ -14,7 +14,11 @@
  * barrel. Adding a classifier means adding it to this tuple, not inventing a
  * local one.
  */
+export const API_KEY_USER_CAP_ERROR_CODE = 'api_key_user_cap';
+
 export const API_ERROR_CODES = [
+  /** The user must revoke an active API key or wait for one to expire before minting another. */
+  API_KEY_USER_CAP_ERROR_CODE,
   /** The caller cannot afford the request; remediation is buying credits. */
   'insufficient_credits',
   /** The owner is solvent but this key hit its admin-set ceiling; remediation is raising the cap. */
