@@ -1,3 +1,4 @@
+import type { AccountCredits } from './account';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
 import type {
@@ -48,6 +49,7 @@ export const IPC_CHANNELS = {
   authOpenAccountPage: 'auth:open-account-page',
   /** main -> renderer push; the renderer never polls for auth state. */
   authStateChanged: 'auth:state-changed',
+  accountGetCredits: 'account:get-credits',
   chatListModels: 'chat:list-models',
   chatSetSessionModel: 'chat:set-session-model',
   chatSetSessionPinned: 'chat:set-session-pinned',
@@ -165,6 +167,16 @@ export interface DesktopApi {
     openAccountPage(page: AccountPage): Promise<void>;
     /** Subscribe to main's auth state pushes; returns the unsubscribe. */
     onStateChanged(listener: (state: AuthState) => void): () => void;
+  };
+  account: {
+    /**
+     * The signed-in account's credit balance, read fresh from the server each time.
+     *
+     * Pull rather than push, and deliberately no subscription: the balance changes when a turn
+     * SPENDS, which is a moment the renderer already witnesses, so the one caller asks then.
+     * A push channel would need main to watch a number only the server knows.
+     */
+    getCredits(): Promise<AccountCredits>;
   };
   chat: {
     /**
