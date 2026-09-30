@@ -1,6 +1,5 @@
 import Alert from '@mui/joy/Alert';
 import Button from '@mui/joy/Button';
-import Divider from '@mui/joy/Divider';
 import LinearProgress from '@mui/joy/LinearProgress';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
@@ -62,18 +61,13 @@ export function UpdateSettings({ controller }: { controller: AppUpdateController
 
   return (
     <Stack spacing={1.5} data-testid="update-settings">
-      <Stack spacing={0.25}>
-        <Typography level="body-sm" sx={{ fontWeight: 'md' }} data-testid="update-current-version">
-          Version {state.currentVersion}
+      {/* The version is the section's own summary line, so only what that line cannot say is
+          repeated here. */}
+      {state.status !== 'unsupported' && (
+        <Typography level="body-xs" textColor="text.tertiary" data-testid="update-last-checked">
+          {lastChecked(state.checkedAt)}
         </Typography>
-        {state.status !== 'unsupported' && (
-          <Typography level="body-xs" textColor="text.tertiary">
-            {lastChecked(state.checkedAt)}
-          </Typography>
-        )}
-      </Stack>
-
-      <Divider />
+      )}
 
       <div data-testid="update-body">{body}</div>
 
