@@ -1,6 +1,7 @@
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { baseApi } from '@server/middlewares/baseApi';
+import { FILES_READ_SCOPES } from '@server/files/fileScopes';
 import { BadRequestError } from '@server/utils/errors';
 import { z } from 'zod';
 import { Request } from 'express';
@@ -70,7 +71,7 @@ export async function filterServeableFilePaths(
   );
 }
 
-const handler = baseApi().get(
+const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
   async (req: Request<unknown, unknown, unknown, { 'filePaths[]'?: string | string[]; expiresIn?: string }>, res) => {
     let filePathsQuery = req.query['filePaths[]'];
 

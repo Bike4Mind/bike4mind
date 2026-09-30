@@ -8,8 +8,7 @@ import {
   type IDataLakeRepository,
 } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
-import { ForbiddenError } from '@server/utils/errors';
-import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
+import { assertApiKeyScope, holdsApiKeyScope, type ScopedRequest } from '@server/middlewares/apiKeyScopeGate';
 
 /**
  * The `requiredScopes` lists every `/api/data-lakes` route declares, and the
@@ -61,41 +60,12 @@ export const DATA_LAKE_QUERY_SCOPES: ApiKeyScope[] = [...DATA_LAKE_QUERY_API_KEY
 /** Gate for a route whose read method is open to readers and whose write method re-shares the lake. */
 export const DATA_LAKE_READ_OR_SHARE_SCOPES: ApiKeyScope[] = [...DATA_LAKE_READ_SCOPES, ApiKeyScope.DATALAKE_SHARE];
 
-interface ScopedRequest {
-  apiKeyInfo?: { scopes?: ApiKeyScope[] };
-}
-
-/**
- * `baseApi`'s gate is per route, not per method, so a route serving both a read
- * and a write declares the read gate and calls one of these inside the write
- * handler. Staging is honored here too: an in-handler assert that ignored
- * API_KEY_SCOPE_STAGING would reject exactly the grandfathered keys the staging
- * window exists to protect.
- *
- * A caller with no `apiKeyInfo` is a JWT/browser caller - the key gate never ran
- * for them and this must not either. That check is on `apiKeyInfo` itself, not on
- * `scopes`: a key caller whose `scopes` came back undefined (apiKeyAuth.ts writes
- * `scopes: validation.scopes!`, a non-null assertion over an optional field) still
- * has `apiKeyInfo` set, and treating a missing `scopes` array as "let it through"
- * would fail open for exactly the caller this gate exists to check.
- */
-function holdsScope(req: ScopedRequest, required: ApiKeyScope[]): boolean {
-  if (!req.apiKeyInfo) return true;
-  const held = req.apiKeyInfo.scopes ?? [];
-  const { staged } = parseStagedScopes(process.env[SCOPE_STAGING_ENV_VAR]);
-  return decideScopeGate(required, held, staged).outcome !== 'deny';
-}
-
-function assertScope(req: ScopedRequest, required: ApiKeyScope[], message: string): void {
-  if (!holdsScope(req, required)) throw new ForbiddenError(message);
-}
-
 /**
  * Non-throwing read-scope check for a door whose data-lake reach is a fallback rather than its
  * purpose (loadAccessibleFabFile): a key without datalake:read keeps the door but not the lake.
  */
 export function holdsDataLakeReadScope(req: ScopedRequest): boolean {
-  return holdsScope(req, DATA_LAKE_READ_SCOPES);
+  return holdsApiKeyScope(req, DATA_LAKE_READ_SCOPES);
 }
 
 /**
@@ -111,11 +81,15 @@ export function dataLakeToolsDeniedFor(req: ScopedRequest): string[] {
 }
 
 export function assertDataLakeWriteScope(req: ScopedRequest): void {
-  assertScope(req, DATA_LAKE_WRITE_SCOPES, 'This API key is read-only for data lakes; datalake:write is required');
+  assertApiKeyScope(
+    req,
+    DATA_LAKE_WRITE_SCOPES,
+    'This API key is read-only for data lakes; datalake:write is required'
+  );
 }
 
 export function assertDataLakeShareScope(req: ScopedRequest): void {
-  assertScope(
+  assertApiKeyScope(
     req,
     DATA_LAKE_SHARE_SCOPES,
     'This API key cannot change who can reach a data lake; datalake:share is required'
@@ -153,7 +127,7 @@ export async function assertDataLakeTagWriteScope(
     return;
   }
   if (!newFile) return;
-  // assertDataLakeWriteScope below is a no-op for a JWT/browser caller (assertScope returns
+  // assertDataLakeWriteScope below is a no-op for a JWT/browser caller (assertApiKeyScope returns
   // early when req.apiKeyInfo is absent), so skip the DB round-trip entirely when it can only
   // ever be thrown away - this path runs on every colon-tagged upload, API key or not.
   if (!req.apiKeyInfo) return;

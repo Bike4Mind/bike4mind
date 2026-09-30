@@ -57,7 +57,7 @@ const resolveReprocessableFabFile = async (
   // behaviour: this route is otherwise scope-less, and declaring a lake gate on the route would 403
   // every file-scoped key that reprocesses its own file. Without it, a key deliberately minted
   // without `datalake:write` could do through this door exactly what /api/data-lakes/:id/rechunk
-  // refuses it. No-op for a browser caller - assertScope returns early when there is no apiKeyInfo.
+  // refuses it. No-op for a browser caller - assertApiKeyScope returns early when there is no apiKeyInfo.
   assertDataLakeWriteScope(req);
 
   // Throws (400) when the caller cannot rebuild the named lake. Not folded into the 404 below: the
