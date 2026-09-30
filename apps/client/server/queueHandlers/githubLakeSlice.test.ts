@@ -284,6 +284,14 @@ describe('runGitHubLakeSlice', () => {
     expect(h.ingest).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the stored copy of a file that grew past the size cap instead of removing it', async () => {
+    tree(blob('grew.md', 's1-new', 2 * 1024 * 1024));
+    h.findByGitHubConnectionIdInDataLake.mockResolvedValue([stored('grew', 'grew.md', 's1-old')]);
+    await runGitHubLakeSlice(input());
+    expect(h.retire).not.toHaveBeenCalled();
+    expect(h.ingest).not.toHaveBeenCalled();
+  });
+
   it('logs oversized files but creates no batch, claim check, or skip record when there is no other sync work', async () => {
     tree(blob('big1.md', 's1', 2 * 1024 * 1024), blob('big2.md', 's2', 3 * 1024 * 1024));
     await expect(runGitHubLakeSlice(input())).resolves.toEqual({ kind: 'done', batchId: null, transientSkips: 0 });

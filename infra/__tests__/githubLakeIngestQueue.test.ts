@@ -35,6 +35,17 @@ describe('githubLakeIngestQueue mirrors the Drive ingest queue', () => {
     expect(sub).toMatch(/SINGLE_RECORD_BATCH\s*$/);
   });
 
+  it('keeps the visibility timeout above the handler timeout, whatever the two are tuned to', () => {
+    const minutes = (source: string, key: string) => {
+      const match = source.match(new RegExp(`${key}:\\s*'(\\d+) minutes'`));
+      expect(match, `${key} in minutes`).not.toBeNull();
+      return Number(match?.[1]);
+    };
+    const queue = cut(QUEUES, "const githubLakeIngestQueue = new sst.aws.Queue('githubLakeIngestQueue'", '\n});');
+    const sub = cut(QUEUES, 'const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(', '\n);');
+    expect(minutes(queue, 'visibilityTimeout')).toBeGreaterThan(minutes(sub, 'timeout'));
+  });
+
   it('alarms on its DLQ', () => {
     expect(read('infra/dlqAlarms.ts')).toMatch(
       /sourceQueue:\s*'githubLakeIngestQueue',\s*queue:\s*githubLakeIngestQueueDLQ/

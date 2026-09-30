@@ -107,7 +107,11 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
   }
 
   const existing = await fabFileRepository.findByGitHubConnectionIdInDataLake(connection.id, lake.datalakeTag);
-  const diff = diffGitHubLakeTree(candidates, existing);
+  const diff = diffGitHubLakeTree(
+    candidates,
+    existing,
+    oversized.map(entry => entry.path)
+  );
 
   // A settled batch or one from another lake is not adopted; the chain starts a fresh one.
   const adoptedBatch = resumeBatchId

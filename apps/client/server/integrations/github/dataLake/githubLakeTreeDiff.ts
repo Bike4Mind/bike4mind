@@ -14,9 +14,15 @@ export type GitHubLakeTreeDiff<T extends GitHubLakeStoredCopy> = {
   duplicates: { keep: T; retire: T[] }[];
 };
 
+/**
+ * `retainedPaths` are paths still in the tree that failed a size/content gate this run (e.g. a file
+ * that grew past the size cap). Their stored copy is kept, neither removed nor re-ingested, matching
+ * Drive's keep-the-stale-copy rule: removing it would evict a working lake member with no replacement.
+ */
 export function diffGitHubLakeTree<T extends GitHubLakeStoredCopy>(
   candidates: readonly GitHubLakeCandidate[],
-  stored: readonly T[]
+  stored: readonly T[],
+  retainedPaths: Iterable<string> = []
 ): GitHubLakeTreeDiff<T> {
   const copiesByPath = new Map<string, T[]>();
   for (const copy of stored) {
@@ -46,8 +52,9 @@ export function diffGitHubLakeTree<T extends GitHubLakeStoredCopy>(
     if (copies[0].githubBlobSha !== candidate.sha) diff.changed.push({ candidate, prior: copies[0] });
     if (copies.length > 1) diff.duplicates.push({ keep: copies[0], retire: copies.slice(1) });
   }
+  const retained = new Set(retainedPaths);
   for (const [githubPath, copies] of copiesByPath) {
-    if (!inTree.has(githubPath)) diff.removed.push(...copies);
+    if (!inTree.has(githubPath) && !retained.has(githubPath)) diff.removed.push(...copies);
   }
   return diff;
 }

@@ -273,11 +273,12 @@ describe('githubLakeIngest end to end', () => {
       await FabFile.countDocuments({ githubConnectionId: connectionId }).setOptions({ includeDeleted: true })
     ).toBe(0);
 
-    const { id: reconnectedId } = await connect(lakeId, userId);
-    await run({ connectionId: reconnectedId });
+    // Delete upstream while disconnected: the race the purge closes is a file that vanishes in the gap,
+    // which the reconnect's first sync can no longer see to retire.
     setRepo([['src/index.ts', 'export const a = 1;\n']]);
     h.headSha.value = 'commit-2';
-    await run({ connectionId: reconnectedId, manual: true });
+    const { id: reconnectedId } = await connect(lakeId, userId);
+    await run({ connectionId: reconnectedId });
 
     const live = await FabFile.find({ tags: { $elemMatch: { name: datalakeTag } }, archivedAt: null });
     expect(live.map(f => [f.githubPath, f.githubConnectionId])).toEqual([['src/index.ts', reconnectedId]]);

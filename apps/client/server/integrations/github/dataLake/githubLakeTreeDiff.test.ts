@@ -62,4 +62,15 @@ describe('diffGitHubLakeTree', () => {
     expect(diff.duplicates).toEqual([]);
     expect(diff.removed).toEqual([]);
   });
+
+  it('keeps a retained (still-in-tree but gated) path out of removed without re-ingesting it', () => {
+    const diff = diffGitHubLakeTree(
+      [candidate('small.md', 's1')],
+      [copy('a', 'small.md', 's1'), copy('b', 'grew.md', 's2'), copy('c', 'gone.md', 's3')],
+      ['grew.md']
+    );
+    expect(diff.removed).toEqual([copy('c', 'gone.md', 's3')]);
+    expect(diff.adds).toEqual([]);
+    expect(diff.changed).toEqual([]);
+  });
 });
