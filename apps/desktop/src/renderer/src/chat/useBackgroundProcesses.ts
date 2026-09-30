@@ -13,6 +13,8 @@ export interface BackgroundProcessesController {
   processes: BackgroundProcessView[];
   running: number;
   stop: (processId: string) => void;
+  /** Drop the ended ones from this window's list. Kills nothing; see `clearFinished` below. */
+  clearFinished: () => void;
 }
 
 /**
@@ -84,5 +86,23 @@ export function useBackgroundProcesses(sessionId: string | null): BackgroundProc
     [sessionId]
   );
 
-  return { processes, running: processes.filter(entry => entry.status === 'running').length, stop };
+  /**
+   * Clear the finished list.
+   *
+   * A view-only discard: main is not told, and nothing is signalled. The filter is on status
+   * rather than on a set of ids the panel chose, so a task that is still running cannot be
+   * dropped by a click that raced its own exit - the one way this control could ever lose
+   * sight of a live process. Reopening the conversation asks main for the list again, so a
+   * process that outlived the clear comes back.
+   */
+  const clearFinished = useCallback(() => {
+    setProcesses(current => current.filter(entry => entry.status === 'running'));
+  }, []);
+
+  return {
+    processes,
+    running: processes.filter(entry => entry.status === 'running').length,
+    stop,
+    clearFinished,
+  };
 }
