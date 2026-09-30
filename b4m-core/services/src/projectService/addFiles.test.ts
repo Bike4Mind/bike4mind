@@ -66,13 +66,12 @@ describe('projectService - addFiles', () => {
 
     expect(result).toEqual(mockProject);
 
-    expect(mockProjectRepo.update).toHaveBeenCalledTimes(1);
-    expect((mockProjectRepo.update as Mock).mock.calls[0][0]).toStrictEqual({
-      id: projectId,
-      fileIds: [...existingFileIds, ...fileIds],
-      updatedAt: expect.any(Date),
-    });
-    expect((mockProjectRepo.update as Mock).mock.calls[0][1]).toBeUndefined();
+    expect(mockProjectRepo.update).not.toHaveBeenCalled();
+    expect(mockProjectRepo.updateWithUpdateAccess).toHaveBeenCalledTimes(1);
+    expect((mockProjectRepo.updateWithUpdateAccess as Mock).mock.calls[0]).toStrictEqual([
+      mockUser,
+      { id: projectId, fileIds: [...existingFileIds, ...fileIds], updatedAt: expect.any(Date) },
+    ]);
 
     expect(mockFabFileRepo.update).toHaveBeenCalledTimes(fileIds.length);
     fileIds.forEach((id, i) => {
@@ -124,5 +123,6 @@ describe('projectService - addFiles', () => {
     expect(mockProjectRepo.shareable.findUpdateAccessById).not.toHaveBeenCalled();
     expect(mockFabFileRepo.shareable.findAllAccessibleByIds).not.toHaveBeenCalled();
     expect(mockProjectRepo.update).not.toHaveBeenCalled();
+    expect(mockProjectRepo.updateWithUpdateAccess).not.toHaveBeenCalled();
   });
 });
