@@ -3,9 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
+import { ChatModels } from '@bike4mind/common';
 import { isTurnBudgetStop, type ChatStreamEvent } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService, type ChatServiceDeps } from './ChatService';
+import type { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
@@ -29,6 +31,17 @@ describe('ChatService tool loop', () => {
   function build(turnLimits?: ChatServiceDeps['turnLimits']): ChatService {
     return new ChatService({
       store,
+      models: {
+        list: async () => ({
+          models: [
+            { id: 'test-model', name: 'Test' },
+            { id: ChatModels.CLAUDE_5_SONNET, name: 'Sonnet' },
+            { id: ChatModels.CLAUDE_4_5_SONNET, name: 'Older Sonnet' },
+            { id: ChatModels.CLAUDE_5_OPUS, name: 'Opus' },
+          ],
+        }),
+        cached: () => [],
+      } as unknown as ModelCatalog,
       access: { list: async () => [root] } as unknown as AccessStore,
       logger: { debug: vi.fn(), warn: vi.fn() },
       ...(turnLimits ? { turnLimits } : {}),
@@ -89,6 +102,39 @@ describe('ChatService tool loop', () => {
       'bash_kill',
       'explore',
     ]);
+  });
+
+  describe('explore gating', () => {
+    async function declaredFor(model: string): Promise<{ names: string[]; system: string }> {
+      const { id } = await service.createSession();
+      await service.setSessionModel(id, model);
+      await service.send(id, 'hi');
+      await firstRequest();
+      const request = post.mock.calls[0][1];
+      return {
+        names: request.options.tools.map((entry: { toolSchema: { name: string } }) => entry.toolSchema.name),
+        system: request.messages[0].content,
+      };
+    }
+
+    it('withholds explore and its prompt lines from an Opus session', async () => {
+      const { names, system } = await declaredFor(ChatModels.CLAUDE_5_OPUS);
+      expect(names).not.toContain('explore');
+      expect(names).toContain('file_read');
+      expect(system).not.toMatch(/explore/);
+    });
+
+    it('offers explore, and says so, to a smaller session model', async () => {
+      const { names, system } = await declaredFor(ChatModels.CLAUDE_4_5_SONNET);
+      expect(names).toContain('explore');
+      expect(system).toContain('call explore instead');
+    });
+
+    it('withholds explore when the explore model would be the session model', async () => {
+      const { names, system } = await declaredFor(ChatModels.CLAUDE_5_SONNET);
+      expect(names).not.toContain('explore');
+      expect(system).not.toMatch(/explore/);
+    });
   });
 
   it('names the granted roots so the model looks them up instead of guessing a path', async () => {

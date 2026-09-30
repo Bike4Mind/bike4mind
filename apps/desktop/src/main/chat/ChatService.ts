@@ -52,7 +52,7 @@ import {
 } from './completions';
 import { addUsage, foldUsage } from './streamEvents';
 import { findStaleResults, historyRounds, toolResultContent } from './contextPruning';
-import { buildExploreContext } from './explore';
+import { buildExploreContext, shouldOfferExplore } from './explore';
 import { MediaApiClient } from './media/MediaApiClient';
 import type { MediaStore } from './media/MediaStore';
 import type { MessageQueue } from './MessageQueue';
@@ -1154,7 +1154,7 @@ export class ChatService {
       const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
       const maxTokens = catalog?.models.find(option => option.id === session.model)?.maxOutputTokens;
       const explore =
-        roots.length > 0
+        roots.length > 0 && shouldOfferExplore(catalog?.models ?? [], session.model)
           ? buildExploreContext({
               axios: api.getAxiosInstance(),
               endpoint: serverConfig.endpoint,
@@ -1186,6 +1186,7 @@ export class ChatService {
           roots,
           !!media,
           !!host,
+          !!explore,
           this.deps.mcp?.connectedServerNames() ?? [],
           session.project,
           this.deps.dependencies?.promptLines(session.id) ?? [],
@@ -2368,6 +2369,7 @@ function buildSystemMessage(
   roots: readonly string[],
   media: boolean,
   host: boolean,
+  explore: boolean,
   mcpServers: readonly string[],
   project?: ChatProject,
   dependencyLines: readonly string[] = [],
@@ -2418,12 +2420,18 @@ function buildSystemMessage(
       'reads into one reply instead of one per turn, and do not re-read lines you already have.',
       'An older file_read result may show as a [stale: ...] placeholder once the file changed or',
       'was re-read later; read it again if you still need it.',
-      'For open-ended exploration across many files, call explore instead - a faster read-only',
-      'sub-agent that returns a report - several in parallel for separate questions. Say what you',
-      'mean to build so its report ends with the edit points. When you already know the file or',
-      'symbol, use grep_search and file_read directly.',
-      'Treat an explore report as already read: do not re-read ranges it quotes, read only what it',
-      'lacks, and file_edit can match against its quoted text directly.',
+      'file_read returns 400 lines per call unless you pass a limit; when a file is longer it ends',
+      'with the offset to continue from, so read the rest only if you need it.',
+      ...(explore
+        ? [
+            'For open-ended exploration across many files, call explore instead - a faster read-only',
+            'sub-agent that returns a report - several in parallel for separate questions. Say what you',
+            'mean to build so its report ends with the edit points. When you already know the file or',
+            'symbol, use grep_search and file_read directly.',
+            'Treat an explore report as already read: do not re-read ranges it quotes, read only what it',
+            'lacks, and file_edit can match against its quoted text directly.',
+          ]
+        : []),
       'Running a command needs the user to approve it first, and they see the exact command, so',
       'prefer one clear command over several speculative ones. If they decline, accept it and ask',
       'what they would like instead rather than trying a variation of the same command.',

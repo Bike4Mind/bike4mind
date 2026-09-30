@@ -27,7 +27,7 @@ function wholeRead(path: string, chars: number): ChatToolCall {
 }
 
 function rangeRead(path: string, first: number, last: number, chars: number): ChatToolCall {
-  const trailer = `[Lines ${first}-${last} of 900. Continue with offset ${last + 1}.]`;
+  const trailer = `[Lines ${first}-${last} of 900. Continue with offset ${last + 1}. grep_search with context is usually cheaper than paging to find a spot.]`;
   return call(
     'file_read',
     { path, offset: first, limit: last - first + 1 },
