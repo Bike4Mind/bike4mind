@@ -66,6 +66,21 @@ describe('BackgroundProcessRegistry', () => {
     expect(output.join('')).toContain(marker);
   }, 20_000);
 
+  it('runs an unsandboxed command with the env overrides', async () => {
+    const info = await registry.start({
+      sessionId: 'session-a',
+      command: 'echo "$B4M_TEST_VALUE"',
+      cwd: root,
+      roots: [],
+      protectedPaths: [],
+      unsandboxed: { env: { B4M_TEST_VALUE: 'from-override' } },
+    });
+    await registry.settle(info.id, 3_000);
+    const read = registry.readForModel(info.id, 'session-a', 5_000);
+    expect(read?.text).toContain('from-override');
+    expect(read?.info.status).toBe('exited');
+  }, 20_000);
+
   it('hands the model only new output on a second read', async () => {
     const info = await start('echo one; sleep 0.4; echo two; sleep 20');
     await registry.settle(info.id, 1_500);
