@@ -332,7 +332,7 @@ export async function bundleHelpContent(opts: BundleOptions = {}): Promise<numbe
  * here rather than in bundleHelpContent so importing that function never touches the
  * caller's exit status.
  */
-export async function main(opts: BundleOptions = {}): Promise<void> {
+export async function runBundleCli(opts: BundleOptions = {}): Promise<void> {
   const errorCount = await bundleHelpContent(opts);
   if (errorCount > 0) {
     console.error(`Help content bundle finished with ${errorCount} error(s); failing the build.`);
@@ -342,7 +342,7 @@ export async function main(opts: BundleOptions = {}): Promise<void> {
 
 // Only run when invoked directly (not when imported by tests)
 if (isDirectInvocation(import.meta.url)) {
-  main().catch(error => {
+  runBundleCli().catch(error => {
     console.error('Failed to bundle help content:', error);
     process.exit(1);
   });
