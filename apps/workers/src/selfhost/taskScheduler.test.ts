@@ -171,7 +171,13 @@ describe.each(adapters)('$name scheduled research adapter', ({ run }) => {
     await run();
     expect(schedule.status).toBe(TaskScheduleStatus.FAILED);
     expect(schedule.statusFailedReason).toBe('broker unavailable');
-    expect(mocks.update).toHaveBeenCalledWith(schedule);
+    expect(mocks.update).toHaveBeenCalledWith({
+      id: schedule.id,
+      status: TaskScheduleStatus.FAILED,
+      expireAt: schedule.expireAt,
+      statusFailedAt: schedule.statusFailedAt,
+      statusFailedReason: 'broker unavailable',
+    });
     expect(mocks.research).not.toHaveBeenCalled();
   });
 });
