@@ -54,7 +54,7 @@ vi.mock('@aws-sdk/client-cloudwatch', () => ({
   StandardUnit: { Count: 'Count' },
 }));
 
-import { handler } from './lakeHealthSweep';
+import { handler, runLakeHealthSweep } from './lakeHealthSweep';
 
 const lake = (overrides: Record<string, unknown> = {}) => ({
   id: 'lake-1',
@@ -96,6 +96,13 @@ describe('lakeHealthSweep cron', () => {
     mockComputeLakeHealth.mockResolvedValue(healthResult());
     mockUpsertSnapshot.mockResolvedValue(undefined);
     mockMarkHealthChecked.mockResolvedValue(undefined);
+  });
+
+  it('runs local snapshots without emitting AWS metrics', async () => {
+    mockFindDue.mockResolvedValueOnce([lake()]);
+    await runLakeHealthSweep({ emitMetrics: false });
+    expect(mockUpsertSnapshot).toHaveBeenCalledTimes(1);
+    expect(mockEmitMetric).not.toHaveBeenCalled();
   });
 
   it('reports zero scanned when there are no active lakes', async () => {
