@@ -92,6 +92,13 @@ describe('oauthFlowCookie', () => {
     expect(cookies[0]).toMatch(new RegExp(`${STATE_NONCE_COOKIE_NAME}=; .*Max-Age=0`));
   });
 
+  it('does not touch cookies once headers are already sent', () => {
+    const { res, cookies } = makeRes();
+    (res as { headersSent: boolean }).headersSent = true;
+    clearStateNonce(res);
+    expect(cookies).toEqual([]);
+  });
+
   it('round-trips the PKCE verifier through an HttpOnly cookie', () => {
     const { res, cookies } = makeRes();
     setPkceVerifierCookie(res, 'the-code-verifier');

@@ -31,12 +31,14 @@ interface SlackStatePayload extends BaseStatePayload {
   installOptions: InstallURLOptions;
 }
 
-/**
- * Custom state store for serverless environments
- * Uses signed JWT instead of cookies (which don't persist across Lambda invocations)
- * This is the industry-standard approach for stateless OAuth in serverless architectures
- */
-const createStateStore = (): StateStore => {
+/** Browser-binding nonce hashes: mint embeds nonceHash, verify requires expectedNonceHash (null fails closed). */
+interface StateBinding {
+  nonceHash?: string;
+  expectedNonceHash?: string | null;
+}
+
+/** Stateless state store: install options are signed into a JWT instead of a server-side session. */
+const createStateStore = (binding: StateBinding): StateStore => {
   // Validate JWT_SECRET is configured at initialization time
   const { jwtStateStore } = getSlackDeps();
   jwtStateStore.validateJwtSecret();
@@ -48,11 +50,11 @@ const createStateStore = (): StateStore => {
       // Sign install options into a JWT (expires in 5 minutes)
       // Uses shared JWT utilities with algorithm pinning and OIDC claims
       const { jwtStateStore } = getSlackDeps();
-      return jwtStateStore.createStateToken(options, { installOptions: installUrlOptions });
+      return jwtStateStore.createStateToken(options, { installOptions: installUrlOptions }, binding.nonceHash);
     },
     verifyStateParam: async (_date, state) => {
       const { jwtStateStore } = getSlackDeps();
-      const result = jwtStateStore.verifyStateToken<SlackStatePayload>(state, options);
+      const result = jwtStateStore.verifyStateToken<SlackStatePayload>(state, options, binding.expectedNonceHash);
 
       if (result.valid) {
         return result.payload.installOptions;
@@ -67,14 +69,15 @@ const createStateStore = (): StateStore => {
 
 // Create InstallProvider instance with metadata callback
 export async function createInstallProvider(
-  workspaceIdOrCallback?: string | ((metadata: InstallationMetadata) => void)
+  workspaceIdOrCallback: string | ((metadata: InstallationMetadata) => void),
+  binding: StateBinding
 ): Promise<InstallProvider> {
   let workspace;
   let onInstallComplete: ((metadata: InstallationMetadata) => void) | undefined;
 
   const { slackDevWorkspaceRepository } = getSlackDb() as any;
 
-  // Handle overloaded parameters
+  // workspaceId (authorize) or onInstallComplete callback (OAuth callback)
   if (typeof workspaceIdOrCallback === 'string') {
     // workspaceId provided
     workspace = await slackDevWorkspaceRepository.findByIdWithCredentials(workspaceIdOrCallback);
@@ -82,7 +85,7 @@ export async function createInstallProvider(
       throw new Error(`Workspace not found: ${workspaceIdOrCallback}`);
     }
   } else {
-    // Callback provided or no params - use first active workspace (backward compatibility)
+    // Callback case: the callback carries no workspaceId, so use the first active workspace
     onInstallComplete = workspaceIdOrCallback;
     const workspaces = await slackDevWorkspaceRepository.findAllActiveWithCredentials();
     if (workspaces.length === 0) {
@@ -104,11 +107,9 @@ export async function createInstallProvider(
   return new InstallProvider({
     clientId,
     clientSecret,
-    stateStore: createStateStore(),
+    stateStore: createStateStore(binding),
     stateVerification: true,
-    // legacyStateVerification is REQUIRED to use custom stateStore in @slack/oauth v3
-    // Without it, the library defaults to cookie-based verification which doesn't work in serverless
-    // Our JWT-based state store provides proper CSRF protection via signed tokens
+    // Required in @slack/oauth v3 for a custom stateStore; browser binding is our nonce hash in the signed state (apps/client/server/auth/oauthFlowCookie.ts).
     legacyStateVerification: true,
     installationStore: {
       // Store installation in database

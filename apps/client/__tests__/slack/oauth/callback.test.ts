@@ -19,15 +19,19 @@ vi.mock('@bike4mind/observability', () => {
 
 // Mock the installer module
 const mockHandleCallback = vi.fn();
+const mockBinding = vi.fn();
+let createProviderError: Error | undefined;
 let onInstallCompleteCallback:
-  | ((metadata: { isReinstall: boolean; teamName: string; teamId: string }) => void)
-  | undefined;
+  ((metadata: { isReinstall: boolean; teamName: string; teamId: string }) => void) | undefined;
 
 vi.mock('@bike4mind/slack', () => ({
   createInstallProvider: (
-    onInstallComplete?: (metadata: { isReinstall: boolean; teamName: string; teamId: string }) => void
+    onInstallComplete?: (metadata: { isReinstall: boolean; teamName: string; teamId: string }) => void,
+    binding?: { expectedNonceHash?: string }
   ) => {
     onInstallCompleteCallback = onInstallComplete;
+    mockBinding(binding);
+    if (createProviderError) return Promise.reject(createProviderError);
     return {
       handleCallback: mockHandleCallback,
     };
@@ -35,6 +39,10 @@ vi.mock('@bike4mind/slack', () => ({
 }));
 
 import handler from '@pages/api/slack/oauth/callback';
+import { readStateNonceHash, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+
+const NONCE_COOKIE = 'b4m_oauth_nonce_slack-app-install=cookie-value';
+const COOKIE_HASH = readStateNonceHash({ headers: { cookie: NONCE_COOKIE } }, NONCE_SLOT.slackAppInstall);
 
 describe('Slack OAuth Callback', () => {
   let req: Partial<NextApiRequest>;
@@ -44,9 +52,17 @@ describe('Slack OAuth Callback', () => {
     req = {
       method: 'GET',
       query: {},
+      headers: { cookie: NONCE_COOKIE },
     };
 
+    createProviderError = undefined;
+    const headers: Record<string, unknown> = {};
     res = {
+      getHeader: vi.fn((name: string) => headers[name]),
+      setHeader: vi.fn((name: string, value: unknown) => {
+        headers[name] = value;
+        return res as NextApiResponse;
+      }),
       status: vi.fn().mockReturnThis(),
       json: vi.fn().mockReturnThis(),
       redirect: vi.fn().mockReturnThis(),
@@ -206,6 +222,57 @@ describe('Slack OAuth Callback', () => {
       await handler(req as NextApiRequest, res as NextApiResponse);
 
       expect(res.redirect).toHaveBeenCalledWith('/integrations/slack/success?workspace=your+workspace');
+    });
+  });
+
+  describe('Browser binding', () => {
+    beforeEach(() => {
+      req.query = { code: 'c', state: 's' };
+    });
+
+    const setCookies = () => [(res.getHeader as ReturnType<typeof vi.fn>)('Set-Cookie')].flat().map(String);
+    const expectNonceBurnedLast = () =>
+      expect(setCookies().at(-1)).toMatch(/^b4m_oauth_nonce_slack-app-install=;.*Max-Age=0/);
+
+    it.each([
+      ['the hash of the install-slot cookie', NONCE_COOKIE, COOKIE_HASH],
+      ['null (never undefined) when the cookie is absent', undefined, null],
+    ])('passes %s as the expected nonce hash', async (_label, cookie, expected) => {
+      req.headers = { cookie };
+      mockHandleCallback.mockResolvedValue(undefined);
+
+      await handler(req as NextApiRequest, res as NextApiResponse);
+
+      expect(mockBinding).toHaveBeenCalledWith({ expectedNonceHash: expected });
+    });
+
+    it('burns the nonce and redirects to the error page when handleCallback rejects', async () => {
+      mockHandleCallback.mockRejectedValue(new Error('Invalid or expired state parameter'));
+
+      await handler(req as NextApiRequest, res as NextApiResponse);
+
+      expectNonceBurnedLast();
+      expect(res.redirect).toHaveBeenCalledWith('/integrations/slack/error?reason=invalid_params');
+    });
+
+    it('burns the nonce when the install provider cannot be created', async () => {
+      createProviderError = new Error('No Slack workspaces configured');
+
+      await handler(req as NextApiRequest, res as NextApiResponse);
+
+      expectNonceBurnedLast();
+      expect(mockHandleCallback).not.toHaveBeenCalled();
+    });
+
+    it('keeps the nonce expiry as the final Set-Cookie even when Bolt overwrites the header', async () => {
+      mockHandleCallback.mockImplementation(async () => {
+        res.setHeader!('Set-Cookie', 'slack-app-oauth-state=deleted');
+      });
+
+      await handler(req as NextApiRequest, res as NextApiResponse);
+
+      expect(setCookies()).toHaveLength(2);
+      expectNonceBurnedLast();
     });
   });
 });

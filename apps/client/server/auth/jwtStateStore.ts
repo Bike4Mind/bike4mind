@@ -132,7 +132,10 @@ export function verifyStateToken<T extends BaseStatePayload>(
     // request with no cookie (expectedNonceHash === null), never matches.
     if (expectedNonceHash !== undefined) {
       if (typeof decoded.nh !== 'string' || decoded.nh.length === 0 || decoded.nh !== expectedNonceHash) {
-        Logger.warn('JWT state nonce mismatch', { hasNonce: typeof decoded.nh === 'string' });
+        Logger.warn('JWT state nonce mismatch', {
+          hasNonce: typeof decoded.nh === 'string',
+          hasCookie: expectedNonceHash !== null,
+        });
         return { valid: false, reason: 'invalid', message: 'Invalid authorization state.' };
       }
     }
