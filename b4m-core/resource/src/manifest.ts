@@ -22,6 +22,7 @@ export const DEFAULT_MANIFEST = {
   GITHUB_LAKE_APP_ID: { kind: 'secret', optional: true },
   GITHUB_LAKE_APP_PRIVATE_KEY: { kind: 'secret', optional: true },
   GITHUB_LAKE_APP_SLUG: { kind: 'secret', optional: true },
+  GITHUB_LAKE_APP_WEBHOOK_SECRET: { kind: 'secret', optional: true },
   GITHUB_ZAP_REF: { kind: 'secret', optional: true },
   GOOGLE_CLIENT_ID: { kind: 'secret', optional: true },
   GOOGLE_CLIENT_SECRET: { kind: 'secret', optional: true },
