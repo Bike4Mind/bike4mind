@@ -21,8 +21,10 @@ const GRANTS = [
 
 const makeWrapper = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return ({ children }: { children: React.ReactNode }) =>
-    React.createElement(QueryClientProvider, { client: queryClient }, children);
+  function Wrapper({ children }: { children: React.ReactNode }) {
+    return React.createElement(QueryClientProvider, { client: queryClient }, children);
+  }
+  return Wrapper;
 };
 
 describe('useOAuthGrants', () => {
@@ -70,11 +72,12 @@ describe('useRevokeOAuthGrant', () => {
   it('invalidates the oauth-grants query on success', async () => {
     mockDelete.mockResolvedValue({ data: { revoked: true, clientId: 'client-a' } });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const wrapper = ({ children }: { children: React.ReactNode }) =>
-      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    function Wrapper({ children }: { children: React.ReactNode }) {
+      return React.createElement(QueryClientProvider, { client: queryClient }, children);
+    }
 
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
-    const { result } = renderHook(() => useRevokeOAuthGrant(), { wrapper });
+    const { result } = renderHook(() => useRevokeOAuthGrant(), { wrapper: Wrapper });
 
     await act(async () => {
       result.current.mutate({ clientId: 'client-a' });
