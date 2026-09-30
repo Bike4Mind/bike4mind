@@ -80,6 +80,23 @@ describe('compiling a diagram', () => {
     for (const word of words) expect(drawnText(result.svg)).toContain(word);
   });
 
+  /**
+   * Mermaid ships `width="100%"` and keeps the real width in a max-width style, which leaves
+   * an <img> with no intrinsic size to clamp - the diagram then stretches to fill the card's
+   * cap instead of being limited by it.
+   */
+  it('gives the image a pixel size rather than a percentage', async () => {
+    const result = await renderMermaidDiagram(FLOWCHART, 'light');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const root = /<svg\b[^>]*>/.exec(result.svg)![0];
+    expect(root).not.toContain('width="100%"');
+    expect(root).not.toContain('max-width');
+    expect(root).toMatch(/width="[\d.]+"/);
+    expect(root).toMatch(/height="[\d.]+"/);
+  });
+
   it('follows the appearance, so a dark diagram is not painted for a light one', async () => {
     const [light, dark] = await Promise.all([
       renderMermaidDiagram(FLOWCHART, 'light'),
