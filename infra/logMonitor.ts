@@ -209,10 +209,16 @@ let logSubscriptions: $util.Output<aws.cloudwatch.LogSubscriptionFilter[]> = $ut
 // Do not create log subscriptions in local environments
 if (!$dev) {
   // Additional filters that do not use the default Lambda ERROR pattern: a second
-  // "kills" filter on each AgentExecutor group (AWS allows at most 2 subscription
-  // filters per log group, and these two now use both) and the ChatCompletion Fargate
-  // group's JSON error filter.
+  // "kills" filter on the AgentExecutor groups and both sweep crons (AWS allows at most
+  // 2 subscription filters per log group, and these now use both) and the ChatCompletion
+  // Fargate group's JSON error filter.
   const agentExecutorLogGroup = agentExecutor.nodes.logGroup.apply(lg => lg?.name);
+  const questTimeoutSweepLogGroup = questTimeoutSweepCron.nodes.function.apply(fn =>
+    fn.nodes.logGroup.apply(lg => lg?.name)
+  );
+  const agentExecutionAbandonedSweepLogGroup = agentExecutionAbandonedSweepCron.nodes.function.apply(fn =>
+    fn.nodes.logGroup.apply(lg => lg?.name)
+  );
   const agentContinuationLogGroup = agentContinuationQueueSubscription.nodes.function.nodes.logGroup.apply(
     lg => lg?.name
   );
@@ -234,14 +240,24 @@ if (!$dev) {
     });
 
   const extraLogGroups = $util
-    .all([agentExecutorLogGroup, agentContinuationLogGroup, chatCompletionLogGroup])
-    .apply(([agentExecutorGroup, continuationGroup, chatCompletionGroup]) => {
+    .all([
+      agentExecutorLogGroup,
+      agentContinuationLogGroup,
+      questTimeoutSweepLogGroup,
+      agentExecutionAbandonedSweepLogGroup,
+    ])
+    .apply(([agentExecutorGroup, continuationGroup, questSweepGroup, abandonedSweepGroup]) => {
       const specs: LogSubscriptionSpec[] = [];
       if (agentExecutorGroup) specs.push({ logGroup: agentExecutorGroup, pattern: KILLS_PATTERN, suffix: 'kills' });
       if (continuationGroup) specs.push({ logGroup: continuationGroup, pattern: KILLS_PATTERN, suffix: 'kills' });
-      specs.push({ logGroup: chatCompletionGroup, pattern: FARGATE_ERROR_PATTERN, suffix: DEFAULT_ERROR_SUFFIX });
+      if (questSweepGroup) specs.push({ logGroup: questSweepGroup, pattern: KILLS_PATTERN, suffix: 'kills' });
+      if (abandonedSweepGroup) specs.push({ logGroup: abandonedSweepGroup, pattern: KILLS_PATTERN, suffix: 'kills' });
       return specs;
     });
+
+  const chatCompletionSubscriptions = chatCompletionLogGroup.apply(group =>
+    createLogSubscriptions([{ logGroup: group, pattern: FARGATE_ERROR_PATTERN, suffix: DEFAULT_ERROR_SUFFIX }])
+  );
 
   // Combine all log groups when ready - simplified approach
   const allLogGroups = $util.all([
@@ -252,7 +268,7 @@ if (!$dev) {
     extraLogGroups,
   ]);
 
-  logSubscriptions = allLogGroups.apply(([individual, appFilesBucket, fabFileBucket, webServer, extras]) => {
+  const sharedSubscriptions = allLogGroups.apply(([individual, appFilesBucket, fabFileBucket, webServer, extras]) => {
     // Flatten all log group names into a single array, filtering out undefined values
     const logGroups = [...individual, ...appFilesBucket, ...fabFileBucket, ...(webServer ? [webServer] : [])].filter(
       logGroupName => logGroupName !== undefined
@@ -266,6 +282,10 @@ if (!$dev) {
 
     return createLogSubscriptions([...defaultSpecs, ...extras]);
   });
+
+  logSubscriptions = $util
+    .all([sharedSubscriptions, chatCompletionSubscriptions])
+    .apply(([shared, chat]) => [...shared, ...chat]);
 }
 
 export { logHandler, logSubscriptions };

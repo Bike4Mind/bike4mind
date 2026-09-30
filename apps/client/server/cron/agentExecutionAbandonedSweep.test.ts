@@ -114,6 +114,20 @@ describe('agentExecutionAbandonedSweep - handler', () => {
     );
   });
 
+  it('does not log at error level when every candidate settled before marking', async () => {
+    const { agentExecutionRepository } = await import('@bike4mind/database');
+    vi.mocked(agentExecutionRepository.markAbandoned).mockResolvedValueOnce([]);
+    staleIds.push('exec1');
+
+    await handler();
+
+    expect(mockLogger.error).not.toHaveBeenCalled();
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      '[AgentExecutionAbandonedSweep] Candidates settled before marking',
+      expect.objectContaining({ candidates: 1, marked: 0 })
+    );
+  });
+
   it('emits both the settled count and the failure signal', async () => {
     staleIds.push('exec1');
     fakeQuests.push({ id: 'q1', agentExecutionId: 'exec1', status: 'pending' });
