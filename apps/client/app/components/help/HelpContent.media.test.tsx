@@ -193,6 +193,28 @@ describe('help media rendering (public)', () => {
     expect(play).toHaveBeenCalledTimes(2);
   });
 
+  it('attaches a catch to play() so blocked autoplay is not an unhandled rejection', async () => {
+    // A real rejected promise with a spied catch: the component must chain onto it, otherwise a
+    // browser that blocks autoplay would surface an unhandled rejection.
+    const blocked = Promise.reject(new Error('autoplay blocked'));
+    const catchSpy = vi.spyOn(blocked, 'catch');
+    vi.mocked(HTMLMediaElement.prototype.play).mockReturnValue(blocked);
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+    renderMarkdown('![Slack setup demo](./media/slack-setup.mp4)');
+
+    const observer = MockIntersectionObserver.instances[0];
+    act(() => {
+      observer.callback(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        observer as unknown as IntersectionObserver
+      );
+    });
+
+    const video = await screen.findByTestId('help-video-player');
+    expect(catchSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('help-video-player')).toBe(video);
+  });
+
   it('renders a YouTube link as a privacy-preserving lazy embed', () => {
     renderMarkdown('![Enabling Research Mode](https://www.youtube.com/watch?v=dQw4w9WgXcQ)');
     const iframe = screen.getByTestId('help-youtube-iframe');
@@ -302,6 +324,11 @@ describe('help media rendering (admin)', () => {
     });
     await waitFor(() => {
       expect(video.getAttribute('src')).toBe('blob:mock-admin-media');
+    });
+    // Once srcless at mount, then again when the blob lands: the second call only happens
+    // because playableSrc is in the play effect's deps.
+    await waitFor(() => {
+      expect(vi.mocked(HTMLMediaElement.prototype.play)).toHaveBeenCalledTimes(2);
     });
   });
 
