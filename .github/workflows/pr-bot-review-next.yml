@@ -3,7 +3,8 @@ name: pr-bot-review-next
 # Canary for the org's reusable PR-review workflow in Bike4Mind/workflow-templates.
 # It runs beside `pr-bot-review.yml`, which stays the live bot until the cutover
 # replaces it with a stub like this one. Separate labels and a separate
-# concurrency group keep the two from touching each other's runs.
+# concurrency group keep the two from sharing a run. They do not protect the
+# live bot: it fires on every label, so a canary label cancels its in-flight run.
 #
 # `bot-review-next` reviews, `bot-review-fold-next` also folds. The reusable only
 # auto-removes `bot-review` / `bot-review-fold`, so remove a canary label by hand
@@ -22,7 +23,9 @@ permissions:
   id-token: write  # required by claude-code-action even when using anthropic_api_key
 
 concurrency:
-  group: pr-bot-review-next-${{ github.event.pull_request.number }}
+  # Workflow-level concurrency applies before the job `if:`, so every label joins
+  # a group. Non-canary labels get a group of their own and cancel nothing.
+  group: pr-bot-review-next-${{ github.event.pull_request.number }}-${{ (github.event.label.name == 'bot-review-next' || github.event.label.name == 'bot-review-fold-next') && 'canary' || github.run_id }}
   cancel-in-progress: ${{ github.event.label.name != 'bot-review-fold-next' }}
 
 jobs:
