@@ -28,8 +28,8 @@ const ADMIN_GATE = /requiredScopes:\s*\[\s*ApiKeyScope\.ADMIN\s*\]/;
 /**
  * `auth: false` means baseApi never installs the API-key chain (it installs
  * `apiKeyAuth(requiredScopes)` only when `auth` is truthy and not 'jwtOnly'), so a scope gate
- * here would be inert. These routes authenticate by shared-secret header or the emergency flow
- * instead. This list only shrinks; adding to it is a deliberate, reviewable edit.
+ * here would be inert. These routes authenticate by shared-secret header, the emergency flow, or
+ * a run-scoped token in the path instead. This list only shrinks; adding to it is a deliberate, reviewable edit.
  */
 const NO_API_KEY_AUTH = new Set<string>([
   'emergency-login.ts',
@@ -54,10 +54,15 @@ function routeFiles(dir: string): string[] {
 
 const files = routeFiles(ROUTES_DIR);
 const rel = (f: string) => path.relative(ROUTES_DIR, f).split(path.sep).join('/');
-// Strip line comments first so a commented-out gate (`// requiredScopes: [ApiKeyScope.ADMIN]`)
-// does not read as gated. The declaration is often inline in the baseApi options, so the
-// regex itself stays unanchored; removing comments is what prevents the false positive.
-const source = (f: string) => readFileSync(f, 'utf8').replace(/\/\/[^\n]*/g, '');
+// Strip comments and string literals first so a gate that only appears in one (`/* requiredScopes:
+// [ApiKeyScope.ADMIN] */`, `'requiredScopes: [...]'`) does not read as gated. The declaration is
+// often inline in the baseApi options, so the regex itself stays unanchored; stripping is what
+// prevents the false positive. A `//` inside a string can only over-strip, failing closed.
+const source = (f: string) =>
+  readFileSync(f, 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n]*/g, '')
+    .replace(/'[^'\n]*'|"[^"\n]*"|`[^`]*`/g, "''");
 const isGated = (f: string) => ADMIN_GATE.test(source(f));
 const declaresNoAuth = (f: string) => /\bauth:\s*false\b/.test(source(f));
 
