@@ -509,6 +509,7 @@ export const SettingKeySchema = z.enum([
   'HardwareComputeMaxUsdPerRun',
   'HardwareComputeMaxConcurrentRunsPerUser',
   'HardwareComputeMaxUsdPerUserPerDay',
+  'SimulatorComputeCreditsPerRound',
   'optiMaxToolCalls',
 
   // LIBREONCOLOGY SETTINGS
@@ -1813,6 +1814,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'HardwareComputeMaxUsdPerRun', order: 89 },
       { key: 'HardwareComputeMaxConcurrentRunsPerUser', order: 90 },
       { key: 'HardwareComputeMaxUsdPerUserPerDay', order: 91 },
+      { key: 'SimulatorComputeCreditsPerRound', order: 91.5 },
       { key: 'EnableQuestMaster', order: 92 },
       { key: 'EnableQuestMasterDefault', order: 93 },
       { key: 'EnableHearth', order: 94 },
@@ -4611,6 +4613,24 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 89,
+    dependsOn: 'EnableComputeSubmission',
+  }),
+  SimulatorComputeCreditsPerRound: makeNumberSetting({
+    key: 'SimulatorComputeCreditsPerRound',
+    name: 'Simulator Compute: Credits per round',
+    // One round is one container run, so it defaults to the flat per-run price of a classical
+    // compute job on the same backend.
+    defaultValue: 50,
+    min: 0,
+    max: 10_000,
+    description:
+      'Credits charged per round of a multi-round hybrid compute job on the simulator. Each round is a ' +
+      'separate container run: the whole run is reserved up front at this price times its round count, and ' +
+      'rounds that never run are refunded. The price is fixed per run when it is submitted, so a change here ' +
+      'only affects later submissions. Set to 0 to make simulator rounds free.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 90,
     dependsOn: 'EnableComputeSubmission',
   }),
   optiMaxToolCalls: makeNumberSetting({
