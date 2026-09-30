@@ -13,6 +13,7 @@ import { Logger } from '@bike4mind/observability';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import { ClaudeArtifactMimeTypes, type IUserDocument } from '@bike4mind/common';
 import { buildSharedTools, type ToolBuilderDeps, type ToolBuilderCallbacks } from './sharedToolBuilder';
+import type { ToolDefinition } from './tools/base/types';
 
 const stubResults = vi.hoisted(() => ({ dice: '' as unknown, chess: '' as unknown }));
 
@@ -206,5 +207,78 @@ describe('buildSharedTools: tool_result artifacts come only from the tools that 
 
     expect(result).toBe(value);
     expect(onArtifactExtracted).not.toHaveBeenCalled();
+  });
+});
+
+describe('buildSharedTools: an externalTools entry that declares artifactType', () => {
+  const HTML_ARTIFACT = '<artifact identifier="panel" type="text/html" title="Panel"><p>rows</p></artifact>';
+
+  const externalTool = (name: string, result: string, artifactType?: string): ToolDefinition => ({
+    name,
+    ...(artifactType ? { artifactType } : {}),
+    implementation: () => ({ toolFn: async () => result, toolSchema: stubSchema(name) }),
+  });
+
+  const build = (tool: ToolDefinition, options: Partial<BuildOptions> = {}) =>
+    buildSharedTools(deps, callbacks, {
+      enabledTools: [tool.name],
+      externalTools: { [tool.name]: tool },
+      ...options,
+    }) ?? [];
+
+  it('extracts its artifact and hands the declared type to the backend on the built tool', async () => {
+    const tool = externalTool('external_panel', `Here is the panel:\n${HTML_ARTIFACT}`, 'text/html');
+
+    const built = build(tool).find(t => t.toolSchema.name === 'external_panel');
+    await built?.toolFn({});
+
+    expect(built?.artifactType).toBe('text/html');
+    expect(extracted()).toEqual([
+      expect.objectContaining({
+        artifactType: 'text/html',
+        identifier: 'panel',
+        toolName: 'external_panel',
+        source: 'tool_result',
+      }),
+    ]);
+  });
+
+  it('extracts nothing from an external tool that declared no type', async () => {
+    const built = build(externalTool('external_panel', HTML_ARTIFACT)).find(
+      t => t.toolSchema.name === 'external_panel'
+    );
+    await built?.toolFn({});
+
+    expect(built?.artifactType).toBeUndefined();
+    expect(onArtifactExtracted).not.toHaveBeenCalled();
+  });
+
+  it('keeps the static pin when an external tool shadows a built-in emitter name', async () => {
+    const tool = externalTool('chess_engine', `${HTML_ARTIFACT}\n${CHESS_ARTIFACT}`, 'text/html');
+
+    await build(tool)
+      .find(t => t.toolSchema.name === 'chess_engine')
+      ?.toolFn({});
+
+    expect(extracted()).toEqual([
+      expect.objectContaining({ artifactType: ClaudeArtifactMimeTypes.CHESS, identifier: 'game-1' }),
+    ]);
+  });
+
+  it('drops an artifactType an MCP server entry carries', () => {
+    const mcpTool: { name: string } & ICompletionOptionTools = {
+      name: 'files__read',
+      toolFn: async () => HTML_ARTIFACT,
+      toolSchema: stubSchema('files__read'),
+      _isMcpTool: true,
+      artifactType: 'text/html',
+    };
+
+    const built = (
+      buildSharedTools(deps, callbacks, { enabledTools: [], mcpToolsByServer: { files: [mcpTool] } }) ?? []
+    ).find(t => t.toolSchema.name === 'files__read');
+
+    expect(built).toBeDefined();
+    expect(built?.artifactType).toBeUndefined();
   });
 });

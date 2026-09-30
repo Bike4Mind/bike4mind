@@ -105,6 +105,12 @@ export interface ICompletionOptionTools {
     strict?: boolean;
   };
   _isMcpTool?: boolean; // Flag to identify MCP tools (enables tool chaining for MCP only)
+  /**
+   * The artifact MIME type this tool's results may carry, exactly as its `<artifact type="...">`
+   * spells it. Set only from a trusted tool registration (services ToolDefinition), never by an
+   * MCP server. Built-in emitters are pinned in common TOOL_ARTIFACT_EMITTERS, which wins.
+   */
+  artifactType?: string;
 }
 
 export interface ICompletionOptions {

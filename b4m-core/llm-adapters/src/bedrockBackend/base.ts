@@ -22,7 +22,7 @@ import {
   ICompletionResponseChunk,
 } from '../backend';
 import { getCachingAdapter } from '../caching/adapters';
-import { handleToolResultStreaming, createRecursiveArtifactGuard } from '../toolStreamingHelper';
+import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from '../toolStreamingHelper';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from '../responseFormatHelpers';
 import {
   BedrockRuntimeClient,
@@ -648,11 +648,16 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 let thisToolHadArtifact = false;
 
                 // For tools that return artifacts (like recharts), stream the result directly
-                await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
-                  thisToolHadArtifact = true;
-                  if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
-                  await artifactGuard.emitArtifact(results, { ...buildCompletionInfo(), ...artifactInfo });
-                });
+                await handleToolResultStreaming(
+                  outcome.name,
+                  outcome.result,
+                  async (results, artifactInfo) => {
+                    thisToolHadArtifact = true;
+                    if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+                    await artifactGuard.emitArtifact(results, { ...buildCompletionInfo(), ...artifactInfo });
+                  },
+                  declaredArtifactType(options.tools, outcome.name)
+                );
 
                 // Strip artifact markup from every tool result, not only the ones that
                 // streamed, so the model never sees markup it could echo into its reply.
@@ -808,11 +813,16 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 let thisToolHadArtifact = false;
 
                 // For tools that return artifacts (like recharts), stream the result directly
-                await handleToolResultStreaming(name, result, async (results, artifactInfo) => {
-                  thisToolHadArtifact = true;
-                  if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
-                  await artifactGuard.emitArtifact(results, { ...buildCompletionInfo(), ...artifactInfo });
-                });
+                await handleToolResultStreaming(
+                  name,
+                  result,
+                  async (results, artifactInfo) => {
+                    thisToolHadArtifact = true;
+                    if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+                    await artifactGuard.emitArtifact(results, { ...buildCompletionInfo(), ...artifactInfo });
+                  },
+                  declaredArtifactType(options.tools, name)
+                );
 
                 // Strip artifact markup from every tool result, not only the ones that
                 // streamed, so the model never sees markup it could echo into its reply.

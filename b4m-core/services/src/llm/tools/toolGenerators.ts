@@ -113,10 +113,10 @@ export const generateTools = (
   };
 
   return Object.entries(tools).reduce(
-    (acc, [key, tool]) => ({
-      ...acc,
-      [key]: tool.implementation(context, config[key as LlmTools]),
-    }),
+    (acc, [key, tool]) => {
+      const built = tool.implementation(context, config[key as LlmTools]);
+      return { ...acc, [key]: tool.artifactType ? { ...built, artifactType: tool.artifactType } : built };
+    },
     {} as Record<LlmTools, ICompletionOptionTools>
   );
 };

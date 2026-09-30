@@ -359,5 +359,12 @@ export interface ToolContext {
 
 export interface ToolDefinition {
   name: string;
+  /**
+   * The artifact MIME type this tool's results carry, matching its `<artifact type="...">`
+   * exactly (e.g. `text/html`). Lets a tool supplied at runtime through `externalTools` emit
+   * an artifact; without it the markup is stripped. Built-ins are pinned in common
+   * TOOL_ARTIFACT_EMITTERS instead, which wins on a name clash (see resolveToolArtifactType).
+   */
+  artifactType?: string;
   implementation: (context: Omit<ToolContext, 'config'>, config: any) => ICompletionOptionTools;
 }
