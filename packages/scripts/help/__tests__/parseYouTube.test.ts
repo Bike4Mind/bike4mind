@@ -27,9 +27,19 @@ describe('parseYouTube', () => {
     expect(parseYouTube(`https://youtu.be/${ID}?t=2m`)?.start).toBe(120);
   });
 
+  it('rejects a unit form that ends in a bare number instead of guessing its unit', () => {
+    expect(parseYouTube(`https://youtu.be/${ID}?t=1h2`)).toEqual({ id: ID, start: 0 });
+    expect(parseYouTube(`https://youtu.be/${ID}?t=1m30`)).toEqual({ id: ID, start: 0 });
+  });
+
   it('treats an unparseable offset as no offset rather than rejecting the link', () => {
     expect(parseYouTube(`https://youtu.be/${ID}?t=soon`)).toEqual({ id: ID, start: 0 });
     expect(parseYouTube(`https://youtu.be/${ID}?t=`)).toEqual({ id: ID, start: 0 });
+  });
+
+  it('falls back to start when t is unparseable, and prefers a valid t over start', () => {
+    expect(parseYouTube(`https://youtu.be/${ID}?t=soon&start=30`)).toEqual({ id: ID, start: 30 });
+    expect(parseYouTube(`https://www.youtube.com/watch?v=${ID}&t=42&start=7`)).toEqual({ id: ID, start: 42 });
   });
 
   it('returns null for non-YouTube and malformed input', () => {
