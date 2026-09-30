@@ -20,11 +20,7 @@ import {
 } from '@bike4mind/utils';
 import { filterRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { Logger } from '@bike4mind/observability';
-import {
-  supportsAtlasVectorSearch,
-  selfHostOpenSearchEnabled,
-  selfHostOpenSearchResidencyRequired,
-} from '@bike4mind/db-core';
+import { selfHostOpenSearchEnabled, selfHostOpenSearchResidencyRequired } from '@bike4mind/db-core';
 import {
   classifyLoadedChunk,
   createEmbeddingMismatchAccumulator,
@@ -56,7 +52,7 @@ import {
   type SupersessionReport,
 } from './supersession';
 import type { AttributableLake } from './attributeAccessedLakes';
-import { atlasVectorSearch, type AtlasVectorSearchAdapters } from './atlasVectorSearch';
+import { atlasVectorSearch, isAtlasVectorSearchAvailable, type AtlasVectorSearchAdapters } from './atlasVectorSearch';
 import { openSearchVectorSearch, type OpenSearchVectorSearchAdapters } from './openSearchVectorSearch';
 import { planAlternateAnnModels, runAlternateModelAnn, type AlternateAnnOutcome } from './alternateModelAnn';
 import { slowestAnnQueryMs, type AnnVectorSearchResult } from './annVectorSearch';
@@ -1107,11 +1103,7 @@ async function rankChunksForFiles(args: {
   // before this cutover existed.
   let annEligible: typeof rankable = [];
   let scanEligible = rankable;
-  const canUseAtlas =
-    args.vectorSearchEnabled &&
-    supportsAtlasVectorSearch() &&
-    !!args.fabfilechunks.vectorSearch &&
-    !!args.fabfilechunks.getAtlasIndexStatus;
+  const canUseAtlas = !!args.vectorSearchEnabled && isAtlasVectorSearchAvailable(args.fabfilechunks);
   // Atlas and self-host OpenSearch are mutually exclusive: getVectorBackend() resolves to exactly
   // one VectorBackend per deployment, so this is an if/else-if documenting that invariant, not two
   // independent guards that happen never to both fire.

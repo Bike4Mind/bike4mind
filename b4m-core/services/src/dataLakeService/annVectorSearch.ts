@@ -7,7 +7,7 @@ export interface AnnSearchAdapter {
     fileIds: string[],
     queryVector: number[],
     model: string,
-    options?: { limit?: number }
+    options?: { limit?: number; includeText?: boolean }
   ): Promise<Array<{ id: string; fabFileId: string; text: string; score: number }>>;
 }
 
@@ -97,15 +97,20 @@ export async function annVectorSearch(args: {
   model: string;
   limit: number;
   minScore: number;
+  includeText?: boolean;
   adapter: AnnSearchAdapter;
 }): Promise<AnnVectorSearchResult> {
-  const { fileIds, fileById, queryVector, model, limit, minScore, adapter } = args;
+  const { fileIds, fileById, queryVector, model, limit, minScore, includeText, adapter } = args;
   if (fileIds.length === 0) {
     return { results: [], hitsReturned: 0, hitsSkippedUnknownFile: 0, filesWithHits: new Set(), backendQueryMs: null };
   }
 
   const backendStartedAt = Date.now();
-  const hits = await adapter.knnSearch(fileIds, queryVector, model, { limit });
+  // The key stays absent when unset, so adapters and their tests see exactly `{ limit }`.
+  const hits = await adapter.knnSearch(fileIds, queryVector, model, {
+    limit,
+    ...(includeText === undefined ? {} : { includeText }),
+  });
   const backendQueryMs = Date.now() - backendStartedAt;
   const filesWithHits = new Set(hits.map(h => h.fabFileId));
 
