@@ -5,11 +5,14 @@ import Chip from '@mui/joy/Chip';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { useColorScheme, useTheme } from '@mui/joy/styles';
-import { ChevronIcon, ContrastIcon, GearIcon, ServerIcon, SparkIcon } from './icons';
+import { updateAttention, updateSummary } from '@shared/update';
+import { ChevronIcon, ContrastIcon, DownloadIcon, GearIcon, ServerIcon, SparkIcon } from './icons';
 import { McpServersDialog } from './McpServersDialog';
 import { NavItem } from './SessionList';
 import { promptSuggestionsSummary, usePromptSuggestions } from './promptSuggestions';
 import { nextThemeMode, themeModeSummary, type ResolvedThemeMode, type ThemeMode } from './themeMode';
+import { UpdateDialog } from './UpdateDialog';
+import { useAppUpdate, type AppUpdateController } from './useAppUpdate';
 import { useMcpServers, type McpServersController } from './useMcpServers';
 
 /**
@@ -27,6 +30,12 @@ interface CustomizeEntry {
   summary: string;
   /** Set only when the entry needs the user; also surfaced on the shut Customize row. */
   attention?: string;
+  /**
+   * How to colour that chip. Danger by default, because every entry that had one until now was
+   * reporting something broken. An update is not broken - drawing "Restart" in the same red as
+   * a dead MCP server would read as a fault the user has to go and fix.
+   */
+  attentionColor?: 'danger' | 'primary';
   onOpen: () => void;
 }
 
@@ -98,6 +107,24 @@ function suggestionsEntry(enabled: boolean, toggle: () => void): CustomizeEntry 
   };
 }
 
+/**
+ * The app's own version, and the only place an update is offered.
+ *
+ * It sits last so a broken MCP server still wins the one chip the shut row has room for: a
+ * server that is down is stopping work now, and an update can wait for the panel to be opened.
+ */
+function updateEntry(controller: AppUpdateController, onOpen: () => void): CustomizeEntry {
+  const attention = updateAttention(controller.state);
+  return {
+    id: 'updates',
+    icon: <DownloadIcon />,
+    label: 'Updates',
+    summary: updateSummary(controller.state),
+    ...(attention ? { attention, attentionColor: 'primary' as const } : {}),
+    onOpen,
+  };
+}
+
 function EntryRow({ entry }: { entry: CustomizeEntry }) {
   return (
     <Button
@@ -108,7 +135,12 @@ function EntryRow({ entry }: { entry: CustomizeEntry }) {
       startDecorator={<Box sx={{ color: 'text.tertiary', display: 'flex' }}>{entry.icon}</Box>}
       endDecorator={
         entry.attention ? (
-          <Chip size="sm" variant="soft" color="danger" data-testid="customize-entry-attention">
+          <Chip
+            size="sm"
+            variant="soft"
+            color={entry.attentionColor ?? 'danger'}
+            data-testid="customize-entry-attention"
+          >
             {entry.attention}
           </Chip>
         ) : undefined
@@ -143,7 +175,9 @@ function EntryRow({ entry }: { entry: CustomizeEntry }) {
 export function CustomizePanel() {
   const [open, setOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
+  const [updateOpen, setUpdateOpen] = useState(false);
   const mcp = useMcpServers();
+  const update = useAppUpdate();
   const { mode, setMode } = useColorScheme();
   const theme = useTheme();
   const [suggestions, toggleSuggestions] = usePromptSuggestions();
@@ -152,8 +186,9 @@ export function CustomizePanel() {
     appearanceEntry(mode, setMode, theme.palette.mode),
     suggestionsEntry(suggestions, toggleSuggestions),
     mcpEntry(mcp, () => setMcpOpen(true)),
+    updateEntry(update, () => setUpdateOpen(true)),
   ];
-  const attention = entries.find(entry => entry.attention)?.attention;
+  const flagged = entries.find(entry => entry.attention);
 
   return (
     <>
@@ -163,9 +198,14 @@ export function CustomizePanel() {
         onClick={() => setOpen(current => !current)}
         end={
           <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
-            {!open && attention && (
-              <Chip size="sm" variant="soft" color="danger" data-testid="customize-attention-chip">
-                {attention}
+            {!open && flagged?.attention && (
+              <Chip
+                size="sm"
+                variant="soft"
+                color={flagged.attentionColor ?? 'danger'}
+                data-testid="customize-attention-chip"
+              >
+                {flagged.attention}
               </Chip>
             )}
             <ChevronIcon open={open} />
@@ -183,6 +223,7 @@ export function CustomizePanel() {
       )}
 
       <McpServersDialog open={mcpOpen} onClose={() => setMcpOpen(false)} controller={mcp} />
+      <UpdateDialog open={updateOpen} onClose={() => setUpdateOpen(false)} controller={update} />
     </>
   );
 }

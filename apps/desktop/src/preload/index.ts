@@ -15,12 +15,24 @@ import type {
 } from '@shared/chat';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
 import { IPC_CHANNELS, type DesktopApi } from '@shared/ipc';
+import type { UpdateState } from '@shared/update';
 
 // Written out one method per channel rather than a generic invoke(channel, ...args)
 // passthrough: a passthrough would let renderer code reach every handler main ever
 // registers, which defeats the point of keeping the auth handlers out of its reach.
 const api: DesktopApi = {
   getAppInfo: () => ipcRenderer.invoke(IPC_CHANNELS.getAppInfo),
+  update: {
+    getState: () => ipcRenderer.invoke(IPC_CHANNELS.updateGetState),
+    check: () => ipcRenderer.invoke(IPC_CHANNELS.updateCheck),
+    download: () => ipcRenderer.invoke(IPC_CHANNELS.updateDownload),
+    install: (force: boolean) => ipcRenderer.invoke(IPC_CHANNELS.updateInstall, force),
+    onStateChanged: listener => {
+      const handler = (_event: unknown, state: UpdateState) => listener(state);
+      ipcRenderer.on(IPC_CHANNELS.updateStateChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.updateStateChanged, handler);
+    },
+  },
   auth: {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.authGetState),
     signIn: () => ipcRenderer.invoke(IPC_CHANNELS.authSignIn),
