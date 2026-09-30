@@ -3,12 +3,13 @@ import { type MigrationFile } from './index';
 
 /**
  * Build the compound index that backs the user-facing grant list query:
- *   { userId: 1, revokedAt: 1, createdAt: -1 }
+ *   { userId: 1, revokedAt: 1, updatedAt: -1 }
  *
- * listActiveByUser() filters on (userId, revokedAt: null) and sorts by createdAt desc.
- * Without this index that query scans every grant for the user. autoIndex is off in
- * deployed environments, so the OAuthGrantSchema.index() declaration never actually
- * builds there; this migration is the only thing that creates it.
+ * listActiveByUser() filters on (userId, revokedAt: null) and sorts by updatedAt desc so the
+ * most-recently approved grant appears first (approvedAt in the API response comes from updatedAt,
+ * which upsertGrant bumps on every re-consent). Without this index that query scans every grant
+ * for the user. autoIndex is off in deployed environments, so the OAuthGrantSchema.index()
+ * declaration never actually builds there; this migration is the only thing that creates it.
  *
  * Id backdated to 20260921235960 to stay below BackfillOAuthClientTokenEndpointAuthMethod
  * (20260922000001), which must remain the highest-id migration on disk - its own test
@@ -18,7 +19,7 @@ import { type MigrationFile } from './index';
  */
 const migration: MigrationFile = {
   id: 20260921235960,
-  name: 'ensure oauthgrant user-revoked-createdat index',
+  name: 'ensure oauthgrant user-revoked-updatedat index',
 
   up: async () => {
     await OAuthGrantModel.createIndexes();

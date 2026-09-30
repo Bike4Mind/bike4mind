@@ -2,7 +2,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { oauthGrantRepository } from '@bike4mind/database';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { NotFoundError } from '@server/utils/errors';
+import { ForbiddenError, NotFoundError } from '@server/utils/errors';
 
 /**
  * Revoke one OAuth client grant. The repository scopes the update to req.user.id,
@@ -11,6 +11,9 @@ import { NotFoundError } from '@server/utils/errors';
  */
 const handler = baseApi({ auth: 'jwtOnly' }).delete(
   asyncHandler<{}, unknown, unknown, { clientId?: string }>(async (req, res) => {
+    // An admin impersonating a user would act on the real customer's grants; refuse it.
+    if (req.user.impersonatedBy) throw new ForbiddenError('Cannot manage OAuth grants while impersonating a user.');
+
     const userId = req.user.id;
     const clientId = req.query.clientId!;
 

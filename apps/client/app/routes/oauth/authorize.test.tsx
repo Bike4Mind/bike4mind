@@ -129,6 +129,21 @@ describe('OAuthAuthorizePage consent screen', () => {
     expect(screen.getByTestId('oauth-consent-deny-btn')).toBeInTheDocument();
   });
 
+  it('renders the revoke-hint link pointing to Settings > Security > Approved Apps', async () => {
+    global.fetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ consent_required: true, client_name: 'VibesWire', scopes: ['openid'] }),
+    });
+
+    renderPage();
+
+    await screen.findByTestId('oauth-consent-scopes');
+    const hint = screen.getByTestId('oauth-consent-revoke-hint-link');
+    expect(hint).toBeInTheDocument();
+    expect(hint).toHaveAttribute('to', '/profile');
+  });
+
   it('shows a plain-language label with the raw scope id kept beside it', async () => {
     global.fetch = vi.fn().mockResolvedValueOnce({
       ok: true,

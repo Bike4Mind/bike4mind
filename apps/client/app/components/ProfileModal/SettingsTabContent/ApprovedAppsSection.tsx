@@ -3,6 +3,7 @@ import { Box, Button, Card, Chip, Divider, Stack, Typography } from '@mui/joy';
 import AppsIcon from '@mui/icons-material/Apps';
 import { toast } from 'sonner';
 import { useOAuthGrants, useRevokeOAuthGrant } from '@client/app/hooks/data/oauthGrants';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { toConsentScopes } from '@client/app/routes/oauth/consentScopes';
 
 const formatDate = (value: string): string =>
@@ -14,10 +15,12 @@ const formatDate = (value: string): string =>
  * regardless of MFA state.
  */
 const ApprovedAppsSection: React.FC = () => {
-  const { data: grants, isLoading } = useOAuthGrants();
+  const { data: grants, isLoading, isError } = useOAuthGrants();
   const revokeGrant = useRevokeOAuthGrant();
   // Track each in-flight revoke by clientId so rows don't share a single isPending flag.
   const [pendingRevokes, setPendingRevokes] = React.useState<Set<string>>(new Set());
+  // While impersonating we would be acting on the real customer's grants; mirror ActiveSessionsSection.
+  const impersonating = useAccessToken(s => s.impersonating);
 
   const handleRevoke = (clientId: string, clientName: string) => {
     setPendingRevokes(prev => new Set(prev).add(clientId));
@@ -49,13 +52,19 @@ const ApprovedAppsSection: React.FC = () => {
 
       {isLoading && <Typography level="body-sm">Loading...</Typography>}
 
-      {!isLoading && (!grants || grants.length === 0) && (
+      {isError && !isLoading && (
+        <Typography level="body-sm" color="danger" data-testid="approved-apps-error">
+          Could not load approved apps. Please try again later.
+        </Typography>
+      )}
+
+      {!isLoading && !isError && (!grants || grants.length === 0) && (
         <Typography level="body-sm" data-testid="approved-apps-empty">
           No approved apps. Apps you authorize through the consent screen will appear here.
         </Typography>
       )}
 
-      {!isLoading && grants && grants.length > 0 && (
+      {!isLoading && !isError && grants && grants.length > 0 && (
         <Stack spacing={1} divider={<Divider />}>
           {grants.map(grant => {
             const scopes = toConsentScopes(grant.scopes);
@@ -79,17 +88,20 @@ const ApprovedAppsSection: React.FC = () => {
                     ))}
                   </Box>
                 </Box>
-                <Button
-                  size="sm"
-                  color="danger"
-                  variant="outlined"
-                  sx={{ flexShrink: 0 }}
-                  data-testid={`approved-app-revoke-btn-${grant.clientId}`}
-                  loading={pendingRevokes.has(grant.clientId)}
-                  onClick={() => handleRevoke(grant.clientId, grant.clientName)}
-                >
-                  Revoke
-                </Button>
+                {!impersonating && (
+                  <Button
+                    size="sm"
+                    color="danger"
+                    variant="outlined"
+                    sx={{ flexShrink: 0 }}
+                    data-testid={`approved-app-revoke-btn-${grant.clientId}`}
+                    loading={pendingRevokes.has(grant.clientId)}
+                    aria-busy={pendingRevokes.has(grant.clientId) || undefined}
+                    onClick={() => handleRevoke(grant.clientId, grant.clientName)}
+                  >
+                    Revoke
+                  </Button>
+                )}
               </Box>
             );
           })}

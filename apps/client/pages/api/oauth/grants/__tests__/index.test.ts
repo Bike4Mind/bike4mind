@@ -1,11 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const mockRefs = vi.hoisted(() => ({
-  getHandler: null as null | ((req: any, res: any) => unknown),
-  grants: [] as any[],
-  clientName: 'TestApp',
-}));
+const { mockRefs, mockListActiveByUser, mockFindByClientIds } = vi.hoisted(() => {
+  const mockListActiveByUser = vi.fn();
+  const mockFindByClientIds = vi.fn();
+  return {
+    mockRefs: {
+      getHandler: null as null | ((req: any, res: any) => unknown),
+      grants: [] as any[],
+      clientName: 'TestApp' as string | null,
+    },
+    mockListActiveByUser,
+    mockFindByClientIds,
+  };
+});
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
@@ -23,17 +31,10 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   oauthGrantRepository: {
-    listActiveByUser: () => Promise.resolve(mockRefs.grants),
+    listActiveByUser: mockListActiveByUser,
   },
   oauthClientRepository: {
-    findByClientIds: (clientIds: string[]) =>
-      Promise.resolve(
-        new Map(
-          clientIds
-            .filter(() => mockRefs.clientName !== null)
-            .map(id => [id, { name: mockRefs.clientName }])
-        )
-      ),
+    findByClientIds: mockFindByClientIds,
   },
 }));
 
@@ -43,6 +44,16 @@ describe('GET /api/oauth/grants', () => {
   beforeEach(() => {
     mockRefs.grants = [];
     mockRefs.clientName = 'TestApp';
+    mockListActiveByUser.mockResolvedValue(mockRefs.grants);
+    mockFindByClientIds.mockImplementation((clientIds: string[]) =>
+      Promise.resolve(
+        new Map(
+          clientIds
+            .filter(() => mockRefs.clientName !== null)
+            .map(id => [id, { name: mockRefs.clientName }])
+        )
+      )
+    );
   });
 
   it('returns an empty grants array when the user has no active grants', async () => {
@@ -53,15 +64,21 @@ describe('GET /api/oauth/grants', () => {
     expect(JSON.parse(res._getData())).toEqual({ grants: [] });
   });
 
+  it('scopes the grant query to the caller -- listActiveByUser is called with req.user.id', async () => {
+    const { req, res } = createMocks({ method: 'GET' });
+    req.user = { id: 'u1' };
+    await mockRefs.getHandler!(req, res);
+    expect(mockListActiveByUser).toHaveBeenCalledWith('u1');
+  });
+
   it('returns enriched grants with clientName and approvedAt', async () => {
-    mockRefs.grants = [
-      {
-        clientId: 'client-a',
-        scopes: ['openid', 'profile'],
-        createdAt: new Date('2026-01-01'),
-        updatedAt: new Date('2026-06-15'),
-      },
-    ];
+    const grant = {
+      clientId: 'client-a',
+      scopes: ['openid', 'profile'],
+      createdAt: new Date('2026-01-01'),
+      updatedAt: new Date('2026-06-15'),
+    };
+    mockListActiveByUser.mockResolvedValue([grant]);
     const { req, res } = createMocks({ method: 'GET' });
     req.user = { id: 'u1' };
     await mockRefs.getHandler!(req, res);
@@ -75,10 +92,10 @@ describe('GET /api/oauth/grants', () => {
   });
 
   it('falls back to clientId as name when the client record is missing from the map', async () => {
-    mockRefs.grants = [
+    mockListActiveByUser.mockResolvedValue([
       { clientId: 'unknown-client', scopes: ['email'], updatedAt: new Date('2026-01-01') },
-    ];
-    mockRefs.clientName = null as any;
+    ]);
+    mockRefs.clientName = null;
     const { req, res } = createMocks({ method: 'GET' });
     req.user = { id: 'u1' };
     await mockRefs.getHandler!(req, res);

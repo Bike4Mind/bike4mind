@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { NotFoundError } from '@server/utils/errors';
+import { ForbiddenError, NotFoundError } from '@server/utils/errors';
 
 const { mockRefs, mockRevoke, mockLogAuthAudit } = vi.hoisted(() => ({
   mockRefs: {
@@ -73,6 +73,14 @@ describe('DELETE /api/oauth/grants/[clientId]', () => {
     const { req, res } = createMocks({ method: 'DELETE', query: { clientId: 'no-such-client' } });
     req.user = { id: 'u1' };
     await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow(NotFoundError);
+    expect(mockLogAuthAudit).not.toHaveBeenCalled();
+  });
+
+  it('throws ForbiddenError and skips revoke when called from an impersonated session', async () => {
+    const { req, res } = createMocks({ method: 'DELETE', query: { clientId: 'client-a' } });
+    req.user = { id: 'u1', impersonatedBy: 'admin-id' };
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow(ForbiddenError);
+    expect(mockRevoke).not.toHaveBeenCalled();
     expect(mockLogAuthAudit).not.toHaveBeenCalled();
   });
 });
