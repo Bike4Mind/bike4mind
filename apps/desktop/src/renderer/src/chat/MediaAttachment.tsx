@@ -4,6 +4,7 @@ import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { ChatMedia } from '@shared/chat';
+import { ImageViewer } from './ImageViewer';
 
 /**
  * Tall enough to be worth looking at, short enough that a square image does not push the rest
@@ -38,6 +39,7 @@ function Caption({ item }: { item: ChatMedia }) {
  */
 function MediaItem({ item }: { item: ChatMedia }) {
   const [failed, setFailed] = useState(false);
+  const [viewing, setViewing] = useState(false);
 
   if (failed) {
     return (
@@ -53,20 +55,30 @@ function MediaItem({ item }: { item: ChatMedia }) {
     return (
       <Box data-testid="chat-media-image">
         <Box
-          component="img"
-          src={item.url}
-          alt={item.caption}
-          onError={() => setFailed(true)}
-          sx={{
-            display: 'block',
-            maxWidth: '100%',
-            maxHeight: IMAGE_MAX_HEIGHT,
-            borderRadius: 'sm',
-            border: '1px solid',
-            borderColor: 'divider',
-          }}
-        />
+          component="button"
+          type="button"
+          onClick={() => setViewing(true)}
+          aria-label={`View ${item.caption} at full size`}
+          sx={{ display: 'block', p: 0, border: 'none', bgcolor: 'transparent', cursor: 'zoom-in', maxWidth: '100%' }}
+          data-testid="chat-media-view-btn"
+        >
+          <Box
+            component="img"
+            src={item.url}
+            alt={item.caption}
+            onError={() => setFailed(true)}
+            sx={{
+              display: 'block',
+              maxWidth: '100%',
+              maxHeight: IMAGE_MAX_HEIGHT,
+              borderRadius: 'sm',
+              border: '1px solid',
+              borderColor: 'divider',
+            }}
+          />
+        </Box>
         <Caption item={item} />
+        <ImageViewer src={item.url} alt={item.caption} open={viewing} onClose={() => setViewing(false)} />
       </Box>
     );
   }

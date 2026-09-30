@@ -5,6 +5,7 @@ import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { ChatAttachment } from '@shared/chat';
+import { ImageViewer } from './ImageViewer';
 
 /** Side of a thumbnail, in px. Big enough to recognise a screenshot, small enough to sit in a row. */
 const THUMBNAIL = 56;
@@ -40,20 +41,32 @@ function useAttachmentContent(sessionId: string | null, attachment: ChatAttachme
 
 function ImageTile({ sessionId, attachment }: { sessionId: string | null; attachment: ChatAttachment }) {
   const src = useAttachmentContent(sessionId, attachment);
+  const [viewing, setViewing] = useState(false);
+
+  const well = {
+    width: THUMBNAIL,
+    height: THUMBNAIL,
+    borderRadius: 'sm',
+    overflow: 'hidden',
+    bgcolor: 'background.level2',
+    display: 'grid',
+    placeItems: 'center',
+  } as const;
+
+  if (!src) return <Box sx={well} />;
 
   return (
-    <Box
-      sx={{
-        width: THUMBNAIL,
-        height: THUMBNAIL,
-        borderRadius: 'sm',
-        overflow: 'hidden',
-        bgcolor: 'background.level2',
-        display: 'grid',
-        placeItems: 'center',
-      }}
-    >
-      {src && (
+    <>
+      {/* A real button, not a Box with an onClick: the thumbnail crops, so reaching the whole
+          image has to be possible from the keyboard as well as the mouse. */}
+      <Box
+        component="button"
+        type="button"
+        onClick={() => setViewing(true)}
+        aria-label={`View ${attachment.name} at full size`}
+        sx={{ ...well, p: 0, border: 'none', cursor: 'zoom-in' }}
+        data-testid="attachment-view-btn"
+      >
         <Box
           component="img"
           src={src}
@@ -61,8 +74,9 @@ function ImageTile({ sessionId, attachment }: { sessionId: string | null; attach
           sx={{ width: '100%', height: '100%', objectFit: 'cover' }}
           data-testid="attachment-thumbnail"
         />
-      )}
-    </Box>
+      </Box>
+      <ImageViewer src={src} alt={attachment.name} open={viewing} onClose={() => setViewing(false)} />
+    </>
   );
 }
 
