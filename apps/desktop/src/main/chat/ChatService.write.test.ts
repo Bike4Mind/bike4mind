@@ -103,7 +103,7 @@ describe('ChatService write gate', () => {
     streams[0].write(frame('[DONE]'));
 
     const call = await pendingApproval();
-    approvals.resolve(call.approvalId as string, 'once');
+    approvals.resolve(call.approvalId as string, { decision: 'once' });
 
     await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 5000, interval: 10 });
     await expect(readFile(target, 'utf8')).resolves.toBe('alpha\nBETA\ngamma\n');
@@ -117,7 +117,7 @@ describe('ChatService write gate', () => {
     streams[0].write(frame('[DONE]'));
 
     const call = await pendingApproval();
-    approvals.resolve(call.approvalId as string, 'deny');
+    approvals.resolve(call.approvalId as string, { decision: 'deny' });
 
     await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 5000, interval: 10 });
     await expect(readFile(target, 'utf8')).resolves.toBe('alpha\nbeta\ngamma\n');
@@ -163,7 +163,7 @@ describe('ChatService write gate', () => {
       streams[0].write(frame('[DONE]'));
 
       const call = await pendingApproval();
-      approvals.resolve(call.approvalId as string, 'once');
+      approvals.resolve(call.approvalId as string, { decision: 'once' });
       await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 5000, interval: 10 });
 
       expect(callWith('done')?.diff).toMatchObject({ path: target, operation: 'edit', added: 1, removed: 1 });
@@ -181,7 +181,7 @@ describe('ChatService write gate', () => {
       streams[0].write(frame('[DONE]'));
 
       const call = await pendingApproval();
-      approvals.resolve(call.approvalId as string, 'deny');
+      approvals.resolve(call.approvalId as string, { decision: 'deny' });
       await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 5000, interval: 10 });
 
       expect(callWith('denied')?.diff).toBeUndefined();
@@ -196,7 +196,7 @@ describe('ChatService write gate', () => {
 
       const call = await pendingApproval();
       await writeFile(target, 'alpha\nsomeone else got here\ngamma\n', 'utf8');
-      approvals.resolve(call.approvalId as string, 'once');
+      approvals.resolve(call.approvalId as string, { decision: 'once' });
       await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 5000, interval: 10 });
 
       expect(toolEvents('error')).toHaveLength(1);

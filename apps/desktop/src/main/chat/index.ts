@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, safeStorage, type WebContents } from 'electron';
 import { ChatModels } from '@bike4mind/common';
 import type {
-  ChatApprovalDecision,
+  ChatApprovalAnswer,
   ChatApprovalMode,
   ChatAttachmentInput,
   ChatQueueEvent,
@@ -313,8 +313,8 @@ export function registerChat(auth: AuthService): RegisteredChat {
   ipcMain.handle(IPC_CHANNELS.chatCancelQueued, (_event, sessionId: string, queuedId: string) =>
     service.cancelQueued(sessionId, queuedId)
   );
-  ipcMain.handle(IPC_CHANNELS.chatRespondToApproval, (_event, approvalId: string, decision: ChatApprovalDecision) =>
-    approvals.resolve(approvalId, decision)
+  ipcMain.handle(IPC_CHANNELS.chatRespondToApproval, (_event, approvalId: string, answer: ChatApprovalAnswer) =>
+    approvals.resolve(approvalId, answer)
   );
 
   // The picker runs in main because that is where Electron's dialog lives, and it is the one

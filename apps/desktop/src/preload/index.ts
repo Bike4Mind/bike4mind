@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
 import type {
-  ChatApprovalDecision,
+  ChatApprovalAnswer,
   ChatApprovalMode,
   ChatAttachmentInput,
   ChatPendingApproval,
@@ -92,8 +92,8 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatReadAttachment, sessionId, attachmentId, mediaType),
     discardAttachment: (sessionId: string, attachmentId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatDiscardAttachment, sessionId, attachmentId),
-    respondToApproval: (approvalId: string, decision: ChatApprovalDecision) =>
-      ipcRenderer.invoke(IPC_CHANNELS.chatRespondToApproval, approvalId, decision),
+    respondToApproval: (approvalId: string, answer: ChatApprovalAnswer) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatRespondToApproval, approvalId, answer),
     listArtifacts: () => ipcRenderer.invoke(IPC_CHANNELS.chatListArtifacts),
     readArtifact: (artifactId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatReadArtifact, artifactId),
     listBackgroundProcesses: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatListBackground, sessionId),

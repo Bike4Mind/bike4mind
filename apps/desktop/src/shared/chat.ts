@@ -123,6 +123,12 @@ export interface ChatToolCall {
    */
   approvalIrreversible?: boolean;
   /**
+   * Set with `approvalId` when the call can be allowed in more than one way, so the card draws
+   * a split button rather than a plain "allow". The chosen option is folded into `input` before
+   * the tool runs, which is what makes the settled row report what the user actually picked.
+   */
+  approvalChoice?: ChatApprovalChoice;
+  /**
    * The change a write tool proposes, set with `approvalId` on tools that edit files. The
    * user sees it before answering; nothing has been written while this is on screen.
    */
@@ -181,8 +187,63 @@ export interface ChatToolDetail {
  * 'always' repeats the approval for identical later calls in the SAME conversation, and is
  * forgotten when the app exits. It is matched on the exact request - an approved `git status`
  * does not carry over to `git status; rm -rf ~`.
+ *
+ * 'redirect' is NOT a refusal, and the difference is the whole point of it: the user wants the
+ * work done, just in the conversation they are already in rather than by the tool. A denial
+ * tells the model to stop and ask what to do instead, which is the opposite of what they asked
+ * for, so the two settle the call with different text. See ChatApprovalOption.redirect.
  */
-export type ChatApprovalDecision = 'once' | 'always' | 'deny';
+export type ChatApprovalDecision = 'once' | 'always' | 'deny' | 'redirect';
+
+/**
+ * One alternative on an approval card that offers a choice, as a button the user can click.
+ *
+ * The options are the same act done differently - not a menu of unrelated things - so the card
+ * draws them as a split button: the first is the primary action and the rest sit under its
+ * caret.
+ */
+export interface ChatApprovalOption {
+  id: string;
+  /** The button face, in the imperative: what clicking it does. */
+  label: string;
+  /** One line under the label saying what it means, since the labels hide the axis they differ on. */
+  description: string;
+  /**
+   * A value this option needs before the call can run, prefilled with a suggestion and editable
+   * on the card. Prefilled rather than derived silently so a bad guess is visible and fixable
+   * BEFORE anything is created.
+   */
+  field?: ChatApprovalField;
+  /**
+   * Choosing this does NOT run the call: the user wants the work done in this conversation
+   * instead. It is a redirect for this one call rather than a policy, so the card offers no
+   * standing approval alongside it and none is ever recorded - the rule `irreversible` follows,
+   * for a different reason.
+   */
+  redirect?: true;
+}
+
+export interface ChatApprovalField {
+  /** Which of the tool's inputs the value lands in; also the field's testid suffix. */
+  name: string;
+  label: string;
+  /** The suggestion, which the user may replace before answering. */
+  value: string;
+}
+
+/** The alternatives an approval card offers. The first option is its primary action. */
+export interface ChatApprovalChoice {
+  options: ChatApprovalOption[];
+}
+
+/** What the user clicked on an approval card, answered back through `respondToApproval`. */
+export interface ChatApprovalAnswer {
+  decision: ChatApprovalDecision;
+  /** Which of the card's options; absent on a card that offered none. */
+  optionId?: string;
+  /** What the user left in the chosen option's field, when it had one. */
+  value?: string;
+}
 
 /**
  * What the user attached to a turn: an image the model looks at, or a text file inlined into
@@ -940,8 +1001,12 @@ export type UpdateProjectResult =
  * Distinguished rather than collapsed into one string because the model can act on two of them
  * differently: 'depth' is permanent for this session and it should stop asking, while
  * 'concurrency' clears on its own and waiting is a real option.
+ *
+ * 'branch' is the user's choice failing rather than the model's: the branch they named for the
+ * child's worktree is unusable or already taken. Told apart so the model reports it back rather
+ * than retrying, since nothing it can do changes the answer.
  */
-export type SpawnRefusal = 'depth' | 'concurrency' | 'no-project' | 'empty-prompt';
+export type SpawnRefusal = 'depth' | 'concurrency' | 'no-project' | 'empty-prompt' | 'branch';
 
 /**
  * A session_send that did not happen, and which bound or precondition stopped it.
@@ -970,6 +1035,8 @@ export interface ChatPendingApproval {
   diff?: ChatDiff;
   /** True when "always in this chat" must not be offered; see ChatToolCall.approvalIrreversible. */
   irreversible?: boolean;
+  /** The ways this call may be allowed; see ChatToolCall.approvalChoice. */
+  choice?: ChatApprovalChoice;
   requestedAt: string;
 }
 

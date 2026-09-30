@@ -58,10 +58,16 @@ describe('ChatService app-control tools', () => {
       emit: event => {
         events.push(event);
         // Stand in for the user, answering every ask the moment it is raised. 'always' is
-        // chosen so that anything which CAN become a standing approval does.
+        // chosen so that anything which CAN become a standing approval does, and a card that
+        // offers a choice is answered with the option that runs where the caller already is:
+        // these tests use a plain temp directory with no repository, and what they are about is
+        // the app-control plumbing rather than where a child lands.
         if (event.type === 'tool-start' && event.call.approvalId) {
           asked.push({ approvalId: event.call.approvalId, toolName: event.call.name });
-          approvals.resolve(event.call.approvalId, 'always');
+          approvals.resolve(event.call.approvalId, {
+            decision: 'always',
+            ...(event.call.approvalChoice ? { optionId: 'local' } : {}),
+          });
         }
       },
     });
