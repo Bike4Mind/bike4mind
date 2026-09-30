@@ -35,30 +35,29 @@ function findMatchingKeywordRule(text: string, rules: IKeywordRoutingRule[]): st
 
 /**
  * Resolves a saved notebook id (agent/keyword routing, slack default, web last notebook) to one the
- * user can still write to: it must exist, not be deleted, and be owned by or update-shared
- * with the user. Returns null otherwise so the caller falls through; never throws.
+ * user can still write to: it must exist, not be deleted, and pass the same write check as
+ * canAccessSession(..., 'write') in apps/client/server/utils/sessionAccess.ts (owner, update share by
+ * user or group, isGlobalWrite). Admin rights are deliberately not honored, so a DM never lands in
+ * another user's notebook. Returns null for a missing, malformed or denied id so the caller falls
+ * through; lookup errors propagate rather than silently creating a new notebook.
  */
 // any: getSlackDb() exposes the Session model untyped, as elsewhere in this file
 export async function resolveAccessibleNotebookId(
   Session: any,
   notebookId: unknown,
-  userId: string
+  user: { id: string; groups?: string[] | null }
 ): Promise<string | null> {
   if (!notebookId) return null;
   const id = String(notebookId);
   if (!mongoose.Types.ObjectId.isValid(id)) return null;
 
-  try {
-    const notebook = await Session.findOne({ _id: id, deletedAt: { $exists: false } });
-    if (canUpdateShareable(notebook, userId)) return notebook.id;
+  const notebook = await Session.findOne({ _id: id, deletedAt: null });
+  if (canUpdateShareable(notebook, user.id, user.groups ?? []) || notebook?.isGlobalWrite) return notebook.id;
 
-    Logger.warn('[Slack Notebook Lookup] Ignoring saved notebook id the user cannot write to', {
-      notebookId: id,
-      userId,
-    });
-  } catch (error) {
-    Logger.warn('[Slack Notebook Lookup] Error checking saved notebook id', { notebookId: id, error });
-  }
+  Logger.warn('[Slack Notebook Lookup] Ignoring saved notebook id the user cannot write to', {
+    notebookId: id,
+    userId: user.id,
+  });
   return null;
 }
 
@@ -108,7 +107,7 @@ export async function getOrCreateNotebookForSlackUser(
   if (agentName && slackSettings.agentNotebookRouting) {
     const agentNotebookId =
       slackSettings.agentNotebookRouting[agentName as keyof typeof slackSettings.agentNotebookRouting];
-    const accessibleId = await resolveAccessibleNotebookId(Session, agentNotebookId, userId);
+    const accessibleId = await resolveAccessibleNotebookId(Session, agentNotebookId, user);
     if (accessibleId) return accessibleId;
   }
 
@@ -116,7 +115,7 @@ export async function getOrCreateNotebookForSlackUser(
   if (slackSettings.keywordRouting && slackSettings.keywordRouting.length > 0) {
     const matchedNotebookId = findMatchingKeywordRule(text || '', slackSettings.keywordRouting);
 
-    const accessibleId = await resolveAccessibleNotebookId(Session, matchedNotebookId, userId);
+    const accessibleId = await resolveAccessibleNotebookId(Session, matchedNotebookId, user);
     if (accessibleId) return accessibleId;
   }
 
@@ -280,11 +279,11 @@ export async function getOrCreateNotebookForSlackUser(
   }
 
   // PRIORITY 3: Fallback to user's slack default notebook (set via /notebook set)
-  const defaultNotebookId = await resolveAccessibleNotebookId(Session, slackSettings.defaultNotebookId, userId);
+  const defaultNotebookId = await resolveAccessibleNotebookId(Session, slackSettings.defaultNotebookId, user);
   if (defaultNotebookId) return defaultNotebookId;
 
   // PRIORITY 4: Fallback to user's last notebook (from web app)
-  const lastNotebookId = await resolveAccessibleNotebookId(Session, user.lastNotebookId, userId);
+  const lastNotebookId = await resolveAccessibleNotebookId(Session, user.lastNotebookId, user);
   if (lastNotebookId) return lastNotebookId;
 
   // PRIORITY 5: Create a default notebook as last resort

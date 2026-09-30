@@ -121,7 +121,8 @@ const handler = baseApi()
           }
         }
 
-        // Same ownership rule for per-agent routing targets, which the Slack resolver also dereferences.
+        // Same ownership rule for per-agent routing targets. Explicitly configured targets must be owned;
+        // the runtime resolveAccessibleNotebookId is more lenient only because lastNotebookId is auto-set.
         for (const notebookId of Object.values(slackSettings.agentNotebookRouting ?? {})) {
           if (!notebookId) continue;
           if (!isValidObjectId(notebookId)) {

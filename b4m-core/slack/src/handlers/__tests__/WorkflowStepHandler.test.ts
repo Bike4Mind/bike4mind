@@ -62,6 +62,7 @@ const addMessageToSession = mockAddMessageToSession;
 const SAVED_NOTEBOOK = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const OTHER_NOTEBOOK = 'bbbbbbbbbbbbbbbbbbbbbbbb';
 const FOREIGN_NOTEBOOK = 'cccccccccccccccccccccccc';
+const GLOBAL_WRITE_NOTEBOOK = 'dddddddddddddddddddddddd';
 
 // Mock SlackClient
 const mockSlackClient = {
@@ -90,7 +91,11 @@ describe('WorkflowStepHandler', () => {
     mockSlackClient.functionCompleteError.mockResolvedValue(true);
     // Saved notebook ids are access-checked; every notebook is the user's own unless a test says otherwise.
     mockSession.findOne.mockImplementation(async ({ _id }: { _id: string }) =>
-      _id === FOREIGN_NOTEBOOK ? { id: _id, userId: 'someone_else' } : { id: _id, userId: 'user_123' }
+      _id === FOREIGN_NOTEBOOK
+        ? { id: _id, userId: 'someone_else' }
+        : _id === GLOBAL_WRITE_NOTEBOOK
+          ? { id: _id, userId: 'someone_else', isGlobalWrite: true }
+          : { id: _id, userId: 'user_123' }
     );
   });
 
@@ -353,6 +358,24 @@ describe('WorkflowStepHandler', () => {
       expect(addMessageToSession).toHaveBeenCalledWith(
         mockUser.id,
         OTHER_NOTEBOOK,
+        expect.any(Object),
+        expect.any(Object)
+      );
+    });
+
+    it('uses an isGlobalWrite last notebook', async () => {
+      const mockUser = createMockUser({ lastNotebookId: GLOBAL_WRITE_NOTEBOOK });
+      vi.mocked(User.findOne).mockResolvedValue(mockUser);
+      vi.mocked(addMessageToSession).mockResolvedValue({ id: 'quest_123' } as any);
+
+      await handler.handleFunctionExecuted(
+        createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, { user_id: 'U123', message: 'Hello' })
+      );
+
+      expect(createSession).not.toHaveBeenCalled();
+      expect(addMessageToSession).toHaveBeenCalledWith(
+        mockUser.id,
+        GLOBAL_WRITE_NOTEBOOK,
         expect.any(Object),
         expect.any(Object)
       );

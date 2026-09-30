@@ -212,8 +212,8 @@ export class WorkflowStepHandler {
   private async resolveSavedNotebookId(user: IUserDocument): Promise<string | null> {
     const { Session } = getSlackDb();
     return (
-      (await resolveAccessibleNotebookId(Session, user.slackSettings?.defaultNotebookId, user.id)) ??
-      (await resolveAccessibleNotebookId(Session, user.lastNotebookId, user.id))
+      (await resolveAccessibleNotebookId(Session, user.slackSettings?.defaultNotebookId, user)) ??
+      (await resolveAccessibleNotebookId(Session, user.lastNotebookId, user))
     );
   }
 

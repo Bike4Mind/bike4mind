@@ -33,6 +33,8 @@ const FOREIGN = 'cccccccccccccccccccccccc';
 const SHARED_UPDATE = 'dddddddddddddddddddddddd';
 const SHARED_READ = 'eeeeeeeeeeeeeeeeeeeeeeee';
 const DELETED = 'ffffffffffffffffffffffff';
+const GLOBAL_WRITE = '222222222222222222222222';
+const GROUP_UPDATE = '333333333333333333333333';
 const CREATED = '111111111111111111111111';
 
 // Deleted notebooks are absent: the real query filters them via deletedAt, asserted below.
@@ -50,10 +52,16 @@ const docsById: Record<string, object> = {
     userId: 'someone-else',
     users: [{ userId: USER_ID, permissions: [Permission.read] }],
   },
+  [GLOBAL_WRITE]: { id: GLOBAL_WRITE, userId: 'someone-else', isGlobalWrite: true },
+  [GROUP_UPDATE]: {
+    id: GROUP_UPDATE,
+    userId: 'someone-else',
+    groups: [{ groupId: 'group-1', permissions: [Permission.read, Permission.update] }],
+  },
 };
 
-function withUser(slackSettings: object, lastNotebookId?: string) {
-  mockFindById.mockResolvedValue({ id: USER_ID, slackSettings, lastNotebookId });
+function withUser(slackSettings: object, lastNotebookId?: string, extra: object = {}) {
+  mockFindById.mockResolvedValue({ id: USER_ID, slackSettings, lastNotebookId, ...extra });
 }
 
 // Empty channelId skips PRIORITY 2 so the saved-id fallbacks are reached.
@@ -117,7 +125,7 @@ describe('getOrCreateNotebookForSlackUser saved notebook ids', () => {
   it('falls through a deleted notebook and filters deleted docs in the query', async () => {
     withUser({ defaultNotebookId: DELETED });
     expect(await resolve()).toBe(CREATED);
-    expect(mockFindOne).toHaveBeenCalledWith({ _id: DELETED, deletedAt: { $exists: false } });
+    expect(mockFindOne).toHaveBeenCalledWith({ _id: DELETED, deletedAt: null });
   });
 
   it('falls through a malformed id without querying', async () => {
@@ -126,9 +134,30 @@ describe('getOrCreateNotebookForSlackUser saved notebook ids', () => {
     expect(mockFindOne).not.toHaveBeenCalled();
   });
 
-  it('falls through when the lookup throws', async () => {
+  it('returns an isGlobalWrite lastNotebookId', async () => {
+    withUser({}, GLOBAL_WRITE);
+    expect(await resolve()).toBe(GLOBAL_WRITE);
+  });
+
+  it('returns a notebook update-shared with one of the user groups', async () => {
+    withUser({}, GROUP_UPDATE, { groups: ['group-1'] });
+    expect(await resolve()).toBe(GROUP_UPDATE);
+  });
+
+  it('falls through a group-shared notebook when the user is not in the group', async () => {
+    withUser({}, GROUP_UPDATE, { groups: ['group-2'] });
+    expect(await resolve()).toBe(CREATED);
+  });
+
+  it('falls through a foreign notebook for an admin', async () => {
+    withUser({}, FOREIGN, { isAdmin: true });
+    expect(await resolve()).toBe(CREATED);
+  });
+
+  it('propagates a lookup error instead of creating a notebook', async () => {
     mockFindOne.mockRejectedValue(new Error('db down'));
     withUser({ defaultNotebookId: OWNED });
-    expect(await resolve()).toBe(CREATED);
+    await expect(resolve()).rejects.toThrow('db down');
+    expect(mockCreateSession).not.toHaveBeenCalled();
   });
 });
