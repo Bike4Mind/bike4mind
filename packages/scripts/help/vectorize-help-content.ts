@@ -21,6 +21,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { isDirectInvocation } from './isDirectInvocation.js';
 import matter from 'gray-matter';
 import { glob } from 'glob';
 import { EmbeddingFactory } from '@bike4mind/fab-pipeline';
@@ -373,7 +374,7 @@ async function main(): Promise<void> {
 
 // Only run when invoked directly (not when imported by tests). Compared by resolved
 // path rather than filename suffix so a mismatch cannot silently no-op the script.
-if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+if (isDirectInvocation(import.meta.url)) {
   main().catch(error => {
     console.error('Failed to vectorize help content:', error);
     process.exit(1);
