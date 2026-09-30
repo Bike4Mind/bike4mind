@@ -42,6 +42,8 @@ import {
 } from '@bike4mind/llm-adapters';
 import {
   ChatModels,
+  DATA_LAKE_TOOL_NAMES,
+  DATA_LAKE_WRITE_TOOL_NAMES,
   ImageModels,
   ModelBackend,
   usdToCredits as realUsdToCredits,
@@ -2306,6 +2308,31 @@ describe('ChatCompletionProcess', () => {
           expect(names).not.toContain('list_my_data_lakes');
           expect(names).toContain('create_data_lake');
           expect(names).toContain('save_content_to_data_lake');
+        });
+
+        // The route half of this chain: dataLakeToolsDeniedFor (apps/client dataLakeScopes.ts) returns
+        // DATA_LAKE_TOOL_NAMES for a datalake:read-less key and DATA_LAKE_WRITE_TOOL_NAMES for a
+        // datalake:read key, and /api/chat + /api/ai/llm pass it through as body.deniedTools
+        // (dataLakeScopes.test.ts, chat.integration.test.ts, llm.integration.test.ts).
+        it('withholds list_my_data_lakes on list intent for a datalake:read-less key', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({ message: 'list my lakes', deniedTools: [...DATA_LAKE_TOOL_NAMES] }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          for (const toolName of DATA_LAKE_TOOL_NAMES) expect(names).not.toContain(toolName);
+        });
+
+        it('still offers list_my_data_lakes on list intent to a datalake:read key', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({ message: 'list my lakes', deniedTools: [...DATA_LAKE_WRITE_TOOL_NAMES] }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          expect(names).toContain('list_my_data_lakes');
+          for (const toolName of DATA_LAKE_WRITE_TOOL_NAMES) expect(names).not.toContain(toolName);
         });
       });
 
