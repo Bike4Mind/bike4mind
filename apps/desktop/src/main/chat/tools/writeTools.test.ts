@@ -297,6 +297,116 @@ describe('write tools', () => {
     });
   });
 
+  describe('recoverable edits', () => {
+    const file = () => join(root, 'tolerant.txt');
+    const block = 'function f() {\n  const a = 1;\n  const b = 2;\n  return a + b;\n}\n';
+    beforeEach(async () => {
+      await writeFile(file(), block, 'utf8');
+    });
+
+    it('applies an over-indented oldText and re-indents newText, saying so', async () => {
+      const result = await fileEdit.run(
+        {
+          path: file(),
+          oldText: '    const a = 1;\n    const b = 2;',
+          newText: '    const a = 10;\n      const b = 20;',
+        },
+        context
+      );
+      await expect(readFile(file(), 'utf8')).resolves.toBe(
+        'function f() {\n  const a = 10;\n    const b = 20;\n  return a + b;\n}\n'
+      );
+      expect(result).toMatch(/whitespace-normalized matching/);
+    });
+
+    it('applies an under-indented oldText, adding the missing indent to newText', async () => {
+      await fileEdit.run({ path: file(), oldText: 'const a = 1;\nconst b = 2;\n', newText: 'const c = 3;\n' }, context);
+      await expect(readFile(file(), 'utf8')).resolves.toBe('function f() {\n  const c = 3;\n  return a + b;\n}\n');
+    });
+
+    it('refuses a loose match that hits two places and lists both', async () => {
+      await writeFile(file(), 'if (x) {\n  run();\n}\nif (y) {\n    run();\n}\n', 'utf8');
+      const message = await editFailure({ path: file(), oldText: '      run();', newText: 'stop();' });
+      expect(message).toMatch(/matches 2 places.*at lines 2, 5/s);
+      await expect(readFile(file(), 'utf8')).resolves.toBe('if (x) {\n  run();\n}\nif (y) {\n    run();\n}\n');
+    });
+
+    it('lists every occurrence of an ambiguous exact match with previews', async () => {
+      await writeFile(file(), 'a\nmark one\nb\nmark two\nc\nmark three\n', 'utf8');
+      const message = await editFailure({ path: file(), oldText: 'mark', newText: 'x' });
+      expect(message).toMatch(/appears 3 times.*at lines 2, 4, 6/s);
+      expect(message).toContain('4: mark two');
+    });
+
+    it('names which batch edits were fine and writes nothing', async () => {
+      await writeFile(file(), 'a\nb\nb\nc\n', 'utf8');
+      const message = await editFailure({
+        path: file(),
+        edits: [
+          { oldText: 'a', newText: 'A' },
+          { oldText: 'b', newText: 'B' },
+          { oldText: 'c', newText: 'C' },
+        ],
+      });
+      expect(message).toMatch(/edits\[1\].*at lines 2, 3/s);
+      expect(message).toMatch(/other edits \(edits\[0\], edits\[2\]\) were fine/);
+      await expect(readFile(file(), 'utf8')).resolves.toBe('a\nb\nb\nc\n');
+    });
+
+    it('accepts edits alongside empty single-form fields', async () => {
+      await fileEdit.run(
+        {
+          path: file(),
+          oldText: '',
+          newText: '',
+          replaceAll: false,
+          edits: [{ oldText: 'const a = 1;', newText: 'const a = 5;' }],
+        },
+        context
+      );
+      await expect(readFile(file(), 'utf8')).resolves.toContain('const a = 5;');
+    });
+
+    it('still refuses edits alongside a real single-form edit', async () => {
+      await expect(
+        fileEdit.run(
+          { path: file(), oldText: 'a', newText: 'b', edits: [{ oldText: 'const a = 1;', newText: 'x' }] },
+          context
+        )
+      ).rejects.toThrow(/not both/);
+    });
+
+    it('skips a no-op edit and applies the rest', async () => {
+      const result = await fileEdit.run(
+        {
+          path: file(),
+          edits: [
+            { oldText: 'const a = 1;', newText: 'const a = 1;' },
+            { oldText: 'const b = 2;', newText: 'const b = 9;' },
+          ],
+        },
+        context
+      );
+      await expect(readFile(file(), 'utf8')).resolves.toContain('const b = 9;');
+      expect(result).toMatch(/edits\[0\] was skipped/);
+    });
+
+    it('reports a batch of only no-ops as a non-error that changed nothing', async () => {
+      const result = await fileEdit.run(
+        {
+          path: file(),
+          edits: [
+            { oldText: 'const a = 1;', newText: 'const a = 1;' },
+            { oldText: 'zzz', newText: 'zzz' },
+          ],
+        },
+        context
+      );
+      expect(result).toMatch(/No change made/);
+      await expect(readFile(file(), 'utf8')).resolves.toBe(block);
+    });
+  });
+
   describe('why an edit missed', () => {
     const miss = async (content: string, oldText: string): Promise<string> => {
       const target = join(root, 'subject.txt');
@@ -305,21 +415,24 @@ describe('write tools', () => {
     };
 
     it('names indentation as the cause and quotes the file version', async () => {
-      const message = await miss('function f() {\n    return 1;\n}\n', '      return 1;');
+      const message = await miss('function f() {\n  return  1;\n}\n', 'return 1;');
       expect(message).toMatch(/indentation or spacing differs/);
-      expect(message).toContain('has:\n    return 1;\nUse that exactly.');
+      expect(message).toContain('has:\nreturn  1;\nUse that exactly.');
       expect(message).not.toMatch(/CRLF|None of its lines|Its line/);
     });
 
-    it('names CRLF rather than asking for line breaks the model cannot see', async () => {
-      const message = await miss('alpha\r\nbeta\r\ngamma\r\n', 'alpha\nbeta');
-      expect(message).toMatch(/file uses CRLF line endings and "oldText" uses bare LF/);
-      expect(message).not.toMatch(/indentation or spacing|None of its lines|Its line/);
+    it('applies an LF oldText to a CRLF file and keeps the file on CRLF', async () => {
+      const target = join(root, 'subject.txt');
+      await writeFile(target, 'alpha\r\nbeta\r\ngamma\r\n', 'utf8');
+      await fileEdit.run({ path: target, oldText: 'alpha\nbeta', newText: 'one\ntwo' }, context);
+      await expect(readFile(target, 'utf8')).resolves.toBe('one\r\ntwo\r\ngamma\r\n');
     });
 
-    it('names LF when the model is the one that sent carriage returns', async () => {
-      const message = await miss('alpha\nbeta\ngamma\n', 'alpha\r\nbeta');
-      expect(message).toMatch(/"oldText" uses CRLF line endings and the file uses bare LF/);
+    it('applies a CRLF oldText to an LF file and keeps the file on LF', async () => {
+      const target = join(root, 'subject.txt');
+      await writeFile(target, 'alpha\nbeta\ngamma\n', 'utf8');
+      await fileEdit.run({ path: target, oldText: 'alpha\r\nbeta', newText: 'one\r\ntwo' }, context);
+      await expect(readFile(target, 'utf8')).resolves.toBe('one\ntwo\ngamma\n');
     });
 
     it('points at a unique anchor line so the snippet can be fixed in place', async () => {

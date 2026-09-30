@@ -180,6 +180,10 @@ interface WritePlan {
   after: string;
   diff: ChatDiff;
   key: string;
+  /** Appended to the result so the model learns what was normalised or skipped on its behalf. */
+  notes?: string[];
+  /** Set when there is nothing to write; returned as the (non-error) result. */
+  unchanged?: string;
 }
 
 /**
@@ -225,7 +229,10 @@ function readEdits(input: Record<string, unknown>): { edits: EditSpec[]; batch: 
     };
   }
 
-  if (input.oldText !== undefined || input.newText !== undefined || input.replaceAll !== undefined) {
+  // Models leave empty or stale single-form fields next to `edits`; only real content in both
+  // forms is a genuine conflict.
+  const carriesText = (value: unknown): boolean => typeof value === 'string' && value.length > 0;
+  if (carriesText(input.oldText) || carriesText(input.newText)) {
     throw new Error('Pass either "edits" or the single oldText/newText form, not both.');
   }
   const raw = input.edits;
@@ -375,8 +382,141 @@ interface EditPosition {
   total: number;
 }
 
+const MAX_LISTED_MATCHES = 8;
+const MAX_PREVIEW_CHARS = 100;
+
+function lineNumberAt(content: string, index: number): number {
+  let line = 1;
+  for (let at = content.indexOf('\n'); at !== -1 && at < index; at = content.indexOf('\n', at + 1)) line += 1;
+  return line;
+}
+
+function previewLine(line: string): string {
+  const text = line.trim();
+  return text.length > MAX_PREVIEW_CHARS ? `${text.slice(0, MAX_PREVIEW_CHARS)}...` : text;
+}
+
+/** "at lines 120, 188, 240" plus a preview of each, so one retry can pick a place and add context. */
+function describeLocations(lines: number[], fileLines: string[]): string {
+  const shown = lines.slice(0, MAX_LISTED_MATCHES);
+  const more = lines.length > shown.length ? `, and ${lines.length - shown.length} more` : '';
+  const previews = shown.map(line => `  ${line}: ${previewLine(fileLines[line - 1] ?? '')}`).join('\n');
+  return `at lines ${shown.join(', ')}${more}:\n${previews}`;
+}
+
+const indentOf = (line: string): string => /^[ \t]*/.exec(line)?.[0] ?? '';
+const isBlank = (line: string): boolean => line.trim() === '';
+
+function stripCommonIndent(lines: string[]): string[] {
+  const widths = lines.filter(line => !isBlank(line)).map(line => indentOf(line).length);
+  const common = widths.length ? Math.min(...widths) : 0;
+  return lines.map(line => line.slice(common).trimEnd());
+}
+
+/** Start line of every window of `file` that equals `wanted` under `normalise`. */
+function findWindows(file: string[], wanted: string[], normalise: (lines: string[]) => string[]): number[] {
+  const target = normalise(wanted);
+  const starts: number[] = [];
+  for (let at = 0; at + wanted.length <= file.length; at += 1) {
+    const window = normalise(file.slice(at, at + wanted.length));
+    if (window.every((line, offset) => line === target[offset])) starts.push(at);
+  }
+  return starts;
+}
+
+// Ordered strictest first: indentation-flexible keeps relative indentation, so it can single out
+// one place where line-trimmed finds several. Nothing looser (anchors, similarity) on purpose.
+const LOOSE_MATCHERS: Array<(lines: string[]) => string[]> = [
+  lines => lines.map(line => line.trim()),
+  stripCommonIndent,
+];
+
+/** Shifts `newText` by the same indentation delta the file has against `oldText`, when it is uniform. */
+function reindent(newText: string, wanted: string[], actual: string[]): string {
+  let add: string | null = null;
+  let remove = '';
+  for (let at = 0; at < wanted.length; at += 1) {
+    if (isBlank(wanted[at])) continue;
+    const was = indentOf(wanted[at]);
+    const now = indentOf(actual[at]);
+    let pairAdd: string;
+    let pairRemove: string;
+    if (now.startsWith(was)) {
+      pairAdd = now.slice(was.length);
+      pairRemove = '';
+    } else if (was.startsWith(now)) {
+      pairAdd = '';
+      pairRemove = was.slice(now.length);
+    } else {
+      return newText;
+    }
+    if (add === null) {
+      add = pairAdd;
+      remove = pairRemove;
+    } else if (add !== pairAdd || remove !== pairRemove) {
+      return newText;
+    }
+  }
+  if (!add && !remove) return newText;
+  return newText
+    .split('\n')
+    .map(line => {
+      if (isBlank(line)) return line;
+      return remove ? (line.startsWith(remove) ? line.slice(remove.length) : line) : `${add}${line}`;
+    })
+    .join('\n');
+}
+
+type LooseResult =
+  { kind: 'applied'; content: string } | { kind: 'ambiguous'; lines: number[]; fileLines: string[] } | { kind: 'none' };
+
+/** Whole-line matching that ignores indentation and spacing; applies only when exactly one place matches. */
+function applyLoose(content: string, oldText: string, newText: string): LooseResult {
+  const fileLines = content.split('\n');
+  const wanted = oldText.split('\n');
+  const trailingNewline = wanted.length > 1 && wanted[wanted.length - 1] === '';
+  if (trailingNewline) wanted.pop();
+  if (wanted.every(isBlank)) return { kind: 'none' };
+
+  let ambiguous: number[] = [];
+  for (const normalise of LOOSE_MATCHERS) {
+    const starts = findWindows(fileLines, wanted, normalise);
+    if (starts.length === 0) continue;
+    if (starts.length > 1) {
+      if (ambiguous.length === 0) ambiguous = starts.map(start => start + 1);
+      continue;
+    }
+
+    const first = starts[0];
+    const last = first + wanted.length - 1;
+    const actual = fileLines.slice(first, last + 1);
+    const offsets: number[] = [];
+    let running = 0;
+    for (const line of fileLines) {
+      offsets.push(running);
+      running += line.length + 1;
+    }
+    const start = offsets[first];
+    const end =
+      trailingNewline && last < fileLines.length - 1
+        ? offsets[last + 1]
+        : offsets[last] + fileLines[last].replace(/\r$/, '').length;
+    let replacement = reindent(newText, wanted, actual);
+    // Line endings follow the file, whichever the model typed.
+    replacement = replacement.replace(/\r?\n/g, actual.some(line => line.endsWith('\r')) ? '\r\n' : '\n');
+    return { kind: 'applied', content: content.slice(0, start) + replacement + content.slice(end) };
+  }
+
+  return ambiguous.length > 0 ? { kind: 'ambiguous', lines: ambiguous, fileLines } : { kind: 'none' };
+}
+
+interface EditOutcome {
+  content: string;
+  status: 'applied' | 'loose' | 'noop';
+}
+
 /** Applies one edit to `content`, or throws. `position` names the edit in a batch, null for a lone edit. */
-function applyEdit(content: string, edit: EditSpec, target: string, position: EditPosition | null): string {
+function applyEdit(content: string, edit: EditSpec, target: string, position: EditPosition | null): EditOutcome {
   const { oldText, newText, replaceAll } = edit;
   const label = position
     ? `edits[${position.index}] (edit ${position.index + 1} of ${position.total}, nothing was written)`
@@ -387,25 +527,37 @@ function applyEdit(content: string, edit: EditSpec, target: string, position: Ed
   // needs is the file.
   const where = position && position.index > 0 ? `${target} as it stands after the earlier edits` : target;
 
+  if (oldText === newText) return { content, status: 'noop' };
+
   const occurrences = countOccurrences(content, oldText);
   if (occurrences === 0) {
+    const loose = applyLoose(content, oldText, newText);
+    if (loose.kind === 'applied') return { content: loose.content, status: 'loose' };
+    if (loose.kind === 'ambiguous') {
+      throw new Error(
+        `${subject} does not match ${where} exactly, and ignoring indentation and spacing it matches ` +
+          `${loose.lines.length} places, so the edit is ambiguous, ${describeLocations(loose.lines, loose.fileLines)}\n` +
+          'Include enough surrounding lines, copied exactly, to make it unique.'
+      );
+    }
     throw new Error(`${subject} does not appear in ${where}. ${describeMiss(content, oldText)}`);
   }
   if (occurrences > 1 && !replaceAll) {
+    const lines: number[] = [];
+    for (let at = content.indexOf(oldText); at !== -1; at = content.indexOf(oldText, at + oldText.length)) {
+      lines.push(lineNumberAt(content, at));
+    }
     throw new Error(
-      `${subject} appears ${occurrences} times in ${where}, so the edit is ambiguous. Include ` +
-        'enough surrounding lines to make it unique, or pass replaceAll: true to change every one.'
-    );
-  }
-  if (oldText === newText) {
-    throw new Error(
-      `${label ? `${label}: ` : ''}"newText" is identical to "oldText", so this edit would change nothing.`
+      `${subject} appears ${occurrences} times in ${where}, so the edit is ambiguous, ` +
+        `${describeLocations(lines, content.split('\n'))}\n` +
+        'Include enough surrounding lines to make it unique, or pass replaceAll: true to change every one.'
     );
   }
 
   // A function replacement, because `$&` and friends in a plain replacement string would be
   // expanded - silently corrupting any edit whose new text contains a dollar sign.
-  return replaceAll ? content.replaceAll(oldText, () => newText) : content.replace(oldText, () => newText);
+  const next = replaceAll ? content.replaceAll(oldText, () => newText) : content.replace(oldText, () => newText);
+  return { content: next, status: 'applied' };
 }
 
 async function planEdit(input: Record<string, unknown>, context: ToolContext): Promise<WritePlan> {
@@ -419,11 +571,55 @@ async function planEdit(input: Record<string, unknown>, context: ToolContext): P
   }
 
   // All in memory and in order, each against the previous result: nothing is written unless
-  // every edit applies, so a failure at edit N leaves the file exactly as it was.
+  // every edit applies. A failing edit is skipped rather than thrown on the spot so one error
+  // can name every failure and confirm the rest, instead of costing a retry per bad edit.
   let after = state.content;
+  const failures: string[] = [];
+  const failed = new Set<number>();
+  const notes: string[] = [];
+  let changed = 0;
   edits.forEach((edit, index) => {
-    after = applyEdit(after, edit, target, batch ? { index, total: edits.length } : null);
+    const name = batch ? `edits[${index}]` : 'The edit';
+    try {
+      const outcome = applyEdit(after, edit, target, batch ? { index, total: edits.length } : null);
+      after = outcome.content;
+      if (outcome.status === 'noop') {
+        notes.push(`${name} was skipped: "newText" is identical to "oldText", so it would change nothing.`);
+      } else {
+        changed += 1;
+        if (outcome.status === 'loose') {
+          notes.push(
+            `${name} was applied with whitespace-normalized matching: "oldText" differed from the file in indentation or spacing.`
+          );
+        }
+      }
+    } catch (error) {
+      failed.add(index);
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
   });
+
+  if (failures.length > 0) {
+    const fine = edits.map((_, index) => index).filter(index => !failed.has(index));
+    const tail =
+      batch && fine.length > 0
+        ? `\nThe other edits (${fine.map(index => `edits[${index}]`).join(', ')}) were fine. Fix only the failing ` +
+          `${failed.size === 1 ? 'one' : 'ones'} and resend the whole batch; nothing was written.`
+        : '';
+    throw new Error(`${failures.join('\n')}${tail}`);
+  }
+
+  const key = editsKeyFor(target, edits);
+  if (changed === 0) {
+    return {
+      target,
+      state,
+      after,
+      diff: buildDiff(target, 'edit', state.content, after),
+      key,
+      unchanged: `No change made: every edit's "newText" equals its "oldText", so ${target} is untouched.`,
+    };
+  }
   if (after === state.content) {
     throw new Error('The edits cancel each other out, so this call would change nothing.');
   }
@@ -431,9 +627,12 @@ async function planEdit(input: Record<string, unknown>, context: ToolContext): P
     throw new Error(`The result would be larger than the ${MAX_WRITE_BYTES} byte limit for a single write.`);
   }
 
-  const diff = buildDiff(target, 'edit', state.content, after);
+  return { target, state, after, diff: buildDiff(target, 'edit', state.content, after), key, notes };
+}
+
+function editsKeyFor(target: string, edits: EditSpec[]): string {
   const editsKey = edits.map(e => `${sha(e.oldText)}\x00${sha(e.newText)}\x00${e.replaceAll}`).join('\x01');
-  return { target, state, after, diff, key: `file_edit\x00${target}\x00${editsKey}` };
+  return `file_edit\x00${target}\x00${editsKey}`;
 }
 
 function countOccurrences(haystack: string, needle: string): number {
@@ -453,6 +652,10 @@ function toPrompt(plan: WritePlan): ApprovalPrompt {
 
 /** Applies an already-planned change, after one last check that the plan still holds. */
 async function applyPlan(plan: WritePlan, context: ToolContext): Promise<string> {
+  if (plan.unchanged) {
+    approvedState.delete(plan.key);
+    return plan.unchanged;
+  }
   assertUnchanged(plan.key, plan.target, fingerprint(plan.state.exists, plan.state.content));
   if (context.signal.aborted) throw new Error('The turn was stopped before this change was written.');
 
@@ -471,7 +674,8 @@ async function applyPlan(plan: WritePlan, context: ToolContext): Promise<string>
   context.report?.diff(plan.diff);
 
   const lines = splitLines(plan.after).length;
-  return `${summarizeDiff(plan.diff)}\nWritten. ${plan.target} is now ${lines} line${lines === 1 ? '' : 's'}.`;
+  const notes = plan.notes?.length ? `\n${plan.notes.join('\n')}` : '';
+  return `${summarizeDiff(plan.diff)}\nWritten. ${plan.target} is now ${lines} line${lines === 1 ? '' : 's'}.${notes}`;
 }
 
 export const fileWrite: ToolDefinition = {
@@ -514,12 +718,13 @@ export const fileEdit: ToolDefinition = {
       '',
       'Make every change you have planned for one file in a single call: pass them as "edits",',
       'applied in order, each against the result of the one before, and all-or-nothing - if any',
-      'edit fails nothing is written and the error names the failing one. Use the top-level',
-      'oldText/newText only for a lone change.',
+      'edit fails nothing is written and the error names the failing ones and confirms the rest.',
+      'Use the top-level oldText/newText only for a lone change. An edit whose newText equals its',
+      'oldText is skipped.',
       '',
-      '"oldText" must match the file exactly, including indentation and line breaks, and must',
-      'identify one place uniquely - include the surrounding lines if it does not. Read the file',
-      'first; an edit against remembered or guessed text will be rejected rather than applied.',
+      '"oldText" should be copied from the file and must identify one place uniquely - include the',
+      'surrounding lines if it does not. Indentation and spacing differences are tolerated when',
+      'exactly one place matches. Read the file first; guessed text is rejected.',
       '',
       'The user approves a diff of the change before it is written. Only paths inside the',
       'folders the user has shared can be edited.',
