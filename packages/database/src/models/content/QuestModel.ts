@@ -775,7 +775,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   ): Promise<IChatHistoryItemDocument | null> {
     const { id, ...updateData } = data;
     if (!mongoose.isObjectIdOrHexString(id)) return null;
-    // deletedAt is explicit: softDeletePlugin does not hook _plainUpdate's findOneAndUpdate.
+    // deletedAt: null is explicit; the softDeletePlugin update hook would add the same guard, this just keeps the filter self-describing.
     return this._plainUpdate({ _id: convertId(id), sessionId, deletedAt: null }, updateData as Record<string, unknown>);
   }
 
