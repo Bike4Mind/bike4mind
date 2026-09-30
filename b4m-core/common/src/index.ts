@@ -88,6 +88,7 @@ export * from './utils/countCodePoints';
 export * from './utils/capForParse';
 export * from './utils/toolArtifactEmitters';
 export * from './utils/artifactOpenTag';
+export * from './utils/scanArtifactTags';
 export * from './utils/forcedRetrievalFloors';
 export * from './utils/modelHelpers';
 export * from './utils/imageSizes';
