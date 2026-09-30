@@ -240,7 +240,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
               logger: req.logger,
             });
           });
-          await sendToQueue(getSourceQueueUrl('dataLakeCleanupQueue'), { dataLakeId: lake.id, actor });
+          await sendToQueue(getSourceQueueUrl('dataLakeCleanupQueue'), {
+            dataLakeId: lake.id,
+            actor,
+            purgeClaimId,
+          });
         } catch (err) {
           // A claim that lands with no message behind it is the one unrecoverable outcome here: no
           // list shows a 'purging' lake, restore and delete both refuse it, and there is no queued
@@ -253,7 +257,16 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
           // Safe even if the message DID land and only the ack was lost: the sweep's guard accepts
           // 'deleted' as well as 'purging', so a delivery that survives still completes the purge
           // the user asked for.
-          await dataLakeRepository.releasePurgingToDeleted(lake.id, purgeClaimId);
+          // A failed release must not mask the commit/enqueue error that is the real cause.
+          try {
+            await dataLakeRepository.releasePurgingToDeleted(lake.id, purgeClaimId);
+          } catch (releaseErr) {
+            req.logger.error('[dataLakes] could not release the purge claim after a failed cleanup request', {
+              dataLakeId: lake.id,
+              purgeClaimId,
+              error: releaseErr instanceof Error ? releaseErr.message : String(releaseErr),
+            });
+          }
           throw err;
         }
         return res.status(202).json({ success: true, queued: true });

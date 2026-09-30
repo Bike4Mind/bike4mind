@@ -895,8 +895,9 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * it. The sweep would then fail its guard and be swallowed as permanently-invalid - the exact
    * abandonment #1744 exists to remove, just through a narrower window.
    *
-   * `claimId` is stored with the claim so the accepting request can later release exactly its own
-   * claim (`releasePurgingToDeleted(id, claimId)`) and never one a concurrent request committed.
+   * `claimId` is stored with the claim (and rides on the cleanup queue message) so the accepting
+   * request and the consumer can later release exactly that claim (`releasePurgingToDeleted(id,
+   * claimId)`) and never one a concurrent request committed.
    */
   claimPurging(id: string, claimId: string): Promise<boolean>;
   /**
@@ -960,8 +961,9 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * use of this correct; a partially-swept lake must stay `purging` and be recovered by DLQ replay.
    *
    * With `claimId`, releases only the claim `claimPurging` stored under that id: the accepting route
-   * uses this so a request whose commit or enqueue failed cannot release a concurrent request's
-   * claim, which would requeue #1744. Without it, any `purging` claim (the consumer's own sweep).
+   * and the consumer (via the id carried on the queue message) both pass it, so neither a failed
+   * request nor a redelivered message can release a concurrent claim, which would requeue #1744.
+   * Without it, any `purging` claim - kept only for queue messages enqueued before the id rode along.
    */
   releasePurgingToDeleted(id: string, claimId?: string): Promise<boolean>;
   /**

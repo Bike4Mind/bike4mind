@@ -56,7 +56,10 @@ import { dispatch } from './dataLakeCleanup';
 
 const logger = { warn: vi.fn(), error: vi.fn(), log: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never;
 const makeEvent = (body: unknown) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
-const payload = { dataLakeId: 'lake1', actor: { userId: 'u1', isAdmin: false } };
+const legacyPayload = { dataLakeId: 'lake1', actor: { userId: 'u1', isAdmin: false } };
+// A redelivered message can be refused after a newer purge claimed the lake, so the release must be
+// keyed to the claim this message was accepted under.
+const payload = { ...legacyPayload, purgeClaimId: 'claim-a' };
 
 describe('dataLakeCleanup consumer', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -228,7 +231,13 @@ describe('dataLakeCleanup consumer', () => {
       expect.stringContaining('releasing the accepted purge'),
       expect.objectContaining({ dataLakeId: 'lake1' })
     );
-    expect(h.releasePurgingToDeleted).toHaveBeenCalledWith('lake1');
+    expect(h.releasePurgingToDeleted).toHaveBeenCalledWith('lake1', 'claim-a');
+  });
+
+  it('releases a legacy message with no claim id anonymously', async () => {
+    h.cleanup.mockRejectedValue(new BadRequestError('must be soft-deleted'));
+    await expect(dispatch(makeEvent(legacyPayload), {} as never, logger)).resolves.toBeUndefined();
+    expect(h.releasePurgingToDeleted).toHaveBeenCalledWith('lake1', undefined);
   });
 
   it('does NOT release on an unexpected error, since that sweep may be half-done', async () => {

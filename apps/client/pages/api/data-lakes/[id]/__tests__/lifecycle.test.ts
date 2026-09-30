@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   loadActiveLakeGrants: vi.fn().mockResolvedValue([]),
   openSearchRetrievalIndex: vi.fn(() => ({ removeForDataLake: vi.fn() })),
   sendToQueue: vi.fn(),
+  loggerError: vi.fn(),
   getSourceQueueUrl: vi.fn(() => 'https://sqs.example.com/data-lake-cleanup'),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
   selfHostOpenSearchEnabled: vi.fn(() => false),
@@ -122,7 +123,8 @@ const makeRes = () => {
   const res = { json, status: vi.fn(() => ({ json })) } as never;
   return { res, json, statusJson: json };
 };
-const req = (body: unknown) => ({ method: 'POST', query: { id: 'lake1' }, body }) as never;
+const req = (body: unknown) =>
+  ({ method: 'POST', query: { id: 'lake1' }, body, logger: { error: h.loggerError } }) as never;
 
 // The route must release with the very claim id it handed the service, so the release can only
 // match a claim this request took.
@@ -148,7 +150,10 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/data-lake-cleanup', {
       dataLakeId: 'lake1',
       actor: { userId: 'u1', isAdmin: false },
+      purgeClaimId: expect.any(String),
     });
+    // The message carries the very claim the request accepted, so the consumer's release is keyed.
+    expect(h.sendToQueue.mock.calls[0][1].purgeClaimId).toBe(h.acceptDataLakePurge.mock.calls[0][2]);
     expect(h.cleanupDeletedDataLake).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(202);
   });
@@ -184,6 +189,22 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
 
     expectReleasedOwnClaim();
     expect(res.status).not.toHaveBeenCalledWith(202);
+  });
+
+  it('rethrows the original enqueue error when the release itself fails', async () => {
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.sendToQueue.mockRejectedValue(new Error('sqs unavailable'));
+    h.releasePurgingToDeleted.mockRejectedValueOnce(new Error('mongo down'));
+    const { res } = makeRes();
+    await expect(
+      (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res)
+    ).rejects.toThrow(/sqs unavailable/);
+
+    expectReleasedOwnClaim();
+    expect(h.loggerError).toHaveBeenCalledWith(
+      expect.stringContaining('could not release the purge claim'),
+      expect.objectContaining({ dataLakeId: 'lake1', error: 'mongo down' })
+    );
   });
 
   it('releases the claim when the transaction fails after the claim, so the lake cannot strand in purging', async () => {
