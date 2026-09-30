@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { create } from 'zustand';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -57,6 +57,8 @@ export function CookieConsentBanner() {
   const [asking, setAsking] = useState(false);
   const settingsOpen = useCookieSettings(s => s.isOpen);
   const closeSettings = useCookieSettings(s => s.close);
+  const firstActionRef = useRef<HTMLButtonElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     const consent = resolveConsent();
@@ -66,6 +68,22 @@ export function CookieConsentBanner() {
     }
     activateConsent(consent);
   }, []);
+
+  // Both triggers sit after the banner in the tab order, so opening it on purpose moves focus
+  // into it and closing it hands focus back. Keyed on the request, not the mount, so the
+  // unprompted first-run ask never takes focus.
+  useEffect(() => {
+    if (settingsOpen) {
+      // From the profile menu this is body: the menu has already unmounted its row.
+      returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      firstActionRef.current?.focus();
+      return;
+    }
+    const trigger = returnFocusRef.current;
+    returnFocusRef.current = null;
+    // Only when focus went down with the banner's buttons; never pull it off something else.
+    if (trigger && document.activeElement === document.body) trigger.focus();
+  }, [settingsOpen]);
 
   if (!asking && !settingsOpen) return null;
 
@@ -89,8 +107,11 @@ export function CookieConsentBanner() {
   };
 
   return (
+    // A region, not a dialog: a dialog would also need a focus trap.
     <Box
       data-testid="cookie-consent-banner"
+      role="region"
+      aria-label="Cookie settings"
       sx={{
         position: 'fixed',
         bottom: 0,
@@ -128,12 +149,14 @@ export function CookieConsentBanner() {
         )}
       </Typography>
       <Box sx={{ display: 'flex', gap: 1, flexShrink: 0 }}>
+        {/* Focus lands where a stray Enter does least: Cancel when managing, Decline on the first-run ask. */}
         {managing && (
           <Button
             variant="plain"
             color="neutral"
             size="sm"
             onClick={closeSettings}
+            ref={firstActionRef}
             data-testid="cookie-consent-cancel-btn"
           >
             Cancel
@@ -144,6 +167,7 @@ export function CookieConsentBanner() {
           color="neutral"
           size="sm"
           onClick={() => choose('denied')}
+          ref={managing ? undefined : firstActionRef}
           data-testid="cookie-consent-decline-btn"
         >
           Decline

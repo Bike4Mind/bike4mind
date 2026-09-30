@@ -29,6 +29,9 @@ on:
       - '**/package.json'
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
+      # The EventBridge handlers in apps/workers resolve @server/* through this file's interim
+      # paths, so an edit to it can break every one of their bundles.
+      - apps/workers/tsconfig.json
       # The guard itself, because nothing else in CI reaches it: root `scripts/`
       # is not a workspace package so `pnpm -r test` skips it, ci.yml runs only
       # `--dir infra` and `--dir scripts/codemods`, and audit-gate.yml filters

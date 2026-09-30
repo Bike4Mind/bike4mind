@@ -15,7 +15,7 @@ import { Logger } from '@bike4mind/observability';
 
 // Self-host has no EventBridge. Deliver email.send straight to the mailer, and route
 // everything else to the SELF_HOST_EVENT_QUEUE for the background worker to consume
-// (server/worker/eventDispatch.ts). These events feed async enrichment (naming,
+// (apps/workers/src/selfhost/eventDispatch.ts). These events feed async enrichment (naming,
 // summaries, tags, memento embedding), so a delivery failure must degrade the feature,
 // not 500 the caller - hence warn-and-drop, never throw.
 async function publishSelfHost(eventName: string, detail: unknown): Promise<void> {

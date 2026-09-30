@@ -158,7 +158,7 @@ async function purgeSlice(
 /**
  * Background consumer for the Drive disconnect purge, enqueued by DELETE
  * /api/data-lakes/:id/drive-connection once the connection is marked disconnecting. Hosted wiring
- * lives in infra/queues.ts; self-host polls the same dispatch from server/worker/main.ts.
+ * lives in infra/queues.ts; self-host polls the same dispatch from apps/workers/src/selfhost/main.ts.
  */
 export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
   try {

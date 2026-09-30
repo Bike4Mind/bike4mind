@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { atlasVectorSearch } from './atlasVectorSearch';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { atlasVectorSearch, isAtlasVectorSearchAvailable } from './atlasVectorSearch';
 
 const fileById = new Map([
   ['f1', { fileName: 'a.pdf', fileTags: ['x'] }],
@@ -205,5 +205,65 @@ describe('atlasVectorSearch', () => {
     });
 
     expect(result.results).toHaveLength(1);
+  });
+});
+
+describe('atlasVectorSearch includeText', () => {
+  const baseArgs = {
+    fileIds: ['f1'],
+    fileById,
+    queryVector: [1, 2, 3],
+    model: 'text-embedding-3-small',
+    limit: 10,
+    minScore: 0,
+  };
+
+  it('forwards includeText to the adapter', async () => {
+    const vectorSearch = vi.fn().mockResolvedValue([]);
+    await atlasVectorSearch({ ...baseArgs, includeText: false, adapters: { vectorSearch } });
+    expect(vectorSearch).toHaveBeenCalledWith(['f1'], [1, 2, 3], 'text-embedding-3-small', {
+      limit: 10,
+      includeText: false,
+    });
+  });
+
+  // Exact `{ limit }`, not `{ limit, includeText: undefined }`: existing callers must see the
+  // options object they always did.
+  it('leaves the key absent when includeText is omitted', async () => {
+    const vectorSearch = vi.fn().mockResolvedValue([]);
+    await atlasVectorSearch({ ...baseArgs, adapters: { vectorSearch } });
+    expect(vectorSearch.mock.calls[0][3]).toStrictEqual({ limit: 10 });
+  });
+});
+
+describe('isAtlasVectorSearchAvailable', () => {
+  const savedSelfHost = process.env.B4M_SELF_HOST;
+  const savedDocumentDb = process.env.USE_DOCUMENTDB_COMPATIBILITY;
+  const both = { vectorSearch: vi.fn(), getAtlasIndexStatus: vi.fn() };
+
+  beforeEach(() => {
+    delete process.env.B4M_SELF_HOST;
+    delete process.env.USE_DOCUMENTDB_COMPATIBILITY;
+  });
+  afterEach(() => {
+    if (savedSelfHost === undefined) delete process.env.B4M_SELF_HOST;
+    else process.env.B4M_SELF_HOST = savedSelfHost;
+    if (savedDocumentDb === undefined) delete process.env.USE_DOCUMENTDB_COMPATIBILITY;
+    else process.env.USE_DOCUMENTDB_COMPATIBILITY = savedDocumentDb;
+  });
+
+  it('is true on Atlas with both ANN methods present', () => {
+    expect(isAtlasVectorSearchAvailable(both)).toBe(true);
+  });
+
+  it('is false off Atlas even with both methods present', () => {
+    process.env.B4M_SELF_HOST = 'true';
+    expect(isAtlasVectorSearchAvailable(both)).toBe(false);
+  });
+
+  it('is false when either ANN method or the repository is missing', () => {
+    expect(isAtlasVectorSearchAvailable({ vectorSearch: both.vectorSearch })).toBe(false);
+    expect(isAtlasVectorSearchAvailable({ getAtlasIndexStatus: both.getAtlasIndexStatus })).toBe(false);
+    expect(isAtlasVectorSearchAvailable(undefined)).toBe(false);
   });
 });

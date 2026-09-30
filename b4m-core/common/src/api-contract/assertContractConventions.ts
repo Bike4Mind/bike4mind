@@ -152,6 +152,46 @@ function carriesTypedStreamErrorFrame(schema: z.ZodTypeAny): boolean {
 }
 
 /**
+ * A GET whose 200 body carries a `data` array is a list, and a list pages by cursor (CONVENTIONS.md
+ * section 8). Probed with `safeParse` like the envelope check: `next_cursor` must be required and
+ * nullable, and the query must carry an optional-or-defaulted `limit` and an optional `cursor`.
+ * The other half of the convention - that `limit` bounds the page and the cursor is opaque - lives
+ * in the handler, and the server helper (`apps/client/server/utils/cursorPagination.ts`) keeps it.
+ *
+ * This inference is fail-closed on purpose: a GET that merely shapes its body as a nullable array
+ * is still caught here, rather than an opt-in marker someone could forget to set. A genuinely
+ * non-paginated array response is the `pagination` conventionExemption's job, not a looser inference.
+ */
+function isListResponse(schema: z.ZodTypeAny | undefined): boolean {
+  const data = schema ? shapeOf(schema)?.data : undefined;
+  return !!data && data.safeParse([]).success && !data.safeParse({}).success;
+}
+
+function carriesCursorPagination(contract: EndpointContract): boolean {
+  const listSchema = contract.responses[200]?.schema;
+  const nextCursor = listSchema ? shapeOf(listSchema)?.next_cursor : undefined;
+  const cursorOk =
+    !!nextCursor &&
+    nextCursor.safeParse(null).success &&
+    nextCursor.safeParse('opaque').success &&
+    !nextCursor.safeParse(undefined).success;
+
+  const query = contract.queryParams?.shape as Record<string, z.ZodTypeAny> | undefined;
+  const limit = query?.limit;
+  const cursor = query?.cursor;
+  const paramsOk =
+    !!limit &&
+    !!cursor &&
+    limit.safeParse(undefined).success &&
+    cursor.safeParse(undefined).success &&
+    !limit.safeParse(0).success &&
+    !limit.safeParse(101).success &&
+    !cursor.safeParse('').success;
+
+  return cursorOk && paramsOk;
+}
+
+/**
  * A >= 400 response whose body is JSON, so the envelope rule applies to it.
  *
  * A missing `schema` does NOT mean "not JSON": registerContract falls back to
@@ -168,9 +208,9 @@ function isJsonErrorResponse(status: number, spec: ResponseSpec): boolean {
 export function assertContractConventions(contracts: readonly EndpointContract[]): void {
   for (const contract of contracts) {
     const exemptions = contract.conventionExemptions;
-    // `scope-required` / `version-root` are contract-wide; `status-table` is keyed
+    // `scope-required` / `version-root` / `pagination` are contract-wide; `status-table` is keyed
     // by the individual status, so excusing 402 cannot also excuse an unrelated 418.
-    const exempt = (rule: 'scope-required' | 'version-root') => Boolean(exemptions?.[rule]);
+    const exempt = (rule: Exclude<ConventionRule, 'status-table'>) => Boolean(exemptions?.[rule]);
     const statusExempt = (status: number) => Boolean(exemptions?.['status-table']?.[status]);
 
     if (!CAMEL_CASE.test(contract.operationId)) {
@@ -245,6 +285,21 @@ export function assertContractConventions(contracts: readonly EndpointContract[]
             'An untyped classifier leaves callers regex-matching the prose `message`.'
         );
       }
+    }
+
+    if (
+      contract.method === 'get' &&
+      isListResponse(contract.responses[200]?.schema) &&
+      !carriesCursorPagination(contract) &&
+      !exempt('pagination')
+    ) {
+      fail(
+        contract,
+        'pagination',
+        'a GET whose 200 body is a `data` array does not follow the cursor-pagination shape.',
+        'Declare `queryParams: PaginationQuerySchema` and build the 200 with `paginatedResponseSchema(item)`, ' +
+          'so the list carries a required, nullable `next_cursor`.'
+      );
     }
 
     for (const [rawStatus, spec] of Object.entries(contract.responses)) {

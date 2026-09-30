@@ -1543,6 +1543,95 @@ describe('ChatCompletionProcess', () => {
       expect(mockQuest.status).toBe('stopped');
     });
 
+    describe('Research Mode cancellation', () => {
+      const RESEARCH_MODEL = 'gpt-4-research';
+
+      function availableModels() {
+        const base = {
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        };
+        return [base, { ...base, id: RESEARCH_MODEL, name: 'Research' }].map(m => ({
+          id: m.id ?? ChatModels.GPT4,
+          ...m,
+        }));
+      }
+
+      function researchBody() {
+        return {
+          ...startQuestParams,
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          researchMode: {
+            enabled: true,
+            configurations: [{ id: 'cfg-1', enabled: true, model: RESEARCH_MODEL, parameters: {} }],
+          },
+        };
+      }
+
+      it('aborts the configuration and ends the quest stopped when the watcher sees a Stop', async () => {
+        const complete = vi.fn().mockImplementation(async (_model, _messages, opts, cb) => {
+          await cb(['Partial ']);
+          // A user Stop persists 'stopped'; the (hoisted) watcher sees it and aborts.
+          mockDb.quests.findByIdWithStatus.mockResolvedValue({ ...mockQuest, status: 'stopped' });
+          await new Promise<void>(resolve => {
+            if (opts.abortSignal?.aborted) return resolve();
+            opts.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
+            setTimeout(resolve, 3000);
+          });
+        });
+        mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn().mockResolvedValue([]) } as any);
+        mockedGetAvailableModels.mockResolvedValue(availableModels() as any);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+        await service.process({ body: researchBody() as any, logger: mockLogger });
+
+        expect(complete).toHaveBeenCalled();
+        expect(complete.mock.calls[0][2].abortSignal).toBeInstanceOf(AbortSignal);
+        expect(complete.mock.calls[0][2].abortSignal.aborted).toBe(true);
+
+        const statuses = mockDb.quests.update.mock.calls.map(([arg]: [{ status?: string } | undefined]) => arg?.status);
+        expect(statuses.at(-1)).toBe('stopped');
+        expect(mockQuest.status).toBe('stopped');
+      });
+
+      it('ends an uncancelled Research Mode turn as done and threads the signal', async () => {
+        const complete = vi.fn().mockImplementation(async (_model, _messages, opts, cb) => {
+          expect(opts.abortSignal).toBeInstanceOf(AbortSignal);
+          await cb(['Answer ']);
+          await cb(['complete']);
+        });
+        mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn().mockResolvedValue([]) } as any);
+        mockedGetAvailableModels.mockResolvedValue(availableModels() as any);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+        await service.process({ body: researchBody() as any, logger: mockLogger });
+
+        expect(complete.mock.calls[0][2].abortSignal.aborted).toBe(false);
+        expect(mockQuest.status).toBe('done');
+        expect(mockQuest.researchModeResults).toEqual([
+          { configurationId: 'cfg-1', success: true, response: 'Answer complete', completionInfo: undefined },
+        ]);
+      });
+    });
+
     describe('incomplete answer notice', () => {
       type Emit = (chunks: string[], info?: Record<string, unknown>) => Promise<void>;
 

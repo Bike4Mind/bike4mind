@@ -4189,50 +4189,9 @@ export class ChatCompletionProcess {
         ...(promptMode === 'raw' ? { omitIdentityReminder: true } : {}),
       };
 
-      // Check if Research Mode is enabled and handle parallel processing
-      if (researchMode?.enabled && researchMode.configurations?.length > 0) {
-        logger.info(
-          `🔬 [Research Mode] Starting parallel processing with ${researchMode.configurations.length} configurations`
-        );
-
-        const researchModeService = new ResearchModeService(apiKeyTable, models, logger, this.user.id);
-
-        // Handle Research Mode parallel processing
-        const researchResults = await researchModeService.processResearchMode(
-          researchMode,
-          messages,
-          options as ICompletionOptions,
-          async (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: unknown) => {
-            // Handle streaming for each configuration
-            this.sendResearchModeStreamUpdate(quest, configId, streamedTexts, completionInfo);
-          }
-        );
-
-        // Update quest with Research Mode results
-        quest.researchModeResults = researchResults;
-        quest.status = 'done';
-
-        logger.info(`🔬 [Research Mode] Saving quest with results:`, {
-          questId: quest.id,
-          resultsCount: researchResults.length,
-          results: researchResults.map(r => ({
-            configId: r.configurationId,
-            success: r.success,
-            responseLength: r.response?.length || 0,
-          })),
-        });
-
-        await saveQuest(quest);
-
-        // Send final status update to complete the Research Mode processing
-        await this.sendStatusUpdate(quest, null, { immediate: true });
-
-        logger.info(`🔬 [Research Mode] Completed parallel processing`);
-
-        return;
-      }
-
-      // Create an AbortController to allow cancelling the request
+      // Create an AbortController to allow cancelling the request. Set up before the Research
+      // Mode branch below, which returns early: both paths share one controller and one watcher,
+      // and the holder assignment is what lets tools on the research path see the turn signal.
       const abortController = new AbortController();
       // Make the signal available to subagents via the closure captured by buildTools
       abortSignalHolder.signal = abortController.signal;
@@ -4296,6 +4255,60 @@ export class ChatCompletionProcess {
 
       // Start the cancellation watcher
       startCancellationWatcher();
+
+      // Check if Research Mode is enabled and handle parallel processing
+      if (researchMode?.enabled && researchMode.configurations?.length > 0) {
+        logger.info(
+          `🔬 [Research Mode] Starting parallel processing with ${researchMode.configurations.length} configurations`
+        );
+
+        const researchModeService = new ResearchModeService(apiKeyTable, models, logger, this.user.id);
+
+        // Handle Research Mode parallel processing
+        const researchResults = await researchModeService.processResearchMode(
+          researchMode,
+          messages,
+          options as ICompletionOptions,
+          async (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: unknown) => {
+            // Handle streaming for each configuration
+            this.sendResearchModeStreamUpdate(quest, configId, streamedTexts, completionInfo);
+          },
+          abortController.signal
+        );
+
+        // Update quest with Research Mode results. A Stop makes the cancellation watcher
+        // abort the controller, so the terminal status has to reflect that rather than
+        // unconditionally claiming the turn finished.
+        quest.researchModeResults = researchResults;
+        quest.status = successStatus();
+
+        // This early return skips the normal-path cleanup below, so drop the controller entry
+        // and the watcher here; the outer finally only clears the interval.
+        cleanupAbortController();
+        if (cancelWatcherInterval) {
+          clearInterval(cancelWatcherInterval);
+          cancelWatcherInterval = null;
+        }
+
+        logger.info(`🔬 [Research Mode] Saving quest with results:`, {
+          questId: quest.id,
+          resultsCount: researchResults.length,
+          results: researchResults.map(r => ({
+            configId: r.configurationId,
+            success: r.success,
+            responseLength: r.response?.length || 0,
+          })),
+        });
+
+        await saveQuest(quest);
+
+        // Send final status update to complete the Research Mode processing
+        await this.sendStatusUpdate(quest, null, { immediate: true });
+
+        logger.info(`🔬 [Research Mode] Completed parallel processing`);
+
+        return;
+      }
 
       // (P2b) Resolve the overlapped rapid reply lookup before streaming begins - by now it
       // has run concurrently with all of context assembly, so this await is effectively free.

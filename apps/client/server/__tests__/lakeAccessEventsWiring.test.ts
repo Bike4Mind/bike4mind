@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
  * Heuristic: a KB-capable db literal is identified by carrying BOTH `fabfiles:` and
  * `fabfilechunks:` as object keys (not `fabFiles`/`fabFileChunks`, which name a different,
  * non-tool-context repository shape used elsewhere) - verified against every file under
- * apps/client/server to match exactly the known construction sites and nothing else.
+ * SCAN_ROOTS to match exactly the known construction sites and nothing else.
  *
  * The COUNT is keyed on `dataLakes:`, not on `fabfilechunks:`. `fabfilechunks:` is no longer 1:1
  * with a tool-context bundle: `processFabFilesServer`'s own deps take the same key and wire no
@@ -28,11 +28,11 @@ import { fileURLToPath } from 'node:url';
  * lake-capable in the first place, which is exactly the population that owes an audit row - it is
  * 1:1 with `lakeAccessEvents:` at every real site today, including agentExecutor's two. This is
  * tighter about intent, not looser: a bundle wiring `dataLakes` without `lakeAccessEvents` still
- * fails, and one wiring neither has no lake access to audit. Scoped to
- * apps/client/server on purpose: b4m-core/services only ever CONSUMES ToolContext, it cannot
- * construct the concrete, @bike4mind/database-backed adapter bundle (the same import-direction
- * rule DataLakeAccessGrantModel and LakeAccessEventModel both split around), so a real
- * construction site can only ever live in apps/client.
+ * fails, and one wiring neither has no lake access to audit. Scoped to apps/client/server and
+ * apps/workers/src on purpose: both depend directly on @bike4mind/database and so can construct
+ * the concrete, database-backed adapter bundle; b4m-core/services only ever CONSUMES ToolContext
+ * (the same import-direction rule DataLakeAccessGrantModel and LakeAccessEventModel both split
+ * around), so a real construction site can only ever live in one of the two apps.
  *
  * Pure string parsing - no imports of the modules, no AWS/SST calls. Lives outside `pages/api/`
  * for the same NFT-bundling reason as sessionRedactionGuard.test.ts.
@@ -40,9 +40,9 @@ import { fileURLToPath } from 'node:url';
 
 // This test lives at apps/client/server/__tests__ -> repo root is four levels up.
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
-const SERVER_DIR = resolve(REPO_ROOT, 'apps/client/server');
+const SCAN_ROOTS = ['apps/client/server', 'apps/workers/src'].map(root => resolve(REPO_ROOT, root));
 
-/** Recursively collect every `.ts` file under apps/client/server, skipping tests. */
+/** Recursively collect every `.ts` file under `dir`, skipping tests. */
 const collectServerFiles = (dir: string): string[] => {
   const out: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -61,7 +61,7 @@ const isKbCapableDbLiteral = (content: string) => content.includes('fabfiles:') 
 const countOccurrences = (content: string, needle: string) => content.split(needle).length - 1;
 
 describe('ToolContext db construction sites wire lakeAccessEvents', () => {
-  const kbCapableFiles = collectServerFiles(SERVER_DIR)
+  const kbCapableFiles = SCAN_ROOTS.flatMap(collectServerFiles)
     .map(file => ({ file, content: readFileSync(file, 'utf8') }))
     .filter(({ content }) => isKbCapableDbLiteral(content));
 

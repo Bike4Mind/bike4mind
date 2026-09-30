@@ -53,6 +53,10 @@ export type LakeAccessPrincipalKind = (typeof LAKE_ACCESS_PRINCIPAL_KINDS)[numbe
  */
 export const LAKE_ACCESS_SURFACES = [
   'data-lake-semantic-search',
+  // The public v1 search contract (POST /api/v1/data-lakes/{id}/search), sharing
+  // `runLakeSemanticSearch` with the SPA route above but recorded under its own value so an
+  // integrator's traffic can be told apart from the product UI's in the access history.
+  'data-lake-api-v1-search',
   'data-lake-articles',
   'data-lake-public-browse',
   'data-lake-sync-delta',

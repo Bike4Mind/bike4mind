@@ -339,6 +339,59 @@ describe('BaseBedrockBackend does not duplicate an echoed tool artifact card (#3
     expect(clientText.indexOf('Done.')).toBeGreaterThan(secondChartIndex);
   });
 
+  it('pin: text and a tool call sharing one choice index in a non-streaming response both survive', async () => {
+    // Moonshot's native tool-call path emits the <think> monologue and the call at the same
+    // index, with the call's chunkText deliberately empty.
+    const backend = new TestBedrockBackend();
+    let callIndex = 0;
+    const bodies = [
+      asBedrockInvokeBody({
+        choices: [
+          {
+            index: 0,
+            status: ChoiceStatus.END,
+            statusEndReason: ChoiceEndReason.STOP,
+            chunkText: '<think>Let me chart this.</think>',
+            usage: { input_tokens: 10, output_tokens: 2 },
+          },
+          {
+            index: 0,
+            status: ChoiceStatus.END,
+            statusEndReason: ChoiceEndReason.TOOL_USE,
+            chunkText: '',
+            tool: {
+              name: 'mermaid_chart',
+              id: TOOL_CALL_ID,
+              parameters: JSON.stringify({ definition: 'graph TD;A-->B' }),
+            },
+          },
+        ],
+      }),
+      asBedrockInvokeBody(nonStreamingTextChunk('Done.')),
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _bedrockRuntime: any })._bedrockRuntime = {
+      send: async () => ({ body: bodies[callIndex++] }),
+    };
+
+    const messages: IMessage[] = [{ role: 'user', content: 'chart it' }];
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      TEST_MODEL,
+      messages,
+      { stream: false, tools: [mermaidTool], executeTools: true } as Partial<ICompletionOptions>,
+      cb
+    );
+
+    const clientText = calls
+      .flatMap(c => c.text)
+      .filter((r): r is string => typeof r === 'string')
+      .join('');
+    expect(clientText).toContain('<think>Let me chart this.</think>');
+    expect(clientText.indexOf('identifier="mermaid-1"')).toBeGreaterThan(clientText.indexOf('Let me chart this.'));
+  });
+
   it('pin: a genuinely NEW artifact the model composes in its own reply text is not mistaken for an echo', async () => {
     // Regression: the echo backstop used to strip EVERY complete <artifact> block from the
     // buffered reply, not just ones matching an artifact already delivered this turn - so a

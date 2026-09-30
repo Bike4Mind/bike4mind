@@ -17,7 +17,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-import { toAccessContext } from './toAccessContext';
+import { toAccessContext, toMemberAccessContext } from './toAccessContext';
 
 const req = (user: Record<string, unknown>) => ({ user }) as unknown as EntitlementRequest;
 
@@ -61,5 +61,33 @@ describe('toAccessContext - organization membership (#1674)', () => {
     expect(ctx.entitlementKeys).toEqual([]);
     expect(ctx.organizationIds).toEqual(['org-a']);
     expect(mockGetRequestEntitlements).not.toHaveBeenCalled();
+  });
+});
+
+describe('toMemberAccessContext', () => {
+  beforeEach(() => {
+    mockGetRequestEntitlements.mockReset();
+    mockGetRequestEntitlements.mockResolvedValue(['ent-1']);
+    mockFindMembershipOrgIds.mockReset();
+    mockFindMembershipOrgIds.mockResolvedValue(['org-a']);
+    mockFindIdsWithAdminRights.mockReset();
+    mockFindIdsWithAdminRights.mockResolvedValue(['org-a']);
+  });
+
+  it('turns the admin bypass off and resolves the sets an admin context skips', async () => {
+    const ctx = await toMemberAccessContext(req({ id: 'admin', isAdmin: true, tags: ['t'] }));
+    expect(ctx).toEqual({
+      userId: 'admin',
+      isAdmin: false,
+      userTags: ['t'],
+      organizationIds: ['org-a'],
+      entitlementKeys: ['ent-1'],
+      administeredOrgIds: ['org-a'],
+    });
+  });
+
+  it('matches toAccessContext for a non-admin', async () => {
+    const user = { id: 'u1', tags: [] };
+    expect(await toMemberAccessContext(req(user))).toEqual(await toAccessContext(req(user)));
   });
 });
