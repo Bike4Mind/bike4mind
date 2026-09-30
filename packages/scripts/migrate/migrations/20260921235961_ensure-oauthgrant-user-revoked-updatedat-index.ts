@@ -27,8 +27,12 @@ const migration: MigrationFile = {
   name: 'ensure oauthgrant user-revoked-updatedat index',
 
   up: async () => {
-    // Drop the stale createdAt index if a preview environment built it under the old id.
-    await OAuthGrantModel.collection.dropIndex({ userId: 1, revokedAt: 1, createdAt: -1 }).catch(() => {});
+    // Drop the stale { userId, revokedAt, createdAt } index if a preview ran the old migration id.
+    await OAuthGrantModel.collection
+      .dropIndex('userId_1_revokedAt_1_createdAt_-1')
+      .catch((err: { codeName?: string }) => {
+        if (err?.codeName !== 'IndexNotFound') throw err;
+      });
     await OAuthGrantModel.createIndexes();
   },
 

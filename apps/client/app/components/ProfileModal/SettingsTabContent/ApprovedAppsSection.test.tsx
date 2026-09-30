@@ -51,7 +51,7 @@ const GRANT_B = {
 
 describe('ApprovedAppsSection', () => {
   beforeEach(() => {
-    vi.resetAllMocks();
+    vi.clearAllMocks();
     mockUseRevokeOAuthGrant.mockReturnValue({ mutate: mockMutate });
     mockUseAccessToken.mockReturnValue(false);
   });
@@ -68,11 +68,19 @@ describe('ApprovedAppsSection', () => {
     expect(screen.getByText('Loading...')).toBeTruthy();
   });
 
-  it('shows an error state when the first fetch fails', () => {
+  it('shows an error state when the first fetch fails (no cached data)', () => {
     mockUseOAuthGrants.mockReturnValue({ data: undefined, isLoading: false, isError: true });
     renderWithTheme(<ApprovedAppsSection />);
     expect(screen.getByTestId('approved-apps-error')).toBeTruthy();
     expect(screen.queryByTestId('approved-apps-empty')).toBeNull();
+  });
+
+  it('shows empty state when grants are empty and a background refetch fails', () => {
+    // data: [] + isError: true -- the empty message should still show, not a blank card
+    mockUseOAuthGrants.mockReturnValue({ data: [], isLoading: false, isError: true });
+    renderWithTheme(<ApprovedAppsSection />);
+    expect(screen.getByTestId('approved-apps-empty')).toBeTruthy();
+    expect(screen.queryByTestId('approved-apps-error')).toBeNull();
   });
 
   it('keeps showing a valid cached list when a background refetch fails', () => {

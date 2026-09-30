@@ -58,7 +58,7 @@ const ApprovedAppsSection: React.FC = () => {
         </Typography>
       )}
 
-      {!isLoading && !grants?.length && !isError && (
+      {!isLoading && !grants?.length && (
         <Typography level="body-sm" data-testid="approved-apps-empty">
           No approved apps. Apps you authorize through the consent screen will appear here.
         </Typography>
