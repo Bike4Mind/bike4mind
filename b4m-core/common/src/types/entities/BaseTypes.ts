@@ -9,9 +9,30 @@ export type RepositoryUpdateOptions<T> = {
 /**
  * `update` data: the changed top-level fields, plus leaf paths (`'visual.portraitUrl'`) that `$set` one
  * field inside a sub-document without rewriting its siblings. A path's root must be a real field, so a
- * typo in it fails to compile; the value under a path is not checked.
+ * typo in it fails to compile; the value under a path is not checked. Nor is the leaf: `'visual.'` (an
+ * empty segment) compiles, and Mongo rejects it at write time.
  */
 export type RepositoryPatch<T> = Partial<T> & { [P in `${keyof T & string}.${string}`]?: unknown };
+
+type AssertTrue<T extends true> = T;
+type PatchFixture = { id: string; name: string; visual: { portraitUrl?: string } };
+
+/**
+ * COMPILE-TIME GUARD on RepositoryPatch: a leaf path under a real root and a plain field are accepted,
+ * a typo'd root is not, and the type never degrades to an arbitrary string index (`& Record<string,
+ * unknown>` would accept every typo). Asserted in source because package tsconfigs exclude test files
+ * and vitest does not typecheck, so a `@ts-expect-error` in a spec is never evaluated.
+ */
+export type RepositoryPatchIsRootChecked = AssertTrue<
+  [
+    { 'visual.portraitUrl': string } extends RepositoryPatch<PatchFixture> ? true : false,
+    { name: string } extends RepositoryPatch<PatchFixture> ? true : false,
+    'visul.portraitUrl' extends keyof RepositoryPatch<PatchFixture> ? false : true,
+    string extends keyof RepositoryPatch<PatchFixture> ? false : true,
+  ] extends [true, true, true, true]
+    ? true
+    : false
+>;
 
 /**
  * `update`'s call shape. Two overloads rather than one `RepositoryPatch<T>` parameter: the leaf-path
@@ -44,7 +65,11 @@ export interface IBaseRepository<T> {
    * Honours the same reserved `unset` option as `update`.
    */
   updateGuarded?: RepositoryUpdate<T>;
-  updateMany: (filter: Record<string, unknown>, data: Partial<T>) => Promise<unknown>;
+  updateMany: (
+    filter: Record<string, unknown>,
+    data: Partial<T>,
+    options?: RepositoryUpdateOptions<T>
+  ) => Promise<unknown>;
   delete: (id: string) => Promise<unknown>;
   count: (filter: Record<string, unknown>) => Promise<number>;
 }
