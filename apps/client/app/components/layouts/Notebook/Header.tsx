@@ -15,6 +15,10 @@ import SearchBarWithToggle from '@client/app/components/Session/SearchBarWithTog
 import { useGetFavoriteSessions } from '@client/app/hooks/data/sessions';
 import { gray } from '@client/app/utils/themes/colors';
 import SessionOwnerBadge from '@client/app/components/Session/SessionOwnerBadge';
+import Typography from '@mui/joy/Typography';
+import { useMobileHeaderStore } from '@client/app/hooks/useMobileHeader';
+import { gearsMenuDot, useGearsNavSignal } from '@client/app/hooks/useVisibleGears';
+import { rewardGreen } from '@client/app/components/common/gearRewardStyles';
 
 const NotebookHeader = () => {
   const [openSideNav, setOpenSideNav, showMessageCounts] = useNotebookLayout(
@@ -29,6 +33,11 @@ const NotebookHeader = () => {
   const { setSearch } = useNotebookSearch();
   const { t } = useTranslation();
   const { data: favoriteSessions = [] } = useGetFavoriteSessions();
+  const pageTitle = useMobileHeaderStore(s => s.title);
+  const pageAction = useMobileHeaderStore(s => s.action);
+  // The phone's sidenav is behind this button, so the tag on its Gears row is
+  // unseen until the menu is opened; a dot stands in for it.
+  const menuDot = gearsMenuDot(useGearsNavSignal());
 
   return (
     <Sheet
@@ -56,8 +65,27 @@ const NotebookHeader = () => {
         onClick={() => {
           setOpenSideNav(!openSideNav);
         }}
+        sx={{ position: 'relative' }}
       >
         <MenuIcon />
+        {menuDot && (
+          <Box
+            component="span"
+            aria-hidden
+            data-testid={`mobile-header-menu-dot-${menuDot}`}
+            sx={theme => ({
+              position: 'absolute',
+              top: '-4px',
+              right: '-4px',
+              width: '10px',
+              height: '10px',
+              borderRadius: '50%',
+              // Start here's own tag is neutral, which a bare dot cannot be and still
+              // be seen - so it takes the text colour, and the reward its green.
+              backgroundColor: menuDot === 'claim' ? rewardGreen(theme).ink : theme.palette.text.primary,
+            })}
+          />
+        )}
       </IconButton>
       {isNotebookPage && currentSession ? (
         <Box
@@ -110,6 +138,19 @@ const NotebookHeader = () => {
             </IconButton>
           </Box>
         </Box>
+      ) : pageTitle ? (
+        <>
+          {/* Centred on the header, not on the space left by the menu button: the
+              right slot is as wide as that button even when empty. */}
+          <Typography
+            data-testid="mobile-header-title"
+            noWrap
+            sx={{ flex: 1, minWidth: 0, textAlign: 'center', fontSize: '16px', fontWeight: 500, color: 'text.primary' }}
+          >
+            {pageTitle}
+          </Typography>
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', minWidth: '32px' }}>{pageAction}</Box>
+        </>
       ) : null}
     </Sheet>
   );
