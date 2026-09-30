@@ -8,15 +8,14 @@ const sharedDir = resolve(__dirname, 'src/shared');
 const nodeCryptoShim = resolve(__dirname, 'src/renderer/src/shims/nodeCrypto.ts');
 
 /**
- * The brand's default backend, supplied at build time and never committed. Precedence is
- * the shell environment first - that is how CI injects it for the CLI today, and how a
- * packaging run injects it here - then a gitignored `.env`/`.env.local` in this directory,
- * which only exists so a local packaging run is one command rather than a long prefix.
- * Absent both, it is empty and the build has no hosted option at all.
+ * One of the brand values supplied at build time and never committed. Precedence is the
+ * shell environment first - that is how CI injects them for the CLI today, and how a
+ * packaging run injects them here - then a gitignored `.env`/`.env.local` in this
+ * directory, which only exists so a local packaging run is one command rather than a long
+ * prefix. Absent both, the value is empty and the feature it gates is off.
  */
-function bakedApiUrl(mode: string): string {
-  const fromFile = loadEnv(mode, __dirname, 'B4M_');
-  return process.env.B4M_DEFAULT_API_URL ?? fromFile.B4M_DEFAULT_API_URL ?? '';
+function baked(mode: string, name: 'B4M_DEFAULT_API_URL' | 'B4M_UPDATE_FEED_URL'): string {
+  return process.env[name] ?? loadEnv(mode, __dirname, 'B4M_')[name] ?? '';
 }
 
 export default defineConfig(({ mode }) => {
@@ -30,8 +29,12 @@ export default defineConfig(({ mode }) => {
       // always be empty; substituting only this one expression leaves every other
       // `process.env` lookup in main working normally. Empty for an unbranded fork, which
       // then has no hosted option in the environment picker.
+      // The release feed is baked in the same way and for the same reasons, plus one more:
+      // this repo is public, and a feed url is a host or a bucket behind one. Empty for a fork,
+      // which then builds an app with updates switched off rather than one pointed at ours.
       define: {
-        'process.env.B4M_DEFAULT_API_URL': JSON.stringify(bakedApiUrl(mode)),
+        'process.env.B4M_DEFAULT_API_URL': JSON.stringify(baked(mode, 'B4M_DEFAULT_API_URL')),
+        'process.env.B4M_UPDATE_FEED_URL': JSON.stringify(baked(mode, 'B4M_UPDATE_FEED_URL')),
       },
       // `@bike4mind/utils` is bundled rather than left external, and only main does this.
       // Main uses one subpath of it, `/artifactParser` - 20 kB that imports nothing but

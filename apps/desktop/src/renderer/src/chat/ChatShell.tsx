@@ -11,7 +11,7 @@ import { BackgroundTaskChip, BackgroundTaskPanel } from './BackgroundTaskPanel';
 import { readPanelFlag, writePanelFlag } from './backgroundTasks';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
-import { CustomizePanel } from './CustomizePanel';
+import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
 import { MessageThread } from './MessageThread';
 import { PendingApprovalBar } from './PendingApprovalBar';
 import { columnStackSx, contentColumnSx } from './layout';
@@ -94,6 +94,12 @@ function WorkingDirectoryLine({ project }: { project: ChatProject }) {
   );
 }
 
+/**
+ * What the main pane is showing. One value rather than a flag per screen, so the screens
+ * cannot both be up and nothing has to remember to shut the other one.
+ */
+type ChatScreen = 'conversation' | 'artifacts' | 'customize';
+
 export function ChatShell({ account }: { account?: ReactNode }) {
   const {
     sessions,
@@ -118,7 +124,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   const statuses = useSessionStatuses();
   const pendingApprovals = usePendingApprovals();
   const [collapsed, setCollapsed] = useState(false);
-  const [showArtifacts, setShowArtifacts] = useState(false);
+  const [screen, setScreen] = useState<ChatScreen>('conversation');
   // Window chrome, so it is remembered per machine rather than per conversation. Seeded from
   // storage on the first render and written back on every change, which is the whole of the
   // persistence - see backgroundTasks.ts for the keys and the blocked-storage fallback.
@@ -231,7 +237,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
    * and no way back in. Nothing is asked up front now, so there is nothing left to cancel.
    */
   const onCreate = useCallback(async () => {
-    setShowArtifacts(false);
+    setScreen('conversation');
     if (mode !== 'code') {
       setActiveId(await create());
       return;
@@ -252,7 +258,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
     async (directory: string) => {
       const sibling = sessions.find(session => session.project?.directory === directory)?.project;
       if (!sibling) return;
-      setShowArtifacts(false);
+      setScreen('conversation');
       const created = await createCode({
         directory: sibling.directory,
         branch: sibling.branch,
@@ -305,23 +311,25 @@ export function ChatShell({ account }: { account?: ReactNode }) {
         collapsed={collapsed}
         onToggleCollapsed={() => setCollapsed(current => !current)}
         onSelect={sessionId => {
-          // The library takes over the same pane the transcript lives in, so picking a
+          // A screen takes over the same pane the transcript lives in, so picking a
           // conversation has to put it back or the click reads as doing nothing.
-          setShowArtifacts(false);
+          setScreen('conversation');
           setActiveId(sessionId);
         }}
         onCreate={() => void onCreate()}
-        onOpenArtifacts={() => setShowArtifacts(true)}
+        onOpenArtifacts={() => setScreen('artifacts')}
         onCreateInProject={directory => void onCreateInProject(directory)}
         onDelete={sessionId => void onDelete(sessionId)}
         onTogglePin={session => void togglePin(session)}
         onToggleArchived={session => void toggleArchived(session)}
-        customize={<CustomizePanel />}
+        customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
         footer={account}
       />
 
-      {showArtifacts ? (
-        <ArtifactLibraryPanel onClose={() => setShowArtifacts(false)} />
+      {screen === 'artifacts' ? (
+        <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
+      ) : screen === 'customize' ? (
+        <CustomizeScreen onClose={() => setScreen('conversation')} />
       ) : (
         <Stack sx={{ flex: 1, minWidth: 0, ...columnStackSx }}>
           <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>

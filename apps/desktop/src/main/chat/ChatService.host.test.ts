@@ -213,6 +213,9 @@ describe('ChatService app-control tools', () => {
     });
     expect(report).toMatchObject({ sessionId: parent.id });
 
+    const childId = (await store.list()).find(session => session.origin)?.id;
+    expect(childId).toBeTruthy();
+
     const stored = (await store.get(parent.id))?.messages ?? [];
     const notice = stored.find(message => message.system);
     expect(notice?.content).toContain('has finished');
@@ -220,6 +223,11 @@ describe('ChatService app-control tools', () => {
     // parent request as though the user had typed it; session_read is the way to that.
     expect(notice?.content).not.toContain('Finished: the file is updated.');
     expect(notice?.content).toContain('session_read');
+    expect(notice?.content).toContain(childId);
+    // The user's half of the same report: same event, none of the handles the model needs.
+    expect(notice?.display).toBeTruthy();
+    expect(notice?.display).not.toContain(childId);
+    expect(notice?.display).not.toContain('session_read');
     // It must not be mistaken for the user's own words, in the thread or on the wire.
     expect(notice?.role).toBe('user');
     expect(notice?.system).toBe(true);

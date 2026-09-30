@@ -214,6 +214,19 @@ export class BackgroundProcessRegistry {
     return { ...tracked.info };
   }
 
+  /**
+   * Running processes across every session, for the one caller that is not session-scoped:
+   * deciding whether quitting would strand work. Finished entries linger in the map until they
+   * are pruned, so this counts status rather than size.
+   */
+  runningCount(): number {
+    let running = 0;
+    for (const tracked of this.processes.values()) {
+      if (tracked.info.status === 'running') running += 1;
+    }
+    return running;
+  }
+
   list(sessionId: string): BackgroundProcessInfo[] {
     return [...this.processes.values()]
       .filter(tracked => tracked.info.sessionId === sessionId)
