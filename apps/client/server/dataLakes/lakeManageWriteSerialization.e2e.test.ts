@@ -6,6 +6,7 @@ import type { AccessContext } from '@bike4mind/common';
 import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
+  settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import {
   User,
@@ -43,7 +44,9 @@ const MODELS = [User, DataLakeModel, DataLakeAccessGrantModel, LakeConfigChangeE
 
 beforeAll(async () => {
   replSet = await createMongoReplSet();
-  await mongoose.connect(replSet.getUri());
+  // No background index builds: they contend with the transactions this suite holds open on a latch.
+  await mongoose.connect(replSet.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
   // Collections and indexes exist before any test, and are emptied rather than dropped between
   // them. Otherwise the audit collection is first created (and indexes built) while a transaction
   // is paused open, which contends with it; `recordLakeConfigChange` swallows the resulting failure,
@@ -223,7 +226,7 @@ describe('lake manage writes vs a concurrent grant revoke (replica set)', () => 
 
     const purge = withTransaction(async () => {
       attempts++;
-      return dataLakeService.acceptDataLakePurge(ctxFor(curator.id), lake.id, {
+      return dataLakeService.acceptDataLakePurge(ctxFor(curator.id), lake.id, 'claim-1', {
         db: {
           dataLakes: dataLakeRepository,
           dataLakeAccessGrants: repo,
