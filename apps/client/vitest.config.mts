@@ -80,8 +80,10 @@ const projectTest = {
   testTimeout: 30000,
   // Integration-lane only: these suites exercise real concurrency (compare-and-set races,
   // multi-document transactions) against a real mongod under CI's worker-capped, oversubscribed
-  // CPU, so an occasional loss is timing noise, not a wrong answer - a genuine regression still
-  // fails after the retries. Unset in the unit lane, where a retry would just mask a real bug.
+  // CPU, so an occasional loss is timing noise, not a wrong answer - a regression that fails on
+  // every attempt (up to 3, not 2) still fails. Unset in the unit lane, where a retry would just
+  // mask a real bug. Guarded by vitest.config.test.ts: this gate only changes behaviour on
+  // failure, so nothing else would catch it silently widening into the unit lane.
   ...(INTEGRATION_LANE ? { retry: 2 } : {}),
 };
 
