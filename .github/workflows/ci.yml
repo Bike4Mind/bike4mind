@@ -697,6 +697,14 @@ jobs:
           # oversubscription by construction. vitestWorkerBudget.test.ts pins this.
           pnpm --recursive --workspace-concurrency=1 "${filter_args[@]}" "$SHARD_SCRIPT" "${script_args[@]}"
 
+      - name: Verify telemetry retention across DST
+        if: matrix.shard.name == 'client-integration 1/3'
+        env:
+          TZ: America/New_York
+          VITEST_MAX_WORKERS: '2'
+          TMPDIR: /dev/shm
+        run: pnpm --filter @bike4mind/client test:integration server/cron/telemetryCleanup.retention.e2e.test.ts
+
       # Tests that live outside every pnpm workspace, which the sharded run above cannot reach:
       # infra/ has no package.json, and scripts/codemods and scripts/__tests__ are not in
       # pnpm-workspace.yaml, so `pnpm --recursive ... test` has no project to run in either. They passed locally and

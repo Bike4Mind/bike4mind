@@ -988,3 +988,18 @@ Rollback requires draining the executor first. Do not switch the app back to Lam
 The worker records health snapshots for active data lakes at 06:00 UTC, using the same bounded sweep as hosted deployments and without CloudWatch metrics. It does not run this sweep at startup. Starting after the daily boundary waits until the next day; a delayed timer runs only the latest due slot, with at most one scheduled attempt per UTC day. An overlapping run consumes the slot without starting another sweep. Shutdown waits up to the worker's existing 20-second grace period; a sweep still running then is abandoned. Completed lakes keep their snapshots, while unvisited lakes retain their older check timestamps and sort first at the next 06:00 UTC run. A restart after today's boundary does not retry that day's missed snapshots.
 
 Snapshots upsert by lake and UTC day. Failed lakes are isolated and their attempted-check timestamp advances so they cannot starve other lakes. The existing 2,000-lake cap and five concurrent computations remain; these are count bounds, not cancellation of a hung database request. This job reports health only. It neither repairs content nor runs inconsistency detection: absent or stale stored inconsistency results remain absent or stale. Other hosted maintenance jobs are not enabled by this registration.
+
+### Daily telemetry retention
+
+The single worker removes `promptMeta.contextTelemetry` from eligible Quest records older than 90 days at 03:00 UTC. The existing hosted cleanup and local worker share the same 5,000-record batches and database writes. The cutoff is fixed once per run using UTC calendar days; the exact cutoff remains excluded. Conversation content and other prompt metadata remain intact, with the usual database `updatedAt` change.
+
+There is no bootstrap run. Starting after 03:00 waits for the next day; starting exactly at 03:00 runs that slot. Delayed ticks coalesce missed days, active runs do not overlap, and shutdown waits within the worker's existing grace period. This remains a single-worker schedule, without a distributed lock or a promise to finish after shutdown grace expires.
+
+Database failures reject the run. Successful earlier batches remain cleaned; the next scheduled run retries the remaining eligible rows. Repeating a completed cleanup makes no further changes. This does not delete Quests, remove every type of telemetry, or change the model's existing record-selection policy.
+
+Focused tests use disposable Mongo, exact retention boundaries and an injected later-batch write failure. They establish persisted application effects, not a Kubernetes deployment drill.
+
+```sh
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test server/cron/telemetryCleanup.test.ts server/worker/telemetryCleanup.test.ts __tests__/mongoTestTimeoutBudget.test.ts
+TZ=America/New_York VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test:integration server/cron/telemetryCleanup.retention.e2e.test.ts
+```
