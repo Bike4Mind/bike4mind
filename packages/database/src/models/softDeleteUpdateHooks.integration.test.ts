@@ -7,8 +7,9 @@ import { createMongoServer } from '../__test__/createMongoServer';
 /**
  * softDeletePlugin's update hook: findOneAndUpdate/updateOne/updateMany skip tombstones by default,
  * like the read hooks, so a whole-doc `repo.update(snapshot)` cannot resurrect a soft-deleted doc.
- * Opt-outs: `includeDeleted`, a caller filter with a top-level `deletedAt`, and update-verb upserts.
- * Replace upserts are not exempt: they fail closed with E11000 rather than drop `deletedAt`.
+ * Opt-outs: `includeDeleted`, a caller filter with a top-level `deletedAt`, and update-verb upserts
+ * that leave `deletedAt` alone. Replace upserts, and update upserts that $set/$unset `deletedAt`, are
+ * not exempt: they fail closed with E11000 rather than revive the tombstone.
  */
 
 type SoftDoc = IMongoDocument & { name?: string; slug?: string; deletedAt?: Date | null };
@@ -151,6 +152,28 @@ describe('softDeletePlugin update hook', () => {
     await SoftModel.updateOne({ slug: 'taken' }, { $set: { name: 'upserted' } }, { upsert: true });
 
     expect((await rawDoc(id))?.deletedAt).toEqual(deletedAt);
+  });
+
+  // A stale snapshot upserted back (repo.update(snapshot, { upsert: true })) $sets deletedAt: null, so
+  // an upsert that names deletedAt stays guarded and fails closed instead of reviving the tombstone.
+  it('an upsert that $sets or $unsets deletedAt fails with E11000 and leaves the tombstone deleted', async () => {
+    const { id, deletedAt } = await seedTombstone('taken');
+
+    await expect(
+      SoftModel.updateOne({ slug: 'taken' }, { $set: { name: 'up', deletedAt: null } }, { upsert: true })
+    ).rejects.toMatchObject({ code: 11000 });
+    await expect(
+      SoftModel.updateOne({ slug: 'taken' }, { $unset: { deletedAt: 1 } }, { upsert: true })
+    ).rejects.toMatchObject({ code: 11000 });
+    await expect(
+      SoftModel.findOneAndUpdate({ _id: id }, { $set: { name: 'up', deletedAt: null } }, { upsert: true })
+    ).rejects.toMatchObject({ code: 11000 });
+    await expect(
+      repo.update({ id: id.toString(), name: 'up', slug: 'taken', deletedAt: null }, { upsert: true })
+    ).rejects.toMatchObject({ code: 11000 });
+
+    expect(await SoftModel.collection.countDocuments()).toBe(1);
+    expect(await rawDoc(id)).toMatchObject({ name: 'before', deletedAt });
   });
 
   it('a filter with deletedAt: undefined is still guarded', async () => {
