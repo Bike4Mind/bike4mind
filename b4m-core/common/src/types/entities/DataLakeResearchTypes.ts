@@ -304,7 +304,8 @@ export interface ResearchRunTotals {
   unusableSource: number;
   /**
    * Candidates never reached because the run stopped on `judge_unavailable`, which keeps that run's
-   * buckets summing to `searchHits`. Only that stop fills it: `cost_ceiling`, `time_budget` and
+   * buckets summing to `searchHits`. It includes any a source rule would have blocked, since the
+   * run stops before checking them. Only that stop fills it: `cost_ceiling`, `time_budget` and
    * `proposal_limit` leave it 0, so their buckets can fall short. Older stored runs read it as 0.
    */
   notJudged: number;
