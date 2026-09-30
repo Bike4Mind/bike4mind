@@ -49,6 +49,8 @@ apps/client/pages/api/sre/workflow-callback.ts          # crypto.timingSafeEqual
 apps/client/pages/api/webhooks/github.ts                # GitHub HMAC signature validation
 apps/client/pages/api/webhooks/github/[token].ts        # GitHub HMAC + routing token in URL path
 apps/client/pages/api/webhooks/github/sre.ts            # GitHub HMAC signature validation
+apps/client/pages/api/webhooks/github/lake.ts           # GitHub HMAC with the data-lake App's webhook secret
+apps/client/pages/api/webhooks/github/__tests__/lake.test.ts # Test file for the handler above (script greps by path, not export)
 
 # Jira webhook — authenticated via HMAC + replay protection
 apps/client/pages/api/webhooks/jira/[token].ts          # Jira HMAC + routing token + replay protection

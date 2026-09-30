@@ -30,6 +30,7 @@ const REPO_ROOT = join(__dirname, '../../..');
 const SCAN_ROOTS = [
   'apps/client/server',
   'apps/client/pages',
+  'apps/workers/src',
   'b4m-core',
   'packages/cli',
   'packages/database',

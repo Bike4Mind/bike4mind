@@ -1,0 +1,25 @@
+{
+  "extends": "@bike4mind/typescript-config/node.json",
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    // The bridge below compiles apps/client files, so the root has to span both apps.
+    "rootDir": "..",
+    // DOM only because the apps/client files compiled through the bridge below are written against
+    // it (e.g. fetch().json() is `any` there, `unknown` under node's types). Drop with the bridge.
+    "lib": ["ESNext", "DOM"],
+    "paths": {
+      "@workers/*": ["./src/*"],
+      // Interim one-way bridge into apps/client while the shared server code still lives there.
+      // Delete these once that code is extracted into its own package. apps/client must never
+      // import @workers/* (enforced in eslint.config.mjs).
+      "@server/*": ["../client/server/*"],
+      "@client/*": ["../client/*"],
+      "@pages/*": ["../client/pages/*"],
+      "@public/*": ["../client/public/*"],
+      "@/*": ["../client/*"]
+    }
+  },
+  "include": ["sst-env.d.ts", "../client/global.d.ts", "src/**/*.ts"],
+  "exclude": ["node_modules", "**/*.test.ts"]
+}

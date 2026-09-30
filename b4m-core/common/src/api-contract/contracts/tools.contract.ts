@@ -22,7 +22,8 @@ export const executeToolContract = defineEndpoint({
   description:
     'Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`) and ' +
     'returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT ' +
-    'accepted on this endpoint. Rate-limited to 100 requests/hour. `request_id` echoes the ' +
+    'accepted on this endpoint. Rate-limited to 100 requests/hour per user, counted separately from ' +
+    'other endpoints. `request_id` echoes the ' +
     'X-Request-ID response header.',
   tags: ['AI'],
   auth: 'jwtOnly',
@@ -41,7 +42,7 @@ export const executeToolContract = defineEndpoint({
     },
     400: { description: 'Malformed JSON body.', schema: ApiErrorSchema },
     401: { description: 'Missing or invalid JWT (an API key is rejected here).', schema: ApiErrorSchema },
-    429: { description: 'Rate limit exceeded (100 requests/hour).', schema: ApiErrorSchema },
+    429: { description: 'Rate limit exceeded (100 requests/hour per user for this endpoint).', schema: ApiErrorSchema },
     // Two 500 shapes: a failed-but-executed tool returns the full ToolExecutionResponse
     // (`success: false` with `error`); an unexpected throw is shaped by defineLambdaRoute
     // into the bare error envelope. Model both so neither trips the adapter's response

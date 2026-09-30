@@ -127,7 +127,11 @@ const callAs = async (userId: string) => {
 };
 
 describe('GET /api/feedback/rollup - per-principal rate limit', () => {
-  it('serves the last request inside the window, then answers 429 with Retry-After', async () => {
+  // retry: 0 on both: EXHAUSTED_USER's window lives in real Mongo for the file's whole run, so a
+  // retried attempt starts from whatever the failed attempt already charged, not a fresh window -
+  // it would re-fail on a different, misleading assertion (a 429 where the retry expects a 200,
+  // say) instead of reproducing the original failure or self-healing past timing noise.
+  it('serves the last request inside the window, then answers 429 with Retry-After', { retry: 0 }, async () => {
     // One short of the limit, so the route's own request is the one that fills it - a limiter
     // that refused early, or an off-by-one, fails here rather than passing quietly.
     await fillWindow(EXHAUSTED_USER, ROUTE_LIMIT - 1);
@@ -147,15 +151,21 @@ describe('GET /api/feedback/rollup - per-principal rate limit', () => {
     expect(retryAfter).toBeLessThanOrEqual(ONE_MINUTE_MS / 1000);
   });
 
-  it('keys the counter per principal, so a second user is unaffected by an exhausted window', async () => {
-    // Same route, same window, different principal: the limiter keys on req.user.id, which is
-    // the whole claim being made about the jwtOnly path.
-    const other = await callAs(`${EXHAUSTED_USER}-other`);
+  // Same reason as above: this test's assertions depend on EXHAUSTED_USER already being over the
+  // limit from the previous test, a real-Mongo precondition a retry cannot restore.
+  it(
+    'keys the counter per principal, so a second user is unaffected by an exhausted window',
+    { retry: 0 },
+    async () => {
+      // Same route, same window, different principal: the limiter keys on req.user.id, which is
+      // the whole claim being made about the jwtOnly path.
+      const other = await callAs(`${EXHAUSTED_USER}-other`);
 
-    expect(other._getStatusCode()).toBe(200);
+      expect(other._getStatusCode()).toBe(200);
 
-    // The other direction of the same claim, and the half that is limiter-sensitive on its own:
-    // serving the second user neither reset nor charged the first user's window.
-    expect((await callAs(EXHAUSTED_USER))._getStatusCode()).toBe(429);
-  });
+      // The other direction of the same claim, and the half that is limiter-sensitive on its own:
+      // serving the second user neither reset nor charged the first user's window.
+      expect((await callAs(EXHAUSTED_USER))._getStatusCode()).toBe(429);
+    }
+  );
 });

@@ -744,7 +744,9 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         if (chunk?.stopReason) stopReason = chunk.stopReason;
         const streamedText: string[] = [];
         chunk?.choices.forEach(choice => {
-          streamedText[choice.index] = choice.chunkText || '';
+          // Accumulate: a whole-message response can carry several choices at one index (prose
+          // plus a tool call whose chunkText is empty), and the later one must not erase the first.
+          streamedText[choice.index] = (streamedText[choice.index] ?? '') + (choice.chunkText || '');
         });
 
         inputTokens = chunk?.choices[0].usage?.input_tokens || 0;
@@ -860,6 +862,9 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           } else {
             // New behavior: just pass tool calls through callback, don't execute
             Logger.globalInstance.log('[BaseBedrockBackend] executeTools=false, passing tool calls to callback');
+            // Same as the executing branch above: the text-only send below is never reached, so
+            // intro text sharing this chunk with the reported tool call goes out here.
+            if (streamedText.some(Boolean)) await callback(streamedText, buildCompletionInfo());
             await callback([null], buildCompletionInfo());
             return; // Exit after passing tools
           }

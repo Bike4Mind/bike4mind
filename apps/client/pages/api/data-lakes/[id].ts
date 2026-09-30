@@ -21,6 +21,7 @@ import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { isSessionActivatablePromptId } from '@server/utils/sessionActivatablePrompts';
 import { disableDriveConnectionForLake } from '@server/integrations/google/drive/common';
+import { disableGitHubConnectionForLake } from '@server/integrations/github/dataLake/githubLakeConnection';
 
 // The canonical single READ gate observes the read-time grant cutover (#1673): its assertLakeAccess
 // call is wired with the settings repo + a logger, so a persisted reader grant resolves into the
@@ -155,6 +156,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       retrievalIndex: retrievalIndex(),
       disableDriveConnection: async ({ dataLakeId }) => {
         await disableDriveConnectionForLake(dataLakeId);
+      },
+      disableGitHubConnection: async ({ dataLakeId }) => {
+        await disableGitHubConnectionForLake(dataLakeId);
       },
       logger: req.logger,
     });

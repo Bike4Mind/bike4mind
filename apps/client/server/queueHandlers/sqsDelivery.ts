@@ -4,7 +4,7 @@ import type { SQSEvent } from 'aws-lambda';
 // diverge - see infra/queues.ts's dlq.retry, which is 2 for dataLakeTaxonomyQueue and 3 for both
 // of these - so a future change to one queue's retry count can't silently mis-gate the other.
 // Also mirrored by the self-host worker's default maxReceiveCount (3) for these queues
-// (apps/client/server/worker/selfHostWorker.ts) - keep all three in sync.
+// (apps/workers/src/selfhost/selfHostWorker.ts) - keep all three in sync.
 export const FAB_FILE_CHUNK_MAX_RECEIVE_COUNT = 3; // mirrors fabFileChunkQueue.dlq.retry
 export const FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT = 3; // mirrors fabFileVectorizeQueue.dlq.retry
 

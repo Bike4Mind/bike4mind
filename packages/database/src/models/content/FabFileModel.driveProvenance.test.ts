@@ -157,6 +157,18 @@ describe('findByDriveConnectionIdInDataLake', () => {
     expect(result.map(f => f.driveFileId).sort()).toEqual(['d-arch', 'd-del', 'd-live']);
     expect(await fabFileRepository.countByDriveConnectionIdInDataLake(purgeConnId, datalakeTag)).toBe(3);
   });
+
+  it('limit caps the includeDeleted set to one bounded slice', async () => {
+    const sliceConnId = 'conn-slice';
+    for (const driveFileId of ['s-1', 's-2', 's-3']) {
+      await FabFile.create(makeFile({ driveConnectionId: sliceConnId, driveFileId }));
+    }
+    const slice = await fabFileRepository.findByDriveConnectionIdInDataLake(sliceConnId, datalakeTag, {
+      includeDeleted: true,
+      limit: 2,
+    });
+    expect(slice).toHaveLength(2);
+  });
 });
 
 // The resume key for a Drive ingest that spans several runs. It excludes `pending` - unlike every

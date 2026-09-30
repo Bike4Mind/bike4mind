@@ -508,7 +508,7 @@ const deepAgentWakeCron = new sst.aws.Cron('deepAgentWakeCron', {
 
 // Data Lake Research Schedule - fires research configs whose cadence is due, skipping any lake whose
 // pending-proposal queue is at the config's review limit. 15 minutes is plenty for a daily-at-most
-// cadence; self-host drives the same tick from worker/main.ts.
+// cadence; self-host drives the same tick from apps/workers/src/selfhost/main.ts.
 const dataLakeResearchScheduleCron = new sst.aws.Cron('dataLakeResearchScheduleCron', {
   schedule: 'rate(15 minutes)',
   function: {

@@ -76,7 +76,7 @@ vi.mock('sst', () => ({
   },
 }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
-vi.mock('@server/worker/chunkRescueSweep', () => ({
+vi.mock('@server/s3/chunkRescueSweep', () => ({
   runChunkRescueSweep: (...a: unknown[]) => h.runSweep(...(a as [])),
 }));
 vi.mock('@server/s3/moderationRescueSweep', () => ({
@@ -84,8 +84,8 @@ vi.mock('@server/s3/moderationRescueSweep', () => ({
 }));
 // Only the stranded-vectorize filter is stubbed (so the call args are assertable); the real
 // age/stale cutoff constants stay real so these tests pin the actual windows the cron uses.
-vi.mock('@server/worker/chunkScan', async importActual => ({
-  ...(await importActual<typeof import('@server/worker/chunkScan')>()),
+vi.mock('@server/s3/chunkScan', async importActual => ({
+  ...(await importActual<typeof import('@server/s3/chunkScan')>()),
   buildStrandedVectorizeScanFilter: (...a: unknown[]) => h.buildStrandedFilter(...(a as [Date, Date])),
 }));
 vi.mock('@server/utils/cloudwatch', () => ({
@@ -226,7 +226,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
   });
 
   describe('un-chunked rescue sweep (#1420)', () => {
-    // The sweep itself lives in server/worker/chunkRescueSweep.ts and is covered there, by the same
+    // The sweep itself lives in server/s3/chunkRescueSweep.ts and is covered there, by the same
     // suite that covers the self-host driver - that shared function is why the two can no longer
     // drift. What is the CRON's own business, and all this block asserts, is that it calls the sweep
     // with the hosted budget, folds both counts into its response, and isolates a failure.
