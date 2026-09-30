@@ -22,7 +22,11 @@ export interface PurgeOrgMembershipAdapters extends LapseDepartedMemberLakeAcces
   auditPrincipal?: LakeAccessLapseTrigger['auditPrincipal'];
 }
 
-/** What the caller MUST persist onto the org doc after a purge. */
+/**
+ * The org fields a purge prunes. Callers persist them via `organizations.removeMember`, which
+ * computes the same pull + manager vacate atomically; assign these onto the in-memory org only for
+ * the returned value.
+ */
 export interface PurgedOrgMembershipFields {
   adminUserIds: string[];
   /** `null` when the departing member held the appointment, otherwise unchanged. */
@@ -65,9 +69,9 @@ export interface PurgedOrgMembershipFields {
  * Takes the whole `organization` rather than its id because the lake step needs the billing owner
  * (`organization.userId`) as the successor for a lake the departing member created.
  *
- * Returns the pruned fields rather than mutating in place and returning void: the caller MUST assign
- * them onto the org doc it persists, so a future caller cannot silently get the unsafe half (group
- * access dropped, admin authority retained). Idempotent - safe under a withTransaction
+ * Returns the pruned fields rather than mutating in place and returning void. The caller MUST pair
+ * this with `organizations.removeMember` (which persists the admin/manager half), so a future caller
+ * cannot silently get the unsafe half (group access dropped, admin authority retained). Idempotent - safe under a withTransaction
  * retry, including both halves of the lake step - by two different mechanisms, so both are worth
  * stating: a retry's `listByPrincipal(..., { activeAsOf })` no longer matches the row phase 1 just
  * expired, so it re-stamps nothing; and the successor grant phase 2 wrote makes phase 2's "another

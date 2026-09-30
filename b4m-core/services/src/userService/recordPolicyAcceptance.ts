@@ -20,7 +20,7 @@ interface RecordPolicyAcceptanceAdapters {
   db: {
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
-      update: (user: IUserDocument) => Promise<unknown>;
+      update: (user: Partial<IUserDocument>) => Promise<unknown>;
     };
   };
 }
@@ -50,14 +50,13 @@ export const recordPolicyAcceptance = async (
     throw new NotFoundError('User not found');
   }
 
-  const updatedUser: IUserDocument = {
-    ...user,
+  const acceptance = {
     aupAcceptedVersion: CURRENT_POLICY_VERSION,
     aupAcceptedAt: new Date(),
     ageAttestedAdult: true,
     updatedAt: new Date(),
   };
 
-  await db.users.update(updatedUser);
-  return updatedUser;
+  await db.users.update({ id: user.id, ...acceptance });
+  return { ...user, ...acceptance };
 };

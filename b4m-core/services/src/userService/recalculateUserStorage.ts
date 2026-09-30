@@ -29,6 +29,5 @@ export const recalculateUserStorage = async (
 
   const totalSize = await db.fabFiles.sumFileSizeByUserId(userId);
 
-  user.currentStorageSize = totalSize;
-  await db.users.update(user);
+  await db.users.update({ id: user.id, currentStorageSize: totalSize });
 };

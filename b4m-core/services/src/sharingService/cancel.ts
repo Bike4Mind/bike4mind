@@ -25,7 +25,7 @@ interface CancelInviteAdapters {
   db: {
     invites: {
       findAllByDocumentId: (documentId: string) => Promise<IInviteDocument[]>;
-      update: (data: IInviteDocument) => Promise<unknown>;
+      update: (data: Partial<IInviteDocument>) => Promise<unknown>;
     };
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
@@ -96,7 +96,7 @@ export const cancelInvite = async (
   for (const invite of invites) {
     // Skip the write entirely for invites this cancel doesn't touch, so we don't churn
     // updatedAt (and needless writes) on every sibling invite for the document.
-    let changed = false;
+    let changes: Partial<IInviteDocument> | null = null;
 
     // If email is provided, we need to remove it from the pending list
     if (email && invite.recipients?.pending) {
@@ -110,15 +110,15 @@ export const cancelInvite = async (
         // Decrementing left slots behind, so cancelling the only named recipient on such a row
         // turned it into a redeemable share link. See inviteVisibility.ts's docblock.
         invite.remaining = Math.max(0, Math.min(invite.remaining - 1, invite.recipients.pending.length));
-        changed = true;
+        changes = { recipients: invite.recipients, remaining: invite.remaining };
       }
     } else if (invite.remaining !== 0) {
       invite.remaining = 0;
-      changed = true;
+      changes = { remaining: 0 };
     }
 
-    if (changed) {
-      await db.invites.update(invite);
+    if (changes) {
+      await db.invites.update({ id: invite.id, ...changes });
     }
   }
 

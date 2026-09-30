@@ -1,5 +1,5 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
-import { BaseArtifact, ArtifactTypeSchema } from '@bike4mind/common';
+import { BaseArtifact, ArtifactTypeSchema, RepositoryPatch, RepositoryUpdateOptions } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
 // Mongoose document interface - omit 'id' from BaseArtifact to avoid conflict with Document._id
@@ -264,7 +264,18 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
 
   // Override update to key on the custom `id` field, not MongoDB `_id`. Last-writer-wins like
   // BaseRepository.update; no guarded variant is exposed (no artifact caller opts in).
-  async update(data: Partial<IArtifactDocument>, options?: Record<string, unknown>): Promise<IArtifactDocument | null> {
+  update(
+    data: Partial<IArtifactDocument>,
+    options?: RepositoryUpdateOptions<IArtifactDocument>
+  ): Promise<IArtifactDocument | null>;
+  update(
+    data: RepositoryPatch<IArtifactDocument>,
+    options?: RepositoryUpdateOptions<IArtifactDocument>
+  ): Promise<IArtifactDocument | null>;
+  async update(
+    data: Partial<IArtifactDocument>,
+    options?: RepositoryUpdateOptions<IArtifactDocument>
+  ): Promise<IArtifactDocument | null> {
     if (!data.id) {
       throw new Error('id is required');
     }

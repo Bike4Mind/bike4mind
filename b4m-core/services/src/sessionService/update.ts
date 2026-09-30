@@ -242,6 +242,6 @@ const addFilesToProjects = async (
 
     await updateShareableFiles(user, { project, files }, adapters);
 
-    await db.projects.update(project);
+    await db.projects.update({ id: project.id, fileIds: project.fileIds });
   }
 };

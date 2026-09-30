@@ -1131,7 +1131,14 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     try {
       quest.status = 'running';
       quest.type = 'message';
-      await this.chatCompletion.db.quests.update(quest);
+      // promptMeta carries the in-memory statusLog ('Spinning up...'); a QuestMaster takeover
+      // returns without the pipeline's saveQuest, so these writes are the only ones that persist it.
+      await this.chatCompletion.db.quests.update({
+        id: quest.id,
+        status: quest.status,
+        type: quest.type,
+        promptMeta: quest.promptMeta,
+      });
 
       await this.chatCompletion.sendStatusUpdate(quest, 'Generating QuestMaster plan...');
 
@@ -1182,7 +1189,11 @@ export class QuestMasterFeature implements ChatCompletionFeature {
       });
 
       updatedQuest.status = 'done';
-      await this.chatCompletion.db.quests.update(updatedQuest);
+      await this.chatCompletion.db.quests.update({
+        id: updatedQuest.id,
+        status: updatedQuest.status,
+        promptMeta: updatedQuest.promptMeta,
+      });
 
       await this.chatCompletion.sendStatusUpdate(updatedQuest, null);
 
@@ -1194,7 +1205,12 @@ export class QuestMasterFeature implements ChatCompletionFeature {
       quest.type = 'error';
       quest.status = 'done';
       quest.reply = (error as Error).message;
-      await this.chatCompletion.db.quests.update(quest);
+      await this.chatCompletion.db.quests.update({
+        id: quest.id,
+        type: quest.type,
+        status: quest.status,
+        reply: quest.reply,
+      });
 
       // Let normal processing continue
       return { shouldContinue: true };

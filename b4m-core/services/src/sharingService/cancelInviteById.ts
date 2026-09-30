@@ -38,6 +38,6 @@ export const cancelInviteById = async (
     invite.recipients.pending = [];
   }
 
-  await db.invites.update(invite);
+  await db.invites.update({ id: invite.id, remaining: invite.remaining, recipients: invite.recipients });
   return db.invites.findById(id);
 };
