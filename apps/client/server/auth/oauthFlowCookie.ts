@@ -13,7 +13,8 @@ import { appendSetCookie, readCookie, secureAttribute, type CookieResponse } fro
  * param never reveals the cookie value.
  *
  * verifyStateToken enforces the match for callers that pass the cookie hash (the
- * Okta and passport login paths); linking callbacks that hand-roll or inject their
+ * Okta and passport login paths, and the Slack app-install callback via the
+ * installer state store); linking callbacks that hand-roll or inject their
  * own state verification call stateNonceMatches() directly.
  *
  * The PKCE code_verifier rides the same cookie transport (Okta): it is a

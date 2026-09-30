@@ -367,7 +367,6 @@ export const KNOWN_UNPOSTURED = new Set<string>([
   'slack/export/channel-info.ts',
   'slack/export/channel.ts',
   'slack/export/status/[jobId].ts',
-  'slack/oauth/authorize.ts',
   'slack/oauth/callback.ts',
   'slack/oauth/user-link/initiate.ts',
   'slack/oauth/workspaces.ts',

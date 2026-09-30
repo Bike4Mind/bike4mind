@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import {
   STATE_NONCE_COOKIE_NAME,
   OKTA_PKCE_COOKIE_NAME,
+  NONCE_SLOT,
   issueStateNonce,
   readStateNonceHash,
   stateNonceMatches,
@@ -106,5 +107,12 @@ describe('oauthFlowCookie', () => {
     expect(setCookie).toMatch(/HttpOnly/);
     const req = reqWith(`${OKTA_PKCE_COOKIE_NAME}=the-code-verifier`);
     expect(readPkceVerifierCookie(req)).toBe('the-code-verifier');
+  });
+});
+
+describe('NONCE_SLOT', () => {
+  it('has a unique value per flow', () => {
+    const slots = Object.values(NONCE_SLOT);
+    expect(new Set(slots).size).toBe(slots.length);
   });
 });

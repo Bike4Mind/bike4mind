@@ -111,9 +111,19 @@ describe('POST /api/data-lakes/github-callback', () => {
     expect(json).toHaveBeenCalledWith({ connection: { id: 'conn1', accountLogin: 'acme' } });
   });
 
-  it('clears the nonce cookie on success', async () => {
-    const { res } = makeRes();
+  it('clears the nonce cookie on success, before the response is sent', async () => {
+    const { res, status } = makeRes();
     await run(makeReq(VALID_BODY), res);
+    expect(h.clearStateNonce).toHaveBeenCalledWith(res, NONCE_SLOT.githubLakeConnect);
+    expect(h.clearStateNonce.mock.invocationCallOrder[0]).toBeLessThan(status.mock.invocationCallOrder[0]);
+  });
+
+  it('clears the nonce cookie before verify, so an invalid state burns it', async () => {
+    h.verifyGitHubLakeState.mockImplementation(() => {
+      throw new UnauthorizedError('Invalid authorization state.');
+    });
+    const { res } = makeRes();
+    await expect(run(makeReq(VALID_BODY), res)).rejects.toThrow();
     expect(h.clearStateNonce).toHaveBeenCalledWith(res, NONCE_SLOT.githubLakeConnect);
   });
 

@@ -32,26 +32,19 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .use(requireFeatureEnabled('EnableDataLakeGitHub'))
   .post(async (req: Request, res) => {
-    // Burn the nonce on every exit so a failed completion cannot be replayed from this browser.
-    try {
-      const { state, code, installationId } = parseOrBadRequest(Body, req.body);
-      const dataLakeId = verifyGitHubLakeState(
-        state,
-        readStateNonceHash(req, NONCE_SLOT.githubLakeConnect),
-        req.user.id
-      );
-      const conn = await completeGitHubLakeConnection({
-        config: requireGitHubLakeAppConfig(getGitHubLakeAppConfig()),
-        user: req.user,
-        dataLakeId,
-        installationId,
-        code,
-        logger: req.logger,
-      });
-      return res.status(201).json({ connection: toGitHubLakeConnectionResponse(conn) });
-    } finally {
-      clearStateNonce(res, NONCE_SLOT.githubLakeConnect);
-    }
+    const { state, code, installationId } = parseOrBadRequest(Body, req.body);
+    const nonceHash = readStateNonceHash(req, NONCE_SLOT.githubLakeConnect);
+    clearStateNonce(res, NONCE_SLOT.githubLakeConnect); // single-use: burn on every exit, before verify or any work
+    const dataLakeId = verifyGitHubLakeState(state, nonceHash, req.user.id);
+    const conn = await completeGitHubLakeConnection({
+      config: requireGitHubLakeAppConfig(getGitHubLakeAppConfig()),
+      user: req.user,
+      dataLakeId,
+      installationId,
+      code,
+      logger: req.logger,
+    });
+    return res.status(201).json({ connection: toGitHubLakeConnectionResponse(conn) });
   });
 
 export const config = {

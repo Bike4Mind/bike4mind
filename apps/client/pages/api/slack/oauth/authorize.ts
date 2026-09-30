@@ -3,7 +3,7 @@ initializeSlackPackage();
 
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin } from '@server/utils/errors';
-import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { issueStateNonce, clearStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { createInstallProvider, getInstallUrlOptionsForWorkspace } from '@bike4mind/slack';
 
 /**
@@ -16,7 +16,7 @@ import { createInstallProvider, getInstallUrlOptionsForWorkspace } from '@bike4m
  * GET /api/slack/oauth/authorize?workspaceId=<workspace_id>
  * Returns: { authUrl: string }
  */
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
   ensureAdmin(req.user.isAdmin);
   const { workspaceId } = req.query;
 
@@ -24,12 +24,18 @@ const handler = baseApi().get(async (req, res) => {
     return res.status(400).json({ error: 'Workspace ID is required' });
   }
 
-  const installer = await createInstallProvider(workspaceId, {
-    nonceHash: issueStateNonce(res, NONCE_SLOT.slackAppInstall),
-  });
+  // Resolve the workspace first so an unknown one never gets a nonce cookie.
   const installUrlOptions = await getInstallUrlOptionsForWorkspace(workspaceId);
+  const nonceHash = issueStateNonce(res, NONCE_SLOT.slackAppInstall);
 
-  const authUrl = await installer.generateInstallUrl(installUrlOptions);
+  let authUrl: string;
+  try {
+    const installer = await createInstallProvider(workspaceId, { nonceHash });
+    authUrl = await installer.generateInstallUrl(installUrlOptions);
+  } catch (error) {
+    clearStateNonce(res, NONCE_SLOT.slackAppInstall);
+    throw error;
+  }
 
   const scopes = installUrlOptions.scopes;
   req.logger.info('Generated Slack OAuth URL', {

@@ -55,13 +55,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Track installation metadata for success redirect
     let metadata: InstallationMetadata = { isReinstall: false, teamName: 'your workspace', teamId: '' };
 
-    const installer = await createInstallProvider(
-      (installMetadata: InstallationMetadata) => {
-        metadata = installMetadata;
-      },
-      { expectedNonceHash: readStateNonceHash(req, NONCE_SLOT.slackAppInstall) }
-    );
-
     const callbackOptions: CallbackOptions = {
       success: async (installation, _installOptions, _req, _res) => {
         Logger.info('✅ Slack OAuth success', {
@@ -92,9 +85,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // handleCallback validates state, exchanges code for token, and calls installationStore
     try {
+      const installer = await createInstallProvider(
+        (installMetadata: InstallationMetadata) => {
+          metadata = installMetadata;
+        },
+        { expectedNonceHash: readStateNonceHash(req, NONCE_SLOT.slackAppInstall) }
+      );
       await installer.handleCallback(req, res, callbackOptions);
     } finally {
-      // Bolt overwrites Set-Cookie during state verification (legacy mode too), so burn the nonce after handleCallback.
+      // Bolt overwrites Set-Cookie during state verification (legacy mode too), so burn the nonce after handleCallback;
+      // provider creation sits inside this try so a throw there burns it too.
       clearStateNonce(res, NONCE_SLOT.slackAppInstall);
     }
 
@@ -148,8 +148,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       stack: err.stack,
     });
     auditLogger.failure('callback_error');
-    // Covers throws before handleCallback's finally (e.g. provider creation).
-    clearStateNonce(res, NONCE_SLOT.slackAppInstall);
 
     // Map error to user-friendly reason
     let reason = 'server_error';

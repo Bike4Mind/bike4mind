@@ -32,7 +32,7 @@ interface SlackStatePayload extends BaseStatePayload {
 }
 
 /** Browser-binding nonce hashes: mint embeds nonceHash, verify requires expectedNonceHash (null fails closed). */
-interface StateBinding {
+export interface StateBinding {
   nonceHash?: string;
   expectedNonceHash?: string | null;
 }
@@ -54,7 +54,12 @@ const createStateStore = (binding: StateBinding): StateStore => {
     },
     verifyStateParam: async (_date, state) => {
       const { jwtStateStore } = getSlackDeps();
-      const result = jwtStateStore.verifyStateToken<SlackStatePayload>(state, options, binding.expectedNonceHash);
+      // Missing binding means no cookie, never "skip the check": an unbound install state must not verify.
+      const result = jwtStateStore.verifyStateToken<SlackStatePayload>(
+        state,
+        options,
+        binding.expectedNonceHash ?? null
+      );
 
       if (result.valid) {
         return result.payload.installOptions;
@@ -69,8 +74,8 @@ const createStateStore = (binding: StateBinding): StateStore => {
 
 // Create InstallProvider instance with metadata callback
 export async function createInstallProvider(
-  workspaceIdOrCallback: string | ((metadata: InstallationMetadata) => void),
-  binding: StateBinding
+  workspaceIdOrCallback?: string | ((metadata: InstallationMetadata) => void),
+  binding: StateBinding = {}
 ): Promise<InstallProvider> {
   let workspace;
   let onInstallComplete: ((metadata: InstallationMetadata) => void) | undefined;
