@@ -45,7 +45,6 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
   stripeCustomerId?: string | null;
 
   storageLimit?: number /** Storage limit in MBs */;
-  currentStorageSize?: number /** Current storage size in Bytes */;
 
   /**
    * Organization-wide system prompt that applies to all conversations for team members.
@@ -183,13 +182,6 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
    * @returns The organization document or null if not found
    */
   findByIdAndUserId(id: string, userId: string): Promise<IOrganizationDocument | null>;
-
-  /**
-   * Increment the current storage size of an organization
-   * @param organizationId - The ID of the organization
-   * @param count - The amount to increment by (can be negative for decrements)
-   */
-  incrementCurrentStorage(organizationId: string, count: number): Promise<void>;
 
   /**
    * Seed a zero-usage `userDetails` row for a member if absent (idempotent). Must be called wherever
