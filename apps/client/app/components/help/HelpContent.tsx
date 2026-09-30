@@ -13,7 +13,7 @@ import {
   toAnchor,
   resolveRelativePath,
   hasVideoExtension,
-  parseYouTubeId,
+  parseYouTube,
   isPublicAccessLevel,
 } from '@bike4mind/scripts/help/utils';
 import type { HelpAccessLevel } from '@bike4mind/scripts/help/types';
@@ -317,9 +317,10 @@ function useAuthedMediaSrc(url: string | undefined, isAdmin: boolean): string | 
 
 /**
  * Lazy gif-style demo video: nothing is fetched until the demo scrolls near
- * the viewport, then it autoplays muted on a loop (controls kept for
- * pause/scrub). Authored via markdown image syntax, so it renders inside a
- * <p> - hence span wrappers (display:block) instead of div/Box.
+ * the viewport, then it plays muted on a loop only while near the viewport and
+ * pauses once scrolled away (controls kept for pause/scrub). Authored via
+ * markdown image syntax, so it renders inside a <p> - hence span wrappers
+ * (display:block) instead of div/Box.
  *
  * For admin content, the authed blob fetch (useAuthedMediaSrc) is deliberately
  * gated on the same `inView` flag rather than starting as soon as the article
@@ -328,37 +329,56 @@ function useAuthedMediaSrc(url: string | undefined, isAdmin: boolean): string | 
  */
 const HelpVideo: React.FC<{ src?: string; label?: string; isAdmin?: boolean }> = ({ src, label, isAdmin }) => {
   const containerRef = useRef<HTMLSpanElement>(null);
-  // No IntersectionObserver (jsdom, very old browsers): load immediately.
-  const [inView, setInView] = useState(() => typeof IntersectionObserver === 'undefined');
+  const videoRef = useRef<HTMLVideoElement>(null);
+  // No IntersectionObserver (jsdom, very old browsers): load immediately and let the
+  // browser autoplay, since there is nothing to gate on.
+  const canObserve = typeof IntersectionObserver !== 'undefined';
+  // inView latches once the demo has been near the viewport (gates the mount and the
+  // admin fetch); visible tracks whether it is near it right now (gates playback).
+  const [inView, setInView] = useState(!canObserve);
+  const [visible, setVisible] = useState(!canObserve);
 
   useEffect(() => {
-    if (inView) return;
     const el = containerRef.current;
-    if (!el) return;
+    if (!canObserve || !el) return;
     const observer = new IntersectionObserver(
       entries => {
-        if (entries.some(entry => entry.isIntersecting)) {
-          setInView(true);
-          observer.disconnect();
-        }
+        const latest = entries[entries.length - 1];
+        if (!latest) return;
+        if (latest.isIntersecting) setInView(true);
+        setVisible(latest.isIntersecting);
       },
       { rootMargin: '200px' } // start loading just before the demo scrolls into view
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [inView]);
+  }, [canObserve]);
 
   const authedSrc = useAuthedMediaSrc(inView ? src : undefined, !!isAdmin);
   const playableSrc = isAdmin ? authedSrc : src;
+
+  // Only the demo near the viewport plays; the rest pause instead of all looping at once.
+  // playableSrc is a dependency because an admin clip mounts srcless until its blob resolves.
+  useEffect(() => {
+    if (!canObserve) return;
+    const video = videoRef.current;
+    if (!video) return;
+    if (visible) {
+      video.play()?.catch(() => {}); // autoplay can be blocked by the browser; controls remain
+    } else {
+      video.pause();
+    }
+  }, [canObserve, visible, inView, playableSrc]);
 
   return (
     <span ref={containerRef} style={{ display: 'block' }} data-testid="help-video-container">
       {inView ? (
         // Video styling lives in the parent Box sx ('& video') for theme parity
         <video
+          ref={videoRef}
           src={playableSrc}
           aria-label={label || undefined}
-          autoPlay
+          autoPlay={!canObserve}
           muted
           loop
           playsInline
@@ -408,7 +428,7 @@ export const HelpArticleFilePathContext = React.createContext<HelpArticleContext
  * privacy-preserving -nocookie host and native iframe lazy-loading. Rendered
  * inside a <p> (markdown image), so span wrappers, not div/Box.
  */
-const HelpYouTube: React.FC<{ id: string; label?: string }> = ({ id, label }) => (
+const HelpYouTube: React.FC<{ id: string; start?: number; label?: string }> = ({ id, start, label }) => (
   <span
     data-testid="help-youtube-container"
     style={{
@@ -422,7 +442,7 @@ const HelpYouTube: React.FC<{ id: string; label?: string }> = ({ id, label }) =>
     }}
   >
     <iframe
-      src={`https://www.youtube-nocookie.com/embed/${id}`}
+      src={`https://www.youtube-nocookie.com/embed/${id}${start ? `?start=${start}` : ''}`}
       title={label || 'YouTube video player'}
       loading="lazy"
       // Narrower than YouTube's default embed grant: a demo clip needs no
@@ -456,16 +476,16 @@ const HelpMedia: React.FC<React.ImgHTMLAttributes<HTMLImageElement> & { node?: u
 }) => {
   const { filePath: currentFilePath, accessLevel } = React.useContext(HelpArticleFilePathContext);
   const rawSrc = typeof src === 'string' ? src : undefined;
-  const youTubeId = rawSrc ? parseYouTubeId(rawSrc) : null;
+  const youTube = rawSrc ? parseYouTube(rawSrc) : null;
   const isAdmin = !isPublicAccessLevel(accessLevel);
   const isVideo = !!rawSrc && hasVideoExtension(rawSrc);
-  const routedSrc = youTubeId ? undefined : resolveHelpMediaSrc(rawSrc, currentFilePath, accessLevel);
+  const routedSrc = youTube ? undefined : resolveHelpMediaSrc(rawSrc, currentFilePath, accessLevel);
   // Hook called unconditionally (before the early returns below) to satisfy the
-  // rules of hooks; it is a no-op when there is nothing to fetch (youTubeId/video).
+  // rules of hooks; it is a no-op when there is nothing to fetch (youTube/video).
   const imgSrc = useAuthedMediaSrc(isVideo ? undefined : routedSrc, isAdmin);
 
-  if (youTubeId) {
-    return <HelpYouTube id={youTubeId} label={alt} />;
+  if (youTube) {
+    return <HelpYouTube id={youTube.id} start={youTube.start} label={alt} />;
   }
   if (isVideo) {
     return <HelpVideo src={routedSrc} label={alt} isAdmin={isAdmin} />;
