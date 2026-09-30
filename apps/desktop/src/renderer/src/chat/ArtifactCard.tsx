@@ -1,12 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Box from '@mui/joy/Box';
 import Chip from '@mui/joy/Chip';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
+import { useTheme } from '@mui/joy/styles';
 import type { ChatArtifact, ChatArtifactView } from '@shared/chat';
 import { HtmlArtifactFrame } from './HtmlArtifactFrame';
 import { ChevronIcon } from './icons';
+import { type MermaidFailure, renderMermaidDiagram } from './mermaidDiagram';
 
 /**
  * The artifact types this client DISPLAYS, as opposed to the ones it stores.
@@ -20,6 +22,8 @@ import { ChevronIcon } from './icons';
  *  - 'html' runs in an opaque-origin frame with its own no-network CSP (HtmlArtifactFrame).
  *  - 'svg' is loaded through <img>, which does not execute script in an SVG at all - so a
  *    <script> or an onload= inside one is inert without needing a sanitizer to have caught it.
+ *  - 'mermaid' is compiled to an SVG string in this process and then loaded through that same
+ *    <img>, so it inherits the property rather than earning a second one.
  *
  * Everything else is source text, which React escapes. 'react' and 'recharts' are the notable
  * absences: rendering them needs React and a JSX transpiler INSIDE the sandbox, which the web
@@ -30,7 +34,7 @@ import { ChevronIcon } from './icons';
  * MUST STAY IN STEP with DESKTOP_ARTIFACT_PROMPT in main/chat/artifacts/prompt.ts, which
  * advertises the MIME types this app can show.
  */
-const RENDERED_TYPES = new Set(['html', 'svg']);
+export const RENDERED_TYPES = new Set(['html', 'svg', 'mermaid']);
 
 /**
  * What the type chip says. An unlisted type shows its raw value rather than being hidden.
@@ -59,12 +63,21 @@ export const TYPE_LABEL: Record<string, string> = {
  * they might reasonably have expected a picture, and "open it in the web app" is the actual
  * remedy. A plain code or python artifact gets nothing, because source is what it IS.
  */
-const SOURCE_ONLY_NOTE: Record<string, string> = {
+export const SOURCE_ONLY_NOTE: Record<string, string> = {
   react: 'Interactive React artifacts render in the web app.',
   recharts: 'Charts render in the web app.',
-  mermaid: 'Diagrams render in the web app.',
   chess: 'Chess boards render in the web app.',
   lattice: 'Financial models render in the web app.',
+};
+
+/**
+ * Why a diagram that WAS going to be drawn is showing its source instead. Separate from
+ * SOURCE_ONLY_NOTE because the type is a rendered one: something specific went wrong, and
+ * "open it in the web app" is only the right advice for one of the two reasons.
+ */
+const MERMAID_FAILURE_NOTE: Record<MermaidFailure, string> = {
+  invalid: 'This diagram could not be drawn - mermaid could not read its source.',
+  'html-labels': 'This kind of diagram renders in the web app.',
 };
 
 /**
@@ -76,7 +89,19 @@ const SOURCE_ONLY_NOTE: Record<string, string> = {
  * and external references are inert by specification, so this needs no sanitizer to be right.
  * The renderer's CSP admits `data:` on img-src for exactly this shape.
  */
-function SvgArtifact({ content, title }: { content: string; title: string }) {
+export function SvgArtifact({
+  content,
+  title,
+  maxHeight = 420,
+  testId = 'chat-artifact-svg',
+  onFailure,
+}: {
+  content: string;
+  title: string;
+  maxHeight?: number;
+  testId?: string;
+  onFailure?: () => void;
+}) {
   const [failed, setFailed] = useState(false);
   if (failed) return null;
 
@@ -85,9 +110,68 @@ function SvgArtifact({ content, title }: { content: string; title: string }) {
       component="img"
       src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(content)}`}
       alt={title}
-      onError={() => setFailed(true)}
-      sx={{ display: 'block', maxWidth: '100%', maxHeight: 420, m: '0 auto', p: 1.5 }}
-      data-testid="chat-artifact-svg"
+      onError={() => {
+        setFailed(true);
+        onFailure?.();
+      }}
+      sx={{ display: 'block', maxWidth: '100%', maxHeight, m: '0 auto', p: 1.5 }}
+      data-testid={testId}
+    />
+  );
+}
+
+/**
+ * A mermaid source as the diagram it describes.
+ *
+ * Compiled here and handed to SvgArtifact, so the picture arrives through the `<img>` path
+ * argued for above rather than as markup in this document. Re-compiled when the appearance
+ * changes, because mermaid bakes its colors into the SVG and a light diagram on the dark UI
+ * is the obvious wrong answer.
+ *
+ * Taller than a plain SVG artifact is allowed: a flowchart is usually a narrow column of
+ * boxes, and at 420 the text in a ten-step one shrinks past reading. Still capped, because the
+ * card sits in a transcript the user is scrolling through - past this it scales down, and the
+ * web app is where a poster-sized diagram belongs.
+ */
+function MermaidArtifact({
+  content,
+  title,
+  onFailure,
+}: {
+  content: string;
+  title: string;
+  onFailure: (reason: MermaidFailure | undefined) => void;
+}) {
+  const mode = useTheme().palette.mode === 'dark' ? 'dark' : 'light';
+  const [svg, setSvg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSvg(null);
+    // A streaming artifact is malformed until its last line arrives, so every attempt starts
+    // from no verdict rather than inheriting the previous one.
+    onFailure(undefined);
+
+    void renderMermaidDiagram(content, mode).then(result => {
+      if (cancelled) return;
+      setSvg(result.ok ? result.svg : null);
+      onFailure(result.ok ? undefined : result.reason);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [content, mode, onFailure]);
+
+  if (!svg) return null;
+
+  return (
+    <SvgArtifact
+      content={svg}
+      title={title}
+      maxHeight={640}
+      testId="chat-artifact-mermaid"
+      onFailure={() => onFailure('invalid')}
     />
   );
 }
@@ -125,8 +209,16 @@ function SaveStatus({ artifact }: { artifact: ChatArtifactView }) {
  */
 export function ArtifactCard({ artifact }: { artifact: ChatArtifactView }) {
   const [showSource, setShowSource] = useState(false);
-  const rendered = RENDERED_TYPES.has(artifact.type);
-  const note = rendered ? undefined : SOURCE_ONLY_NOTE[artifact.type];
+  // Passed straight to MermaidArtifact as its failure callback: a useState setter is stable,
+  // so the compile effect is not re-run by this component re-rendering.
+  const [diagramFailure, setDiagramFailure] = useState<MermaidFailure | undefined>(undefined);
+
+  const rendered = RENDERED_TYPES.has(artifact.type) && !diagramFailure;
+  const note = rendered
+    ? undefined
+    : diagramFailure
+      ? MERMAID_FAILURE_NOTE[diagramFailure]
+      : SOURCE_ONLY_NOTE[artifact.type];
 
   return (
     <Sheet
@@ -149,14 +241,24 @@ export function ArtifactCard({ artifact }: { artifact: ChatArtifactView }) {
         </Chip>
       </Stack>
 
-      {rendered && (
-        <Box sx={{ bgcolor: 'background.level1' }}>
-          {artifact.type === 'html' ? (
-            <HtmlArtifactFrame content={artifact.content} title={artifact.title} />
-          ) : (
-            <SvgArtifact content={artifact.content} title={artifact.title} />
-          )}
+      {/* Mermaid stays mounted through a failure, unlike the other two: its verdict comes from
+          compiling the source, and a streaming artifact's source is malformed until the last
+          line lands. Unmounting on the first bad parse would leave the finished diagram
+          showing its own error note. */}
+      {artifact.type === 'mermaid' ? (
+        <Box sx={{ bgcolor: rendered ? 'background.level1' : undefined }}>
+          <MermaidArtifact content={artifact.content} title={artifact.title} onFailure={setDiagramFailure} />
         </Box>
+      ) : (
+        rendered && (
+          <Box sx={{ bgcolor: 'background.level1' }}>
+            {artifact.type === 'html' ? (
+              <HtmlArtifactFrame content={artifact.content} title={artifact.title} />
+            ) : (
+              <SvgArtifact content={artifact.content} title={artifact.title} />
+            )}
+          </Box>
+        )
       )}
 
       <Box sx={{ px: 1.5, py: 1 }}>
