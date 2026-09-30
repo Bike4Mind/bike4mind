@@ -4,7 +4,7 @@ import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
 import type {
   AddAttachmentsResult,
   BackgroundProcessInfo,
-  ChatApprovalDecision,
+  ChatApprovalAnswer,
   ChatApprovalMode,
   ChatArtifactContent,
   ChatArtifactLibrary,
@@ -265,7 +265,7 @@ export interface DesktopApi {
      * Answer a tool call sitting at 'awaiting-approval'. Unknown or already-answered ids are
      * ignored, so a double click cannot approve a second, different command.
      */
-    respondToApproval(approvalId: string, decision: ChatApprovalDecision): Promise<void>;
+    respondToApproval(approvalId: string, answer: ChatApprovalAnswer): Promise<void>;
     /**
      * Every artifact this account has made from a desktop client, newest first.
      *

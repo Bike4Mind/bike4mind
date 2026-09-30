@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type {
   ChatApprovalMode,
+  ChatApprovalOption,
   ChatArtifact,
   ChatAttachment,
   ChatDiff,
@@ -36,7 +37,8 @@ import { NO_SKILLS, type SkillsState } from '@shared/skills';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
-import { projectDisplayName } from './project/git';
+import { isValidBranchName } from './project/branchName';
+import { branchExists, listWorktrees, projectDisplayName } from './project/git';
 import type { DependencyInstaller } from './project/dependencyInstall';
 import { ProjectContextCache } from './project/projectContext';
 import { resolveWorkspace, type WorkspaceOutcome } from './project/workspace';
@@ -79,6 +81,7 @@ import { assessApprovalRisk, spendsCredits } from './tools/riskAssessment';
 import {
   capOutput,
   outputCapFor,
+  type ApprovalOption,
   type ApprovalPrompt,
   type ExploreContext,
   type HostContext,
@@ -86,6 +89,8 @@ import {
   type MediaContext,
   type RelayOutcome,
   type SpawnOutcome,
+  type SpawnPlacement,
+  type SpawnRejected,
   type ToolContext,
   type ToolDefinition,
   type ToolReporter,
@@ -1639,8 +1644,11 @@ export class ChatService {
 
         // Asked BEFORE 'running' is announced, so the UI never shows a command as under way
         // while it is still waiting on the user, and nothing has run if they say no.
-        const denial = await this.awaitApproval(tool, call, context, sessionId, scope.title, messageId, signal);
-        if (denial) return denial;
+        const gated = await this.awaitApproval(tool, call, context, sessionId, scope.title, messageId, signal);
+        if (gated.settled) return gated.settled;
+        // The user's choice becomes part of the call, so every later reader of this row - the
+        // transcript, the stored session, the model on its next turn - sees what actually ran.
+        call.input = gated.input;
 
         startedAt = Date.now();
         this.emit({ type: 'tool-start', sessionId, messageId, call });
@@ -1671,10 +1679,11 @@ export class ChatService {
    *
    * Everything it offers is bounded by the caller's own project: it can see and change the
    * conversations in that project and no others. The one capability that creates something -
-   * `spawn` - copies the caller's project binding verbatim, so the child's folder grants are
-   * exactly the parent's. There is deliberately no argument through which a directory, a branch
-   * or a worktree could be named: an agent that can pick where its child runs can grant itself
-   * a root the user never approved, and the whole family rests on it not being able to.
+   * `spawn` - puts the child either in the caller's own working directory or in a fresh worktree
+   * of the caller's own repository, and WHICH of those comes from the user's answer on the
+   * approval card. There is still deliberately no argument through which a directory, a branch or
+   * a worktree could be named: an agent that can pick where its child runs can grant itself a
+   * root the user never approved, and the whole family rests on it not being able to.
    */
   private buildHostContext(session: ChatSession): HostContext | undefined {
     const project = session.project;
@@ -1690,7 +1699,7 @@ export class ChatService {
     };
 
     return {
-      spawn: (prompt, title) => this.spawnSession(session, prompt, title),
+      spawn: (prompt, title, placement) => this.spawnSession(session, prompt, title, placement),
 
       listSessions: async ({ includeArchived }) => {
         const all = await this.deps.store.list();
@@ -1858,12 +1867,18 @@ export class ChatService {
    * BEFORE the first await: `runTools` runs a turn's tool calls in parallel, so two spawns
    * asked for together would otherwise both read the count as it was before either of them.
    *
-   * The child is created with the parent's model and the parent's project exactly as stored -
-   * in particular its already-resolved `workingDirectory`, so spawning never creates a worktree
-   * and never moves a checkout. A failure after the reservation releases it; a success hands it
-   * to `spawnWatch`, which releases it when the seeded run ends.
+   * The child is created with the parent's model and the parent's project, and `placement` says
+   * where its tools run: in the parent's own working directory, or in a worktree made for it on a
+   * branch of its own. Nothing here ever moves the PARENT's checkout. A failure after the
+   * reservation releases it; a success hands it to `spawnWatch`, which releases it when the
+   * seeded run ends.
    */
-  private async spawnSession(parent: ChatSession, prompt: string, title?: string): Promise<SpawnOutcome> {
+  private async spawnSession(
+    parent: ChatSession,
+    prompt: string,
+    title: string | undefined,
+    placement: SpawnPlacement
+  ): Promise<SpawnOutcome> {
     const project = parent.project;
     if (!project) {
       return { ok: false, reason: 'no-project', message: 'Only a Code session, which has a project, can start one.' };
@@ -1897,15 +1912,27 @@ export class ChatService {
     this.spawnReservations++;
 
     try {
+      // Resolved BEFORE the session is written, for the reason createCodeSession gives: a
+      // worktree that cannot be made must leave nothing behind, rather than a session whose
+      // tools then quietly run in the parent's checkout after the user asked for isolation.
+      let workspace: { branch: string; workingDirectory: string } | null = null;
+      if (placement.kind === 'worktree') {
+        const prepared = await this.prepareSpawnWorkspace(project, placement.branch);
+        if (!prepared.ok) return prepared;
+        workspace = prepared;
+      }
+
       const child = await this.deps.store.create(parent.model, {
         // Copied field by field rather than spread, so a field added to ChatProject later has
         // to be considered here: this object IS the child access to the filesystem.
         project: {
           directory: project.directory,
           name: project.name,
-          branch: project.branch,
-          workspace: project.workspace,
-          workingDirectory: project.workingDirectory,
+          branch: workspace?.branch ?? project.branch,
+          // Local placement carries the parent's flag across unchanged: a child sharing a parent
+          // that is itself in a worktree IS in a worktree, and the chip must not say otherwise.
+          workspace: workspace !== null || project.workspace,
+          workingDirectory: workspace?.workingDirectory ?? project.workingDirectory,
           contextDirectories: [...project.contextDirectories],
         },
         origin: { parentSessionId: parent.id, depth, seedPrompt: seed },
@@ -1920,11 +1947,22 @@ export class ChatService {
 
       const named = title?.trim() ? await this.deps.store.rename(child.id, title.trim()) : null;
 
+      // A fresh worktree has no node_modules, and on this monorepo restoring them takes minutes.
+      // Started before the seed so the child's very first turn already carries the "dependencies
+      // are installing" line rather than discovering a broken command and guessing at why.
+      if (workspace) this.startDependencyInstall(child.id, workspace.workingDirectory, 'created');
+
       // Registered before the seed is sent: `send` resolves once the turn is accepted, and the
       // reply can finish - and look for its watch entry - before the await below returns.
       this.spawnWatch.set(child.id, { parentSessionId: parent.id });
 
-      const sent = await this.send(child.id, seed, [], undefined, this.turnRelay.get(parent.id)?.hops ?? 0);
+      const sent = await this.send(
+        child.id,
+        workspace ? `${worktreePreamble(project.directory, workspace)}\n\n${seed}` : seed,
+        [],
+        undefined,
+        this.turnRelay.get(parent.id)?.hops ?? 0
+      );
       if (!sent.ok) {
         this.spawnWatch.delete(child.id);
         await this.deleteSession(child.id);
@@ -1935,6 +1973,60 @@ export class ChatService {
       return { ok: true, session: named ?? child };
     } finally {
       this.spawnReservations--;
+    }
+  }
+
+  /**
+   * A worktree of the parent's repository for a spawned session to run in, or why there is none.
+   *
+   * An EXISTING branch is refused rather than used, which is the opposite of what the sidebar's
+   * worktree toggle does. The reason is the keying: `resolveWorkspace` hands back whatever
+   * worktree is already registered for a branch, so a child pointed at the parent's branch - or
+   * at any branch already checked out - would be given that checkout and share it, while the row
+   * and the chip both claimed isolation. Refusing puts the collision in front of the user, who
+   * can answer again with a different name; adopting would hide it.
+   */
+  private async prepareSpawnWorkspace(
+    project: ChatProject,
+    branch: string
+  ): Promise<({ ok: true } & { branch: string; workingDirectory: string }) | SpawnRejected> {
+    const wanted = branch.trim();
+    if (!isValidBranchName(wanted)) {
+      return {
+        ok: false,
+        reason: 'branch',
+        message: `"${wanted}" is not a usable branch name, so no worktree was made and no session started.`,
+      };
+    }
+
+    const parentBranch = project.branch.trim();
+    if (wanted === parentBranch) {
+      return {
+        ok: false,
+        reason: 'branch',
+        message:
+          `A started session cannot run on ${wanted}, which is this conversation's own branch: ` +
+          'it would share this checkout rather than getting one of its own. Nothing was started.',
+      };
+    }
+
+    try {
+      const taken =
+        (await branchExists(project.directory, wanted)) ||
+        (await listWorktrees(project.directory)).some(entry => entry.branch === wanted);
+      if (taken) {
+        return {
+          ok: false,
+          reason: 'branch',
+          message: `The branch ${wanted} already exists, so no worktree was made and no session started.`,
+        };
+      }
+
+      const resolved = await resolveWorkspace(project.directory, wanted);
+      return { ok: true, branch: wanted, workingDirectory: resolved.workingDirectory };
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'unknown error';
+      return { ok: false, reason: 'branch', message: `The worktree could not be created: ${detail}` };
     }
   }
 
@@ -2041,9 +2133,11 @@ export class ChatService {
   /**
    * Hold a tool at the approval gate, if it declares one.
    *
-   * Returns the settled DENIED call when the user says no, and null when the tool may run. A
-   * refusal is reported to the model as a failed tool_result rather than as an aborted turn, so
-   * it can say what it wanted to do instead of the conversation stopping dead.
+   * Returns a SETTLED call when the tool must not run - the user declined it, or redirected the
+   * work into this conversation - and otherwise the input it should run with, which is the call's
+   * own plus whatever option the user picked. A refusal is reported to the model as a failed
+   * tool_result rather than as an aborted turn, so it can say what it wanted to do instead of the
+   * conversation stopping dead.
    */
   private async awaitApproval(
     tool: ToolDefinition,
@@ -2053,9 +2147,9 @@ export class ChatService {
     sessionTitle: string,
     messageId: string,
     signal: AbortSignal
-  ): Promise<ChatToolCall | null> {
+  ): Promise<ApprovalOutcome> {
     const gate = this.deps.approvals;
-    if (!gate || !tool.approval) return null;
+    if (!gate || !tool.approval) return { input: call.input };
 
     // Building the prompt reads the filesystem for a write tool, and a refusal there - a path
     // outside every granted folder, a binary file - has to settle the call WITHOUT asking. A
@@ -2072,19 +2166,35 @@ export class ChatService {
       };
       this.emit({ type: 'tool-start', sessionId, messageId, call });
       this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
-      return refused;
+      return { settled: refused, input: call.input };
     }
+
+    // A redirect option is never offered as a standing answer, so it is never looked up as one
+    // either - only the options that actually run the call can have been remembered.
+    const runnable = (prompt.choice?.options ?? []).filter(option => !option.redirect);
 
     // An irreversible tool is asked every time, whatever was answered before: the standing set
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
     // enough reason to skip asking. The gate refuses to record one for these either.
-    if (!prompt.irreversible && gate.isStanding(sessionId, prompt.key)) return null;
+    if (!prompt.irreversible) {
+      const standing = gate.isStanding(
+        sessionId,
+        prompt.key,
+        runnable.map(option => option.id)
+      );
+      if (standing) return { input: applyOption(call.input, findOption(prompt, standing.optionId), standing.value) };
+    }
 
     // Consulted AFTER tool.approval() ran, so a call that is refused outright - a path outside
-    // every granted root - is still refused rather than waved through by a loose mode.
-    if (await this.autoApproves(sessionId, call, prompt, context)) return null;
+    // every granted root - is still refused rather than waved through by a loose mode. A mode
+    // loose enough to skip the question takes the card's primary action, which is the one the
+    // user would have been shown pre-selected.
+    if (await this.autoApproves(sessionId, call, prompt, context)) {
+      return { input: applyOption(call.input, runnable[0]) };
+    }
 
-    const decision = await gate.request(
+    const choice = prompt.choice ? { options: prompt.choice.options.map(toWireOption) } : undefined;
+    const answer = await gate.request(
       sessionId,
       prompt.key,
       signal,
@@ -2094,6 +2204,7 @@ export class ChatService {
         detail: prompt.detail,
         ...(prompt.diff ? { diff: prompt.diff } : {}),
         ...(prompt.irreversible ? { irreversible: true } : {}),
+        ...(choice ? { choice } : {}),
       },
       approvalId => {
         this.emit({
@@ -2107,21 +2218,50 @@ export class ChatService {
             approvalDetail: prompt.detail,
             ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
             ...(prompt.irreversible ? { approvalIrreversible: true } : {}),
+            ...(choice ? { approvalChoice: choice } : {}),
           },
         });
       },
-      { remember: !prompt.irreversible }
+      {
+        remember: !prompt.irreversible,
+        // Only the options that RUN the call may become standing. The card offers no "always"
+        // beside a redirect, and this is the second lock on that door: a redirect is an
+        // instruction about one call, never a policy for every later one.
+        ...(prompt.choice ? { rememberable: runnable.map(option => option.id) } : {}),
+      }
     );
 
-    if (decision !== 'deny') return null;
+    const picked = findOption(prompt, answer.optionId);
 
-    const denied: ChatToolCall = {
-      ...call,
-      status: 'denied',
-      error: 'The user declined to run this. Do not try to run it again; ask them what to do instead.',
-    };
-    this.emit({ type: 'tool-end', sessionId, messageId, call: denied });
-    return denied;
+    // Keyed on the OPTION rather than on the decision, so an answer naming this option can only
+    // ever redirect - never run the tool because it arrived with some other decision on it.
+    //
+    // Not a refusal, and settled apart from one for exactly that reason: the user wants the work
+    // done, here rather than by the tool. Reported as a normal result with no `error`, so the
+    // model reads an instruction rather than a failure it should apologise for and back away
+    // from - HOST_GUIDANCE trains precisely that reflex on a declined call.
+    if (picked?.redirect) {
+      const redirected: ChatToolCall = {
+        ...call,
+        status: 'done',
+        preview: picked.note,
+        label: `${picked.label} - no session was started`,
+      };
+      this.emit({ type: 'tool-end', sessionId, messageId, call: redirected });
+      return { settled: redirected, input: call.input };
+    }
+
+    if (answer.decision === 'deny' || answer.decision === 'redirect') {
+      const denied: ChatToolCall = {
+        ...call,
+        status: 'denied',
+        error: 'The user declined to run this. Do not try to run it again; ask them what to do instead.',
+      };
+      this.emit({ type: 'tool-end', sessionId, messageId, call: denied });
+      return { settled: denied, input: call.input };
+    }
+
+    return { input: applyOption(call.input, picked ?? runnable[0], answer.value) };
   }
 
   /**
@@ -2698,6 +2838,76 @@ function replaceToolResults(wire: CompletionMessage[], content: ReadonlyMap<stri
       return replacement === undefined ? block : { ...result, content: replacement };
     });
   }
+}
+
+/**
+ * What a child in a worktree has to be told before it reads its task.
+ *
+ * The parent wrote that task not knowing where the child would land - the user picks that after
+ * the prompt exists - so it routinely names files by the parent's absolute path. Left alone the
+ * child takes those paths literally: its file tools refuse them, because its roots are its own
+ * worktree and nothing else, and its shell does the work in the wrong checkout. Observed on a
+ * live run, not imagined - three denied tool calls and a file written into the parent's tree.
+ *
+ * Prepended to the seed rather than substituted into it. Rewriting the user's prompt would be
+ * guessing at which mentions of a path meant "this repository" and which meant that exact
+ * directory; saying where the child is lets it decide.
+ */
+function worktreePreamble(projectDirectory: string, workspace: { branch: string; workingDirectory: string }): string {
+  return [
+    `[You are running in a git worktree made for this task: ${workspace.workingDirectory}, on a new`,
+    `branch ${workspace.branch}. It is a checkout of the same repository as ${projectDirectory},`,
+    'which is where the conversation that started you is working.',
+    '',
+    `Any path in the task below that points into ${projectDirectory} names a file of THAT`,
+    'checkout. Use the one at the matching path inside your own worktree instead. Do not read or',
+    'write under it: it is another session working tree, you have no access to it, and changing it',
+    'is the one thing your own worktree exists to prevent.]',
+  ].join('\n');
+}
+
+/**
+ * What the approval gate concluded about one call.
+ *
+ * `settled` present means the call must NOT run and this is its final row. Otherwise `input` is
+ * what to run it with: the model's arguments, plus whatever the user picked on the card.
+ */
+interface ApprovalOutcome {
+  settled?: ChatToolCall;
+  input: Record<string, unknown>;
+}
+
+function findOption(prompt: ApprovalPrompt, optionId: string | undefined): ApprovalOption | undefined {
+  if (!optionId) return undefined;
+  return prompt.choice?.options.find(option => option.id === optionId);
+}
+
+/**
+ * Fold the user's choice into the arguments the tool will run with.
+ *
+ * It lands in `input` rather than being passed beside it so the settled row - and the stored
+ * transcript - say which way the call was allowed. The tool reads it as an ordinary argument,
+ * and the model still cannot set it: none of these properties is in the tool's schema.
+ */
+function applyOption(
+  input: Record<string, unknown>,
+  option: ApprovalOption | undefined,
+  value?: string
+): Record<string, unknown> {
+  if (!option || option.redirect) return input;
+  const field = option.field ? { [option.field.name]: value ?? option.field.value } : {};
+  return { ...input, ...option.input, ...field };
+}
+
+/** The half of an option the renderer needs. `input` and `note` are main's business alone. */
+function toWireOption(option: ApprovalOption): ChatApprovalOption {
+  return {
+    id: option.id,
+    label: option.label,
+    description: option.description,
+    ...(option.field ? { field: option.field } : {}),
+    ...(option.redirect ? { redirect: true as const } : {}),
+  };
 }
 
 /** Tool arguments arrive as a raw JSON string; a malformed one becomes an empty object. */

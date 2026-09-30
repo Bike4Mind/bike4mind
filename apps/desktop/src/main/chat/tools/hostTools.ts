@@ -1,4 +1,12 @@
-import { requireString, type HostContext, type HostSessionView, type ToolContext, type ToolDefinition } from './types';
+import { suggestBranchName } from '../project/branchName';
+import {
+  requireString,
+  type HostContext,
+  type HostSessionView,
+  type SpawnPlacement,
+  type ToolContext,
+  type ToolDefinition,
+} from './types';
 
 /**
  * The tools that drive the app itself, rather than the machine or the server.
@@ -82,17 +90,49 @@ export const sessionRead: ToolDefinition = {
   },
 };
 
+/**
+ * What the model is told when the user answers "Do it here".
+ *
+ * Emphatically not a refusal, and worded against one: a declined call trains the model to stop
+ * and ask what to do instead (see HOST_GUIDANCE), which is the exact opposite of what this
+ * answer means. The user has said they want the work done - just in this conversation.
+ */
+const DO_IT_HERE = [
+  'No session was started, and none should be. The user chose to have this done in THIS',
+  'conversation instead, by you, now.',
+  '',
+  'This is not a refusal and there is nothing to ask about: they have already told you what they',
+  'want. Get on with the task you were about to hand over, in this turn, using your own tools. Do',
+  'not call session_spawn for it again, and do not ask them what they would like instead.',
+  '',
+  'When you report back, report the WORK. Their choice is not news to them, so do not open by',
+  'explaining that a session was not started, and do not close by offering to start one after all.',
+].join('\n');
+
+const WORKTREE_NOTE =
+  'The new session gets its own git worktree on the branch below, beside the project. It cannot ' +
+  'disturb this conversation, and both can work at once.';
+
+const LOCAL_NOTE =
+  'The new session shares this conversation working directory. Nothing new is checked out, and ' +
+  'both sessions edit the same files at the same time.';
+
 export const sessionSpawn: ToolDefinition = {
   schema: {
     name: 'session_spawn',
     description:
       'Start a NEW conversation in this project and set it working on `prompt` straight away. ' +
       'It runs on its own: it does not wait for you, and it reports back into this conversation ' +
-      'when it finishes. It can read and change exactly the folders you can, and no others. ' +
-      'Use it for a self-contained piece of work that can proceed without this conversation, ' +
-      'and give it everything it needs in the prompt - it cannot see what has been said here. ' +
-      'It costs credits and the user approves each one, so do not start one speculatively, and ' +
-      'never start several to try variations of the same task.',
+      'when it finishes. Use it for a self-contained piece of work that can proceed without this ' +
+      'conversation, and give it everything it needs in the prompt - it cannot see what has been ' +
+      'said here. It costs credits and the user approves each one, so do not start one ' +
+      'speculatively, and never start several to try variations of the same task. ' +
+      'When they approve it, the USER chooses where it runs: in this working directory, or in a ' +
+      'git worktree of its own on a new branch. You cannot choose and must not assume - so write ' +
+      'the prompt so it stands on its own in either, naming files by their path within the ' +
+      'repository rather than telling it to carry on with something uncommitted here. They may ' +
+      'also answer that they want the work done in this conversation, in which case nothing is ' +
+      'started and you do it yourself.',
     parameters: {
       type: 'object',
       properties: {
@@ -112,8 +152,37 @@ export const sessionSpawn: ToolDefinition = {
     return {
       detail: [title ? `New session: ${title}` : 'New session', '', prompt].join('\n'),
       // The prompt is the key, so approving one task never covers the next: two spawns are the
-      // same act only if they would go and do the same thing.
+      // same act only if they would go and do the same thing. Which of the options below was
+      // chosen is part of what the gate files a standing approval under, so "always start these
+      // locally" can never be spent on a worktree.
       key: `session_spawn:${title ?? ''}:${prompt}`,
+      choice: {
+        options: [
+          {
+            id: 'worktree',
+            label: 'Start with worktree',
+            description: WORKTREE_NOTE,
+            input: { placement: 'worktree' },
+            // Prefilled and editable rather than derived behind the user's back. A worktree is
+            // keyed on its branch, so this name is what decides whether the child is isolated at
+            // all - a bad guess has to be visible before anything is created, not after.
+            field: { name: 'branch', label: 'Branch', value: suggestBranchName(title ?? undefined, prompt) },
+          },
+          {
+            id: 'local',
+            label: 'Start locally',
+            description: LOCAL_NOTE,
+            input: { placement: 'local' },
+          },
+          {
+            id: 'here',
+            label: 'Do it here',
+            description: 'No new session. This conversation does the work itself.',
+            redirect: true,
+            note: DO_IT_HERE,
+          },
+        ],
+      },
     };
   },
   async run(input, context) {
@@ -121,10 +190,21 @@ export const sessionSpawn: ToolDefinition = {
     const prompt = requireString(input, 'prompt');
     const title = typeof input.title === 'string' && input.title.trim() ? input.title.trim() : undefined;
 
-    const outcome = await host.spawn(prompt, title);
+    // Set by the approval card and by nothing else - neither property is in the schema above, so
+    // a model cannot send one. Absent means no gate was configured at all, and the answer there
+    // is the placement that touches nothing: creating a checkout nobody asked for is the worse
+    // of the two ways to be wrong.
+    const branch = typeof input.branch === 'string' ? input.branch.trim() : '';
+    const placement: SpawnPlacement =
+      input.placement === 'worktree' && branch ? { kind: 'worktree', branch } : { kind: 'local' };
+
+    const outcome = await host.spawn(prompt, title, placement);
     if (!outcome.ok) throw new Error(outcome.message);
     return [
       `Started session ${outcome.session.id} ("${outcome.session.title}").`,
+      placement.kind === 'worktree'
+        ? `The user gave it its own worktree on ${placement.branch}, so it is NOT editing the files here and its dependencies are installing there now.`
+        : 'The user had it share this working directory, so it is editing the same files you are.',
       'It is running now. You will be told in this conversation WHEN it finishes, but not what',
       'it said - read it with session_read then if you need that. Do not wait for it in this',
       'turn, and do not start another one for the same work.',

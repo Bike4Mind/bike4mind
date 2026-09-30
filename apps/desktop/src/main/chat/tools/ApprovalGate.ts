@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { ChatApprovalDecision, ChatPendingApproval } from '@shared/chat';
+import type { ChatApprovalAnswer, ChatPendingApproval } from '@shared/chat';
 
 /**
  * A pending approval expires rather than waiting forever. The reply keeps streaming in main
@@ -14,11 +14,29 @@ interface PendingApproval {
   summary: ChatPendingApproval;
   /** False for a tool whose effect cannot be undone: 'always' is downgraded to 'once'. */
   remember: boolean;
-  settle(decision: ChatApprovalDecision): void;
+  settle(answer: ChatApprovalAnswer): void;
 }
 
 /** Everything a caller has to say about a request beyond its key, for the inbox. */
 export type ApprovalDescription = Omit<ChatPendingApproval, 'approvalId' | 'sessionId' | 'requestedAt'>;
+
+/**
+ * A recorded "always", replayed whole for a later identical call.
+ *
+ * The OPTION is stored, not just the fact of consent, and that is the point: on a card that
+ * offered a choice, a standing approval recorded for one option must never be spent on another.
+ * Replaying the answer is what makes "always start this locally" mean that and not "always
+ * start this somehow".
+ */
+export interface StandingApproval {
+  optionId?: string;
+  value?: string;
+}
+
+/** The key a standing approval is filed under: the call, plus which way it was allowed. */
+function standingKey(key: string, optionId: string | undefined): string {
+  return optionId ? `${key}#${optionId}` : key;
+}
 
 export interface ApprovalRequestOptions {
   /**
@@ -26,6 +44,12 @@ export interface ApprovalRequestOptions {
    * irreversible tool, where a single click must never cover a later, different call.
    */
   remember?: boolean;
+  /**
+   * On a card that offers a choice, which of its options may be recorded as standing. An answer
+   * naming any other option is honoured for this call and forgotten - that is what stops a
+   * redirect, which is an instruction about one call, from ever becoming a policy.
+   */
+  rememberable?: readonly string[];
 }
 
 /**
@@ -57,13 +81,26 @@ export interface ApprovalGateListener {
 export class ApprovalGate {
   private readonly pending = new Map<string, PendingApproval>();
 
-  /** sessionId -> request keys the user chose 'always' for. In memory only, by design. */
-  private readonly standing = new Map<string, Set<string>>();
+  /** sessionId -> standing key -> the answer to replay. In memory only, by design. */
+  private readonly standing = new Map<string, Map<string, StandingApproval>>();
 
   constructor(private readonly listener?: ApprovalGateListener) {}
 
-  isStanding(sessionId: string, key: string): boolean {
-    return this.standing.get(sessionId)?.has(key) ?? false;
+  /**
+   * The standing approval covering this call, or null when there is none.
+   *
+   * `optionIds` are the card's options in the order it draws them, so the first one the user ever
+   * said "always" to is the one replayed - the same precedence the card's primary action has.
+   */
+  isStanding(sessionId: string, key: string, optionIds: readonly string[] = []): StandingApproval | null {
+    const keys = this.standing.get(sessionId);
+    if (!keys) return null;
+    if (optionIds.length === 0) return keys.get(key) ?? null;
+    for (const optionId of optionIds) {
+      const found = keys.get(standingKey(key, optionId));
+      if (found) return found;
+    }
+    return null;
   }
 
   /** Everything waiting on the user right now, oldest first - the order it should be answered in. */
@@ -84,34 +121,39 @@ export class ApprovalGate {
     describe: ApprovalDescription,
     announce: (approvalId: string) => void,
     options: ApprovalRequestOptions = {}
-  ): Promise<ChatApprovalDecision> {
+  ): Promise<ChatApprovalAnswer> {
     const approvalId = randomUUID();
     const remember = options.remember !== false;
 
-    return new Promise<ChatApprovalDecision>(resolve => {
+    return new Promise<ChatApprovalAnswer>(resolve => {
       let done = false;
       // Whether the user was ever actually asked. The aborted-before-announce path settles
       // without asking, and reporting that as a settled request would leave the sidebar
       // counting an ask that never happened.
       let announced = false;
-      const settle = (decision: ChatApprovalDecision) => {
+      const settle = (answer: ChatApprovalAnswer) => {
         if (done) return;
         done = true;
         clearTimeout(timer);
         signal.removeEventListener('abort', onAbort);
         this.pending.delete(approvalId);
         // An 'always' on an irreversible tool allows THIS call and nothing after it: the
-        // decision still stands, it just is not remembered.
-        if (decision === 'always' && remember) this.remember(sessionId, key);
+        // decision still stands, it just is not remembered. Same for an option the caller did
+        // not list as rememberable - see ApprovalRequestOptions.rememberable.
+        const keep =
+          remember &&
+          answer.decision === 'always' &&
+          (!options.rememberable || (!!answer.optionId && options.rememberable.includes(answer.optionId)));
+        if (keep) this.remember(sessionId, standingKey(key, answer.optionId), answer);
         if (announced) {
           this.listener?.settled(sessionId);
           this.listener?.changed();
         }
-        resolve(decision === 'always' && !remember ? 'once' : decision);
+        resolve(answer.decision === 'always' && !keep ? { ...answer, decision: 'once' } : answer);
       };
 
-      const onAbort = () => settle('deny');
-      const timer = setTimeout(() => settle('deny'), APPROVAL_TIMEOUT_MS);
+      const onAbort = () => settle({ decision: 'deny' });
+      const timer = setTimeout(() => settle({ decision: 'deny' }), APPROVAL_TIMEOUT_MS);
       // Unref so a pending approval never keeps the process alive on quit.
       timer.unref?.();
 
@@ -123,7 +165,7 @@ export class ApprovalGate {
       });
       signal.addEventListener('abort', onAbort, { once: true });
       if (signal.aborted) {
-        settle('deny');
+        settle({ decision: 'deny' });
         return;
       }
 
@@ -135,8 +177,8 @@ export class ApprovalGate {
   }
 
   /** Unknown ids are ignored: a stale click must never answer whatever request came next. */
-  resolve(approvalId: string, decision: ChatApprovalDecision): void {
-    this.pending.get(approvalId)?.settle(decision);
+  resolve(approvalId: string, answer: ChatApprovalAnswer): void {
+    this.pending.get(approvalId)?.settle(answer);
   }
 
   /** Deleting a conversation drops both its in-flight asks and anything it had standing. */
@@ -144,7 +186,7 @@ export class ApprovalGate {
     this.standing.delete(sessionId);
     for (const [approvalId, entry] of this.pending) {
       if (entry.sessionId === sessionId) {
-        entry.settle('deny');
+        entry.settle({ decision: 'deny' });
         this.pending.delete(approvalId);
       }
     }
@@ -152,14 +194,17 @@ export class ApprovalGate {
   }
 
   dispose(): void {
-    for (const entry of this.pending.values()) entry.settle('deny');
+    for (const entry of this.pending.values()) entry.settle({ decision: 'deny' });
     this.pending.clear();
     this.standing.clear();
   }
 
-  private remember(sessionId: string, key: string): void {
-    const keys = this.standing.get(sessionId) ?? new Set<string>();
-    keys.add(key);
+  private remember(sessionId: string, key: string, answer: ChatApprovalAnswer): void {
+    const keys = this.standing.get(sessionId) ?? new Map<string, StandingApproval>();
+    keys.set(key, {
+      ...(answer.optionId ? { optionId: answer.optionId } : {}),
+      ...(answer.value === undefined ? {} : { value: answer.value }),
+    });
     this.standing.set(sessionId, keys);
   }
 }

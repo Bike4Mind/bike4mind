@@ -3,7 +3,8 @@ import Button from '@mui/joy/Button';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import type { ChatApprovalDecision, ChatPendingApproval } from '@shared/chat';
+import type { ChatApprovalAnswer, ChatPendingApproval } from '@shared/chat';
+import { ApprovalChoiceButtons } from './ApprovalChoice';
 import { contentColumnSx } from './layout';
 
 /**
@@ -29,7 +30,7 @@ export function PendingApprovalBar({
   pending: ChatPendingApproval[];
   /** The conversation on screen, whose approvals the transcript is already showing. */
   openSessionId: string | null;
-  onRespond: (approvalId: string, decision: ChatApprovalDecision) => void;
+  onRespond: (approvalId: string, answer: ChatApprovalAnswer) => void;
   onOpenSession: (sessionId: string) => void;
 }) {
   const elsewhere = pending.filter(entry => entry.sessionId !== openSessionId);
@@ -91,42 +92,69 @@ export function PendingApprovalBar({
           </Typography>
         </Box>
 
-        <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-          <Button size="sm" onClick={() => onRespond(next.approvalId, 'once')} data-testid="chat-pending-approve-once">
-            Allow once
-          </Button>
-          {/* Withheld on an irreversible tool for the same reason the card withholds it: one
-            click must never stand in for an answer to a later, different request. */}
-          {!next.irreversible && (
+        {next.choice ? (
+          <>
+            <ApprovalChoiceButtons
+              choice={next.choice}
+              onAnswer={answer => onRespond(next.approvalId, answer)}
+              onDeny={() => onRespond(next.approvalId, { decision: 'deny' })}
+              denyLabel="Don't start it"
+              alwaysLabel="Always answer this way in that chat"
+              testPrefix="chat-pending"
+            />
             <Button
               size="sm"
-              variant="soft"
-              onClick={() => onRespond(next.approvalId, 'always')}
-              data-testid="chat-pending-approve-always"
+              variant="plain"
+              color="neutral"
+              sx={{ mt: 0.5 }}
+              onClick={() => onOpenSession(next.sessionId)}
+              data-testid="chat-pending-open-session-btn"
             >
-              Always in that chat
+              Open it
             </Button>
-          )}
-          <Button
-            size="sm"
-            variant="plain"
-            color="neutral"
-            onClick={() => onRespond(next.approvalId, 'deny')}
-            data-testid="chat-pending-deny"
-          >
-            Don&apos;t allow
-          </Button>
-          <Box sx={{ flex: 1 }} />
-          <Button
-            size="sm"
-            variant="plain"
-            color="neutral"
-            onClick={() => onOpenSession(next.sessionId)}
-            data-testid="chat-pending-open-session-btn"
-          >
-            Open it
-          </Button>
-        </Stack>
+          </>
+        ) : (
+          <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+            <Button
+              size="sm"
+              onClick={() => onRespond(next.approvalId, { decision: 'once' })}
+              data-testid="chat-pending-approve-once"
+            >
+              Allow once
+            </Button>
+            {/* Withheld on an irreversible tool for the same reason the card withholds it: one
+            click must never stand in for an answer to a later, different request. */}
+            {!next.irreversible && (
+              <Button
+                size="sm"
+                variant="soft"
+                onClick={() => onRespond(next.approvalId, { decision: 'always' })}
+                data-testid="chat-pending-approve-always"
+              >
+                Always in that chat
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="plain"
+              color="neutral"
+              onClick={() => onRespond(next.approvalId, { decision: 'deny' })}
+              data-testid="chat-pending-deny"
+            >
+              Don&apos;t allow
+            </Button>
+            <Box sx={{ flex: 1 }} />
+            <Button
+              size="sm"
+              variant="plain"
+              color="neutral"
+              onClick={() => onOpenSession(next.sessionId)}
+              data-testid="chat-pending-open-session-btn"
+            >
+              Open it
+            </Button>
+          </Stack>
+        )}
       </Sheet>
     </Box>
   );

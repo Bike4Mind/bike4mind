@@ -101,7 +101,7 @@ describe('ChatService approval gate', () => {
 
     streams[0].write(bashTurn('call_1', 'echo approved-and-ran'));
     streams[0].write(frame('[DONE]'));
-    approvals.resolve(await pendingApprovalId(), 'once');
+    approvals.resolve(await pendingApprovalId(), { decision: 'once' });
 
     await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 5000, interval: 10 });
     const result = post.mock.calls[1][1].messages[3].content[0];
@@ -116,7 +116,7 @@ describe('ChatService approval gate', () => {
 
     streams[0].write(bashTurn('call_1', 'echo should-never-run'));
     streams[0].write(frame('[DONE]'));
-    approvals.resolve(await pendingApprovalId(), 'deny');
+    approvals.resolve(await pendingApprovalId(), { decision: 'deny' });
 
     await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 3000, interval: 5 });
     const result = post.mock.calls[1][1].messages[3].content[0];
@@ -138,7 +138,7 @@ describe('ChatService approval gate', () => {
 
     streams[0].write(bashTurn('call_1', 'echo repeated'));
     streams[0].write(frame('[DONE]'));
-    approvals.resolve(await pendingApprovalId(), 'always');
+    approvals.resolve(await pendingApprovalId(), { decision: 'always' });
 
     await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 10 });
     streams[1].write(bashTurn('call_2', 'echo repeated'));

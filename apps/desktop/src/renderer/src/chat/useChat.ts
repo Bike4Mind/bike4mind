@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
-  ChatApprovalDecision,
+  ChatApprovalAnswer,
   ChatApprovalMode,
   ChatAttachment,
   ChatMessage,
@@ -321,7 +321,7 @@ export interface ConversationController {
   /** Where this Code session is grounded, for the chip row. Inert on a Chat session. */
   project: ProjectBindingController;
   /** Answer a tool call waiting at the approval gate. Nothing has run until this is called. */
-  respondToApproval: (approvalId: string, decision: ChatApprovalDecision) => void;
+  respondToApproval: (approvalId: string, answer: ChatApprovalAnswer) => void;
 }
 
 /**
@@ -627,8 +627,8 @@ export function useConversation(
     [sessionId, onSummaryChanged]
   );
 
-  const respondToApproval = useCallback((approvalId: string, decision: ChatApprovalDecision) => {
-    void window.b4m.chat.respondToApproval(approvalId, decision);
+  const respondToApproval = useCallback((approvalId: string, answer: ChatApprovalAnswer) => {
+    void window.b4m.chat.respondToApproval(approvalId, answer);
   }, []);
 
   const dismissNotice = useCallback(() => setNotice(null), []);

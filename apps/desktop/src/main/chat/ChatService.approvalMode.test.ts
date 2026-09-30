@@ -44,11 +44,20 @@ describe('ChatService approval modes', () => {
   const awaitStatus = (status: ChatToolCall['status']) =>
     vi.waitUntil(() => calls(status)[0], { timeout: 5000, interval: 10 });
 
-  /** Answer whatever is sitting at the gate, so a turn that has to ask can still finish. */
+  /**
+   * Answer whatever is sitting at the gate, so a turn that has to ask can still finish.
+   *
+   * A card offering a choice is answered with the option that runs where the parent already is.
+   * These tests are about which MODE a child inherits and run in a plain temp directory with no
+   * repository in it; where a child lands is ChatService.spawnPlacement.test.ts's subject.
+   */
   async function answer(decision: 'once' | 'deny'): Promise<void> {
     const asked = await awaitStatus('awaiting-approval');
     if (!asked.approvalId) throw new Error('no approval announced');
-    approvals.resolve(asked.approvalId, decision);
+    approvals.resolve(asked.approvalId, {
+      decision,
+      ...(asked.approvalChoice ? { optionId: 'local' } : {}),
+    });
   }
 
   beforeEach(async () => {

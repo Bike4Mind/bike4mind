@@ -1,4 +1,5 @@
 import type {
+  ChatApprovalOption,
   ChatDiff,
   ChatToolDetail,
   ChatMedia,
@@ -155,6 +156,16 @@ export interface SpawnRejected {
 export type SpawnOutcome = { ok: true; session: ChatSessionSummary } | SpawnRejected;
 
 /**
+ * Where a spawned session's tools run. Chosen by the USER on the approval card, never by the
+ * model - see HostContext for why that distinction is the whole feature.
+ *
+ * 'worktree' carries a branch of its own rather than inheriting one, and it has to: a worktree
+ * is keyed on its branch, so a child handed the parent's branch would be given the parent's
+ * checkout back and be isolated in name only.
+ */
+export type SpawnPlacement = { kind: 'local' } | { kind: 'worktree'; branch: string };
+
+/**
  * A delivered message, and whether the target took it up straight away.
  *
  * `title` is what the caller's transcript row names, resolved here because the model only ever
@@ -184,18 +195,23 @@ export type RelayOutcome = RelayAccepted | RelayRejected;
  * work that spends credits without them typing anything, and it can remove a conversation.
  *
  * Deliberately narrow, and narrow in a specific direction: everything here is scoped to the
- * calling session's own project, and `spawn` copies the caller's folder grants verbatim rather
- * than taking any of its own. There is no way through this interface to widen what the agent
- * may touch, which is the invariant the whole family rests on.
+ * calling session's own project, and `spawn` can put the child only where the USER said - in
+ * the caller's own working directory, or in a worktree of the caller's own repository. There is
+ * no way through this interface to widen what the agent may touch, which is the invariant the
+ * whole family rests on.
  */
 export interface HostContext {
   /**
    * Start a session under this one's project and set it running on `prompt`.
    *
+   * `placement` reaches this from the approval card, NOT from the tool's arguments: the schema
+   * has no property for it, so a model cannot ask for a directory of its own. That is what keeps
+   * the invariant above true now that a child can land somewhere the parent is not.
+   *
    * Refused rather than queued when a cap is hit; see SpawnRefusal for which caps and why the
    * model is told them apart.
    */
-  spawn(prompt: string, title?: string): Promise<SpawnOutcome>;
+  spawn(prompt: string, title: string | undefined, placement: SpawnPlacement): Promise<SpawnOutcome>;
   /** Sessions in this one's project, newest first. Includes archived ones, flagged as such. */
   listSessions(options: { includeArchived: boolean }): Promise<HostSessionView[]>;
   /** One session's transcript as plain text, or null when it is gone or not in this project. */
@@ -236,6 +252,36 @@ export interface ApprovalPrompt {
    * conversation is the case this exists for.
    */
   irreversible?: true;
+  /**
+   * The ways this call may be allowed, when "allow it" is not one question but a choice between
+   * several. The card draws a split button; whatever the user picks is folded into the tool's
+   * input before `run` sees it.
+   */
+  choice?: ApprovalChoice;
+}
+
+/** See ChatApprovalOption: this is that, plus what main does with the answer. */
+export type ApprovalOption = ChatApprovalOption &
+  (
+    | {
+        redirect: true;
+        /** What the model is told INSTEAD of running the call. See ChatApprovalDecision. */
+        note: string;
+      }
+    | {
+        redirect?: undefined;
+        /**
+         * Merged into the tool's input when this option is chosen, with the field's value under
+         * `field.name`. These properties are deliberately absent from the tool's JSON schema, so
+         * the model cannot reach them: the choice is the user's and only the user's.
+         */
+        input?: Record<string, unknown>;
+      }
+  );
+
+export interface ApprovalChoice {
+  /** The first is the primary action, and the one a standing approval or an auto-approval takes. */
+  options: readonly ApprovalOption[];
 }
 
 /** Wire shape the completions endpoint expects, matching CompletionToolSchema in common. */

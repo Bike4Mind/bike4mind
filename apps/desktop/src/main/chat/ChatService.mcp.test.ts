@@ -135,7 +135,7 @@ describe('ChatService with an MCP server', () => {
       frame({ type: 'tool_use', tools: [{ id: 'call_1', name: 'mcp__echo_echo', arguments: '{"text":"hello"}' }] })
     );
     streams[0].write(frame('[DONE]'));
-    approvals.resolve(await pendingApprovalId(), 'once');
+    approvals.resolve(await pendingApprovalId(), { decision: 'once' });
 
     await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 10_000, interval: 10 });
     const result = post.mock.calls[1][1].messages[3].content[0];
@@ -152,7 +152,7 @@ describe('ChatService with an MCP server', () => {
 
     streams[0].write(frame({ type: 'tool_use', tools: [{ id: 'call_1', name: 'mcp__echo_boom', arguments: '{}' }] }));
     streams[0].write(frame('[DONE]'));
-    approvals.resolve(await pendingApprovalId(), 'once');
+    approvals.resolve(await pendingApprovalId(), { decision: 'once' });
 
     await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 10_000, interval: 10 });
     expect(post.mock.calls[1][1].messages[3].content[0]).toMatchObject({ type: 'tool_result', is_error: true });
@@ -185,7 +185,7 @@ describe('ChatService with an MCP server', () => {
       frame({ type: 'tool_use', tools: [{ id: 'call_1', name: 'mcp__echo_echo', arguments: '{"text":"hello"}' }] })
     );
     streams[0].write(frame('[DONE]'));
-    approvals.resolve(await pendingApprovalId(), 'deny');
+    approvals.resolve(await pendingApprovalId(), { decision: 'deny' });
 
     await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 10_000, interval: 10 });
     const result = post.mock.calls[1][1].messages[3].content[0];

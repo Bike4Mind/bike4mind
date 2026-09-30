@@ -70,6 +70,15 @@ export function ChevronIcon({ open }: { open: boolean }) {
   );
 }
 
+/** The caret on a split button, which points at the menu it opens rather than at its own state. */
+export function CaretDownIcon() {
+  return (
+    <Glyph>
+      <path d="M4 6l4 4 4-4" />
+    </Glyph>
+  );
+}
+
 export function CloseIcon() {
   return (
     <Glyph>

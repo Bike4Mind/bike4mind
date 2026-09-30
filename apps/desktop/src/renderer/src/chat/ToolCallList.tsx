@@ -5,7 +5,8 @@ import CircularProgress from '@mui/joy/CircularProgress';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import type { ChatApprovalDecision, ChatToolCall, ChatToolNotice, ChatToolStatus } from '@shared/chat';
+import type { ChatApprovalAnswer, ChatToolCall, ChatToolNotice, ChatToolStatus } from '@shared/chat';
+import { ApprovalChoiceButtons } from './ApprovalChoice';
 import { DiffView } from './DiffView';
 import { ChevronIcon } from './icons';
 import { MediaAttachments } from './MediaAttachment';
@@ -32,7 +33,7 @@ const HOST_QUESTION: Record<string, string> = {
   session_delete: 'Delete this conversation for good?',
 };
 
-export type RespondToApproval = (approvalId: string, decision: ChatApprovalDecision) => void;
+export type RespondToApproval = (approvalId: string, answer: ChatApprovalAnswer) => void;
 
 /** Named for what it does to the file, so nothing reads as a generic "allow this". */
 const APPROVAL_QUESTION: Record<'create' | 'overwrite' | 'edit', string> = {
@@ -88,6 +89,7 @@ function ApprovalPrompt({
   // No undo behind it, so the card is red and offers no way to stop being asked. Answering
   // "always" would be a single click standing in for consent to a later, different deletion.
   const irreversible = call.approvalIrreversible === true;
+  const choice = call.approvalChoice;
 
   return (
     <Sheet
@@ -134,47 +136,58 @@ function ApprovalPrompt({
         </Box>
       )}
 
-      <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-        <Button
-          size="sm"
-          color={irreversible ? 'danger' : 'primary'}
-          onClick={() => onRespond(approvalId, 'once')}
-          data-testid="chat-tool-approve-once"
-        >
-          {irreversible
-            ? 'Delete it'
-            : diff
-              ? 'Apply this change'
-              : isGeneration(call.name)
-                ? 'Generate it'
-                : 'Allow once'}
-        </Button>
-        {!irreversible && (
+      {choice ? (
+        <ApprovalChoiceButtons
+          choice={choice}
+          onAnswer={answer => onRespond(approvalId, answer)}
+          onDeny={() => onRespond(approvalId, { decision: 'deny' })}
+          denyLabel="Don't start it"
+          alwaysLabel="Always answer this way in this chat"
+          testPrefix="chat-tool-approval"
+        />
+      ) : (
+        <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
           <Button
             size="sm"
-            variant="soft"
-            onClick={() => onRespond(approvalId, 'always')}
-            data-testid="chat-tool-approve-always"
+            color={irreversible ? 'danger' : 'primary'}
+            onClick={() => onRespond(approvalId, { decision: 'once' })}
+            data-testid="chat-tool-approve-once"
           >
-            Always in this chat
+            {irreversible
+              ? 'Delete it'
+              : diff
+                ? 'Apply this change'
+                : isGeneration(call.name)
+                  ? 'Generate it'
+                  : 'Allow once'}
           </Button>
-        )}
-        <Button
-          size="sm"
-          variant="plain"
-          color="neutral"
-          onClick={() => onRespond(approvalId, 'deny')}
-          data-testid="chat-tool-deny"
-        >
-          {irreversible
-            ? 'Keep it'
-            : diff
-              ? "Don't change it"
-              : isGeneration(call.name)
-                ? "Don't generate"
-                : "Don't run"}
-        </Button>
-      </Stack>
+          {!irreversible && (
+            <Button
+              size="sm"
+              variant="soft"
+              onClick={() => onRespond(approvalId, { decision: 'always' })}
+              data-testid="chat-tool-approve-always"
+            >
+              Always in this chat
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="plain"
+            color="neutral"
+            onClick={() => onRespond(approvalId, { decision: 'deny' })}
+            data-testid="chat-tool-deny"
+          >
+            {irreversible
+              ? 'Keep it'
+              : diff
+                ? "Don't change it"
+                : isGeneration(call.name)
+                  ? "Don't generate"
+                  : "Don't run"}
+          </Button>
+        </Stack>
+      )}
     </Sheet>
   );
 }
