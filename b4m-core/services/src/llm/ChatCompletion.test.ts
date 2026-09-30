@@ -3,6 +3,7 @@ import {
   ChatCompletionProcess,
   addPairedTool,
   resolveEnabledTools,
+  resolveDeniedTools,
   shouldDeferCorpusToRetrieval,
   attachmentHasIndexedContent,
   computeSettlementDelta,
@@ -30,6 +31,7 @@ import {
 } from '@bike4mind/utils';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { measureIdentityNamedExclusion } from '../dataLakeService/getDynamicDataLakeTags';
+import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import type { FabFileNotice } from '@bike4mind/utils';
 import {
   getLlmByModel,
@@ -40,6 +42,8 @@ import {
 } from '@bike4mind/llm-adapters';
 import {
   ChatModels,
+  DATA_LAKE_TOOL_NAMES,
+  DATA_LAKE_WRITE_TOOL_NAMES,
   ImageModels,
   ModelBackend,
   usdToCredits as realUsdToCredits,
@@ -171,6 +175,7 @@ const mockedGetSettingsValue = vi.mocked(getSettingsValue);
 const mockedCalculateTotalTokenLength = vi.mocked(calculateTotalTokenLength);
 const mockedProcessFabFilesServer = vi.mocked(processFabFilesServer);
 const mockedFetchAndConvertFabFiles = vi.mocked(fetchAndConvertFabFiles);
+const mockedGetEffectiveLLMApiKeys = vi.mocked(getEffectiveLLMApiKeys);
 
 const mockDb = {};
 const mockStorage = {};
@@ -2231,6 +2236,268 @@ describe('ChatCompletionProcess', () => {
           delete (service as any).user.blogIntegration;
           mockSession.disabledTools = undefined;
         }
+      });
+
+      describe('data-lake intent gate and the request deniedTools', () => {
+        const offeredNames = () =>
+          (vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools ?? []).map(
+            (t: { toolSchema: { name: string } }) => t.toolSchema.name
+          );
+        const lakeBody = (extra: Record<string, unknown> = {}) => ({
+          ...startQuestParams,
+          message: 'save this summary to my data lake',
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          ...extra,
+        });
+
+        beforeEach(() => {
+          (service.db.adminSettings as Record<string, unknown>).getSettingsValue = vi.fn().mockResolvedValue(true);
+        });
+        afterEach(() => {
+          delete (service.db.adminSettings as Record<string, unknown>).getSettingsValue;
+        });
+
+        it('offers the data-lake trio on save-to-lake intent', async () => {
+          mockTextModel();
+          await service.process({ body: lakeBody(), logger: mockLogger });
+          expect(offeredNames()).toEqual(
+            expect.arrayContaining(['list_my_data_lakes', 'create_data_lake', 'save_content_to_data_lake'])
+          );
+        });
+
+        // Load-bearing: the intent gate pushes these AFTER resolveEnabledTools, so only the final
+        // denylist pass on the built list can strip them - this is the API-key scope case.
+        it('strips gate-added tools named in the request deniedTools, keeping the rest', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({ deniedTools: ['create_data_lake', 'save_content_to_data_lake'] }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          expect(names).toContain('list_my_data_lakes');
+          expect(names).not.toContain('create_data_lake');
+          expect(names).not.toContain('save_content_to_data_lake');
+        });
+
+        it('strips a caller-named tool in the request deniedTools too', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({
+              message: 'hello',
+              tools: ['save_content_to_data_lake'],
+              deniedTools: ['save_content_to_data_lake', 'create_data_lake'],
+            }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          expect(names).not.toContain('save_content_to_data_lake');
+          expect(names).not.toContain('create_data_lake');
+        });
+
+        // The gate-added trio is a UNIT for the Smart Tools toggle - denying only the read tool
+        // must not also drop the write tools it is paired with.
+        it('strips only the request-denied read tool, keeping the write tools', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({ deniedTools: ['list_my_data_lakes'] }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          expect(names).not.toContain('list_my_data_lakes');
+          expect(names).toContain('create_data_lake');
+          expect(names).toContain('save_content_to_data_lake');
+        });
+
+        // The route half of this chain: dataLakeToolsDeniedFor (apps/client dataLakeScopes.ts) returns
+        // DATA_LAKE_TOOL_NAMES for a datalake:read-less key and DATA_LAKE_WRITE_TOOL_NAMES for a
+        // datalake:read key, and /api/chat + /api/ai/llm pass it through as body.deniedTools
+        // (dataLakeScopes.test.ts, chat.integration.test.ts, llm.integration.test.ts).
+        it('withholds list_my_data_lakes on list intent for a datalake:read-less key', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({ message: 'list my lakes', deniedTools: [...DATA_LAKE_TOOL_NAMES] }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          for (const toolName of DATA_LAKE_TOOL_NAMES) expect(names).not.toContain(toolName);
+        });
+
+        it('still offers list_my_data_lakes on list intent to a datalake:read key', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({ message: 'list my lakes', deniedTools: [...DATA_LAKE_WRITE_TOOL_NAMES] }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          expect(names).toContain('list_my_data_lakes');
+          for (const toolName of DATA_LAKE_WRITE_TOOL_NAMES) expect(names).not.toContain(toolName);
+        });
+
+        // The local-model (Ollama) trim (ChatCompletionProcess.ts's `modelInfo.backend ===
+        // ModelBackend.Ollama` block, ~line 3073) strips every AUTO_ADDED_TOOL_NAMES entry the user
+        // didn't select. The data-lake trio is in that list, so it must survive the trim when the
+        // caller explicitly selected save_content_to_data_lake - resolveEnabledTools' companion
+        // pairing (list_my_data_lakes, create_data_lake) counts as "selected" too - while an
+        // unrelated auto-added tool (blog_draft) the user never asked for still gets dropped, even
+        // though its own intent is in the message.
+        describe('local-model (Ollama) auto-added-tool trim', () => {
+          const mockOllamaModel = () => {
+            mockTextModel();
+            mockedGetAvailableModels.mockResolvedValue([
+              {
+                id: ChatModels.GPT4,
+                type: 'text',
+                name: 'Local Model',
+                backend: ModelBackend.Ollama,
+                max_tokens: 100,
+                contextWindow: 1000,
+                can_stream: false,
+                pricing: {},
+                supportsImageVariation: false,
+              },
+            ]);
+          };
+
+          // Blog intent in the message (to prove blog_draft would otherwise be offered) plus an
+          // explicit save-to-lake tool selection (to prove its companions survive the trim).
+          const trimBody = () =>
+            lakeBody({
+              message: 'Turn this conversation into a blog post',
+              tools: ['save_content_to_data_lake'],
+            });
+
+          // Control: same body, non-Ollama backend. Both the data-lake trio and the unrelated
+          // blog_draft are offered - proves the trim (not the gate or the selection) is what removes
+          // blog_draft on the Ollama path below.
+          it('offers the data-lake trio and the unrelated blog_draft on a non-Ollama model', async () => {
+            (service as any).user.isAdmin = true;
+            try {
+              mockTextModel();
+              await service.process({ body: trimBody(), logger: mockLogger });
+              const names = offeredNames();
+              expect(names).toEqual(
+                expect.arrayContaining([
+                  'save_content_to_data_lake',
+                  'list_my_data_lakes',
+                  'create_data_lake',
+                  'blog_draft',
+                ])
+              );
+            } finally {
+              delete (service as any).user.isAdmin;
+            }
+          });
+
+          it('keeps the selected save tool and its list/create companions on an Ollama model', async () => {
+            (service as any).user.isAdmin = true;
+            try {
+              mockOllamaModel();
+              await service.process({ body: trimBody(), logger: mockLogger });
+              const names = offeredNames();
+              expect(names).toEqual(
+                expect.arrayContaining(['save_content_to_data_lake', 'list_my_data_lakes', 'create_data_lake'])
+              );
+            } finally {
+              delete (service as any).user.isAdmin;
+            }
+          });
+
+          it('drops the unrelated blog_draft on an Ollama model despite its intent in the message', async () => {
+            (service as any).user.isAdmin = true;
+            try {
+              mockOllamaModel();
+              await service.process({ body: trimBody(), logger: mockLogger });
+              expect(offeredNames()).not.toContain('blog_draft');
+            } finally {
+              delete (service as any).user.isAdmin;
+            }
+          });
+        });
+      });
+
+      // Reviewer finding: both resolveCorpusInlinePlan's `knowledgeSearchDisabled` input (site
+      // around ChatCompletionProcess.ts:2826) and the invisible-failure warning's
+      // `knowledgeToolWithheldByConfig` gate (site around :3221) must read the RESOLVED request
+      // `deniedTools` union (resolveDeniedTools(session.disabledTools, parsedBody.deniedTools)),
+      // not session.disabledTools alone. A caller can deny search_knowledge_base only at the
+      // REQUEST level (e.g. an API-key scope - see dataLakeScopes.ts), and no existing test sent
+      // that tool through the request deniedTools field, so either site quietly reverting to
+      // session.disabledTools stayed green.
+      describe('corpus inline-defer plan and the withheld-tool warning read the resolved deniedTools', () => {
+        beforeEach(() => {
+          mockedGetSettingsValue.mockImplementation(((key: string) => {
+            if (key === 'CorpusRetrievalMinInlineTokensPerDoc') return 500;
+            if (key === 'defaultEmbeddingModel') return 'text-embedding-3-small';
+            return undefined;
+          }) as typeof getSettingsValue);
+        });
+        afterEach(() => {
+          mockedGetSettingsValue.mockReset();
+        });
+
+        it('inlines a retrievable lake corpus when only the request deniedTools names the tool', async () => {
+          mockSession.disabledTools = undefined; // session denylist does NOT deny the tool
+          mockSession.knowledgeIds = Array.from({ length: 40 }, (_, i) => `k${i}`);
+          (service as any).accessibleDataLakeAccessMemo = {
+            dataLakeTags: ['datalake:corpus'],
+            dataLakeTagPrefixes: [],
+            scopedTagPrefixes: [],
+            lakes: [],
+          };
+          (service as any).getScopeFilter = vi.fn().mockReturnValue({});
+          const files = mockSession.knowledgeIds.map((id: string) => ({
+            id,
+            tags: [{ name: 'datalake:corpus' }],
+            chunkCount: 2,
+            vectorizedChunkCount: 2,
+            embeddingModel: 'text-embedding-3-small',
+            fileName: `${id}.md`,
+            vectorized: true,
+          }));
+          mockDb.fabfiles = { getAccessibleFiles: vi.fn().mockResolvedValue(files) };
+          mockedGetEffectiveLLMApiKeys.mockResolvedValueOnce({ openai: 'sk-test-key-1234567890' });
+
+          const body = { ...wireMinimalTurn(), deniedTools: ['search_knowledge_base'] };
+          const resolveCorpusInlinePlanSpy = vi.spyOn(service as any, 'resolveCorpusInlinePlan');
+
+          await service.process({ body, logger: mockLogger });
+
+          const args = resolveCorpusInlinePlanSpy.mock.calls[0][0] as { knowledgeSearchDisabled: boolean };
+          expect(args.knowledgeSearchDisabled).toBe(true);
+          const plan = await resolveCorpusInlinePlanSpy.mock.results[0].value;
+          expect(plan.deferredToRetrieval).toBe(false);
+        });
+
+        it('suppresses the invisible-failure warning for a lake-only caller whose deniedTools is request-only', async () => {
+          mockSession.disabledTools = undefined; // session denylist does NOT deny the tool
+          mockSession.knowledgeIds = []; // lake-only: no attached knowledge, so hasAttachedKnowledge stays false
+          (service as any).accessibleDataLakeAccessMemo = {
+            dataLakeTags: ['datalake:corpus'],
+            dataLakeTagPrefixes: [],
+            scopedTagPrefixes: [],
+            lakes: [],
+          };
+          // This warning is logged through `this.logger`, set once at construction from
+          // baseOptions - not through the per-call `logger` argument service.process() takes.
+          // Point it at this test's mock so the assertion below is not vacuously true.
+          (service as any).logger = mockLogger;
+
+          const body = {
+            ...wireMinimalTurn(),
+            // Keeps offeredToolNames non-empty so the OTHER knowledgeToolWithheldByConfig disjunct
+            // (offeredToolNames.length === 0) cannot mask a broken deniedTools check.
+            tools: ['current_datetime'],
+            deniedTools: ['search_knowledge_base'],
+          };
+
+          await service.process({ body, logger: mockLogger });
+
+          expect(mockLogger.warn).not.toHaveBeenCalledWith(
+            expect.stringMatching(/has an accessible data lake but search_knowledge_base is not offered/)
+          );
+        });
       });
 
       it('suppresses auto-added tools under a mode even with blog intent in the message', async () => {
@@ -6358,6 +6625,25 @@ describe('resolveEnabledTools', () => {
     const twice = resolveEnabledTools({ requestTools: once, hasAttachedKnowledge: true });
     expect(twice).toEqual(once);
   });
+
+  it('pairs the save-to-data-lake toggle with its list and create companions', () => {
+    const result = resolveEnabledTools({ requestTools: ['save_content_to_data_lake'], hasAttachedKnowledge: false });
+    expect(result).toEqual(['save_content_to_data_lake', 'list_my_data_lakes', 'create_data_lake']);
+  });
+
+  it('does not drag the data-lake companions in without the save tool', () => {
+    const result = resolveEnabledTools({ requestTools: ['list_my_data_lakes'], hasAttachedKnowledge: false });
+    expect(result).toEqual(['list_my_data_lakes']);
+  });
+
+  it('lets the session denylist strip a data-lake companion the save tool would pair in', () => {
+    const result = resolveEnabledTools({
+      requestTools: ['save_content_to_data_lake'],
+      hasAttachedKnowledge: false,
+      sessionDisabledTools: ['create_data_lake'],
+    });
+    expect(result).toEqual(['save_content_to_data_lake', 'list_my_data_lakes']);
+  });
 });
 
 describe('shouldDeferCorpusToRetrieval (per-doc even-split depth floor)', () => {
@@ -6609,5 +6895,23 @@ describe('dropOldestHistoryTurn (overflow-recovery shed)', () => {
     history = dropOldestHistoryTurn(history!);
     expect(history).toEqual([user('q3'), assistant('a3')]);
     expect(dropOldestHistoryTurn(history!)).toBeNull();
+  });
+});
+
+describe('resolveDeniedTools', () => {
+  it('unions the session denylist with the request deniedTools', () => {
+    expect(resolveDeniedTools(['web_search'], ['create_data_lake', 'web_search'])?.sort()).toEqual([
+      'create_data_lake',
+      'web_search',
+    ]);
+  });
+
+  it('ignores a non-array session value', () => {
+    expect(resolveDeniedTools(undefined, ['create_data_lake'])).toEqual(['create_data_lake']);
+    expect(resolveDeniedTools('web_search', undefined)).toBeUndefined();
+  });
+
+  it('is undefined when neither source denies anything', () => {
+    expect(resolveDeniedTools([], [])).toBeUndefined();
   });
 });

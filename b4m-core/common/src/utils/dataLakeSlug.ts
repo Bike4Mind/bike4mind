@@ -1,11 +1,11 @@
 /**
- * Pure slug helpers for the Data Lake wizard, kept dependency-free (no hooks,
- * axios, or store) so the client gate and its tests exercise the same logic the
+ * Pure slug helpers for Data Lake creation (the client wizard and the create_data_lake LLM tool),
+ * kept dependency-free so the client gate and its tests exercise the same logic the
  * server validates against. Every bound here comes from @bike4mind/common, which
  * CreateDataLakeRequestInput validates against - the wizard and the schema cannot
  * disagree because there is only one copy of each rule.
  */
-import { MAX_TAG_PREFIX_LENGTH, MIN_DATA_LAKE_SLUG_LENGTH, MAX_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
+import { MAX_TAG_PREFIX_LENGTH, MIN_DATA_LAKE_SLUG_LENGTH, MAX_DATA_LAKE_SLUG_LENGTH } from '../constants/dataLakes';
 
 /**
  * Slugify a string for use as a data lake slug. Trimming the leading/trailing

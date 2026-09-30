@@ -183,6 +183,9 @@ const TOOL_PREAMBLES: Record<string, string> = {
   edit_image: 'Editing the image…',
   music_generation: 'Composing music…',
   audio_generation: 'Generating audio…',
+  list_my_data_lakes: 'Checking which data lakes you can save to...',
+  create_data_lake: 'Creating a new data lake...',
+  save_content_to_data_lake: 'Saving that to your data lake...',
 };
 
 function resolveToolPreamble(toolName: string): string | null {
@@ -217,6 +220,10 @@ function resolveToolStatus(toolName: string, data: any): string | null {
       return '🔢 Counting the documents in the data lake…';
     case 'describe_knowledge_base':
       return '🗂️ Mapping the shape of the data lake…';
+    case 'save_content_to_data_lake':
+      return typeof d.fileName === 'string'
+        ? `Saving "${truncateForStatus(d.fileName)}" to the data lake...`
+        : TOOL_PREAMBLES[toolName];
     case 'web_search':
       return query ? `🌐 Searching the web: “${truncateForStatus(query)}”` : '🌐 Searching the web…';
     case 'web_fetch':
@@ -823,6 +830,7 @@ export class ToolBuilder {
         sessionReaderConsentDatalakeTags: this.deps.sessionReaderConsentDatalakeTags,
         sessionLakeScopeExplicit: this.deps.sessionLakeScopeExplicit,
         sessionPreauthorizedLakeIds: this.deps.sessionPreauthorizedLakeIds,
+        organizationId: organization?.id,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,
         imageGenerateStorage: this.deps.imageGenerateStorage,

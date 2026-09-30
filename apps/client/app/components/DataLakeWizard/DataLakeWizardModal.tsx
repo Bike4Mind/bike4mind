@@ -10,10 +10,10 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { checkStorageForUpload, getStorageQuota } from '@client/app/utils/storageQuota';
 import StorageLimitNotice from '@client/app/components/common/StorageLimitNotice';
 import { useFileBrowser } from '@client/app/components/Files/fileBrowserStore';
-import { isValidDataLakeSlug } from '@client/app/hooks/data/dataLakeSlug';
 import {
   hasBlankTagPrefixSegment,
   isReservedTagPrefix,
+  isValidDataLakeSlug,
   submittedTagPrefix,
   MAX_TAG_PREFIX_LENGTH,
   MIN_TAG_PREFIX_LENGTH,

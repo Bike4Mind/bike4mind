@@ -43,6 +43,7 @@ import LanguageSelector from '@client/app/components/LanguageSelector';
 import { useTranslation } from 'react-i18next';
 import VoicePreferenceSection from './VoicePreferenceSection';
 import ActiveSessionsSection from './ActiveSessionsSection';
+import ApprovedAppsSection from './ApprovedAppsSection';
 import DocxTemplateSection from './DocxTemplateSection';
 import ExperimentalFeatureToggle from '../ExperimentalFeatureToggle';
 import { useExperimentalFeatureSettings, useSettingsFromServer } from '@client/app/hooks/data/settings';
@@ -552,6 +553,7 @@ const GeneralSettingsTab = () => {
           </Grid>
 
           <ActiveSessionsSection />
+          <ApprovedAppsSection />
         </SectionContainer>
       </Box>
 

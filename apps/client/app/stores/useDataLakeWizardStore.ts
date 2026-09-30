@@ -1,8 +1,7 @@
 import { create } from 'zustand';
-import { isReservedTagPrefix } from '@bike4mind/common';
+import { deriveTagPrefixFromLakeName, isReservedTagPrefix } from '@bike4mind/common';
 import type { DataLakeStatus, TaxonomyStatus } from '@bike4mind/common';
 import type { FolderTreeNode, WizardFile } from '../utils/folderTreeParser';
-import { deriveTagPrefixFromLakeName } from '../hooks/data/dataLakeSlug';
 import {
   parseFilesToTree,
   getAllFiles,
