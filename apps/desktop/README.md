@@ -28,6 +28,13 @@ Electron against it with HMR.
 | `pnpm typecheck:fast` | `tsgo`, falling back to `tsc` |
 | `pnpm test` | vitest |
 
+`B4M_DESKTOP_DEFAULT_MODEL` overrides the model a *new* conversation starts on for one launch,
+for a launch nobody is driving and so cannot reach the in-app picker. It is a preference, not a
+guarantee: the list is the server's (see `ModelCatalog`), and a deployment that does not offer
+that id starts on the first one it does. Existing conversations keep the model saved on them.
+Unset or blank leaves the shipped default. Either way the preference is logged once at startup,
+so a launch can be checked without opening the picker.
+
 ## Layout
 
 ```

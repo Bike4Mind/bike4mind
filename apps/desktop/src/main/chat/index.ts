@@ -45,14 +45,21 @@ import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 
+/** Overrides the preferred model for one launch. Unset or blank leaves the shipped default. */
+const MODEL_OVERRIDE = process.env.B4M_DESKTOP_DEFAULT_MODEL?.trim();
+
 /**
  * The model a new conversation prefers.
  *
  * A PREFERENCE, not a list: the real set comes from the server (see ModelCatalog), and a
  * deployment that does not offer this one gets the first model it does offer instead. It is
  * still the fallback for a session file written before the catalog could be read.
+ *
+ * The override exists for a launch nobody is driving - handed to someone else, or run for a
+ * check - where reaching the in-app picker is not an option. It is a preference like any
+ * other, so a value the deployment does not offer is replaced the same way.
  */
-const PREFERRED_MODEL: string = ChatModels.CLAUDE_5_OPUS;
+const PREFERRED_MODEL: string = MODEL_OVERRIDE || ChatModels.CLAUDE_5_OPUS;
 
 /** How much of a background process's output the panel asks for when it rejoins after a reload. */
 const PANEL_TAIL_CHARS = 20_000;
@@ -127,6 +134,11 @@ async function pickDirectory(sender: WebContents): Promise<string | null> {
 
 export function registerChat(auth: AuthService): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
+  // Unconditional, unlike everything else at this level: an overridden launch has no other
+  // evidence the variable was read, short of a human opening the picker.
+  logger.warn(
+    `CHAT: preferred model for new conversations: ${PREFERRED_MODEL} (${MODEL_OVERRIDE ? 'B4M_DESKTOP_DEFAULT_MODEL' : 'built-in default'})`
+  );
   const userData = app.getPath('userData');
   // Scoped to the backend and the account, not just to this machine: one install reaches
   // production and a local server, and can be signed in as a different person on each. The
