@@ -22,7 +22,8 @@ describe('cursorPagination', () => {
 
   it('rejects garbage, non-JSON and wrong-version cursors with a 422', () => {
     const wrongVersion = Buffer.from(JSON.stringify({ v: 2, s: 'lakes', after: 'a' })).toString('base64url');
-    for (const bad of ['!!!', Buffer.from('not json').toString('base64url'), wrongVersion]) {
+    const wrongShape = Buffer.from(JSON.stringify({ v: 1, s: 'lakes', after: 123 })).toString('base64url');
+    for (const bad of ['!!!', Buffer.from('not json').toString('base64url'), wrongVersion, wrongShape]) {
       expect(() => decodeCursor(bad, 'lakes')).toThrow(expect.objectContaining({ statusCode: 422 }));
     }
   });
@@ -38,6 +39,13 @@ describe('cursorPagination', () => {
     const last = paginateById(items, { limit: 2, scope: 'lakes', cursor: second.nextCursor! });
     expect(last.items.map(i => i.id)).toEqual(['e']);
     expect(last.nextCursor).toBeNull();
+  });
+
+  it('keeps a cursor valid when the caller changes limit mid-pagination', () => {
+    const first = paginateById(items, { limit: 1, scope: 'lakes' });
+    const rest = paginateById(items, { limit: 3, scope: 'lakes', cursor: first.nextCursor! });
+    expect(rest.items.map(i => i.id)).toEqual(['b', 'c', 'd']);
+    expect(rest.nextCursor).not.toBeNull();
   });
 
   it('returns a null cursor when the page exactly exhausts the items', () => {

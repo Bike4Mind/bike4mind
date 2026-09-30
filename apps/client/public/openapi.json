@@ -9654,7 +9654,7 @@
       "get": {
         "operationId": "getDataLakeFile",
         "summary": "Get a data lake file",
-        "description": "Returns a lake member's ingestion status. Adding a file to a lake does NOT ingest it: a file only becomes searchable once it has been chunked and embedded, so poll this endpoint until `ingestion_status` is `ready`. `indexing` clears on its own; `paused` means re-processing was stopped partway and needs the file reprocessed (or background lake work resumed) before it returns; `failed` carries the reason in `error`; `not_ingested` means the file has no searchable passages yet: ingestion has not started, a first pass has not committed its chunks, or the file has no extractable text (such a file never becomes `ready`). These agree with what search reports under `retrieval_unavailable`.",
+        "description": "Returns a lake member's ingestion status. Adding a file to a lake does NOT ingest it: a file only becomes searchable once it has been chunked and embedded, so poll this endpoint until `ingestion_status` is `ready`. `indexing` clears on its own; `paused` means re-processing was stopped partway and needs the file reprocessed (or background lake work resumed) before it returns; `failed` carries the reason in `error`. A `ready` file can also carry a non-null `error` when a later pass failed partway: its committed passages stay searchable, so branch on `ingestion_status`, not on `error`. `not_ingested` means the file has no searchable passages yet: ingestion has not started, a first pass has not committed its chunks, or the file has no extractable text (such a file never becomes `ready`). These agree with what search reports under `retrieval_unavailable`.",
         "tags": [
           "Data Lakes"
         ],

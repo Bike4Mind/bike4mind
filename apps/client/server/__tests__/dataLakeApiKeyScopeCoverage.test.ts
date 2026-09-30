@@ -119,6 +119,17 @@ const V1_EXPECTED_SCOPES = [
   [searchDataLakeContract, DATA_LAKE_QUERY_API_KEY_SCOPES] as const,
 ];
 
+// Keyed by the identifier a route passes to nextRouteForContract(), so the source scan can tie
+// each v1 router to a pinned contract rather than one built inline and never registered.
+const V1_CONTRACTS_BY_IDENTIFIER = {
+  listDataLakesContract,
+  getDataLakeContract,
+  getDataLakeFileContract,
+  addDataLakeFileContract,
+  removeDataLakeFileContract,
+  searchDataLakeContract,
+};
+
 describe('data-lake routes declare an API-key scope gate', () => {
   it('finds the route files', () => {
     expect(files.length).toBeGreaterThan(30);
@@ -184,6 +195,14 @@ describe('public /api/v1/data-lakes routes gate scopes through their contract', 
       'nextRouteForContract('
     );
     expect(source).not.toContain('ApiKeyScope.ADMIN');
+  });
+
+  it('builds every v1 router from a pinned contract, and gives every pinned contract a router', () => {
+    const routed = v1Files.flatMap(f =>
+      [...readFileSync(f, 'utf8').matchAll(/nextRouteForContract\(\s*(\w+)/g)].map(m => m[1])
+    );
+    expect(new Set(routed)).toEqual(new Set(Object.keys(V1_CONTRACTS_BY_IDENTIFIER)));
+    expect(Object.values(V1_CONTRACTS_BY_IDENTIFIER)).toEqual(V1_EXPECTED_SCOPES.map(([c]) => c));
   });
 
   it('lists exactly these six contracts under /api/v1/data-lakes', () => {
