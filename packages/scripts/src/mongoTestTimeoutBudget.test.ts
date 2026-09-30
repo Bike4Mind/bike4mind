@@ -24,7 +24,7 @@ describe('real-Mongo suites in the scripts shard declare the shared 60s budget',
     expect(audit.suites).toContain('migrate/migrations/20260810000000_drop-legacy-fabfilechunk-indexes.test.ts');
   });
 
-  it('lists each real-Mongo suite once', () => {
+  it('lists each real-Mongo suite exactly once', () => {
     // Paths are absolute, so the same file reached through two roots still dedupes.
     expect(new Set(audit.suites).size).toBe(audit.suites.length);
   });
