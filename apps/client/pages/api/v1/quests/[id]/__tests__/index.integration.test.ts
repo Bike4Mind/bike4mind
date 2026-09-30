@@ -227,6 +227,35 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     process.env.NEXT_PUBLIC_CDN_URL = prev;
   });
 
+  // The completion callback carries this same body (toQuestPollBody), so a video poll and a video
+  // callback must agree; parsing through the schema also proves the published spec keeps `videos`.
+  it('returns quest.videos and resolves them into files[] alongside images', async () => {
+    const prev = process.env.NEXT_PUBLIC_CDN_URL;
+    process.env.NEXT_PUBLIC_CDN_URL = 'https://cdn.example.com';
+    mockQuestFindById.mockResolvedValue({
+      id: 'quest-1',
+      sessionId: 'sess-1',
+      status: 'done',
+      reply: 'Here is your video.',
+      replies: [],
+      promptMeta: {},
+      videos: ['clip.mp4'],
+    });
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    const body = res._getJSONData();
+    expect(body).toMatchObject({
+      images: [],
+      videos: ['clip.mp4'],
+      files: [{ name: 'clip.mp4', url: 'https://cdn.example.com/generated/clip.mp4', isImage: false }],
+    });
+    const { QuestPollResponseSchema } = await import('@bike4mind/common');
+    expect(QuestPollResponseSchema.parse(body).videos).toEqual(['clip.mp4']);
+    process.env.NEXT_PUBLIC_CDN_URL = prev;
+  });
+
   it('returns empty images/files when the quest generated nothing', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     const { req, res } = fire();

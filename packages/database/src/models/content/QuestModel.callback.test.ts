@@ -99,6 +99,29 @@ describe('questRepository.armCallback', () => {
   });
 });
 
+// Mirrors the generation services' retry branch (ImageGeneration/VideoGeneration/ImageEdit invoke):
+// read the finished quest, clear its status, then the route arms a callback and dispatches at once.
+describe('re-arming a retried quest', () => {
+  async function retryThenArm(updateOptions?: Record<string, unknown>) {
+    const created = await Quest.create(seed({ status: 'done' }));
+    const quest = await questRepository.findById(created._id.toString());
+    if (!quest) throw new Error('seeded quest not found');
+    quest.status = undefined;
+    await questRepository.update(quest, updateOptions);
+    await questRepository.armCallback(quest.id, CALLBACK);
+    return questRepository.claimCallbackDispatch(quest.id);
+  }
+
+  it('does not claim against the previous run once status is unset', async () => {
+    await expect(retryThenArm({ unset: ['status'] })).resolves.toBe(false);
+  });
+
+  it('would claim against the previous run if status were only set to undefined', async () => {
+    // Pins why the services pass `unset`: an undefined in $set is dropped and the old status survives.
+    await expect(retryThenArm()).resolves.toBe(true);
+  });
+});
+
 describe('callback is select: false', () => {
   it('a plain findById never carries callback; findCallbackById does', async () => {
     const quest = await Quest.create(seed({ status: 'done' }));

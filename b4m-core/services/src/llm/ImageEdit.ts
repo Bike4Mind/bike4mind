@@ -230,12 +230,17 @@ export class ImageEditService {
       quest.replies = [];
       quest.status = undefined;
       quest.promptMeta = promptMeta;
-      await this.db.quests.update({
-        id: quest.id,
-        images: quest.images,
-        replies: quest.replies,
-        promptMeta: quest.promptMeta,
-      });
+      // `undefined` alone is dropped from $set, so the prior terminal status would survive and let
+      // armGenerationCallback dispatch the previous run's outcome at once. Unset it explicitly.
+      await this.db.quests.update(
+        {
+          id: quest.id,
+          images: quest.images,
+          replies: quest.replies,
+          promptMeta: quest.promptMeta,
+        },
+        { unset: ['status'] }
+      );
     } else {
       // Create the associated quest record.  We'll update this as we go.
       quest = await this.db.quests.create({

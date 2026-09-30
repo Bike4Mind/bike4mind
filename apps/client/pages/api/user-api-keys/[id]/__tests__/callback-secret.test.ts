@@ -161,7 +161,7 @@ describe('POST /api/user-api-keys/[id]/callback-secret', () => {
     expect(res._getStatusCode()).toBe(200);
   });
 
-  it('propagates a service NotFoundError when the caller neither minted nor administers the key', async () => {
+  it('propagates a service NotFoundError when the caller did not mint the key', async () => {
     userApiKeyRepository.findByUserIdAndId.mockResolvedValue(null);
     const { req, res } = post('key-1');
 
@@ -169,6 +169,25 @@ describe('POST /api/user-api-keys/[id]/callback-secret', () => {
 
     expect(error).toBeInstanceOf(NotFoundError);
     expect(error.statusCode).toBe(404);
+  });
+
+  it("refuses (404) an admin of the key's billing org who did not mint it, and mints nothing", async () => {
+    // Minting without re-owning would leave the member's receiver trusting a secret only the admin holds.
+    userApiKeyRepository.findByUserIdAndId.mockResolvedValue(null);
+    userApiKeyRepository.findByOrganizationIdsAndId.mockResolvedValue({
+      id: 'key-1',
+      name: 'Org embed key',
+      userId: 'member-user',
+      scopes: [],
+    });
+    organizationRepository.findIdsAdministeredBy.mockResolvedValue(['org-1']);
+    const { req, res } = post('key-1');
+
+    const error = await mockRefs.handler!(req, res).catch(e => e);
+
+    expect(error).toBeInstanceOf(NotFoundError);
+    expect(userApiKeyRepository.findByOrganizationIdsAndId).not.toHaveBeenCalled();
+    expect(userApiKeyRepository.setCallbackSigningSecret).not.toHaveBeenCalled();
   });
 
   it('logs the UPDATED event through logEventSafe with the request logger', async () => {

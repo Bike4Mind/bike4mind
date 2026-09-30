@@ -1,6 +1,5 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { logEventSafe } from '@server/utils/analyticsLog';
 import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
@@ -9,7 +8,7 @@ import { BadRequestError } from '@server/utils/errors';
 
 /**
  * Mint or replace the key's generation-callback signing secret. The plaintext is in this
- * response only. Authorized exactly like rotate.ts (see rotateCallbackSigningSecret). An API
+ * response only. Minter-only (see rotateCallbackSigningSecret for why admins are refused). An API
  * key needs ai:generate, the scope every callbackUrl request already carries.
  */
 const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(
@@ -23,10 +22,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(
       userId,
       { keyId },
       {
-        db: {
-          userApiKeys: userApiKeyRepository,
-          organizations: organizationRepository,
-        },
+        db: { userApiKeys: userApiKeyRepository },
         // `?? []` on purpose, as in rotate.ts: an API key with absent scopes must deny.
         callerScopes: req.apiKeyInfo ? (req.apiKeyInfo.scopes ?? []) : undefined,
       }

@@ -368,13 +368,18 @@ export class ImageGenerationService {
         quest.promptEnhancement = promptEnhancement;
       }
 
-      await this.db.quests.update({
-        id: quest.id,
-        images: quest.images,
-        replies: quest.replies,
-        promptMeta: quest.promptMeta,
-        promptEnhancement: quest.promptEnhancement,
-      });
+      // `undefined` alone is dropped from $set, so the prior terminal status would survive and let
+      // armGenerationCallback dispatch the previous run's outcome at once. Unset it explicitly.
+      await this.db.quests.update(
+        {
+          id: quest.id,
+          images: quest.images,
+          replies: quest.replies,
+          promptMeta: quest.promptMeta,
+          promptEnhancement: quest.promptEnhancement,
+        },
+        { unset: ['status'] }
+      );
     } else {
       // Persist the user's literal prompt on the quest so the chat bubble shows what they actually
       // typed. The body's `prompt` carries the resolver's rewritten version (used by `process()` for
