@@ -27,6 +27,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: (fn: () => unknown) => fn(),
   dataLakeRepository: {},
   // The config-audit repos this route wires (see lakeConfigAuditDb). Stubbed rather than
   // omitted because the mock replaces the whole module: a missing export is an import-time

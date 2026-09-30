@@ -5,6 +5,7 @@ const h = vi.hoisted(() => ({
   grantLakeAccess: vi.fn(),
   revokeLakeAccess: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false, administeredOrgIds: [] })),
+  inTransaction: [] as string[],
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as the sibling endpoint tests).
@@ -28,6 +29,14 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: async (fn: () => unknown) => {
+    h.inTransaction.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.inTransaction.push('exit');
+    }
+  },
   dataLakeRepository: {},
   // The config-audit repos this route wires (see lakeConfigAuditDb). Stubbed rather than omitted
   // because the mock replaces the whole module: a missing export is an import-time failure.
@@ -57,6 +66,7 @@ const GRANTS = [{ principalType: 'user', principalId: 'u9', role: 'curator' }];
 describe('/api/data-lakes/[id]/grants', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.inTransaction.length = 0;
     h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false, administeredOrgIds: [] });
     h.assertLakeAccessWithGrants.mockResolvedValue({ lake: LAKE, grants: GRANTS });
     h.grantLakeAccess.mockResolvedValue({ principalType: 'user', principalId: 'u2', role: 'reader' });
@@ -108,6 +118,33 @@ describe('/api/data-lakes/[id]/grants', () => {
       GRANTS,
       expect.objectContaining({ principalEmail: 'a@b.co', expiresAt: new Date('2027-01-01T00:00:00Z') }),
       expect.anything()
+    );
+  });
+
+  it.each([
+    ['POST', { id: 'lake1' }, { principalType: 'user', principalEmail: 'a@b.co', role: 'reader' }, h.grantLakeAccess],
+    ['DELETE', { id: 'lake1', principalType: 'user', principalId: 'u2' }, undefined, h.revokeLakeAccess],
+  ] as const)('%s runs the gate and the door inside ONE transaction', async (method, query, body, door) => {
+    // The gate inside the callback is what lets a retry after a concurrent revoke re-read the grants.
+    h.assertLakeAccessWithGrants.mockImplementation(async () => {
+      h.inTransaction.push('gate');
+      return { lake: LAKE, grants: GRANTS };
+    });
+    door.mockImplementation(async () => {
+      h.inTransaction.push('door');
+      return {};
+    });
+    const { res } = makeRes();
+    await call({ method, query, body }, res);
+
+    expect(h.inTransaction).toEqual(['enter', 'gate', 'door', 'exit']);
+    // The lake-doc stamp that makes the collision happen needs the lake repo wired.
+    expect(door).toHaveBeenCalledWith(
+      expect.anything(),
+      LAKE,
+      GRANTS,
+      expect.anything(),
+      expect.objectContaining({ db: expect.objectContaining({ dataLakes: expect.anything() }) })
     );
   });
 

@@ -32,10 +32,14 @@ interface AcceptDataLakePurgeAdapters extends LakeConfigAuditAdapters {
  * means a concurrent restore got there first, so the purge is REFUSED rather than racing it. A
  * plain status write would leave the same bug behind a narrower window, because the restore's own
  * terminal write would clobber `purging` on its way to `active`.
+ *
+ * `claimId` tags the claim so the caller can release exactly this claim if its commit or enqueue
+ * fails; reuse one id across transaction retries (at most one attempt commits).
  */
 export const acceptDataLakePurge = async (
   actor: ManageActor,
   dataLakeId: string,
+  claimId: string,
   { db, logger }: AcceptDataLakePurgeAdapters
 ): Promise<void> => {
   const existing = await db.dataLakes.findById(dataLakeId);
@@ -49,7 +53,7 @@ export const acceptDataLakePurge = async (
     throw new BadRequestError('You do not have permission to clean up this data lake');
   }
 
-  const claimed = await db.dataLakes.claimPurging(dataLakeId);
+  const claimed = await db.dataLakes.claimPurging(dataLakeId, claimId);
   if (!claimed) {
     // Lost the claim: between this caller's read and the write, the lake stopped being `deleted` -
     // a concurrent restore, or a purge already accepted by another tab. Refusing is the point;
