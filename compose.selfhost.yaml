@@ -108,8 +108,9 @@ services:
   # are served via a short-lived signed URL and never deleted by the app.
   # All three rules are idempotent (skipped if a lifecycle config already exists) and
   # best-effort (an mc build without ilm support just skips them). Hosted gets the same
-  # cleanup from S3 lifecycle rules; this is the MinIO equivalent. If you point object
-  # storage at a different S3 backend, add equivalent rules there.
+  # current-object expiry from S3 lifecycle rules; this is the MinIO equivalent (the hosted
+  # FabFile rule also expires noncurrent versions, which unversioned MinIO buckets never have).
+  # If you point object storage at a different S3 backend, add equivalent rules there.
   createbuckets:
     image: minio/mc
     depends_on:
