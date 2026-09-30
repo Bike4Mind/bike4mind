@@ -20,10 +20,16 @@ personal information or secrets in campaign URLs.
 | App first campaign       | App cookie `b4m_app_first_touch`                                                                 | 90 days, not overwritten while present         | First-touch fallback                           |
 | Marketing first campaign | Parent-domain cookie `b4m-first-touch`, produced by the marketing site                           | Producer-managed; expected 90 days             | Preferred first touch                          |
 | Checkout consent         | Boolean `attributionConsent` in the checkout request                                             | Request only                                   | Permit or suppress reading attribution cookies |
+| Resolved consent         | App cookie `b4m_consent`, republished on every load                                              | 90 days, cleared when consent resolves unset   | Let the server read the browser's decision     |
 | Purchase attribution     | Stripe subscription metadata `acq_first_*` / `acq_last_*` and MongoDB `Subscription.acquisition` | No automatic expiry configured by this feature | Record the consenting buyer's checkout touches |
 
-The app's three campaign cookies use `path=/` and `SameSite=Strict`. They are
-JavaScript-readable and scoped to the app host. Stored subscription attribution
+The app's three campaign cookies and `b4m_consent` use `path=/` and
+`SameSite=Lax`. They are JavaScript-readable and scoped to the app host. Lax,
+not Strict, because an OAuth signup returns the browser through a top-level
+cross-site GET from the identity provider, and Strict is withheld on exactly
+that navigation: under Strict these cookies are absent on the one request that
+credits a new account. None of them authorizes anything, and every server reader
+treats the campaign fields as an untrusted claim. Stored subscription attribution
 is linked to the subscription owner and must be treated as account-associated
 analytics data, even though the campaign fields do not require an identity.
 
@@ -31,7 +37,9 @@ analytics data, even though the campaign fields do not require an identity.
 
 Consent precedence is the app's stored decision, then the marketing site's shared
 decision, then the region default. Only `row` auto-grants; a missing or unknown
-region requires a decision. The banner is available even without third-party
+region requires a decision. The browser publishes whatever that precedence
+resolves to into `b4m_consent`, so a request handler reaches the same answer
+without reading localStorage, and clears it when the answer goes back to unset. The banner is available even without third-party
 tracker IDs because app attribution also requires a consent decision.
 
 Capture waits in memory until consent is granted. Denial clears the three app
@@ -73,15 +81,24 @@ contractual count, or an external report without a verified attribution signal
 the server observes for itself, such as a referrer correlated at landing and
 signed so it cannot be forged.
 
-Signup attribution is gated server-side and fails closed: only an explicit
-`granted` in the marketing site's decision cookie permits reading the campaign
-cookies. Denied, absent, malformed, and unrecognised values all suppress the
-touches while still reporting the signup itself. This gate is deliberately
-stricter than the browser's, which also treats the `row` region as an implicit
-grant: the server cannot see the app origin's stored decision, so it does not
-infer a grant from a cookie the visitor never answered. A visitor who was
-auto-granted by region but never opened the banner therefore carries no decision
-cookie and is not attributed.
+Signup attribution is gated server-side and fails closed. The gate reads
+`b4m_consent` first and the marketing site's `b4m-consent-decision` second,
+which is the browser's own precedence; only an explicit `granted` permits
+reading the campaign cookies. Denied, absent, empty, malformed, and unrecognised
+values all suppress at both levels, and a value that is not a recognised
+decision falls through to the next source rather than being read as a denial. A
+visitor who has opened neither banner carries no decision and is not attributed.
+
+A suppressed signup sends nothing on this stream: with no touches there is no
+source product, so no event is emitted at all. The account itself is still
+recorded in the application's own registration log, which is a separate system.
+
+Reading the app cookie first is what keeps signup and checkout from disagreeing
+about the same visitor. A visitor who consents on the app rather than the
+marketing site is attributed, where a gate on the shared cookie alone would
+suppress every app-direct signup; and a visitor who declines on the app is not
+attributed off a surviving parent-domain `b4m-first-touch` even when the shared
+cookie still says granted.
 
 ## Troubleshooting missing attribution
 

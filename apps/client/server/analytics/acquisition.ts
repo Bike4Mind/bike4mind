@@ -1,14 +1,12 @@
-import crypto from 'crypto';
 import type { Request } from 'express';
 import type { SubscriptionAcquisition, SubscriptionAcquisitionTouch } from '@client/lib/subscriptions/types';
-import { ACQUISITION_FIELD_LIMIT, readAcquisitionCookies } from '@client/lib/subscriptions/acquisition';
-import type { AcquisitionTouches } from '@client/lib/subscriptions/acquisition';
+import {
+  ACQUISITION_FIELD_LIMIT,
+  readAcquisitionCookies,
+  type AcquisitionTouches,
+} from '@client/lib/subscriptions/acquisition';
 import { parseCookies } from './cookies';
 import { resolveServerConsent } from './serverConsent';
-
-// Re-exported so the emitter beside this file takes the touch type from the same module it
-// takes the readers from, rather than reaching past it into lib/.
-export type { AcquisitionTouches };
 
 const UTM_FIELDS = ['source', 'medium', 'campaign', 'content'] as const;
 
@@ -23,9 +21,11 @@ export function readAcquisitionTouches(req: Pick<Request, 'headers'>): Acquisiti
  *
  * The gate belongs here rather than at each call site: the raw reader above cannot tell whether
  * its caller is checkout (which carries its own `attributionConsent` flag from the client) or a
- * path with no flag to carry, and a new emitting call site that simply forgot the check is the
- * failure this shape is meant to make impossible. Anything that emits attribution off a bare
- * request should use this, not the reader above.
+ * path with no flag to carry. Anything that emits attribution off a bare request should use this,
+ * not the reader above. That is a convention, not an enforcement - `readAcquisitionTouches` stays
+ * exported for checkout, which gates on its own flag, so a new call site CAN still reach past this
+ * one. Making it unreachable would take splitting the ungated reader into a module checkout alone
+ * imports.
  *
  * Note the parent-domain `b4m-first-touch` is exactly why this matters: `clearAttributionCookies`
  * deliberately leaves it in place on a decline, and `readAcquisitionCookies` prefers it over the
@@ -73,15 +73,4 @@ export function acquisitionFromStripeMetadata(
     out[touch] = t;
   }
   return out.firstTouch || out.lastTouch ? out : undefined;
-}
-
-/**
- * A UUID that is the same every time for the same parts, so a retried webhook sends the same
- * eventId and the receiver keeps one event. Formatted as a version-4-shaped UUID, which is what
- * the ingest schema accepts.
- */
-export function stableEventId(...parts: string[]): string {
-  const h = crypto.createHash('sha256').update(parts.join('\u0000')).digest('hex');
-  const variant = ((parseInt(h[16], 16) & 0x3) | 0x8).toString(16);
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${variant}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }

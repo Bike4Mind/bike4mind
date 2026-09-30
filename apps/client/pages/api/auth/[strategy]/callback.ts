@@ -152,6 +152,14 @@ const handler = baseApi({ auth: false })
           // Strict they would be withheld on exactly this request and every OAuth signup would
           // emit nothing. That coupling is easy to undo by accident, so it is asserted in
           // utmCapture.test.ts rather than left to this comment.
+          //
+          // Awaited, against the `void ... .catch()` form analyticsMiddleware and
+          // pages/api/analytics/visit.ts use, and deliberately: those emit a daily or
+          // per-session event whose loss an idempotent upsert and the next request absorb,
+          // while a signup happens once per account and has no later occurrence to recover it
+          // - a Lambda freeze after the redirect would drop it for good. The cost is bounded
+          // and narrow: emitProductEvent has its own 2s timeout and per-emit catch, and a
+          // signup naming no product resolves here immediately, which is most of them.
           await emitSignupForSourceProducts({
             userId: user.id,
             touches: readConsentedAcquisitionTouches(req),

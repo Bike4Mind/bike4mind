@@ -1,6 +1,6 @@
+import crypto from 'crypto';
 import type { OverwatchUtm } from '@bike4mind/common';
-import type { AcquisitionTouches } from './acquisition';
-import { stableEventId } from './acquisition';
+import type { AcquisitionTouches } from '@client/lib/subscriptions/acquisition';
 import { emitProductEvent, HOST_PRODUCT_ID, ingestKeyFor } from './emitActiveEvent';
 
 // Kept apart from acquisition.ts, which is pure: this is the one piece that sends, so importing
@@ -22,6 +22,18 @@ import { emitProductEvent, HOST_PRODUCT_ID, ingestKeyFor } from './emitActiveEve
  * signal the server observed for itself (a referrer correlated at landing, signed so it cannot be
  * forged); until one exists, this label is the honest description of the data.
  */
+/**
+ * A UUID that is the same every time for the same parts, so a retried webhook sends the same
+ * eventId and the receiver keeps one event. Formatted as a version-4-shaped UUID, which is what
+ * the ingest schema accepts. Lives here, with its only caller, rather than in the pure cookie
+ * readers next door, which have no need of crypto.
+ */
+export function stableEventId(...parts: string[]): string {
+  const h = crypto.createHash('sha256').update(parts.join('\u0000')).digest('hex');
+  const variant = ((parseInt(h[16], 16) & 0x3) | 0x8).toString(16);
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${variant}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+
 const ATTRIBUTION = 'self-reported';
 
 type SourceTouch = { touch: 'first' | 'last' | 'both'; utm: OverwatchUtm };
@@ -82,12 +94,12 @@ async function emitForSourceProducts(opts: {
 /**
  * Tell each product the customer came through that they subscribed. Never throws.
  *
- * GROUNDWORK, NOT LIVE: nothing calls this. The invoice-webhook call site was removed in
- * 31f12201b when #3362 deferred cookie-routed subscribe events, and this PR does not restore it -
- * only the signup path below is wired. `invoicePaymentSucceeded.test.ts` still asserts that the
- * webhook emits nothing, and that assertion passes. Kept so the two conversions stay one shape
- * for whenever the subscribe decision is settled; delete it, and the `signup | subscribe`
- * parameterization with it, if that decision lands the other way.
+ * GROUNDWORK, NOT LIVE: no production caller. Cookie-routed subscribe events are deferred
+ * pending a decision on whether a self-reported `utm.source` may select another product's
+ * record at all; only the signup path below is wired. `invoicePaymentSucceeded.test.ts` asserts
+ * that the invoice webhook emits nothing, which is what holds that deferral in place. Kept so
+ * the two conversions stay one shape for whenever the decision is settled; delete it, and the
+ * `signup | subscribe` parameterization with it, if that decision lands the other way.
  */
 export function emitSubscribeForSourceProducts(opts: {
   userId: string;

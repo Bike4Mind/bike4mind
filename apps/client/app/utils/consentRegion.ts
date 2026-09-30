@@ -32,6 +32,54 @@ export function readSharedConsent(): 'granted' | 'denied' | null {
   return value === 'granted' || value === 'denied' ? value : null;
 }
 
+/** 'unset' means the visitor is in the opt-in region and has not answered yet, here or on
+ * the marketing site: nothing non-essential may run until they do. */
+export type ConsentState = 'granted' | 'denied' | 'unset';
+
+/**
+ * Where this origin publishes the decision it resolved, so a request handler can see it.
+ *
+ * The underscore name marks it app-owned, like b4m_utm and b4m_app_first_touch; the shared
+ * marketing cookies above use hyphens, and the two must never be confused. It exists because
+ * the server cannot read localStorage: without it an in-app Accept is invisible to every
+ * request handler, and server/analytics/serverConsent.ts would suppress a visitor who plainly
+ * consented here. See publishResolvedConsent for what it records and why.
+ */
+export const APP_DECISION_COOKIE = 'b4m_consent';
+
+/** 90 days: outlives b4m_app_first_touch, the longest-lived thing this gate guards. */
+const APP_DECISION_TTL_SECONDS = 90 * 24 * 60 * 60;
+
+/**
+ * Publish the resolved decision where the server can read it, or withdraw it when the visitor
+ * has no decision to publish.
+ *
+ * Records what resolveConsent RESOLVED and the page then acted on, not only what was clicked,
+ * so the server's answer matches the browser's for every visitor - including one auto-granted
+ * by region, who clicks nothing. That is the honest signal to publish: the campaign cookies
+ * this gate guards are themselves only written when that same resolution says granted
+ * (utmCapture.ts flushUtmCapture), so publishing it keeps the gate and the thing it gates in
+ * step instead of letting them disagree.
+ *
+ * This does NOT freeze an auto-allow, which is what activateConsent's comment warns against.
+ * It is a cache of the current resolution, rewritten on every load and cleared the moment the
+ * resolution goes back to 'unset' - so a visitor who travels from the auto-allow region into
+ * the opt-in one loses it and is asked, exactly as before.
+ *
+ * SameSite=Lax for the transport reason utmCapture.ts sets out at length: an OAuth signup
+ * returns through a top-level cross-site GET from the IdP, and Strict is withheld on precisely
+ * that navigation. Under Strict this cookie would be missing on the one request it exists for.
+ */
+export function publishResolvedConsent(value: ConsentState): void {
+  if (typeof document === 'undefined') return;
+  if (value === 'unset') {
+    document.cookie = `${APP_DECISION_COOKIE}=; path=/; SameSite=Lax; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+    return;
+  }
+  const expires = new Date(Date.now() + APP_DECISION_TTL_SECONDS * 1000).toUTCString();
+  document.cookie = `${APP_DECISION_COOKIE}=${value}; path=/; SameSite=Lax; expires=${expires}`;
+}
+
 /** Where this origin records the visitor's own decision. */
 export const CONSENT_KEY = 'cookie_consent';
 
@@ -44,10 +92,6 @@ export function readStoredConsent(): 'granted' | 'denied' | null {
     return null;
   }
 }
-
-/** 'unset' means the visitor is in the opt-in region and has not answered yet, here or on
- * the marketing site: nothing non-essential may run until they do. */
-export type ConsentState = 'granted' | 'denied' | 'unset';
 
 /**
  * The consent state every non-essential feature should gate on, so none of them can drift

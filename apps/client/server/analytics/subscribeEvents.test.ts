@@ -8,8 +8,7 @@ vi.mock('./emitActiveEvent', () => ({
   ingestKeyFor: mockKeyFor,
 }));
 
-import { stableEventId } from './acquisition';
-import { emitSignupForSourceProducts, emitSubscribeForSourceProducts } from './subscribeEvents';
+import { emitSignupForSourceProducts, emitSubscribeForSourceProducts, stableEventId } from './subscribeEvents';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -175,5 +174,14 @@ describe('emitSignupForSourceProducts', () => {
       })
     ).resolves.toEqual(['widgets', 'gadgets']);
     expect(mockEmit).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('stableEventId', () => {
+  it('is a UUID-shaped id, the same for the same parts and different otherwise', () => {
+    const a = stableEventId('subscribe', 'widgets', 'sub_1');
+    expect(a).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(stableEventId('subscribe', 'widgets', 'sub_1')).toBe(a);
+    expect(stableEventId('subscribe', 'widgets', 'sub_2')).not.toBe(a);
   });
 });

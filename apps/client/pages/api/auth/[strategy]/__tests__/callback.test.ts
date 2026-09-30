@@ -177,8 +177,8 @@ describe('[strategy]/callback - invite gate', () => {
 
 describe('[strategy]/callback - signup credited to the source product', () => {
   const touch = `b4m_last_touch=${encodeURIComponent(JSON.stringify({ source: 'widgets', medium: 'landing' }))}`;
-  // Attribution is gated server-side on the marketing site's decision cookie, so a touch cookie
-  // alone is no longer enough to emit - see readConsentedAcquisitionTouches.
+  // Attribution is gated server-side on a consent decision, so a touch cookie alone is not
+  // enough to emit - see readConsentedAcquisitionTouches.
   const touchCookie = `${touch}; b4m-consent-decision=granted`;
 
   it("sends a new account's touches, read from its own cookies, with the provider as the method", async () => {
@@ -203,9 +203,39 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     expect(mockEmitSignup).not.toHaveBeenCalled();
   });
 
+  // The case the whole SameSite=Lax change exists to serve, and the one the first version of
+  // this gate got wrong: a visitor who never touched the marketing site, landed on the app, and
+  // accepted its own banner. Their decision lives in localStorage, which this handler cannot
+  // read, so the banner publishes it to `b4m_consent` - and gating only on the marketing
+  // cookie suppressed every one of these.
+  it('sends touches for a visitor who consented on this origin, with no marketing cookie', async () => {
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
+      cookie: `${touch}; b4m_consent=granted`,
+    });
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(mockEmitSignup).toHaveBeenCalledWith({
+      userId: 'u-new',
+      touches: { lastTouch: { source: 'widgets', medium: 'landing' } },
+      method: 'github',
+    });
+  });
+
+  // The inverse, and why this origin outranks the shared cookie rather than merely supplementing
+  // it: a decline here must not be overridden by a grant the visitor gave on the other host,
+  // which is what checkout's own precedence does too.
+  it('withholds touches when this origin was declined but the marketing cookie says granted', async () => {
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
+      cookie: `${touch}; b4m_consent=denied; b4m-consent-decision=granted`,
+    });
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'u-new', touches: {}, method: 'github' });
+  });
+
   // The gate fails closed, so each of these is a separate way of NOT saying granted. Absent is
-  // the one that matters most in practice: the marketing site publishes the decision cookie only
-  // when a visitor actually decides, so a visitor who never opened the banner carries none.
+  // the one that matters most in practice: a visitor who has opened neither banner carries no
+  // decision at all.
   it.each([
     ['denied', `${touch}; b4m-consent-decision=denied`],
     ['absent', touch],
@@ -214,8 +244,11 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie });
     await new Promise(resolve => setImmediate(resolve));
 
-    // The signup itself is still reported - only the attribution is withheld, so a suppressed
-    // visitor is not silently dropped from the funnel by the consent gate.
+    // The emitter is still CALLED, with no touches, so the consent gate is the only thing that
+    // decided this and the signup path itself is unchanged. Nothing reaches Overwatch either
+    // way: with no touches there is no source product, so this stream sends nothing at all for
+    // a suppressed visitor. The account is recorded in Mongo by the REGISTER log above, which
+    // is a different system.
     expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'u-new', touches: {}, method: 'github' });
   });
 });

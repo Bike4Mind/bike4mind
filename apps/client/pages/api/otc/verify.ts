@@ -481,6 +481,10 @@ const handler = baseApi({ auth: false })
     }).catch(err => req.logger.error('OTC registration analytics log failed', err));
     // Credit the signup to the product the visitor came through, if any, and only with consent
     // - see readConsentedAcquisitionTouches. Never throws.
+    //
+    // Awaited rather than fire-and-forget for the reason the OAuth callback sets out: a signup
+    // occurs once per account, so an emit lost to a freeze is lost permanently, and the wait is
+    // paid only by the signups that actually name a product.
     await emitSignupForSourceProducts({
       userId: newUser.id,
       touches: readConsentedAcquisitionTouches(req),

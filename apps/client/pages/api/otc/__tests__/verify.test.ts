@@ -147,6 +147,60 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'user-1', touches: {}, method: 'otc' });
   });
 
+  // The case SameSite=Lax exists for, and the one the first version of this gate suppressed: a
+  // visitor who never saw the marketing site, landed here, and accepted this app's own banner.
+  // Their decision is in localStorage, which this handler cannot read, so the banner publishes
+  // it to `b4m_consent`.
+  it('credits a visitor who consented on this origin, with no marketing cookie', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `${firstTouch}; b4m_consent=granted`;
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockEmitSignup).toHaveBeenCalledWith({
+      userId: 'user-1',
+      touches: { firstTouch: { source: 'widgets' } },
+      method: 'otc',
+    });
+  });
+
+  // This origin outranks the shared cookie rather than supplementing it, so a decline here is
+  // not overridden by a grant given on the other host - matching checkout's own precedence.
+  it('withholds touches when this origin was declined but the marketing cookie says granted', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `${firstTouch}; b4m_consent=denied; b4m-consent-decision=granted`;
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'user-1', touches: {}, method: 'otc' });
+  });
+
+  // The guard is structural, not conditional: the emit sits after the existingUser branch has
+  // already returned. Nothing asserted that until now, so moving the emit above that return - or
+  // adding a second call site on the login path - left this whole suite green while every
+  // returning login re-emitted a `signup`. OAuth has the counterpart assertion in
+  // [strategy]/__tests__/callback.test.ts ("sends nothing for a returning user").
+  it('sends nothing when the code proves a returning user rather than a new one', async () => {
+    mockFindByEmail.mockResolvedValue({
+      id: 'u-existing',
+      isSystem: false,
+      isBanned: false,
+      emailVerified: true,
+      tokenVersion: 0,
+      toJSON: () => ({ id: 'u-existing', username: 'bob' }),
+    });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `${firstTouch}; b4m_consent=granted`;
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRegisterViaOTC).not.toHaveBeenCalled();
+    expect(mockEmitSignup).not.toHaveBeenCalled();
+  });
+
   it('is a sanity check that the fixture domain actually confers the product credit sum', () => {
     // Guards the suite: if bike4mind.com ever stops conferring the product, the credit
     // assertions below would silently pass on 0.

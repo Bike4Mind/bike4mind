@@ -438,4 +438,85 @@ describe('CookieConsentBanner', () => {
       expect(attributionCookiesPresent()).toBe(false);
     });
   });
+
+  // The bridge from this origin's decision to the server's. The banner keeps its own decision in
+  // localStorage, which no request handler can read, so it publishes the resolution it reached
+  // into a first-party cookie (see publishResolvedConsent). Signup attribution is gated on that
+  // cookie in server/analytics/serverConsent.ts, so if the banner stops publishing it, every
+  // app-direct signup silently stops being attributed and nothing near the auth code fails.
+  describe('publishing the resolved decision for the server', () => {
+    const published = () =>
+      document.cookie
+        .split('; ')
+        .find(c => c.startsWith('b4m_consent='))
+        ?.slice('b4m_consent='.length);
+
+    it('publishes granted on an Accept click', () => {
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+      expect(published()).toBe('granted');
+    });
+
+    it('publishes denied on a Decline click', () => {
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+
+      expect(published()).toBe('denied');
+    });
+
+    // The visitor clicks nothing here, so without publishing there is no decision for the server
+    // to read at all - and this is the majority case outside the opt-in region.
+    it('publishes granted for a region auto-allow, with no click', () => {
+      setRegion('row');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(screen.queryByTestId('cookie-consent-accept-btn')).not.toBeInTheDocument();
+      expect(published()).toBe('granted');
+    });
+
+    it("publishes the marketing site's decision when this origin has none", () => {
+      setSharedDecision('granted');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(published()).toBe('granted');
+    });
+
+    // Travel, and the reason publishing an auto-allow does not freeze it: the visitor carried a
+    // published grant out of the auto-allow region, resolves to 'unset' here, and must stop being
+    // attributed while the banner asks them again.
+    it('withdraws a published grant when the visitor now resolves to unset', () => {
+      document.cookie = 'b4m_consent=granted';
+      setRegion('eu');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(screen.getByTestId('cookie-consent-accept-btn')).toBeInTheDocument();
+      expect(published()).toBeUndefined();
+    });
+  });
 });
