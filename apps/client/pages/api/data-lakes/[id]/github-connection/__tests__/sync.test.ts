@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BadRequestError, ConflictError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ConflictError, InternalServerError, NotFoundError } from '@server/utils/errors';
 
 const h = vi.hoisted(() => ({
   verifyOrgAccess: vi.fn(),
   dlFindById: vi.fn(),
   connFindByDataLakeIdAny: vi.fn(),
+  connRecordLastError: vi.fn(),
   sendToQueue: vi.fn(),
   requireFeatureEnabled: vi.fn(() => () => {}),
 }));
@@ -32,6 +33,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
     orgGitHubLakeConnectionRepository: {
       ...actual.orgGitHubLakeConnectionRepository,
       findByDataLakeIdAny: h.connFindByDataLakeIdAny,
+      recordLastError: h.connRecordLastError,
     },
   };
 });
@@ -45,7 +47,8 @@ const makeRes = () => {
   const status = vi.fn(() => ({ json }));
   return { res: { json, status } as never, json, status };
 };
-const makeReq = () => ({ method: 'POST', query: { id: 'lake1' }, user: { id: 'u1', isAdmin: false } }) as never;
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+const makeReq = () => ({ method: 'POST', query: { id: 'lake1' }, user: { id: 'u1', isAdmin: false }, logger }) as never;
 const run = (req: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req, res);
 const CONN = { id: 'conn1', organizationId: 'orgA', enabled: true, status: 'connected' };
 
@@ -118,5 +121,12 @@ describe('POST /api/data-lakes/[id]/github-connection/sync', () => {
     });
     await run(makeReq(), makeRes().res);
     expect(h.sendToQueue).toHaveBeenCalled();
+  });
+
+  it('records lastError and 500s when the enqueue fails, mirroring the connect flow', async () => {
+    h.sendToQueue.mockRejectedValue(new Error('SQS unavailable'));
+    h.connRecordLastError.mockResolvedValue(undefined);
+    await expect(run(makeReq(), makeRes().res)).rejects.toBeInstanceOf(InternalServerError);
+    expect(h.connRecordLastError).toHaveBeenCalledWith('conn1', expect.any(String));
   });
 });

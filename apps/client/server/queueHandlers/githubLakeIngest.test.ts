@@ -411,6 +411,22 @@ describe('githubLakeIngest - yield', () => {
     );
   });
 
+  it('refuses at the outer dispatch before running a slice, when a deferred continuation wakes past budget', async () => {
+    // Guards the gap capRefusal alone cannot: a rate-limited slice can enqueue its continuation with
+    // a delay up to 900s, so by the time it dequeues the budget may already be spent - this must not
+    // cost a full slice of repo IO before the chain notices.
+    await run(continuation({ chainStartedAt: Date.now() - GITHUB_LAKE_CHAIN_BUDGET_MS - 1 }));
+    expect(h.runGitHubLakeSlice).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(h.settle).toHaveBeenCalledWith('batch1', logger);
+    expect(h.releaseSyncClaim).toHaveBeenCalledWith(
+      'conn1',
+      'tok-adopt',
+      expect.stringContaining('3-hour'),
+      'connected'
+    );
+  });
+
   it('ends the chain when the renew loses', async () => {
     h.renewSyncClaim.mockResolvedValue(null);
     h.runGitHubLakeSlice.mockResolvedValue({ kind: 'deadline', batchId: 'batch1', remaining: 3 });

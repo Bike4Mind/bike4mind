@@ -55,4 +55,11 @@ describe('diffGitHubLakeTree', () => {
     expect(diff.adds).toEqual([candidate('a.md', 's1')]);
     expect(diff.removed).toEqual([]);
   });
+
+  it('processes a duplicate path once, not once per repeated candidate', () => {
+    const diff = diffGitHubLakeTree([candidate('a.md', 's1'), candidate('a.md', 's1')], [copy('old', 'a.md', 's0')]);
+    expect(diff.changed).toEqual([{ candidate: candidate('a.md', 's1'), prior: copy('old', 'a.md', 's0') }]);
+    expect(diff.duplicates).toEqual([]);
+    expect(diff.removed).toEqual([]);
+  });
 });

@@ -86,7 +86,7 @@ export function classifyTreeEntry(
   const segments = entry.path.split('/');
   const fileName = segments[segments.length - 1];
   const lowerFileName = fileName.toLowerCase();
-  if (segments.some(segment => DENIED_SEGMENTS.has(segment))) return { ok: false, reason: 'denied_path' };
+  if (segments.some(segment => DENIED_SEGMENTS.has(segment.toLowerCase()))) return { ok: false, reason: 'denied_path' };
   if (DENIED_FILE_NAMES.has(lowerFileName)) return { ok: false, reason: 'lockfile' };
   const ext = extensionOf(fileName);
   if (ext ? !EXTENSIONS.has(ext) : !EXTENSIONLESS_NAMES.has(lowerFileName)) return { ok: false, reason: 'extension' };

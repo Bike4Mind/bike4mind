@@ -33,6 +33,10 @@ export function diffGitHubLakeTree<T extends GitHubLakeStoredCopy>(
   const diff: GitHubLakeTreeDiff<T> = { adds: [], changed: [], removed: [], duplicates: [] };
   const inTree = new Set<string>();
   for (const candidate of candidates) {
+    // A duplicate path within candidates itself (impossible from getRecursiveTree today, but a
+    // future filter bug or GitHub API change could produce one) would otherwise process the same
+    // copiesByPath bucket twice - a duplicate ingest and a duplicate-retire that fight each other.
+    if (inTree.has(candidate.path)) continue;
     inTree.add(candidate.path);
     const copies = copiesByPath.get(candidate.path);
     if (!copies) {

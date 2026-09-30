@@ -4,7 +4,7 @@ import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeRepository, isGitHubLakeSyncClaimLive, orgGitHubLakeConnectionRepository } from '@bike4mind/database';
 import { isLakeIngestable } from '@bike4mind/common';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
-import { BadRequestError, ConflictError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ConflictError, InternalServerError, NotFoundError } from '@server/utils/errors';
 import { sendToQueue } from '@server/utils/sqs';
 import { Request } from 'express';
 import { Resource } from 'sst';
@@ -34,7 +34,22 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     if (isGitHubLakeSyncClaimLive(conn)) {
       throw new ConflictError('A sync is already running for this repository');
     }
-    await sendToQueue(Resource.githubLakeIngestQueue.url, { connectionId: conn.id, manual: true });
+    try {
+      await sendToQueue(Resource.githubLakeIngestQueue.url, { connectionId: conn.id, manual: true });
+    } catch (error) {
+      req.logger.error('GitHub manual re-sync enqueue failed', { connectionId: conn.id, error });
+      // lastError surfaces the failure on the connection, same as the connect flow's first-sync
+      // enqueue (githubLakeConnection.ts); best-effort so a record failure doesn't mask the real one.
+      await orgGitHubLakeConnectionRepository
+        .recordLastError(conn.id, 'Re-sync could not be queued. Try again.')
+        .catch(e =>
+          req.logger.warn('GitHub manual re-sync: could not record the enqueue failure', {
+            connectionId: conn.id,
+            error: e,
+          })
+        );
+      throw new InternalServerError('Could not queue the GitHub re-sync. Please try again.');
+    }
     return res.status(202).json({ connectionId: conn.id, status: 'queued' });
   });
 

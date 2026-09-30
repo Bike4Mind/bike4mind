@@ -166,6 +166,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       resumeBatchId = undefined;
     }
 
+    // Guards the outer dispatch, not just yieldChain's own capRefusal check after a slice runs: a
+    // continuation enqueued near the end of the window (a rate-limit deferral's delaySeconds runs up
+    // to 900 s) would otherwise run a full slice of repo IO before capRefusal ever sees the budget
+    // was exhausted.
+    if (Date.now() - chainStartedAt > GITHUB_LAKE_CHAIN_BUDGET_MS) {
+      logger.warn('[githubLakeIngest] chain budget already exhausted at dispatch; stopping', { connectionId: id });
+      await settle(resumeBatchId);
+      await release('Sync ran past its 3-hour budget before it finished. Re-sync to continue.');
+      return;
+    }
+
     // Gated after the claim so a continuation's chain claim is released rather than left to go stale.
     const featureOn = (await flagOn('EnableDataLakes')) && (await flagOn('EnableDataLakeGitHub'));
     const lake = await dataLakeRepository.findById(connection.targetDataLakeId);

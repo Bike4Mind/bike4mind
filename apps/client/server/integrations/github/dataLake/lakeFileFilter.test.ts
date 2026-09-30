@@ -51,6 +51,8 @@ describe('classifyTreeEntry', () => {
     ['.next/server.js', 'denied_path'],
     ['target/debug/main.rs', 'denied_path'],
     ['app/__pycache__/m.py', 'denied_path'],
+    ['Vendor/lib.go', 'denied_path'],
+    ['Node_Modules/pkg/index.js', 'denied_path'],
     ['pnpm-lock.yaml', 'lockfile'],
     ['web/package-lock.json', 'lockfile'],
     ['yarn.lock', 'lockfile'],
