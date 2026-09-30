@@ -9,7 +9,7 @@ import Typography from '@mui/joy/Typography';
 import type { ChatQueuedMessage } from '@shared/chat';
 import { AttachmentRow } from './Attachments';
 import { composerKeyAction, composerPlaceholder, shownSuggestion } from './composerInput';
-import { contentColumnSx } from './layout';
+import { columnStartGlyphSx, contentColumnSx } from './layout';
 import { QueuedMessageList } from './QueuedMessageList';
 import { mergeIntoDraft } from './queuedMessages';
 import { matchSkills, skillQuery } from './skillMenu';
@@ -248,34 +248,32 @@ export function Composer({
   return (
     <Box>
       {attachments.rejected.length > 0 && (
-        <Alert
-          size="sm"
-          color="warning"
-          variant="soft"
-          sx={{ ...contentColumnSx, mt: 1, cursor: 'pointer' }}
-          onClick={attachments.dismissRejected}
-          data-testid="attachment-rejected"
-        >
-          <Stack>
-            {attachments.rejected.map(item => (
-              <Typography key={`${item.name}:${item.reason}`} level="body-xs">
-                {item.name}: {item.reason}
-              </Typography>
-            ))}
-          </Stack>
-        </Alert>
+        <Box sx={{ ...contentColumnSx, mt: 1 }}>
+          <Alert
+            size="sm"
+            color="warning"
+            variant="soft"
+            sx={{ cursor: 'pointer' }}
+            onClick={attachments.dismissRejected}
+            data-testid="attachment-rejected"
+          >
+            <Stack>
+              {attachments.rejected.map(item => (
+                <Typography key={`${item.name}:${item.reason}`} level="body-xs">
+                  {item.name}: {item.reason}
+                </Typography>
+              ))}
+            </Stack>
+          </Alert>
+        </Box>
       )}
 
       {blockedReason && (
-        <Alert
-          size="sm"
-          color="warning"
-          variant="soft"
-          sx={{ ...contentColumnSx, mt: 1 }}
-          data-testid="composer-blocked-reason"
-        >
-          {blockedReason}
-        </Alert>
+        <Box sx={{ ...contentColumnSx, mt: 1 }}>
+          <Alert size="sm" color="warning" variant="soft" data-testid="composer-blocked-reason">
+            {blockedReason}
+          </Alert>
+        </Box>
       )}
 
       <QueuedMessageList messages={queued ?? []} onCancel={onCancelQueued ?? (() => undefined)} />
@@ -366,9 +364,8 @@ export function Composer({
       {/* `gap` rather than Stack's `spacing`: spacing resets every child's margin from the row
           itself, which outranks the attach button's own negative margin below. */}
       <Stack direction="row" alignItems="center" sx={{ ...contentColumnSx, py: 1, gap: 1 }}>
-        {/* Pulled left by the inset its own 32px box puts around a centred glyph, so the '+' the
-            user sees starts on the column's left edge - the line the transcript and the input's
-            border already sit on. Without it the glyph alone hangs ~10px inside that line. */}
+        {/* Borderless, so it is the '+' itself that has to land on the content edge rather
+            than the box around it - see `columnStartGlyphSx` for how that is done. */}
         <IconButton
           size="sm"
           variant="plain"
@@ -376,7 +373,7 @@ export function Composer({
           disabled={disabled || attachments.busy}
           onClick={() => void attachments.pick()}
           aria-label="Attach a file"
-          sx={{ ml: '-10px' }}
+          sx={columnStartGlyphSx}
           data-testid="composer-attach-btn"
         >
           <Typography level="body-lg">+</Typography>

@@ -11,7 +11,7 @@ import { ArtifactList } from './ArtifactCard';
 import { presentReply } from './codeStream';
 import { AttachmentRow } from './Attachments';
 import { ChevronIcon } from './icons';
-import { contentColumnSx } from './layout';
+import { contentColumnSx, scrollingColumnHostSx } from './layout';
 import { ReplyMarkdown } from './markdown/ReplyMarkdown';
 import { relaySummary } from './relayRows';
 import { callsIn, roundsOf } from './replyRounds';
@@ -356,7 +356,7 @@ export function MessageThread({
   return (
     // Scrolling on the outer box, the column on the inner one: reversing the two would put the
     // scrollbar in the middle of the window rather than at the edge of the pane.
-    <Box sx={{ flex: 1, overflowY: 'auto' }} data-testid="chat-thread">
+    <Box sx={{ flex: 1, ...scrollingColumnHostSx }} data-testid="chat-thread">
       <Stack spacing={3} sx={{ ...contentColumnSx, py: 3 }}>
         {messages.map((message, index) =>
           message.relay ? (

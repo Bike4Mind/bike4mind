@@ -11,7 +11,7 @@ import Typography from '@mui/joy/Typography';
 import type { ChatArtifactSummary, ChatArtifactView } from '@shared/chat';
 import { ArtifactCard, TYPE_LABEL } from './ArtifactCard';
 import { ChevronIcon, CloseIcon } from './icons';
-import { contentColumnSx } from './layout';
+import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from './layout';
 
 /** What one row knows about its body: not asked for yet, in flight, here, or refused. */
 type RowBody =
@@ -139,7 +139,7 @@ export function ArtifactLibraryPanel({ onClose }: { onClose: () => void }) {
   const empty = !loading && !error && summaries?.length === 0;
 
   return (
-    <Stack sx={{ flex: 1, minWidth: 0 }} data-testid="artifact-library">
+    <Stack sx={{ flex: 1, minWidth: 0, ...columnStackSx }} data-testid="artifact-library">
       <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
         <Stack direction="row" alignItems="center" spacing={1} sx={{ ...contentColumnSx, py: 1.25 }}>
           <Typography level="title-sm" sx={{ flex: 1 }}>
@@ -168,7 +168,7 @@ export function ArtifactLibraryPanel({ onClose }: { onClose: () => void }) {
         </Stack>
       </Box>
 
-      <Box sx={{ flex: 1, overflowY: 'auto' }}>
+      <Box sx={{ flex: 1, ...scrollingColumnHostSx }}>
         <Box sx={{ ...contentColumnSx, py: 2 }}>
           {/* An error and a stale list can be on screen together: a refresh that fails leaves
               the rows it already had, which are still worth reading. */}
