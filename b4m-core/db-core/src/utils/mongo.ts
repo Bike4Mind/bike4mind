@@ -468,17 +468,20 @@ export const softDeletePlugin = (
   // $sets deletedAt: null - or a replacement that omits deletedAt (schema default null) cannot
   // resurrect a tombstone (SessionModel's explicit deletedAt: null filter is now redundant but kept).
   // Skipped for includeDeleted, for a caller filter with a top-level deletedAt (nested $or/$and is not
-  // detected), and for upserts: a unique- or _id-keyed upsert onto a tombstone would otherwise miss and
-  // E11000, so an upsert can still write into a tombstone. Known gap: Model.bulkWrite fires no query
-  // middleware, so its ops are unguarded.
+  // detected), and for update-verb upserts: a unique- or _id-keyed upsert onto a tombstone would
+  // otherwise miss and E11000, so an update upsert can still write into a tombstone (its $set leaves
+  // deletedAt alone). Replace upserts stay guarded and fail closed with E11000 instead: a replacement
+  // drops every field it omits, deletedAt included, so matching the tombstone would revive it.
+  // Known gap: Model.bulkWrite fires no query middleware, so its ops are unguarded.
   schema.pre(
     ['findOneAndUpdate', 'updateOne', 'updateMany', 'findOneAndReplace', 'replaceOne'],
     { document: false, query: true },
     function (next) {
       const opts = this.getOptions();
+      const isReplace = this.op === 'replaceOne' || this.op === 'findOneAndReplace';
       // `!== undefined` rather than hasOwn: `deletedAt: undefined` constrains nothing once
       // ignoreUndefined drops it, so it must not count as the caller taking over.
-      if (!opts.includeDeleted && !opts.upsert && this.getFilter().deletedAt === undefined) {
+      if (!opts.includeDeleted && (!opts.upsert || isReplace) && this.getFilter().deletedAt === undefined) {
         this.where({ deletedAt: null });
       }
       next();

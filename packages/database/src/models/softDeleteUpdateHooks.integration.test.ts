@@ -7,7 +7,8 @@ import { createMongoServer } from '../__test__/createMongoServer';
 /**
  * softDeletePlugin's update hook: findOneAndUpdate/updateOne/updateMany skip tombstones by default,
  * like the read hooks, so a whole-doc `repo.update(snapshot)` cannot resurrect a soft-deleted doc.
- * Opt-outs: `includeDeleted`, a caller filter with a top-level `deletedAt`, and upserts.
+ * Opt-outs: `includeDeleted`, a caller filter with a top-level `deletedAt`, and update-verb upserts.
+ * Replace upserts are not exempt: they fail closed with E11000 rather than drop `deletedAt`.
  */
 
 type SoftDoc = IMongoDocument & { name?: string; slug?: string; deletedAt?: Date | null };
@@ -113,6 +114,24 @@ describe('softDeletePlugin update hook', () => {
 
     await SoftModel.updateOne({ _id: id, deletedAt }, { $set: { name: 'stamped' } });
     expect((await rawDoc(id))?.name).toBe('stamped');
+
+    await SoftModel.updateOne({ _id: id, deletedAt: { $exists: true } }, { $set: { name: 'exists' } });
+    expect((await rawDoc(id))?.name).toBe('exists');
+  });
+
+  // Characterizes the documented limitation: only a top-level deletedAt counts as the caller taking
+  // over, so one nested in $or/$and still gets the guard ANDed on and matches nothing.
+  it('a deletedAt nested in $or / $and is not detected and stays guarded', async () => {
+    const { id } = await seedTombstone();
+
+    const or = await SoftModel.updateOne({ $or: [{ _id: id, deletedAt: { $ne: null } }] }, { $set: { name: 'or' } });
+    const and = await SoftModel.updateOne(
+      { $and: [{ _id: id }, { deletedAt: { $ne: null } }] },
+      { $set: { name: 'and' } }
+    );
+
+    expect([or.matchedCount, and.matchedCount]).toEqual([0, 0]);
+    expect((await rawDoc(id))?.name).toBe('before');
   });
 
   it('an upsert onto a tombstoned unique key keeps matching the tombstone (no E11000)', async () => {
@@ -137,7 +156,11 @@ describe('softDeletePlugin update hook', () => {
   it('a filter with deletedAt: undefined is still guarded', async () => {
     const { id } = await seedTombstone();
 
-    const result = await SoftModel.updateOne({ _id: id, deletedAt: undefined }, { $set: { name: 'x' } });
+    // ignoreUndefined makes the driver drop the key, so a hook that treated it as the caller's own
+    // deletedAt constraint would leave the filter as bare { _id } and write the tombstone.
+    const result = await SoftModel.updateOne({ _id: id, deletedAt: undefined }, { $set: { name: 'x' } }, {
+      ignoreUndefined: true,
+    } as mongoose.QueryOptions);
 
     expect(result.matchedCount).toBe(0);
     expect((await rawDoc(id))?.name).toBe('before');
@@ -156,13 +179,19 @@ describe('softDeletePlugin update hook', () => {
     expect(await rawDoc(id)).toMatchObject({ name: 'r2', deletedAt });
   });
 
-  it('a replace upsert onto a tombstoned unique key keeps matching it', async () => {
-    const { id } = await seedTombstone('taken');
+  // A replacement drops every field it omits, so matching the tombstone would clear deletedAt.
+  it('a replace upsert onto a tombstoned unique key fails with E11000 and leaves it deleted', async () => {
+    const { id, deletedAt } = await seedTombstone('taken');
 
-    await SoftModel.replaceOne({ slug: 'taken' }, { name: 'up', slug: 'taken' }, { upsert: true });
+    await expect(
+      SoftModel.replaceOne({ slug: 'taken' }, { name: 'up', slug: 'taken' }, { upsert: true })
+    ).rejects.toMatchObject({ code: 11000 });
+    await expect(
+      SoftModel.findOneAndReplace({ slug: 'taken' }, { name: 'up', slug: 'taken' }, { upsert: true })
+    ).rejects.toMatchObject({ code: 11000 });
 
     expect(await SoftModel.collection.countDocuments()).toBe(1);
-    expect((await rawDoc(id))?.name).toBe('up');
+    expect(await rawDoc(id)).toMatchObject({ name: 'before', deletedAt });
   });
 
   it('doc.updateOne() on a doc loaded with includeDeleted needs its own includeDeleted', async () => {
