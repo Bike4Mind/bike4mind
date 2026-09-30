@@ -244,9 +244,9 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    *    incremented - so N racing joins land N members with `seats` equal to that size, never a
    *    double-raise past it.
    *
-   * `deletedAt: null` keeps the write off a soft-deleted org: the softDeletePlugin only hooks
-   * `find`/`findOne`, not `findOneAndUpdate`, so without this a delete landing between the caller's
-   * read and this write would grow a dead org's ceiling.
+   * `deletedAt: null` keeps the write off a soft-deleted org, so a delete landing between the
+   * caller's read and this write cannot grow a dead org's ceiling. softDeletePlugin's update hook
+   * adds the same filter; this one is redundant but keeps the guarantee visible here.
    *
    * Returns the PRE-image ({ new: false }) - the caller derives before/after seats from this one
    * atomically-matched document rather than from an earlier read, so two racers can't report

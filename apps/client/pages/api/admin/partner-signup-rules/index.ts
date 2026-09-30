@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ensureAdmin } from '@server/utils/errors';
 import { partnerSignupRuleRepository } from '@bike4mind/database';
-import { createPartnerSignupRuleSchema } from '@bike4mind/common';
+import { ApiKeyScope, createPartnerSignupRuleSchema } from '@bike4mind/common';
 import { invalidatePartnerRuleCache, assertKnownEntitlements } from '@server/entitlements/partnerRules';
 import { assertOrganizationExists } from '@server/entitlements/assertOrganizationExists';
 import { z } from 'zod';
@@ -21,7 +21,7 @@ function toBadRequest(error: unknown): never {
   throw error;
 }
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(
     asyncHandler(async (req, res) => {
       ensureAdmin(req.user?.isAdmin);

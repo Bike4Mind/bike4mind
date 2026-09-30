@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { HelpEventModel } from '@bike4mind/database';
@@ -26,7 +27,7 @@ function shiftedDate(value: string, label: string, offsetMinutes: number, endOfD
   return assertDateInRange(label, d);
 }
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .use(
     rateLimit({
       limit: process.env.NODE_ENV === 'development' ? 100 : 20,

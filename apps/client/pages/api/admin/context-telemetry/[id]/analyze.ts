@@ -6,6 +6,7 @@ import { ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { isValidObjectId } from '@server/utils/objectId';
 import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
 import {
+  ApiKeyScope,
   ContextTelemetryAlertsSchema,
   getRecommendedAction,
   type ContextTelemetry,
@@ -30,7 +31,7 @@ const paramsSchema = z.object({
     .transform(v => v === 'true'),
 });
 
-const handler = baseApi().post(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

@@ -4,6 +4,8 @@ import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { useUser } from '@client/app/contexts/UserContext';
+import type { IUserDocument } from '@bike4mind/common';
 import DataLakeWizardModal from './DataLakeWizardModal';
 
 /**
@@ -430,6 +432,22 @@ describe('DataLakeWizardModal - Drive-only create', () => {
 
   afterEach(() => {
     useDataLakeWizardStore.getState().resetWizard();
+    useUser.setState({ currentUser: null });
+  });
+
+  // Nothing uploads on this path (uploadBytes is 0), so a user already over quota must still be
+  // able to create-and-sync - the block exists to stop bytes the server would refuse, and this
+  // commit sends none.
+  it('is not blocked by a storage limit the commit sends no bytes against', () => {
+    useUser.setState({ currentUser: { currentStorageSize: 1_000_000, storageLimit: 1 } as IUserDocument });
+    seedDriveOnly({ step: 'config' });
+
+    renderModal();
+    const commitBtn = screen.getByTestId('wizard-start-upload-btn');
+
+    expect(commitBtn).toBeEnabled();
+    commitBtn.click();
+    expect(driveCommitMutate).toHaveBeenCalledTimes(1);
   });
 
   it('advances past the source step on a Drive folder alone, with no files', () => {
@@ -500,5 +518,60 @@ describe('DataLakeWizardModal - Drive-only create', () => {
 
     expect(useDataLakeWizardStore.getState().pendingDriveFolder).toEqual(driveFolder);
     confirmSpy.mockRestore();
+  });
+});
+
+describe('DataLakeWizardModal - storage limit', () => {
+  const refreshUser = vi.fn(() => Promise.resolve());
+  const seed = (step: 'source' | 'config', currentStorageSize: number) => {
+    // 1 MB limit, stored in MB like the real user document.
+    useUser.setState({ currentUser: { currentStorageSize, storageLimit: 1 } as IUserDocument, refreshUser });
+    useDataLakeWizardStore.setState({
+      isOpen: true,
+      step,
+      targetLake: null,
+      allFiles: [{ relativePath: 'a.txt', size: 10, type: 'text/plain', excluded: false, isDuplicate: false }] as never,
+      config: {
+        name: 'Test Lake',
+        description: '',
+        tagPrefix: 'test:',
+        requiredUserTag: '',
+        requiredEntitlement: '',
+        conflictResolution: 'skip',
+      },
+    });
+  };
+
+  afterEach(() => {
+    useUser.setState({ currentUser: null });
+    useDataLakeWizardStore.getState().resetWizard();
+    batchUploadMutate.mockClear();
+    refreshUser.mockClear();
+  });
+
+  it('warns a user at the limit as soon as a file is selected, before the lake is created', () => {
+    seed('source', 1_000_000);
+    render(<DataLakeWizardModal />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('storage-limit-exceeded-alert')).toBeInTheDocument();
+    // Cached usage can be stale after deletes, so a block triggers a fresh read.
+    expect(refreshUser).toHaveBeenCalled();
+  });
+
+  it('disables Start Upload for a user at the limit, so no create request is sent', () => {
+    seed('config', 1_000_000);
+    render(<DataLakeWizardModal />, { wrapper: TestWrapper });
+    const start = screen.getByTestId('wizard-start-upload-btn');
+    expect(start).toBeDisabled();
+    start.click();
+    expect(batchUploadMutate).not.toHaveBeenCalled();
+  });
+
+  it('changes nothing for a user under the limit', () => {
+    seed('config', 0);
+    render(<DataLakeWizardModal />, { wrapper: TestWrapper });
+    expect(screen.queryByTestId('storage-limit-exceeded-alert')).toBeNull();
+    expect(screen.queryByTestId('storage-limit-near-alert')).toBeNull();
+    expect(screen.getByTestId('wizard-start-upload-btn')).toBeEnabled();
+    expect(refreshUser).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin, BadRequestError } from '@server/utils/errors';
 import { agentExecutionRepository } from '@bike4mind/database';
@@ -31,7 +32,7 @@ export type CleanupResponse = {
  * have already reached a terminal state are no-ops. `markAbandoned` filters
  * to sweepable statuses to avoid clobbering a concurrent natural completion.
  */
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   ensureAdmin(req.user?.isAdmin);
 
   const parsed = BodySchema.safeParse(req.body);

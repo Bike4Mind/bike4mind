@@ -1,9 +1,10 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { systemPromptRepository, systemPromptHistoryRepository } from '@bike4mind/database';
 import { getDefaultSystemPrompts } from '@server/utils/systemPrompts/defaults';
 
-const handler = baseApi().get(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
   /**
    * GET /api/admin/system-prompts/[promptId]/history
    * Get version history for a system prompt

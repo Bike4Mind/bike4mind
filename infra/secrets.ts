@@ -17,7 +17,8 @@ export const secrets = {
   GITHUB_LAKE_APP_ID: new sst.Secret('GITHUB_LAKE_APP_ID', 'not-configured'),
   GITHUB_LAKE_APP_PRIVATE_KEY: new sst.Secret('GITHUB_LAKE_APP_PRIVATE_KEY', 'not-configured'),
   GITHUB_LAKE_APP_SLUG: new sst.Secret('GITHUB_LAKE_APP_SLUG', 'not-configured'),
-  // Signs the App's push webhooks (pages/api/webhooks/github/lake.ts); unset means pushes are refused.
+  // HMAC secret for the App's single webhook (pages/api/webhooks/github/lake.ts: pushes and
+  // installation revokes); unset means deliveries are refused.
   GITHUB_LAKE_APP_WEBHOOK_SECRET: new sst.Secret('GITHUB_LAKE_APP_WEBHOOK_SECRET', 'not-configured'),
   STRIPE_SECRET_KEY: new sst.Secret('STRIPE_SECRET_KEY', 'not-configured'),
   STRIPE_PUBLISHABLE_KEY: new sst.Secret('STRIPE_PUBLISHABLE_KEY', 'not-configured'),

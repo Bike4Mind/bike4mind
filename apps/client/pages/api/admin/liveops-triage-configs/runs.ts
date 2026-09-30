@@ -8,6 +8,7 @@
  */
 
 import { liveopsTriageRunRepository } from '@bike4mind/database';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { z } from 'zod';
@@ -19,7 +20,7 @@ const QuerySchema = z.object({
   minutes: z.coerce.number().min(1).max(60).optional().default(10),
 });
 
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   try {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

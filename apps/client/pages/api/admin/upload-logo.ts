@@ -1,4 +1,5 @@
 import {
+  ApiKeyScope,
   AppFileReservedTags,
   FileGeneratePresignedUrlRequestInput,
   LogoSettings,
@@ -61,7 +62,7 @@ async function updateLogoSettings(newSettings: Partial<LogoSettings>, session?: 
 /**
  * Lambda function to generate S3 signed URL for uploading custom admin logo
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .post(async (req, res) => {
     try {
       const { user } = req;

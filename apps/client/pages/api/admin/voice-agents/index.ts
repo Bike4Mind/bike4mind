@@ -1,6 +1,7 @@
 import { adminSettingsRepository, agentRepository } from '@bike4mind/database';
 import { BadRequestError, ForbiddenError, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { createElevenLabsAgent, DEFAULT_TURN_EAGERNESS, SILENCE_TURN_TIMEOUT_SECONDS } from '@bike4mind/voice';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
 
@@ -24,7 +25,7 @@ function getCustomLlmUrl(req: { headers: { host?: string; 'x-forwarded-proto'?: 
   return `${proto}://${host}/api/voice/v2/llm-proxy`;
 }
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

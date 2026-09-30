@@ -1,8 +1,9 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { agentOpsSettingsRepository } from '@bike4mind/database';
 import { ForbiddenError } from '@bike4mind/utils';
 
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   if (!req.user!.isAdmin) {
     throw new ForbiddenError('Admin access required');
   }

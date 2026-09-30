@@ -1,5 +1,5 @@
 import { userRepository } from '@bike4mind/database';
-import { AuthEvents, redactUserSecretsForSelf } from '@bike4mind/common';
+import { ApiKeyScope, AuthEvents, redactUserSecretsForSelf } from '@bike4mind/common';
 import { userService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -27,7 +27,7 @@ interface UserImportRow {
   tags?: string[];
 }
 
-const handler = baseApi().post(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler<{}, unknown, { users: UserImportRow[] }>(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

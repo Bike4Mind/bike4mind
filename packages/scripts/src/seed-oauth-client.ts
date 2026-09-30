@@ -186,7 +186,9 @@ async function main() {
   // requires the user to have approved the billable ai:generate scope (a client-identity grant is not
   // spend authorization). So the scope must be requestable at /authorize; a non-federated client
   // gets identity scopes only.
-  const allowedScopes = federatedIdp ? ['openid', 'email', 'profile', 'ai:generate'] : ['openid', 'email', 'profile'];
+  const allowedScopes = federatedIdp
+    ? ['openid', 'email', 'profile', 'ai:generate', 'me:read']
+    : ['openid', 'email', 'profile'];
 
   await OAuthClient.create({
     clientId,

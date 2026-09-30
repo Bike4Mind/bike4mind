@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { mcpServerRepository, userRepository } from '@bike4mind/database';
 import { Config } from '@server/utils/config';
 import { InternalServerError } from '@server/utils/errors';
-import { McpServerName } from '@bike4mind/common';
+import { McpServerName, type IMcpServerDocument } from '@bike4mind/common';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import { readStateNonceHash, clearStateNonce } from '@server/auth/oauthFlowCookie';
@@ -220,6 +220,22 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
 
     const githubUser = await userResponse.json();
 
+    // The reconnect below keys account identity on these; without them a write could mislabel the
+    // connection or drop the stored webhook and repo selection.
+    if (
+      !userResponse.ok ||
+      !githubUser ||
+      typeof githubUser.login !== 'string' ||
+      !githubUser.login ||
+      typeof githubUser.id !== 'number'
+    ) {
+      req.logger.error('[GitHub OAuth] GitHub user lookup failed', { userId, status: userResponse.status });
+      auditLogger.failure('github_user_lookup_failed');
+      return res.redirect(
+        '/profile?tab=integrations&github_oauth=error&error=github_user_lookup_failed#github-integration'
+      );
+    }
+
     // Get granted scopes from the token response (logged for debugging)
     const grantedScopes = tokenData.scope?.split(',') || [];
 
@@ -237,17 +253,50 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     // Initially save with empty tools array - we'll discover tools dynamically next
     let githubServer;
     if (recentConnection) {
-      githubServer = await mcpServerRepository.update({
+      const connectionFields = {
         id: recentConnection.id,
         enabled: true,
         envVariables: encryptedEnvVariables,
         tools: [], // Will be populated by dynamic discovery
-        metadata: {
-          githubLogin: githubUser.login,
-          connectedAt: new Date().toISOString(),
-          scope: grantedScopes.join(','),
-        },
-      });
+      };
+      const connectionMetadata = {
+        githubLogin: githubUser.login,
+        githubUserId: githubUser.id,
+        connectedAt: new Date().toISOString(),
+        scope: grantedScopes.join(','),
+      };
+      // Same account: write leaf paths so metadata.webhooks.github (the routing token baked into the
+      // webhook URL registered on GitHub) and metadata.selectedRepositories survive, including a
+      // concurrent lastDeliveryAt stamp. Only a proven different account starts clean, since those
+      // belong to the old account's repos. A stored `metadata: null` can't take a dotted $set, so it
+      // falls through to the full replace too (nothing is stored there to lose).
+      const stored = recentConnection.metadata;
+      let sameAccount: boolean;
+      if (stored == null) {
+        sameAccount = false;
+      } else if (typeof stored.githubUserId === 'number') {
+        sameAccount = stored.githubUserId === githubUser.id;
+      } else if (typeof stored.githubLogin === 'string' && stored.githubLogin) {
+        // Docs written before the immutable id was stored; logins are case-insensitive.
+        sameAccount = stored.githubLogin.toLowerCase() === githubUser.login.toLowerCase();
+      } else {
+        // No stored identity (e.g. a repo selection saved before the first connect): preserve. This can
+        // carry a previous selection forward, which is cheaper than silently wiping a live webhook.
+        sameAccount = true;
+      }
+      // Dotted paths aren't expressible in Partial<T>; update() $sets keys as given.
+      const leafUpdate: Omit<Partial<IMcpServerDocument>, 'metadata'> &
+        Record<'metadata.githubLogin' | 'metadata.connectedAt' | 'metadata.scope', string> &
+        Record<'metadata.githubUserId', number> = {
+        ...connectionFields,
+        'metadata.githubLogin': connectionMetadata.githubLogin,
+        'metadata.githubUserId': connectionMetadata.githubUserId,
+        'metadata.connectedAt': connectionMetadata.connectedAt,
+        'metadata.scope': connectionMetadata.scope,
+      };
+      githubServer = sameAccount
+        ? await mcpServerRepository.update(leafUpdate)
+        : await mcpServerRepository.update({ ...connectionFields, metadata: connectionMetadata });
       req.logger.info('[GitHub OAuth] Updated GitHub MCP server config', {
         userId,
         githubLogin: githubUser.login,
@@ -262,6 +311,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
         tools: [], // Will be populated by dynamic discovery
         metadata: {
           githubLogin: githubUser.login,
+          githubUserId: githubUser.id,
           connectedAt: new Date().toISOString(),
           scope: grantedScopes.join(','),
         },

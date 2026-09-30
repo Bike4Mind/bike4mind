@@ -24,6 +24,7 @@ import { BadRequestError, InternalServerError, NotFoundError, ensureAdmin } from
 import { validatePrivateKeyFormat } from '@server/utils/validators';
 import { Logger } from '@bike4mind/observability';
 import {
+  ApiKeyScope,
   IOrgGitHubConnectionDocument,
   IOrgGitHubConnectionResponse,
   IOrgGitHubConnectionHealth,
@@ -140,7 +141,7 @@ function buildResponse(
   return response;
 }
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   // Rate limit all connection operations (GET/POST/PUT/DELETE) to prevent brute-force and abuse
   .use(
     rateLimit({

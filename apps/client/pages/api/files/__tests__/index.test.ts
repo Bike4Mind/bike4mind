@@ -15,6 +15,7 @@ const mockRefs = vi.hoisted(() => ({
   searchArgs: undefined as unknown[] | undefined,
   deleteManyArgs: undefined as unknown[] | undefined,
   updateManyArgs: undefined as unknown[] | undefined,
+  updateManyOptions: undefined as unknown,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -51,7 +52,12 @@ vi.mock('@bike4mind/database', () => {
     };
     static updateMany = (filter: unknown, update: unknown, ...rest: unknown[]) => {
       mockRefs.updateManyArgs = [filter, update, ...rest];
-      return Promise.resolve({ modifiedCount: 1 });
+      return {
+        setOptions: (options: unknown) => {
+          mockRefs.updateManyOptions = options;
+          return Promise.resolve({ modifiedCount: 1 });
+        },
+      };
     };
   }
   class User {
@@ -152,6 +158,7 @@ describe('DELETE /api/files', () => {
   beforeEach(() => {
     mockRefs.deleteManyArgs = undefined;
     mockRefs.updateManyArgs = undefined;
+    mockRefs.updateManyOptions = undefined;
   });
 
   // Regression for the TypeError that fired in production: FabFile.deleteMany() comes from the
@@ -183,6 +190,8 @@ describe('DELETE /api/files', () => {
     expect(updateFilter.$and[0]).toBe(accessibleFilter);
     expect(updateFilter.$and[1]).toEqual({ userId: { $ne: 'user-1' } });
     expect(update).toEqual({ $pull: { users: { userId: 'user-1' } } });
+    // A soft-deleted share must lose the grant too, or restoring it hands the access back.
+    expect(mockRefs.updateManyOptions).toEqual({ includeDeleted: true });
   });
 
   it('completes the request without throwing', async () => {

@@ -19,6 +19,7 @@ import {
   zeroProgressCounts,
 } from '@client/app/hooks/data/dataLakeUploadPipeline';
 import { activeOrgId } from '@client/app/hooks/data/dataLakes';
+import { useUser } from '@client/app/contexts/UserContext';
 
 // Re-exported for DataLakeWizardModal's pre-flight check, which imports it from this path.
 export { OFFLINE_MESSAGE };
@@ -158,6 +159,7 @@ export function useBatchUpload() {
           // Show their rewards without waiting out the gears/status staleTime.
           invalidateGearsStatusWhileLocked(queryClient, ['datalakes', 'files']);
         },
+        refreshUser: () => useUser.getState().refreshUser(),
       });
     },
     onSuccess: result => {

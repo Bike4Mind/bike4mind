@@ -108,6 +108,11 @@ export const DEFAULT_MANIFEST = {
   // Read by the connect callback, the re-sync route and the ingest handler's own re-enqueues. Not optional: the
   // connect path reads it after the binding row is written, the same hazard as driveLakeIngestQueue above.
   githubLakeIngestQueue: { kind: 'queue' },
+  // Read by the App's webhook (webhooks/github/lake.ts) only after it verifies the signature and
+  // resolves affected connections - no row is written first. Registered so the webhook resolves the
+  // key instead of throwing; the self-host worker runner (apps/workers/src/selfhost) has no consumer
+  // for this queue (nor githubLakeIngestQueue), so on a self-host the queued revokes still wait for one.
+  githubLakeRevokeQueue: { kind: 'queue' },
   emailAnalysisQueue: { kind: 'queue', optional: true },
   emailBatchQueue: { kind: 'queue' },
   emailIngestionQueue: { kind: 'queue' },
