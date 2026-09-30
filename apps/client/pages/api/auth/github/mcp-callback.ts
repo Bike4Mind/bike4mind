@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { mcpServerRepository, userRepository } from '@bike4mind/database';
 import { Config } from '@server/utils/config';
 import { InternalServerError } from '@server/utils/errors';
-import { McpServerName, type IMcpServerDocument } from '@bike4mind/common';
+import { McpServerName } from '@bike4mind/common';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import { readStateNonceHash, clearStateNonce } from '@server/auth/oauthFlowCookie';
@@ -254,7 +254,6 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     let githubServer;
     if (recentConnection) {
       const connectionFields = {
-        id: recentConnection.id,
         enabled: true,
         envVariables: encryptedEnvVariables,
         tools: [], // Will be populated by dynamic discovery
@@ -284,19 +283,20 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
         // carry a previous selection forward, which is cheaper than silently wiping a live webhook.
         sameAccount = true;
       }
-      // Dotted paths aren't expressible in Partial<T>; update() $sets keys as given.
-      const leafUpdate: Omit<Partial<IMcpServerDocument>, 'metadata'> &
-        Record<'metadata.githubLogin' | 'metadata.connectedAt' | 'metadata.scope', string> &
-        Record<'metadata.githubUserId', number> = {
-        ...connectionFields,
-        'metadata.githubLogin': connectionMetadata.githubLogin,
-        'metadata.githubUserId': connectionMetadata.githubUserId,
-        'metadata.connectedAt': connectionMetadata.connectedAt,
-        'metadata.scope': connectionMetadata.scope,
-      };
       githubServer = sameAccount
-        ? await mcpServerRepository.update(leafUpdate)
-        : await mcpServerRepository.update({ ...connectionFields, metadata: connectionMetadata });
+        ? await mcpServerRepository.update({
+            id: recentConnection.id,
+            ...connectionFields,
+            'metadata.githubLogin': connectionMetadata.githubLogin,
+            'metadata.githubUserId': connectionMetadata.githubUserId,
+            'metadata.connectedAt': connectionMetadata.connectedAt,
+            'metadata.scope': connectionMetadata.scope,
+          })
+        : await mcpServerRepository.update({
+            id: recentConnection.id,
+            ...connectionFields,
+            metadata: connectionMetadata,
+          });
       req.logger.info('[GitHub OAuth] Updated GitHub MCP server config', {
         userId,
         githubLogin: githubUser.login,
