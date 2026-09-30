@@ -1,5 +1,6 @@
 import { Request } from 'express';
 import { ForbiddenError } from '@server/utils/errors';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { PublishedArtifactReport } from '@bike4mind/database';
 
@@ -9,7 +10,7 @@ import { PublishedArtifactReport } from '@bike4mind/database';
  * before deciding on a takedown.
  */
 
-const handler = baseApi().get(async (req: Request, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req: Request, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Admin access required');
   }

@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { AdminSettings } from '@bike4mind/database';
@@ -8,7 +9,7 @@ const SETTING_NAME = 'whatsNewGenerationStatus';
 const RATE_LIMIT = 10;
 const ONE_MINUTE_MS = 60 * 1000;
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: RATE_LIMIT, windowMs: ONE_MINUTE_MS }))
   .get(async (req: Request, res: Response) => {
     if (!req.user?.isAdmin) {

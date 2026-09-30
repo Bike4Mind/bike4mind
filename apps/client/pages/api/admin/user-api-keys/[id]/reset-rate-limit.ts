@@ -6,7 +6,7 @@ import { ForbiddenError } from '@server/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { evaluateCounterLockout, resetApiKeyRateLimit, resolveCounterLimit } from '@server/utils/apiKeyRateLimitCheck';
-import { UserApiKeyEvents } from '@bike4mind/common';
+import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
 import { userApiKeyService } from '@bike4mind/services';
 
 /**
@@ -34,7 +34,7 @@ import { userApiKeyService } from '@bike4mind/services';
  * fails to clear, `resetApiKeyRateLimit` itself rejects rather than
  * returning a result this route could report as a 200 success.
  */
-const handler = baseApi({ auth: true })
+const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {

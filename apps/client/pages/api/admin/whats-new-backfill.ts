@@ -10,7 +10,7 @@ import { collectDataForDate } from '@server/services/whatsNewDataCollector';
 import { Logger } from '@bike4mind/observability';
 import type { WhatsNewGenerationPayload } from '@server/queueHandlers/types';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { WHATS_NEW_DEFAULT_REPOSITORY, WHATS_NEW_DEFAULT_TARGET_BRANCH } from '@bike4mind/common';
+import { ApiKeyScope, WHATS_NEW_DEFAULT_REPOSITORY, WHATS_NEW_DEFAULT_TARGET_BRANCH } from '@bike4mind/common';
 
 // Rate limiting - 3 requests per minute to allow retries after gateway timeouts
 const BACKFILL_RATE_LIMIT = 3;
@@ -21,7 +21,7 @@ const MAX_DATES = 10;
 
 const logger = new Logger({ metadata: { service: 'whatsNewBackfill' } });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: BACKFILL_RATE_LIMIT, windowMs: ONE_MINUTE_MS }))
   .post(async (req: Request, res: Response) => {
     if (!req.user?.isAdmin) {

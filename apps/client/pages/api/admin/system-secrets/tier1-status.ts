@@ -12,6 +12,7 @@
  * - Only returns status: configured, placeholder, invalid, missing, or warning
  */
 
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { Config } from '@server/utils/config';
@@ -91,7 +92,7 @@ function getTier1Status(stage: string): Tier1SecretInfo[] {
   ];
 }
 
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   try {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

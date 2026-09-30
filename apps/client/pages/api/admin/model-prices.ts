@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { generateModelPriceSeed, modelPriceRepository, SEED_NOTE } from '@bike4mind/database';
-import { DISCOVERY_PRICE_NOTE_PREFIX, MODEL_PRICE_UNITS, ModelPriceTier } from '@bike4mind/common';
+import { ApiKeyScope, DISCOVERY_PRICE_NOTE_PREFIX, MODEL_PRICE_UNITS, ModelPriceTier } from '@bike4mind/common';
 import { ForbiddenError, BadRequestError } from '@server/utils/errors';
 
 /**
@@ -154,7 +154,7 @@ const RevertBody = z.object({
   action: z.literal('revert-to-seed'),
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
     if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
 

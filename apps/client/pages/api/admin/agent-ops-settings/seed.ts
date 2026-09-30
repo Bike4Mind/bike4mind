@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { agentOpsSettingsRepository } from '@bike4mind/database';
 import { ForbiddenError } from '@bike4mind/utils';
@@ -32,7 +33,7 @@ Given the agent metadata below, create a detailed system prompt that:
 
 Provide only the final system prompt text (do not include additional explanations or meta-commentary). The prompt should be ready to use directly as a system message for the AI agent.`;
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   if (!req.user!.isAdmin) {
     throw new ForbiddenError('Admin access required');
   }
