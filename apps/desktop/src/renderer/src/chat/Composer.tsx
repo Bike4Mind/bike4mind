@@ -17,7 +17,7 @@ import {
   shownSuggestion,
 } from './composerInput';
 import { ArrowUpIcon, StopIcon } from './icons';
-import { columnStartGlyphSx, contentColumnSx } from './layout';
+import { contentColumnSx } from './layout';
 import { QueuedMessageList } from './QueuedMessageList';
 import { mergeIntoDraft } from './queuedMessages';
 import { matchSkills, skillQuery } from './skillMenu';
@@ -401,11 +401,10 @@ export function Composer({
       </Box>
 
       {/* Attach on the left, what answers the turn on the right - the shape Claude Code uses. */}
-      {/* `gap` rather than Stack's `spacing`: spacing resets every child's margin from the row
-          itself, which outranks the attach button's own negative margin below. */}
       <Stack direction="row" alignItems="center" sx={{ ...contentColumnSx, py: 1, gap: 1 }}>
-        {/* Borderless, so it is the '+' itself that has to land on the content edge rather
-            than the box around it - see `columnStartGlyphSx` for how that is done. */}
+        {/* No correction of its own: its box goes on the content edge like every other control
+            in the column, and the '+' rides inside it. Pulling the box left so the glyph alone
+            sat on the line is what used to send its hover surface outside the column. */}
         <IconButton
           size="sm"
           variant="plain"
@@ -413,7 +412,6 @@ export function Composer({
           disabled={disabled || attachments.busy}
           onClick={() => void attachments.pick()}
           aria-label="Attach a file"
-          sx={columnStartGlyphSx}
           data-testid="composer-attach-btn"
         >
           <Typography level="body-lg">+</Typography>

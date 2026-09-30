@@ -13,18 +13,21 @@ export const CONTENT_MAX_WIDTH = 760;
  * Centered reading column. Applied to the INNER element, so the scrollbar stays at the pane edge.
  *
  * The left edge of this element's CONTENT box is the column's content edge, and it is the one
- * line everything in the conversation aligns to - the line the transcript's prose sits on. Two
- * rules follow from that, and every row added to the column has to pick one:
+ * line everything in the conversation aligns to - the line the transcript's prose sits on. One
+ * rule covers every row: a control puts its own OUTER edge on that line, and whatever the
+ * control draws inside itself is inset by its own padding.
  *
- *   - A control that draws a BORDER or a surface - a Chip, a Textarea, a Sheet, an Alert - puts
- *     its BORDER on the edge. That is what a plain child of the column already does, so such a
- *     control needs nothing beyond being inside a `contentColumnSx` element. It must not spread
- *     `contentColumnSx` onto ITSELF: the column's `px` would become the surface's own padding
- *     and the surface would bleed a gutter's width past the column on both sides.
+ * Outer edge means the hard edge the eye reads - the border of a Chip, a Textarea, a Sheet or an
+ * Alert, and equally the surface an otherwise plain control fills in when it is hovered or
+ * pressed. An IconButton is the case that keeps being got wrong: it looks borderless at rest, so
+ * pulling it left until the glyph itself sat on the line seemed right, but then its hover
+ * surface was the thing hanging outside the column. Its box goes on the line like everything
+ * else, and the glyph rides ~10px inside it - the same way a placeholder sits inside an input's
+ * border and a label inside a chip's.
  *
- *   - A control with no border - an icon button, plain text - puts its visible GLYPH on the
- *     edge, which means cancelling the inset its own box puts around that glyph. See
- *     `columnStartGlyphSx`.
+ * A control therefore needs NOTHING beyond being a child of a `contentColumnSx` element. What it
+ * must not do is spread `contentColumnSx` onto ITSELF: the column's `px` would become the
+ * control's own padding and its surface would bleed a gutter's width past the column both sides.
  *
  * A stack that scrolls one of these rows and not the others needs `columnStackSx` on the stack
  * and `scrollingColumnHostSx` on the row that scrolls, or that row's scrollbar shifts its column
@@ -81,27 +84,4 @@ export const scrollingColumnHostSx: SxProps = {
   overflowY: 'auto',
   scrollbarGutter: 'stable',
   marginRight: `calc(-1 * var(${SCROLL_GUTTER_VAR}, 0px))`,
-};
-
-/**
- * Breathing room a borderless control keeps around its glyph, in px.
- *
- * Joy centres an IconButton's glyph inside a 32px box, so how far in from the border the glyph
- * lands depends on the glyph - 6px for a 20px icon, ~10px for a '+' set at body-lg. Pinning the
- * padding instead makes that inset a constant, which is what lets `columnStartGlyphSx` cancel it
- * exactly rather than by a number measured once against one glyph and wrong for the next.
- */
-export const GLYPH_INSET = 8;
-
-/**
- * A borderless control that STARTS a row in the column: its glyph lands on the content edge.
- *
- * Read with `GLYPH_INSET`: the padding is set, then the same amount is taken back off the
- * margin, so what is left over the edge is the glyph itself. The hit area and the hover surface
- * stay centred on the glyph, which a left-aligned box inside a fixed-width button would not.
- */
-export const columnStartGlyphSx: SxProps = {
-  minWidth: 0,
-  paddingInline: `${GLYPH_INSET}px`,
-  ml: `-${GLYPH_INSET}px`,
 };
