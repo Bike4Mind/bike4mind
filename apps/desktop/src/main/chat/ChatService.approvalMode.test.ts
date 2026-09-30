@@ -34,7 +34,6 @@ describe('ChatService approval modes', () => {
   let service: ChatService;
   let approvals: ApprovalGate;
   let events: ChatStreamEvent[];
-  let post: ReturnType<typeof vi.fn>;
   let streams: PassThrough[];
   let root: string;
 
@@ -58,13 +57,17 @@ describe('ChatService approval modes', () => {
     await writeFile(join(root, 'notes.txt'), 'hello\n', 'utf8');
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-mode-sessions-')), 'test-model');
     approvals = new ApprovalGate();
-    events = [];
-    streams = [];
-    post = vi.fn().mockImplementation(() => {
+    // Bound to consts, not the reassigned lets, so a turn still winding down from the last
+    // test cannot post into or emit into this one.
+    const testEvents: ChatStreamEvent[] = [];
+    const testStreams: PassThrough[] = [];
+    const testPost = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      testStreams.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
+    events = testEvents;
+    streams = testStreams;
 
     service = new ChatService({
       store,
@@ -74,10 +77,10 @@ describe('ChatService approval modes', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
-          getAxiosInstance: () => ({ post }),
+          getAxiosInstance: () => ({ post: testPost }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => testEvents.push(event),
     });
   });
 
@@ -296,10 +299,14 @@ describe('ChatService approval modes', () => {
       // Spawning spends credits, so it asks in every mode; the user says yes.
       await answer('once');
 
-      return vi.waitUntil(
-        async () => (await service.listSessions()).find(entry => entry.origin?.parentSessionId === created.session.id),
-        { timeout: 5000, interval: 20 }
-      );
+      // The tool ends only once the child's own turn is accepted, so the child is in the
+      // store and its turn is one dispose() can abort.
+      const spawned = await awaitStatus('done');
+      expect(spawned.name).toBe('session_spawn');
+
+      const child = (await service.listSessions()).find(entry => entry.origin?.parentSessionId === created.session.id);
+      if (!child) throw new Error('spawned session not stored');
+      return child;
     }
 
     it('inherits "Ask for approval" from its parent', async () => {
