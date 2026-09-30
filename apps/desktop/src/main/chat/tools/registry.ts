@@ -5,6 +5,7 @@ import { fileRead, globFiles, grepSearch } from './fileTools';
 import { sessionArchive, sessionDelete, sessionList, sessionRead, sessionSend, sessionSpawn } from './hostTools';
 import { generateImageTool, generateMusicTool, generateSoundEffectTool, generateSpeechTool } from './mediaTools';
 import { bashExecute } from './shellTools';
+import { todoWrite } from './todoTool';
 import { fileEdit, fileWrite } from './writeTools';
 import type { ToolDefinition, ToolSchema } from './types';
 
@@ -31,6 +32,7 @@ const LOCAL_TOOLS: readonly ToolDefinition[] = [
   bashOutput,
   bashList,
   bashKill,
+  todoWrite,
 ];
 
 /**

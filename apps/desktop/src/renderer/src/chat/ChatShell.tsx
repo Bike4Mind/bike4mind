@@ -6,6 +6,7 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatProject, ChatSessionMode } from '@shared/chat';
+import { latestTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { BackgroundTaskChip, BackgroundTaskPanel } from './BackgroundTaskPanel';
 import { readPanelFlag, writePanelFlag } from './backgroundTasks';
@@ -17,6 +18,7 @@ import { columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
 import { SessionChips } from './SessionChips';
 import { SessionList } from './SessionList';
+import { TodoPanel } from './TodoPanel';
 import { TurnStatus } from './TurnStatus';
 import { presentReply } from './codeStream';
 import { roundsOf } from './replyRounds';
@@ -202,6 +204,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
    * at the approval gate is still a turn, and the next message still queues behind it.
    */
   const sessionStatus = activeId ? statuses.get(activeId) : undefined;
+  const plan = useMemo(() => latestTodos(conversation.messages), [conversation.messages]);
   const turnOpen = conversation.streaming || sessionStatus === 'processing' || sessionStatus === 'needs-action';
 
   // What the turn in flight is doing, read off the reply being streamed into the thread. Only
@@ -387,6 +390,8 @@ export function ChatShell({ account }: { account?: ReactNode }) {
             // from the bottom of the thread, not from a bar that is always on screen.
             footer={<BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />}
           />
+
+          <TodoPanel todos={plan} turnOpen={turnOpen} />
 
           {conversation.sendError && (
             <Box sx={contentColumnSx}>

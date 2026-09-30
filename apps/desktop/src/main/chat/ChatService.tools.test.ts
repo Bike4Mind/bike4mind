@@ -100,6 +100,7 @@ describe('ChatService tool loop', () => {
       'bash_output',
       'bash_list',
       'bash_kill',
+      'todo_write',
       'explore',
     ]);
   });
