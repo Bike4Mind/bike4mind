@@ -34,10 +34,10 @@ describe('ChatService tool loop', () => {
       models: {
         list: async () => ({
           models: [
-            { id: 'test-model', name: 'Test' },
-            { id: ChatModels.CLAUDE_5_SONNET, name: 'Sonnet' },
-            { id: ChatModels.CLAUDE_4_5_SONNET, name: 'Older Sonnet' },
-            { id: ChatModels.CLAUDE_5_OPUS, name: 'Opus' },
+            { id: 'test-model', name: 'Test', backend: 'anthropic' },
+            { id: ChatModels.CLAUDE_5_SONNET, name: 'Sonnet', backend: 'anthropic' },
+            { id: ChatModels.CLAUDE_4_5_SONNET, name: 'Older Sonnet', backend: 'anthropic' },
+            { id: ChatModels.CLAUDE_5_OPUS, name: 'Opus', backend: 'anthropic' },
           ],
         }),
         cached: () => [],

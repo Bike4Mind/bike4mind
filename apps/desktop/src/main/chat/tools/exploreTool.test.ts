@@ -218,6 +218,31 @@ describe('explore', () => {
     expect(prompt).toContain('NOT seen any file');
   });
 
+  it("retries the first request on the session's model when the explore model fails", async () => {
+    const { explore, requests } = fakeExplore([[{ type: 'content', text: 'report' }]]);
+    explore.fallback = { model: 'session-model' };
+    const complete = explore.complete;
+    explore.complete = (request, onEvent, signal) =>
+      request.model === 'cheap-model'
+        ? Promise.reject(new Error('400 usage limit'))
+        : complete(request, onEvent, signal);
+
+    expect(await exploreTool.run({ question: 'q' }, { ...context, explore })).toBe('report');
+    expect(requests.map(request => request.model)).toEqual(['session-model']);
+  });
+
+  it('does not fall back after the first round', async () => {
+    const { explore } = fakeExplore([[toolUse([{ name: 'file_read', input: { path: join(root, 'app.ts') } }])]]);
+    explore.fallback = { model: 'session-model' };
+    const complete = explore.complete;
+    let calls = 0;
+    explore.complete = (request, onEvent, signal) =>
+      ++calls > 1 ? Promise.reject(new Error('boom')) : complete(request, onEvent, signal);
+
+    await expect(exploreTool.run({ question: 'q' }, { ...context, explore })).rejects.toThrow('boom');
+    expect(calls).toBe(2);
+  });
+
   it('does not truncate a long report below the explore cap', async () => {
     const long = 'x'.repeat(MAX_TOOL_OUTPUT_CHARS + 20_000);
     const { explore } = fakeExplore([[{ type: 'content', text: long }]]);

@@ -45,11 +45,19 @@ export interface MediaContext {
  * Handed over as a narrow transport rather than an api client, for the same reason MediaContext
  * is the only other network door: every other tool here stays off the network.
  */
-export interface ExploreContext {
+export interface ExploreTarget {
   model: string;
   maxTokens?: number;
   /** Whether `model` accepts `cache: true` on its messages; see supportsPromptCache. */
   cache?: boolean;
+}
+
+export interface ExploreContext extends ExploreTarget {
+  /**
+   * The session's own model, tried when the first request on `model` fails - a spent key or an
+   * account limit on the cheaper model should cost the sub-agent's savings, not the whole explore.
+   */
+  fallback?: ExploreTarget;
   complete(
     request: CompletionRequest,
     onEvent: (event: CompletionStreamEvent) => void,

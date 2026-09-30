@@ -2,7 +2,7 @@ import { ChatModels } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
 import { pickExploreModel, shouldOfferExplore } from './explore';
 
-const option = (id: string) => ({ id, name: id });
+const option = (id: string, backend = 'anthropic') => ({ id, name: id, backend });
 
 describe('pickExploreModel', () => {
   it('prefers the best Sonnet the deployment offers', () => {
@@ -12,6 +12,20 @@ describe('pickExploreModel', () => {
       option(ChatModels.CLAUDE_5_SONNET),
     ];
     expect(pickExploreModel(available, ChatModels.CLAUDE_5_OPUS)).toBe(ChatModels.CLAUDE_5_SONNET);
+  });
+
+  it("only picks a model on the session model's own backend", () => {
+    const available = [
+      option(ChatModels.CLAUDE_5_SONNET),
+      option(ChatModels.GPT5, 'openai'),
+      option(ChatModels.GPT5_MINI, 'openai'),
+    ];
+    expect(pickExploreModel(available, ChatModels.GPT5)).toBe(ChatModels.GPT5_MINI);
+    expect(pickExploreModel(available.slice(0, 2), ChatModels.GPT5)).toBe(ChatModels.GPT5);
+  });
+
+  it('falls back to the session model when its backend is unknown', () => {
+    expect(pickExploreModel([{ id: 'x', name: 'x' }, option(ChatModels.CLAUDE_5_SONNET)], 'x')).toBe('x');
   });
 
   it('falls back to the session model when no Sonnet is offered or the list is unknown', () => {
@@ -42,5 +56,9 @@ describe('shouldOfferExplore', () => {
     expect(shouldOfferExplore(available, ChatModels.CLAUDE_5_SONNET)).toBe(false);
     expect(shouldOfferExplore([option('llama3')], 'llama3')).toBe(false);
     expect(shouldOfferExplore([], 'llama3')).toBe(false);
+  });
+
+  it('is off for a GPT session when only Claude could explore', () => {
+    expect(shouldOfferExplore([...available, option(ChatModels.GPT5, 'openai')], ChatModels.GPT5)).toBe(false);
   });
 });
