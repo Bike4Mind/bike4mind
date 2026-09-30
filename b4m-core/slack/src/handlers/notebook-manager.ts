@@ -40,18 +40,20 @@ function findMatchingKeywordRule(text: string, rules: IKeywordRoutingRule[]): st
  */
 // any: getSlackDb() exposes the Session model untyped, as elsewhere in this file
 async function resolveAccessibleNotebookId(Session: any, notebookId: unknown, userId: string): Promise<string | null> {
-  if (!notebookId || !mongoose.Types.ObjectId.isValid(String(notebookId))) return null;
+  if (!notebookId) return null;
+  const id = String(notebookId);
+  if (!mongoose.Types.ObjectId.isValid(id)) return null;
 
   try {
-    const notebook = await Session.findOne({ _id: String(notebookId), deletedAt: { $exists: false } });
+    const notebook = await Session.findOne({ _id: id, deletedAt: { $exists: false } });
     if (canUpdateShareable(notebook, userId)) return notebook.id;
 
     Logger.warn('[Slack Notebook Lookup] Ignoring saved notebook id the user cannot write to', {
-      notebookId: String(notebookId),
+      notebookId: id,
       userId,
     });
   } catch (error) {
-    Logger.warn('[Slack Notebook Lookup] Error checking saved notebook id', { notebookId: String(notebookId), error });
+    Logger.warn('[Slack Notebook Lookup] Error checking saved notebook id', { notebookId: id, error });
   }
   return null;
 }
