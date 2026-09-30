@@ -176,8 +176,10 @@ export const purgeDataLakeConnectionFiles = async (
             }
           }
           const deletedByThisCall = await db.fabFiles.hardDeleteOneById(file.id);
-          await db.fabFileChunks.deleteManyByFabFileId(file.id);
           if (deletedByThisCall) {
+            // Recorded (and shredded/unlinked) BEFORE the chunk delete: the row has no retry door
+            // once hard-deleted, so a chunk-delete throw below must not cost this file its refund,
+            // shred or session unlink too.
             deletedFiles.push({ id: file.id, userId: file.userId, fileSize: file.fileSize });
             const tagNames = (file.tags ?? [])
               .map(tag => tag?.name)
@@ -195,6 +197,7 @@ export const purgeDataLakeConnectionFiles = async (
               });
             }
           }
+          await db.fabFileChunks.deleteManyByFabFileId(file.id);
         })
       );
       const failure = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected');

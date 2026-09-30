@@ -235,7 +235,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     expect(h.connMarkDisconnecting).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
     expect(status).toHaveBeenCalledWith(202);
-    expect(json).toHaveBeenCalledWith({ success: true, queued: true });
+    expect(json).toHaveBeenCalledWith({ success: true, queued: false });
   });
 
   it('DELETE 204s when there is nothing to release', async () => {

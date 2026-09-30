@@ -112,9 +112,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const conn = await findLakeConnection(lake.id, organizationId);
     if (conn) {
       // A purge that ran recently is still progressing; another message would only start a second
-      // self-re-enqueueing chain over the same files.
+      // self-re-enqueueing chain over the same files. `queued: false` here is accurate, not just
+      // idempotent: self-heals once DRIVE_DISCONNECT_STALL_MS passes and the next DELETE retries.
       if (conn.disconnectRequestedAt && !isDriveDisconnectStalled(conn.disconnectRequestedAt)) {
-        return res.status(202).json({ success: true, queued: true });
+        return res.status(202).json({ success: true, queued: false });
       }
       // Don't hard-delete under a live ingest: the running handler still holds the connection it
       // loaded and would keep creating FabFiles stamped with a driveConnectionId that no longer
