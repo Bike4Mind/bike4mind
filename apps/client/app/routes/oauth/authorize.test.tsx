@@ -1,3 +1,4 @@
+import React from 'react';
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -10,6 +11,9 @@ let searchParams: Record<string, string | undefined>;
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mockNavigate,
   useSearch: () => searchParams,
+  Link: ({ children, ...props }: { children: React.ReactNode; [key: string]: unknown }) => (
+    <a {...(props as React.AnchorHTMLAttributes<HTMLAnchorElement>)}>{children}</a>
+  ),
 }));
 
 vi.mock('@client/app/hooks/useAccessToken', () => ({

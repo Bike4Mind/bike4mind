@@ -265,16 +265,14 @@ const OAuthAuthorizePage = () => {
           </Box>
           <Typography level="body-xs" color="neutral" sx={{ mt: 1 }}>
             You can revoke this access at any time from{' '}
-            <Typography
-              component={Link}
+            <Link
               to="/profile"
-              search={{ tab: 'settings' }}
-              level="body-xs"
-              color="neutral"
-              sx={{ textDecoration: 'underline' }}
+              search={{ tab: 'settings', section: 'security' }}
+              style={{ textDecoration: 'underline', color: 'inherit' }}
+              data-testid="oauth-consent-revoke-hint-link"
             >
               Settings &rsaquo; Security &rsaquo; Approved Apps
-            </Typography>
+            </Link>
             .
           </Typography>
         </Sheet>

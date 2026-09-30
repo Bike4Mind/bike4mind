@@ -34,7 +34,8 @@ const ApprovedAppsSection: React.FC = () => {
       </Typography>
       <Typography level="body-sm" sx={{ mb: 2 }}>
         Third-party apps you have authorized to access your Bike4Mind account. Revoking an app
-        immediately cancels its access; the app will need your permission again before it can connect.
+        stops it from renewing access; any active session it holds may continue for up to 30
+        minutes before it expires.
       </Typography>
 
       {isLoading && <Typography level="body-sm">Loading...</Typography>}
