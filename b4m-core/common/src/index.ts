@@ -123,6 +123,7 @@ export * from './utils/isImageServeable';
 export * from './utils/multimodalContent';
 export * from './utils/attachmentScope';
 export * from './utils/dataLakeTaxonomy';
+export * from './utils/dataLakeSlug';
 export * from './utils/tagName';
 export * from './utils/generatedMedia';
 export * from './utils/imageSize';

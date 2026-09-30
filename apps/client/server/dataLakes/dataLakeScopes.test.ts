@@ -11,6 +11,7 @@ import {
   assertDataLakeShareScope,
   assertDataLakeWriteScope,
   assertDataLakeTagWriteScope,
+  dataLakeToolsDeniedFor,
 } from './dataLakeScopes';
 
 const key = (...scopes: ApiKeyScope[]) => ({ apiKeyInfo: { scopes } });
@@ -135,5 +136,34 @@ describe('data-lake API-key scopes', () => {
     // so the keys sliding through never reach the re-mint cross-check either.
     process.env[SCOPE_STAGING_ENV_VAR] = ApiKeyScope.DATALAKE_SHARE;
     expect(() => assertDataLakeShareScope(key(ApiKeyScope.AI_CHAT))).not.toThrow();
+  });
+});
+
+describe('dataLakeToolsDeniedFor', () => {
+  it('denies only the write tools to a key holding datalake:read but not datalake:write', () => {
+    expect(dataLakeToolsDeniedFor(key(ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_READ))).toEqual([
+      'create_data_lake',
+      'save_content_to_data_lake',
+    ]);
+  });
+
+  it('also denies the list tool to a chat key without any data-lake read scope', () => {
+    expect(dataLakeToolsDeniedFor(key(ApiKeyScope.AI_CHAT))).toEqual([
+      'list_my_data_lakes',
+      'create_data_lake',
+      'save_content_to_data_lake',
+    ]);
+  });
+
+  it('denies all three to a key whose scopes came back undefined (fails closed)', () => {
+    expect(dataLakeToolsDeniedFor({ apiKeyInfo: {} })).toHaveLength(3);
+  });
+
+  it('denies nothing to a key holding datalake:write', () => {
+    expect(dataLakeToolsDeniedFor(key(ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE))).toEqual([]);
+  });
+
+  it('denies nothing to a JWT/browser caller', () => {
+    expect(dataLakeToolsDeniedFor({})).toEqual([]);
   });
 });

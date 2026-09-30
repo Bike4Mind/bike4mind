@@ -10,6 +10,7 @@ import { ChatCompletionInvoke } from '@bike4mind/services/llm';
 import { SQSService } from '@bike4mind/utils';
 import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveBillingOrgId } from '@server/utils/orgAccess';
+import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
@@ -28,6 +29,9 @@ import { Request } from 'express';
 // accept AI_GENERATE only to preserve legacy completions behavior; that rationale does not
 // extend here, since this route is in no contract. Scope checks apply only to API-key requests;
 // browser/JWT sessions fall through untouched (see apiKeyAuth).
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every(item => typeof item === 'string');
+
 const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
   .use(
     rateLimit({
@@ -54,6 +58,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     if (typeof systemPrompt === 'string' && systemPrompt.length > PROMPT_TEXT_MAX) {
       throw new UnprocessableEntityError(`systemPrompt exceeds the ${PROMPT_TEXT_MAX}-character limit.`, {
         code: 'SYSTEM_PROMPT_TOO_LONG',
+      });
+    }
+
+    // Validated here, beside systemPrompt, so a malformed value is rejected before any session or lastNotebookId write. invoke()'s own parse would 422 it too, but only after those side effects.
+    const requestedDenials: unknown = req.body.deniedTools;
+    if (requestedDenials !== undefined && !isStringArray(requestedDenials)) {
+      throw new UnprocessableEntityError('deniedTools must be an array of strings.', {
+        code: 'DENIED_TOOLS_INVALID',
       });
     }
 
@@ -104,11 +116,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // null = personal account, undefined = fall back to the caller's own org.
     const effectiveOrgId = await resolveBillingOrgId(req, invokeParams.organizationId);
 
+    // Unioned and placed after the spread, so a client value can only ADD denials; the key's own
+    // scope gaps always win.
+    const deniedTools = [...(isStringArray(requestedDenials) ? requestedDenials : []), ...dataLakeToolsDeniedFor(req)];
+
     const quest = await chatCompletion.invoke({
       body: {
         ...invokeParams,
         sessionId,
         organizationId: effectiveOrgId,
+        ...(deniedTools.length > 0 ? { deniedTools } : {}),
       },
       userId: req.user.id,
     });
