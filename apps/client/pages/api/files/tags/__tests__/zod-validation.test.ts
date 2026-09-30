@@ -25,7 +25,14 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 const create = vi.hoisted(() => vi.fn(async () => ({ id: 'tag1', name: 'bug' })));
 vi.mock('@bike4mind/services', () => ({ tagService: { create, listFileTags: vi.fn() } }));
 vi.mock('@bike4mind/database', () => ({ fabFileRepository: {}, fileTagRepository: {} }));
-vi.mock('@bike4mind/common', () => ({ TagType: { FILE: 'file' } }));
+// TagType is the only export the route reads directly; ApiKeyScope and CONFINED_API_KEY_SCOPES are
+// needed only because tags/index.ts now pulls in the real fileScopes.ts -> apiKeyScopeGate.ts, whose
+// module-level `new Set(CONFINED_API_KEY_SCOPES)` would otherwise throw at import time.
+vi.mock('@bike4mind/common', () => ({
+  TagType: { FILE: 'file' },
+  ApiKeyScope: { READ_FILES: 'files:read', WRITE_FILES: 'files:write' },
+  CONFINED_API_KEY_SCOPES: [],
+}));
 vi.mock('@server/utils/errors', () => ({
   ForbiddenError: class extends Error {},
 }));

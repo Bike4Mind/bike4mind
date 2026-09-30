@@ -19,6 +19,7 @@ const mockRefs = vi.hoisted(() => ({
   createArgs: undefined as unknown[] | undefined,
   createResult: undefined as unknown,
   createError: undefined as unknown,
+  baseApiOptions: undefined as unknown,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -33,7 +34,7 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return { baseApi: (options: unknown) => ((mockRefs.baseApiOptions = options), chain) };
 });
 
 vi.mock('@bike4mind/database', () => ({
@@ -127,6 +128,30 @@ describe('POST /api/files/tags', () => {
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow();
     expect(mockRefs.createArgs).toBeUndefined();
   });
+
+  it('rejects a files:read-only key with a 403 before touching the service', async () => {
+    const { req, res } = invokePost({ id: 'user-1' }, { name: 'invoices' });
+    (req as any).apiKeyInfo = { keyId: 'k', scopes: ['files:read'] };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/files:write is required/);
+
+    expect(mockRefs.createArgs).toBeUndefined();
+  });
+
+  it('allows a files:write key through the gate on the happy path', async () => {
+    const { req, res } = invokePost({ id: 'user-1' }, { name: 'invoices' });
+    (req as any).apiKeyInfo = { keyId: 'k', scopes: ['files:write'] };
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(mockRefs.createArgs?.[0]).toBe('user-1');
+  });
+});
+
+describe('/api/files/tags - scope gate', () => {
+  it('requires files:read or files:write at the baseApi route gate', () => {
+    expect(mockRefs.baseApiOptions).toEqual({ requiredScopes: ['files:read', 'files:write'] });
+  });
 });
 
 describe('GET /api/files/tags', () => {
@@ -190,6 +215,15 @@ describe('GET /api/files/tags', () => {
     const { req, res } = invokeGet({});
 
     await expect(mockRefs.getHandler!(req, res)).rejects.toThrow();
+    expect(mockRefs.listArgs).toBeUndefined();
+  });
+
+  it('rejects a files:write-only key with a 403 before touching the service', async () => {
+    const { req, res } = invokeGet({ id: 'user-1', groups: ['group-a'], tags: USER_TAGS });
+    (req as any).apiKeyInfo = { keyId: 'k', scopes: ['files:write'] };
+
+    await expect(mockRefs.getHandler!(req, res)).rejects.toThrow(/files:read is required/);
+
     expect(mockRefs.listArgs).toBeUndefined();
   });
 });

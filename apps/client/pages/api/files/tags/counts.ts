@@ -3,8 +3,9 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { buildUserFileScope } from '@server/utils/userFileScope';
 import { fabFileRepository } from '@bike4mind/database';
+import { FILES_READ_SCOPES } from '@server/files/fileScopes';
 
-const handler = baseApi().get(
+const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
   asyncHandler<{}, unknown, unknown>(async (req, res) => {
     if (!req.user.id) {
       throw new ForbiddenError('Unauthorized');

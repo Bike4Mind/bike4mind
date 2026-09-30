@@ -6,6 +6,7 @@ import { ForbiddenError } from '@server/utils/errors';
 import { buildUserFileScope } from '@server/utils/userFileScope';
 import { tagService } from '@bike4mind/services';
 import { fabFileRepository, fileTagRepository } from '@bike4mind/database';
+import { assertFilesReadScope, assertFilesWriteScope, FILES_READ_OR_WRITE_SCOPES } from '@server/files/fileScopes';
 
 const tagCreateBodySchema = z.object({
   name: z.string().trim().min(1),
@@ -14,9 +15,11 @@ const tagCreateBodySchema = z.object({
   color: z.string().optional(),
 });
 
-const handler = baseApi()
+// baseApi's scope gate is per route, so it admits either files scope and each method asserts its own.
+const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
   .post(
     asyncHandler<{}, unknown, unknown>(async (req, res) => {
+      assertFilesWriteScope(req);
       if (!req.user.id) {
         throw new ForbiddenError('Unauthorized');
       }
@@ -37,6 +40,7 @@ const handler = baseApi()
   )
   .get(
     asyncHandler<{}, unknown, unknown>(async (req, res) => {
+      assertFilesReadScope(req);
       if (!req.user.id) {
         throw new ForbiddenError('Unauthorized');
       }

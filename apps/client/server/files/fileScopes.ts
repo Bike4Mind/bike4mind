@@ -6,10 +6,15 @@ import { assertApiKeyScope, type ScopedRequest } from '@server/middlewares/apiKe
  * contracts (b4m-core/common/src/api-contract/contracts/files.contract.ts): upload needs
  * `files:write`, read needs `files:read`, and write does not imply read.
  *
- * Enforcement sites: `files/generate-presigned-url.ts` (write), `files/presigned-url.ts`
- * (read), `files/[id]/index.ts` (route gate below, plus the per-method asserts). Keep this
- * list complete - a scope preflight is sized from the enforcement sites
- * (docs/architecture/api-key-scope-rollout.md).
+ * Enforcement sites: every route under `pages/api/files`, pinned by
+ * server/__tests__/filesApiKeyScopeCoverage.test.ts. The mixed-method doors (`files/index.ts`,
+ * `files/[id]/index.ts`, `files/tags/index.ts`) declare the read-or-write gate below and assert
+ * per method. So a preflight for these scopes is sized over `/api/files` plus the public
+ * `/api/v1/files` doors (docs/architecture/api-key-scope-rollout.md).
+ *
+ * `files/generate-smart-name.ts` spends LLM budget yet gates on `files:write`: it exists only
+ * inside the paste-to-upload flow, and gating it on `ai:generate` would mean staging that scope
+ * too, which re-opens every `ai:generate` door for the window.
  */
 export const FILES_READ_SCOPES: ApiKeyScope[] = [ApiKeyScope.READ_FILES];
 

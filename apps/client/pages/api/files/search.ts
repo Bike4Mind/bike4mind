@@ -13,8 +13,9 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { getFilesStorage } from '@server/utils/storage';
+import { FILES_READ_SCOPES } from '@server/files/fileScopes';
 
-const handler = baseApi().get(
+const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
   asyncHandler<{}, unknown, unknown>(async (req, res) => {
     if (!req.ability?.can(Permission.read, FabFile)) {
       throw new ForbiddenError('Unauthorized');

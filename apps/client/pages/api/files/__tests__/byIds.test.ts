@@ -1,9 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { NextApiResponse } from 'next';
 
-// baseApi wraps the handler; mock it as a pass-through so the test drives the handler directly.
+// Evaluated once at import - not reset in beforeEach - so it captures the options this module's
+// top-level baseApi(...) call was made with.
+const h = vi.hoisted(() => ({ baseApiOptions: undefined as unknown }));
+
+// baseApi wraps the handler; mock it as a pass-through so the test drives the handler directly,
+// capturing the options it was called with for the scope-gate test below.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ get: (h: unknown) => h }),
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
+    return { get: (handler: unknown) => handler };
+  },
 }));
 
 const listFabFiles = vi.fn();
@@ -200,5 +208,9 @@ describe('GET /api/files/byIds', () => {
     expect(res.statusCode).toBe(400);
     expect(listFabFiles).not.toHaveBeenCalled();
     expect(resolveAccessibleLakes).not.toHaveBeenCalled();
+  });
+
+  it('requires files:read at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:read'] });
   });
 });

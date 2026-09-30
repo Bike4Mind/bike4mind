@@ -99,8 +99,8 @@ export function assertDataLakeShareScope(req: ScopedRequest): void {
 /**
  * Gate for a door outside `/api/data-lakes` that writes lake membership through a
  * caller-supplied tag list (`files/tags/toggle.ts`, `files/createFabFile.ts`,
- * `files/generate-presigned-url(s-batch).ts`, `files/[id]/index.ts`). These routes stay
- * ungated for a plain file-tag/upload call so a `files:write`-only key keeps working, but
+ * `files/generate-presigned-url(s-batch).ts`, `files/[id]/index.ts`). These routes need
+ * only `files:write` for a plain file-tag/upload call (server/files/fileScopes.ts), but
  * once the tag list actually reaches into a lake (a `datalake:*` meta-tag), an API-key
  * caller must hold `datalake:write` too - otherwise a key minted for file tagging alone
  * could add/remove a file from a lake it cannot otherwise write into.

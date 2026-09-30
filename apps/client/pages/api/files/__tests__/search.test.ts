@@ -14,6 +14,7 @@ import { getDataLakeTags } from '@bike4mind/common';
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
   searchArgs: undefined as unknown[] | undefined,
+  baseApiOptions: undefined as unknown,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -24,7 +25,7 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return { baseApi: (options: unknown) => ((mockRefs.baseApiOptions = options), chain) };
 });
 
 vi.mock('@bike4mind/database', () => ({
@@ -191,5 +192,9 @@ describe('GET /api/files/search', () => {
 
     await expect(mockRefs.getHandler!(req, res)).rejects.toThrow();
     expect(mockRefs.searchArgs).toBeUndefined();
+  });
+
+  it('requires files:read at the baseApi route gate', () => {
+    expect(mockRefs.baseApiOptions).toEqual({ requiredScopes: ['files:read'] });
   });
 });
