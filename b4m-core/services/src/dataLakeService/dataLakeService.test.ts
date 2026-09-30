@@ -2706,6 +2706,27 @@ describe('createDataLake', () => {
     ).rejects.toThrow(/"My Other Lake"/);
   });
 
+  it('refuses a prefix that collides with a built-in registry lake, before touching the slug', async () => {
+    // Deleting the { code } tag on this throw (or collidesWithRegistryPrefix's call site) makes
+    // create_data_lake's disambiguation stop treating this as a collision, and the raw 4xx
+    // surfaces instead - the exact regression the code-based match exists to catch.
+    const registryPrefix = DATA_LAKES[0].fileTagPrefix;
+    const create = vi.fn();
+    const find = vi.fn().mockResolvedValue([]);
+    await expect(
+      createDataLake(
+        'owner',
+        { name: 'X', slug: 'xy', fileTagPrefix: registryPrefix },
+        { db: { dataLakes: { create, find } } }
+      )
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/reserved by a built-in knowledge base/i),
+      additionalInfo: { code: TAG_PREFIX_UNAVAILABLE_CODE },
+    });
+    expect(create).not.toHaveBeenCalled();
+    expect(find).not.toHaveBeenCalled();
+  });
+
   it('allows a prefix that only collides outside the create scope', async () => {
     const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
     // find() answers the scoped query, so an out-of-scope lake simply is not in the result.

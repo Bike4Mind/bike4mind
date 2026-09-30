@@ -15,8 +15,8 @@ export const DATA_LAKES_DISABLED_MESSAGE =
  * platform admin manages every lake on the platform; the assistant narrows them to lakes they own
  * rather than writing platform-wide on their behalf.
  */
-export function isAssistantWriteTarget(lake: { canManage?: boolean; isOwn?: boolean }, isAdmin: boolean): boolean {
-  return !!lake.canManage && (!isAdmin || !!lake.isOwn);
+export function isAssistantWriteTarget(lake: { canManage: boolean; isOwn: boolean }, isAdmin: boolean): boolean {
+  return lake.canManage && (!isAdmin || lake.isOwn);
 }
 
 function hasMethods<T extends object, K extends keyof T>(

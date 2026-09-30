@@ -140,6 +140,19 @@ describe('save_content_to_data_lake', () => {
     const { context } = makeContext({ isAdmin: true });
 
     await expect(run(context)).resolves.toContain('Saved "notes.md"');
+    expect(createFabFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('saves when a platform admin targets a lake whose ownership was transferred to them', async () => {
+    // isEffectiveOwner resolves ownership through an owner-role grant, not just createdByUserId -
+    // this proves the admin narrowing follows the grant, not only the original creator.
+    assertLakeAccessWithGrantsMock.mockResolvedValue({
+      lake: { ...activeLake, createdByUserId: 'someone-else' },
+      grants: [{ principalType: 'user', principalId: 'u1', role: 'owner' }],
+    });
+    const { context } = makeContext({ isAdmin: true });
+
+    await expect(run(context)).resolves.toContain('Saved "notes.md"');
   });
 
   it('creates no file for a built-in lake', async () => {

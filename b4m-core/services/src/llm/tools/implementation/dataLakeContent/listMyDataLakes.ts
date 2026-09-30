@@ -13,16 +13,6 @@ import {
 
 const TOOL_NAME = 'list_my_data_lakes';
 
-/**
- * A lake this caller can put a file into: an assistant write target (see isAssistantWriteTarget),
- * backed by a document (a built-in lake is read-only - the same predicate assertLakeWritable uses),
- * and not archived.
- */
-function isWritableTarget(lake: ManageableDataLakeConfig, isAdmin: boolean): boolean {
-  if (!isAssistantWriteTarget(lake, isAdmin) || isFallbackLake(lake)) return false;
-  return (LAKE_ATTACHABLE_STATUSES as readonly string[]).includes(lake.status ?? 'active');
-}
-
 function describeLake(lake: ManageableDataLakeConfig): string {
   const status =
     lake.status === 'draft'
@@ -45,7 +35,17 @@ export const listMyDataLakesTool: ToolDefinition = {
         if (!(await dataLakesEnabled(context.db))) return DATA_LAKES_DISABLED_MESSAGE;
 
         const ctx = await buildToolAccessContext(context);
-        const lakes = (await listDataLakes(ctx, { db: adapters })).filter(lake => isWritableTarget(lake, ctx.isAdmin));
+        // A lake this caller can put a file into: an assistant write target (see
+        // isAssistantWriteTarget), backed by a document (a built-in lake is read-only - the same
+        // predicate assertLakeWritable uses), and not archived.
+        const lakes = (await listDataLakes(ctx, { db: adapters })).filter(
+          lake =>
+            // canManage is absent only on projections that never resolved an actor; listDataLakes
+            // always resolves one, so this defaults to the same "cannot manage" a resolved false means.
+            isAssistantWriteTarget({ canManage: lake.canManage ?? false, isOwn: lake.isOwn }, ctx.isAdmin) &&
+            !isFallbackLake(lake) &&
+            (LAKE_ATTACHABLE_STATUSES as readonly string[]).includes(lake.status ?? 'active')
+        );
 
         if (lakes.length === 0) {
           return (
