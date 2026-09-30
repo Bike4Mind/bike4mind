@@ -38,6 +38,7 @@ import { ProjectTrustStore } from './skills/ProjectTrustStore';
 import { SkillCatalog } from './skills/SkillCatalog';
 import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
+import { DependencyInstaller } from './project/dependencyInstall';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
@@ -191,6 +192,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     preferredModel: PREFERRED_MODEL,
     approvals,
     background,
+    dependencies: new DependencyInstaller(background),
     media,
     activity,
     mcp,
