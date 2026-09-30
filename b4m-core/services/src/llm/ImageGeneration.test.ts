@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { ImageGenerationService } from './ImageGeneration';
 import { SUMMARIZATION_CONFIG } from './ChatCompletionFeatures';
 import {
@@ -1024,7 +1024,7 @@ describe('ImageGenerationService quest partial writes', () => {
       db: {
         sessions: { findById: vi.fn(async () => ({ id: 'session1' }) as ISessionDocument) },
         quests: {
-          findById: vi.fn(async () => quest as any),
+          findById: vi.fn(async () => quest as never),
           update,
           updateMany: vi.fn(async () => undefined),
           getMostRecentChatHistory: vi.fn(async () => []),
@@ -1041,18 +1041,54 @@ describe('ImageGenerationService quest partial writes', () => {
       startImageGenerationProcess: opts.startImageGenerationProcess ?? vi.fn(async () => undefined),
       logEvent: vi.fn().mockResolvedValue(undefined),
       abilityGetter: vi.fn().mockReturnValue({}),
-      storage: { upload: vi.fn().mockResolvedValue('generated/output.png') } as any,
-      fabFileStorage: { getSignedUrl: vi.fn(async (path: string) => path) } as any,
+      storage: { upload: vi.fn().mockResolvedValue('generated/output.png') },
+      fabFileStorage: { getSignedUrl: vi.fn(async (path: string) => path) },
       wsHttpsUrl: 'https://ws.example.com',
-    } as any);
+    } as never);
     return { service, update, quest };
   };
 
   // Turns credit enforcement on so quest.creditsUsed is a real number (7) on the partial writes.
   const enforceCredits = (service: ImageGenerationService) => {
-    vi.spyOn(service as any, 'validateUserCredits').mockResolvedValue({ requiredCredits: 7, usdCost: 0 });
+    vi.spyOn(
+      service as unknown as { validateUserCredits: () => Promise<unknown> },
+      'validateUserCredits'
+    ).mockResolvedValue({ requiredCredits: 7, usdCost: 0 });
     // process() reads the settings map once for the credit gate and once for moderation.
     vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' }).mockResolvedValueOnce({});
+  };
+
+  // Drops any queued enforceCredits value that process() did not consume, so it cannot leak.
+  afterEach(() => {
+    vi.mocked(getSettingsMap).mockReset().mockResolvedValue({});
+  });
+
+  // statusLog timestamps are wall-clock, so only the status sequence is pinned.
+  const statusLog = (...statuses: string[]) => statuses.map(status => ({ status, timestamp: expect.any(Date) }));
+
+  // The promptMeta invoke() builds for the `a cat` FLUX_PRO_1_1 body below.
+  const invokePromptMeta = {
+    model: { name: ImageModels.FLUX_PRO_1_1, parameters: { safety_tolerance: 2 }, type: 'image' },
+    session: { id: 'session1', userId: 'user1' },
+    prompt: 'a cat',
+    questId: 'quest1',
+    context: {
+      totalMessageCount: 1,
+      mementoCount: 0,
+      systemPrompt: 'Image generation request',
+      userPrompt: 'a cat',
+      attachedFiles: [],
+      sessionFileIds: [],
+      messageFileIds: [],
+      globalSystemFileIds: [],
+      userSystemFileIds: [],
+      projectSystemFileIds: [],
+      dedupedSystemPrompts: [],
+      totalSystemPromptCount: 0,
+      duplicateSystemPromptCount: 0,
+    },
+    performance: {},
+    statusLog: statusLog('Image generation started'),
   };
 
   const callArgs = (update: ReturnType<typeof vi.fn>) => update.mock.calls.map(c => c[0] as Record<string, unknown>);
@@ -1066,7 +1102,7 @@ describe('ImageGenerationService quest partial writes', () => {
         model: ImageModels.FLUX_PRO_1_1,
         fabFileIds: [],
         ...extra,
-      } as any,
+      } as never,
       userId: 'user1',
     });
 
@@ -1080,7 +1116,7 @@ describe('ImageGenerationService quest partial writes', () => {
         model: ImageModels.GEMINI_3_PRO_IMAGE,
         fabFileIds: ['f1'],
         intent: 'continuation',
-      } as any,
+      } as never,
       logger: silentLogger,
     });
 
@@ -1088,11 +1124,12 @@ describe('ImageGenerationService quest partial writes', () => {
     const { service, update } = makeService();
     await invoke(service);
 
+    expect(update).toHaveBeenCalledTimes(1);
     expect(update.mock.calls[0][0]).toStrictEqual({
       id: 'quest1',
       images: [],
       replies: [],
-      promptMeta: expect.any(Object),
+      promptMeta: invokePromptMeta,
       promptEnhancement: undefined,
     });
   });
@@ -1102,11 +1139,12 @@ describe('ImageGenerationService quest partial writes', () => {
     const promptEnhancement = { originalPrompt: 'a cat', enhancedPrompt: 'a fluffy cat', promptWasEnhanced: true };
     await invoke(service, { promptEnhancement });
 
+    expect(update).toHaveBeenCalledTimes(1);
     expect(update.mock.calls[0][0]).toStrictEqual({
       id: 'quest1',
       images: [],
       replies: [],
-      promptMeta: expect.any(Object),
+      promptMeta: invokePromptMeta,
       promptEnhancement,
     });
   });
@@ -1140,7 +1178,19 @@ describe('ImageGenerationService quest partial writes', () => {
       replies: [],
       images: ['generated/output.png'],
       status: 'done',
-      promptMeta: expect.any(Object),
+      promptMeta: {
+        marker: 'meta',
+        session: { id: 'session1', userId: 'user1' },
+        performance: { totalResponseTime: expect.any(Number), modelInferenceTime: expect.any(Number) },
+        generatedImageReferences: ['generated/output.png'],
+        statusLog: statusLog(
+          'Preparing to paint...',
+          'Now painting...',
+          'Tucking your image into storage...',
+          'Adding to the notebook...',
+          'Image generation completed'
+        ),
+      },
       creditsUsed: 7,
     });
   });
@@ -1164,13 +1214,19 @@ describe('ImageGenerationService quest partial writes', () => {
       reply: expect.stringContaining('Which blue?'),
       type: 'message',
       status: 'done',
-      promptMeta: expect.any(Object),
+      promptMeta: {
+        marker: 'meta',
+        session: { id: 'session1', userId: 'user1' },
+        imageClarification: expect.any(Object),
+        statusLog: statusLog('Preparing to paint...', 'Now painting...', 'Clarification requested'),
+      },
       creditsUsed: 7,
     });
-    expect((call?.promptMeta as { imageClarification?: unknown }).imageClarification).toMatchObject({
+    expect((call?.promptMeta as { imageClarification?: unknown }).imageClarification).toStrictEqual({
       clarificationId: 'clar1',
       question: 'Which blue?',
       originalPrompt: 'make it blue',
+      timestamp: expect.any(Date),
     });
   });
 

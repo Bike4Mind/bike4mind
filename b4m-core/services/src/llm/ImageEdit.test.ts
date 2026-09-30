@@ -828,8 +828,7 @@ describe('ImageEditService quest partial writes', () => {
       storage: { upload: vi.fn(async () => 'stored/out.png') } as never,
       fabFileStorage: { getSignedUrl: vi.fn(async () => 'https://example.invalid/x.png') } as never,
     } as never);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (service as any).tokenizer = {
+    (service as unknown as { tokenizer: unknown }).tokenizer = {
       encodeTokens: vi.fn(async () => [1, 2, 3]),
       decodeTokens: vi.fn(async () => 'make it blue'),
     };
@@ -877,11 +876,15 @@ describe('ImageEditService quest partial writes', () => {
     const { service, update } = makeService();
     await invoke(service);
 
+    expect(update).toHaveBeenCalledTimes(1);
     expect(update.mock.calls[0][0]).toStrictEqual({
       id: 'quest1',
       images: [],
       replies: [],
-      promptMeta: expect.any(Object),
+      promptMeta: {
+        model: { name: 'gpt-image-1', parameters: {} },
+        session: { id: 'session1', userId: 'user1' },
+      },
     });
   });
 

@@ -40,6 +40,9 @@ const silentLogger = {
   updateMetadata: vi.fn(),
 } as unknown as Logger;
 
+// statusLog timestamps are wall-clock, so only the status sequence is pinned.
+const statusLog = (...statuses: string[]) => statuses.map(status => ({ status, timestamp: expect.any(Date) }));
+
 describe('VideoGenerationService.invoke (retry quest bound to its session)', () => {
   const makeInvokeService = (questSessionId: string) => {
     const update = vi.fn(async () => undefined);
@@ -80,7 +83,17 @@ describe('VideoGenerationService.invoke (retry quest bound to its session)', () 
       id: 'quest1',
       videos: [],
       replies: [],
-      promptMeta: expect.any(Object),
+      promptMeta: {
+        model: {
+          name: VideoModels.SORA_2,
+          parameters: { model: VideoModels.SORA_2, seconds: 4, size: '720x1280' },
+          type: 'video',
+        },
+        session: { id: 'session1', userId: 'user1' },
+        prompt: 'a cat surfing',
+        questId: 'quest1',
+        statusLog: statusLog('Video generation started'),
+      },
     });
   });
 
@@ -140,7 +153,17 @@ describe('VideoGenerationService.process (partial quest writes)', () => {
       replies: [],
       videos: ['videos/out.mp4'],
       status: 'done',
-      promptMeta: expect.any(Object),
+      promptMeta: {
+        performance: { totalResponseTime: expect.any(Number), modelInferenceTime: expect.any(Number) },
+        session: { id: 'session1', userId: 'user1' },
+        statusLog: statusLog(
+          'Preparing to generate video...',
+          'Generating video... This may take several minutes.',
+          'Storing your video...',
+          'Adding to the notebook...',
+          'Video generation completed'
+        ),
+      },
       creditsUsed: undefined,
     });
   });
@@ -156,7 +179,14 @@ describe('VideoGenerationService.process (partial quest writes)', () => {
       type: 'error',
       status: 'done',
       errorCode: undefined,
-      promptMeta: expect.any(Object),
+      promptMeta: {
+        session: { id: 'session1', userId: 'user1' },
+        statusLog: statusLog(
+          'Preparing to generate video...',
+          'Generating video... This may take several minutes.',
+          'Error: render failed'
+        ),
+      },
     });
   });
 });
