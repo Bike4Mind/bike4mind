@@ -14,7 +14,7 @@
  * desktop user's model to "use the in-app Share action" describes a button that is not there.
  * It is also ~2.8k tokens on every turn of a client whose sessions replay their whole history.
  *
- * What it MUST stay in step with is `renderableTypes` in the renderer's ArtifactCard: this
+ * What it MUST stay in step with is `RENDERED_TYPES` in the renderer's ArtifactCard: this
  * advertises the MIME types the desktop can show, and advertising one it cannot renders as a
  * wall of source. The list is narrower than the server's on purpose - see the comment there.
  */
@@ -27,10 +27,13 @@ export const DESKTOP_ARTIFACT_PROMPT = [
   'Types: text/html, image/svg+xml, application/vnd.ant.mermaid, application/vnd.ant.react,',
   'application/vnd.ant.code, application/vnd.ant.python. Use the same identifier when you revise',
   'an artifact you already emitted, and emit the whole file again rather than a patch.',
-  'This app shows html and svg as they will look, and the rest as source. Pick the type that',
-  'genuinely fits the deliverable anyway - every artifact is also saved to the Bike4Mind web app,',
-  'which renders the others properly, so do not downgrade a React component or a diagram to',
-  'plain code just because the source is what you see here.',
+  'This app draws html, svg and mermaid artifacts as they will look, and shows the rest as',
+  'source. Pick the type that genuinely fits the deliverable anyway - every artifact is also',
+  'saved to the Bike4Mind web app, which renders the others properly, so do not downgrade a',
+  'React component to plain code just because the source is what you see here.',
+  'A mermaid diagram is drawn as a picture rather than run, so a journey or a mindmap - the two',
+  'kinds mermaid can only draw with embedded HTML - still comes out as source here. Every other',
+  'kind, flowchart and sequence included, is shown.',
   'The body must be the entire file, written out. Never put an ellipsis, a "rest of the code"',
   'comment, or any stand-in for content you wrote earlier in its place: an artifact whose logic',
   'is replaced by a summary still renders a complete-looking page whose controls do nothing,',
