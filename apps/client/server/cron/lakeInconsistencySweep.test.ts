@@ -50,7 +50,7 @@ vi.mock('@server/utils/cloudwatch', () => ({
 
 vi.mock('@aws-sdk/client-cloudwatch', () => ({ StandardUnit: { Count: 'Count' } }));
 
-import { handler } from './lakeInconsistencySweep';
+import { handler, runLakeInconsistencySweep } from './lakeInconsistencySweep';
 
 const lake = (overrides: Record<string, unknown> = {}) => ({
   id: 'lake-1',
@@ -102,6 +102,13 @@ describe('lakeInconsistencySweep cron', () => {
     mockRecordFindings.mockResolvedValue({ recorded: 1, failed: 0 });
     mockUpdateLake.mockResolvedValue(undefined);
     mockMarkScanned.mockResolvedValue(undefined);
+  });
+
+  it('runs locally without emitting hosted metrics or reconnecting', async () => {
+    const { connectDB } = await import('@bike4mind/database');
+    await runLakeInconsistencySweep();
+    expect(mockEmitMetric).not.toHaveBeenCalled();
+    expect(connectDB).not.toHaveBeenCalled();
   });
 
   it('reports zero scanned when there are no active lakes', async () => {

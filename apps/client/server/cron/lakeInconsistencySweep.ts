@@ -55,8 +55,6 @@ import { toScanSummary, type IDataLakeDocument } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
-import { emitMetric } from '@server/utils/cloudwatch';
-import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { Resource } from 'sst';
 
 const logger = new Logger({ metadata: { service: 'lakeInconsistencySweep' } });
@@ -173,15 +171,22 @@ async function scanLake(lake: SweepLake, nowYear: number, computedAt: Date): Pro
 }
 
 export async function handler() {
+  const [{ emitMetric }, { StandardUnit }] = await Promise.all([
+    import('@server/utils/cloudwatch'),
+    import('@aws-sdk/client-cloudwatch'),
+  ]);
   const stage = Resource.App.stage;
+  const recordMetric = (name: string, value: number) =>
+    emitMetric(CLOUDWATCH_NAMESPACE, name, value, { Stage: stage }, StandardUnit.Count);
   logger.info('[LakeInconsistencySweep] Starting sweep', { stage });
-
-  // Ahead of the connect and the scan, so a sweep that cannot reach the database still reports as a
-  // run rather than looking identical to one that was never scheduled.
-  await emitMetric(CLOUDWATCH_NAMESPACE, 'LakeInconsistencySweepRuns', 1, { Stage: stage }, StandardUnit.Count);
-
+  await recordMetric('LakeInconsistencySweepRuns', 1);
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage));
+  return runLakeInconsistencySweep({ recordMetric });
+}
 
+export async function runLakeInconsistencySweep(
+  options: { recordMetric?: (name: string, value: number) => Promise<void> } = {}
+) {
   const computedAt = new Date();
   // One year for the whole run, read once: `detectLakeInconsistencies` takes it as a parameter
   // precisely so the same corpus yields the same report, and a run straddling New Year would
@@ -289,38 +294,14 @@ export async function handler() {
     findingsFailed,
     truncated,
   });
-  await emitMetric(
-    CLOUDWATCH_NAMESPACE,
-    'LakeInconsistencySweepLakesScanned',
-    scanned,
-    { Stage: stage },
-    StandardUnit.Count
-  );
-  await emitMetric(
-    CLOUDWATCH_NAMESPACE,
-    'LakeInconsistencySweepFailures',
-    failed,
-    { Stage: stage },
-    StandardUnit.Count
-  );
-  await emitMetric(
-    CLOUDWATCH_NAMESPACE,
-    'LakeInconsistencySweepFindingsRecorded',
-    findingsRecorded,
-    { Stage: stage },
-    StandardUnit.Count
-  );
+  await options.recordMetric?.('LakeInconsistencySweepLakesScanned', scanned);
+  await options.recordMetric?.('LakeInconsistencySweepFailures', failed);
+  await options.recordMetric?.('LakeInconsistencySweepFindingsRecorded', findingsRecorded);
   // Emitted beside FindingsRecorded, not just logged: per-finding failures never reach the per-lake
   // `failed` counter on their own, so a sweep whose every write is failing would otherwise publish
   // `FindingsRecorded: 0, Failures: 0` - which reads as a clean run over a clean corpus, and is the
   // one shape no alarm could distinguish from success.
-  await emitMetric(
-    CLOUDWATCH_NAMESPACE,
-    'LakeInconsistencySweepFindingsFailed',
-    findingsFailed,
-    { Stage: stage },
-    StandardUnit.Count
-  );
+  await options.recordMetric?.('LakeInconsistencySweepFindingsFailed', findingsFailed);
 
   return { status: 'OK', scanned, failed, findingsRecorded, findingsFailed, truncated };
 }
