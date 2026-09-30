@@ -45,7 +45,7 @@ async function baseline(id: string) {
   return (await UserApiKey.collection.findOne({ _id: new mongoose.Types.ObjectId(id) }))?.metadata?.baseline;
 }
 beforeAll(async () => {
-  server = await createMongoServer({ instance: { launchTimeout: MONGO_TEST_TIMEOUT_MS } });
+  server = await createMongoServer();
   await mongoose.connect(server.getUri());
 });
 afterAll(async () => {
