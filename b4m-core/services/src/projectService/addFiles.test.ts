@@ -110,7 +110,7 @@ describe('projectService - addFiles', () => {
 
   it('should throw error when some files are not accessible', async () => {
     const mockUser = { id: contributorId } as IUserDocument;
-    const mockProject = { id: 'project-1', userId: 'owner-1' };
+    const mockProject = { id: 'project-1', userId: 'owner-1', fileIds: [], users: [] };
     const fileIds = ['file-1', 'file-2'];
     const mockFiles = [{ id: 'file-1' }]; // Only one file found
 
