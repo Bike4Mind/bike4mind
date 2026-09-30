@@ -50,6 +50,8 @@ import {
   driveLakeIngestQueueDLQ,
   driveDisconnectPurgeQueue,
   driveDisconnectPurgeQueueDLQ,
+  githubLakeIngestQueue,
+  githubLakeIngestQueueDLQ,
   whatsNewGenerationQueue,
   whatsNewHighlightsQueue,
   notebookCurationQueue,
@@ -139,6 +141,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'lake-inconsistency-model': lakeInconsistencyModelQueueDLQ.url,
     'drive-lake-ingest': driveLakeIngestQueueDLQ.url,
     'drive-disconnect-purge': driveDisconnectPurgeQueueDLQ.url,
+    'github-lake-ingest': githubLakeIngestQueueDLQ.url,
   },
 });
 
@@ -197,6 +200,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     lakeInconsistencyModelQueue: lakeInconsistencyModelQueue.url,
     driveLakeIngestQueue: driveLakeIngestQueue.url,
     driveDisconnectPurgeQueue: driveDisconnectPurgeQueue.url,
+    githubLakeIngestQueue: githubLakeIngestQueue.url,
   },
 });
 
@@ -251,6 +255,7 @@ export const web = new sst.aws.Nextjs(
       // exports). Resource.dataLakeTaxonomyQueue.url resolves in both Lambdas this way.
       dataLakeTaxonomyQueue,
       driveLakeIngestQueue,
+      githubLakeIngestQueue,
       // Directly linked for the plainer reason: `POST /api/data-lakes/:id/research/runs` reads
       // Resource.dataLakeResearchQueue.url to enqueue the run. Via sourceQueueUrls alone the key is
       // only reachable as Resource.sourceQueueUrls.dataLakeResearchQueue, and sst's Resource proxy

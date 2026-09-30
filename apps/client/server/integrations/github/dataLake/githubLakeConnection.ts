@@ -1,12 +1,14 @@
 import type { Response } from 'express';
 import {
   dataLakeRepository,
+  fabFileRepository,
   orgGitHubLakeConnectionRepository,
   orgGoogleDriveConnectionRepository,
 } from '@bike4mind/database';
 import {
   acceptsConnectorContent,
   isLakeIngestable,
+  type IDataLakeDocument,
   type IOrgGitHubLakeConnectionDocument,
   type IOrgGitHubLakeConnectionResponse,
 } from '@bike4mind/common';
@@ -14,7 +16,12 @@ import { Logger } from '@bike4mind/observability';
 import { createStateToken, verifyStateToken, type BaseStatePayload } from '@server/auth/jwtStateStore';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
+import {
+  purgeConnectionIngestedFiles,
+  type PurgeConnectionLogger,
+} from '@server/dataLakes/purgeConnectionIngestedFiles';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { sendToQueue } from '@server/utils/sqs';
 import {
   BadRequestError,
   ConflictError,
@@ -23,6 +30,7 @@ import {
   NotFoundError,
   UnauthorizedError,
 } from '@server/utils/errors';
+import { Resource } from 'sst';
 import {
   deleteInstallation,
   exchangeInstallerCode,
@@ -187,8 +195,9 @@ export async function completeGitHubLakeConnection(params: {
   dataLakeId: string;
   installationId: number;
   code: string;
+  logger: Pick<Logger, 'warn'>;
 }): Promise<IOrgGitHubLakeConnectionDocument> {
-  const { config, user, dataLakeId, installationId, code } = params;
+  const { config, user, dataLakeId, installationId, code, logger } = params;
   const { lakeId, organizationId } = await resolveConnectableLake(user, dataLakeId);
 
   const visibleRepositories = await listReposVisibleToInstaller(config, code, installationId);
@@ -215,8 +224,9 @@ export async function completeGitHubLakeConnection(params: {
     );
   }
 
+  let connection: IOrgGitHubLakeConnectionDocument;
   try {
-    return await orgGitHubLakeConnectionRepository.create({
+    connection = await orgGitHubLakeConnectionRepository.create({
       organizationId,
       targetDataLakeId: lakeId,
       installationId,
@@ -233,6 +243,26 @@ export async function completeGitHubLakeConnection(params: {
     }
     throw error;
   }
+
+  // Best-effort: the binding is valid without it and a manual re-sync runs the same ingest. Inside the try
+  // because an unregistered Resource key throws on the property read, before sendToQueue is called.
+  try {
+    await sendToQueue(Resource.githubLakeIngestQueue.url, { connectionId: connection.id });
+  } catch (error) {
+    logger.warn('GitHub lake connect: could not queue the first ingest', { connectionId: connection.id, error });
+    // lastError makes the failure visible on the connection (status stays 'connected' so the sync
+    // route's isGitHubLakeSyncClaimLive check still accepts a manual re-sync); a later successful
+    // sync clears it via recordSynced. Best-effort like the enqueue itself - never fails the connect.
+    await orgGitHubLakeConnectionRepository
+      .recordLastError(connection.id, 'Initial sync could not be queued. Re-sync to start.')
+      .catch(e =>
+        logger.warn('GitHub lake connect: could not record the enqueue failure', {
+          connectionId: connection.id,
+          error: e,
+        })
+      );
+  }
+  return connection;
 }
 
 /**
@@ -256,6 +286,41 @@ export async function releaseGitHubLakeConnection(
 }
 
 /**
+ * The disconnect door (DELETE github-connection): disable, purge what the connection ingested, then
+ * release. A reconnect mints a new connection id and a re-sync diffs only against its own id, so a
+ * file left behind here would be orphaned in the lake for good. Purge runs before release so a
+ * failed purge leaves the row for a retried DELETE, and the disable is healed on that failure so the
+ * connection is not left present but unable to sync. Mirrors drive-connection.ts's DELETE.
+ */
+export async function disconnectGitHubLakeConnection(
+  lake: IDataLakeDocument,
+  connection: IOrgGitHubLakeConnectionDocument,
+  logger: PurgeConnectionLogger
+): Promise<{ installationRetained: boolean }> {
+  // Paired with claimForSync's `enabled` guard: a live sync would keep minting files past the purge.
+  const disabled = await orgGitHubLakeConnectionRepository.disableIfNoLiveSyncClaim(
+    connection.id,
+    connection.organizationId
+  );
+  if (!disabled) {
+    throw new ConflictError('A sync is in progress for this repository. Try disconnecting again once it finishes.');
+  }
+  await purgeConnectionIngestedFiles(
+    lake,
+    () => fabFileRepository.findByGitHubConnectionIdInDataLake(connection.id, lake.datalakeTag, { includeDeleted: true }),
+    {
+      connectionId: connection.id,
+      label: 'GitHub lake disconnect',
+      logger,
+      // Restore, don't force: an archived lake's connection was already disabled and must stay so.
+      restore: disabled.wasEnabled ? () => enableGitHubConnectionForLake(lake.id) : undefined,
+    }
+  );
+  // The App config is only needed to uninstall; a retained installation releases without it.
+  return releaseGitHubLakeConnection(connection, getGitHubLakeAppConfig());
+}
+
+/**
  * The lake-purge teardown's entry point: releases whatever connection feeds the lake, resolved
  * globally because the lake's org may no longer be resolvable. Null when the lake had none.
  */
@@ -265,4 +330,13 @@ export async function releaseGitHubLakeConnectionForLake(
   const connection = await orgGitHubLakeConnectionRepository.findByDataLakeIdAny(dataLakeId);
   if (!connection) return null;
   return releaseGitHubLakeConnection(connection, getGitHubLakeAppConfig());
+}
+
+/** Archive/delete pause: flips `enabled` only, unlike releaseGitHubLakeConnectionForLake's teardown. */
+export async function disableGitHubConnectionForLake(dataLakeId: string): Promise<boolean> {
+  return orgGitHubLakeConnectionRepository.setEnabledForLake(dataLakeId, false);
+}
+
+export async function enableGitHubConnectionForLake(dataLakeId: string): Promise<boolean> {
+  return orgGitHubLakeConnectionRepository.setEnabledForLake(dataLakeId, true);
 }

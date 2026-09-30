@@ -17,9 +17,9 @@ import { lakeMembershipScope } from './lakeMembershipScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
 import {
   bestEffortIndexRemove,
-  bestEffortSetDriveConnectionEnabled,
+  bestEffortSetConnectionEnabled,
   type RetrievalIndexPort,
-  type DriveConnectionEnablePort,
+  type ConnectionEnablePort,
 } from './ports';
 
 interface ArchiveDataLakeAdapters extends LakeConfigAuditAdapters {
@@ -58,7 +58,9 @@ interface ArchiveDataLakeAdapters extends LakeConfigAuditAdapters {
   };
   retrievalIndex?: RetrievalIndexPort;
   /** Disable the lake's Drive connection so the hourly poll stops enqueueing it. See ports.ts. */
-  disableDriveConnection?: DriveConnectionEnablePort;
+  disableDriveConnection?: ConnectionEnablePort;
+  /** Disable the lake's GitHub connection so a re-sync or redelivery stops ingesting. See ports.ts. */
+  disableGitHubConnection?: ConnectionEnablePort;
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
 }
 
@@ -71,7 +73,7 @@ interface ArchiveDataLakeAdapters extends LakeConfigAuditAdapters {
 export const archiveDataLake = async (
   actor: ManageActor,
   dataLakeId: string,
-  { db, retrievalIndex, disableDriveConnection, logger }: ArchiveDataLakeAdapters
+  { db, retrievalIndex, disableDriveConnection, disableGitHubConnection, logger }: ArchiveDataLakeAdapters
 ): Promise<IDataLakeDocument> => {
   const existing = await db.dataLakes.findById(dataLakeId);
   if (!existing) {
@@ -254,7 +256,8 @@ export const archiveDataLake = async (
     );
   }
   // Stops the hourly poll from enqueueing this lake again - best-effort, see ports.ts.
-  await bestEffortSetDriveConnectionEnabled(disableDriveConnection, dataLakeId, logger);
+  await bestEffortSetConnectionEnabled(disableDriveConnection, dataLakeId, 'Drive', logger);
+  await bestEffortSetConnectionEnabled(disableGitHubConnection, dataLakeId, 'GitHub', logger);
   // Recorded on the terminal transition alongside the stamp, for the same reason and with the same
   // scope: one operator action, one audit row. Placed BEFORE the stats recompute so the archive is
   // attributed even if the recompute throws - the lake is already archived by this point either way.
