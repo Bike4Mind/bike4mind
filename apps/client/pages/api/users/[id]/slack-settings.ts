@@ -121,6 +121,23 @@ const handler = baseApi()
           }
         }
 
+        // Same ownership rule for per-agent routing targets, which the Slack resolver also dereferences.
+        for (const notebookId of Object.values(slackSettings.agentNotebookRouting ?? {})) {
+          if (!notebookId) continue;
+          if (!isValidObjectId(notebookId)) {
+            return res.status(400).json({ error: 'Invalid notebook ID format' });
+          }
+          const notebook = await Session.findOne({
+            _id: notebookId,
+            userId,
+            deletedAt: { $exists: false },
+          }).select('_id');
+
+          if (!notebook) {
+            return res.status(400).json({ error: 'Agent routing notebook not found or does not belong to you' });
+          }
+        }
+
         // Validate defaultProjectId access (owner or member, mirroring the customAgentId check).
         if (slackSettings.defaultProjectId) {
           if (!isValidObjectId(slackSettings.defaultProjectId)) {
