@@ -160,6 +160,12 @@ export interface ChatToolCall {
   endedAt?: number;
   /** What a tool that runs its own model loop spent; today only explore. */
   detail?: ChatToolDetail;
+  /**
+   * The model is sent a short placeholder instead of `preview`, because a later write or wider
+   * read made this result stale. Never unset once set: every later request has to reproduce the
+   * same bytes or the prompt cache is lost from this point on. `preview` stays for the thread.
+   */
+  cleared?: true;
 }
 
 /** Sum over a sub-loop's rounds: how many requests it made and where its time went. */
