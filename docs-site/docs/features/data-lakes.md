@@ -49,6 +49,9 @@ cannot find its files even after they finish uploading and indexing. Adding file
 lake -- publishing is a deliberate step, so that no lake starts grounding answers without someone
 choosing it. Use **Publish** in the Data Lakes list once the lake is ready.
 
+This holds for a lake the assistant creates from chat with the **Save to Data Lake** tool (see
+[Smart Tools](./smart-tools.md)) too: it starts as `Draft`, and saving files into it does not publish it.
+
 ## Use Cases
 
 - **Domain-specific knowledge** -- upload medical literature, legal documents, or technical manuals and scope retrieval to authorized users

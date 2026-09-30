@@ -37,7 +37,10 @@ import {
   imageModerationIncidentRepository,
   lakeAccessEventRepository,
   scopedSettingsRepository,
+  lakeMembershipRemovalRepository,
 } from '@bike4mind/database';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { NotFoundError, registerLambdaErrorHandlers } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 
@@ -82,7 +85,7 @@ type StaticChatCompletionOptions = Omit<ChatCompletionOptions, 'logger' | 'token
 let cachedStaticOptions: StaticChatCompletionOptions | null = null;
 let cachedDbConnection: typeof mongoose.connection | null = null;
 
-const getStaticOptions = () => {
+export const getStaticOptions = () => {
   if (cachedStaticOptions) {
     console.log('♻️ [PERFORMANCE] Reusing cached static ChatCompletion options');
     return cachedStaticOptions;
@@ -152,6 +155,11 @@ const getStaticOptions = () => {
       imageModerationIncidents: imageModerationIncidentRepository,
       lakeAccessEvents: lakeAccessEventRepository,
       scopedSettings: scopedSettingsRepository,
+      // Read by save_content_to_data_lake (-> addFileToDataLake). Without them that tool answers
+      // "not available on this surface" rather than failing mid-write.
+      lakeMembershipRemovals: lakeMembershipRemovalRepository,
+      lakeConfigChangeEvents: lakeConfigAuditDb.lakeConfigChangeEvents,
+      lakeMembershipChangeEvents: lakeMembershipAuditDb.lakeMembershipChangeEvents,
     },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),

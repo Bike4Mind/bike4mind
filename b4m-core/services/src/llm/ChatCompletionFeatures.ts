@@ -43,6 +43,9 @@ import {
   ImageModerationIncident,
   ILakeAccessEventRepository,
   IScopedSettingsRepository,
+  ILakeMembershipRemovalRepository,
+  ILakeConfigChangeEventRepository,
+  ILakeMembershipChangeEventRepository,
   isExperimentalFeatureEnabled,
   isSupportedEmbeddingModel,
   resolveHistoryFetchLimit,
@@ -256,7 +259,14 @@ interface DatabaseAdapters {
     // read that narrows the retrieval creator arm, so every host that can retrieve has to wire it
     // rather than silently degrade to bare creator provenance.
     | 'findIdsCreatedBy'
-  >;
+  > &
+    // Must stay a superset of ToolContext.db.dataLakes (the data-lake write tools' methods).
+    Partial<
+      Pick<
+        IDataLakeRepository,
+        'findAccessible' | 'findBySlug' | 'findBySlugAmongIds' | 'create' | 'setStats' | 'activateIfDraft'
+      >
+    >;
   /**
    * Access-grant lookup shared by two independent optional features:
    * - the retrieval resolver's grant arm (getDynamicDataLakeAccess / `listByPrincipal`), so a
@@ -267,7 +277,12 @@ interface DatabaseAdapters {
    *   rungs cannot resolve, so the re-check revokes a maintainer whose rights are in fact intact.
    * Optional here - absent means both features resolve lake access with no grant arm.
    */
-  dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes'>;
+  dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes'> &
+    Partial<Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'upsertGrant'>>;
+  /** Forwarded to ToolContext.db for the data-lake write tools - see its doc comment there. */
+  lakeMembershipRemovals?: Pick<ILakeMembershipRemovalRepository, 'findLive'>;
+  lakeConfigChangeEvents?: Pick<ILakeConfigChangeEventRepository, 'record'>;
+  lakeMembershipChangeEvents?: Pick<ILakeMembershipChangeEventRepository, 'record'>;
   /**
    * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
    * IFallbackLakeSetting). Used only by getAccessibleDataLakePrompts' registry-candidate branch,

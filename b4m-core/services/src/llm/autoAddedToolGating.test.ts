@@ -1,9 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { DATA_LAKE_TOOL_NAMES } from '@bike4mind/common';
 import { ServerAgentStore } from './agents/ServerAgentStore';
 import {
   BLOG_REQUEST_PATTERN,
   hasPriorToolUse,
+  mentionsDataLakeSave,
   mentionsDelegatableAgent,
+  shouldOfferDataLakeTools,
   shouldOfferBlogTools,
   shouldOfferDelegation,
   shouldOfferSkillTool,
@@ -243,5 +246,87 @@ describe('shouldOfferDelegation', () => {
     ['a store-agent mention', { message: '@researcher help' }],
   ])('vetoes delegation on a disableUserIntegrations surface despite %s', (_label, override) => {
     expect(shouldOfferDelegation({ ...base, ...override, disableUserIntegrations: true })).toBe(false);
+  });
+});
+
+describe('mentionsDataLakeSave', () => {
+  it.each([
+    'Save this summary to my data lake',
+    'can you add it to the Data-Lake?',
+    'what data lakes do I have',
+    'Store these notes into my research lake',
+    'add these notes to my Research lake',
+    'upload the table to the lake',
+    'SAVE THIS TO MY LAKE',
+    'Put that into a new lake called Q3',
+    'put that in a lake',
+    'create a lake called Q3',
+    'Make me a new research lake',
+    'list my lakes',
+    'Show me all of our lakes',
+    'what lakes do I have',
+    'Which lakes can I save to?',
+  ])('fires on %j', message => {
+    expect(mentionsDataLakeSave(message)).toBe(true);
+  });
+
+  it.each([
+    'Planning a Lake Tahoe trip next month',
+    'Lake Michigan weather this weekend',
+    'save the photos from our trip to Lake Tahoe',
+    'I love lakes',
+    'save the file',
+    'we lakers',
+    'the lakers won last night',
+    'drive to the lake',
+    'add a stop at the lake on the way home',
+    'save this as a PDF',
+    'save me a seat',
+  ])('stays quiet on %j', message => {
+    expect(mentionsDataLakeSave(message)).toBe(false);
+  });
+});
+
+describe('shouldOfferDataLakeTools', () => {
+  const enabled = () => Promise.resolve(true);
+
+  it('offers on intent when data lakes are enabled', async () => {
+    await expect(
+      shouldOfferDataLakeTools({ message: 'save this to my data lake', priorToolNames: [], dataLakesEnabled: enabled })
+    ).resolves.toBe(true);
+  });
+
+  it('keeps offering on a follow-up once a data-lake tool was used', async () => {
+    await expect(
+      shouldOfferDataLakeTools({
+        message: 'yes, the first one',
+        priorToolNames: ['list_my_data_lakes'],
+        dataLakesEnabled: enabled,
+      })
+    ).resolves.toBe(true);
+  });
+
+  it('never offers when the platform has data lakes disabled', async () => {
+    await expect(
+      shouldOfferDataLakeTools({
+        message: 'save this to my data lake',
+        priorToolNames: [],
+        dataLakesEnabled: () => Promise.resolve(false),
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('skips the settings read entirely on a turn with no intent', async () => {
+    const dataLakesEnabled = vi.fn(enabled);
+    await expect(
+      shouldOfferDataLakeTools({ message: 'what is the weather', priorToolNames: ['web_search'], dataLakesEnabled })
+    ).resolves.toBe(false);
+    expect(dataLakesEnabled).not.toHaveBeenCalled();
+  });
+
+  it('names exactly the three save-to-data-lake tools', () => {
+    expect([...DATA_LAKE_TOOL_NAMES].sort()).toEqual(
+      ['create_data_lake', 'list_my_data_lakes', 'save_content_to_data_lake'].sort()
+    );
   });
 });
