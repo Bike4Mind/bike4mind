@@ -141,6 +141,7 @@ import EnsureDataLakeResearchScheduleIndex from './20260921125000_ensure-data-la
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod's for the same reason as
 // EnsureDataLakeInconsistencyScanIndex above - see that migration's docstring.
 import BackfillShareTokens from './20260921130000_backfill-share-tokens';
+import DropShareTokenScalar from './20260921140000_drop-share-token-scalar';
 import EnsureOrgGitHubLakeConnectionIndexes from './20260921235959_ensure-org-github-lake-connection-indexes';
 import EnsureOAuthGrantClientUserIndex from './20260922000000_ensure-oauthgrant-client-user-index';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
@@ -263,6 +264,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureDataLakeInconsistencyScanIndex,
   EnsureDataLakeResearchScheduleIndex,
   BackfillShareTokens,
+  DropShareTokenScalar,
   EnsureOrgGitHubLakeConnectionIndexes,
   EnsureOAuthGrantClientUserIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.

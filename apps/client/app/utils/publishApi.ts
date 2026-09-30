@@ -736,10 +736,11 @@ export function toShareTokenUrl(shareToken: string): string {
 }
 
 /** One live no-sign-in share link, as the owner's link list renders it (#3255 step 3).
- *  `id` is the handle `revokeShareLink` revokes by; it is null only for a link minted before
- *  the `shareTokens[]` backfill, which can still be revoked with `revokeShareToken`. */
+ *  `id` is the handle `revokeShareLink` revokes by. Non-nullable since #3523: it was null only
+ *  for a link minted before the `shareTokens[]` backfill, and retiring the legacy scalar
+ *  mirrored every such link into the array, so no link without an entry can exist. */
 export interface ShareLink {
-  id: string | null;
+  id: string;
   shareToken: string;
   shareUrl: string;
   createdAt: string | null;
@@ -752,6 +753,8 @@ export interface ShareTokenState {
   /** The NEWEST live link. Kept beside `shareLinks` for single-link callers. */
   shareToken: string | null;
   shareUrl: string | null;
+  /** When the newest live link was created. Still sent, but DERIVED from that link rather than
+   *  stored since #3523 - it is the same value the retired `shareTokenUpdatedAt` scalar held. */
   shareTokenUpdatedAt: string | null;
   /** Every live link with its own view count. Empty when nothing is shared. */
   shareLinks: ShareLink[];
@@ -759,7 +762,7 @@ export interface ShareTokenState {
 
 /** What every mint path returns: the link it just produced, plus the resulting list. */
 export interface MintedShareLink {
-  id: string | null;
+  id: string;
   shareToken: string;
   shareUrl: string;
   shareLinks: ShareLink[];
