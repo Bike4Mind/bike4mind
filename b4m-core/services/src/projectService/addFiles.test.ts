@@ -3,8 +3,7 @@ import { addFiles } from './addFiles';
 import { createMockProjectRepository, createMockFabFileRepository } from '../__tests__/utils/testUtils';
 import { IFabFileRepository, IProjectRepository, IUserDocument, NotFoundError, Permission } from '@bike4mind/common';
 
-// TODO: Skipped temporarily due to test failures that need fixing
-describe.skip('projectService - addFiles', () => {
+describe('projectService - addFiles', () => {
   const contributorId = 'contributor-123';
   let mockProjectRepo: IProjectRepository;
   let mockFabFileRepo: IFabFileRepository;
@@ -67,25 +66,29 @@ describe.skip('projectService - addFiles', () => {
 
     expect(result).toEqual(mockProject);
 
-    expect(mockProjectRepo.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...mockProject,
-        fileIds: expect.arrayContaining([...existingFileIds, ...fileIds]),
-        updatedAt: expect.any(Date),
-      })
-    );
+    expect(mockProjectRepo.update).toHaveBeenCalledTimes(1);
+    expect((mockProjectRepo.update as Mock).mock.calls[0][0]).toStrictEqual({
+      id: projectId,
+      fileIds: [...existingFileIds, ...fileIds],
+      updatedAt: expect.any(Date),
+    });
+    expect((mockProjectRepo.update as Mock).mock.calls[0][1]).toBeUndefined();
 
-    for (const file of mockFiles) {
-      expect(mockFabFileRepo.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ...file,
-          users: expect.arrayContaining([
-            { userId: projectOwnerId, permissions: [Permission.read], projectId },
-            { userId: contributorId, permissions: [Permission.read], projectId },
-          ]),
-        })
-      );
-    }
+    expect(mockFabFileRepo.update).toHaveBeenCalledTimes(fileIds.length);
+    fileIds.forEach((id, i) => {
+      expect((mockFabFileRepo.update as Mock).mock.calls[i][0]).toStrictEqual({
+        id,
+        users: [
+          {
+            userId: projectOwnerId,
+            permissions: [Permission.read, Permission.update],
+            projectId,
+            sessionId: undefined,
+          },
+          { userId: contributorId, permissions: [Permission.read], projectId, sessionId: undefined },
+        ],
+      });
+    });
   });
 
   it('should throw error when project is not found', async () => {

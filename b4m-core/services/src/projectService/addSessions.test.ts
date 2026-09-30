@@ -15,11 +15,15 @@ import {
   IFabFileRepository,
 } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
-import * as addFilesModule from './addFiles';
 
-// TODO: Skipped temporarily due to test failures that need fixing
-describe.skip('projectService - addSessions', () => {
+describe('projectService - addSessions', () => {
   const userId = 'test-user-123';
+  const ownerGrant = {
+    userId,
+    permissions: [Permission.read, Permission.update],
+    projectId: 'test-project-id',
+    sessionId: undefined,
+  };
   let mockProjectRepo: IProjectRepository;
   let mockSessionRepo: ISessionRepository;
   let mockFabFileRepo: IFabFileRepository;
@@ -31,8 +35,6 @@ describe.skip('projectService - addSessions', () => {
     mockSessionRepo = createMockSessionRepository();
     mockFabFileRepo = createMockFabFileRepository();
     mockUser = createMockUser() as unknown as IUserDocument;
-
-    vi.spyOn(addFilesModule, 'addFiles').mockResolvedValue({} as any);
 
     adapters = {
       db: {
@@ -99,39 +101,35 @@ describe.skip('projectService - addSessions', () => {
       groups: [],
     }));
 
-    (mockProjectRepo.shareable.findAccessibleById as Mock).mockResolvedValueOnce(mockProject);
+    (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce(mockProject);
     (mockSessionRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValueOnce(mockSessions);
-    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue(mockFiles);
+    (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValue(mockFiles);
 
     const result = await addSessions(mockContributor, { projectId, sessionIds }, adapters);
 
     expect(result).toEqual(mockSessions);
 
-    expect(mockProjectRepo.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...mockProject,
-        sessionIds: expect.arrayContaining([...existingSessionIds, ...sessionIds]),
-        updatedAt: expect.any(Date),
-      })
-    );
+    expect(mockProjectRepo.update).toHaveBeenCalledTimes(1);
+    expect((mockProjectRepo.update as Mock).mock.calls[0][0]).toStrictEqual({
+      id: projectId,
+      sessionIds: [...existingSessionIds, ...sessionIds],
+      fileIds: knowledgeFileIds,
+      updatedAt: expect.any(Date),
+    });
+    expect((mockProjectRepo.update as Mock).mock.calls[0][1]).toBeUndefined();
 
-    for (const session of mockSessions) {
-      expect(mockSessionRepo.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ...session,
-          users: expect.arrayContaining([
-            { userId: projectOwnerId, permissions: [Permission.read], projectId },
-            { userId: contributorId, permissions: [Permission.read], projectId },
-          ]),
-        })
-      );
-    }
-
-    expect(addFilesModule.addFiles).toHaveBeenCalledWith(
-      mockContributor,
-      { projectId: projectId, fileIds: knowledgeFileIds },
-      adapters
-    );
+    const sharedUsers = [
+      { userId: projectOwnerId, permissions: [Permission.read, Permission.update], projectId, sessionId: undefined },
+      { userId: contributorId, permissions: [Permission.read], projectId, sessionId: undefined },
+    ];
+    expect(mockSessionRepo.update).toHaveBeenCalledTimes(sessionIds.length);
+    sessionIds.forEach((id, i) => {
+      expect((mockSessionRepo.update as Mock).mock.calls[i][0]).toStrictEqual({ id, users: sharedUsers });
+    });
+    expect(mockFabFileRepo.update).toHaveBeenCalledTimes(sessionIds.length * knowledgeFileIds.length);
+    (mockFabFileRepo.update as Mock).mock.calls.forEach(([partial], i) => {
+      expect(partial).toStrictEqual({ id: knowledgeFileIds[i % knowledgeFileIds.length], users: sharedUsers });
+    });
   });
 
   it('should add sessions to a project and share with project owner', async () => {
@@ -176,31 +174,28 @@ describe.skip('projectService - addSessions', () => {
       groups: [],
     }));
 
-    (mockProjectRepo.shareable.findAccessibleById as Mock).mockResolvedValueOnce(mockProject);
+    (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce(mockProject);
     (mockSessionRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValueOnce(mockSessions);
 
     const result = await addSessions(mockContributor, { projectId, sessionIds }, adapters);
 
     expect(result).toEqual(mockSessions);
-    expect(mockProjectRepo.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...mockProject,
-        sessionIds: expect.arrayContaining([...existingSessionIds, ...sessionIds]),
-        updatedAt: expect.any(Date),
-      })
-    );
+    expect(mockProjectRepo.update).toHaveBeenCalledTimes(1);
+    expect((mockProjectRepo.update as Mock).mock.calls[0][0]).toStrictEqual({
+      id: projectId,
+      sessionIds: [...existingSessionIds, ...sessionIds],
+      fileIds: [],
+      updatedAt: expect.any(Date),
+    });
 
-    for (const session of mockSessions) {
-      expect(mockSessionRepo.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ...session,
-          users: expect.arrayContaining([
-            { userId: projectOwnerId, permissions: [Permission.read], projectId },
-            { userId: contributorId, permissions: [Permission.read], projectId },
-          ]),
-        })
-      );
-    }
+    const sharedUsers = [
+      { userId: projectOwnerId, permissions: [Permission.read, Permission.update], projectId, sessionId: undefined },
+      { userId: contributorId, permissions: [Permission.read], projectId, sessionId: undefined },
+    ];
+    expect(mockSessionRepo.update).toHaveBeenCalledTimes(sessionIds.length);
+    sessionIds.forEach((id, i) => {
+      expect((mockSessionRepo.update as Mock).mock.calls[i][0]).toStrictEqual({ id, users: sharedUsers });
+    });
   });
 
   it('should add sessions to a project successfully', async () => {
@@ -238,7 +233,7 @@ describe.skip('projectService - addSessions', () => {
       groups: [],
     }));
 
-    (mockProjectRepo.shareable.findAccessibleById as Mock).mockResolvedValueOnce(mockProject);
+    (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce(mockProject);
     (mockSessionRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValueOnce(mockSessions);
     (mockProjectRepo.update as Mock).mockResolvedValueOnce({
       ...mockProject,
@@ -249,24 +244,33 @@ describe.skip('projectService - addSessions', () => {
     const result = await addSessions(mockUser, { projectId, sessionIds }, adapters);
 
     expect(result).toEqual(mockSessions);
-    expect(mockProjectRepo.shareable.findAccessibleById).toHaveBeenCalledWith(mockUser, projectId);
+    expect(mockProjectRepo.shareable.findUpdateAccessById).toHaveBeenCalledWith(mockUser, projectId);
     expect(mockSessionRepo.shareable.findAllAccessibleByIds).toHaveBeenCalledWith(mockUser, sessionIds);
-    expect(mockProjectRepo.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...mockProject,
-        sessionIds: expect.arrayContaining([...existingSessionIds, ...sessionIds]),
-        updatedAt: expect.any(Date),
-      })
-    );
+    expect((mockProjectRepo.update as Mock).mock.calls[0][0]).toStrictEqual({
+      id: projectId,
+      sessionIds: [...existingSessionIds, ...sessionIds],
+      fileIds: [],
+      updatedAt: expect.any(Date),
+    });
+    // mockUser is not the project owner, so only the owner is granted.
+    sessionIds.forEach((id, i) => {
+      expect((mockSessionRepo.update as Mock).mock.calls[i][0]).toStrictEqual({ id, users: [ownerGrant] });
+    });
   });
 
   it('should throw NotFoundError when sessions are not found', async () => {
     const projectId = 'test-project-id';
     const sessionIds = ['session-1', 'session-2'];
+    (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce({
+      id: projectId,
+      userId,
+      sessionIds: [],
+      fileIds: [],
+      users: [],
+    });
     (mockSessionRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValueOnce([]);
 
     await expect(addSessions(mockUser, { projectId, sessionIds }, adapters)).rejects.toThrow(NotFoundError);
-    expect(mockProjectRepo.shareable.findAccessibleById).not.toHaveBeenCalled();
     expect(mockProjectRepo.update).not.toHaveBeenCalled();
   });
 
@@ -284,7 +288,7 @@ describe.skip('projectService - addSessions', () => {
     ];
 
     (mockSessionRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValueOnce(mockSessions);
-    (mockProjectRepo.shareable.findAccessibleById as Mock).mockResolvedValueOnce(null);
+    (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce(null);
 
     await expect(addSessions(mockUser, { projectId, sessionIds }, adapters)).rejects.toThrow(NotFoundError);
     expect(mockProjectRepo.update).not.toHaveBeenCalled();
@@ -298,7 +302,7 @@ describe.skip('projectService - addSessions', () => {
 
     await expect(addSessions(mockUser, invalidParams, adapters)).rejects.toThrow();
     expect(mockSessionRepo.shareable.findAllAccessibleByIds).not.toHaveBeenCalled();
-    expect(mockProjectRepo.shareable.findAccessibleById).not.toHaveBeenCalled();
+    expect(mockProjectRepo.shareable.findUpdateAccessById).not.toHaveBeenCalled();
     expect(mockProjectRepo.update).not.toHaveBeenCalled();
   });
 
@@ -346,14 +350,24 @@ describe.skip('projectService - addSessions', () => {
       users: [],
     }));
 
-    (mockProjectRepo.shareable.findAccessibleById as Mock).mockResolvedValue(mockProject);
+    (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValue(mockProject);
     (mockSessionRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValue(mockSessions);
     (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValue(mockFiles);
 
     const result = await addSessions(mockUser, { projectId, sessionIds }, adapters);
 
     expect(result).toEqual(mockSessions);
-    expect(addFilesModule.addFiles).toHaveBeenCalledWith(mockUser, { projectId, fileIds: knowledgeFileIds }, adapters);
+    expect((mockProjectRepo.update as Mock).mock.calls[0][0]).toStrictEqual({
+      id: projectId,
+      sessionIds: sessionIds,
+      fileIds: knowledgeFileIds,
+      updatedAt: expect.any(Date),
+    });
+    expect((mockSessionRepo.update as Mock).mock.calls[0][0]).toStrictEqual({ id: sessionIds[0], users: [ownerGrant] });
+    expect(mockFabFileRepo.update).toHaveBeenCalledTimes(knowledgeFileIds.length);
+    knowledgeFileIds.forEach((id, i) => {
+      expect((mockFabFileRepo.update as Mock).mock.calls[i][0]).toStrictEqual({ id, users: [ownerGrant] });
+    });
   });
 
   afterEach(() => {
