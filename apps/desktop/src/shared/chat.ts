@@ -641,7 +641,7 @@ export type ChatStreamEvent =
   | { type: 'tool-start'; sessionId: string; messageId: string; call: ChatToolCall }
   | { type: 'tool-end'; sessionId: string; messageId: string; call: ChatToolCall }
   | { type: 'tool-progress'; sessionId: string; messageId: string; callId: string; text: string }
-  /** Readable reasoning, streamed ahead of the round's prose; see ChatReplyRound.reasoning. */
+  /** Readable reasoning, streamed ahead of the round's prose. Stored, not drawn; see ChatReplyRound.reasoning. */
   | { type: 'reasoning'; sessionId: string; messageId: string; text: string }
   /**
    * The turn's cost so far, emitted after each tool round trip completes and once more with
@@ -962,8 +962,12 @@ export interface ChatReplyRound {
   /** Epoch ms, display and diagnosis only; absent on rounds stored before timing was kept. */
   timing?: ChatRoundTiming;
   /**
-   * The model's readable reasoning before this round's prose, drawn collapsed above it. Display
-   * only: what is replayed to the provider is the message's opaque `thinking`, never this.
+   * The model's readable reasoning before this round's prose. Captured and stored, but NOT
+   * drawn: the transcript deliberately shows no thinking rows. Kept because sessions already on
+   * disk carry it and it is the only readable record of how a turn got there.
+   *
+   * Never the replay channel either: what goes back to the provider is the message's opaque
+   * `thinking`, never this. Nothing reads this field today.
    */
   reasoning?: string;
 }
