@@ -10,9 +10,8 @@ import {
 } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 
-vi.mock('@server/utils/cloudwatch', () => {
-  throw new Error('Local sweep must not load CloudWatch');
-});
+const { emitMetric } = vi.hoisted(() => ({ emitMetric: vi.fn() }));
+vi.mock('@server/utils/cloudwatch', () => ({ emitMetric }));
 import { runLakeInconsistencySweep } from './lakeInconsistencySweep';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -46,7 +45,7 @@ async function seedLake(slug: string, status = 'active') {
   return { id: String(lake._id), ids };
 }
 beforeAll(async () => {
-  server = await createMongoServer({ instance: { launchTimeout: MONGO_TEST_TIMEOUT_MS } });
+  server = await createMongoServer();
   await mongoose.connect(server.getUri());
   await DataLakeFindingModel.init();
 });
@@ -60,6 +59,7 @@ beforeEach(async () => {
   vi.setSystemTime(firstAt);
 });
 afterEach(() => {
+  expect(emitMetric).not.toHaveBeenCalled();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });

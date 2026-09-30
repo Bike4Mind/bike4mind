@@ -55,6 +55,8 @@ import { toScanSummary, type IDataLakeDocument } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
+import { emitMetric } from '@server/utils/cloudwatch';
+import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { Resource } from 'sst';
 
 const logger = new Logger({ metadata: { service: 'lakeInconsistencySweep' } });
@@ -171,14 +173,11 @@ async function scanLake(lake: SweepLake, nowYear: number, computedAt: Date): Pro
 }
 
 export async function handler() {
-  const [{ emitMetric }, { StandardUnit }] = await Promise.all([
-    import('@server/utils/cloudwatch'),
-    import('@aws-sdk/client-cloudwatch'),
-  ]);
   const stage = Resource.App.stage;
   const recordMetric = (name: string, value: number) =>
     emitMetric(CLOUDWATCH_NAMESPACE, name, value, { Stage: stage }, StandardUnit.Count);
   logger.info('[LakeInconsistencySweep] Starting sweep', { stage });
+  // Report a run even when the database connection fails, so failure differs from never being scheduled.
   await recordMetric('LakeInconsistencySweepRuns', 1);
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage));
   return runLakeInconsistencySweep({ recordMetric });
