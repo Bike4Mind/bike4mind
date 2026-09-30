@@ -31,7 +31,7 @@ const migration: MigrationFile = {
     await OAuthGrantModel.collection
       .dropIndex('userId_1_revokedAt_1_createdAt_-1')
       .catch((err: { codeName?: string }) => {
-        if (err?.codeName !== 'IndexNotFound') throw err;
+        if (err?.codeName !== 'IndexNotFound' && err?.codeName !== 'NamespaceNotFound') throw err;
       });
     await OAuthGrantModel.createIndexes();
   },
