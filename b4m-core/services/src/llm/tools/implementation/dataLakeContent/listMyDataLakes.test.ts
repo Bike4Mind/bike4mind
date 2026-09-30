@@ -76,6 +76,15 @@ describe('list_my_data_lakes', () => {
     expect(result).not.toContain('Archived');
   });
 
+  it('hides a lake whose projection carries no canManage', async () => {
+    listDataLakesMock.mockResolvedValue([lake({ canManage: undefined })]);
+
+    const result = await run(makeContext());
+
+    expect(result).toContain('create_data_lake');
+    expect(result).not.toContain('Research');
+  });
+
   it('restricts a platform admin to lakes they own', async () => {
     listDataLakesMock.mockResolvedValue([
       lake({ id: 'mine', name: 'Mine' }),

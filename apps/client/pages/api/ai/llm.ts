@@ -61,6 +61,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       });
     }
 
+    // Validated here, beside systemPrompt, so a malformed value is rejected before any session or lastNotebookId write. invoke()'s own parse would 422 it too, but only after those side effects.
+    const requestedDenials: unknown = req.body.deniedTools;
+    if (requestedDenials !== undefined && !isStringArray(requestedDenials)) {
+      throw new UnprocessableEntityError('deniedTools must be an array of strings.', {
+        code: 'DENIED_TOOLS_INVALID',
+      });
+    }
+
     const { session, sessionId, asyncPromises } = await getOrCreateSession({
       sessionId: req.body.sessionId,
       sessionName: req.body.sessionName,
@@ -108,16 +116,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // null = personal account, undefined = fall back to the caller's own org.
     const effectiveOrgId = await resolveBillingOrgId(req, invokeParams.organizationId);
 
-    // Validated explicitly (as systemPrompt is above), not left for ChatCompletionInvokeParamsSchema
-    // to 422 downstream: that schema also accepts this field directly from the client, so leaving a
-    // malformed value in place until then means the server-derived denials below are skipped on
-    // exactly the request that most needs them enforced.
-    const requestedDenials: unknown = invokeParams.deniedTools;
-    if (requestedDenials !== undefined && !isStringArray(requestedDenials)) {
-      throw new UnprocessableEntityError('deniedTools must be an array of strings.', {
-        code: 'DENIED_TOOLS_INVALID',
-      });
-    }
     // Unioned and placed after the spread, so a client value can only ADD denials; the key's own
     // scope gaps always win.
     const deniedTools = [...(isStringArray(requestedDenials) ? requestedDenials : []), ...dataLakeToolsDeniedFor(req)];

@@ -10,9 +10,11 @@ export const DATA_LAKES_DISABLED_MESSAGE =
   'Data lakes are not enabled on this platform, so nothing can be saved to one. Tell the user so.';
 
 /**
- * Whether the assistant may save into a lake - the one rule list_my_data_lakes offers by and
- * save_content_to_data_lake accepts by, so the list can never under-report relative to save. A
- * platform admin manages every lake on the platform; the assistant narrows them to lakes they own
+ * The ownership/admin half of whether the assistant may save into a lake, shared by
+ * list_my_data_lakes and save_content_to_data_lake. The fallback-lake and LAKE_ATTACHABLE_STATUSES
+ * gates are applied separately at each site (listMyDataLakes.ts filter; saveContentToDataLake.ts
+ * assertLakeWritable + status check) and must stay in sync, or the list can offer a lake save
+ * refuses. A platform admin manages every lake on the platform; the assistant narrows them to lakes they own
  * rather than writing platform-wide on their behalf.
  */
 export function isAssistantWriteTarget(lake: { canManage: boolean; isOwn: boolean }, isAdmin: boolean): boolean {

@@ -254,10 +254,7 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       ]);
     });
 
-    // Rejected at the route (mirroring the systemPrompt check above), not left for
-    // ChatCompletionInvokeParamsSchema to 422 downstream - that schema also accepts deniedTools
-    // directly from the client, so a malformed value reaching it would mean the server-derived
-    // denials were silently skipped on exactly the request that most needs them enforced.
+    // Rejected at the route, beside the systemPrompt check, before a session is created or a completion dispatched.
     it('rejects a non-array deniedTools with a 422 before dispatching any completion', async () => {
       validateWithScopes([ApiKeyScope.AI_CHAT]);
       const { req, res } = fire({ body: { deniedTools: 5 } });
@@ -265,6 +262,17 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       expect(res._getStatusCode()).toBe(422);
       expect(res._getJSONData().code).toBe('DENIED_TOOLS_INVALID');
       expect(mockInvoke).not.toHaveBeenCalled();
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    });
+
+    it('rejects a deniedTools array with a non-string element', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { deniedTools: ['ok', 1] } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(res._getJSONData().code).toBe('DENIED_TOOLS_INVALID');
+      expect(mockInvoke).not.toHaveBeenCalled();
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
     });
 
     it('denies nothing to a key that holds datalake:write', async () => {
