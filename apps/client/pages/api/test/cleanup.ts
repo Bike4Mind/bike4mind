@@ -21,6 +21,8 @@ import {
   Agent,
   Project,
   Organization,
+  DataLakeModel,
+  DataLakeAccessGrantModel,
 } from '@bike4mind/database';
 import mongoose from 'mongoose';
 import {
@@ -98,6 +100,14 @@ const handler = baseApi({ auth: false }).delete(
 
     const sessions = await Session.find({ userId: { $in: userIds } }, { _id: 1 }).lean();
     const sessionIds = sessions.map(s => s._id);
+    const sessionIdStrings = sessions.map(s => s._id.toString());
+
+    // Lakes the swept users own. `createdByUserId` (and `dataLakeId` on the grants) is a String
+    // field, like nearly every other user reference; the grants are reclaimed alongside the lakes
+    const ownedLakes = await DataLakeModel.collection
+      .find({ createdByUserId: { $in: userIdStrings } }, { projection: { _id: 1 } })
+      .toArray();
+    const lakeIdStrings = ownedLakes.map(l => l._id.toString());
 
     // Helper to delete and track count per collection
     const counts: Record<string, number> = {};
@@ -106,31 +116,36 @@ const handler = baseApi({ auth: false }).delete(
       counts[label] = result.deletedCount;
     }
 
-    // Hard-delete across collections using native driver to bypass soft-delete plugin
+    // Hard-delete across collections using the native driver to bypass the soft-delete plugin.
+    // The native driver does NOT cast, so each filter must carry the value type the field stores:
+    // every user reference below is a String EXCEPT Tool.userId (ObjectId) and User._id, which are
+    // the only two that take `userIds`. Passing an ObjectId to a String field matches nothing, which
+    // silently orphans the row while still deleting the user - the bug this list exists to avoid.
     await Promise.all([
       // Leaf collections (session-dependent)
-      deleteFrom('quests', Quest.collection.deleteMany({ sessionId: { $in: sessionIds } })),
+      deleteFrom('quests', Quest.collection.deleteMany({ sessionId: { $in: sessionIdStrings } })),
 
       // Leaf collections (user-dependent)
-      deleteFrom('favorites', Favorite.collection.deleteMany({ userId: { $in: userIds } })),
+      deleteFrom('favorites', Favorite.collection.deleteMany({ userId: { $in: userIdStrings } })),
       deleteFrom(
         'inbox',
-        Inbox.collection.deleteMany({ $or: [{ userId: { $in: userIds } }, { receiverId: { $in: userIds } }] })
+        Inbox.collection.deleteMany({
+          $or: [{ userId: { $in: userIdStrings } }, { receiverId: { $in: userIdStrings } }],
+        })
       ),
-      deleteFrom('activityCounters', UserActivityCounter.collection.deleteMany({ userId: { $in: userIds } })),
+      deleteFrom('activityCounters', UserActivityCounter.collection.deleteMany({ userId: { $in: userIdStrings } })),
       deleteFrom(
         'friendships',
         Friendship.collection.deleteMany({
-          $or: [{ requester: { $in: userIds } }, { recipient: { $in: userIds } }],
+          $or: [{ requester: { $in: userIdStrings } }, { recipient: { $in: userIdStrings } }],
         })
       ),
-      deleteFrom('emailPreferences', EmailPreferences.collection.deleteMany({ userId: { $in: userIds } })),
-      deleteFrom('voices', Voice.collection.deleteMany({ userId: { $in: userIds } })),
-      deleteFrom('userApiKeys', UserApiKey.collection.deleteMany({ userId: { $in: userIds } })),
-      deleteFrom('apiKeys', ApiKey.collection.deleteMany({ userId: { $in: userIds } })),
-      deleteFrom('artifacts', Artifact.collection.deleteMany({ userId: { $in: userIds } })),
+      deleteFrom('emailPreferences', EmailPreferences.collection.deleteMany({ userId: { $in: userIdStrings } })),
+      deleteFrom('voices', Voice.collection.deleteMany({ userId: { $in: userIdStrings } })),
+      deleteFrom('userApiKeys', UserApiKey.collection.deleteMany({ userId: { $in: userIdStrings } })),
+      deleteFrom('apiKeys', ApiKey.collection.deleteMany({ userId: { $in: userIdStrings } })),
+      deleteFrom('artifacts', Artifact.collection.deleteMany({ userId: { $in: userIdStrings } })),
       deleteFrom('tools', Tool.collection.deleteMany({ userId: { $in: userIds } })),
-      // RegistrationInvite stores userId/usedbyId as String, not ObjectId
       deleteFrom(
         'registrationInvites',
         RegistrationInvite.collection.deleteMany({
@@ -149,27 +164,50 @@ const handler = baseApi({ auth: false }).delete(
           ? [
               deleteFrom(
                 name.charAt(0).toLowerCase() + name.slice(1) + 's',
-                model.collection.deleteMany({ userId: { $in: userIds } })
+                model.collection.deleteMany({ userId: { $in: userIdStrings } })
               ),
             ]
           : [];
       }),
 
       // Parent collections
-      deleteFrom('files', FabFile.collection.deleteMany({ userId: { $in: userIds } })),
-      deleteFrom('agents', Agent.collection.deleteMany({ userId: { $in: userIds } })),
-      deleteFrom('projects', Project.collection.deleteMany({ userId: { $in: userIds } })),
-      deleteFrom('organizations', Organization.collection.deleteMany({ userId: { $in: userIds } })),
+      deleteFrom('files', FabFile.collection.deleteMany({ userId: { $in: userIdStrings } })),
+      deleteFrom('agents', Agent.collection.deleteMany({ userId: { $in: userIdStrings } })),
+      deleteFrom('projects', Project.collection.deleteMany({ userId: { $in: userIdStrings } })),
+      deleteFrom('organizations', Organization.collection.deleteMany({ userId: { $in: userIdStrings } })),
+
+      // Data lakes: grants held on the swept users' lakes plus grants where a swept user is the
+      // principal, then the lakes themselves.
+      deleteFrom(
+        'dataLakeAccessGrants',
+        DataLakeAccessGrantModel.collection.deleteMany({
+          $or: [{ dataLakeId: { $in: lakeIdStrings } }, { principalType: 'user', principalId: { $in: userIdStrings } }],
+        })
+      ),
+      deleteFrom('dataLakes', DataLakeModel.collection.deleteMany({ createdByUserId: { $in: userIdStrings } })),
 
       // Sessions, then users
-      deleteFrom('sessions', Session.collection.deleteMany({ userId: { $in: userIds } })),
+      deleteFrom('sessions', Session.collection.deleteMany({ userId: { $in: userIdStrings } })),
       deleteFrom('users', User.collection.deleteMany({ _id: { $in: userIds } })),
     ]);
 
     const totalDeleted = Object.values(counts).reduce((sum, n) => sum + n, 0);
 
+    // A swept user with zero child rows is either genuinely childless or the signature of a value
+    // type mismatch that deletes the user and orphans everything else. Warn so it cannot pass
+    // silently, but keep `success: true` - a brand-new account with no children is legitimate.
+    const childDeleted = Object.entries(counts)
+      .filter(([label]) => label !== 'users')
+      .reduce((sum, [, n]) => sum + n, 0);
+    const warning =
+      childDeleted === 0
+        ? 'Swept users but deleted no child rows - check cleanup filters against the schema field types'
+        : undefined;
+    if (warning) console.warn(`[e2e cleanup] ${warning}`);
+
     return res.json({
       success: true,
+      ...(warning ? { warning } : {}),
       cleaned: {
         users: userIds.length,
         staleSwept,
@@ -181,6 +219,7 @@ const handler = baseApi({ auth: false }).delete(
         quests: counts.quests || 0,
         artifacts: counts.artifacts || 0,
         registrationInvites: counts.registrationInvites || 0,
+        dataLakes: counts.dataLakes || 0,
         totalDeleted,
         byCollection: counts,
       },
