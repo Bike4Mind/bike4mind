@@ -51,6 +51,7 @@ import {
   type CompletionMessage,
 } from './completions';
 import { addUsage, foldUsage } from './streamEvents';
+import { findStaleResults, historyRounds, toolResultContent } from './contextPruning';
 import { buildExploreContext } from './explore';
 import { MediaApiClient } from './media/MediaApiClient';
 import type { MediaStore } from './media/MediaStore';
@@ -1215,6 +1216,8 @@ export class ChatService {
           this.emit({ type: 'delta', sessionId, messageId: replyId, text });
         };
 
+        await this.clearStaleResults(session, toolCalls, produced, wire, replyId);
+
         const failure = await streamRound(
           api.getAxiosInstance(),
           serverConfig.endpoint,
@@ -1316,7 +1319,7 @@ export class ChatService {
           content: settled.map(call => ({
             type: 'tool_result',
             tool_use_id: call.id,
-            content: call.error ?? call.preview ?? '',
+            content: toolResultContent(call),
             ...(call.error ? { is_error: true } : {}),
           })),
         });
@@ -1418,6 +1421,44 @@ export class ChatService {
       });
       this.emit({ type: 'error', sessionId, messageId: replyId, message });
       return 'failed';
+    }
+  }
+
+  /** Apply the stale-result batch, when one fires, to the wire and the stored calls. */
+  private async clearStaleResults(
+    session: ChatSession,
+    toolCalls: readonly ChatToolCall[],
+    produced: readonly RawRound[],
+    wire: CompletionMessage[],
+    replyId: string
+  ): Promise<void> {
+    const byId = new Map(toolCalls.map(call => [call.id, call]));
+    const rounds = [
+      ...historyRounds(session.messages),
+      ...produced.map(round => round.toolCallIds.flatMap(id => byId.get(id) ?? [])),
+    ];
+    const { clearIds, pendingChars } = findStaleResults(rounds);
+    if (clearIds.length === 0) return;
+
+    const ids = new Set(clearIds);
+    const content = new Map<string, string>();
+    for (const call of [...session.messages.flatMap(message => message.toolCalls ?? []), ...toolCalls]) {
+      if (!ids.has(call.id)) continue;
+      call.cleared = true;
+      content.set(call.id, toolResultContent(call));
+    }
+    replaceToolResults(wire, content);
+    this.deps.logger.debug(`CHAT: cleared ${ids.size} stale tool results (${pendingChars} chars)`);
+
+    // The reply in flight is stored whole when it settles; earlier replies are written now so a
+    // later turn, or a reopened session, rebuilds this same wire.
+    for (const message of session.messages) {
+      if (message.id === replyId || !message.toolCalls?.some(call => ids.has(call.id))) continue;
+      try {
+        await this.deps.store.updateMessage(session.id, message.id, { toolCalls: message.toolCalls });
+      } catch (err) {
+        this.deps.logger.warn(`CHAT: could not store cleared tool results: ${String(err)}`);
+      }
     }
   }
 
@@ -2375,6 +2416,8 @@ function buildSystemMessage(
       'symbol with grep_search, then read only the lines around it with file_read offset and limit.',
       'Tool calls made together in one reply run in parallel, so batch independent searches and',
       'reads into one reply instead of one per turn, and do not re-read lines you already have.',
+      'An older file_read result may show as a [stale: ...] placeholder once the file changed or',
+      'was re-read later; read it again if you still need it.',
       'For open-ended exploration across many files, call explore instead - a faster read-only',
       'sub-agent that returns a report - several in parallel for separate questions. Say what you',
       'mean to build so its report ends with the edit points. When you already know the file or',
@@ -2614,6 +2657,19 @@ function describeChildOutcome(child: ChatSession): string {
 
 export { addUsage };
 
+/** Swap the content of the tool_result blocks named in `content`, in place. */
+function replaceToolResults(wire: CompletionMessage[], content: ReadonlyMap<string, string>): void {
+  for (const message of wire) {
+    if (!Array.isArray(message.content)) continue;
+    message.content = message.content.map(block => {
+      const result = block as { type?: string; tool_use_id?: string };
+      const replacement =
+        result.type === 'tool_result' && result.tool_use_id ? content.get(result.tool_use_id) : undefined;
+      return replacement === undefined ? block : { ...result, content: replacement };
+    });
+  }
+}
+
 /** Tool arguments arrive as a raw JSON string; a malformed one becomes an empty object. */
 function parseArguments(raw: string | undefined): Record<string, unknown> {
   if (!raw) return {};
@@ -2671,7 +2727,7 @@ async function toCompletionMessages(
       content: calls.map(call => ({
         type: 'tool_result',
         tool_use_id: call.id,
-        content: call.error ?? call.preview ?? '',
+        content: toolResultContent(call),
         ...(call.error ? { is_error: true } : {}),
       })),
     });
