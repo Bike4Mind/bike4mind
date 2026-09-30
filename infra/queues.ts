@@ -855,6 +855,34 @@ const driveLakeIngestQueueSubscription = driveLakeIngestQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
+// Drive disconnect purge: deletes the files a disconnected Drive connection ingested, one bounded
+// slice per run, then releases the connection. Links fabFileBucket for the stored-object deletes and
+// its own queue because each slice re-enqueues the remainder.
+const driveDisconnectPurgeQueueDLQ = new sst.aws.Queue('driveDisconnectPurgeQueueDLQ', {});
+const driveDisconnectPurgeQueue = new sst.aws.Queue('driveDisconnectPurgeQueue', {
+  visibilityTimeout: '12 minutes', // > the 10-minute handler timeout + margin
+  dlq: {
+    queue: driveDisconnectPurgeQueueDLQ.arn,
+    retry: 3,
+  },
+});
+const driveDisconnectPurgeQueueSubscription = driveDisconnectPurgeQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/driveDisconnectPurge.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, fabFileBucket, driveDisconnectPurgeQueue],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
 // What's New Highlights Queue
 // Generates weekly highlights summary from What's New modals and posts to Slack
 const whatsNewHighlightsQueueDLQ = new sst.aws.Queue('whatsNewHighlightsQueueDLQ', {
@@ -1488,6 +1516,7 @@ export {
   lakeMemoryQueue,
   lakeInconsistencyModelQueue,
   driveLakeIngestQueue,
+  driveDisconnectPurgeQueue,
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
@@ -1519,6 +1548,7 @@ export {
   lakeMemoryQueueDLQ,
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueueDLQ,
+  driveDisconnectPurgeQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -1552,6 +1582,7 @@ export {
   lakeMemoryQueueSubscription,
   lakeInconsistencyModelQueueSubscription,
   driveLakeIngestQueueSubscription,
+  driveDisconnectPurgeQueueSubscription,
   liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,

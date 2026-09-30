@@ -15,6 +15,10 @@ export type LakeDriveConnection = {
   connectedAt: string | null;
   /** How many documents this connection has ingested into the lake - disconnecting deletes all of them. */
   fileCount: number;
+  /** A disconnect was accepted and its file purge is running in the background. */
+  disconnecting: boolean;
+  /** The pending purge has made no progress for DRIVE_DISCONNECT_STALL_MS, so a retry may re-queue it. */
+  disconnectStalled: boolean;
 };
 
 const lakeDriveConnectionKey = (dataLakeId?: string) => ['lake-drive-connection', dataLakeId];
@@ -68,7 +72,9 @@ export const DRIVE_CONNECTION_IDLE_POLL_MS = 20_000;
 /** Exported so the interval logic is unit-testable without mounting the query. */
 export function driveConnectionPollInterval(connection: LakeDriveConnection | null | undefined): number | false {
   if (!connection) return false;
-  return connection.status === 'syncing' ? DRIVE_CONNECTION_ACTIVE_POLL_MS : DRIVE_CONNECTION_IDLE_POLL_MS;
+  return connection.status === 'syncing' || connection.disconnecting
+    ? DRIVE_CONNECTION_ACTIVE_POLL_MS
+    : DRIVE_CONNECTION_IDLE_POLL_MS;
 }
 
 /**
@@ -77,6 +83,7 @@ export function driveConnectionPollInterval(connection: LakeDriveConnection | nu
  * genuine failure: the lake doesn't exist, or the caller lacks org owner/manager access.
  */
 export function useLakeDriveConnection(dataLakeId?: string, enabled = true) {
+  const queryClient = useQueryClient();
   return useQuery({
     queryKey: lakeDriveConnectionKey(dataLakeId),
     // `enabled` lets a caller skip a request it already knows the answer to: a lake with no
@@ -87,7 +94,14 @@ export function useLakeDriveConnection(dataLakeId?: string, enabled = true) {
       const response = await api.get<{ connection: LakeDriveConnection | null }>(
         `/api/data-lakes/${dataLakeId}/drive-connection`
       );
-      return response.data.connection;
+      const next = response.data.connection;
+      // The purge runs in the background after a disconnect, so the lake's file lists only go
+      // stale as it progresses; refresh them whenever a disconnecting read shows files removed.
+      const previous = queryClient.getQueryData<LakeDriveConnection | null>(lakeDriveConnectionKey(dataLakeId));
+      if (dataLakeId && previous?.disconnecting && (!next || next.fileCount !== previous.fileCount)) {
+        void invalidateLakeFileQueries(queryClient, dataLakeId);
+      }
+      return next;
     },
     refetchInterval: query => (enabled ? driveConnectionPollInterval(query.state.data) : false),
   });
@@ -107,11 +121,18 @@ export function useConnectDriveFolderToLake() {
   });
 }
 
+function invalidateLakeFileQueries(queryClient: ReturnType<typeof useQueryClient>, dataLakeId: string) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) }),
+    queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot }),
+  ]);
+}
+
 /**
- * Disconnect a lake's Drive folder, releasing the claim (DELETE /api/data-lakes/:id/drive-
- * connection). The route purges every FabFile the connection ingested (see drive-connection.ts),
- * so this must also invalidate the lake's own file/count queries, not just the connection status -
- * before this PR a disconnect deleted nothing, so those queries had nothing to go stale over.
+ * Disconnect a lake's Drive folder (DELETE /api/data-lakes/:id/drive-connection). The route only
+ * queues the purge of every FabFile the connection ingested; the connection then reads
+ * `disconnecting` until the background purge releases it, and useLakeDriveConnection refreshes
+ * the lake's file/count queries as that purge removes files.
  */
 export function useDisconnectLakeDrive() {
   const queryClient = useQueryClient();
@@ -122,8 +143,7 @@ export function useDisconnectLakeDrive() {
     onSuccess: async (_data, dataLakeId) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: lakeDriveConnectionKey(dataLakeId) }),
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) }),
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot }),
+        invalidateLakeFileQueries(queryClient, dataLakeId),
       ]);
     },
   });
