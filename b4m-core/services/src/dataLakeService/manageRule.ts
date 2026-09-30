@@ -160,10 +160,12 @@ function isGrantOrgContained(grant: LakeGrant, lakeOrg: string | undefined): boo
  * commit in between. The rule, rather than a list that drifts: a manage write is serialized against
  * a revoke ONLY when it writes the lake DOCUMENT inside `withTransaction` with its gate inside the
  * callback (see the SERIALIZATION note on `grantLakeAccess`). Today that is the grants door, the lake
- * PUT, visibility, promote and demote. Every other manage-gated write - lifecycle cascades, file
- * membership and tags, proposals, findings, research, batches and taxonomy, rebuild queues - is gated
- * once per request, and a revoke committing after that gate does not abort it. For the lifecycle
- * claims that is deliberate: re-checking after the claim would strand the lake mid-status.
+ * PUT, visibility, promote, demote and the cleanup claim (its sweep runs later and re-gates). Every
+ * other manage-gated write - the archive/unarchive/delete/restore cascades, file membership and tags,
+ * proposals, findings, research, batches and taxonomy, rebuild queues - is gated once per request,
+ * and a revoke committing after that gate does not abort it. For the cascades that is deliberate:
+ * each runs its claim and sweep in one call, so a transaction would span the whole sweep, and
+ * re-checking after the claim would strand the lake mid-status.
  *
  * Two kinds of access loss collide with nothing, even against the serialized writes: a departure lapse
  * (`lapseDepartedMemberLakeAccess` phase 1 expires the member's grant rows without writing the lake

@@ -109,7 +109,7 @@ function assertManageableLake(lake: IDataLakeDocument, actor: ManageActor, grant
  * SERIALIZATION against every other manage write on the same lake. A real grant change also writes
  * the lake DOCUMENT (the actor stamp), and the route runs the gate and this door inside
  * `withTransaction`, gate inside the callback. So a curator's revoke and a concurrent manage write
- * by that curator (another grant, PUT, visibility, promote/demote - which all write the lake doc) touch a
+ * by that curator (another grant, PUT, visibility, promote/demote, cleanup - which all write the lake doc) touch a
  * common document, Mongo aborts whichever commits second, and its retry re-reads the grants. Same
  * shape as `lapseDepartedMemberLakeAccess` vs `transferLakeOwnership`. Holds only while the actor is
  * attributable (`lakeConfigWriteStamp` returns `{}` for a blank id); the sole caller is a route

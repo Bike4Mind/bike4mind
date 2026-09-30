@@ -205,15 +205,19 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
         // would leave the accept window this fixes wide open (#1744) - the sweep can finish before
         // the status ever moves. Throws on a lost claim, which is the correct refusal: the checks
         // above ran against a document read moments earlier, and a restore or a second purge can
-        // land in that gap.
-        await dataLakeService.acceptDataLakePurge(actor, lake.id, {
-          db: {
-            dataLakes: dataLakeRepository,
-            dataLakeAccessGrants: dataLakeAccessGrantRepository,
-            ...lakeConfigAuditDb,
-          },
-          logger: req.logger,
-        });
+        // land in that gap. Transactional like promote, so a grant revoke committing mid-request
+        // collides on the lake doc and the service's own gate re-runs on retry; the enqueue stays
+        // outside, after the commit, so a retried claim never sends a second message.
+        await withTransaction(() =>
+          dataLakeService.acceptDataLakePurge(actor, lake.id, {
+            db: {
+              dataLakes: dataLakeRepository,
+              dataLakeAccessGrants: dataLakeAccessGrantRepository,
+              ...lakeConfigAuditDb,
+            },
+            logger: req.logger,
+          })
+        );
         try {
           await sendToQueue(getSourceQueueUrl('dataLakeCleanupQueue'), { dataLakeId: lake.id, actor });
         } catch (err) {

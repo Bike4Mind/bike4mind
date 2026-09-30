@@ -28,8 +28,8 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
  * Proves a curator's in-flight manage write cannot commit against a grant snapshot that a
  * concurrent revoke has already superseded (see the SERIALIZATION note on `grantLakeAccess`).
  *
- * Each case pauses the manage write right after its gate read the grants, commits a revoke of the
- * curator, then lets the write continue. Both sides write the lake document inside a transaction,
+ * Each race case pauses the manage write right after its gate read the grants, commits a revoke of
+ * the curator, then lets the write continue. Both sides write the lake document inside a transaction,
  * so Mongo aborts the manage write and the retry must refuse the curator. Ordering is by latch,
  * never by timing. Needs a real replica set (a standalone mongod rejects writes in a session), and
  * consumes the built dist, so `pnpm turbo:core:build` must be current.
@@ -68,7 +68,7 @@ const ctxFor = (userId: string): AccessContext => ({
   entitlementKeys: [],
 });
 
-const seed = async (status: 'draft' | 'active') => {
+const seed = async (status: 'draft' | 'active' | 'deleted') => {
   const s = suffix();
   const [owner, curator, reader] = await Promise.all(
     ['owner', 'curator', 'reader'].map(name =>
@@ -213,6 +213,35 @@ describe('lake manage writes vs a concurrent grant revoke (replica set)', () => 
     expect(String(await outcome)).toMatch(/You do not have permission to update this data lake/);
     expect(attempts).toBeGreaterThanOrEqual(2);
     expect((await dataLakeRepository.findById(lake.id))?.description).toBeUndefined();
+  });
+
+  it('aborts a curator cleanup claim whose grant was revoked mid-request, leaving the lake deleted', async () => {
+    const { owner, curator, lake } = await seed('deleted');
+    const { repo, atGate, release } = pausingGrants();
+    let attempts = 0;
+
+    const purge = withTransaction(async () => {
+      attempts++;
+      return dataLakeService.acceptDataLakePurge(ctxFor(curator.id), lake.id, {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: repo,
+          lakeConfigChangeEvents: lakeConfigChangeEventRepository,
+        },
+      });
+    });
+    const outcome = purge.then(
+      () => null,
+      (e: unknown) => e
+    );
+
+    await atGate;
+    await expect(revokeAsOwner(owner, lake.id, curator.id)).resolves.toEqual({ revoked: true });
+    release();
+
+    expect(String(await outcome)).toMatch(/You do not have permission to clean up this data lake/);
+    expect(attempts).toBeGreaterThanOrEqual(2);
+    expect((await dataLakeRepository.findById(lake.id))?.status).toBe('deleted');
   });
 
   it('aborts a curator grant whose own grant was revoked mid-request, leaving no row for the grantee', async () => {

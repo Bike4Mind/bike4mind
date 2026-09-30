@@ -387,7 +387,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - db.users wiring (delete/restore/
   });
 });
 
-describe('POST /api/data-lakes/[id]/lifecycle - transaction scope (promote/demote)', () => {
+describe('POST /api/data-lakes/[id]/lifecycle - transaction scope (promote/demote/cleanup)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.inTransaction.length = 0;
@@ -410,6 +410,16 @@ describe('POST /api/data-lakes/[id]/lifecycle - transaction scope (promote/demot
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
 
     expect(h.inTransaction).toEqual(['enter', 'service', 'exit']);
+  });
+
+  it('cleanup claims the purge inside a transaction and enqueues only after it commits', async () => {
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.acceptDataLakePurge.mockImplementation(async () => void h.inTransaction.push('claim'));
+    h.sendToQueue.mockImplementation(async () => void h.inTransaction.push('enqueue'));
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res);
+
+    expect(h.inTransaction).toEqual(['enter', 'claim', 'exit', 'enqueue']);
   });
 
   it('leaves the long cascades (archive) outside a transaction', async () => {
