@@ -359,6 +359,7 @@ const HelpVideo: React.FC<{ src?: string; label?: string; isAdmin?: boolean }> =
 
   // Only the demo near the viewport plays; the rest pause instead of all looping at once.
   // playableSrc is a dependency because an admin clip mounts srcless until its blob resolves.
+  // inView is not: it only flips together with visible, so visible already covers the mount.
   useEffect(() => {
     if (!canObserve) return;
     const video = videoRef.current;
@@ -368,7 +369,7 @@ const HelpVideo: React.FC<{ src?: string; label?: string; isAdmin?: boolean }> =
     } else {
       video.pause();
     }
-  }, [canObserve, visible, inView, playableSrc]);
+  }, [canObserve, visible, playableSrc]);
 
   return (
     <span ref={containerRef} style={{ display: 'block' }} data-testid="help-video-container">
