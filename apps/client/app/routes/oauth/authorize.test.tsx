@@ -11,8 +11,13 @@ let searchParams: Record<string, string | undefined>;
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mockNavigate,
   useSearch: () => searchParams,
-  Link: ({ children, ...props }: { children: React.ReactNode; [key: string]: unknown }) => (
-    <a {...(props as React.AnchorHTMLAttributes<HTMLAnchorElement>)}>{children}</a>
+  Link: ({ children, search, ...props }: { children: React.ReactNode; search?: unknown; [key: string]: unknown }) => (
+    <a
+      {...(props as React.AnchorHTMLAttributes<HTMLAnchorElement>)}
+      data-search={search !== undefined ? JSON.stringify(search) : undefined}
+    >
+      {children}
+    </a>
   ),
 }));
 
@@ -142,6 +147,7 @@ describe('OAuthAuthorizePage consent screen', () => {
     const hint = screen.getByTestId('oauth-consent-revoke-hint-link');
     expect(hint).toBeInTheDocument();
     expect(hint).toHaveAttribute('to', '/profile');
+    expect(hint).toHaveAttribute('data-search', JSON.stringify({ tab: 'settings', section: 'security' }));
   });
 
   it('shows a plain-language label with the raw scope id kept beside it', async () => {

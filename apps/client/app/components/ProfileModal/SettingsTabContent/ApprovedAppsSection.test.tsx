@@ -2,6 +2,8 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes';
 
 const mockUseOAuthGrants = vi.fn();
 const mockMutate = vi.fn();
@@ -29,6 +31,10 @@ vi.mock('@client/app/routes/oauth/consentScopes', () => ({
 
 import ApprovedAppsSection from './ApprovedAppsSection';
 
+const appTheme = extendTheme({ ...getThemeConfig() });
+const renderWithTheme = (ui: React.ReactElement) =>
+  render(<CssVarsProvider theme={appTheme}>{ui}</CssVarsProvider>);
+
 const GRANT_A = {
   clientId: 'client-a',
   clientName: 'TestApp',
@@ -45,33 +51,41 @@ const GRANT_B = {
 
 describe('ApprovedAppsSection', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockUseRevokeOAuthGrant.mockReturnValue({ mutate: mockMutate });
     mockUseAccessToken.mockReturnValue(false);
   });
 
   it('shows empty state when there are no grants', () => {
     mockUseOAuthGrants.mockReturnValue({ data: [], isLoading: false, isError: false });
-    render(<ApprovedAppsSection />);
+    renderWithTheme(<ApprovedAppsSection />);
     expect(screen.getByTestId('approved-apps-empty')).toBeTruthy();
   });
 
   it('shows loading text while fetching', () => {
     mockUseOAuthGrants.mockReturnValue({ data: undefined, isLoading: true, isError: false });
-    render(<ApprovedAppsSection />);
+    renderWithTheme(<ApprovedAppsSection />);
     expect(screen.getByText('Loading...')).toBeTruthy();
   });
 
-  it('shows an error state when the fetch fails', () => {
+  it('shows an error state when the first fetch fails', () => {
     mockUseOAuthGrants.mockReturnValue({ data: undefined, isLoading: false, isError: true });
-    render(<ApprovedAppsSection />);
+    renderWithTheme(<ApprovedAppsSection />);
     expect(screen.getByTestId('approved-apps-error')).toBeTruthy();
     expect(screen.queryByTestId('approved-apps-empty')).toBeNull();
   });
 
+  it('keeps showing a valid cached list when a background refetch fails', () => {
+    // isError=true but grants is the stale cached value -- error branch must not replace the list
+    mockUseOAuthGrants.mockReturnValue({ data: [GRANT_A], isLoading: false, isError: true });
+    renderWithTheme(<ApprovedAppsSection />);
+    expect(screen.queryByTestId('approved-apps-error')).toBeNull();
+    expect(screen.getByText('TestApp')).toBeTruthy();
+  });
+
   it('renders a row for each grant with name, scope chips, and revoke button', () => {
     mockUseOAuthGrants.mockReturnValue({ data: [GRANT_A, GRANT_B], isLoading: false, isError: false });
-    render(<ApprovedAppsSection />);
+    renderWithTheme(<ApprovedAppsSection />);
     expect(screen.getByText('TestApp')).toBeTruthy();
     expect(screen.getByText('AnotherApp')).toBeTruthy();
     // scope chips
@@ -83,7 +97,7 @@ describe('ApprovedAppsSection', () => {
 
   it('calls revoke mutation with the correct clientId and all lifecycle callbacks', () => {
     mockUseOAuthGrants.mockReturnValue({ data: [GRANT_A], isLoading: false, isError: false });
-    render(<ApprovedAppsSection />);
+    renderWithTheme(<ApprovedAppsSection />);
     fireEvent.click(screen.getByTestId('approved-app-revoke-btn-client-a'));
     expect(mockMutate).toHaveBeenCalledWith(
       { clientId: 'client-a' },
@@ -102,7 +116,7 @@ describe('ApprovedAppsSection', () => {
       callbacks.onSuccess();
       callbacks.onSettled();
     });
-    render(<ApprovedAppsSection />);
+    renderWithTheme(<ApprovedAppsSection />);
     fireEvent.click(screen.getByTestId('approved-app-revoke-btn-client-a'));
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Access revoked for TestApp'));
   });
@@ -114,7 +128,7 @@ describe('ApprovedAppsSection', () => {
       callbacks.onError();
       callbacks.onSettled();
     });
-    render(<ApprovedAppsSection />);
+    renderWithTheme(<ApprovedAppsSection />);
     fireEvent.click(screen.getByTestId('approved-app-revoke-btn-client-a'));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not revoke access for TestApp'));
   });
@@ -123,7 +137,7 @@ describe('ApprovedAppsSection', () => {
     mockUseOAuthGrants.mockReturnValue({ data: [GRANT_A, GRANT_B], isLoading: false, isError: false });
     // mutate that never calls onSettled so the pending state stays
     mockMutate.mockImplementation(() => {});
-    render(<ApprovedAppsSection />);
+    renderWithTheme(<ApprovedAppsSection />);
     fireEvent.click(screen.getByTestId('approved-app-revoke-btn-client-a'));
     const btnA = screen.getByTestId('approved-app-revoke-btn-client-a');
     const btnB = screen.getByTestId('approved-app-revoke-btn-client-b');
@@ -138,7 +152,7 @@ describe('ApprovedAppsSection', () => {
       callbacks.onSuccess();
       settle = callbacks.onSettled;
     });
-    render(<ApprovedAppsSection />);
+    renderWithTheme(<ApprovedAppsSection />);
     fireEvent.click(screen.getByTestId('approved-app-revoke-btn-client-a'));
     const btn = screen.getByTestId('approved-app-revoke-btn-client-a');
     expect(btn.getAttribute('aria-busy')).toBe('true');
@@ -151,7 +165,7 @@ describe('ApprovedAppsSection', () => {
   it('hides the Revoke button while impersonating', () => {
     mockUseAccessToken.mockReturnValue(true);
     mockUseOAuthGrants.mockReturnValue({ data: [GRANT_A], isLoading: false, isError: false });
-    render(<ApprovedAppsSection />);
+    renderWithTheme(<ApprovedAppsSection />);
     expect(screen.queryByTestId('approved-app-revoke-btn-client-a')).toBeNull();
   });
 });

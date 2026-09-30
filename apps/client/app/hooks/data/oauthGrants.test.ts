@@ -69,6 +69,24 @@ describe('useRevokeOAuthGrant', () => {
     expect(mockDelete).toHaveBeenCalledWith('/api/oauth/grants/client-a%2Fwith-slash');
   });
 
+  it('exposes isError and does not invalidate the query when the request fails', async () => {
+    mockDelete.mockRejectedValue(new Error('server error'));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    function Wrapper({ children }: { children: React.ReactNode }) {
+      return React.createElement(QueryClientProvider, { client: queryClient }, children);
+    }
+
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(() => useRevokeOAuthGrant(), { wrapper: Wrapper });
+
+    await act(async () => {
+      result.current.mutate({ clientId: 'client-a' });
+    });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
   it('invalidates the oauth-grants query on success', async () => {
     mockDelete.mockResolvedValue({ data: { revoked: true, clientId: 'client-a' } });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

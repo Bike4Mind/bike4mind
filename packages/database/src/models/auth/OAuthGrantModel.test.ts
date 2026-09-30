@@ -91,6 +91,26 @@ describe('OAuthGrantModel repository', () => {
     expect(active[0].clientId).toBe('c6b');
   });
 
+  it('listActiveByUser returns active grants sorted by updatedAt desc (most-recently approved first)', async () => {
+    // Insert in a deliberate order; the most-recently upserted one should appear first
+    // because upsertGrant bumps updatedAt, matching the approvedAt the API returns.
+    await oauthGrantRepository.upsertGrant({ userId: 'u8', clientId: 'c8a', scopes: ['openid'], source: 'authorize' });
+    await oauthGrantRepository.upsertGrant({ userId: 'u8', clientId: 'c8b', scopes: ['email'], source: 'authorize' });
+
+    const activeAfterInitial = await oauthGrantRepository.listActiveByUser('u8');
+    // c8b was approved last so it should be first
+    expect(activeAfterInitial[0].clientId).toBe('c8b');
+    expect(activeAfterInitial[1].clientId).toBe('c8a');
+
+    // Re-approving c8a (e.g. after a revoke+re-consent) bumps its updatedAt and moves it to front
+    await oauthGrantRepository.revoke('u8', 'c8a');
+    await oauthGrantRepository.upsertGrant({ userId: 'u8', clientId: 'c8a', scopes: ['openid'], source: 'authorize' });
+
+    const activeAfterReapprove = await oauthGrantRepository.listActiveByUser('u8');
+    expect(activeAfterReapprove[0].clientId).toBe('c8a');
+    expect(activeAfterReapprove[1].clientId).toBe('c8b');
+  });
+
   it('listActiveByUser returns an empty array when the user has no active grants', async () => {
     const active = await oauthGrantRepository.listActiveByUser('u-nobody');
     expect(active).toEqual([]);

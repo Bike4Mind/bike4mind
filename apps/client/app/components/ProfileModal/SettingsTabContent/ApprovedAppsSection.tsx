@@ -52,19 +52,19 @@ const ApprovedAppsSection: React.FC = () => {
 
       {isLoading && <Typography level="body-sm">Loading...</Typography>}
 
-      {isError && !isLoading && (
+      {isError && !isLoading && !grants && (
         <Typography level="body-sm" color="danger" data-testid="approved-apps-error">
           Could not load approved apps. Please try again later.
         </Typography>
       )}
 
-      {!isLoading && !isError && (!grants || grants.length === 0) && (
+      {!isLoading && !grants?.length && !isError && (
         <Typography level="body-sm" data-testid="approved-apps-empty">
           No approved apps. Apps you authorize through the consent screen will appear here.
         </Typography>
       )}
 
-      {!isLoading && !isError && grants && grants.length > 0 && (
+      {grants && grants.length > 0 && (
         <Stack spacing={1} divider={<Divider />}>
           {grants.map(grant => {
             const scopes = toConsentScopes(grant.scopes);
