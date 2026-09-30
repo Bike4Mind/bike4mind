@@ -2,6 +2,7 @@ import { useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Button from '@mui/joy/Button';
 import FormControl from '@mui/joy/FormControl';
+import FormHelperText from '@mui/joy/FormHelperText';
 import FormLabel from '@mui/joy/FormLabel';
 import Input from '@mui/joy/Input';
 import Option from '@mui/joy/Option';
@@ -15,10 +16,21 @@ interface EnvironmentPickerProps {
   disabled?: boolean;
 }
 
+/** What the apply button switches to, phrased to match the option the Select is showing. */
+const TARGET_NAMES: Record<EnvironmentPresetId, string> = {
+  hosted: 'Production',
+  local: 'Local Dev',
+  custom: 'this URL',
+};
+
 /**
  * Endpoint picker mirroring the CLI's resolution order. Tokens are cached per normalized API
  * URL in the main process, so switching back to a backend the user already signed in to
  * restores that session rather than starting another device flow.
+ *
+ * The Select holds a pending choice while `state.environment` is the live one, so whenever the
+ * apply button is enabled those two name different servers. The live one is therefore captioned
+ * and kept on the Select rather than sitting unlabelled beside the control that replaces it.
  */
 export function EnvironmentPicker({ state, disabled }: EnvironmentPickerProps) {
   const [preset, setPreset] = useState<EnvironmentPresetId>(state.environment.preset);
@@ -27,6 +39,9 @@ export function EnvironmentPicker({ state, disabled }: EnvironmentPickerProps) {
   const [saving, setSaving] = useState(false);
 
   const unchanged = preset === state.environment.preset && (preset !== 'custom' || customUrl === state.environment.url);
+  // `unconfigured` reports a preset with an empty url, which `unchanged` reads as "nothing to
+  // do" - true, but it is not the same as being on that server, and must not be captioned so.
+  const active = state.environment.url ? state.environment : null;
 
   async function apply() {
     setSaving(true);
@@ -52,6 +67,18 @@ export function EnvironmentPicker({ state, disabled }: EnvironmentPickerProps) {
           <Option value="local">Local Dev</Option>
           <Option value="custom">Self-hosted URL</Option>
         </Select>
+        <FormHelperText data-testid="environment-active-text">
+          {active ? (
+            <span>
+              Now using {active.label} -{' '}
+              <Typography component="span" fontFamily="monospace" fontSize="inherit" textColor="inherit">
+                {active.url}
+              </Typography>
+            </span>
+          ) : (
+            'No server is set yet. Pick one and apply it.'
+          )}
+        </FormHelperText>
       </FormControl>
 
       {preset === 'custom' && (
@@ -73,7 +100,7 @@ export function EnvironmentPicker({ state, disabled }: EnvironmentPickerProps) {
         </Alert>
       )}
 
-      <Stack direction="row" spacing={1} alignItems="center">
+      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
         <Button
           size="sm"
           variant="soft"
@@ -82,11 +109,11 @@ export function EnvironmentPicker({ state, disabled }: EnvironmentPickerProps) {
           onClick={() => void apply()}
           data-testid="environment-apply-btn"
         >
-          Use this server
+          Switch to {TARGET_NAMES[preset]}
         </Button>
-        {state.environment.url && (
-          <Typography level="body-xs" fontFamily="monospace" textColor="text.tertiary">
-            {state.environment.label} - {state.environment.url}
+        {unchanged && active && (
+          <Typography level="body-xs" textColor="text.tertiary" data-testid="environment-unchanged-text">
+            Already the server in use.
           </Typography>
         )}
       </Stack>
