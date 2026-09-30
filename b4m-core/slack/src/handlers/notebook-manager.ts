@@ -39,7 +39,11 @@ function findMatchingKeywordRule(text: string, rules: IKeywordRoutingRule[]): st
  * with the user. Returns null otherwise so the caller falls through; never throws.
  */
 // any: getSlackDb() exposes the Session model untyped, as elsewhere in this file
-async function resolveAccessibleNotebookId(Session: any, notebookId: unknown, userId: string): Promise<string | null> {
+export async function resolveAccessibleNotebookId(
+  Session: any,
+  notebookId: unknown,
+  userId: string
+): Promise<string | null> {
   if (!notebookId) return null;
   const id = String(notebookId);
   if (!mongoose.Types.ObjectId.isValid(id)) return null;
