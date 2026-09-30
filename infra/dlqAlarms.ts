@@ -37,6 +37,7 @@ import {
   lakeMemoryQueueDLQ,
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueueDLQ,
+  driveDisconnectPurgeQueueDLQ,
   videoGenerationDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
@@ -328,6 +329,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'DataLakeManagement',
     sourceQueue: 'driveLakeIngestQueue',
     queue: driveLakeIngestQueueDLQ,
+  },
+  {
+    label: 'drive-disconnect-purge',
+    displayName: 'Drive Disconnect Purge',
+    application: 'DataLakeManagement',
+    sourceQueue: 'driveDisconnectPurgeQueue',
+    queue: driveDisconnectPurgeQueueDLQ,
   },
   {
     label: 'video-generation',
