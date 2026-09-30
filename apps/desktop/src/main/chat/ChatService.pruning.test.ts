@@ -114,7 +114,7 @@ describe('ChatService stale tool results', () => {
 
     // Before round 3, the round-0 reads are no longer exempt and together pass the floor.
     const round3 = messages(3);
-    const placeholder = `[stale: ${join(root, 'a.ts')} was read here; the file changed or was re-read later. Read it again if you need it.]`;
+    const placeholder = `[stale: ${join(root, 'a.ts')} was read here; the file was rewritten or re-read later. Read it again if you need it.]`;
     expect(resultFor(round3, 'r0_a.ts')).toBe(placeholder);
     expect(resultFor(round3, 'r0_b.ts')).toMatch(/^\[stale: .*b\.ts was read here;/);
     expect(resultFor(round3, 'r1_a.ts')).toMatch(/^ *1\tline 0 /);

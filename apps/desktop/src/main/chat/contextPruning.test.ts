@@ -39,6 +39,10 @@ function edit(path: string): ChatToolCall {
   return call('file_edit', { path, oldText: 'a', newText: 'b' }, 'Written.');
 }
 
+function rewrite(path: string): ChatToolCall {
+  return call('file_write', { path, content: 'b' }, 'Written.');
+}
+
 function glob(): ChatToolCall {
   return call('glob_files', { pattern: '*' }, 'a.ts');
 }
@@ -47,9 +51,15 @@ function glob(): ChatToolCall {
 const EAGER: PruningPolicy = { minChars: 0, minShare: 0, exemptRounds: 2 };
 
 describe('findStaleResults', () => {
-  it('clears a read the model later edited', () => {
+  it('keeps a read the model later changed with file_edit', () => {
     const read = wholeRead('/p/a.ts', 100);
-    const result = findStaleResults([[read], [edit('/p/a.ts')], [glob()], [glob()]], EAGER);
+    const result = findStaleResults([[read], [edit('/p/a.ts')], [edit('/p/a.ts')], [glob()], [glob()]], EAGER);
+    expect(result).toEqual({ clearIds: [], pendingChars: 0 });
+  });
+
+  it('clears a read the model later rewrote with file_write', () => {
+    const read = wholeRead('/p/a.ts', 100);
+    const result = findStaleResults([[read], [rewrite('/p/a.ts')], [glob()], [glob()]], EAGER);
     expect(result.clearIds).toEqual([read.id]);
   });
 
@@ -77,7 +87,7 @@ describe('findStaleResults', () => {
     const read = wholeRead('/p/a.ts', 100);
     const rounds = [
       [read],
-      [edit('/p/b.ts'), call('file_edit', { path: '/p/a.ts' }, '', { status: 'error', error: 'no match' })],
+      [rewrite('/p/b.ts'), call('file_edit', { path: '/p/a.ts' }, '', { status: 'error', error: 'no match' })],
       [call('file_write', { path: '/p/a.ts' }, '', { status: 'denied', error: 'declined' })],
       [glob()],
       [glob()],
@@ -89,7 +99,7 @@ describe('findStaleResults', () => {
     const failed = call('file_read', { path: '/p/a.ts' }, '', { status: 'error', error: 'ENOENT' });
     const report = call('explore', { question: 'where?' }, 'report');
     const bash = call('bash_execute', { command: 'ls' }, 'a.ts');
-    const rounds = [[failed, report, bash], [edit('/p/a.ts'), wholeRead('/p/a.ts', 10)], [glob()], [glob()]];
+    const rounds = [[failed, report, bash], [rewrite('/p/a.ts'), wholeRead('/p/a.ts', 10)], [glob()], [glob()]];
     expect(findStaleResults(rounds, EAGER).clearIds).toEqual([]);
   });
 
@@ -97,24 +107,24 @@ describe('findStaleResults', () => {
     const older = wholeRead('/p/a.ts', 100);
     const previous = wholeRead('/p/b.ts', 100);
     const current = wholeRead('/p/c.ts', 100);
-    const rounds = [[older], [previous], [current, edit('/p/a.ts'), edit('/p/b.ts'), edit('/p/c.ts')]];
+    const rounds = [[older], [previous], [current, rewrite('/p/a.ts'), rewrite('/p/b.ts'), rewrite('/p/c.ts')]];
     expect(findStaleResults(rounds, EAGER).clearIds).toEqual([older.id]);
   });
 
   it('counts only rounds that ran tools toward the exemption', () => {
     const read = wholeRead('/p/a.ts', 100);
-    expect(findStaleResults([[read], [], [edit('/p/a.ts')], []], EAGER).clearIds).toEqual([]);
+    expect(findStaleResults([[read], [], [rewrite('/p/a.ts')], []], EAGER).clearIds).toEqual([]);
   });
 
   it('matches paths after normalizing them', () => {
     const read = wholeRead('/p/src/../a.ts', 100);
-    expect(findStaleResults([[read], [edit('/p/a.ts')], [glob()], [glob()]], EAGER).clearIds).toEqual([read.id]);
+    expect(findStaleResults([[read], [rewrite('/p/a.ts')], [glob()], [glob()]], EAGER).clearIds).toEqual([read.id]);
   });
 
   describe('batching', () => {
     it('tallies stale results but clears nothing below the character floor', () => {
       const read = wholeRead('/p/a.ts', 30_000);
-      const result = findStaleResults([[read], [edit('/p/a.ts')], [glob()], [glob()]]);
+      const result = findStaleResults([[read], [rewrite('/p/a.ts')], [glob()], [glob()]]);
       expect(result.clearIds).toEqual([]);
       expect(result.pendingChars).toBe(toolResultContent(read).length);
     });
@@ -122,7 +132,7 @@ describe('findStaleResults', () => {
     it('clears every stale result at once when the tally passes the floor', () => {
       const a = wholeRead('/p/a.ts', 25_000);
       const b = wholeRead('/p/b.ts', 25_000);
-      const rounds = [[a], [b], [edit('/p/a.ts'), edit('/p/b.ts')], [glob()], [glob()]];
+      const rounds = [[a], [b], [rewrite('/p/a.ts'), rewrite('/p/b.ts')], [glob()], [glob()]];
       const result = findStaleResults(rounds);
       expect(result.clearIds).toEqual([a.id, b.id]);
       expect(result.pendingChars).toBeGreaterThanOrEqual(DEFAULT_PRUNING_POLICY.minChars);
@@ -132,7 +142,7 @@ describe('findStaleResults', () => {
       const a = wholeRead('/p/a.ts', 25_000);
       const b = wholeRead('/p/b.ts', 25_000);
       const fresh = [1, 2, 3, 4, 5].map(n => wholeRead(`/p/fresh${n}.ts`, 25_000));
-      const rounds = [[a], [b], fresh, [edit('/p/a.ts'), edit('/p/b.ts')], [glob()], [glob()]];
+      const rounds = [[a], [b], fresh, [rewrite('/p/a.ts'), rewrite('/p/b.ts')], [glob()], [glob()]];
       const result = findStaleResults(rounds);
       expect(result.pendingChars).toBeGreaterThanOrEqual(DEFAULT_PRUNING_POLICY.minChars);
       expect(result.clearIds).toEqual([]);
@@ -142,7 +152,7 @@ describe('findStaleResults', () => {
   it('is sticky: a cleared result stays cleared once the tally is back to zero', () => {
     const a = wholeRead('/p/a.ts', 25_000);
     const b = wholeRead('/p/b.ts', 25_000);
-    const rounds = [[a], [b], [edit('/p/a.ts'), edit('/p/b.ts')], [glob()], [glob()]];
+    const rounds = [[a], [b], [rewrite('/p/a.ts'), rewrite('/p/b.ts')], [glob()], [glob()]];
     for (const id of findStaleResults(rounds).clearIds) {
       const target = rounds.flat().find(entry => entry.id === id);
       if (target) target.cleared = true;
@@ -160,7 +170,7 @@ describe('findStaleResults', () => {
       nextId = 1000;
       const a = wholeRead('/p/a.ts', 25_000);
       const b = rangeRead('/p/b.ts', 10, 90, 25_000);
-      return [[a], [b], [edit('/p/a.ts'), rangeRead('/p/b.ts', 1, 200, 50)], [glob()], [glob()]];
+      return [[a], [b], [rewrite('/p/a.ts'), rangeRead('/p/b.ts', 1, 200, 50)], [glob()], [glob()]];
     };
     const first = findStaleResults(build());
     expect(first.clearIds).toHaveLength(2);
@@ -171,13 +181,13 @@ describe('findStaleResults', () => {
 describe('stalePlaceholder', () => {
   it('names the path and the lines the read returned', () => {
     expect(stalePlaceholder(rangeRead('/p/a.ts', 10, 90, 5))).toBe(
-      '[stale: /p/a.ts lines 10-90 was read here; the file changed or was re-read later. Read it again if you need it.]'
+      '[stale: /p/a.ts lines 10-90 was read here; the file was rewritten or re-read later. Read it again if you need it.]'
     );
   });
 
   it('names just the path for a whole-file read', () => {
     expect(stalePlaceholder(wholeRead('/p/a.ts', 5))).toBe(
-      '[stale: /p/a.ts was read here; the file changed or was re-read later. Read it again if you need it.]'
+      '[stale: /p/a.ts was read here; the file was rewritten or re-read later. Read it again if you need it.]'
     );
   });
 

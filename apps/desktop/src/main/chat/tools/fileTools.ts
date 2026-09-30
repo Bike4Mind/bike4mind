@@ -5,7 +5,7 @@ import { resolveWithinRoots } from './paths';
 import { ripgrepSearch, type RipgrepFile } from './ripgrep';
 import {
   capOutput,
-  MAX_TOOL_OUTPUT_CHARS,
+  MAX_FILE_READ_OUTPUT_CHARS,
   optionalNumber,
   requireString,
   type ToolContext,
@@ -46,11 +46,10 @@ const MAX_GREP_CONTEXT = 10;
 const MAX_GREP_LINE_CHARS = 240;
 const MAX_LISTED_MATCHING_FILES = 500;
 
-const DEFAULT_READ_LINES = 400;
 const MAX_READ_LINES = 2000;
 const MAX_READ_LINE_CHARS = 2000;
-/** Leaves room under the shared cap for the trailing "Lines a-b of n" note. */
-const OUTPUT_BUDGET = MAX_TOOL_OUTPUT_CHARS - 500;
+/** Leaves room under file_read's own cap for the trailing "Lines a-b of n" note. */
+const OUTPUT_BUDGET = MAX_FILE_READ_OUTPUT_CHARS - 500;
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -185,19 +184,24 @@ export const fileRead: ToolDefinition = {
     name: 'file_read',
     description:
       'Read a text file from the local filesystem. Only files inside folders the user has ' +
-      'granted are readable. Each line is prefixed with its line number and a tab; those ' +
-      'prefixes are not part of the file, so never copy them into file_edit. Returns at most ' +
-      `${DEFAULT_READ_LINES} lines per call unless you pass a limit (up to ${MAX_READ_LINES}), and ` +
-      'says where to continue. For a large file, find what you need with grep_search first ' +
-      '(with context lines) and read just that range with offset/limit.',
+      `granted are readable. Reads up to ${MAX_READ_LINES} lines from the start of the file by ` +
+      'default. You can pass offset and limit when you already know which part of the file you ' +
+      'need, or when the file is too large to read at once. Lines longer than ' +
+      `${MAX_READ_LINE_CHARS} characters are cut. Each line is prefixed with its line number and ` +
+      'a tab; those prefixes are not part of the file, so never copy them into file_edit. When ' +
+      'the output stops before the end of the file, it says the offset to continue from.',
     parameters: {
       type: 'object',
       properties: {
         path: { type: 'string', description: 'Absolute path to the file.' },
-        offset: { type: 'number', description: 'First line to return (1-based).' },
+        offset: {
+          type: 'number',
+          description:
+            'Line number to start reading from (1-based). Pass it only when you know which part you need or the file is too large to read at once.',
+        },
         limit: {
           type: 'number',
-          description: `Maximum number of lines to return (default ${DEFAULT_READ_LINES}, at most ${MAX_READ_LINES}).`,
+          description: `Number of lines to read (at most ${MAX_READ_LINES}). Pass it only when you know which part you need or the file is too large to read at once.`,
         },
       },
       required: ['path'],
@@ -218,10 +222,7 @@ export const fileRead: ToolDefinition = {
 
     const first = Math.max(1, Math.floor(optionalNumber(input, 'offset') ?? 1));
     if (first > total) return `${target} has ${total} line${total === 1 ? '' : 's'}; offset ${first} is past the end.`;
-    const wanted = Math.min(
-      MAX_READ_LINES,
-      Math.max(1, Math.floor(optionalNumber(input, 'limit') ?? DEFAULT_READ_LINES))
-    );
+    const wanted = Math.min(MAX_READ_LINES, Math.max(1, Math.floor(optionalNumber(input, 'limit') ?? MAX_READ_LINES)));
     const last = Math.min(total, first + wanted - 1);
 
     const width = String(last).length;
@@ -242,10 +243,9 @@ export const fileRead: ToolDefinition = {
     }
 
     if (first > 1 || shownTo < total) {
-      const next =
-        shownTo < total
-          ? ` Continue with offset ${shownTo + 1}. grep_search with context is usually cheaper than paging to find a spot.`
-          : '';
+      // contextPruning.ts parses this trailer to learn which lines a read covered.
+      const cutByBudget = shownTo < last ? ' The rest did not fit in one result.' : '';
+      const next = shownTo < total ? ` Continue with offset ${shownTo + 1}.${cutByBudget}` : '';
       rows.push('', `[Lines ${first}-${shownTo} of ${total}.${next}]`);
     }
     return rows.join('\n');

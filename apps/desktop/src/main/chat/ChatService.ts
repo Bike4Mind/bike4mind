@@ -2608,8 +2608,7 @@ function buildSystemMessage(
           ]
         : []),
       'Explore with grep_search and glob_files, not grep, find or ls through bash_execute: they need',
-      'no approval, skip ignored and binary files, and are faster. Search before you read - find the',
-      'symbol with grep_search, then read only the lines around it with file_read offset and limit.',
+      'no approval, skip ignored and binary files, and are faster.',
       'Tool calls made together in one reply run in parallel, so batch independent searches and',
       'reads into one reply instead of one per turn, and do not re-read lines you already have.',
       'Before a batch of searches, reads or edits, say in one short sentence what you are after and',
@@ -2619,10 +2618,12 @@ function buildSystemMessage(
       'For a task with three or more steps, keep a plan with todo_write: send the whole list each time,',
       'mark one item in_progress before starting it and completed as soon as it is done. Skip it for',
       'anything you can finish in a step or two.',
-      'An older file_read result may show as a [stale: ...] placeholder once the file changed or',
-      'was re-read later; read it again if you still need it.',
-      'file_read returns 400 lines per call unless you pass a limit; when a file is longer it ends',
-      'with the offset to continue from, so read the rest only if you need it.',
+      'An older file_read result may show as a [stale: ...] placeholder once the file was rewritten',
+      'with file_write or re-read later; read it again if you still need it. A file_edit does not',
+      'invalidate earlier reads, and its result shows the edited lines, so edit again without',
+      'reading the file first.',
+      'file_read returns the whole file, up to 2000 lines; pass offset and limit only when you',
+      'already know which part you need or the file is too large to read at once.',
       ...(explore
         ? [
             'For open-ended exploration across many files, call explore instead - a faster read-only',

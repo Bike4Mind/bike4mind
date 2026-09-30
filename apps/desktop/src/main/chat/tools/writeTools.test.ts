@@ -109,6 +109,77 @@ describe('write tools', () => {
     });
   });
 
+  describe('file_edit result snippet', () => {
+    const numberedFile = (count: number) =>
+      Array.from({ length: count }, (_, index) => `line ${index + 1}`).join('\n') + '\n';
+
+    it('shows the edited region numbered like file_read, with four lines of context', async () => {
+      await writeFile(join(root, 'long.txt'), numberedFile(40), 'utf8');
+      const result = await fileEdit.run(
+        { path: join(root, 'long.txt'), oldText: 'line 20\n', newText: 'twenty\nextra\n' },
+        context
+      );
+      expect(result).toContain('[Edited region, lines 16-25 as they now read:]');
+      expect(result).toContain(
+        '16\tline 16\n17\tline 17\n18\tline 18\n19\tline 19\n20\ttwenty\n21\textra\n22\tline 21'
+      );
+      expect(result).toContain('25\tline 24');
+      expect(result).not.toContain('line 15');
+      expect(result).not.toContain('line 25');
+    });
+
+    it('keeps the whitespace-normalized note and adds the snippet', async () => {
+      await writeFile(join(root, 'ind.ts'), 'function f() {\n    return 1;\n}\n', 'utf8');
+      const result = await fileEdit.run(
+        {
+          path: join(root, 'ind.ts'),
+          oldText: 'function f() {\n  return 1;\n}',
+          newText: 'function f() {\n  return 2;\n}',
+        },
+        context
+      );
+      expect(result).toContain('whitespace-normalized matching');
+      expect(result).toContain('2\t  return 2;');
+    });
+
+    it('shows one snippet per separate edit of a batch and merges neighbours', async () => {
+      await writeFile(join(root, 'long.txt'), numberedFile(60), 'utf8');
+      const result = await fileEdit.run(
+        {
+          path: join(root, 'long.txt'),
+          edits: [
+            { oldText: 'line 5\n', newText: 'five\n' },
+            { oldText: 'line 50\n', newText: 'fifty\n' },
+          ],
+        },
+        context
+      );
+      expect(result.match(/\[Edited region/g)).toHaveLength(2);
+      expect(result).toContain('5\tfive');
+      expect(result).toContain('50\tfifty');
+    });
+
+    it('anchors a deletion on the lines around it', async () => {
+      await writeFile(join(root, 'long.txt'), numberedFile(30), 'utf8');
+      const result = await fileEdit.run({ path: join(root, 'long.txt'), oldText: 'line 15\n', newText: '' }, context);
+      expect(result).toContain('14\tline 14\n15\tline 16');
+    });
+
+    it('caps a long region at 60 lines', async () => {
+      await writeFile(join(root, 'long.txt'), numberedFile(200), 'utf8');
+      const big = Array.from({ length: 100 }, (_, index) => `new ${index}`).join('\n') + '\n';
+      const result = await fileEdit.run({ path: join(root, 'long.txt'), oldText: 'line 50\n', newText: big }, context);
+      expect(result).toContain('as they now read:]');
+      expect(result).toMatch(/\[Lines \d+-\d+ of this region not shown\.\]/);
+      expect(result.split('\n').filter(row => /^ *\d+\t/.test(row))).toHaveLength(60);
+    });
+
+    it('adds no snippet for a file_write', async () => {
+      const result = await fileWrite.run({ path: join(root, 'notes.md'), content: 'one\ntwo\n' }, context);
+      expect(result).not.toContain('Edited region');
+    });
+  });
+
   describe('file_edit', () => {
     it('replaces a unique stretch and leaves the rest alone', async () => {
       const input = { path: join(root, 'notes.md'), oldText: 'beta', newText: 'BETA' };

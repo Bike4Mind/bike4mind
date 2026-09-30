@@ -392,9 +392,17 @@ export function capOutputMiddle(text: string, limit = MAX_TOOL_OUTPUT_CHARS, hea
  */
 export const MAX_EXPLORE_REPORT_CHARS = 60_000;
 
+/**
+ * About 25K tokens, the size of Claude Code's Read cap. A whole source file is the one result the
+ * model needs complete: stopping short costs a second call and a re-read of what came before.
+ */
+export const MAX_FILE_READ_OUTPUT_CHARS = 100_000;
+
 /** The cap a finished call's result is held to before the model sees it. */
 export function outputCapFor(toolName: string): number {
-  return toolName === 'explore' ? MAX_EXPLORE_REPORT_CHARS : MAX_TOOL_OUTPUT_CHARS;
+  if (toolName === 'explore') return MAX_EXPLORE_REPORT_CHARS;
+  if (toolName === 'file_read') return MAX_FILE_READ_OUTPUT_CHARS;
+  return MAX_TOOL_OUTPUT_CHARS;
 }
 
 /** Read a required string argument, failing loudly rather than coercing a wrong type. */

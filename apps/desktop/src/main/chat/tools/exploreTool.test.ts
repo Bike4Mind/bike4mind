@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CompletionRequest } from '../completions';
 import type { CompletionStreamEvent } from '../streamEvents';
 import { describeNested, exploreSystemPrompt, exploreTool, MAX_EXPLORE_ROUNDS } from './exploreTool';
-import { MAX_EXPLORE_REPORT_CHARS, MAX_TOOL_OUTPUT_CHARS, outputCapFor } from './types';
+import { MAX_EXPLORE_REPORT_CHARS, MAX_FILE_READ_OUTPUT_CHARS, MAX_TOOL_OUTPUT_CHARS, outputCapFor } from './types';
 import type { ExploreContext, ToolContext } from './types';
 
 type Reply = CompletionStreamEvent[] | ((signal: AbortSignal) => CompletionStreamEvent[]);
@@ -252,7 +252,8 @@ describe('explore', () => {
 
     expect(report).toBe(long);
     expect(outputCapFor('explore')).toBe(MAX_EXPLORE_REPORT_CHARS);
-    expect(outputCapFor('file_read')).toBe(MAX_TOOL_OUTPUT_CHARS);
+    expect(outputCapFor('file_read')).toBe(MAX_FILE_READ_OUTPUT_CHARS);
+    expect(outputCapFor('grep_search')).toBe(MAX_TOOL_OUTPUT_CHARS);
   });
 
   it('still caps a report past the explore cap', async () => {

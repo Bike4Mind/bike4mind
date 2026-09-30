@@ -8,6 +8,7 @@ import { fileRead, globFiles, grepSearch } from './fileTools';
 import { createLoopTally } from '../turnTiming';
 import {
   capOutput,
+  outputCapFor,
   MAX_EXPLORE_REPORT_CHARS,
   requireString,
   type ExploreTarget,
@@ -220,7 +221,7 @@ async function runNested(
   }
   progress(describeNested(request.name, input, context.workingDirectory));
   try {
-    return { ...base, content: capOutput(await tool.run(input, context)), error: false };
+    return { ...base, content: capOutput(await tool.run(input, context), outputCapFor(request.name)), error: false };
   } catch (err) {
     return { ...base, content: err instanceof Error ? err.message : String(err), error: true };
   }

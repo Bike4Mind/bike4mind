@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { ChatDiff } from '@shared/chat';
-import { buildDiff, splitLines, summarizeDiff } from './diff';
+import { buildDiff, diffLines, splitLines, summarizeDiff } from './diff';
 import { isWithin, PathAccessDenied, realpathNearest, resolveWithinRoots } from './paths';
 import { credentialPaths } from './sandbox';
 import { requireString, type ApprovalPrompt, type ToolContext, type ToolDefinition } from './types';
@@ -650,6 +650,60 @@ function toPrompt(plan: WritePlan): ApprovalPrompt {
   return { detail: summarizeDiff(plan.diff), key: plan.key, diff: plan.diff };
 }
 
+const SNIPPET_CONTEXT_LINES = 4;
+const MAX_SNIPPET_LINES = 60;
+const MAX_SNIPPET_TOTAL_LINES = 300;
+
+/**
+ * The edited regions as the file now reads, in file_read's `N<TAB>line` format. Lets the model
+ * chain the next edit from this result instead of reading the whole file again.
+ */
+function editSnippets(before: string, after: string): string {
+  const fileLines = splitLines(after);
+  if (fileLines.length === 0) return '';
+
+  const changed: Array<[number, number]> = [];
+  let cursor = 1;
+  for (const op of diffLines(splitLines(before), fileLines).ops) {
+    if (op.kind === 'context') {
+      cursor = (op.newLine ?? cursor) + 1;
+      continue;
+    }
+    const at = op.kind === 'add' ? (op.newLine ?? cursor) : cursor;
+    const last = changed[changed.length - 1];
+    if (op.kind === 'add') cursor = at + 1;
+    if (last && at <= last[1] + 1) last[1] = Math.max(last[1], op.kind === 'add' ? at : at - 1);
+    else changed.push([at, op.kind === 'add' ? at : at - 1]);
+  }
+
+  const ranges: Array<[number, number]> = [];
+  for (const [from, to] of changed) {
+    const start = Math.max(1, from - SNIPPET_CONTEXT_LINES);
+    const end = Math.min(fileLines.length, Math.max(to, from) + SNIPPET_CONTEXT_LINES);
+    const last = ranges[ranges.length - 1];
+    if (last && start <= last[1] + 1) last[1] = Math.max(last[1], end);
+    else ranges.push([start, end]);
+  }
+
+  const sections: string[] = [];
+  let budget = MAX_SNIPPET_TOTAL_LINES;
+  for (const [start, end] of ranges) {
+    if (budget <= 0) {
+      sections.push('[More edited regions not shown.]');
+      break;
+    }
+    const shownEnd = Math.min(end, start + Math.min(MAX_SNIPPET_LINES, budget) - 1);
+    const width = String(shownEnd).length;
+    const rows = fileLines
+      .slice(start - 1, shownEnd)
+      .map((line, index) => `${String(start + index).padStart(width)}\t${line.replace(/\r$/, '')}`);
+    const cut = shownEnd < end ? `\n[Lines ${shownEnd + 1}-${end} of this region not shown.]` : '';
+    sections.push(`[Edited region, lines ${start}-${shownEnd} as they now read:]\n${rows.join('\n')}${cut}`);
+    budget -= shownEnd - start + 1;
+  }
+  return sections.length > 0 ? `\n${sections.join('\n\n')}` : '';
+}
+
 /** Applies an already-planned change, after one last check that the plan still holds. */
 async function applyPlan(plan: WritePlan, context: ToolContext): Promise<string> {
   if (plan.unchanged) {
@@ -675,7 +729,8 @@ async function applyPlan(plan: WritePlan, context: ToolContext): Promise<string>
 
   const lines = splitLines(plan.after).length;
   const notes = plan.notes?.length ? `\n${plan.notes.join('\n')}` : '';
-  return `${summarizeDiff(plan.diff)}\nWritten. ${plan.target} is now ${lines} line${lines === 1 ? '' : 's'}.${notes}`;
+  const snippets = plan.diff.operation === 'edit' ? editSnippets(plan.state.content, plan.after) : '';
+  return `${summarizeDiff(plan.diff)}\nWritten. ${plan.target} is now ${lines} line${lines === 1 ? '' : 's'}.${notes}${snippets}`;
 }
 
 export const fileWrite: ToolDefinition = {

@@ -40,7 +40,11 @@ export const DEFAULT_PRUNING_POLICY: PruningPolicy = {
   exemptRounds: 2,
 };
 
-const WRITE_TOOLS = new Set(['file_edit', 'file_write']);
+/**
+ * Whole-file rewrites only. A file_edit leaves the read mostly true and its own result shows the
+ * edited region, so clearing the read would just make the model read the file again.
+ */
+const REWRITE_TOOLS = new Set(['file_write']);
 
 interface LineRange {
   first: number;
@@ -94,7 +98,7 @@ export function stalePlaceholder(call: ChatToolCall): string {
   const path = typeof call.input.path === 'string' ? call.input.path : 'this file';
   const range = shownRange(call);
   const where = range && range !== WHOLE_FILE ? `${path} lines ${range.first}-${range.last}` : path;
-  return `[stale: ${where} was read here; the file changed or was re-read later. Read it again if you need it.]`;
+  return `[stale: ${where} was read here; the file was rewritten or re-read later. Read it again if you need it.]`;
 }
 
 /**
@@ -142,7 +146,7 @@ function isStale(call: ChatToolCall, later: ToolRounds): boolean {
   return later.some(round =>
     round.some(next => {
       if (!succeeded(next) || pathOf(next) !== path) return false;
-      if (WRITE_TOOLS.has(next.name)) return true;
+      if (REWRITE_TOOLS.has(next.name)) return true;
       if (next.name !== 'file_read' || !range) return false;
       const covers = shownRange(next);
       return !!covers && covers.first <= range.first && covers.last >= range.last;

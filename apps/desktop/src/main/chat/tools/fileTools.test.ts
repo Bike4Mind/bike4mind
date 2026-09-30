@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { fileRead, globFiles, grepSearch } from './fileTools';
 import { PathAccessDenied } from './paths';
-import type { ToolContext } from './types';
+import { MAX_FILE_READ_OUTPUT_CHARS, MAX_TOOL_OUTPUT_CHARS, outputCapFor, type ToolContext } from './types';
 
 describe('file tools', () => {
   let root: string;
@@ -29,7 +29,7 @@ describe('file tools', () => {
 
     it('slices with offset and limit', async () => {
       const result = await fileRead.run({ path: join(root, 'notes.md'), offset: 2, limit: 1 }, context);
-      expect(result).toMatch(/^2\tbeta gamma\n\n\[Lines 2-2 of 3\. Continue with offset 3\. grep_search/);
+      expect(result).toBe('2\tbeta gamma\n\n[Lines 2-2 of 3. Continue with offset 3.]');
     });
 
     it('numbers every line and adds no range note when the whole file fits', async () => {
@@ -40,12 +40,64 @@ describe('file tools', () => {
 
     const numbered = (count: number) => Array.from({ length: count }, (_, index) => `line ${index + 1}`).join('\n');
 
-    it('stops a long file at the default page and says how to get the rest', async () => {
+    it('reads a whole file of up to 2000 lines by default', async () => {
       await writeFile(join(root, 'long.txt'), numbered(1000), 'utf8');
       const result = await fileRead.run({ path: join(root, 'long.txt') }, context);
-      expect(result).toContain('400\tline 400');
-      expect(result).not.toContain('line 401');
-      expect(result).toMatch(/\[Lines 1-400 of 1000\. Continue with offset 401\. grep_search with context .*\]$/);
+      expect(result.startsWith('   1\tline 1\n')).toBe(true);
+      expect(result.endsWith('1000\tline 1000')).toBe(true);
+      expect(result).not.toContain('[Lines');
+    });
+
+    it('stops at 2000 lines by default and gives the offset to continue from', async () => {
+      await writeFile(join(root, 'long.txt'), numbered(2500), 'utf8');
+      const result = await fileRead.run({ path: join(root, 'long.txt') }, context);
+      expect(result).toContain('2000\tline 2000');
+      expect(result).not.toContain('line 2001');
+      expect(result.endsWith('[Lines 1-2000 of 2500. Continue with offset 2001.]')).toBe(true);
+    });
+
+    it('returns as many lines as fit the output budget and names the exact offset to continue from', async () => {
+      const wide = Array.from({ length: 1500 }, (_, index) => `${index + 1} ${'w'.repeat(100)}`).join('\n');
+      await writeFile(join(root, 'wide.txt'), wide, 'utf8');
+      const result = await fileRead.run({ path: join(root, 'wide.txt') }, context);
+      expect(result.length).toBeLessThanOrEqual(MAX_FILE_READ_OUTPUT_CHARS);
+      expect(result.length).toBeGreaterThan(MAX_TOOL_OUTPUT_CHARS);
+      const trailer =
+        /\[Lines 1-(\d+) of 1500\. Continue with offset (\d+)\. The rest did not fit in one result\.\]$/.exec(result);
+      expect(trailer).not.toBeNull();
+      const lastShown = Number(trailer?.[1]);
+      expect(lastShown).toBeLessThan(1500);
+      expect(Number(trailer?.[2])).toBe(lastShown + 1);
+      expect(result).toContain(`${String(lastShown).padStart(4)}\t${lastShown} w`);
+      expect(result).not.toContain(`\t${lastShown + 1} w`);
+
+      const rest = await fileRead.run({ path: join(root, 'wide.txt'), offset: lastShown + 1 }, context);
+      expect(rest).toMatch(new RegExp(`^ *${lastShown + 1}\t${lastShown + 1} w`));
+    });
+
+    it('reads a 600-line file past the shared 30k cap in one call', async () => {
+      const code = Array.from(
+        { length: 616 },
+        (_, index) => `const value${index} = compute(${index}, 'some argument text');`
+      );
+      await writeFile(join(root, 'app.ts'), code.join('\n'), 'utf8');
+      const result = await fileRead.run({ path: join(root, 'app.ts') }, context);
+      expect(result.length).toBeGreaterThan(MAX_TOOL_OUTPUT_CHARS);
+      expect(result).toContain('value615');
+      expect(result).not.toContain('[Lines');
+      expect(outputCapFor('file_read')).toBeGreaterThanOrEqual(result.length);
+    });
+
+    it('cuts a line longer than 2000 characters', async () => {
+      await writeFile(join(root, 'minified.js'), 'z'.repeat(2500), 'utf8');
+      const result = await fileRead.run({ path: join(root, 'minified.js') }, context);
+      expect(result).toBe(`1\t${'z'.repeat(2000)}... [line cut at 2000 characters]`);
+    });
+
+    it('tells the model to read whole files, not to grep first or page', () => {
+      const { description } = fileRead.schema;
+      expect(description).toContain('up to 2000 lines');
+      expect(description).not.toMatch(/grep_search|cheaper|page/i);
     });
 
     it('honours an explicit limit, up to the maximum', async () => {
