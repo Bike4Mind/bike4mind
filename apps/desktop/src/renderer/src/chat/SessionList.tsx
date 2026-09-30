@@ -120,7 +120,6 @@ function SessionRow({ session, activeId, statuses, onSelect, onDelete, onToggleP
   const [menuOpen, setMenuOpen] = useState(false);
   const status = statuses.get(session.id) ?? 'done';
   const needsAction = status === 'needs-action';
-  const spawned = !!session.origin;
   const { ref: titleRef, clipped } = useTitleClipped(session.title);
 
   return (
@@ -183,7 +182,6 @@ function SessionRow({ session, activeId, statuses, onSelect, onDelete, onToggleP
         }}
         data-testid="chat-session-item"
         data-session-status={status}
-        data-session-spawned={spawned ? 'true' : undefined}
       >
         <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center', minWidth: 0, width: '100%' }}>
           <SessionBadge status={status} />
@@ -201,28 +199,13 @@ function SessionRow({ session, activeId, statuses, onSelect, onDelete, onToggleP
               fontWeight: 'normal',
               // noWrap brings an ellipsis with it; the mask replaces it. Only when the text
               // really is clipped - a fade over the last pixels of a short title reads as a
-              // rendering fault. The mask is on the title's own box, which ends before the
-              // `agent` marker, so it lands where the text clips and not under the marker.
+              // rendering fault.
               textOverflow: 'clip',
               ...(clipped && { WebkitMaskImage: TITLE_FADE, maskImage: TITLE_FADE }),
             }}
           >
             {session.title}
           </Typography>
-          {/* A session the agent started is marked, because the user did not open it and will
-              not recognise the title. It sits after the title so a long one still truncates. */}
-          {spawned && (
-            <Tooltip title="Started by the agent" size="sm" variant="soft" placement="top">
-              <Typography
-                level="body-xs"
-                textColor="text.tertiary"
-                sx={{ flexShrink: 0 }}
-                data-testid="chat-session-spawned-mark"
-              >
-                agent
-              </Typography>
-            </Tooltip>
-          )}
         </Stack>
       </ListItemButton>
     </ListItem>
