@@ -148,6 +148,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       stack: err.stack,
     });
     auditLogger.failure('callback_error');
+    // Covers throws before handleCallback's finally (e.g. provider creation).
     clearStateNonce(res, NONCE_SLOT.slackAppInstall);
 
     // Map error to user-friendly reason
