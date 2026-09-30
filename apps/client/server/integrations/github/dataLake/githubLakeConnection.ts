@@ -307,7 +307,8 @@ export async function disconnectGitHubLakeConnection(
   }
   await purgeConnectionIngestedFiles(
     lake,
-    () => fabFileRepository.findByGitHubConnectionIdInDataLake(connection.id, lake.datalakeTag, { includeDeleted: true }),
+    () =>
+      fabFileRepository.findByGitHubConnectionIdInDataLake(connection.id, lake.datalakeTag, { includeDeleted: true }),
     {
       connectionId: connection.id,
       label: 'GitHub lake disconnect',
@@ -318,6 +319,27 @@ export async function disconnectGitHubLakeConnection(
   );
   // The App config is only needed to uninstall; a retained installation releases without it.
   return releaseGitHubLakeConnection(connection, getGitHubLakeAppConfig());
+}
+
+/**
+ * The revoke door (githubLakeRevoke queue, fed by the App's webhook): the same teardown as a
+ * disconnect, resolved globally because GitHub names an installation, never an org. Idempotent for
+ * redeliveries; a live sync's ConflictError is left to throw so SQS retries it.
+ */
+export async function revokeGitHubLakeConnection(connectionId: string, logger: PurgeConnectionLogger): Promise<void> {
+  const connection = await orgGitHubLakeConnectionRepository.findById(connectionId);
+  if (!connection) {
+    logger.info('GitHub lake revoke: connection already released; nothing to do', { connectionId });
+    return;
+  }
+  const lake = await dataLakeRepository.findById(connection.targetDataLakeId);
+  if (!lake) {
+    // The lake's own delete sweep (dataLakeCleanup.ts) owns purging its files; only the
+    // connection/installation claim remains to release here.
+    await releaseGitHubLakeConnection(connection, getGitHubLakeAppConfig());
+    return;
+  }
+  await disconnectGitHubLakeConnection(lake, connection, logger);
 }
 
 /**

@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   dlFindById: vi.fn(),
   ghConnFindByDataLakeIdAny: vi.fn(),
   ghConnFindByInstallationId: vi.fn(),
+  ghConnFindById: vi.fn(),
   ghConnCreate: vi.fn(),
   ghConnRelease: vi.fn(),
   ghConnSetEnabledForLake: vi.fn(),
@@ -48,6 +49,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
       ...actual.orgGitHubLakeConnectionRepository,
       findByDataLakeIdAny: h.ghConnFindByDataLakeIdAny,
       findByInstallationId: h.ghConnFindByInstallationId,
+      findById: h.ghConnFindById,
       create: h.ghConnCreate,
       release: h.ghConnRelease,
       setEnabledForLake: h.ghConnSetEnabledForLake,
@@ -73,6 +75,7 @@ import {
   releaseGitHubLakeConnection,
   releaseGitHubLakeConnectionForLake,
   disconnectGitHubLakeConnection,
+  revokeGitHubLakeConnection,
   disableGitHubConnectionForLake,
   enableGitHubConnectionForLake,
   GITHUB_LAKE_STATE_OPTIONS,
@@ -479,6 +482,57 @@ describe('disconnectGitHubLakeConnection', () => {
     h.ghConnDisableIfNoLiveSyncClaim.mockResolvedValue({ wasEnabled: false });
     await disconnectGitHubLakeConnection(LAKE, CONNECTION, logger);
     expect(h.purgeConnectionIngestedFiles.mock.calls[0][2].restore).toBeUndefined();
+  });
+});
+
+describe('revokeGitHubLakeConnection', () => {
+  const LAKE = { id: 'lake1', organizationId: 'orgA', datalakeTag: 'datalake:lake1' } as never;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getGitHubLakeAppConfig.mockReturnValue(CONFIG);
+    h.ghConnFindById.mockResolvedValue(CONNECTION);
+    h.dlFindById.mockResolvedValue(LAKE);
+    h.ghConnFindByInstallationId.mockResolvedValue([CONNECTION]);
+    h.fabFilesFindByGitHubConnectionIdInDataLake.mockResolvedValue([]);
+    h.ghConnDisableIfNoLiveSyncClaim.mockResolvedValue({ wasEnabled: true });
+    h.purgeConnectionIngestedFiles.mockResolvedValue(undefined);
+    h.deleteInstallation.mockResolvedValue(undefined);
+    h.ghConnRelease.mockResolvedValue(true);
+  });
+
+  it('is a no-op when the connection is already gone (idempotent for a duplicate webhook delivery)', async () => {
+    h.ghConnFindById.mockResolvedValue(null);
+    await expect(revokeGitHubLakeConnection('conn1', logger)).resolves.toBeUndefined();
+    expect(h.dlFindById).not.toHaveBeenCalled();
+    expect(h.ghConnDisableIfNoLiveSyncClaim).not.toHaveBeenCalled();
+    expect(h.ghConnRelease).not.toHaveBeenCalled();
+  });
+
+  it('only releases the connection/installation claim when its lake is already gone', async () => {
+    h.dlFindById.mockResolvedValue(null);
+    await revokeGitHubLakeConnection('conn1', logger);
+    expect(h.ghConnDisableIfNoLiveSyncClaim).not.toHaveBeenCalled();
+    expect(h.purgeConnectionIngestedFiles).not.toHaveBeenCalled();
+    expect(h.ghConnRelease).toHaveBeenCalledWith(CONNECTION.id, CONNECTION.organizationId);
+  });
+
+  it('disconnects (disable, purge, release) when the connection and its lake both still exist', async () => {
+    await revokeGitHubLakeConnection('conn1', logger);
+    expect(h.ghConnDisableIfNoLiveSyncClaim).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.purgeConnectionIngestedFiles).toHaveBeenCalledWith(
+      LAKE,
+      expect.any(Function),
+      expect.objectContaining({ connectionId: 'conn1', logger })
+    );
+    expect(h.ghConnRelease).toHaveBeenCalledWith(CONNECTION.id, CONNECTION.organizationId);
+  });
+
+  it('propagates the 409 a live sync raises, so the caller lets SQS retry the message', async () => {
+    h.ghConnDisableIfNoLiveSyncClaim.mockResolvedValue(null);
+    await expect(revokeGitHubLakeConnection('conn1', logger)).rejects.toMatchObject({ statusCode: 409 });
+    expect(h.purgeConnectionIngestedFiles).not.toHaveBeenCalled();
+    expect(h.ghConnRelease).not.toHaveBeenCalled();
   });
 });
 

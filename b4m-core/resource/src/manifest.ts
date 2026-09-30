@@ -108,6 +108,11 @@ export const DEFAULT_MANIFEST = {
   // Read by the connect callback, the re-sync route and the ingest handler's own re-enqueues. Not optional: the
   // connect path reads it after the binding row is written, the same hazard as driveLakeIngestQueue above.
   githubLakeIngestQueue: { kind: 'queue' },
+  // Read by the App's own webhook (github-lake-app.ts) only after it verifies the signature and
+  // resolves affected connections - no row is written first, but a self-host that turns the
+  // webhook secret on and leaves this queue unregistered loses every revoke delivery, and GitHub
+  // does not auto-retry a failed one.
+  githubLakeRevokeQueue: { kind: 'queue' },
   emailAnalysisQueue: { kind: 'queue', optional: true },
   emailBatchQueue: { kind: 'queue' },
   emailIngestionQueue: { kind: 'queue' },

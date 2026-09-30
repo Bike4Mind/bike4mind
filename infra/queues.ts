@@ -97,6 +97,20 @@ const githubLakeIngestQueue = new sst.aws.Queue('githubLakeIngestQueue', {
   },
 });
 
+// GitHub data-lake App access revoked -> purge and release the connection (github-lake-app.ts).
+// SQS is the retry: GitHub never redelivers on its own, and a live sync makes the purge 409.
+const githubLakeRevokeQueueDLQ = new sst.aws.Queue('githubLakeRevokeQueueDLQ', {});
+const githubLakeRevokeQueue = new sst.aws.Queue('githubLakeRevokeQueue', {
+  // Must exceed the handler's 10-minute timeout (below) or SQS redelivers mid-run.
+  visibilityTimeout: '12 minutes',
+  dlq: {
+    queue: githubLakeRevokeQueueDLQ.arn,
+    // 6 x 12 min outlasts CHAINED_SYNC_CLAIM_STALE_MS (60 min, OrgGitHubLakeConnectionModel.ts),
+    // the longest a sync claim can block the purge; keep them in step.
+    retry: 6,
+  },
+});
+
 // FabFile Vectorize Queue
 const fabFileVectorizeQueueDLQ = new sst.aws.Queue('fabFileVectorizeQueueDLQ', {});
 const fabFileVectorizeQueue = new sst.aws.Queue('fabFileVectorizeQueue', {
@@ -912,6 +926,25 @@ const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
+const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/githubLakeRevoke.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    // fabFileBucket only: unlike githubLakeIngestQueue, this handler never re-enqueues itself, so it
+    // does not link its own queue.
+    link: [...allSecrets, fabFileBucket],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
 // What's New Highlights Queue
 // Generates weekly highlights summary from What's New modals and posts to Slack
 const whatsNewHighlightsQueueDLQ = new sst.aws.Queue('whatsNewHighlightsQueueDLQ', {
@@ -1547,6 +1580,7 @@ export {
   driveLakeIngestQueue,
   driveDisconnectPurgeQueue,
   githubLakeIngestQueue,
+  githubLakeRevokeQueue,
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
@@ -1580,6 +1614,7 @@ export {
   driveLakeIngestQueueDLQ,
   driveDisconnectPurgeQueueDLQ,
   githubLakeIngestQueueDLQ,
+  githubLakeRevokeQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -1615,6 +1650,7 @@ export {
   driveLakeIngestQueueSubscription,
   driveDisconnectPurgeQueueSubscription,
   githubLakeIngestQueueSubscription,
+  githubLakeRevokeQueueSubscription,
   liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,
