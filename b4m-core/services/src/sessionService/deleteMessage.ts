@@ -35,7 +35,7 @@ export const deleteSessionMessage = async (
   // normally only soft-deleted, but notebookImportComplete.ts's session-replace flow does hard
   // delete matching rows, so this guards a narrow real race rather than dead code - report it as
   // a real failure rather than success on a write that touched nothing.
-  const updated = await db.chatHistories.update(message);
+  const updated = await db.chatHistories.update({ id: message.id, deletedAt: message.deletedAt });
   if (!updated) throw new NotFoundError('Message not found');
 
   return updated;

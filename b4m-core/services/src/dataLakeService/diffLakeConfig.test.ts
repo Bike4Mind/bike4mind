@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { IDataLake } from '@bike4mind/common';
-import { LAKE_CONFIG_VALUE_MAX_CHARS, lakeConfigTextFingerprint } from '@bike4mind/common';
+import { LAKE_CONFIG_FIELD_AUDIT, LAKE_CONFIG_VALUE_MAX_CHARS, lakeConfigTextFingerprint } from '@bike4mind/common';
 import { diffLakeConfig, grantChange, ownershipChange } from './diffLakeConfig';
 
 const lake = (overrides: Partial<IDataLake> = {}): Partial<IDataLake> => ({
@@ -16,6 +16,11 @@ const lake = (overrides: Partial<IDataLake> = {}): Partial<IDataLake> => ({
 describe('diffLakeConfig', () => {
   it('records nothing for an identical document - the whole reason a diff exists', () => {
     expect(diffLakeConfig(lake(), lake())).toEqual([]);
+  });
+
+  it('never audits the purge claim id - an internal lifecycle token, not config', () => {
+    expect(LAKE_CONFIG_FIELD_AUDIT.purgeClaimId).toBe('excluded');
+    expect(diffLakeConfig(lake(), lake({ purgeClaimId: 'claim-a' }))).toEqual([]);
   });
 
   it('emits only the field that moved, not every field it compared', () => {
@@ -50,11 +55,19 @@ describe('diffLakeConfig', () => {
   it('treats an unset boolean as false, so writing false onto a never-set field is no change', () => {
     expect(diffLakeConfig(lake(), lake({ isPublic: false }))).toEqual([]);
     expect(diffLakeConfig(lake(), lake({ auditQueryTextEnabled: false }))).toEqual([]);
+    expect(diffLakeConfig(lake(), lake({ injectPromptForReaders: false }))).toEqual([]);
   });
 
   it('catches the audit control being flipped off - the sharpest case in the issue', () => {
     const changes = diffLakeConfig(lake({ auditQueryTextEnabled: true }), lake({ auditQueryTextEnabled: false }));
     expect(changes).toEqual([{ field: 'auditQueryTextEnabled', kind: 'literal', before: true, after: false }]);
+  });
+
+  it('records the reader opt-in flag (injectPromptForReaders) being turned on', () => {
+    // Unlike a string field, a boolean's "unset" side normalizes to a concrete `false` (see
+    // normalizeValue), so `before` is present here too - matching auditQueryTextEnabled above.
+    const changes = diffLakeConfig(lake(), lake({ injectPromptForReaders: true }));
+    expect(changes).toEqual([{ field: 'injectPromptForReaders', kind: 'literal', before: false, after: true }]);
   });
 
   it('records numeric and org-scope moves, including their explicit clear sentinels', () => {

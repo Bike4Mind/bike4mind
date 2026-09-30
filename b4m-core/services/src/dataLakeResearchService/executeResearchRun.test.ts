@@ -174,6 +174,62 @@ describe('executeResearchRun', () => {
     });
   });
 
+  describe('judge circuit breaker', () => {
+    const failing = { outcome: 'failed', error: 'model access denied', costMicroUsd: 0 } as const;
+    const bucketSum = ({ searchHits: _hits, ...buckets }: Record<string, number>): number =>
+      Object.values(buckets).reduce((sum, n) => sum + n, 0);
+
+    it('stops after three failures with nothing scored, and counts the rest as not judged', async () => {
+      const candidates = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n =>
+        hit(n, [2, 4, 7].includes(n) ? 'spam.net' : 'example.com')
+      );
+      const { ports, calls } = makePorts({ candidates, judge: vi.fn(async () => failing) });
+
+      const result = await executeResearchRun(levers({ blockedDomains: ['spam.net'] }), 'run-1', ports);
+
+      expect(ports.judge).toHaveBeenCalledTimes(3);
+      expect(calls.fetched).toEqual([]);
+      expect(result.stopReason).toBe('judge_unavailable');
+      expect(result).toMatchObject({ judgeStepFailed: true, judgeError: 'model access denied' });
+      expect(result.totals).toMatchObject({ searchHits: 10, filteredBySource: 3, judgeFailed: 3, notJudged: 4 });
+      expect(bucketSum({ ...result.totals })).toBe(result.totals.searchHits);
+    });
+
+    it('leaves nothing uncounted when the breaker trips on the last candidate', async () => {
+      const { ports } = makePorts({ candidates: [hit(1), hit(2), hit(3)], judge: vi.fn(async () => failing) });
+
+      const result = await executeResearchRun(levers(), 'run-1', ports);
+
+      expect(result.stopReason).toBe('judge_unavailable');
+      expect(result.totals).toMatchObject({ judgeFailed: 3, notJudged: 0 });
+    });
+
+    it('does not trip on a judge that fails once and then recovers', async () => {
+      const { ports } = makePorts({ candidates: [hit(1), hit(2), hit(3), hit(4)] });
+      (ports.judge as ReturnType<typeof vi.fn>).mockResolvedValueOnce(failing);
+
+      const result = await executeResearchRun(levers(), 'run-1', ports);
+
+      expect(ports.judge).toHaveBeenCalledTimes(4);
+      expect(result.stopReason).toBe('exhausted');
+      expect(result.totals).toMatchObject({ judgeFailed: 1, proposed: 3, notJudged: 0 });
+    });
+
+    it('keeps going through failures once the judge has scored something', async () => {
+      const { ports } = makePorts({ candidates: [hit(1), hit(2), hit(3), hit(4), hit(5)] });
+      (ports.judge as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ outcome: 'judged', relevance: 0.1, costMicroUsd: 10 })
+        .mockResolvedValue(failing);
+
+      const result = await executeResearchRun(levers(), 'run-1', ports);
+
+      expect(ports.judge).toHaveBeenCalledTimes(5);
+      expect(result.stopReason).toBe('exhausted');
+      expect(result).toMatchObject({ judgeStepFailed: false });
+      expect(result.totals).toMatchObject({ belowRelevance: 1, judgeFailed: 4, notJudged: 0 });
+    });
+  });
+
   // Rule 3: fetch only what cleared the judgment.
   it('never fetches a candidate below the relevance floor', async () => {
     const { ports, calls } = makePorts({ candidates: [hit(1), hit(2)] });

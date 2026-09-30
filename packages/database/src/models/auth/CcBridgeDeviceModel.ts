@@ -117,7 +117,8 @@ export const ccBridgeDeviceRepository = {
     if (device.apiKeyId) {
       const keyUpdate = await UserApiKey.updateOne(
         // Scoped to a real transition so a replayed revoke keeps the original
-        // audit stamp, matching revokeUserApiKey and deactivateAllByUserId.
+        // audit stamp, matching UserApiKeyRepository.revokeIfNotDisabled and
+        // deactivateAllByUserId; keep the not-DISABLED filter in the same write as theirs.
         { _id: device.apiKeyId, userId, status: { $ne: ApiKeyStatus.DISABLED } },
         {
           $set: {

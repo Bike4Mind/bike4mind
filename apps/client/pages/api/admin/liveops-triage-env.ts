@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { Resource } from 'sst';
@@ -14,7 +15,7 @@ import { Resource } from 'sst';
  * - Local development (IS_LOCAL=true): for development
  * - Fork deployments: HIDDEN (cannot act on alerts, wrong GitHub repo)
  */
-const handler = baseApi().get(async (req: Request, res: Response) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req: Request, res: Response) => {
   // Check if user is admin
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Unauthorized. Admin access required.');

@@ -56,7 +56,7 @@ const createUserApiKeySchema = z.object({
   // by the route; the service only enforces the field-shape invariant below.
   billingOwnerType: z.enum(CreditHolderType).optional(),
   organizationId: z.string().optional(),
-  // Manage-but-not-member session admission (see pages/api/sessions/create.ts): the lakes this
+  // Manage-but-not-member session admission (see pages/api/v1/sessions/index.ts): the lakes this
   // key may bind a session to. No existence/manage check at THIS layer - session-create
   // independently re-verifies the ACTING user's live manage rights against the lake on every
   // request, so a stale or made-up id reaching the document is inert, never a privilege. That is
@@ -175,7 +175,7 @@ export const createUserApiKey = async (
   // agentId. Same constant the runtime gate reads, so mint and runtime state one rule.
   if (params.scopes.length > 1 && params.scopes.some(scope => CONFINED_API_KEY_SCOPES.includes(scope))) {
     throw new BadRequestError(
-      'A confined scope (embed:chat, overwatch-ingest:write, cc-bridge:connect) must be the only scope on a key'
+      `A confined scope (${CONFINED_API_KEY_SCOPES.join(', ')}) must be the only scope on a key`
     );
   }
 

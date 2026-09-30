@@ -532,6 +532,13 @@ jobs:
             workers: '2'
             script: 'test:integration'
             args: '--shard=3/3'
+          # apps/workers' real-Mongo suites, split off its unit lane (which runs in `misc` below)
+          # for the same mongod-contention reason as client-integration above. Unsharded: the lane
+          # holds only a few files. See apps/workers/vitest.config.mts.
+          - name: workers-integration
+            filter: '--filter @bike4mind/workers'
+            workers: '2'
+            script: 'test:integration'
           - name: services
             filter: '--filter @bike4mind/services'
             workers: ''
@@ -640,8 +647,8 @@ jobs:
       - name: Mark shard start
         run: echo "SHARD_START_SECONDS=$(date +%s)" >> "$GITHUB_ENV"
 
-      # `matrix.shard.script` is unset on every shard but the three client-integration
-      # ones, and an unset matrix value is the empty string here, so `||` falls back
+      # `matrix.shard.script` is unset on every shard but the integration ones (client and
+      # workers), and an unset matrix value is the empty string here, so `||` falls back
       # to the unit `test` script. `matrix.shard.args` is likewise set only on the
       # shard legs (three client, three client-integration), where it carries
       # `--shard=i/3` - deliberately with no `--` separator before it, see the matrix
@@ -691,8 +698,8 @@ jobs:
           pnpm --recursive --workspace-concurrency=1 "${filter_args[@]}" "$SHARD_SCRIPT" "${script_args[@]}"
 
       # Tests that live outside every pnpm workspace, which the sharded run above cannot reach:
-      # infra/ has no package.json, and scripts/codemods is not in pnpm-workspace.yaml, so
-      # `pnpm --recursive ... test` has no project to run in either. They passed locally and
+      # infra/ has no package.json, and scripts/codemods and scripts/__tests__ are not in
+      # pnpm-workspace.yaml, so `pnpm --recursive ... test` has no project to run in either. They passed locally and
       # nowhere else, which is worse than having no tests - infra/__tests__ holds the guard that
       # is meant to fail the build when a WAF shadow rule flips from Count to Block, and it could
       # not have.
@@ -716,6 +723,7 @@ jobs:
         run: |
           pnpm exec vitest run --dir infra
           pnpm exec vitest run --dir scripts/codemods
+          pnpm test:scripts
         env:
           CI: true
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}

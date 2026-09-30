@@ -65,7 +65,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     lakeScopeExplicit: { type: Boolean, required: false },
     // default: undefined (not []) - keeps "field present" a meaningful marker of manage-but-not-
     // member admission, distinct from an ordinary session that never went through it. Written ONLY
-    // by pages/api/sessions/create.ts, as a separate authorized write AFTER its own canManageLake
+    // by pages/api/v1/sessions/index.ts, as a separate authorized write AFTER its own canManageLake
     // check - never part of session creation's own input, so fork/clone/snip cannot copy it.
     preauthorizedLakeIds: { type: [String], default: undefined },
     // Resolved from the lake at create time (resolveLakeSessionDefaults). DELIBERATELY no default -
@@ -91,7 +91,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     tags: { type: [TagSchema], required: false },
     // Pairs with `tags` the way `summaryAt` pairs with `summary`. The schema is strict, so WITHOUT
     // this declaration the field is dropped from every write and the `!session.taggedAt` gate in
-    // apps/client/server/events/spider.ts re-tags notebooks it already paid a completion to tag.
+    // apps/workers/src/events/spider.ts re-tags notebooks it already paid a completion to tag.
     taggedAt: { type: Date, required: false },
     // Same strict-schema hazard as `taggedAt` above: undeclared means silently dropped, and the
     // retry gate would read permanently unattempted. Records that a completion was spent and
@@ -302,8 +302,8 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   /**
    * Partial update that matches only while `user` still holds update access and the session is not
    * soft-deleted, so a revocation or delete landing between the authorizing read and this write
-   * makes it a no-op (null) instead of a write. `deletedAt: null` is explicit because
-   * softDeletePlugin does not hook findOneAndUpdate.
+   * makes it a no-op (null) instead of a write. softDeletePlugin's update hook already adds
+   * `deletedAt: null`; the explicit filter is redundant but keeps the contract visible here.
    */
   async updateWithUpdateAccess(
     user: Pick<IUserDocument, 'id' | 'groups'>,
@@ -532,7 +532,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
    * the spider itself already runs at.
    *
    * Must stay in step with the handler's gate (`determineSessionOperations` in
-   * apps/client/server/events/spider.ts): quest existence AND the retry backoff. Both halves of
+   * apps/client/server/utils/sessionOperations.ts): quest existence AND the retry backoff. Both halves of
    * the backoff are declared together in `@bike4mind/common` so they cannot drift.
    */
   async countTaggableNotebooks(userId: string): Promise<number> {

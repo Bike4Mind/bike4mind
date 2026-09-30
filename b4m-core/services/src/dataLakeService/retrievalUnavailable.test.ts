@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildRetrievalUnavailableReport,
+  classifyIngestionStatus,
   describeRetrievalUnavailable,
   describeSearchLimitations,
   emptyRetrievalUnavailableReport,
@@ -328,5 +329,95 @@ describe('describeSearchLimitations / isPartialSearch', () => {
     );
     expect(text).not.toContain('\n');
     expect(text).not.toContain('[x]');
+  });
+});
+
+describe('classifyIngestionStatus', () => {
+  it('reports a fully-embedded file as ready', () => {
+    expect(classifyIngestionStatus(settled)).toBe('ready');
+  });
+
+  it('reports a legacy file with chunks but no vector count as ready', () => {
+    expect(classifyIngestionStatus({ ...settled, vectorizedChunkCount: null })).toBe('ready');
+  });
+
+  it('reports a file mid-embed as indexing', () => {
+    expect(classifyIngestionStatus({ ...settled, vectorizedChunkCount: 3 })).toBe('indexing');
+  });
+
+  it('reports a chunkless member with a rebuild pending as indexing', () => {
+    expect(
+      classifyIngestionStatus({
+        ...settled,
+        chunkCount: 0,
+        vectorizedChunkCount: 0,
+        chunkRebuildRequestedAt: new Date(),
+      })
+    ).toBe('indexing');
+  });
+
+  it('reports a kill-switch stalled file with nothing retrievable as paused', () => {
+    expect(
+      classifyIngestionStatus({ ...settled, vectorizedChunkCount: 0, chunkStallReason: CHUNK_STALL_REASONS[0] })
+    ).toBe('paused');
+  });
+
+  it('reports an errored file with nothing embedded as failed', () => {
+    expect(classifyIngestionStatus({ ...settled, vectorizedChunkCount: 0, error: 'boom' })).toBe('failed');
+    expect(classifyIngestionStatus({ ...settled, chunkCount: 0, vectorizedChunkCount: 0, error: 'boom' })).toBe(
+      'failed'
+    );
+  });
+
+  it('keeps a partly-embedded file that later errored ready, since its passages still serve', () => {
+    expect(classifyIngestionStatus({ ...settled, vectorizedChunkCount: 3, error: 'boom' })).toBe('ready');
+  });
+
+  it('reports a file with no chunks and no error as not_ingested', () => {
+    expect(classifyIngestionStatus({ id: 'f1', chunkCount: 0, vectorizedChunkCount: 0 })).toBe('not_ingested');
+    expect(classifyIngestionStatus({ id: 'f1' })).toBe('not_ingested');
+  });
+
+  // The defect this closes: a legacy row (predates vectorizedChunkCount) that later errored still
+  // has its chunks to serve, so `partitionByIndexAvailability` counts it servable - the status must
+  // agree and say `ready`, not `failed`.
+  it('reports a legacy null-count file that later errored as ready, not failed', () => {
+    expect(classifyIngestionStatus({ ...settled, vectorizedChunkCount: null, error: 'boom' })).toBe('ready');
+  });
+
+  // Property check: for every fixture below, `classifyIngestionStatus` must call a file 'indexing'
+  // or 'paused' exactly when `partitionByIndexAvailability` withholds it - and must never call a
+  // SERVABLE file either of those two - so the per-file status a caller polls can never disagree
+  // with what search actually withheld for that file.
+  it.each([
+    ['fully embedded', settled],
+    ['legacy null count', { ...settled, vectorizedChunkCount: null }],
+    ['legacy null count, errored', { ...settled, vectorizedChunkCount: null, error: 'boom' }],
+    ['mid-embed', { ...settled, vectorizedChunkCount: 3 }],
+    ['zero vectors, no error', { ...settled, vectorizedChunkCount: 0 }],
+    ['zero vectors, errored', { ...settled, vectorizedChunkCount: 0, error: 'boom' }],
+    ['partly-embedded, errored', { ...settled, vectorizedChunkCount: 3, error: 'boom' }],
+    ['chunkless, no error', { ...settled, chunkCount: 0, vectorizedChunkCount: 0 }],
+    ['chunkless, unknown row', { id: 'f1' }],
+    [
+      'kill-switch abandoned, zero vectors',
+      { ...settled, vectorizedChunkCount: 0, chunkStallReason: 'vectorizePaused' as const },
+    ],
+    [
+      'kill-switch abandoned, repaired',
+      { ...settled, vectorizedChunkCount: 8, chunkStallReason: 'vectorizePaused' as const },
+    ],
+    [
+      'chunkless, paused re-chunk',
+      { ...settled, chunkCount: 0, vectorizedChunkCount: 0, chunkStallReason: 'rechunkPaused' as const },
+    ],
+    [
+      'chunkless, rebuild pending',
+      { ...settled, chunkCount: 0, vectorizedChunkCount: 0, chunkRebuildRequestedAt: new Date() },
+    ],
+  ] as const)('agrees with partitionByIndexAvailability for: %s', (_label, file) => {
+    const withheld = partitionByIndexAvailability([file]).withheld.length > 0;
+    const status = classifyIngestionStatus(file);
+    expect(status === 'indexing' || status === 'paused').toBe(withheld);
   });
 });

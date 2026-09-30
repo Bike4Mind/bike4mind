@@ -305,13 +305,28 @@ export interface IDataLake {
    * #1674 governance path - see isTrustedForInjection), the holder of an owner/curator GRANT on it
    * (#2495), or a manager admitted to a scoped session via `preauthorizedLakeIds`. A user who
    * reaches the lake only by a tag, an entitlement, or a `reader` grant reads it WITHOUT this
-   * prompt. Note the org arm is membership, not manage rights - so "trusted" is deliberately
+   * prompt, unless the lake opts in via `injectPromptForReaders` AND that user's session explicitly
+   * scopes to the lake. Note the org arm is membership, not manage rights - so "trusted" is deliberately
    * curator-or-above for the GRANT arm specifically, not a property of the whole rule. The org
    * prompt stays authoritative on conflict. Editable
    * only via canManageLake and withheld from non-managers by the server; uncapped, matching
    * the other system prompts in the codebase. Absent/empty = no per-lake prompt.
    */
   systemPrompt?: string;
+  /**
+   * Manager-set opt-in: `systemPrompt` also steers a READER who reaches the lake by its
+   * `requiredUserTag` / `requiredEntitlement`, but only on a session scoped to this lake
+   * (`session.retrievalTags`). That scope is produced any of several ways: the `lakeScope` picker
+   * or a `dataLakeId` create seed at session creation, a direct write of `retrievalTags` (session
+   * update), or derivation from a lake file attached to an otherwise-unscoped session - attaching
+   * one of the lake's files counts as consent too. It is always the session OWNER's scope, honored
+   * only on the owner's own turns (never a share's or a teammate's) - so an opted-in lake can never
+   * steer a turn that merely happened to retrieve from it, or a turn acting on someone else's
+   * session - see the READER OPT-IN arm in getAccessibleDataLakePrompts. Reader-visible, so a
+   * reader can see a prompt is active. Has no effect on a lake with no tag/entitlement gate.
+   * Absent = false.
+   */
+  injectPromptForReaders?: boolean;
   /**
    * Optional preferred registry system prompt for this lake, by `promptId` (e.g. 'triage_router').
    * When a session is created FOR this lake (see resolveLakeSessionDefaults), this seeds the
@@ -525,6 +540,11 @@ export interface IDataLake {
    * recording a mark that would name none of the pre-existing archived rows.
    */
   filesArchivedAt?: Date | null;
+  /**
+   * Which accept request holds the `purging` claim - see `claimPurging`. Set with the claim and
+   * unset on release; meaningless on any other status.
+   */
+  purgeClaimId?: string;
   /**
    * Per-lake opt-in to lake memory: gates BOTH extraction-on-ingest and recall injection for
    * this lake specifically. `EnableLakeMemory` (the platform setting) gates whether the option is
@@ -874,8 +894,12 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * would let a restore that read `deleted` before this claim write its terminal `active` after
    * it. The sweep would then fail its guard and be swallowed as permanently-invalid - the exact
    * abandonment #1744 exists to remove, just through a narrower window.
+   *
+   * `claimId` is stored with the claim (and rides on the cleanup queue message) so the accepting
+   * request and the consumer can later release exactly that claim (`releasePurgingToDeleted(id,
+   * claimId)`) and never one a concurrent request committed.
    */
-  claimPurging(id: string): Promise<boolean>;
+  claimPurging(id: string, claimId: string): Promise<boolean>;
   /**
    * Enter `restoring` from a soft-deleted lake, claimed rather than set so it cannot overwrite a
    * `purging` accepted between the caller's status read and this write - the mirror of the race
@@ -935,8 +959,13 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * ONLY safe for a sweep that failed BEFORE destroying anything. `cleanupDeletedDataLake` throws
    * `BadRequestError` exclusively from its two entry guards, which is what makes the consumer's
    * use of this correct; a partially-swept lake must stay `purging` and be recovered by DLQ replay.
+   *
+   * With `claimId`, releases only the claim `claimPurging` stored under that id: the accepting route
+   * and the consumer (via the id carried on the queue message) both pass it, so neither a failed
+   * request nor a redelivered message can release a concurrent claim, which would requeue #1744.
+   * Without it, only a claim that has no id (taken before ids were stored), for queue messages enqueued before the id rode along.
    */
-  releasePurgingToDeleted(id: string): Promise<boolean>;
+  releasePurgingToDeleted(id: string, claimId?: string): Promise<boolean>;
   /**
    * Per-lake concurrency claim for the memory producer (#1440): stamp `lakeMemoryExtractionAt = at` only
    * if no run currently holds the lease - the field is unset, OR its stamp is older than `staleBefore`

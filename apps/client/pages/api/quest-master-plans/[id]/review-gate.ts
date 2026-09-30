@@ -1,6 +1,6 @@
 import { REVIEW_GATE_STATUS_VALUES } from '@bike4mind/common';
 import { questMasterPlanRepository } from '@bike4mind/database';
-import { BadRequestError } from '@bike4mind/common';
+import { BadRequestError, NotFoundError } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -34,11 +34,14 @@ const handler = baseApi()
 
     const updatedPlan = await questMasterPlanRepository.updateReviewGate(
       planId,
+      req.user!.id,
       questId,
       subQuestId,
       reviewStatus,
       reviewNote
     );
+
+    if (!updatedPlan) throw new NotFoundError('Quest plan not found');
 
     res.json({ success: true, plan: updatedPlan });
   });

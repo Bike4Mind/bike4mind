@@ -4,6 +4,7 @@ import axios from 'axios';
 const { apiPost, apiPut } = vi.hoisted(() => ({ apiPost: vi.fn(), apiPut: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: apiPost, put: apiPut, delete: vi.fn() } }));
 
+import { StorageLimitExceededError } from '@client/app/utils/storageQuota';
 import {
   classifyUploadError,
   foldersTagsForBatch,
@@ -67,6 +68,16 @@ describe('classifyUploadError', () => {
   it('never blames name/prefix on a 422 in append mode', () => {
     const res = classifyUploadError(axiosError(422), { config: { name: '!', tagPrefix: ':' }, isAppend: true });
     expect(res.message).toBe('Your data lake settings were rejected. Review them and try again.');
+  });
+
+  // Not 'validation': that kind shows the Name/Tag Prefix "Common fixes" hint (UploadStep.tsx),
+  // which has nothing to do with a storage refusal.
+  it('classifies a storage-limit refusal as server, not validation', () => {
+    const quota = { usedBytes: 10, limitBytes: 8 };
+    const check = { status: 'exceeds' as const, quota, uploadBytes: 8, bytesToFree: 2 };
+    const res = classifyUploadError(new StorageLimitExceededError(check), CREATE);
+    expect(res.kind).toBe('server');
+    expect(res.message).toBe(new StorageLimitExceededError(check).message);
   });
 
   it('maps 5xx to the server-problem message and surfaces a curated 4xx server message', () => {

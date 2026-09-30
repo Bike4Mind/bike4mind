@@ -50,14 +50,14 @@ describe('requestEmailChange', () => {
 
     expect(mockAdapters.db.users.findById).toHaveBeenCalledWith(baseParams.userId);
     expect(mockAdapters.db.users.findByEmail).toHaveBeenCalledWith(baseParams.newEmail);
-    expect(mockAdapters.db.users.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pendingEmail: baseParams.newEmail,
-        pendingEmailToken: expect.any(String),
-        pendingEmailSentAt: expect.any(Date),
-        pendingEmailExpires: expect.any(Date),
-      })
-    );
+    expect(mockAdapters.db.users.update).toHaveBeenCalledWith({
+      id: baseParams.userId,
+      pendingEmail: baseParams.newEmail,
+      pendingEmailToken: expect.any(String),
+      pendingEmailSentAt: expect.any(Date),
+      pendingEmailExpires: expect.any(Date),
+      pendingEmailUsed: null,
+    });
     expect(mockAdapters.mailer.sendEmailChangeVerification).toHaveBeenCalledWith(
       expect.objectContaining({ email: mockUser.email }),
       baseParams.newEmail,

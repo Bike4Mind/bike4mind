@@ -32,6 +32,22 @@ vi.mock('../mementoService', async importOriginal => ({
   getRelevantMementos: getRelevantMementosMock,
 }));
 
+// Spy that KEEPS the real implementation - the reader opt-in tests below assert on the literal
+// options object this call site passes (including readerConsentDatalakeTags), which an outcome-only
+// assertion cannot pin: a resolver that quietly derived consent from something else could still
+// admit the same lake and pass every outcome check.
+const getAccessibleDataLakePromptsSpy = vi.hoisted(() => vi.fn());
+vi.mock('../dataLakeService/getDataLakePrompts', async importOriginal => {
+  const actual = await importOriginal<typeof import('../dataLakeService/getDataLakePrompts')>();
+  return {
+    ...actual,
+    getAccessibleDataLakePrompts: (...args: Parameters<typeof actual.getAccessibleDataLakePrompts>) => {
+      getAccessibleDataLakePromptsSpy(...args);
+      return actual.getAccessibleDataLakePrompts(...args);
+    },
+  };
+});
+
 const makeQuest = (overrides: Partial<IChatHistoryItemDocument> = {}): IChatHistoryItemDocument =>
   ({
     id: 'quest1',
@@ -1156,6 +1172,26 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       annDb.vectorSearch.mockResolvedValue([]);
       const { quest, content } = await run(ctx);
       expect(annDb.vectorSearch).toHaveBeenCalledTimes(1);
+      expect(content).not.toContain(targetHeading);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('vector index returned no hits'));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+      expect((quest.promptMeta as { retrievalCoverage?: { partial: boolean } }).retrievalCoverage?.partial).toBe(true);
+    });
+
+    it('applies no score floor: a weak hit still ranks its file into the pick', async () => {
+      // A raw 0.1 denormalizes to -0.8, which any minScore the seam applied would drop.
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      annDb.vectorSearch.mockResolvedValue([{ id: `ch-${TARGET}`, fabFileId: TARGET, text: '', score: 0.1 }]);
+      const { content } = await run(ctx);
+      expect(content).toContain(targetHeading);
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+    });
+
+    it('falls back, and reports the by-name cut, when every hit names a file outside the listing', async () => {
+      // Nothing to rank on: without this the pick would keep the input order while reporting relevance.
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      annDb.vectorSearch.mockResolvedValue([{ id: 'ch-ghost', fabFileId: 'ghost', text: '', score: 0.99 }]);
+      const { quest, content } = await run(ctx);
       expect(content).not.toContain(targetHeading);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('vector index returned no hits'));
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
@@ -2315,24 +2351,28 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
     expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBe(1);
   });
 
-  it('leaves promptMeta.retrieval unset when no lake-tagged file was grounded on (site never ran)', async () => {
+  it('records present-and-empty injectedLakePromptIds when no lake-tagged file was grounded on, without calling the resolver', async () => {
     const quest = makeQuest();
+    const ctx = makeCtx([{ id: 'plain', fileName: 'plain.pdf', tags: [] }], [makeLake()]);
     const feature = new KnowledgeRetrievalFeature(
-      makeCtx([{ id: 'plain', fileName: 'plain.pdf', tags: [] }], [makeLake()]) as unknown as ConstructorParameters<
-        typeof KnowledgeRetrievalFeature
-      >[0]
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
     );
     await feature.getContextMessages(
       quest,
       embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
       'anything'
     );
-    // No datalake-tagged file was grounded on, so resolveRetrievedLakePromptMessage's own write
-    // never runs (contrast prependRetrievedLakePrompts, whose site runs even when its scoped tags
-    // resolve to no qualifying prompt) - only the coarser outcome-tracking write elsewhere in this
-    // feature touches promptMeta.retrieval here.
-    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toBeUndefined();
-    expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBeUndefined();
+    // The site still ran (it recorded attempted:true + present-and-empty ids) even though no
+    // datalake-tagged file was grounded on - "the site ran and found no lake file" must stay
+    // distinguishable from "the site never ran". But it returns BEFORE ever resolving prompts, so
+    // getAccessibleDataLakePrompts' own DB read never fires - only retrieval's OWN lake-access
+    // resolution (getDynamicDataLakeAccess) calls this same mock, once, to build the search scope.
+    // getAccessibleDataLakePrompts would be a SECOND call (with a 2-key options object, no
+    // orgGrantedLakes - getDynamicDataLakeAccess's own call carries that extra key), so pinning the
+    // count to 1 is what proves the injection resolver's read never happened.
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual([]);
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBe(0);
+    expect(ctx.db.dataLakes?.findActiveByUserTagsAndEntitlements).toHaveBeenCalledTimes(1);
   });
 
   // The field measures MEMBERSHIP in the admitted set, not causation: a lake the caller could
@@ -2478,6 +2518,69 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
       'anything'
     );
     expect(quest.promptMeta?.retrieval?.grantedLakeIdsUsed).toBeUndefined();
+  });
+
+  describe('reader opt-in arm (injectPromptForReaders)', () => {
+    // Not the creator, no org, no grant, no preauth - only the reader opt-in arm could admit this.
+    const makeReaderLake = () =>
+      makeLake({
+        createdByUserId: 'someone-else',
+        requiredUserTag: 'reader-team',
+        injectPromptForReaders: true,
+        systemPrompt: 'Reader-visible prompt.',
+      });
+
+    it('forwards the ctor readerConsentDatalakeTags arg into the injection call, admitting + recording the opt-in arm', async () => {
+      const quest = makeQuest();
+      const ctx = makeCtx([lakeFile('fA', 'datalake:x')], [makeReaderLake()]);
+      ctx.user.tags = ['reader-team'];
+      getAccessibleDataLakePromptsSpy.mockClear();
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:x'],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        // An extra tag for a lake this call never retrieved from - proves the resolver receives the
+        // constructor's OWN consent arg verbatim, not a derivation from retrievalTags/the retrieved
+        // datalakeTags list.
+        ['datalake:x', 'datalake:never-retrieved']
+      );
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'anything'
+      );
+      expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual(['lakeX']);
+      expect(quest.promptMeta?.retrieval?.readerOptInLakeIdsUsed).toEqual(['lakeX']);
+      expect(getAccessibleDataLakePromptsSpy).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          readerConsentDatalakeTags: ['datalake:x', 'datalake:never-retrieved'],
+        })
+      );
+    });
+
+    it('does NOT admit the reader opt-in arm when the session grants no consent, even with retrievalTags set', async () => {
+      const quest = makeQuest();
+      const ctx = makeCtx([lakeFile('fA', 'datalake:x')], [makeReaderLake()]);
+      ctx.user.tags = ['reader-team'];
+      // retrievalTags (scoping) is set, but the readerConsentDatalakeTags ctor arg (consent) is
+      // not - proving the two are independent: scoping retrieval to this lake is not, by itself,
+      // consent to inject its prompt (see ToolContext.sessionReaderConsentDatalakeTags).
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:x']
+      );
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'anything'
+      );
+      expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual([]);
+      expect(quest.promptMeta?.retrieval?.readerOptInLakeIdsUsed).toBeUndefined();
+    });
   });
 });
 
@@ -3402,7 +3505,13 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
     createdAt: new Date(createdAt),
   });
 
-  const makeCtx = (opts: { files: Array<Record<string, unknown>>; collapseEnabled?: boolean; score?: number }) => {
+  const makeCtx = (opts: {
+    files: Array<Record<string, unknown>>;
+    collapseEnabled?: boolean;
+    score?: number;
+    hasMore?: boolean;
+    settings?: Record<string, unknown>;
+  }) => {
     const vector = vectorScoring(opts.score ?? 1);
     return {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
@@ -3410,7 +3519,11 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
       db: {
         organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
         fabfiles: {
-          search: vi.fn().mockResolvedValue({ data: opts.files, hasMore: false, total: opts.files.length }),
+          search: vi.fn().mockResolvedValue({
+            data: opts.files,
+            hasMore: opts.hasMore ?? false,
+            total: opts.files.length,
+          }),
         },
         fabfilechunks: {
           findByFabFileId: vi.fn(),
@@ -3423,9 +3536,10 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
           findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([LAKE]),
         },
         adminSettings: {
-          getSettingsValue: vi.fn(async (key: string) =>
-            key === 'EnableRetrievalSupersessionCollapse' ? (opts.collapseEnabled ?? false) : undefined
-          ),
+          getSettingsValue: vi.fn(async (key: string) => {
+            if (opts.settings && key in opts.settings) return opts.settings[key];
+            return key === 'EnableRetrievalSupersessionCollapse' ? (opts.collapseEnabled ?? false) : undefined;
+          }),
         },
         lakeAccessEvents: { record },
       },
@@ -3523,6 +3637,8 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
     expect(input).toMatchObject({
       surface: 'forced-retrieval',
       servedNothing: true,
+      // One file, whole listing: nothing was cut, so this row must not claim the cap was reached.
+      candidateCapReached: false,
       // The scope that was SEARCHED - there is no returned file whose tags could be reversed here.
       resolvedLakeIds: ['lakeZ'],
       fileIds: [],
@@ -3564,6 +3680,74 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
     // The grounded write never mentions the flag at all, so key absence is the real assertion here.
     expect(recordedInput()).not.toHaveProperty('servedNothing');
     expect(recordedInput()?.fileIds).toEqual(['only']);
+  });
+
+  it('records candidateCapReached: true on a zero row when the listing was cut off', async () => {
+    await run(makeCtx({ files: [generation('only', '2025-01-01')], score: 0.1, hasMore: true }), ['datalake:z']);
+    expect(recordedInput()).toMatchObject({ servedNothing: true, candidateCapReached: true });
+  });
+
+  /**
+   * candidateCapReached after the >100-file candidate pick. The listing itself is whole here
+   * (`hasMore: false`), so only the pick decides the value: a relevance pick chose the candidates
+   * by ANN rank over the whole listing, so no file was cut by name, while the by-name fallback
+   * trimmed the servable set, which is a cut the row has to own. Vector search stays on in both, so
+   * the listing limit (1000) is the same and the ANN outcome is the only variable.
+   */
+  describe('candidateCapReached after candidate selection', () => {
+    const lakeFiles = Array.from({ length: 150 }, (_, i) => {
+      const n = String(i).padStart(3, '0');
+      return {
+        id: `f${n}`,
+        fileName: `doc-${n}.pdf`,
+        tags: [{ name: 'datalake:z' }],
+        vectorized: true,
+        embeddingModel: 'text-embedding-ada-002',
+        chunkCount: 1,
+        vectorizedChunkCount: 1,
+        chunkEmbeddingModelStampedAt: new Date('2026-01-01T00:00:00Z'),
+        createdAt: new Date('2025-01-01'),
+      };
+    });
+
+    const ROWS = {
+      grounded: { score: 1, retrievalTags: undefined, servedNothing: false },
+      'served-nothing': { score: 0.1, retrievalTags: ['datalake:z'], servedNothing: true },
+    } as const;
+
+    it.each([
+      { row: 'grounded', pick: 'relevance', expected: false },
+      { row: 'served-nothing', pick: 'relevance', expected: false },
+      { row: 'grounded', pick: 'by-name fallback', expected: true },
+      { row: 'served-nothing', pick: 'by-name fallback', expected: true },
+    ] as const)('$row row after a $pick pick: candidateCapReached $expected', async ({ row, pick, expected }) => {
+      const { score, retrievalTags, servedNothing } = ROWS[row];
+      const ctx = makeCtx({ files: lakeFiles, score, settings: { EnableDataLakeVectorSearch: true } });
+      const annDb = {
+        getAtlasIndexStatus: vi.fn().mockResolvedValue({ queryable: true, status: 'READY' }),
+        vectorSearch: vi.fn().mockResolvedValue([
+          { id: 'ch-f149', fabFileId: 'f149', score: 0.97 },
+          { id: 'ch-f000', fabFileId: 'f000', score: 0.2 },
+        ]),
+      };
+      if (pick === 'by-name fallback') annDb.vectorSearch.mockRejectedValue(new Error('mongot unavailable'));
+      Object.assign(ctx.db.fabfilechunks, annDb);
+
+      await run(ctx, retrievalTags ? [...retrievalTags] : undefined);
+
+      // Guards that the >100 pick ran (not the 'all' shortcut) and that the intended row fired.
+      expect(annDb.vectorSearch).toHaveBeenCalled();
+      const warnMessages = vi.mocked(ctx.logger.warn).mock.calls.map(([message]) => String(message));
+      if (pick === 'by-name fallback') {
+        expect(warnMessages).toContainEqual(expect.stringContaining('ANN candidate pick failed'));
+      } else {
+        expect(warnMessages.filter(m => m.includes('ANN candidate pick'))).toEqual([]);
+      }
+      const input = recordedInput();
+      if (servedNothing) expect(input).toMatchObject({ servedNothing: true });
+      else expect(input).not.toHaveProperty('servedNothing');
+      expect(input?.candidateCapReached).toBe(expected);
+    });
   });
 });
 

@@ -1,5 +1,6 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { userRepository, withTransaction } from '@bike4mind/database';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { userService } from '@bike4mind/services';
@@ -14,7 +15,7 @@ interface RequestQuery {
 }
 
 // Admin-only endpoint to resend email verification for a specific user
-const handler = baseApi({ auth: true })
+const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {

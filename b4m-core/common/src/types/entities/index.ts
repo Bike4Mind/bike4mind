@@ -117,3 +117,4 @@ export * from './UserComplianceTypes';
 export * from './AdminSupportAccessTypes';
 export * from './AuthSessionTypes';
 export * from './WorkItemTypes';
+export * from './QaTypes';

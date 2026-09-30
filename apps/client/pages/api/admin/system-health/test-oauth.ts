@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError, BadRequestError } from '@server/utils/errors';
 import { rateLimit } from '@server/middlewares/rateLimit';
@@ -72,7 +73,7 @@ const inputSchema = z.object({
  * 2. The provider endpoint is reachable
  * 3. The configuration is valid (e.g., Okta audience URL is correct)
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .use(
     rateLimit({
       limit: 5,

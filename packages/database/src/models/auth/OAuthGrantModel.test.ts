@@ -70,4 +70,55 @@ describe('OAuthGrantModel repository', () => {
     await oauthGrantRepository.upsertGrant({ userId: 'u3', clientId: 'c3', scopes: ['openid'], source: 'authorize' });
     expect((await oauthGrantRepository.findGrant('u3', 'c3'))?.scopes).toEqual(['openid']);
   });
+
+  it('revoke returns null for an already-revoked grant instead of re-stamping revokedAt', async () => {
+    await oauthGrantRepository.upsertGrant({ userId: 'u8', clientId: 'c8', scopes: ['openid'], source: 'authorize' });
+    const first = await oauthGrantRepository.revoke('u8', 'c8');
+    expect(first).not.toBeNull();
+    // A second revoke on an already-revoked grant must return null, not update the timestamp.
+    const second = await oauthGrantRepository.revoke('u8', 'c8');
+    expect(second).toBeNull();
+  });
+
+  it('listActiveByUser returns only non-revoked grants for that user', async () => {
+    await oauthGrantRepository.upsertGrant({ userId: 'u6', clientId: 'c6a', scopes: ['openid'], source: 'authorize' });
+    await oauthGrantRepository.upsertGrant({ userId: 'u6', clientId: 'c6b', scopes: ['profile'], source: 'authorize' });
+    // Revoke one; only the active grant should be listed.
+    await oauthGrantRepository.revoke('u6', 'c6a');
+
+    const active = await oauthGrantRepository.listActiveByUser('u6');
+    expect(active).toHaveLength(1);
+    expect(active[0].clientId).toBe('c6b');
+  });
+
+  it('listActiveByUser returns active grants sorted by updatedAt desc (most-recently approved first)', async () => {
+    // Insert in a deliberate order; the most-recently upserted one should appear first
+    // because upsertGrant bumps updatedAt, matching the approvedAt the API returns.
+    await oauthGrantRepository.upsertGrant({ userId: 'u8', clientId: 'c8a', scopes: ['openid'], source: 'authorize' });
+    await oauthGrantRepository.upsertGrant({ userId: 'u8', clientId: 'c8b', scopes: ['email'], source: 'authorize' });
+
+    const activeAfterInitial = await oauthGrantRepository.listActiveByUser('u8');
+    // c8b was approved last so it should be first
+    expect(activeAfterInitial[0].clientId).toBe('c8b');
+    expect(activeAfterInitial[1].clientId).toBe('c8a');
+
+    // Re-approving c8a (e.g. after a revoke+re-consent) bumps its updatedAt and moves it to front
+    await oauthGrantRepository.revoke('u8', 'c8a');
+    await oauthGrantRepository.upsertGrant({ userId: 'u8', clientId: 'c8a', scopes: ['openid'], source: 'authorize' });
+
+    const activeAfterReapprove = await oauthGrantRepository.listActiveByUser('u8');
+    expect(activeAfterReapprove[0].clientId).toBe('c8a');
+    expect(activeAfterReapprove[1].clientId).toBe('c8b');
+  });
+
+  it('listActiveByUser returns an empty array when the user has no active grants', async () => {
+    const active = await oauthGrantRepository.listActiveByUser('u-nobody');
+    expect(active).toEqual([]);
+  });
+
+  it('listActiveByUser does not return grants belonging to a different user', async () => {
+    await oauthGrantRepository.upsertGrant({ userId: 'u7', clientId: 'c7', scopes: ['email'], source: 'authorize' });
+    const active = await oauthGrantRepository.listActiveByUser('u-other');
+    expect(active).toHaveLength(0);
+  });
 });

@@ -32,6 +32,7 @@ export interface IMcpServerDocument extends IMongoDocument {
   enabled: boolean;
   metadata?: {
     githubLogin?: string;
+    githubUserId?: number; // GitHub's immutable account id; the login can be renamed
     scope?: string;
     connectedAt?: string;
     disconnectedAt?: string;

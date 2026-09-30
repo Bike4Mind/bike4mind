@@ -52,6 +52,8 @@ export const createMockShareableRepository = <T>(): IShareableStaticMethods<T> =
 export const createMockProjectRepository = (): IProjectRepository => ({
   ...createMockRepository<IProjectDocument>(),
   shareable: createMockShareableRepository<IProjectDocument>(),
+  // Echoes the patch so a test that does not care about the write-time re-check sees a success.
+  updateWithUpdateAccess: vi.fn(async (_user, data) => data as IProjectDocument),
   findByIdAndUserId: vi.fn(),
   searchAccessible: vi.fn(),
   removeSession: vi.fn(),
@@ -61,6 +63,7 @@ export const createMockProjectRepository = (): IProjectRepository => ({
 export const createMockSessionAgentConfigRepository = (): ISessionAgentConfigRepository => ({
   ...createMockRepository<ISessionAgentConfigDocument>(),
   findBySessionAndAgent: vi.fn(),
+  updateBySessionAndAgent: vi.fn(),
   findBySessionId: vi.fn(),
   findAllWithProactiveMessagingEnabled: vi.fn(),
   updateLastProactiveMessageAt: vi.fn(),
@@ -113,6 +116,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   findByDriveFileIdsInDataLake: vi.fn(),
   findByDriveConnectionIdInDataLake: vi.fn(),
   countByDriveConnectionIdInDataLake: vi.fn(),
+  findByGitHubConnectionIdInDataLake: vi.fn(),
   findDriveFileIdsByBatchId: vi.fn(),
   markUploaded: vi.fn(),
   markFailedIfNotAlready: vi.fn(),
@@ -227,6 +231,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     removeGroupsFromAllUsers: vi.fn(),
     addGroupToUser: vi.fn(),
     removeGroupFromUser: vi.fn(),
+    recordReferrals: vi.fn(),
     removeGroupsFromUser: vi.fn(),
     findUserIdsByGroupIds: vi.fn(),
     findByIds: vi.fn(),
@@ -265,6 +270,7 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     incrementCurrentStorage: vi.fn(),
     findByIdAndUserId: vi.fn(),
     ensureUserDetails: vi.fn(),
+    removeMember: vi.fn(),
     updateUserDetails: vi.fn(),
     findMembershipOrgIds: vi.fn(),
     findMemberUserIds: vi.fn(),

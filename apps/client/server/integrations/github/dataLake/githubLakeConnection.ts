@@ -1,12 +1,14 @@
 import type { Response } from 'express';
 import {
   dataLakeRepository,
+  fabFileRepository,
   orgGitHubLakeConnectionRepository,
   orgGoogleDriveConnectionRepository,
 } from '@bike4mind/database';
 import {
   acceptsConnectorContent,
   isLakeIngestable,
+  type IDataLakeDocument,
   type IOrgGitHubLakeConnectionDocument,
   type IOrgGitHubLakeConnectionResponse,
 } from '@bike4mind/common';
@@ -14,7 +16,12 @@ import { Logger } from '@bike4mind/observability';
 import { createStateToken, verifyStateToken, type BaseStatePayload } from '@server/auth/jwtStateStore';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
+import {
+  purgeConnectionIngestedFiles,
+  type PurgeConnectionLogger,
+} from '@server/dataLakes/purgeConnectionIngestedFiles';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { sendToQueue } from '@server/utils/sqs';
 import {
   BadRequestError,
   ConflictError,
@@ -23,6 +30,7 @@ import {
   NotFoundError,
   UnauthorizedError,
 } from '@server/utils/errors';
+import { Resource } from 'sst';
 import {
   deleteInstallation,
   exchangeInstallerCode,
@@ -187,8 +195,9 @@ export async function completeGitHubLakeConnection(params: {
   dataLakeId: string;
   installationId: number;
   code: string;
+  logger: Pick<Logger, 'warn'>;
 }): Promise<IOrgGitHubLakeConnectionDocument> {
-  const { config, user, dataLakeId, installationId, code } = params;
+  const { config, user, dataLakeId, installationId, code, logger } = params;
   const { lakeId, organizationId } = await resolveConnectableLake(user, dataLakeId);
 
   const visibleRepositories = await listReposVisibleToInstaller(config, code, installationId);
@@ -215,8 +224,9 @@ export async function completeGitHubLakeConnection(params: {
     );
   }
 
+  let connection: IOrgGitHubLakeConnectionDocument;
   try {
-    return await orgGitHubLakeConnectionRepository.create({
+    connection = await orgGitHubLakeConnectionRepository.create({
       organizationId,
       targetDataLakeId: lakeId,
       installationId,
@@ -233,26 +243,127 @@ export async function completeGitHubLakeConnection(params: {
     }
     throw error;
   }
+
+  // Best-effort: the binding is valid without it and a manual re-sync runs the same ingest. Inside the try
+  // because an unregistered Resource key throws on the property read, before sendToQueue is called.
+  try {
+    await sendToQueue(Resource.githubLakeIngestQueue.url, { connectionId: connection.id });
+  } catch (error) {
+    logger.warn('GitHub lake connect: could not queue the first ingest', { connectionId: connection.id, error });
+    // lastError makes the failure visible on the connection (status stays 'connected' so the sync
+    // route's isGitHubLakeSyncClaimLive check still accepts a manual re-sync); a later successful
+    // sync clears it via recordSynced. Best-effort like the enqueue itself - never fails the connect.
+    await orgGitHubLakeConnectionRepository
+      .recordLastError(connection.id, 'Initial sync could not be queued. Re-sync to start.')
+      .catch(e =>
+        logger.warn('GitHub lake connect: could not record the enqueue failure', {
+          connectionId: connection.id,
+          error: e,
+        })
+      );
+  }
+  return connection;
 }
 
 /**
  * Releases a connection. The installation is account-wide and may serve other lakes, so the App is
  * uninstalled only with its last binding; otherwise it keeps read access to this repository until
  * the account owner deselects it on GitHub (an App cannot drop one repository from its own install),
- * which `installationRetained` tells the caller. Uninstall runs before the row is deleted so a
- * GitHub failure leaves the connection in place to retry instead of an orphaned install.
+ * which `installationRetained` tells the caller. A sole binding uninstalls before its row is deleted
+ * so a GitHub failure leaves the connection in place to retry instead of an orphaned install; the
+ * concurrent-release branch below cannot, so its retry goes through uninstallIfUnbound instead.
  */
 export async function releaseGitHubLakeConnection(
   connection: IOrgGitHubLakeConnectionDocument,
   config: GitHubLakeAppConfig | null
 ): Promise<{ installationRetained: boolean }> {
   const bindings = await orgGitHubLakeConnectionRepository.findByInstallationId(connection.installationId);
-  const installationRetained = bindings.some(binding => binding.id !== connection.id);
-  if (!installationRetained) {
+  if (!bindings.some(binding => binding.id !== connection.id)) {
     await deleteInstallation(requireGitHubLakeAppConfig(config), connection.installationId);
+    await orgGitHubLakeConnectionRepository.release(connection.id, connection.organizationId);
+    return { installationRetained: false };
   }
   await orgGitHubLakeConnectionRepository.release(connection.id, connection.organizationId);
-  return { installationRetained };
+  // Concurrent releases of an installation's last bindings (the revoke queue's installation.deleted
+  // fan-out) each see the other and skip the uninstall, so recount after our own delete: the last one
+  // out still uninstalls. The row is already gone if that uninstall fails, so the revoke retry
+  // re-enters by installation id (revokeGitHubLakeConnection).
+  const uninstalled = await uninstallIfUnbound(connection.installationId, config);
+  return { installationRetained: !uninstalled };
+}
+
+/** deleteInstallation treats GitHub's 404 as success, so a repeat call for the same install is safe. */
+async function uninstallIfUnbound(installationId: number, config: GitHubLakeAppConfig | null): Promise<boolean> {
+  const remaining = await orgGitHubLakeConnectionRepository.findByInstallationId(installationId);
+  if (remaining.length > 0) return false;
+  await deleteInstallation(requireGitHubLakeAppConfig(config), installationId);
+  return true;
+}
+
+/**
+ * The disconnect door (DELETE github-connection): disable, purge what the connection ingested, then
+ * release. A reconnect mints a new connection id and a re-sync diffs only against its own id, so a
+ * file left behind here would be orphaned in the lake for good. Purge runs before release so a
+ * failed purge leaves the row for a retried DELETE, and the disable is healed on that failure so the
+ * connection is not left present but unable to sync. Mirrors drive-connection.ts's DELETE.
+ */
+export async function disconnectGitHubLakeConnection(
+  lake: IDataLakeDocument,
+  connection: IOrgGitHubLakeConnectionDocument,
+  logger: PurgeConnectionLogger,
+  { reenableOnPurgeFailure = true }: { reenableOnPurgeFailure?: boolean } = {}
+): Promise<{ installationRetained: boolean }> {
+  // Paired with claimForSync's `enabled` guard: a live sync would keep minting files past the purge.
+  const disabled = await orgGitHubLakeConnectionRepository.disableIfNoLiveSyncClaim(
+    connection.id,
+    connection.organizationId
+  );
+  if (!disabled) {
+    throw new ConflictError('A sync is in progress for this repository. Try disconnecting again once it finishes.');
+  }
+  await purgeConnectionIngestedFiles(
+    lake,
+    () =>
+      fabFileRepository.findByGitHubConnectionIdInDataLake(connection.id, lake.datalakeTag, { includeDeleted: true }),
+    {
+      connectionId: connection.id,
+      label: 'GitHub lake disconnect',
+      logger,
+      // Restore, don't force: an archived lake's connection was already disabled and must stay so.
+      restore: reenableOnPurgeFailure && disabled.wasEnabled ? () => enableGitHubConnectionForLake(lake.id) : undefined,
+    }
+  );
+  // The App config is only needed to uninstall; a retained installation releases without it.
+  return releaseGitHubLakeConnection(connection, getGitHubLakeAppConfig());
+}
+
+/**
+ * The revoke door (githubLakeRevoke queue, fed by the App's webhook): the same teardown as a
+ * disconnect, resolved globally because GitHub names an installation, never an org. Idempotent for
+ * redeliveries; a live sync's ConflictError is left to throw so SQS retries it.
+ */
+export async function revokeGitHubLakeConnection(
+  { connectionId, installationId }: { connectionId: string; installationId: number },
+  logger: PurgeConnectionLogger
+): Promise<void> {
+  const connection = await orgGitHubLakeConnectionRepository.findById(connectionId);
+  if (!connection) {
+    // Either a redelivery, or a retry of a concurrent release that deleted the row and then failed
+    // its uninstall (releaseGitHubLakeConnection): finish that uninstall if nothing binds it anymore.
+    const uninstalled = await uninstallIfUnbound(installationId, getGitHubLakeAppConfig());
+    logger.info('GitHub lake revoke: connection already released', { connectionId, installationId, uninstalled });
+    return;
+  }
+  const lake = await dataLakeRepository.findById(connection.targetDataLakeId);
+  if (!lake) {
+    // The lake's own delete sweep (dataLakeCleanup.ts) owns purging its files; only the
+    // connection/installation claim remains to release here.
+    await releaseGitHubLakeConnection(connection, getGitHubLakeAppConfig());
+    return;
+  }
+  // No re-enable on a failed purge: the App has lost access, so a sync could only fail; the disabled
+  // row stays for the SQS retry, and disableIfNoLiveSyncClaim accepts an already-disabled row.
+  await disconnectGitHubLakeConnection(lake, connection, logger, { reenableOnPurgeFailure: false });
 }
 
 /**
@@ -265,4 +376,13 @@ export async function releaseGitHubLakeConnectionForLake(
   const connection = await orgGitHubLakeConnectionRepository.findByDataLakeIdAny(dataLakeId);
   if (!connection) return null;
   return releaseGitHubLakeConnection(connection, getGitHubLakeAppConfig());
+}
+
+/** Archive/delete pause: flips `enabled` only, unlike releaseGitHubLakeConnectionForLake's teardown. */
+export async function disableGitHubConnectionForLake(dataLakeId: string): Promise<boolean> {
+  return orgGitHubLakeConnectionRepository.setEnabledForLake(dataLakeId, false);
+}
+
+export async function enableGitHubConnectionForLake(dataLakeId: string): Promise<boolean> {
+  return orgGitHubLakeConnectionRepository.setEnabledForLake(dataLakeId, true);
 }

@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ensureAdmin } from '@server/utils/errors';
@@ -26,7 +27,7 @@ const backfillSchema = z.object({
 
 const SAMPLE_LIMIT = 25;
 
-const handler = baseApi().post(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler(async (req, res) => {
     ensureAdmin(req.user?.isAdmin);
 

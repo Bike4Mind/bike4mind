@@ -1,10 +1,10 @@
 import {
   ExtractedArtifact,
   CurationArtifactType as ArtifactType,
+  stripArtifactTags,
   stripSearchResultCardFences,
   type CitableSource,
 } from '@bike4mind/common';
-import { stripArtifactTags } from '../utils/scanArtifactTags';
 
 /**
  * Template-based "Raw Transcript" markdown generator (Option 1) for curated notebooks.

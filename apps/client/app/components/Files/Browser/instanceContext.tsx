@@ -1,7 +1,7 @@
 import { IFabFileDocument } from '@bike4mind/common';
 import { createContext, useContext } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { useFileBrowser } from '../Browser';
+import { useFileBrowser } from '../fileBrowserStore';
 
 /**
  * Per-instance surface the file browser reads instead of talking to the module-level

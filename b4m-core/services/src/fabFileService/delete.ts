@@ -69,8 +69,8 @@ export interface DeleteFabFileAdapter extends LakeMembershipAuditAdapters {
   searchIndex?: { deleteByFabFileId: (fabFileId: string, embeddingModel: string) => Promise<void> };
   /**
    * Who drove this delete - forwarded to the membership `removed` events below (see
-   * `LakeMembershipChangeOrigin`'s own doc comment). Defaults to `'person'`; the Drive connector's
-   * sole-lake-copy delete (driveLakeIngest.ts) is the one caller that passes `'connector'`.
+   * `LakeMembershipChangeOrigin`'s own doc comment). Defaults to `'person'`; the connector ingests
+   * (driveLakeIngest.ts and githubLakeSlice.ts, through queueHandlers/lakeIngestShared.ts) pass `'connector'`.
    */
   origin?: LakeMembershipChangeOrigin;
   /**

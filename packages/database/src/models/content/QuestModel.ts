@@ -8,7 +8,7 @@ import {
   MessageContentObject,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
-import BaseRepository from '@bike4mind/db-core';
+import BaseRepository, { convertId } from '@bike4mind/db-core';
 
 export interface IChatHistoryItemModel extends Model<IChatHistoryItemDocument> {}
 
@@ -163,6 +163,8 @@ const RetrievalSummarySchema = subSchema({
   // Same shape and the same default:undefined reason as preauthorizedLakeIdsUsed above - its
   // per-arm sibling, which the two overlap by design (see both fields on the Zod side).
   grantedLakeIdsUsed: { type: [String], required: false, default: undefined },
+  // Same shape and default:undefined reason as its per-arm siblings above (see the Zod side).
+  readerOptInLakeIdsUsed: { type: [String], required: false, default: undefined },
   // default: undefined for the same auto-vivification reason as `injected` above - and here it
   // also preserves the presence contract that absence means NOT RECORDED, never "nothing excluded".
   excludedLakes: { type: ExcludedLakesSchema, required: false, default: undefined },
@@ -766,6 +768,18 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     this.ctx = null;
   }
 
+  /** Partial update of one live quest, matched only inside `sessionId` so it cannot land on another session's quest. */
+  async updateInSession(
+    sessionId: string,
+    data: Partial<IChatHistoryItemDocument> & { id: string }
+  ): Promise<IChatHistoryItemDocument | null> {
+    const { id, ...updateData } = data;
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    // deletedAt: null is explicit for readability; without it the softDeletePlugin update hook
+    // would add the same guard.
+    return this._plainUpdate({ _id: convertId(id), sessionId, deletedAt: null }, updateData as Record<string, unknown>);
+  }
+
   async findBySessionIdAndId(sessionId: string, id: string) {
     // A non-ObjectId id can never address a row - report no such row, not a CastError the
     // calling route cannot attribute. Same contract as `BaseRepository.findById`.
@@ -1039,6 +1053,38 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
           },
         ])
       : await this.model.updateOne(filter, { $set: fields });
+    return result.matchedCount > 0;
+  }
+
+  /**
+   * Set only `promptMeta.performance.clientFirstTokenTime`. The client posts it while the quest is
+   * still streaming, so a read-modify-write of the whole `promptMeta` would clobber whatever the
+   * pipeline saved in between. Returns whether a quest matched.
+   *
+   * Goes through an update pipeline, not a dotted `$set`, for the same reason as `settleIfUnfinished`:
+   * a null `promptMeta` (or `performance`) makes the dotted path error, while `$mergeObjects` treats
+   * a null or missing operand as empty.
+   */
+  async setClientFirstTokenTime(id: string, clientFirstTokenTime: number): Promise<boolean> {
+    const result = await this.model.updateOne({ _id: id }, [
+      {
+        $set: {
+          promptMeta: {
+            $mergeObjects: [
+              '$promptMeta',
+              {
+                performance: {
+                  $mergeObjects: [
+                    '$promptMeta.performance',
+                    { clientFirstTokenTime: { $literal: clientFirstTokenTime } },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      },
+    ]);
     return result.matchedCount > 0;
   }
 

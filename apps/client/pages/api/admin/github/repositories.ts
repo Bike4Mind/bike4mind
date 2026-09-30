@@ -12,6 +12,7 @@
  * @route GET /api/admin/github/repositories - Get accessible repositories
  */
 
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError, ensureAdmin } from '@server/utils/errors';
 import { Logger } from '@bike4mind/observability';
@@ -20,7 +21,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 
 const logger = new Logger({ metadata: { component: 'admin-github-repositories' } });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   // Rate limit to prevent abuse (60/hour - makes real GitHub API calls)
   .use(
     rateLimit({

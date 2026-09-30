@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { rateLimit } from '@server/middlewares/rateLimit';
@@ -22,7 +23,7 @@ export interface AvailableModalsResponse {
  * Source environment (main production with ENABLE_WHATS_NEW_DISTRIBUTION=true) generates modals.
  * Requires admin privileges.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .use(
     rateLimit({
       limit: 20,

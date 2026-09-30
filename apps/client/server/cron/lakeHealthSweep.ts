@@ -166,12 +166,17 @@ async function computeAndPersist(lake: SweepLake, snapshotDate: string, computed
 }
 
 export async function handler() {
+  return runLakeHealthSweep();
+}
+
+export async function runLakeHealthSweep(options: { emitMetrics?: boolean } = {}) {
   const stage = Resource.App.stage;
   logger.info('[LakeHealthSweep] Starting sweep', { stage });
 
   // Ahead of the connect and the scan, so a sweep that cannot reach the database still reports
   // as a run rather than looking identical to one that was never scheduled.
-  await emitMetric(CLOUDWATCH_NAMESPACE, 'LakeHealthSweepRuns', 1, { Stage: stage }, StandardUnit.Count);
+  if (options.emitMetrics !== false)
+    await emitMetric(CLOUDWATCH_NAMESPACE, 'LakeHealthSweepRuns', 1, { Stage: stage }, StandardUnit.Count);
 
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage));
 
@@ -249,8 +254,16 @@ export async function handler() {
   }
 
   logger.info('[LakeHealthSweep] Sweep complete', { scanned, failed, truncated });
-  await emitMetric(CLOUDWATCH_NAMESPACE, 'LakeHealthSweepLakesScanned', scanned, { Stage: stage }, StandardUnit.Count);
-  await emitMetric(CLOUDWATCH_NAMESPACE, 'LakeHealthSweepFailures', failed, { Stage: stage }, StandardUnit.Count);
+  if (options.emitMetrics !== false)
+    await emitMetric(
+      CLOUDWATCH_NAMESPACE,
+      'LakeHealthSweepLakesScanned',
+      scanned,
+      { Stage: stage },
+      StandardUnit.Count
+    );
+  if (options.emitMetrics !== false)
+    await emitMetric(CLOUDWATCH_NAMESPACE, 'LakeHealthSweepFailures', failed, { Stage: stage }, StandardUnit.Count);
 
   return { status: 'OK', scanned, failed, truncated };
 }

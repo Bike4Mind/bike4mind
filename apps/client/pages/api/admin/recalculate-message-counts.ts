@@ -5,7 +5,7 @@ import { ForbiddenError } from '@server/utils/errors';
 import { SpiderEvents } from '@server/utils/eventBus';
 import { v4 as uuidv4 } from 'uuid';
 import { assertSessionOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
-import { HTTPError } from '@bike4mind/common';
+import { ApiKeyScope, HTTPError } from '@bike4mind/common';
 
 type SpiderOperation = 'messageCount' | 'curation' | 'summarize' | 'tags' | 'embeddings';
 
@@ -21,7 +21,7 @@ type SpiderOperation = 'messageCount' | 'curation' | 'summarize' | 'tags' | 'emb
  * different things:
  *
  * - `summarize` keeps a plain `summaryAt: null` count. Its only content-dependent return
- *   (`server/events/sessionSummarization.ts`, after the model resolve and before the completion;
+ *   (`apps/workers/src/events/sessionSummarization.ts`, after the model resolve and before the completion;
  *   the four returns above it are argument and existence guards a counted notebook cannot hit)
  *   also requires `!needsInitialSummaryId`, and the only writer of `summaryModelId` sets it in
  *   the same update as `summaryAt` - so a notebook this leg
@@ -30,7 +30,7 @@ type SpiderOperation = 'messageCount' | 'curation' | 'summarize' | 'tags' | 'emb
  *   `summaryAt` and leaves the id (notebookImportService); such a notebook can return early only
  *   if the imported file also carried no chat history. Not narrowed for: that population is tiny,
  *   and the effect is the same harmless direction described below.
- * - `tags` cannot use `taggedAt: null` alone. `server/events/sessionTagging.ts` aborts before the
+ * - `tags` cannot use `taggedAt: null` alone. `apps/workers/src/events/sessionTagging.ts` aborts before the
  *   model when the notebook has no quest AND writes nothing, so such a notebook is dispatched,
  *   counted, and re-counted on every run while settling nothing.
  *   `countTaggableNotebooks` adds the quest-existence term that mirrors that gate.
@@ -74,7 +74,7 @@ const isSpendingSpiderOperation = (operation: SpiderOperation): operation is Spe
  * - dryRun: boolean (default: false) - If true, only simulates the job without making changes
  * - operations: string[] (default: all) - Specific operations to run
  */
-const handler = baseApi().post(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler(async (req, res) => {
     // Only admins can trigger Spider
     if (!req.user?.isAdmin) {

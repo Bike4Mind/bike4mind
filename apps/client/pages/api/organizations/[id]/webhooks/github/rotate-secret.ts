@@ -82,7 +82,7 @@ const handler = baseApi().post(
     const encryptedSecret = encryptSecret(newSecret, encryptionKey);
 
     const updatedConfig = await orgWebhookConfigRepository.update({
-      ...existingConfig,
+      id: existingConfig.id,
       secret: encryptedSecret,
     });
 

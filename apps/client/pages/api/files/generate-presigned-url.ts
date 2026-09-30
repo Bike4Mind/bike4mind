@@ -1,167 +1,19 @@
-import { PutObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { createS3Client } from '@bike4mind/fab-pipeline';
 import {
-  FabFileSourceType,
   FileGeneratePresignedUrlRequestInput,
   FileGeneratePresignedUrlRequestInputType,
   FileGeneratePresignedUrlResponseType,
-  KnowledgeType,
 } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
-import mime from 'mime-types';
-import { v4 as uuidv4 } from 'uuid';
-import {
-  adminSettingsRepository,
-  dataLakeBatchRepository,
-  dataLakeRepository,
-  dataLakeAccessGrantRepository,
-  scopedSettingsRepository,
-} from '@bike4mind/database';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { dataLakeService } from '@bike4mind/services';
-import { getSettingsMap, getSettingsValue, resolveSupportedMimeType } from '@bike4mind/utils';
-import { createFabFile } from '@server/managers/fabFileManager';
 import { baseApi } from '@server/middlewares/baseApi';
-import { logEvent } from '@server/utils/analyticsLog';
-import { FileEvents } from '@bike4mind/common';
-import { checkStorageLimit } from '@bike4mind/utils';
-import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
-import { Resource } from 'sst';
+import { createPresignedUpload } from '@server/files/createPresignedUpload';
 
-const s3Client = createS3Client();
-
+// SPA-internal door. The public API-key door is POST /api/v1/files (same admission logic).
 const handler = baseApi().post(
   asyncHandler<unknown, FileGeneratePresignedUrlResponseType, FileGeneratePresignedUrlRequestInputType>(
     async (req, res) => {
-      const expires = 600; // URL expires in 10 minutes
-
-      const userId = req.user.id;
       const data = FileGeneratePresignedUrlRequestInput.parse(req.body);
-
-      // Same effective gate as the batch-presign sibling (generate-presigned-urls-batch.ts):
-      // when this upload is bound to a data lake batch, the feature must actually be on. Same
-      // 403 + FEATURE_DISABLED code, but a different response shape - this route throws
-      // ForbiddenError (rendered by errorHandler as {code, name, error, request_id}), while the
-      // sibling still hand-rolls res.status(403).json({error, code}). Convert the sibling to
-      // throw too if exact parity is ever wanted.
-      if (data.batchId) {
-        const enabled = await adminSettingsRepository.getSettingsValue('EnableDataLakes');
-        if (!enabled) throw new ForbiddenError('Feature not available', { code: 'FEATURE_DISABLED' });
-      }
-
-      const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-      const maxFileSize = getSettingsValue('MaxFileSize', settings, MAX_FILE_SIZE_DEFAULT_MB) * 1024 * 1024;
-
-      if (!data.fileSize) throw new BadRequestError('No file size provided');
-      if (data.fileSize >= maxFileSize) throw new BadRequestError('File size exceeds maximum file size');
-
-      await checkStorageLimit(req.user, data.fileSize);
-
-      console.log('==============');
-      console.log('Generating presigned URL for file', data.fileName);
-      console.log('File size', data.fileSize);
-      console.log('Mime type', data.mimeType);
-      console.log('==============');
-
-      // Applying a lake's `datalake:*` meta-tag is a WRITE into that lake - gate it so this
-      // presign door can't be used to inject files into a lake the caller only reads. Full actor
-      // (ctx) + the grant repo so a transferred owner / curator / org admin can upload here too,
-      // matching the batch presign door (generate-presigned-urls-batch.ts).
-      const requestedTagNames = (data.tags ?? []).map(t => t.name);
-      // Covers both membership signals for this new file: a `datalake:*` meta-tag, and a plain
-      // content tag matching one of the caller's OWN lakes' `fileTagPrefix` (the prefix arm - see
-      // assertDataLakeTagWriteScope's own doc comment). Only the latter needs `userId` - this
-      // file does not exist yet, so it can only ever be a JOIN.
-      await assertDataLakeTagWriteScope(req, requestedTagNames, { userId, db: { dataLakes: dataLakeRepository } });
-      const ctx = await toAccessContext(req);
-      await dataLakeService.assertCanWriteDataLakeTags(ctx, requestedTagNames, {
-        db: {
-          dataLakes: dataLakeRepository,
-          dataLakeAccessGrants: dataLakeAccessGrantRepository,
-          adminSettings: adminSettingsRepository,
-          scopedSettings: scopedSettingsRepository,
-        },
-        // This request creates the file, so the caller is its owner-to-be and the admission
-        // contract (#1680) predicts against their chunk policy.
-        members: [{ userId }],
-        logger: req.logger,
-      });
-      // This route creates the FabFile through the manager's direct FabFile.create(), not the
-      // fabFileService.createFabFile door that gates the static-registry namespace centrally -
-      // so it needs its own check, same as the meta-tag one above.
-      dataLakeService.assertCanWriteStaticRegistryTags({ userId, isAdmin: !!req.user.isAdmin }, requestedTagNames);
-
-      // A file joining a lake must also land under that lake's content prefix, or it is
-      // invisible to tag-counts and to the Explorer's tag tree.
-      const tags = await dataLakeService.reconcileDataLakeFallbackTags(data.tags ?? [], {
-        db: { dataLakes: dataLakeRepository },
-        logger: req.logger,
-      });
-
-      // Verify batch ownership before stamping - batchId comes from the body (IDOR otherwise).
-      // Shared with the batch-presign and createFabFile routes (see assertBatchOwnership).
-      if (data.batchId) {
-        await dataLakeService.assertBatchOwnership(userId, data.batchId, { db: { batches: dataLakeBatchRepository } });
-      }
-
-      // Reject unsupported/binary types (e.g. .exe) - the chunker can't
-      // vectorize them, and the prior `mime.extension()` guard let generic
-      // binaries (application/octet-stream mapped to "bin") slip through.
-      const { mimeType, supported } = resolveSupportedMimeType(data.fileName, data.mimeType);
-      if (!supported)
-        throw new BadRequestError(
-          `File "${data.fileName}" has an unsupported file type${
-            data.mimeType ? ` (${data.mimeType})` : ''
-          }. Supported types include documents, spreadsheets, images, code, and text files.`
-        );
-
-      const ext = mime.extension(mimeType);
-      const fileKey = `${uuidv4()}${ext ? `.${ext}` : ''}`;
-
-      const command = new PutObjectCommand({
-        Bucket: Resource.fabFileBucket.name,
-        Key: fileKey,
-      });
-
-      // Create File metadata, status will be set to `pending` by default
-      const file = await createFabFile(
-        {
-          userId,
-          filePath: fileKey,
-          fileSize: data.fileSize,
-          fileName: data.fileName,
-          mimeType: mimeType,
-          type: KnowledgeType.FILE,
-          // Admission provenance (#1679): stamp the door - the web upload path the lake previously
-          // could not identify. Mirrors the batch door and the connector/chat-platform doors.
-          sourceType: FabFileSourceType.MANUAL_UPLOAD,
-          ...(data.contentHash && { contentHash: data.contentHash }),
-          ...(data.batchId && { batchId: data.batchId }),
-          ...(data.relativePath && { relativePath: data.relativePath }),
-          // Keyed on the reconciled list, not `data.tags`: reconciling can add a tag the client
-          // never sent, and gating the spread on the request's own array would drop it.
-          ...(tags.length > 0 && { tags }),
-        },
-        req.ability!
-      );
-
-      const presignedUrl = await getSignedUrl(s3Client, command, {
-        expiresIn: expires,
-      });
-
-      await logEvent(
-        {
-          userId,
-          type: FileEvents.GENERATE_FILE_PRESIGNED_URL,
-          metadata: { id: file.id, url: presignedUrl, expiry: expires },
-        },
-        { ability: req.ability }
-      );
-
-      return res.json({ url: presignedUrl, fileId: file.id, fileKey });
+      const { url, fileId, fileKey } = await createPresignedUpload(req, data);
+      return res.json({ url, fileId, fileKey });
     }
   )
 );

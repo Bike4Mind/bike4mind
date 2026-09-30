@@ -19,6 +19,7 @@ import {
   zeroProgressCounts,
 } from '@client/app/hooks/data/dataLakeUploadPipeline';
 import { activeOrgId } from '@client/app/hooks/data/dataLakes';
+import { useUser } from '@client/app/contexts/UserContext';
 
 // Re-exported for DataLakeWizardModal's pre-flight check, which imports it from this path.
 export { OFFLINE_MESSAGE };
@@ -154,10 +155,11 @@ export function useBatchUpload() {
         },
         onUploadComplete: () => {
           queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
-          // First lake unlocks the 'datalakes' nav slot; first file unlocks 'files'.
-          // Reveal them without waiting out the gears/status staleTime (#833).
+          // First lake unlocks the 'datalakes' gear; first file unlocks 'files'.
+          // Show their rewards without waiting out the gears/status staleTime.
           invalidateGearsStatusWhileLocked(queryClient, ['datalakes', 'files']);
         },
+        refreshUser: () => useUser.getState().refreshUser(),
       });
     },
     onSuccess: result => {
@@ -288,7 +290,7 @@ export function useCreateLakeFromDrive() {
       if (recoverableLake?.id === dataLakeId) setRecoverableLake(null);
       updateUploadProgress({ status: 'complete' });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
-      // First lake unlocks the 'datalakes' nav slot; no files yet, so 'files' stays locked (#833).
+      // First lake unlocks the 'datalakes' gear; no files yet, so 'files' stays locked.
       invalidateGearsStatusWhileLocked(queryClient, ['datalakes']);
 
       return { dataLakeId };

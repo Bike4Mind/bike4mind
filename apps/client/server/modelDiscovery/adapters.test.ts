@@ -164,6 +164,26 @@ describe('bedrock wiring', () => {
     // The 'discovered' Bedrock id is absent, so it still gets its entitlement call.
     expect((active as Set<string>).has('us.anthropic.claude-sonnet-9')).toBe(false);
   });
+
+  it('asks again about an active model a source auto-disabled, so the disable can be lifted', async () => {
+    rowsInForce.mockResolvedValue([
+      catalogRow('claude-sonnet-5', 'anthropic', 'active'),
+      {
+        ...catalogRow('anthropic.claude-opus-9-v1:0', 'bedrock', 'active'),
+        ownedGroups: ['identity', 'lifecycle', 'availability'],
+        patch: {
+          id: 'anthropic.claude-opus-9-v1:0',
+          backend: 'bedrock',
+          lifecycle: { status: 'active' },
+          autoDisabled: true,
+          autoDisabledReason: 'not entitled in this AWS account',
+        },
+      },
+    ]);
+    buildModelDiscoveryAdapters(logger);
+
+    expect(await captured.bedrock!.activeModelIds!()).toEqual(new Set(['claude-sonnet-5']));
+  });
 });
 
 describe('openai wiring', () => {

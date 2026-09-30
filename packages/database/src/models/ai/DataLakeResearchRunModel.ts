@@ -44,6 +44,7 @@ const ResearchRunTotalsSchema = {
   alreadyInLake: { type: Number, default: 0 },
   suppressedByTombstone: { type: Number, default: 0 },
   unusableSource: { type: Number, default: 0 },
+  notJudged: { type: Number, default: 0 },
 };
 
 /**

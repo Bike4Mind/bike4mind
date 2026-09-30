@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { ensureAdmin, NotFoundError, BadRequestError, isZodError } from '@server/utils/errors';
@@ -64,7 +65,7 @@ function zodResponse(res: Response, error: unknown): Response | null {
   return res.status(400).json({ error: 'Invalid request', details: issues, validationErrors: issues });
 }
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: ADMIN_RATE_LIMIT, windowMs: ONE_MINUTE_MS }))
   // Read the full modal INCLUDING its raw variants map (for admin editing).
   .get(async (req: Request, res: Response) => {

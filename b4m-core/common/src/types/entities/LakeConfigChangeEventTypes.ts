@@ -172,6 +172,7 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   slug: 'audited',
   description: 'audited',
   systemPrompt: 'audited',
+  injectPromptForReaders: 'audited',
   preferredSystemPromptId: 'audited',
   groundingMode: 'audited',
   requiredPassageTokenTarget: 'audited',
@@ -202,6 +203,7 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   lastInconsistencyScanAt: 'excluded',
   filesDeletedAt: 'excluded',
   filesArchivedAt: 'excluded',
+  purgeClaimId: 'excluded',
   lakeMemoryExtractionAt: 'excluded',
   lakeMemoryCursor: 'excluded',
   // The purge itself is audited as its own event (LAKE_MEMORY_PURGED); a config row for the fence

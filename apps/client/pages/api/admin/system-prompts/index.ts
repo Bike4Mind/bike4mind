@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { systemPromptRepository } from '@bike4mind/database';
@@ -22,7 +23,7 @@ const CreateSystemPromptSchema = z.object({
   enabled: z.boolean().default(true),
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(
     /**
      * GET /api/admin/system-prompts

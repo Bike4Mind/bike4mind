@@ -5,7 +5,7 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@server/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
-import { AuthEvents } from '@bike4mind/common';
+import { ApiKeyScope, AuthEvents } from '@bike4mind/common';
 import { logAuditEvent, EmailAuditEvents } from '@server/utils/auditLog';
 
 interface RequestQuery {
@@ -13,7 +13,7 @@ interface RequestQuery {
 }
 
 // Admin-only endpoint to manually verify a user's email
-const handler = baseApi({ auth: true })
+const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
@@ -42,13 +42,14 @@ const handler = baseApi({ auth: true })
         }
 
         // Update user email verification status
-        user.emailVerified = true;
-        user.emailVerifiedAt = new Date();
-        user.emailVerificationToken = null;
-        user.emailVerificationExpires = null;
-        user.emailVerificationSentAt = null;
-
-        await userRepository.update(user);
+        await userRepository.update({
+          id: user.id,
+          emailVerified: true,
+          emailVerifiedAt: new Date(),
+          emailVerificationToken: null,
+          emailVerificationExpires: null,
+          emailVerificationSentAt: null,
+        });
 
         // Log admin action with audit trail
         await logAuditEvent(

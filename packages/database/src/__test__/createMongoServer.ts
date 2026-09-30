@@ -110,6 +110,35 @@ export const createMongoServer = async (): Promise<MongoMemoryServer> =>
  * helper is the fix.
  *
  * Slower to boot - reach for it only when transactionality is the thing under test.
+ *
+ * A suite that opens a transaction over the full model registry should also await
+ * `settleAutoIndexBuilds(mongoose)` after connecting, and after its last model-registering import.
  */
 export const createMongoReplSet = async (): Promise<MongoMemoryReplSet> =>
   withPortRetry(() => MongoMemoryReplSet.create({ replSet: { count: 1, storageEngine: 'wiredTiger' } }));
+
+/**
+ * Waits out the index builds Mongoose starts in the background for every registered model on
+ * connect. Required before a suite opens its first transaction.
+ *
+ * Without it the failure is a deadlock, not slowness. The `@bike4mind/database` barrel registers
+ * enough models that connect has more `createIndexes` in flight than the pool has connections (100
+ * by default). A transaction opened meanwhile holds locks the builds queue behind, and each
+ * blocked build pins a pooled connection. Once the pool drains, the transaction's next command waits for a connection
+ * that only a finished build can return. Nothing moves until mongod reaps the transaction at
+ * `transactionLifetimeLimitSeconds` (60s), so the test times out. It needs a contended runner for
+ * the builds to still be running when the test starts, which is why it passes on re-run.
+ *
+ * Waiting out the full build costs tens of seconds on a contended runner. A suite that asserts
+ * nothing about indexes should connect with `{ autoIndex: false }` first, which leaves only the
+ * cheap collection creates for this helper to settle.
+ *
+ * `init()` returns the build already in flight rather than starting another. `allSettled`, because
+ * a few schemas declare an index mongod rejects, and a rejected build has released its connection.
+ */
+export const settleAutoIndexBuilds = async (odm: {
+  modelNames: () => string[];
+  model: (name: string) => { init: () => Promise<unknown> };
+}): Promise<void> => {
+  await Promise.allSettled(odm.modelNames().map(name => odm.model(name).init()));
+};

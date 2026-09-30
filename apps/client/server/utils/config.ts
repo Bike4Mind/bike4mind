@@ -58,6 +58,10 @@ const Config = {
     () => Resource.GITHUB_LAKE_APP_PRIVATE_KEY.value
   ),
   GITHUB_LAKE_APP_SLUG: readOptionalSecret('GITHUB_LAKE_APP_SLUG', () => Resource.GITHUB_LAKE_APP_SLUG.value),
+  GITHUB_LAKE_APP_WEBHOOK_SECRET: readOptionalSecret(
+    'GITHUB_LAKE_APP_WEBHOOK_SECRET',
+    () => Resource.GITHUB_LAKE_APP_WEBHOOK_SECRET.value
+  ),
   STRIPE_WEBHOOK_SECRET: Resource.STRIPE_WEBHOOK_SECRET.value,
   STRIPE_SECRET_KEY: Resource.STRIPE_SECRET_KEY.value,
   STRIPE_PUBLISHABLE_KEY: Resource.STRIPE_PUBLISHABLE_KEY.value,
@@ -115,6 +119,8 @@ const Config = {
     'OVERWATCH_PSEUDONYM_SALT',
     () => Resource.OVERWATCH_PSEUDONYM_SALT.value
   ),
+  // JSON map of product slug -> Slack webhook for the QA status alarm (server/qa/evaluateAlarm.ts).
+  QA_ALARM_SLACK_WEBHOOKS: readOptionalSecret('QA_ALARM_SLACK_WEBHOOKS', () => Resource.QA_ALARM_SLACK_WEBHOOKS.value),
   STAGE: Resource.App.stage,
 } as const;
 

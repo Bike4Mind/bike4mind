@@ -9,7 +9,7 @@ import type { Request } from 'express';
  * The user's own /context view for one of their quests: which system-prompt layers, tools, files
  * and history made up the turn, and what was left of the window.
  *
- * Owner-only, and stricter than GET /api/quests/[id]: a share grant authorizes reading the
+ * Owner-only, and stricter than GET /api/v1/quests/[id]: a share grant authorizes reading the
  * conversation, not auditing how the owner's context was assembled. Non-owners get the same 404 a
  * stranger gets, so the route cannot be used to probe which quest ids exist.
  */

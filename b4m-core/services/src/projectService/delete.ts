@@ -63,7 +63,7 @@ export const deleteProject = async (
   project.deletedAt = new Date();
   project.name = `[Deleted] ${project.id}`;
 
-  await db.projects.update(project);
+  await db.projects.update({ id: project.id, deletedAt: project.deletedAt, name: project.name });
 
   return project;
 };

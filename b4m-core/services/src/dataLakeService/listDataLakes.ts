@@ -47,7 +47,7 @@ type OrgAdminLookup = Pick<IOrganizationRepository, 'findIdsWithAdminRights'>;
  * `toAccessContext` ZEROES `administeredOrgIds` for an admin caller (org resolution is pure
  * overhead for the ordinary read gates, which grant an admin outright), so reading it off `ctx`
  * would report `canPreauthorize: false` for a platform admin whose real rung on the lake is
- * org-admin - the same trap `pages/api/sessions/create.ts` documents and avoids by re-resolving.
+ * org-admin - the same trap `pages/api/v1/sessions/index.ts` documents and avoids by re-resolving.
  * Re-resolve here too, and ONLY for an admin: a non-admin's `ctx` value is already correct.
  *
  * Degrades to `[]` when no org repo is wired, which under-reports that one rung rather than

@@ -1529,28 +1529,33 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // metacharacters. Case-insensitive so a `Foo` document also clears files carrying `foo`.
     const nameRegex = new RegExp(`^${escapeRegex(tag)}$`, 'i');
     // No deletedAt conjunct, unlike most reads here: a soft-deleted file that kept the name would
-    // resurrect a tag document that no longer exists the moment it is undeleted.
-    const result = await this.fabFileModel.updateMany(
-      {
-        userId,
-        tags: {
-          $elemMatch: {
-            name: nameRegex,
-          },
-        },
-      },
-      {
-        $pull: {
+    // resurrect a tag document that no longer exists the moment it is undeleted. includeDeleted
+    // opts past softDeletePlugin's update hook, which otherwise skips tombstones.
+    const result = await this.fabFileModel
+      .updateMany(
+        {
+          userId,
           tags: {
-            name: nameRegex,
+            $elemMatch: {
+              name: nameRegex,
+            },
           },
         },
-      }
-    );
+        {
+          $pull: {
+            tags: {
+              name: nameRegex,
+            },
+          },
+        }
+      )
+      .setOptions({ includeDeleted: true });
     // Same reasoning as pullTagsByFabFileId: a primaryTag naming a tag the file no longer carries
     // later fails the data-lake write gate on PUT /api/files/[id]. Separate filtered write because
     // a plain update cannot clear a field conditionally on its own value.
-    await this.fabFileModel.updateMany({ userId, primaryTag: nameRegex }, { $unset: { primaryTag: '' } });
+    await this.fabFileModel
+      .updateMany({ userId, primaryTag: nameRegex }, { $unset: { primaryTag: '' } })
+      .setOptions({ includeDeleted: true });
     return result.modifiedCount;
   }
 
@@ -1808,10 +1813,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return results;
   }
 
-  /** Shared by the Drive-connection finder and count so the disconnect dialog and the purge agree. */
-  private driveConnectionInDataLakeFilter(driveConnectionId: string, datalakeTag: string) {
+  /** Shared by a connector's finder and count so the disconnect dialog and the purge agree. */
+  private connectorInDataLakeFilter(connectorFilter: Record<string, string>, datalakeTag: string) {
     return {
-      driveConnectionId,
+      ...connectorFilter,
       tags: { $elemMatch: { name: datalakeTag } },
       // Exclude in-flight rows: a 'pending' file from a sync still mid-upload is not yet a
       // durable member, so it must not be mistaken for a delete (absent from the fresh walk it
@@ -1820,22 +1825,50 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     };
   }
 
+  /**
+   * Every file a given connector connection (Drive or GitHub) has ingested into a lake. The basis
+   * a re-sync diffs its fresh walk/tree against: a stored file absent from the fresh read was
+   * DELETED, and one whose content moved was EDITED - neither detectable from the walk alone.
+   *
+   * `includeDeleted` drops the archivedAt/deletedAt filters for the disconnect purge, which must
+   * reach an archived lake's members (every member is archivedAt-stamped when its lake archives)
+   * and soft-deleted rows, mirroring `hardDeleteByDataLakeTag`. `status: 'pending'` rows are
+   * excluded either way.
+   */
+  private async findByConnectorInDataLake(
+    connectorFilter: Record<string, string>,
+    datalakeTag: string,
+    options?: { includeDeleted?: boolean; limit?: number }
+  ): Promise<IFabFileDocument[]> {
+    const filter = this.connectorInDataLakeFilter(connectorFilter, datalakeTag);
+    const query = options?.includeDeleted
+      ? this.fabFileModel.find(filter).setOptions({ includeDeleted: true })
+      : this.fabFileModel.find({ ...filter, deletedAt: null, archivedAt: null });
+    if (options?.limit !== undefined) query.limit(options.limit);
+    const docs = await query;
+    return docs.map(d => d.toJSON());
+  }
+
   async findByDriveConnectionIdInDataLake(
     driveConnectionId: string,
     datalakeTag: string,
-    options?: { includeDeleted?: boolean }
+    options?: { includeDeleted?: boolean; limit?: number }
   ): Promise<IFabFileDocument[]> {
-    const filter = this.driveConnectionInDataLakeFilter(driveConnectionId, datalakeTag);
-    const docs = options?.includeDeleted
-      ? await this.fabFileModel.find(filter).setOptions({ includeDeleted: true })
-      : await this.fabFileModel.find({ ...filter, deletedAt: null, archivedAt: null });
-    return docs.map(d => d.toJSON());
+    return this.findByConnectorInDataLake({ driveConnectionId }, datalakeTag, options);
   }
 
   async countByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<number> {
     // countDocuments is not soft-delete-plugin-filtered, so this counts the includeDeleted set the
     // disconnect purge reaches, archived and soft-deleted rows included.
-    return this.fabFileModel.countDocuments(this.driveConnectionInDataLakeFilter(driveConnectionId, datalakeTag));
+    return this.fabFileModel.countDocuments(this.connectorInDataLakeFilter({ driveConnectionId }, datalakeTag));
+  }
+
+  async findByGitHubConnectionIdInDataLake(
+    githubConnectionId: string,
+    datalakeTag: string,
+    options?: { includeDeleted?: boolean; limit?: number }
+  ): Promise<IFabFileDocument[]> {
+    return this.findByConnectorInDataLake({ githubConnectionId }, datalakeTag, options);
   }
 
   async findDriveFileIdsByBatchId(batchId: string): Promise<string[]> {
@@ -3163,21 +3196,25 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // `$[elem]` and not `$`: the first-positional operator updates only the FIRST matching element
     // per document, so a file carrying the name twice kept one stale copy.
     // No deletedAt conjunct - see removeTagByUserId; an undelete must not revive the old name.
-    const result = await this.fabFileModel.updateMany(
-      {
-        userId,
-        'tags.name': nameRegex,
-      },
-      {
-        $set: {
-          'tags.$[elem].name': newTag,
+    const result = await this.fabFileModel
+      .updateMany(
+        {
+          userId,
+          'tags.name': nameRegex,
         },
-      },
-      { arrayFilters: [{ 'elem.name': nameRegex }] }
-    );
+        {
+          $set: {
+            'tags.$[elem].name': newTag,
+          },
+        },
+        { arrayFilters: [{ 'elem.name': nameRegex }] }
+      )
+      .setOptions({ includeDeleted: true });
     // Renamed rather than cleared: unlike a delete, the tag still exists under its new name, so
     // the file's primary label should follow it.
-    await this.fabFileModel.updateMany({ userId, primaryTag: nameRegex }, { $set: { primaryTag: newTag } });
+    await this.fabFileModel
+      .updateMany({ userId, primaryTag: nameRegex }, { $set: { primaryTag: newTag } })
+      .setOptions({ includeDeleted: true });
     return result.modifiedCount;
   }
 
@@ -3193,60 +3230,63 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // rows carry elements with a missing or non-string `name` - six other call sites defend the
     // same shape. Without the guard one bad element decides the whole user's dedupe.
     const isMatch = (expr: unknown) => ({ $eq: [{ $toLower: { $ifNull: [expr, ''] } }, folded] });
-    const result = await this.fabFileModel.updateMany(
-      {
-        userId,
-        // Index-eligible prefilter first, then the $expr narrows to documents that genuinely carry
-        // the name more than once, so the write set stays small.
-        'tags.name': new RegExp(`^${escapeRegex(name)}$`, 'i'),
-        $expr: {
-          $gt: [
-            {
-              $size: {
-                $filter: {
-                  input: { $ifNull: ['$tags', []] },
-                  as: 't',
-                  cond: isMatch('$$t.name'),
+    const result = await this.fabFileModel
+      .updateMany(
+        {
+          userId,
+          // Index-eligible prefilter first, then the $expr narrows to documents that genuinely carry
+          // the name more than once, so the write set stays small.
+          'tags.name': new RegExp(`^${escapeRegex(name)}$`, 'i'),
+          $expr: {
+            $gt: [
+              {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ['$tags', []] },
+                    as: 't',
+                    cond: isMatch('$$t.name'),
+                  },
                 },
               },
-            },
-            1,
-          ],
+              1,
+            ],
+          },
         },
-      },
-      [
-        {
-          $set: {
-            tags: {
-              $reduce: {
-                input: { $ifNull: ['$tags', []] },
-                initialValue: [],
-                in: {
-                  $cond: {
-                    if: isMatch('$$this.name'),
-                    // Keep the FIRST match, normalized to the passed casing, and drop later ones.
-                    // $mergeObjects rather than a rebuilt {name, strength} so `strength` and any
-                    // field this schema does not declare survive.
-                    then: {
-                      $cond: {
-                        if: {
-                          $anyElementTrue: {
-                            $map: { input: '$$value', as: 'kept', in: isMatch('$$kept.name') },
+        [
+          {
+            $set: {
+              tags: {
+                $reduce: {
+                  input: { $ifNull: ['$tags', []] },
+                  initialValue: [],
+                  in: {
+                    $cond: {
+                      if: isMatch('$$this.name'),
+                      // Keep the FIRST match, normalized to the passed casing, and drop later ones.
+                      // $mergeObjects rather than a rebuilt {name, strength} so `strength` and any
+                      // field this schema does not declare survive.
+                      then: {
+                        $cond: {
+                          if: {
+                            $anyElementTrue: {
+                              $map: { input: '$$value', as: 'kept', in: isMatch('$$kept.name') },
+                            },
                           },
+                          then: '$$value',
+                          else: { $concatArrays: ['$$value', [{ $mergeObjects: ['$$this', { name }] }]] },
                         },
-                        then: '$$value',
-                        else: { $concatArrays: ['$$value', [{ $mergeObjects: ['$$this', { name }] }]] },
                       },
+                      else: { $concatArrays: ['$$value', ['$$this']] },
                     },
-                    else: { $concatArrays: ['$$value', ['$$this']] },
                   },
                 },
               },
             },
           },
-        },
-      ]
-    );
+        ]
+      )
+      // Must reach the same tombstones updateTagsByUserId renamed, or they keep both copies.
+      .setOptions({ includeDeleted: true });
     return result.modifiedCount;
   }
 
@@ -3308,10 +3348,12 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // reports modifiedCount 1. Callers that mint a durable fact from a removal (the lake
     // membership audit trail) read this count to tell a real removal from the losing half of
     // two concurrent removals, so an unmatched pull has to report 0.
-    const result = await this.fabFileModel.updateOne(
-      { _id: fabFileId, 'tags.name': { $in: tagNames } },
-      { $pull: { tags: { name: { $in: tagNames } } } }
-    );
+    //
+    // includeDeleted on both writes: pushTagsByFabFileId's bulkWrite reaches tombstones, so a removal
+    // that skipped them would let an undelete bring back a tag the user removed.
+    const result = await this.fabFileModel
+      .updateOne({ _id: fabFileId, 'tags.name': { $in: tagNames } }, { $pull: { tags: { name: { $in: tagNames } } } })
+      .setOptions({ includeDeleted: true });
     // A primaryTag naming a tag the file no longer carries later fails the data-lake write
     // gate on PUT /api/files/[id], which round-trips the stale value. Separate filtered write
     // because a plain update can't clear a field conditionally on its own value; it is a
@@ -3328,10 +3370,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // "removal partially failed" state, only for "removal did not happen." A stale primaryTag
     // is self-correcting the next time the file's tags are written through setDataLakeFileTags.
     try {
-      await this.fabFileModel.updateOne(
-        { _id: fabFileId, primaryTag: { $in: tagNames } },
-        { $unset: { primaryTag: '' } }
-      );
+      await this.fabFileModel
+        .updateOne({ _id: fabFileId, primaryTag: { $in: tagNames } }, { $unset: { primaryTag: '' } })
+        .setOptions({ includeDeleted: true });
     } catch {
       // swallowed - see the best-effort note above.
     }
@@ -3544,6 +3585,10 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     driveMd5Checksum: { type: String },
     sourceLakeId: { type: String },
     driveConnectionId: { type: String },
+    // GitHub repository ingest provenance. Populated when sourceType === GITHUB.
+    githubConnectionId: { type: String },
+    githubPath: { type: String },
+    githubBlobSha: { type: String },
     // Curator supersession rulings, one per lake - see IFabFile.supersededInLakes. `default:
     // undefined` so an unruled file stores no empty array, matching `versions` above.
     // `select: false`: this is control-plane data (who ruled, when, which lake), never something a
@@ -3660,6 +3705,9 @@ FabFileSchema.index({ driveFileId: 1 });
 // three equality keys the query also carries bound it to the live rows in the index itself
 // (archivedAt and tags.name stay post-filters; a multikey array key here would not help).
 FabFileSchema.index({ driveConnectionId: 1, deletedAt: 1, status: 1 });
+
+// GitHub re-sync reconcile (findByGitHubConnectionIdInDataLake), same shape and reason as the Drive one above.
+FabFileSchema.index({ githubConnectionId: 1, deletedAt: 1, status: 1 });
 
 // Un-chunked rescue sweep (buildFabFileChunkScanFilter: self-host worker scan + the hosted
 // dataLakeBatchReconcile cron). Equality prefix, createdAt range last; without it the daily

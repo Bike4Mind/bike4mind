@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ensureAdmin } from '@server/utils/errors';
 import { NotFoundError } from '@bike4mind/utils';
 import { partnerSignupRuleRepository } from '@bike4mind/database';
-import { updatePartnerSignupRuleSchema } from '@bike4mind/common';
+import { ApiKeyScope, updatePartnerSignupRuleSchema } from '@bike4mind/common';
 import { invalidatePartnerRuleCache, assertKnownEntitlements } from '@server/entitlements/partnerRules';
 import { assertOrganizationExists } from '@server/entitlements/assertOrganizationExists';
 import { z } from 'zod';
@@ -12,7 +12,7 @@ interface RequestQuery {
   id: string;
 }
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .put(
     asyncHandler(async (req, res) => {
       ensureAdmin(req.user?.isAdmin);

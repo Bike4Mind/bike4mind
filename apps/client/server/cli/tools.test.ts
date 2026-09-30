@@ -97,6 +97,14 @@ describe('tools Lambda handler — request ID correlation', () => {
     expect(body.data).toEqual({ temp: 21 });
   });
 
+  it('counts against its own rate-limit bucket, not the budget shared with agent/CLI traffic', async () => {
+    vi.mocked(executeToolWithLogging).mockResolvedValue({ success: true, data: {} } as any);
+
+    await handleToolRequest(makeEvent({ body: VALID_BODY }));
+
+    expect(checkRateLimit).toHaveBeenCalledWith(expect.any(String), undefined, { bucket: 'tools' });
+  });
+
   it('includes request_id on the handled-failure result path (500)', async () => {
     vi.mocked(executeToolWithLogging).mockResolvedValue({
       success: false,

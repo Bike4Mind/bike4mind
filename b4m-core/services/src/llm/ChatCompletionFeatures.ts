@@ -43,6 +43,9 @@ import {
   ImageModerationIncident,
   ILakeAccessEventRepository,
   IScopedSettingsRepository,
+  ILakeMembershipRemovalRepository,
+  ILakeConfigChangeEventRepository,
+  ILakeMembershipChangeEventRepository,
   isExperimentalFeatureEnabled,
   isSupportedEmbeddingModel,
   resolveHistoryFetchLimit,
@@ -90,6 +93,8 @@ import {
 } from '../dataLakeService/embeddingMismatch';
 import { partitionByIndexAvailability } from '../dataLakeService/retrievalUnavailable';
 import { isVectorSearchReady, type VectorSearchReadinessFile } from '../dataLakeService/vectorSearchEligibility';
+import { atlasVectorSearch, isAtlasVectorSearchAvailable } from '../dataLakeService/atlasVectorSearch';
+import type { AnnRankableFile } from '../dataLakeService/annVectorSearch';
 import {
   DeadlineExceededError,
   rankCandidateFilesByRelevance,
@@ -107,6 +112,7 @@ import {
   getAccessibleDataLakePrompts,
   datalakeTagsFrom,
   grantedLakeIdsUsedFor,
+  readerOptInLakeIdsUsedFrom,
 } from '../dataLakeService/getDataLakePrompts';
 import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
 import { membershipOrgIdsForTurn } from '../dataLakeService/membershipOrgIdsForTurn';
@@ -139,7 +145,6 @@ import {
 import { filterRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { supportsAtlasVectorSearch } from '@bike4mind/db-core';
 import { MongoAbility } from '@casl/ability';
 import mongoose from 'mongoose';
 import { z } from 'zod';
@@ -254,7 +259,14 @@ interface DatabaseAdapters {
     // read that narrows the retrieval creator arm, so every host that can retrieve has to wire it
     // rather than silently degrade to bare creator provenance.
     | 'findIdsCreatedBy'
-  >;
+  > &
+    // Must stay a superset of ToolContext.db.dataLakes (the data-lake write tools' methods).
+    Partial<
+      Pick<
+        IDataLakeRepository,
+        'findAccessible' | 'findBySlug' | 'findBySlugAmongIds' | 'create' | 'setStats' | 'activateIfDraft'
+      >
+    >;
   /**
    * Access-grant lookup shared by two independent optional features:
    * - the retrieval resolver's grant arm (getDynamicDataLakeAccess / `listByPrincipal`), so a
@@ -265,7 +277,12 @@ interface DatabaseAdapters {
    *   rungs cannot resolve, so the re-check revokes a maintainer whose rights are in fact intact.
    * Optional here - absent means both features resolve lake access with no grant arm.
    */
-  dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes'>;
+  dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes'> &
+    Partial<Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'upsertGrant'>>;
+  /** Forwarded to ToolContext.db for the data-lake write tools - see its doc comment there. */
+  lakeMembershipRemovals?: Pick<ILakeMembershipRemovalRepository, 'findLive'>;
+  lakeConfigChangeEvents?: Pick<ILakeConfigChangeEventRepository, 'record'>;
+  lakeMembershipChangeEvents?: Pick<ILakeMembershipChangeEventRepository, 'record'>;
   /**
    * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
    * IFallbackLakeSetting). Used only by getAccessibleDataLakePrompts' registry-candidate branch,
@@ -1114,7 +1131,14 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     try {
       quest.status = 'running';
       quest.type = 'message';
-      await this.chatCompletion.db.quests.update(quest);
+      // promptMeta carries the in-memory statusLog ('Spinning up...'); a QuestMaster takeover
+      // returns without the pipeline's saveQuest, so these writes are the only ones that persist it.
+      await this.chatCompletion.db.quests.update({
+        id: quest.id,
+        status: quest.status,
+        type: quest.type,
+        promptMeta: quest.promptMeta,
+      });
 
       await this.chatCompletion.sendStatusUpdate(quest, 'Generating QuestMaster plan...');
 
@@ -1165,7 +1189,11 @@ export class QuestMasterFeature implements ChatCompletionFeature {
       });
 
       updatedQuest.status = 'done';
-      await this.chatCompletion.db.quests.update(updatedQuest);
+      await this.chatCompletion.db.quests.update({
+        id: updatedQuest.id,
+        status: updatedQuest.status,
+        promptMeta: updatedQuest.promptMeta,
+      });
 
       await this.chatCompletion.sendStatusUpdate(updatedQuest, null);
 
@@ -1177,7 +1205,12 @@ export class QuestMasterFeature implements ChatCompletionFeature {
       quest.type = 'error';
       quest.status = 'done';
       quest.reply = (error as Error).message;
-      await this.chatCompletion.db.quests.update(quest);
+      await this.chatCompletion.db.quests.update({
+        id: quest.id,
+        type: quest.type,
+        status: quest.status,
+        reply: quest.reply,
+      });
 
       // Let normal processing continue
       return { shouldContinue: true };
@@ -1203,7 +1236,12 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     const session = isObjectIdShaped(plan.notebookId)
       ? await this.chatCompletion.db.sessions.findById(plan.notebookId)
       : null;
-    return session?.userId === userId;
+    if (session?.userId !== userId) return false;
+    // Backfill like the HTTP side does, so the owner arm of the plan's write filter (writableBy in
+    // QuestMasterPlanModel.ts) matches the write that follows.
+    await this.chatCompletion.db.questMasterPlans.update({ id: plan.id, userId });
+    plan.userId = userId;
+    return true;
   }
 
   async onComplete({
@@ -1238,6 +1276,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
 
     await this.chatCompletion.db.questMasterPlans.updateTaskStatus(
       questMaster.questMasterPlanId,
+      this.user.id,
       questMaster.questId,
       questMaster.subQuestId,
       'completed'
@@ -1298,6 +1337,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
 
     await this.chatCompletion.db.questMasterPlans.updateTaskStatus(
       questMaster.questMasterPlanId,
+      this.user.id,
       questMaster.questId,
       questMaster.subQuestId,
       'in_progress'
@@ -1724,6 +1764,12 @@ const FORCED_RETRIEVAL_ANN_CHUNK_LIMIT = 1000;
 // This runs inline on every turn and a cold Atlas index has been seen taking tens of seconds, so
 // the ANN pick gets a hard deadline and falls back to the file-name pick past it.
 const FORCED_RETRIEVAL_ANN_DEADLINE_MS = 3000;
+// The listing-row fields the ANN seam shapes its rows from (see AnnRankableFile).
+type ForcedRetrievalCandidateFile = VectorSearchReadinessFile & {
+  fileName?: string | null;
+  tags?: { name: string }[];
+  documentDate?: Date | null;
+};
 // File ids per chunk query, and chunk rows per query - together these bound how many vectors
 // are resident at once instead of loading every candidate file's chunks up front.
 const FORCED_RETRIEVAL_FILE_BATCH_SIZE = 10;
@@ -1985,6 +2031,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   private preauthorizedLakeIds: string[];
   /** `session.lakeScopeExplicit` - see sessionGroundsOnNoLake for why an empty scope needs it. */
   private lakeScopeExplicit: boolean | undefined;
+  /**
+   * Owner-vetted copy of `retrievalTags` - the reader's consent for the lake-prompt READER
+   * OPT-IN arm. Kept separate from `retrievalTags`, which stays populated for a non-owner turn so
+   * retrieval scoping keeps working; see ToolContext.sessionReaderConsentDatalakeTags.
+   */
+  private readerConsentTags: string[];
 
   constructor(
     chatCompletion: ChatCompletionContext,
@@ -1992,7 +2044,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     citationStyle?: 'named' | 'indexed',
     retrievalFilter?: RetrievalExclusionOptions,
     preauthorizedLakeIds?: string[],
-    lakeScopeExplicit?: boolean
+    lakeScopeExplicit?: boolean,
+    readerConsentDatalakeTags?: string[]
   ) {
     this.chatCompletion = chatCompletion;
     this.logger = chatCompletion.logger;
@@ -2001,6 +2054,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     this.retrievalFilter = retrievalFilter ?? {};
     this.preauthorizedLakeIds = Array.isArray(preauthorizedLakeIds) ? preauthorizedLakeIds : [];
     this.lakeScopeExplicit = lakeScopeExplicit;
+    this.readerConsentTags = Array.isArray(readerConsentDatalakeTags) ? readerConsentDatalakeTags : [];
   }
 
   async beforeDataGathering(): Promise<{ shouldContinue: boolean }> {
@@ -2168,7 +2222,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     try {
       const tagNames = sourceFileIds.flatMap(fid => (fileById.get(fid)?.tags ?? []).map(t => t.name));
       const datalakeTags = datalakeTagsFrom(tagNames);
-      if (datalakeTags.length === 0) return null;
+      // Still recorded, as present-and-empty: "the site ran and grounded on no lake file" must stay
+      // distinguishable from "the site never ran" (absent).
+      if (datalakeTags.length === 0) {
+        this.recordLakePromptInjection(quest, { injectedLakePromptIds: [] });
+        return null;
+      }
 
       const { db, user } = this.chatCompletion;
       const { keys: entitlementKeys, resolved: entitlementKeysResolved } =
@@ -2180,24 +2239,20 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const prompts = await getAccessibleDataLakePrompts(lakeAccessContext, {
         restrictToDatalakeTags: datalakeTags,
         preauthorizedLakeIds: this.preauthorizedLakeIds,
+        readerConsentDatalakeTags: this.readerConsentTags,
       });
       const injectedLakePromptIds = prompts.map(p => p.id);
       const preauthorizedSet = new Set(this.preauthorizedLakeIds);
       const preauthorizedLakeIdsUsed = injectedLakePromptIds.filter(id => preauthorizedSet.has(id));
       const grantedLakeIdsUsed = await grantedLakeIdsUsedFor(lakeAccessContext, injectedLakePromptIds);
+      const readerOptInLakeIdsUsed = readerOptInLakeIdsUsedFrom(prompts);
       // Recorded whenever this injection site ran, even if nothing qualified (present-and-empty
       // is distinct from absent - see the field's own comment in promptMeta.ts).
-      quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
-        sessionId: quest.sessionId,
-        userId: user.id,
-      });
-      quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
-        attempted: true,
-        surfaces: [],
-        dataLakeTags: [],
+      this.recordLakePromptInjection(quest, {
         injectedLakePromptIds,
         ...(preauthorizedLakeIdsUsed.length ? { preauthorizedLakeIdsUsed } : {}),
         ...(grantedLakeIdsUsed.length ? { grantedLakeIdsUsed } : {}),
+        ...(readerOptInLakeIdsUsed.length ? { readerOptInLakeIdsUsed } : {}),
       });
       const section = renderDataLakePromptSection(prompts);
       if (!section) return null;
@@ -2210,6 +2265,26 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       this.logger.warn('📋 Forced retrieval: lake-prompt resolution failed; injecting no lake prompt', err);
       return null;
     }
+  }
+
+  /** Merge this site's lake-prompt telemetry onto the quest's retrieval summary. */
+  private recordLakePromptInjection(
+    quest: IChatHistoryItemDocument,
+    lakePromptIds: Pick<
+      RetrievalSummary,
+      'injectedLakePromptIds' | 'preauthorizedLakeIdsUsed' | 'grantedLakeIdsUsed' | 'readerOptInLakeIdsUsed'
+    >
+  ): void {
+    quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+      sessionId: quest.sessionId,
+      userId: this.chatCompletion.user.id,
+    });
+    quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
+      attempted: true,
+      surfaces: [],
+      dataLakeTags: [],
+      ...lakePromptIds,
+    });
   }
 
   /**
@@ -2229,17 +2304,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   }
 
   /**
-   * Whether this turn can choose its candidate files by relevance: the same gate the
-   * search_knowledge_base path applies (EnableDataLakeVectorSearch + an Atlas backend + the ANN
-   * repository methods). Self-host OpenSearch is not wired here and keeps the file-name pick.
+   * Whether this turn can choose its candidate files by relevance: EnableDataLakeVectorSearch plus
+   * isAtlasVectorSearchAvailable, the gate semanticDataLakeSearch shares. Self-host OpenSearch is
+   * not wired here and keeps the file-name pick.
    * Fails closed, like readSupersessionCollapseSetting: an unreadable setting means the file-name
    * pick this path always had, never an error.
    */
   private async canSelectCandidatesByRelevance(): Promise<boolean> {
     const { fabfilechunks, adminSettings } = this.chatCompletion.db;
-    if (!supportsAtlasVectorSearch() || !fabfilechunks?.vectorSearch || !fabfilechunks.getAtlasIndexStatus) {
-      return false;
-    }
+    if (!isAtlasVectorSearchAvailable(fabfilechunks)) return false;
     try {
       return (await adminSettings?.getSettingsValue('EnableDataLakeVectorSearch')) === true;
     } catch (error) {
@@ -2257,7 +2330,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * that stops it - index not queryable, no index-ready file, an error, or the deadline - falls
    * back to the file-name prefix, which reportCoverage then flags as the by-name cut it is.
    */
-  private async selectForcedRetrievalCandidates<T extends VectorSearchReadinessFile>(
+  private async selectForcedRetrievalCandidates<T extends ForcedRetrievalCandidateFile>(
     files: T[],
     queryVector: number[],
     embeddingModel: SupportedEmbeddingModel,
@@ -2271,16 +2344,17 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     return { files: files.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'fileName' };
   }
 
-  /** The ANN half of selectForcedRetrievalCandidates. `null` means "fall back"; never throws. */
-  private async rankCandidatesByAnn<T extends VectorSearchReadinessFile>(
+  /**
+   * The ANN half of selectForcedRetrievalCandidates, run through the same atlasVectorSearch seam
+   * as semanticDataLakeSearch. `null` means "fall back"; never throws.
+   */
+  private async rankCandidatesByAnn<T extends ForcedRetrievalCandidateFile>(
     files: T[],
     queryVector: number[],
     embeddingModel: SupportedEmbeddingModel
   ): Promise<T[] | null> {
     const { fabfilechunks } = this.chatCompletion.db;
-    const vectorSearch = fabfilechunks?.vectorSearch?.bind(fabfilechunks);
-    const getIndexStatus = fabfilechunks?.getAtlasIndexStatus?.bind(fabfilechunks);
-    if (!vectorSearch || !getIndexStatus) return null;
+    if (!isAtlasVectorSearchAvailable(fabfilechunks)) return null;
     const now = new Date();
     const annReadyIds = files.filter(f => isVectorSearchReady(f, now)).map(f => f.id);
     if (annReadyIds.length === 0) {
@@ -2289,21 +2363,38 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     }
     try {
       // One deadline across both calls: the status read is cached but a cold miss is a round trip.
-      const hits = await withDeadline(
+      const ann = await withDeadline(
         (async () => {
-          const status = await getIndexStatus(embeddingModel);
+          const status = await fabfilechunks.getAtlasIndexStatus(embeddingModel);
           if (!status?.queryable) return null;
-          // Only fabFileId + score feed the ranking; skipping `text` keeps up to
-          // FORCED_RETRIEVAL_ANN_CHUNK_LIMIT chunk bodies off the wire on every turn.
-          return vectorSearch(annReadyIds, queryVector, embeddingModel, {
+          const fileById = new Map<string, AnnRankableFile>(
+            files.map(f => [
+              f.id,
+              {
+                fileName: f.fileName ?? '',
+                fileTags: f.tags?.map(t => t.name) ?? [],
+                documentDate: f.documentDate ?? null,
+              },
+            ])
+          );
+          return atlasVectorSearch({
+            fileIds: annReadyIds,
+            fileById,
+            queryVector,
+            model: embeddingModel,
             limit: FORCED_RETRIEVAL_ANN_CHUNK_LIMIT,
+            // No floor: the scores only ORDER the candidates, and a weak hit still outranks no hit.
+            minScore: -Infinity,
+            // Only fileId + score feed the ranking; skipping `text` keeps up to
+            // FORCED_RETRIEVAL_ANN_CHUNK_LIMIT chunk bodies off the wire on every turn.
             includeText: false,
+            adapters: fabfilechunks,
           });
         })(),
         FORCED_RETRIEVAL_ANN_DEADLINE_MS,
         'forced-retrieval ANN candidate pick'
       );
-      if (!hits) {
+      if (!ann) {
         this.logger.warn(
           `🔒 Forced retrieval: ${embeddingModel} vector index not queryable - picking candidates by name`
         );
@@ -2311,14 +2402,19 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       }
       // An empty answer is not a ranking: ranking on it would return the input (by-name) order
       // while reporting 'relevance', hiding the cut. Seen in the mongot lag window, where the
-      // index is queryable but has no chunks yet for the ready files.
-      if (hits.length === 0) {
+      // index is queryable but has no chunks yet for the ready files. Counted after the seam drops
+      // hits for files outside the listing, which would rank nothing either.
+      if (ann.results.length === 0) {
         this.logger.warn(
           `🔒 Forced retrieval: ${embeddingModel} vector index returned no hits - picking candidates by name`
         );
         return null;
       }
-      return rankCandidateFilesByRelevance(files, hits, now);
+      return rankCandidateFilesByRelevance(
+        files,
+        ann.results.map(r => ({ fabFileId: r.fileId, score: r.score })),
+        now
+      );
     } catch (error) {
       if (error instanceof DeadlineExceededError) {
         this.logger.warn(

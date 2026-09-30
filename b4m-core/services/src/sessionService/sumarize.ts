@@ -14,7 +14,7 @@ interface SumarizeSessionAdapters {
   db: {
     sessions: {
       findByIdAndUserId: (id: string, userId: string) => Promise<ISession | null | undefined>;
-      update: (session: ISession) => Promise<ISession | null>;
+      update: (session: Partial<ISession>) => Promise<ISession | null>;
     };
     chatHistories: {
       findAllBySessionIdAndCreatedAtGreaterThanDate: (
@@ -86,7 +86,7 @@ export const summarizeSession = async (
   session.summary = summary;
   session.summaryAt = new Date();
 
-  await db.sessions.update(session);
+  await db.sessions.update({ id: session.id, summary: session.summary, summaryAt: session.summaryAt });
 
   return session;
 };

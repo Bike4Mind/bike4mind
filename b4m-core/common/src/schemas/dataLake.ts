@@ -98,6 +98,8 @@ export const UpdateDataLakeRequestInput = z.object({
   // Per-lake system prompt (see IDataLake.systemPrompt). Uncapped, matching the other system
   // prompts in the codebase. Edit is gated to creator/admin by updateDataLake (canManageLake).
   systemPrompt: z.string().optional(),
+  // Reader opt-in for that prompt (see IDataLake.injectPromptForReaders). Same canManageLake gate.
+  injectPromptForReaders: z.boolean().optional(),
   // Preferred registry system-prompt id bound to the lake (see IDataLake.preferredSystemPromptId).
   // Empty string clears it, mirroring the requiredUserTag sentinel below. The session-activatable
   // ALLOWLIST check is enforced at the write route (apps/client), which owns the allowlist - core

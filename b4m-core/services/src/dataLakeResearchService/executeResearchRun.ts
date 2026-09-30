@@ -92,6 +92,9 @@ export interface ResearchRunResult {
  */
 const TIME_BUDGET_RESERVE_MS = 90_000;
 
+/** Judge failures, with nothing scored yet, after which the judge is treated as down for the run. */
+const JUDGE_BREAKER_FAILURES = 3;
+
 export async function executeResearchRun(
   levers: ResearchRunLevers,
   runId: string,
@@ -116,7 +119,7 @@ export async function executeResearchRun(
   const candidates = await ports.search(levers.query, levers.maxResults, levers.recencyDays);
   totals.searchHits = candidates.length;
 
-  for (const candidate of candidates) {
+  for (const [index, candidate] of candidates.entries()) {
     // Rule 1: the free filter, before anything is spent.
     if (classifySource(candidate.url, levers) !== 'allowed') {
       totals.filteredBySource += 1;
@@ -136,6 +139,14 @@ export async function executeResearchRun(
     if (judgement.outcome === 'failed') {
       totals.judgeFailed += 1;
       judgeError ??= judgement.error;
+      // Only before the first score: once the judge has worked, a later failure is a blip, not an outage.
+      if (scored === 0 && totals.judgeFailed >= JUDGE_BREAKER_FAILURES) {
+        for (const unreached of candidates.slice(index + 1)) {
+          if (classifySource(unreached.url, levers) !== 'allowed') totals.filteredBySource += 1;
+          else totals.notJudged += 1;
+        }
+        return settle('judge_unavailable');
+      }
       await ports.onProgress?.(spentMicroUsd, totals);
       continue;
     }
