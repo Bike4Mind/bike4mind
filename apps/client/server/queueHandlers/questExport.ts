@@ -15,6 +15,7 @@ import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { sendToClient } from '@server/websocket/utils';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { filterReadableQuests } from '@server/utils/sessionAccess';
+import { userCanAccessGeneratedImage } from '@server/utils/generatedImageAccess';
 import { apiKeyService } from '@bike4mind/services';
 import {
   ChatModels,
@@ -495,14 +496,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         urlToFilename.set(url, filename);
 
         try {
-          const { storage } = getStorageForUrl(url);
+          const { storage, label } = getStorageForUrl(url);
           const key = extractS3Key(url);
 
           // A held/blocked uploaded image must not be included in the export zip. Look up
           // a matching FabFile by the extracted storage key; if it exists and isn't
           // serveable yet, skip it via the same breadcrumb path as a download failure below.
-          // Fail-closed on lookup error (skip) - no FabFile match (external/generated image
-          // URL) falls through unaffected.
+          // Fail-closed on lookup error (skip). Untracked keys are handled by the guard below.
           let fabFile;
           try {
             fabFile = await FabFile.findOne({ filePath: key });
@@ -515,16 +515,20 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
           // Object-level guard: a tracked fab-file key embedded in the plan markdown must be
           // accessible to the export subject (the plan owner, resolved above), or its bytes would
-          // leak (IDOR). Untracked keys (external/generated-image URLs) have no FabFile owner record
-          // and fall through unaffected - the same limitation the generated-image copy/serve paths
-          // carry. Lake-tag access isn't resolved here (a queue handler has no entitlement context),
-          // so a curated-lake image degrades to the breadcrumb below rather than leaking. Fails
-          // closed: a tracked file with no loadable export user is treated as inaccessible.
+          // leak (IDOR). An untracked key has no FabFile owner record, so it is allowed only when it is
+          // a generated-images key the owner can reach via quest.images (see generatedImageAccess.ts);
+          // every other untracked key fails closed. Lake-tag access isn't resolved here (a queue
+          // handler has no entitlement context), so a curated-lake image degrades to the breadcrumb
+          // below rather than leaking. Fails closed: no loadable export user means inaccessible.
           if (fabFile) {
             const accessible = exportUser
               ? await fabFileRepository.shareable.findAccessibleById(exportUser, fabFile.id)
               : null;
             if (!accessible) throw new Error('Image is not available');
+          } else {
+            const allowed =
+              label === 'generatedImages' && exportUser ? await userCanAccessGeneratedImage(key, exportUser.id) : false;
+            if (!allowed) throw new Error('Image is not available');
           }
 
           const buffer = await storage.download(key);

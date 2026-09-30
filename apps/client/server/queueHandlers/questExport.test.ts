@@ -50,6 +50,7 @@ const h = vi.hoisted(() => {
       filePath === OWNER_IMAGE_KEY ? { id: OWNER_FILE_ID, filePath, moderationStatus: 'clean' } : null
     ),
     download: vi.fn(async () => Buffer.from('image-bytes')),
+    canAccessGeneratedImage: vi.fn(async () => false),
     createZipBuffer: vi.fn(async () => Buffer.from('zip')),
   };
 });
@@ -127,6 +128,10 @@ vi.mock('@server/utils/storage', () => ({
   getGeneratedImageStorage: () => ({ download: h.download }),
 }));
 
+vi.mock('@server/utils/generatedImageAccess', () => ({
+  userCanAccessGeneratedImage: h.canAccessGeneratedImage,
+}));
+
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
 
 vi.mock('@client/app/utils/subQuestStatusPresentation', () => ({ getSubQuestStatusIcon: () => '' }));
@@ -190,6 +195,54 @@ describe('questExport image access subject', () => {
     const [markdown, imageBuffers] = h.createZipBuffer.mock.calls[0] as unknown as [string, unknown[]];
     expect(imageBuffers).toHaveLength(1);
     expect(markdown).not.toContain('Image unavailable');
+  });
+});
+
+describe('questExport untracked image keys', () => {
+  const FOREIGN_FILES_URL = 'https://x-fabfilebucket-y.s3.amazonaws.com/exports/abc/foreign.png';
+  const GENERATED_URL = 'https://x-generatedimages-y.s3.amazonaws.com/gen-1.png';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.questFind.mockReturnValueOnce({
+      lean: async () => [
+        {
+          _id: 'q1',
+          sessionId: h.SESSION_ID,
+          reply: `![a](${FOREIGN_FILES_URL}) ![b](${GENERATED_URL})`,
+          images: [],
+        },
+      ],
+    });
+  });
+
+  const zipOutput = () => h.createZipBuffer.mock.calls[0] as unknown as [string, { filename: string }[]];
+
+  it('skips an untracked files-bucket key without consulting the generated-image check', async () => {
+    await runExport(h.COLLABORATOR_ID);
+
+    expect(h.download).not.toHaveBeenCalledWith('exports/abc/foreign.png');
+    expect(h.canAccessGeneratedImage).not.toHaveBeenCalledWith('exports/abc/foreign.png', expect.anything());
+    expect(zipOutput()[0]).toContain('Image unavailable: foreign.png');
+  });
+
+  it('keeps an untracked generated image the plan owner can reach, checked against the owner', async () => {
+    h.canAccessGeneratedImage.mockResolvedValueOnce(true);
+    await runExport(h.COLLABORATOR_ID);
+
+    expect(h.canAccessGeneratedImage).toHaveBeenCalledWith('gen-1.png', h.OWNER_ID);
+    expect(h.download).toHaveBeenCalledWith('gen-1.png');
+    const [markdown, imageBuffers] = zipOutput();
+    expect(imageBuffers.map(b => b.filename)).toEqual(['images/fig-2.png']);
+    expect(markdown).not.toContain('Image unavailable: gen-1.png');
+  });
+
+  it('skips an untracked generated image the plan owner cannot reach', async () => {
+    await runExport(h.COLLABORATOR_ID);
+
+    expect(h.canAccessGeneratedImage).toHaveBeenCalledWith('gen-1.png', h.OWNER_ID);
+    expect(h.download).not.toHaveBeenCalled();
+    expect(zipOutput()[0]).toContain('Image unavailable: gen-1.png');
   });
 });
 
