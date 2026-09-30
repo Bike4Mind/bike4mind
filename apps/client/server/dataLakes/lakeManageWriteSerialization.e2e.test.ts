@@ -47,8 +47,8 @@ beforeAll(async () => {
   // No background index builds: they contend with the transactions this suite holds open on a latch.
   await mongoose.connect(replSet.getUri(), { autoIndex: false });
   await settleAutoIndexBuilds(mongoose);
-  // Collections and indexes exist before any test, and are emptied rather than dropped between
-  // them. Otherwise the audit collection is first created (and indexes built) while a transaction
+  // Collections exist before any test, and are emptied rather than dropped between
+  // them. Otherwise the audit collection is first created while a transaction
   // is paused open, which contends with it; `recordLakeConfigChange` swallows the resulting failure,
   // so the driver retries the revoke until the paused transaction expires. Production collections
   // always exist, so that is collection setup being measured, not the collision under test.

@@ -2805,7 +2805,9 @@ describe('DataLakeRepository purge-accept claims (#1744)', () => {
     await dataLakeRepository.claimPurging(created.id, 'claim-a');
 
     expect(await dataLakeRepository.releasePurgingToDeleted(created.id)).toBe(true);
-    expect((await dataLakeRepository.findById(created.id))?.status).toBe('deleted');
+    const released = await DataLakeModel.findById(created.id).lean();
+    expect(released?.status).toBe('deleted');
+    expect(released).not.toHaveProperty('purgeClaimId');
   });
 
   it('releases by claim id only the claim that id took, never a concurrent one', async () => {
