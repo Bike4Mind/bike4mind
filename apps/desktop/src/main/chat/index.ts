@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, safeStorage, type WebContents } from 'electron';
@@ -33,6 +34,7 @@ import { registerMediaProtocol } from './media/protocol';
 import { ModelCatalog } from './ModelCatalog';
 import { SessionActivity } from './SessionActivity';
 import { SessionStore } from './SessionStore';
+import { sessionScopeFor } from './sessionScope';
 import { currentBranch, isGitRepository, listBranches, projectDisplayName } from './project/git';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
 import { SkillCatalog } from './skills/SkillCatalog';
@@ -126,7 +128,13 @@ async function pickDirectory(sender: WebContents): Promise<string | null> {
 export function registerChat(auth: AuthService): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
   const userData = app.getPath('userData');
-  const store = new SessionStore(join(userData, 'sessions'), PREFERRED_MODEL);
+  // Scoped to the backend and the account, not just to this machine: one install reaches
+  // production and a local server, and can be signed in as a different person on each. The
+  // provider is read per operation, so a switch takes effect on the next list with nothing
+  // here to invalidate. See ./sessionScope for the key and the one-time migration.
+  const store = new SessionStore(join(userData, 'sessions'), PREFERRED_MODEL, randomUUID(), () =>
+    sessionScopeFor(auth.getState())
+  );
   const access = new AccessStore(join(userData, 'tool-access.json'));
   // Its own file beside tool-access.json, and for the same reason: both record a consent the
   // user gave once and should not be asked for again on every launch.
