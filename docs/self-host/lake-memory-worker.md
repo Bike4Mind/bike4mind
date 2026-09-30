@@ -15,7 +15,6 @@ The co-located integration suite uses a real disposable Mongo server and the act
 Run with Node 24:
 
 ```sh
-VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test __tests__/mongoTestTimeoutBudget.test.ts
-VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/lakeMemoryQueue.test.ts src/selfhost/selfHostWorker.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/mongoTestTimeoutBudget.test.ts src/selfhost/lakeMemoryQueue.test.ts src/selfhost/selfHostWorker.test.ts
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/selfhost/lakeMemoryQueue.e2e.test.ts
 ```
