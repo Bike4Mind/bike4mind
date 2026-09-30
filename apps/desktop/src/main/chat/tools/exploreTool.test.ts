@@ -126,6 +126,7 @@ describe('explore', () => {
       [toolUse([{ name: 'grep_search', input: { pattern: 'answer' } }])],
       [{ type: 'content', text: 'done' }],
     ]);
+    explore.cache = true;
     const seen: (boolean | undefined)[][] = [];
     const complete = explore.complete;
     explore.complete = (request, onEvent, signal) => {
@@ -139,6 +140,12 @@ describe('explore', () => {
       [true, true],
       [true, undefined, undefined, true],
     ]);
+  });
+
+  it('sends no markers to a model that cannot take them', async () => {
+    const { explore, requests } = fakeExplore([[{ type: 'content', text: 'done' }]]);
+    await exploreTool.run({ question: 'q' }, { ...context, explore });
+    expect(requests[0].messages.some(message => 'cache' in message)).toBe(false);
   });
 
   it('reports what the sub-loop spent, cache included, beside the timings', async () => {

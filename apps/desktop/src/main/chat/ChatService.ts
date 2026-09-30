@@ -46,6 +46,7 @@ import { startRoundTimer } from './turnTiming';
 import {
   DEFAULT_COMPLETIONS_PATH,
   streamCompletion,
+  supportsPromptCache,
   withCacheBreakpoints,
   type CompletionMessage,
 } from './completions';
@@ -1149,6 +1150,7 @@ export class ChatService {
       await this.deps.mcp?.ensureConnected();
       const mcpTools = this.deps.mcp?.tools() ?? [];
       const catalog = await this.deps.models?.list();
+      const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
       const maxTokens = catalog?.models.find(option => option.id === session.model)?.maxOutputTokens;
       const explore =
         roots.length > 0
@@ -1218,7 +1220,7 @@ export class ChatService {
           serverConfig.endpoint,
           {
             model: session.model,
-            messages: withCacheBreakpoints(wire),
+            messages: cacheable ? withCacheBreakpoints(wire) : wire,
             tools,
             thinking: true,
             ...(maxTokens ? { maxTokens } : {}),

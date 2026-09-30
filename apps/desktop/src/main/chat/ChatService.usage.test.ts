@@ -6,6 +6,7 @@ import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatStreamEvent } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { addUsage, ChatService } from './ChatService';
+import type { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
@@ -31,6 +32,7 @@ describe('addUsage', () => {
 describe('ChatService usage reporting', () => {
   let service: ChatService;
   let store: SessionStore;
+  let backend: string;
   let events: ChatStreamEvent[];
   let post: ReturnType<typeof vi.fn>;
   let streams: PassThrough[];
@@ -40,6 +42,7 @@ describe('ChatService usage reporting', () => {
     await writeFile(join(root, 'tiny.txt'), 'z', 'utf8');
 
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-usage-sessions-')), 'test-model');
+    backend = 'anthropic';
     events = [];
     streams = [];
     post = vi.fn().mockImplementation(() => {
@@ -50,6 +53,10 @@ describe('ChatService usage reporting', () => {
 
     service = new ChatService({
       store,
+      models: {
+        list: async () => ({ models: [{ id: 'test-model', name: 'Test', backend }] }),
+        cached: () => [],
+      } as unknown as ModelCatalog,
       access: { list: async () => [root] } as unknown as AccessStore,
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () =>
@@ -182,6 +189,13 @@ describe('ChatService usage reporting', () => {
     // prompt is gone and the new one sits on the tool_result message.
     expect(markers(1)).toEqual([true, undefined, undefined, true]);
     expect(wireOf(1).messages[3].role).toBe('user');
+  });
+
+  it('sends no markers on a backend that would reject the flag', async () => {
+    backend = 'bedrock';
+    await runTwoRoundTurn();
+    expect(markers(0).every(marker => marker === undefined)).toBe(true);
+    expect(markers(1).every(marker => marker === undefined)).toBe(true);
   });
 
   it('never stores a cache flag on the session', async () => {

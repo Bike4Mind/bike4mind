@@ -48,6 +48,8 @@ export interface MediaContext {
 export interface ExploreContext {
   model: string;
   maxTokens?: number;
+  /** Whether `model` accepts `cache: true` on its messages; see supportsPromptCache. */
+  cache?: boolean;
   complete(
     request: CompletionRequest,
     onEvent: (event: CompletionStreamEvent) => void,

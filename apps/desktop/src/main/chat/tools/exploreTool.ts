@@ -104,7 +104,7 @@ export const exploreTool: ToolDefinition = {
         explore.complete(
           {
             model: explore.model,
-            messages: withCacheBreakpoints(messages),
+            messages: explore.cache ? withCacheBreakpoints(messages) : messages,
             tools,
             ...(explore.maxTokens ? { maxTokens: explore.maxTokens } : {}),
           },

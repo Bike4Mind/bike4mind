@@ -1,7 +1,7 @@
 import { ChatModels } from '@bike4mind/common';
 import type { AxiosInstance } from 'axios';
 import type { ChatModelOption, ChatUsage } from '@shared/chat';
-import { streamCompletion } from './completions';
+import { streamCompletion, supportsPromptCache } from './completions';
 import type { ExploreContext } from './tools/types';
 
 /**
@@ -38,6 +38,7 @@ export function buildExploreContext(options: {
   const maxTokens = options.models.find(option => option.id === model)?.maxOutputTokens;
   return {
     model,
+    cache: supportsPromptCache(options.models, model),
     ...(maxTokens ? { maxTokens } : {}),
     complete: (request, onEvent, signal) => streamCompletion(options.axios, options.endpoint, request, onEvent, signal),
     addUsage: options.onUsage,

@@ -1,7 +1,7 @@
 import { PassThrough } from 'node:stream';
 import type { AxiosInstance } from 'axios';
 import { describe, expect, it, vi } from 'vitest';
-import { streamCompletion, withCacheBreakpoints } from './completions';
+import { streamCompletion, supportsPromptCache, withCacheBreakpoints } from './completions';
 import type { CompletionStreamEvent } from './streamEvents';
 
 /** One SSE frame. The blank-line terminator is what the parser splits on. */
@@ -212,6 +212,42 @@ describe('withCacheBreakpoints', () => {
     expect(marked).toEqual([0, 5]);
   });
 
+  it('never marks a message that ends on a reasoning block, and moves back to one that can carry it', () => {
+    const withThinking = [
+      ...history,
+      {
+        role: 'assistant' as const,
+        content: [
+          { type: 'text', text: 'hm' },
+          { type: 'thinking', thinking: 'x' },
+        ],
+      },
+    ];
+    expect(withCacheBreakpoints(withThinking).map(message => message.cache)).toEqual([
+      true,
+      undefined,
+      undefined,
+      true,
+      undefined,
+    ]);
+    const redacted = [...history, { role: 'assistant' as const, content: [{ type: 'redacted_thinking', data: 'x' }] }];
+    expect(withCacheBreakpoints(redacted).at(-1)?.cache).toBeUndefined();
+  });
+
+  it('marks the last text block case: a thinking block earlier in the last message is fine', () => {
+    const mixed = [
+      ...history,
+      {
+        role: 'assistant' as const,
+        content: [
+          { type: 'thinking', thinking: 'x' },
+          { type: 'text', text: 'hi' },
+        ],
+      },
+    ];
+    expect(withCacheBreakpoints(mixed).at(-1)?.cache).toBe(true);
+  });
+
   it('sends the flag on the wire and nothing for a message without it', async () => {
     const stream = new PassThrough();
     const { instance, post } = fakeAxios(stream);
@@ -220,5 +256,21 @@ describe('withCacheBreakpoints', () => {
     await done;
     const body = post.mock.calls[0][1] as { messages: { cache?: boolean }[] };
     expect(body.messages.map(message => message.cache)).toEqual([true, undefined, undefined, true]);
+  });
+});
+
+describe('supportsPromptCache', () => {
+  const models = [
+    { id: 'a', name: 'A', backend: 'anthropic' },
+    { id: 'b', name: 'B', backend: 'bedrock' },
+    { id: 'c', name: 'C' },
+  ];
+
+  it('is true only for a model the catalog says is served by direct Anthropic', () => {
+    expect(supportsPromptCache(models, 'a')).toBe(true);
+    expect(supportsPromptCache(models, 'b')).toBe(false);
+    expect(supportsPromptCache(models, 'c')).toBe(false);
+    expect(supportsPromptCache(models, 'missing')).toBe(false);
+    expect(supportsPromptCache([], 'a')).toBe(false);
   });
 });
