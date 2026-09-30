@@ -151,7 +151,7 @@ interface TargetState {
   content: string;
 }
 
-async function readTarget(target: string): Promise<TargetState> {
+async function readTarget(target: string, options: { allowBinary?: boolean } = {}): Promise<TargetState> {
   let info;
   try {
     info = await stat(target);
@@ -168,10 +168,29 @@ async function readTarget(target: string): Promise<TargetState> {
   const content = await readFile(target, 'utf8');
   // A NUL byte means the "text" round trip would corrupt the file, and the diff shown to the
   // user would be meaningless anyway.
-  if (content.includes('\u0000')) {
+  if (!options.allowBinary && content.includes('\u0000')) {
     throw new Error(`${target} looks like a binary file. Refusing to rewrite it as text.`);
   }
   return { exists: true, content };
+}
+
+// Tab, LF, CR and form feed are the only C0 controls real source text carries. Anything else is
+// nearly always a garbled escape (a model emitting \u00b7 as NUL plus "b7"), not intent.
+const isForbiddenControl = (code: number): boolean =>
+  code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d && code !== 0x0c;
+
+function assertNoControlCharacters(text: string, label: string): void {
+  let index = 0;
+  while (index < text.length && !isForbiddenControl(text.charCodeAt(index))) index += 1;
+  if (index === text.length) return;
+  const before = text.slice(0, index);
+  const line = before.split('\n').length;
+  const column = index - before.lastIndexOf('\n');
+  const code = text.charCodeAt(index).toString(16).toUpperCase().padStart(4, '0');
+  throw new Error(
+    `${label} contains U+${code} at line ${line}, column ${column}, which looks like a garbled \\u escape. ` +
+      'Write the character itself (e.g. the actual middle dot) instead of an escape. Nothing was written.'
+  );
 }
 
 interface WritePlan {
@@ -199,8 +218,12 @@ async function planWrite(input: Record<string, unknown>, context: ToolContext): 
     throw new Error(`"content" is larger than the ${MAX_WRITE_BYTES} byte limit for a single write.`);
   }
 
+  assertNoControlCharacters(after, '"content"');
+
   const target = await resolveWritablePath(requested, context);
-  const state = await readTarget(target);
+  // A whole-file replacement discards the old bytes, so a file already corrupted with NULs can
+  // be repaired this way; only an in-place edit has to refuse it.
+  const state = await readTarget(target, { allowBinary: true });
   const diff = buildDiff(target, state.exists ? 'overwrite' : 'create', state.content, after);
 
   return { target, state, after, diff, key: `file_write\x00${target}\x00${sha(after)}` };
@@ -563,6 +586,9 @@ function applyEdit(content: string, edit: EditSpec, target: string, position: Ed
 async function planEdit(input: Record<string, unknown>, context: ToolContext): Promise<WritePlan> {
   const requested = requireString(input, 'path');
   const { edits, batch } = readEdits(input);
+  edits.forEach((edit, index) =>
+    assertNoControlCharacters(edit.newText, batch ? `edits[${index}].newText` : 'newText')
+  );
 
   const target = await resolveWritablePath(requested, context);
   const state = await readTarget(target);

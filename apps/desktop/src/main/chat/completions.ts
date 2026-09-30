@@ -1,3 +1,4 @@
+import { StringDecoder } from 'node:string_decoder';
 import type { Readable } from 'node:stream';
 import { createParser } from 'eventsource-parser';
 import { isAxiosError, type AxiosInstance, type AxiosResponse } from 'axios';
@@ -173,9 +174,12 @@ function readSseStream(
       },
     });
 
+    // A chunk boundary can land inside a multi-byte character; decoding each chunk alone would
+    // turn both halves into U+FFFD.
+    const decoder = new StringDecoder('utf8');
     const onData = (chunk: Buffer) => {
       if (signal?.aborted) return;
-      parser.feed(chunk.toString('utf8'));
+      parser.feed(decoder.write(chunk));
     };
     // Ending without [DONE] is still an end: the caller keeps whatever text arrived.
     const onEnd = () => finish();

@@ -30,6 +30,30 @@ describe('write tools', () => {
     return (caught as Error).message;
   }
 
+  describe('control characters and binary files in file_edit', () => {
+    it('rejects newText containing a NUL before writing', async () => {
+      const message = await editFailure({ path: join(root, 'notes.md'), oldText: 'beta', newText: 'x \u0000b7' });
+      expect(message).toMatch(/newText contains U\+0000 at line 1, column 3/);
+      await expect(readFile(join(root, 'notes.md'), 'utf8')).resolves.toBe('alpha\nbeta\ngamma\n');
+    });
+
+    it('names the batch entry whose newText is garbled', async () => {
+      const message = await editFailure({
+        path: join(root, 'notes.md'),
+        edits: [
+          { oldText: 'alpha', newText: 'fine' },
+          { oldText: 'beta', newText: 'b\u0000' },
+        ],
+      });
+      expect(message).toMatch(/edits\[1\]\.newText contains U\+0000/);
+    });
+
+    it('still refuses to edit a file containing NUL bytes', async () => {
+      await writeFile(join(root, 'blob.bin'), Buffer.from('a \u0000 b', 'utf8'));
+      expect(await editFailure({ path: join(root, 'blob.bin'), oldText: 'a', newText: 'c' })).toMatch(/binary file/);
+    });
+  });
+
   describe('file_write', () => {
     it('describes a new file as a creation before writing anything', async () => {
       const input = { path: join(root, 'fresh.txt'), content: 'hello\n' };
@@ -95,11 +119,26 @@ describe('write tools', () => {
       await expect(readFile(join(root, 'notes.md'), 'utf8')).resolves.toBe('someone else got here first\n');
     });
 
-    it('refuses to rewrite a binary file as text', async () => {
-      await writeFile(join(root, 'blob.bin'), Buffer.from([0x00, 0x01, 0x02]));
-      await expect(fileWrite.run({ path: join(root, 'blob.bin'), content: 'text' }, context)).rejects.toThrow(
-        /binary file/
+    it('lets a whole-file write replace a file corrupted with NUL bytes', async () => {
+      await writeFile(join(root, 'blob.bin'), Buffer.from('a \u0000\u0000b7 b', 'utf8'));
+      await fileWrite.run({ path: join(root, 'blob.bin'), content: 'a \u00b7 b\n' }, context);
+      await expect(readFile(join(root, 'blob.bin'), 'utf8')).resolves.toBe('a \u00b7 b\n');
+    });
+
+    it('rejects content with a NUL, naming the character and position, and writes nothing', async () => {
+      const target = join(root, 'jsx.tsx');
+      await expect(fileWrite.run({ path: target, content: 'ok\nab \u0000\u0000b7 x' }, context)).rejects.toThrow(
+        /"content" contains U\+0000 at line 2, column 4, which looks like a garbled \\u escape/
       );
+      await expect(readFile(target, 'utf8')).rejects.toThrow();
+    });
+
+    it('rejects other C0 controls such as a vertical tab but allows tab, CR and form feed', async () => {
+      await expect(fileWrite.run({ path: join(root, 'v.txt'), content: '\u000bb' }, context)).rejects.toThrow(
+        /U\+000B at line 1, column 1/
+      );
+      await fileWrite.run({ path: join(root, 'ok.txt'), content: 'a\tb\r\n\fc' }, context);
+      await expect(readFile(join(root, 'ok.txt'), 'utf8')).resolves.toBe('a\tb\r\n\fc');
     });
 
     it('creates missing parents inside the granted root', async () => {

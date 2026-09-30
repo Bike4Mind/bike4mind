@@ -49,6 +49,43 @@ describe('streamCompletion', () => {
     expect(events).toEqual([{ type: 'content', text: 'split' }]);
   });
 
+  describe('tool arguments split across chunk boundaries', () => {
+    // The arguments are JSON inside JSON, so the middle dot is `\\u00b7` on the wire and `\u00b7`
+    // once the frame is decoded; both layers must survive a split at any byte.
+    const escaped = '{"path":"a.tsx","content":"{x} \\u00b7 {y}"}';
+    const raw = '{"path":"a.tsx","content":"{x} \u00b7 {y}"}';
+
+    async function roundTrip(args: string, splitAt: number): Promise<string | undefined> {
+      const stream = new PassThrough();
+      const { instance } = fakeAxios(stream);
+      const events: CompletionStreamEvent[] = [];
+      const done = streamCompletion(instance, '/c', REQUEST, event => events.push(event));
+      const bytes = Buffer.from(frame({ type: 'tool_use', tools: [{ name: 'file_write', arguments: args, id: 't' }] }));
+      stream.write(bytes.subarray(0, splitAt));
+      stream.write(bytes.subarray(splitAt));
+      stream.end();
+      await done;
+      const event = events[0];
+      return event?.type === 'tool_use' ? event.tools?.[0]?.arguments : undefined;
+    }
+
+    it.each([
+      ['an escaped middle dot', escaped],
+      ['a literal middle dot', raw],
+    ])('delivers %s intact at every split position', async (_name, args) => {
+      const total = Buffer.byteLength(
+        frame({ type: 'tool_use', tools: [{ name: 'file_write', arguments: args, id: 't' }] })
+      );
+      for (let at = 1; at < total; at += 1) {
+        const received = await roundTrip(args, at);
+        expect(received, `split at byte ${at}`).toBe(args);
+        expect(received).not.toContain('\u0000');
+        expect(received).not.toContain('\ufffd');
+        expect((JSON.parse(received as string) as { content: string }).content).toBe('{x} \u00b7 {y}');
+      }
+    });
+  });
+
   it('resolves on socket end without [DONE], so a truncated stream keeps its text', async () => {
     const stream = new PassThrough();
     const { instance } = fakeAxios(stream);
