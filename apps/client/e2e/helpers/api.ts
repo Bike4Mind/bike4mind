@@ -138,14 +138,15 @@ export async function apiCreateTestUser(
  * another test running in parallel (an OTC send overwrites the code the other test reads back) or
  * must start from a never-exchanged refresh token (a rotated one is revoked on replay).
  *
- * The retry index is baked into the identity: createUser rejects a duplicate username or email, so
- * without it a retry would die in apiCreateTestUser instead of re-running the test. The marker
+ * The retry and repeat indexes are baked into the identity: createUser rejects a duplicate username
+ * or email, so without them a retry or `--repeat-each` run would die in apiCreateTestUser. The marker
  * stays before the `<id>-<runId>` tail so both cleanup regexes in pages/api/test/cleanup.ts match.
  */
 export async function apiCreateThrowawayUser(request: APIRequestContext, label: string) {
   const e2eId = getE2ETestId();
   const idSuffix = e2eId ? `${e2eId}-${getTestRunId()}` : getTestRunId();
-  const slug = `auth-${label}${test.info().retry}`;
+  const { retry, repeatEachIndex } = test.info();
+  const slug = `auth-${label}${retry}r${repeatEachIndex}`;
   const email = `${slug}-${idSuffix}-e2e@test.com`;
   const result = await apiCreateTestUser(request, {
     username: `${slug}-${idSuffix}`,
