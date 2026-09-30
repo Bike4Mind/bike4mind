@@ -12,8 +12,8 @@ import {
   memoryPrincipalKeyRepository,
 } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { createLedgerMemoryStore } from '../memory/ledgerMemoryStore';
-import { createKeyProvider } from '../memory/factCipher';
+import { createLedgerMemoryStore } from '@server/memory/ledgerMemoryStore';
+import { createKeyProvider } from '@server/memory/factCipher';
 
 const { evaluate, send, receive, remove } = vi.hoisted(() => ({
   evaluate: vi.fn(),
@@ -90,7 +90,7 @@ async function beliefs() {
 }
 
 beforeAll(async () => {
-  server = await createMongoServer({ instance: { launchTimeout: MONGO_TEST_TIMEOUT_MS } });
+  server = await createMongoServer();
   await mongoose.connect(server.getUri());
 });
 afterAll(async () => {
