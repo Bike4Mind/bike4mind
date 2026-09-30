@@ -1,5 +1,5 @@
 import { glob, lstat, readFile, stat } from 'node:fs/promises';
-import { basename, join, matchesGlob, relative } from 'node:path';
+import { basename, dirname, join, matchesGlob, relative } from 'node:path';
 import { git } from '../project/git';
 import { resolveWithinRoots } from './paths';
 import {
@@ -443,8 +443,11 @@ export const grepSearch: ToolDefinition = {
       Math.max(1, Math.floor(optionalNumber(input, 'maxResults') ?? DEFAULT_GREP_RESULTS))
     );
 
-    const listing = await listFiles(base, context);
-    const candidates = include ? listing.files.filter(file => matchesInclude(file, include)) : listing.files;
+    // A file path is a one-file search; listing it as a folder found nothing and read as "No matches".
+    const single = (await stat(base).catch(() => undefined))?.isFile() === true;
+    const directory = single ? dirname(base) : base;
+    const listing: FileListing = single ? { files: [basename(base)], complete: true } : await listFiles(base, context);
+    const candidates = include && !single ? listing.files.filter(file => matchesInclude(file, include)) : listing.files;
 
     const body: string[] = [];
     let size = 0;
@@ -459,7 +462,7 @@ export const grepSearch: ToolDefinition = {
     for (let start = 0; start < candidates.length && !truncated; start += SCAN_BATCH) {
       if (context.signal.aborted) break;
       const batch = candidates.slice(start, start + SCAN_BATCH);
-      const scanned = await Promise.all(batch.map(file => scanFile(join(base, file), expression)));
+      const scanned = await Promise.all(batch.map(file => scanFile(join(directory, file), expression)));
 
       for (let index = 0; index < batch.length; index += 1) {
         const result = scanned[index];
