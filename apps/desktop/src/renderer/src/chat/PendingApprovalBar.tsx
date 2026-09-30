@@ -40,89 +40,94 @@ export function PendingApprovalBar({
   const [next, ...rest] = elsewhere;
 
   return (
-    <Sheet
-      variant="soft"
-      color="warning"
-      sx={{ ...contentColumnSx, borderRadius: 'sm', px: 1.5, py: 1.25, my: 0.5 }}
-      data-testid="chat-pending-approval-bar"
-    >
-      <Stack direction="row" spacing={1} sx={{ alignItems: 'baseline' }}>
-        <Typography level="body-xs" fontWeight="lg" sx={{ flex: 1, minWidth: 0 }}>
-          Another conversation needs you
-        </Typography>
-        {rest.length > 0 && (
-          <Typography level="body-xs" data-testid="chat-pending-approval-more">
-            {rest.length} more waiting
+    // The column wraps the bar rather than being spread onto it: the column's gutter is what
+    // puts the bar's border on the content edge, and as the bar's own padding it would instead
+    // have bled the warning surface a gutter's width past the column on both sides.
+    <Box sx={{ ...contentColumnSx, my: 0.5 }}>
+      <Sheet
+        variant="soft"
+        color="warning"
+        sx={{ borderRadius: 'sm', px: 1.5, py: 1.25 }}
+        data-testid="chat-pending-approval-bar"
+      >
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'baseline' }}>
+          <Typography level="body-xs" fontWeight="lg" sx={{ flex: 1, minWidth: 0 }}>
+            Another conversation needs you
           </Typography>
-        )}
-      </Stack>
+          {rest.length > 0 && (
+            <Typography level="body-xs" data-testid="chat-pending-approval-more">
+              {rest.length} more waiting
+            </Typography>
+          )}
+        </Stack>
 
-      <Typography
-        level="body-xs"
-        noWrap
-        sx={{ mt: 0.25, cursor: 'pointer', textDecoration: 'underline' }}
-        onClick={() => onOpenSession(next.sessionId)}
-        data-testid="chat-pending-approval-session"
-      >
-        {next.sessionTitle}
-      </Typography>
-
-      <Box
-        sx={{
-          mt: 0.75,
-          p: 1,
-          borderRadius: 'sm',
-          bgcolor: 'background.surface',
-          maxHeight: 160,
-          overflowY: 'auto',
-        }}
-      >
         <Typography
           level="body-xs"
-          fontFamily="monospace"
-          sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
-          data-testid="chat-pending-approval-detail"
+          noWrap
+          sx={{ mt: 0.25, cursor: 'pointer', textDecoration: 'underline' }}
+          onClick={() => onOpenSession(next.sessionId)}
+          data-testid="chat-pending-approval-session"
         >
-          {next.detail}
+          {next.sessionTitle}
         </Typography>
-      </Box>
 
-      <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-        <Button size="sm" onClick={() => onRespond(next.approvalId, 'once')} data-testid="chat-pending-approve-once">
-          Allow once
-        </Button>
-        {/* Withheld on an irreversible tool for the same reason the card withholds it: one
+        <Box
+          sx={{
+            mt: 0.75,
+            p: 1,
+            borderRadius: 'sm',
+            bgcolor: 'background.surface',
+            maxHeight: 160,
+            overflowY: 'auto',
+          }}
+        >
+          <Typography
+            level="body-xs"
+            fontFamily="monospace"
+            sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
+            data-testid="chat-pending-approval-detail"
+          >
+            {next.detail}
+          </Typography>
+        </Box>
+
+        <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+          <Button size="sm" onClick={() => onRespond(next.approvalId, 'once')} data-testid="chat-pending-approve-once">
+            Allow once
+          </Button>
+          {/* Withheld on an irreversible tool for the same reason the card withholds it: one
             click must never stand in for an answer to a later, different request. */}
-        {!next.irreversible && (
+          {!next.irreversible && (
+            <Button
+              size="sm"
+              variant="soft"
+              onClick={() => onRespond(next.approvalId, 'always')}
+              data-testid="chat-pending-approve-always"
+            >
+              Always in that chat
+            </Button>
+          )}
           <Button
             size="sm"
-            variant="soft"
-            onClick={() => onRespond(next.approvalId, 'always')}
-            data-testid="chat-pending-approve-always"
+            variant="plain"
+            color="neutral"
+            onClick={() => onRespond(next.approvalId, 'deny')}
+            data-testid="chat-pending-deny"
           >
-            Always in that chat
+            Don&apos;t allow
           </Button>
-        )}
-        <Button
-          size="sm"
-          variant="plain"
-          color="neutral"
-          onClick={() => onRespond(next.approvalId, 'deny')}
-          data-testid="chat-pending-deny"
-        >
-          Don&apos;t allow
-        </Button>
-        <Box sx={{ flex: 1 }} />
-        <Button
-          size="sm"
-          variant="plain"
-          color="neutral"
-          onClick={() => onOpenSession(next.sessionId)}
-          data-testid="chat-pending-open-session-btn"
-        >
-          Open it
-        </Button>
-      </Stack>
-    </Sheet>
+          <Box sx={{ flex: 1 }} />
+          <Button
+            size="sm"
+            variant="plain"
+            color="neutral"
+            onClick={() => onOpenSession(next.sessionId)}
+            data-testid="chat-pending-open-session-btn"
+          >
+            Open it
+          </Button>
+        </Stack>
+      </Sheet>
+    </Box>
   );
 }

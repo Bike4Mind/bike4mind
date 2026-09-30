@@ -14,7 +14,7 @@ import { Composer } from './Composer';
 import { CustomizePanel } from './CustomizePanel';
 import { MessageThread } from './MessageThread';
 import { PendingApprovalBar } from './PendingApprovalBar';
-import { contentColumnSx } from './layout';
+import { columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
 import { SessionChips } from './SessionChips';
 import { SessionList } from './SessionList';
@@ -323,7 +323,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
       {showArtifacts ? (
         <ArtifactLibraryPanel onClose={() => setShowArtifacts(false)} />
       ) : (
-        <Stack sx={{ flex: 1, minWidth: 0 }}>
+        <Stack sx={{ flex: 1, minWidth: 0, ...columnStackSx }}>
           <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
             <Box sx={{ ...contentColumnSx, py: 1.25 }}>
               {conversation.session ? (
@@ -360,22 +360,26 @@ export function ChatShell({ account }: { account?: ReactNode }) {
           />
 
           {conversation.sendError && (
-            <Alert size="sm" color="danger" variant="soft" sx={contentColumnSx} data-testid="chat-send-error">
-              {conversation.sendError}
-            </Alert>
+            <Box sx={contentColumnSx}>
+              <Alert size="sm" color="danger" variant="soft" data-testid="chat-send-error">
+                {conversation.sendError}
+              </Alert>
+            </Box>
           )}
 
           {conversation.notice && (
-            <Alert
-              size="sm"
-              color="warning"
-              variant="soft"
-              sx={{ ...contentColumnSx, cursor: 'pointer' }}
-              onClick={conversation.dismissNotice}
-              data-testid="chat-notice"
-            >
-              {conversation.notice}
-            </Alert>
+            <Box sx={contentColumnSx}>
+              <Alert
+                size="sm"
+                color="warning"
+                variant="soft"
+                sx={{ cursor: 'pointer' }}
+                onClick={conversation.dismissNotice}
+                data-testid="chat-notice"
+              >
+                {conversation.notice}
+              </Alert>
+            </Box>
           )}
 
           <PendingApprovalBar
@@ -386,16 +390,18 @@ export function ChatShell({ account }: { account?: ReactNode }) {
           />
 
           {codeError && (
-            <Alert
-              size="sm"
-              color="danger"
-              variant="soft"
-              sx={{ ...contentColumnSx, cursor: 'pointer' }}
-              onClick={clearCodeError}
-              data-testid="chat-code-create-error"
-            >
-              {codeError}
-            </Alert>
+            <Box sx={contentColumnSx}>
+              <Alert
+                size="sm"
+                color="danger"
+                variant="soft"
+                sx={{ cursor: 'pointer' }}
+                onClick={clearCodeError}
+                data-testid="chat-code-create-error"
+              >
+                {codeError}
+              </Alert>
+            </Box>
           )}
 
           {/* Every Code session, bound or not. The chips are how a project is chosen, so gating
