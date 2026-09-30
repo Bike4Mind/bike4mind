@@ -991,15 +991,16 @@ Snapshots upsert by lake and UTC day. Failed lakes are isolated and their attemp
 
 ### Daily telemetry retention
 
-The single worker removes `promptMeta.contextTelemetry` from eligible Quest records older than 90 days at 03:00 UTC. The existing hosted cleanup and local worker share the same 5,000-record batches and database writes. The cutoff is fixed once per run using UTC calendar days; the exact cutoff remains excluded. Conversation content and other prompt metadata remain intact, with the usual database `updatedAt` change.
+The single worker removes `promptMeta.contextTelemetry` from eligible Quest records older than 90 days at 03:00 UTC. The existing hosted cleanup and local worker share the same 5,000-record batches and database writes. The cutoff is fixed once per run using UTC calendar days; the exact cutoff remains excluded. Conversation content and other prompt metadata remain intact.
 
 There is no bootstrap run. Starting after 03:00 waits for the next day; starting exactly at 03:00 runs that slot. Delayed ticks coalesce missed days, active runs do not overlap, and shutdown waits within the worker's existing grace period. This remains a single-worker schedule, without a distributed lock or a promise to finish after shutdown grace expires.
 
 Database failures reject the run. Successful earlier batches remain cleaned; the next scheduled run retries the remaining eligible rows. Repeating a completed cleanup makes no further changes. This does not delete Quests, remove every type of telemetry, or change the model's existing record-selection policy.
 
-Focused tests use disposable Mongo, exact retention boundaries and an injected later-batch write failure. They establish persisted application effects, not a Kubernetes deployment drill.
+Focused tests use disposable Mongo, exact retention boundaries and an injected later-batch write failure. CI also runs the retention tests with `TZ=America/New_York` set before Node starts, covering a daylight-saving transition. They establish persisted application effects, not a Kubernetes deployment drill.
 
 ```sh
-VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test server/cron/telemetryCleanup.test.ts server/worker/telemetryCleanup.test.ts __tests__/mongoTestTimeoutBudget.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test server/cron/telemetryCleanup.test.ts __tests__/mongoTestTimeoutBudget.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/telemetryCleanup.test.ts
 TZ=America/New_York VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test:integration server/cron/telemetryCleanup.retention.e2e.test.ts
 ```

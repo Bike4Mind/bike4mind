@@ -75,4 +75,20 @@ describe('local telemetry retention schedule', () => {
     await vi.advanceTimersByTimeAsync(86_400_000);
     expect(run).toHaveBeenCalledOnce();
   });
+  it('stops after the grace period when a cleanup never settles', async () => {
+    run.mockImplementationOnce(() => new Promise<void>(() => {}));
+    vi.setSystemTime(new Date('2026-09-30T02:59:00Z'));
+    worker.start();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(run).toHaveBeenCalledOnce();
+    let stopped = false;
+    const stop = worker.stop(1000).then(() => {
+      stopped = true;
+    });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(stopped).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await stop;
+    expect(stopped).toBe(true);
+  });
 });
