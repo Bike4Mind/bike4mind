@@ -1,0 +1,77 @@
+# Packaging config for the desktop client. `pnpm package` runs `electron-vite build`
+# first; everything below only assembles what that produced into installers.
+#
+# Signing is deliberately absent from this file. An unsigned build is the default so a
+# machine with no certificates can still produce a working artifact, and every
+# credential arrives through the environment. See the `mac` block.
+appId: com.bike4mind.desktop
+productName: Bike4Mind
+copyright: Copyright (c) Bike4Mind
+
+directories:
+  buildResources: build
+  output: release
+
+# out/ is the electron-vite bundle; package.json is what Electron reads `main` from.
+# Production dependencies are collected separately by electron-builder and are not
+# affected by this list - main and preload keep them external (externalizeDepsPlugin),
+# so they have to ship.
+files:
+  - out/**
+  - package.json
+
+asar: true
+
+mac:
+  icon: build/icon.icns
+  category: public.app-category.developer-tools
+  target:
+    # zip alongside dmg because that is the format an auto-updater consumes on macOS
+    # (T44); the dmg is only the human-facing installer.
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  # Both of these are inert while unsigned and become correct the moment an identity
+  # exists, so they live here rather than in a signed-only branch. Hardened runtime is a
+  # notarization prerequisite, and the entitlements cover what the app actually does:
+  # run V8 and spawn shell commands and MCP servers as child processes.
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  gatekeeperAssess: false
+  # Signing turns on by itself once a "Developer ID Application" identity is reachable -
+  # either in the login keychain or via CSC_LINK + CSC_KEY_PASSWORD. With neither,
+  # electron-builder logs that it skipped signing and ad-hoc signs the bundle, which is
+  # the minimum macOS needs to run an arm64 build at all.
+  #
+  # Notarization stays off here because turning it on without credentials is a hard
+  # build failure. Enable it per invocation instead, with APPLE_ID,
+  # APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID exported:
+  #   pnpm package:mac -c.mac.notarize=true
+  notarize: false
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  window:
+    width: 540
+    height: 380
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+  # Same shape as macOS: no certificate is named here. electron-builder picks one up
+  # from WIN_CSC_LINK + WIN_CSC_KEY_PASSWORD (or the platform-neutral CSC_LINK +
+  # CSC_KEY_PASSWORD). Unsigned installers work, behind a SmartScreen warning.
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-${version}-setup.${ext}
+
+# The auto-updater lands in T44. Nothing publishes from here yet, and `--publish never`
+# on the package scripts keeps a stray GH_TOKEN in the environment from changing that.
+publish: null
