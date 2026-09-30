@@ -90,6 +90,48 @@ export interface ToolReporter {
   diff(value: ChatDiff): void;
   /** Record what a sub-loop spent; see ChatToolCall.detail. */
   detail(value: ChatToolDetail): void;
+  /**
+   * Show the model an image alongside this call's text result, on the next request only; it is
+   * not stored, so a reloaded conversation carries the text result alone.
+   */
+  image(bytes: Buffer, mimeType: string): void;
+}
+
+/** One conversation's agent browser: a hidden window with its own cookie jar. */
+export interface BrowserPage {
+  /** Where the page is now; empty before the first navigation. */
+  currentUrl(): string;
+  /** Load a URL and wait for it to settle. Resolves with where it ended up. */
+  navigate(url: string): Promise<{ url: string; title: string; status?: number }>;
+  back(): Promise<void>;
+  snapshot(maxChars: number): Promise<{ url: string; title: string; text: string; truncated: boolean }>;
+  click(ref: string): Promise<string>;
+  fill(ref: string, text: string): Promise<string>;
+  /** A named key such as Enter, Tab, Escape or ArrowDown, sent as real input to the focused element. */
+  press(key: string): Promise<void>;
+  screenshot(): Promise<Buffer>;
+  evaluate(expression: string): Promise<unknown>;
+  /** Console errors, failed requests and navigations since the last call, oldest first. */
+  drainEvents(): string[];
+  /** Wait for in-flight navigation and network to go quiet, bounded by `timeoutMs`. */
+  settle(timeoutMs: number): Promise<void>;
+  close(): Promise<void>;
+}
+
+/** What ChatService holds: the Electron BrowserManager in the app, a fake in tests. */
+export interface BrowserProvider {
+  context(
+    sessionId: string,
+    keepScreenshot: (bytes: Buffer, caption: string) => Promise<ChatMedia | undefined>
+  ): BrowserContext;
+  closeSession(sessionId: string): Promise<void>;
+}
+
+export interface BrowserContext {
+  /** The session's page, opened on first use. */
+  page(): Promise<BrowserPage>;
+  /** Keep a screenshot for the transcript, so the user sees what the model saw. */
+  keepScreenshot(bytes: Buffer, caption: string): Promise<ChatMedia | undefined>;
 }
 
 /**
@@ -128,6 +170,8 @@ export interface ToolContext {
   host?: HostContext;
   /** Absent in tests and when signed out; `explore` then refuses rather than runs. */
   explore?: ExploreContext;
+  /** Absent outside a Code session; the browser tools are then not declared at all. */
+  browser?: BrowserContext;
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
 }
@@ -307,6 +351,11 @@ export interface ToolDefinition {
    * is what a write outside a granted folder must do, rather than being prompted around.
    */
   approval?(input: Record<string, unknown>, context: ToolContext): ApprovalPrompt | Promise<ApprovalPrompt>;
+  /**
+   * Consulted before `approval`: false lets this call through unasked. For a tool whose risk
+   * depends on its target - the browser on a local dev server as against a real site.
+   */
+  needsApproval?(input: Record<string, unknown>, context: ToolContext): boolean | Promise<boolean>;
   /** Returns the text handed back to the model. Throwing is reported to it as a failure. */
   run(input: Record<string, unknown>, context: ToolContext): Promise<string>;
 }

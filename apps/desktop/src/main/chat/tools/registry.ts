@@ -1,4 +1,5 @@
 import { bashBackground, bashKill, bashList, bashOutput } from './backgroundTools';
+import { BROWSER_TOOLS } from './browserTools';
 import { exploreTool } from './exploreTool';
 import { fileRead, globFiles, grepSearch } from './fileTools';
 import { sessionArchive, sessionDelete, sessionList, sessionRead, sessionSend, sessionSpawn } from './hostTools';
@@ -64,7 +65,7 @@ const HOST_TOOLS: readonly ToolDefinition[] = [
 ];
 
 const BY_NAME = new Map(
-  [...LOCAL_TOOLS, exploreTool, ...MEDIA_TOOLS, ...HOST_TOOLS].map(tool => [tool.schema.name, tool])
+  [...LOCAL_TOOLS, exploreTool, ...MEDIA_TOOLS, ...HOST_TOOLS, ...BROWSER_TOOLS].map(tool => [tool.schema.name, tool])
 );
 
 export function findTool(name: string): ToolDefinition | undefined {
@@ -92,6 +93,8 @@ export function toolsForRequest(options: {
    * files it would read are exactly the ones they can.
    */
   explore?: boolean;
+  /** A hidden browser for this session; Code sessions get one, to test what they build. */
+  browser?: boolean;
   /**
    * Schemas contributed by the user's connected MCP servers, already namespaced and framed
    * (see chat/mcp/names.ts). They are appended rather than merged into a family above because
@@ -104,6 +107,7 @@ export function toolsForRequest(options: {
     ...(options.roots.length > 0 && options.explore ? [exploreTool] : []),
     ...(options.media ? MEDIA_TOOLS : []),
     ...(options.host ? HOST_TOOLS : []),
+    ...(options.browser ? BROWSER_TOOLS : []),
   ];
   return [
     ...available.map(tool => ({ toolSchema: tool.schema })),
