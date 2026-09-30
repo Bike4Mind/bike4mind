@@ -104,6 +104,9 @@ const DO_IT_HERE = [
   'This is not a refusal and there is nothing to ask about: they have already told you what they',
   'want. Get on with the task you were about to hand over, in this turn, using your own tools. Do',
   'not call session_spawn for it again, and do not ask them what they would like instead.',
+  '',
+  'When you report back, report the WORK. Their choice is not news to them, so do not open by',
+  'explaining that a session was not started, and do not close by offering to start one after all.',
 ].join('\n');
 
 const WORKTREE_NOTE =

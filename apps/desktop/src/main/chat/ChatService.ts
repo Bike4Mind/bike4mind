@@ -1956,7 +1956,13 @@ export class ChatService {
       // reply can finish - and look for its watch entry - before the await below returns.
       this.spawnWatch.set(child.id, { parentSessionId: parent.id });
 
-      const sent = await this.send(child.id, seed, [], undefined, this.turnRelay.get(parent.id)?.hops ?? 0);
+      const sent = await this.send(
+        child.id,
+        workspace ? `${worktreePreamble(project.directory, workspace)}\n\n${seed}` : seed,
+        [],
+        undefined,
+        this.turnRelay.get(parent.id)?.hops ?? 0
+      );
       if (!sent.ok) {
         this.spawnWatch.delete(child.id);
         await this.deleteSession(child.id);
@@ -2832,6 +2838,32 @@ function replaceToolResults(wire: CompletionMessage[], content: ReadonlyMap<stri
       return replacement === undefined ? block : { ...result, content: replacement };
     });
   }
+}
+
+/**
+ * What a child in a worktree has to be told before it reads its task.
+ *
+ * The parent wrote that task not knowing where the child would land - the user picks that after
+ * the prompt exists - so it routinely names files by the parent's absolute path. Left alone the
+ * child takes those paths literally: its file tools refuse them, because its roots are its own
+ * worktree and nothing else, and its shell does the work in the wrong checkout. Observed on a
+ * live run, not imagined - three denied tool calls and a file written into the parent's tree.
+ *
+ * Prepended to the seed rather than substituted into it. Rewriting the user's prompt would be
+ * guessing at which mentions of a path meant "this repository" and which meant that exact
+ * directory; saying where the child is lets it decide.
+ */
+function worktreePreamble(projectDirectory: string, workspace: { branch: string; workingDirectory: string }): string {
+  return [
+    `[You are running in a git worktree made for this task: ${workspace.workingDirectory}, on a new`,
+    `branch ${workspace.branch}. It is a checkout of the same repository as ${projectDirectory},`,
+    'which is where the conversation that started you is working.',
+    '',
+    `Any path in the task below that points into ${projectDirectory} names a file of THAT`,
+    'checkout. Use the one at the matching path inside your own worktree instead. Do not read or',
+    'write under it: it is another session working tree, you have no access to it, and changing it',
+    'is the one thing your own worktree exists to prevent.]',
+  ].join('\n');
 }
 
 /**
