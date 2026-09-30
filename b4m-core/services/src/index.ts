@@ -4,8 +4,6 @@ export * as authSessionService from './authSessionService';
 export * as userApiKeyService from './userApiKeyService';
 // Flat export: callers outside the service (the OAuth ai-token route) must recognize
 // this refusal, and the namespace form would make the machine code easy to miss.
-// Sourced directly from common (the canonical definition), not via create.ts's own
-// re-export of it.
 export { API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/common';
 export * as counterService from './countersService';
 export * as importHistoryService from './importHistoryService';

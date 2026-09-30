@@ -29,6 +29,7 @@ describe('API_ERROR_CODES', () => {
   // justify itself rather than sit in the published vocabulary unemitted.
   it('carries no code that no surface emits', () => {
     const NARROWING_TUPLES = [QUEST_ERROR_CODES, TTS_ERROR_CODES];
+    // API_KEY_USER_CAP_ERROR_CODE has no narrowing tuple; its emission is proven by userApiKeyService/__tests__/create.test.ts (the additionalInfo assertion).
     const emitted = new Set<string>([...NARROWING_TUPLES.flat(), API_KEY_USER_CAP_ERROR_CODE]);
     expect(API_ERROR_CODES.filter(code => !emitted.has(code))).toEqual([]);
   });

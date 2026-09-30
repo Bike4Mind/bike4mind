@@ -1,3 +1,5 @@
+export const API_KEY_USER_CAP_ERROR_CODE = 'api_key_user_cap';
+
 /**
  * The one enumerated vocabulary for the `errorCode` field on a public error body
  * (CONVENTIONS.md section 1, "One error-code vocabulary").
@@ -14,8 +16,6 @@
  * barrel. Adding a classifier means adding it to this tuple, not inventing a
  * local one.
  */
-export const API_KEY_USER_CAP_ERROR_CODE = 'api_key_user_cap';
-
 export const API_ERROR_CODES = [
   /** The user must revoke an active API key or wait for one to expire before minting another. */
   API_KEY_USER_CAP_ERROR_CODE,
