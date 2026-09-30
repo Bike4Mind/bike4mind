@@ -191,6 +191,42 @@ Routing uses hash history. A packaged build loads the renderer over `file://`, w
 origin for the History API to push against, so hash history is the one mode that behaves
 identically in dev and when packaged.
 
+## Updates
+
+`electron-updater` against a `generic` feed, wired in `src/main/update`. The feed URL is baked
+in at build time from `B4M_UPDATE_FEED_URL`, exactly like `B4M_DEFAULT_API_URL` above, and for
+one extra reason: this repo is public, and a release feed is a host or a bucket behind one. The
+`generic` provider is what makes that possible - `s3` and `github` want a bucket name or an
+owner/repo in committed configuration, whereas `generic` takes a plain URL any static host can
+serve. Set nothing and the build simply does not check, which is right for a fork that
+publishes no releases.
+
+Only https is accepted, plus http on the loopback so the check path can be exercised against a
+local static server. See `resolveFeedUrl` in `src/main/update/feed.ts`.
+
+| When | What |
+| --- | --- |
+| 15s after launch | The first check, deliberately behind the window, auth and model catalog |
+| Every 6 hours | Because this app is left running for days, so "on launch" alone is not enough |
+| The Customize row | On demand |
+
+Nothing downloads or installs itself. `autoDownload` and `autoInstallOnAppQuit` are both off:
+the user presses Download, and then Restart. An install asks main what is in flight first - a
+streaming reply, a session at the approval gate, a background process still up - and refuses
+with that report rather than quitting, so the restart is never a surprise. Background children
+are killed before the app is handed to the installer, not left to the quit handlers.
+
+A failed check is never surfaced. No network, a dead feed and a malformed manifest all land as
+one quiet state that keeps showing the current version, and none of them can retract an update
+that is already downloaded and waiting. The state machine is in `src/shared/update.ts` and is
+unit-tested there, which matters more than usual: **macOS will not auto-update an unsigned
+app**, so until code-signing certificates exist the full download-and-install cycle cannot be
+exercised on macOS at all. Do not "fix" that by relaxing the signature check - an updater that
+accepts unsigned payloads is a remote code execution path.
+
+Packaging (the macOS `zip` target the updater consumes) is a separate concern; see the
+packaging config once it lands.
+
 ## App icon
 
 `build/icon.svg` is the source of truth: a copy of the square bike4mind mark that the web app

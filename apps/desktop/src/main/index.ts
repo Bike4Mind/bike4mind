@@ -7,6 +7,7 @@ import { registerChat } from './chat';
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
 import { isExternallyOpenable } from './externalLinks';
+import { registerUpdates } from './update';
 
 // electron-vite sets this in dev only; a packaged build loads the renderer off disk.
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL;
@@ -86,13 +87,38 @@ void app.whenReady().then(async () => {
   const auth = registerAuth();
   const { service: chat, background, mcp } = registerChat(auth);
 
+  // Set by whichever path starts the teardown, so the `before-quit` veto below runs at most
+  // once. Declared here because the updater's install path does that teardown itself and must
+  // not then be vetoed: quitAndInstall has already handed the app to the installer, and a
+  // second graceful pass would only delay a quit whose children are already gone.
+  let quitting = false;
+
+  // Everything a quit would throw away, counted fresh each time it is asked for. The updater
+  // puts this to the user rather than acting on it: a streaming reply and a dev server are both
+  // things only they can say are expendable.
+  const updates = registerUpdates({
+    busy: () => {
+      const statuses = chat.sessionStatuses();
+      return {
+        replying: statuses.filter(status => status.status === 'processing').length,
+        awaitingApproval: statuses.filter(status => status.status === 'needs-action').length,
+        background: background.runningCount(),
+      };
+    },
+    prepareQuit: async () => {
+      quitting = true;
+      await Promise.all([background.shutdown(), mcp.shutdown()]).catch(() => undefined);
+    },
+  });
+
   /**
    * Kill every background process and MCP server child before the app goes, in two passes.
    *
    * `before-quit` is the only hook that can wait, so the graceful pass lives here: the quit is
    * vetoed once, the process groups are SIGTERMed and given a moment to shut down cleanly (a
    * dev server releasing its port), and only then does the quit resume. `quitting` stops that
-   * veto from looping forever, and Electron's own force-quit paths still land on `will-quit`
+   * veto from looping forever - and stops it firing at all after an update install, which has
+   * already done this pass - and Electron's own force-quit paths still land on `will-quit`
    * below, which SIGKILLs whatever survived.
    *
    * Neither of these runs if main is SIGKILLed or crashes. For a background command that case
@@ -102,7 +128,6 @@ void app.whenReady().then(async () => {
    * wrapping it in a watchdog shell would put a layer between this app and the JSON-RPC stream
    * it speaks. An MCP child therefore survives a crash of main, and nothing else.
    */
-  let quitting = false;
   app.on('before-quit', event => {
     if (quitting) return;
     quitting = true;
@@ -115,6 +140,7 @@ void app.whenReady().then(async () => {
   app.once('will-quit', () => {
     auth.dispose();
     chat.dispose();
+    updates.dispose();
     // Synchronous and unconditional: this handler cannot await, and a quit that raced the
     // grace period above must not leave a process group behind.
     background.shutdownSync();

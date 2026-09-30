@@ -261,3 +261,13 @@ export function ArrowUpIcon() {
     </Glyph>
   );
 }
+
+/** Updates: an arrow into a tray, which is the shape every installer has used for decades. */
+export function DownloadIcon() {
+  return (
+    <Glyph>
+      <path d="M8 2.75v7.5M4.4 6.65 8 10.25l3.6-3.6" />
+      <path d="M2.75 11.5v1.25a.5.5 0 0 0 .5.5h9.5a.5.5 0 0 0 .5-.5V11.5" />
+    </Glyph>
+  );
+}

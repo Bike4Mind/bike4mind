@@ -26,6 +26,7 @@ import type {
   UpdateProjectResult,
 } from './chat';
 import type { SkillsState } from './skills';
+import type { UpdateInstallResult, UpdateState } from './update';
 
 /**
  * IPC contract shared by the main process and the preload bridge.
@@ -118,6 +119,13 @@ export const IPC_CHANNELS = {
   toolsGetAccess: 'tools:get-access',
   toolsGrantAccess: 'tools:grant-access',
   toolsRevokeAccess: 'tools:revoke-access',
+  updateGetState: 'update:get-state',
+  updateCheck: 'update:check',
+  updateDownload: 'update:download',
+  /** The one channel that can end this process. Main gates it on work in flight. */
+  updateInstall: 'update:install',
+  /** main -> renderer push; a check, a download or an install offer changed state. */
+  updateStateChanged: 'update:state-changed',
   /** Renderer -> main only. Main decides what may be opened; see isExternallyOpenable. */
   shellOpenExternal: 'shell:open-external',
 } as const;
@@ -134,6 +142,18 @@ export interface AppInfo {
 /** The whole surface exposed on `window.b4m`. Mirrored in src/preload/index.d.ts. */
 export interface DesktopApi {
   getAppInfo(): Promise<AppInfo>;
+  update: {
+    getState(): Promise<UpdateState>;
+    /** Resolves when the check finishes; the OUTCOME arrives on onStateChanged. */
+    check(): Promise<void>;
+    download(): Promise<void>;
+    /**
+     * Restart into the new version. Without `force` this reports what is still running and
+     * does nothing, so the renderer can put that to the user before anything is lost.
+     */
+    install(force: boolean): Promise<UpdateInstallResult>;
+    onStateChanged(listener: (state: UpdateState) => void): () => void;
+  };
   auth: {
     getState(): Promise<AuthState>;
     signIn(): Promise<void>;
