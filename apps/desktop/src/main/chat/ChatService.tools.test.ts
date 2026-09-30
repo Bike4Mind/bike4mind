@@ -148,6 +148,16 @@ describe('ChatService tool loop', () => {
     expect(preamble.content).toMatch(/absolute paths/);
   });
 
+  it('asks for a line of intent before a batch of calls, including the first of a turn', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'how are transactions modelled?');
+    await firstRequest();
+
+    const preamble = post.mock.calls[0][1].messages[0];
+    expect(preamble.content).toMatch(/say in one short line what you are after/);
+    expect(preamble.content).toMatch(/first batch of the turn/);
+  });
+
   it('runs the tool the model asks for and feeds the result back as a second turn', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'what is the largest file?');
