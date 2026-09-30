@@ -254,21 +254,146 @@ function readEdits(input: Record<string, unknown>): { edits: EditSpec[]; batch: 
   return { edits, batch: true };
 }
 
-/** Applies one edit to `content`, or throws. `label` names the edit in a batch, empty for a lone edit. */
-function applyEdit(content: string, edit: EditSpec, target: string, label: string): string {
+/**
+ * How much file text an error may quote back. The message is read by a model, so a hint that
+ * pastes a whole region costs more context than the re-read it saves.
+ */
+const MAX_HINT_LINES = 4;
+const MAX_HINT_LINE_CHARS = 200;
+
+/** Quoted verbatim and unnumbered: the model is meant to copy this straight back into "oldText". */
+function quoteForHint(lines: string[]): string {
+  const shown = lines
+    .slice(0, MAX_HINT_LINES)
+    .map(line => (line.length > MAX_HINT_LINE_CHARS ? `${line.slice(0, MAX_HINT_LINE_CHARS)}...` : line));
+  if (lines.length > MAX_HINT_LINES) shown.push('...');
+  return shown.join('\n');
+}
+
+const squeezeSpacing = (text: string): string => text.replace(/[ \t]/g, '');
+
+/** Index in `text` of the `nth` character that survives `squeezeSpacing`. */
+function unsqueezeIndex(text: string, nth: number): number {
+  let seen = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === ' ' || char === '\t') continue;
+    if (seen === nth) return index;
+    seen += 1;
+  }
+  return text.length;
+}
+
+function describeLineEndingMiss(content: string, oldText: string): string | null {
+  const toLf = (text: string): string => text.replace(/\r\n/g, '\n');
+  if (countOccurrences(toLf(content), toLf(oldText)) === 0) return null;
+
+  return content.includes('\r\n')
+    ? 'The text is there, but the file uses CRLF line endings and "oldText" uses bare LF. ' +
+        'Copy the line breaks from the file, or replace one line at a time.'
+    : 'The text is there, but "oldText" uses CRLF line endings and the file uses bare LF. ' +
+        'Drop the carriage returns, or replace one line at a time.';
+}
+
+/**
+ * Spaces and tabs are stripped from both sides rather than collapsed, so a hit proves the two
+ * differ in nothing else - the message can name the cause outright instead of guessing at it.
+ */
+function describeSpacingMiss(content: string, oldText: string): string | null {
+  const wanted = squeezeSpacing(oldText);
+  if (wanted.length === 0) return null;
+  const flattened = squeezeSpacing(content);
+  const at = flattened.indexOf(wanted);
+  if (at === -1) return null;
+
+  let start = unsqueezeIndex(content, at);
+  let end = unsqueezeIndex(content, at + wanted.length - 1) + 1;
+  // A squeezed match lands on the first surviving character, which would trim the file's own
+  // indentation out of the one hint whose whole job is to show it.
+  const blank = (index: number): boolean => content[index] === ' ' || content[index] === '\t';
+  if (/^[ \t]/.test(oldText)) while (start > 0 && blank(start - 1)) start -= 1;
+  if (/[ \t]$/.test(oldText)) while (end < content.length && blank(end)) end += 1;
+  const ambiguous =
+    countOccurrences(flattened, wanted) > 1
+      ? ' It matches in more than one place, so include surrounding lines as well.'
+      : '';
+  return (
+    'The text is there, but its indentation or spacing differs. The file has:\n' +
+    `${quoteForHint(splitLines(content.slice(start, end)))}\nUse that exactly.${ambiguous}`
+  );
+}
+
+const REREAD = 'Read the file and copy the exact text to replace, including its indentation and line breaks.';
+
+/**
+ * A line of `oldText` that occurs exactly once places the edit without a second read of the
+ * whole file; no line occurring at all is worth saying plainly, because then re-reading really
+ * is the only move left.
+ */
+function describeLineMiss(content: string, oldText: string): string | null {
+  const fileLines = splitLines(content);
+  const trimmed = fileLines.map(line => line.trim());
+  let anyPresent = false;
+
+  for (const line of splitLines(oldText)) {
+    const needle = line.trim();
+    if (needle.length === 0) continue;
+    const at = trimmed.indexOf(needle);
+    if (at === -1) continue;
+    anyPresent = true;
+    if (trimmed.indexOf(needle, at + 1) !== -1) continue;
+
+    const from = Math.max(0, at - 1);
+    return (
+      `Its line "${needle.length > MAX_HINT_LINE_CHARS ? `${needle.slice(0, MAX_HINT_LINE_CHARS)}...` : needle}" ` +
+      `is at line ${at + 1}, surrounded by:\n${quoteForHint(fileLines.slice(from, at + 2))}\n` +
+      'Correct "oldText" against that.'
+    );
+  }
+
+  return anyPresent
+    ? null
+    : `None of its lines appear in the file, so the file has changed or this text is not from it. ${REREAD}`;
+}
+
+/**
+ * Why `oldText` missed, when the reason can be proved outright. Every check below is exact and
+ * never a similarity score: a confident wrong hint sends the model chasing text that was never
+ * there, which costs more than the honest "read it again" it would replace.
+ */
+function describeMiss(content: string, oldText: string): string {
+  return (
+    describeLineEndingMiss(content, oldText) ??
+    describeSpacingMiss(content, oldText) ??
+    describeLineMiss(content, oldText) ??
+    REREAD
+  );
+}
+
+interface EditPosition {
+  index: number;
+  total: number;
+}
+
+/** Applies one edit to `content`, or throws. `position` names the edit in a batch, null for a lone edit. */
+function applyEdit(content: string, edit: EditSpec, target: string, position: EditPosition | null): string {
   const { oldText, newText, replaceAll } = edit;
+  const label = position
+    ? `edits[${position.index}] (edit ${position.index + 1} of ${position.total}, nothing was written)`
+    : '';
   const subject = label ? `${label}: "oldText"` : '"oldText"';
+  // `content` is the file itself until an earlier edit has actually run against it. Blaming
+  // edits that never happened points the model at reconstructing its own chain, when what it
+  // needs is the file.
+  const where = position && position.index > 0 ? `${target} as it stands after the earlier edits` : target;
 
   const occurrences = countOccurrences(content, oldText);
   if (occurrences === 0) {
-    throw new Error(
-      `${subject} does not appear in ${target}${label ? ' as it stands after the earlier edits' : ''}. ` +
-        'Read the file and copy the exact text to replace, including its indentation and line breaks.'
-    );
+    throw new Error(`${subject} does not appear in ${where}. ${describeMiss(content, oldText)}`);
   }
   if (occurrences > 1 && !replaceAll) {
     throw new Error(
-      `${subject} appears ${occurrences} times in ${target}, so the edit is ambiguous. Include ` +
+      `${subject} appears ${occurrences} times in ${where}, so the edit is ambiguous. Include ` +
         'enough surrounding lines to make it unique, or pass replaceAll: true to change every one.'
     );
   }
@@ -297,8 +422,7 @@ async function planEdit(input: Record<string, unknown>, context: ToolContext): P
   // every edit applies, so a failure at edit N leaves the file exactly as it was.
   let after = state.content;
   edits.forEach((edit, index) => {
-    const label = batch ? `edits[${index}] (edit ${index + 1} of ${edits.length}, nothing was written)` : '';
-    after = applyEdit(after, edit, target, label);
+    after = applyEdit(after, edit, target, batch ? { index, total: edits.length } : null);
   });
   if (after === state.content) {
     throw new Error('The edits cancel each other out, so this call would change nothing.');

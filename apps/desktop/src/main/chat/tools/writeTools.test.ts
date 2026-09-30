@@ -20,6 +20,16 @@ describe('write tools', () => {
     await writeFile(join(outside, 'secret.txt'), 'not yours\n', 'utf8');
   });
 
+  /** The message a rejected edit produced, so a test can assert what it does NOT claim too. */
+  async function editFailure(input: Record<string, unknown>): Promise<string> {
+    const caught = await fileEdit.run(input, context).then(
+      () => null,
+      (error: unknown) => error
+    );
+    expect(caught).toBeInstanceOf(Error);
+    return (caught as Error).message;
+  }
+
   describe('file_write', () => {
     it('describes a new file as a creation before writing anything', async () => {
       const input = { path: join(root, 'fresh.txt'), content: 'hello\n' };
@@ -211,6 +221,57 @@ describe('write tools', () => {
       await expect(fileEdit.run(input, context)).rejects.toThrow(/edits\[1\].*appears 2 times/);
     });
 
+    // The old label blamed "the earlier edits" on every batch entry, index 0 included, which
+    // pushed the model into re-deriving text from its own edit chain instead of re-reading.
+    it('does not blame earlier edits when the first edit is the one that missed', async () => {
+      const message = await editFailure({
+        path: file(),
+        edits: [
+          { oldText: 'absent', newText: 'x' },
+          { oldText: 'two', newText: '2' },
+        ],
+      });
+      expect(message).toMatch(/edits\[0\] \(edit 1 of 2, nothing was written\)/);
+      expect(message).not.toMatch(/earlier edits/);
+    });
+
+    it('does blame earlier edits once one has actually applied', async () => {
+      const message = await editFailure({
+        path: file(),
+        edits: [
+          { oldText: 'two', newText: 'TWO' },
+          { oldText: 'two', newText: 'x' },
+        ],
+      });
+      expect(message).toMatch(/edits\[1\] \(edit 2 of 2, nothing was written\).*as it stands after the earlier edits/);
+    });
+
+    it('makes no earlier-edits claim for a one-element batch', async () => {
+      const message = await editFailure({ path: file(), edits: [{ oldText: 'absent', newText: 'x' }] });
+      expect(message).toMatch(/edits\[0\] \(edit 1 of 1, nothing was written\)/);
+      expect(message).not.toMatch(/earlier edits/);
+    });
+
+    it('leaves the lone oldText form unlabelled', async () => {
+      const message = await editFailure({ path: file(), oldText: 'absent', newText: 'x' });
+      expect(message).toMatch(/^"oldText" does not appear in/);
+      expect(message).not.toMatch(/edits\[|earlier edits/);
+    });
+
+    it('leaves the file byte-identical when edit 2 of 3 fails', async () => {
+      const before = await readFile(file(), 'utf8');
+      const message = await editFailure({
+        path: file(),
+        edits: [
+          { oldText: 'one', newText: '1' },
+          { oldText: 'absent', newText: 'x' },
+          { oldText: 'three', newText: '3' },
+        ],
+      });
+      expect(message).toMatch(/edits\[1\] \(edit 2 of 3, nothing was written\)/);
+      await expect(readFile(file(), 'utf8')).resolves.toBe(before);
+    });
+
     it('rejects mixing the two forms and oversized batches', async () => {
       await expect(
         fileEdit.run({ path: file(), oldText: 'one', newText: '1', edits: [{ oldText: 'two', newText: '2' }] }, context)
@@ -233,6 +294,63 @@ describe('write tools', () => {
       expect(prompt?.diff?.removed).toBe(2);
       const texts = prompt?.diff?.lines.map(line => line.text);
       expect(texts).toEqual(expect.arrayContaining(['1', '5', 'one', 'five']));
+    });
+  });
+
+  describe('why an edit missed', () => {
+    const miss = async (content: string, oldText: string): Promise<string> => {
+      const target = join(root, 'subject.txt');
+      await writeFile(target, content, 'utf8');
+      return editFailure({ path: target, oldText, newText: 'REPLACED' });
+    };
+
+    it('names indentation as the cause and quotes the file version', async () => {
+      const message = await miss('function f() {\n    return 1;\n}\n', '      return 1;');
+      expect(message).toMatch(/indentation or spacing differs/);
+      expect(message).toContain('has:\n    return 1;\nUse that exactly.');
+      expect(message).not.toMatch(/CRLF|None of its lines|Its line/);
+    });
+
+    it('names CRLF rather than asking for line breaks the model cannot see', async () => {
+      const message = await miss('alpha\r\nbeta\r\ngamma\r\n', 'alpha\nbeta');
+      expect(message).toMatch(/file uses CRLF line endings and "oldText" uses bare LF/);
+      expect(message).not.toMatch(/indentation or spacing|None of its lines|Its line/);
+    });
+
+    it('names LF when the model is the one that sent carriage returns', async () => {
+      const message = await miss('alpha\nbeta\ngamma\n', 'alpha\r\nbeta');
+      expect(message).toMatch(/"oldText" uses CRLF line endings and the file uses bare LF/);
+    });
+
+    it('points at a unique anchor line so the snippet can be fixed in place', async () => {
+      const message = await miss('alpha\nbeta\ngamma\n', 'beta\ndelta');
+      expect(message).toMatch(/Its line "beta" is at line 2/);
+      expect(message).toContain('alpha\nbeta\ngamma');
+      expect(message).not.toMatch(/CRLF|indentation or spacing|None of its lines/);
+    });
+
+    it('says plainly when nothing in the file is close', async () => {
+      const message = await miss('alpha\nbeta\ngamma\n', 'epsilon\nzeta');
+      expect(message).toMatch(/None of its lines appear in the file/);
+      expect(message).not.toMatch(/CRLF|indentation or spacing|Its line/);
+    });
+
+    it('falls back to the generic advice when a shared line is not unique', async () => {
+      const message = await miss('x\ny\nx\n', 'x\nzeta');
+      expect(message).toMatch(/Read the file and copy the exact text/);
+      expect(message).not.toMatch(/Its line|None of its lines|indentation or spacing/);
+    });
+
+    it('warns when the spacing match is not unique either', async () => {
+      const message = await miss('  a b\n   a  b\n', 'a    b');
+      expect(message).toMatch(/matches in more than one place/);
+    });
+
+    it('caps how much of the file it quotes back', async () => {
+      const message = await miss(`${'q'.repeat(400)} tail\n`, `${'q'.repeat(400)}  tail`);
+      expect(message).toMatch(/indentation or spacing differs/);
+      expect(message).toContain(`${'q'.repeat(200)}...`);
+      expect(message).not.toContain('q'.repeat(300));
     });
   });
 
