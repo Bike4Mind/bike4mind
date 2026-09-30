@@ -1,7 +1,7 @@
 import type { Readable } from 'node:stream';
 import { createParser } from 'eventsource-parser';
 import { isAxiosError, type AxiosInstance, type AxiosResponse } from 'axios';
-import type { ChatRole } from '@shared/chat';
+import type { ChatModelOption, ChatRole } from '@shared/chat';
 import { parseStreamEvent, type CompletionStreamEvent } from './streamEvents';
 
 /** Same-origin default; a self-host stack overrides it with `sseCompletionsUrl` from serverConfig. */
@@ -15,6 +15,50 @@ export const DEFAULT_COMPLETIONS_PATH = '/api/ai/v1/completions';
 export interface CompletionMessage {
   role: ChatRole | 'system';
   content: string | unknown[];
+  /** Asks the provider to cache the request up to and including this message. Anthropic only. */
+  cache?: boolean;
+}
+
+/**
+ * Whether `model` can be sent `cache: true`. Only direct Anthropic turns the flag into
+ * `cache_control`; the Bedrock backend forwards it as a raw field on the message body, which
+ * Bedrock may reject, and other providers gain nothing from it. An unknown model - a catalog
+ * that could not be read, or one with no backend named - is treated as not cacheable, because a
+ * stray field failing every request is worse than paying full price.
+ */
+export function supportsPromptCache(models: readonly ChatModelOption[], model: string): boolean {
+  return models.find(option => option.id === model)?.backend === 'anthropic';
+}
+
+/** Anthropic rejects `cache_control` on these, and the adapter stamps whatever block is last. */
+const UNCACHEABLE_BLOCKS = new Set(['thinking', 'redacted_thinking']);
+
+function canCarryBreakpoint(message: CompletionMessage): boolean {
+  if (typeof message.content === 'string') return message.content.trim() !== '';
+  const tail = message.content[message.content.length - 1];
+  const type = tail && typeof tail === 'object' ? (tail as { type?: unknown }).type : undefined;
+  return message.content.length > 0 && !(typeof type === 'string' && UNCACHEABLE_BLOCKS.has(type));
+}
+
+/**
+ * The messages as one request should send them: a copy of the system message and of the last
+ * message that can carry a breakpoint, marked `cache: true`, the rest untouched. The first
+ * breakpoint caches the tools and system prompt, which are stable across a whole turn; the
+ * second is a rolling one, so the next request reads everything up to it from cache instead of
+ * re-billing it.
+ *
+ * The rolling one skips back past a message that ends on a reasoning block. In a tool loop the
+ * last message is a user turn of tool results, so that is a guard rather than a common path.
+ *
+ * Copies, never the caller's own messages: a stamp left on a stored message would pile up into a
+ * breakpoint per round and trip the provider's limit of four.
+ */
+export function withCacheBreakpoints(messages: readonly CompletionMessage[]): CompletionMessage[] {
+  let rolling = messages.length - 1;
+  while (rolling >= 0 && !canCarryBreakpoint(messages[rolling])) rolling--;
+  return messages.map((message, index) =>
+    index === rolling || message.role === 'system' ? { ...message, cache: true } : message
+  );
 }
 
 export interface CompletionRequest {

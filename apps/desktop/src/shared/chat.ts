@@ -167,6 +167,8 @@ export interface ChatToolDetail {
   rounds: number;
   modelMs: number;
   toolMs: number;
+  /** Summed over the sub-loop's requests; absent when the server reported none. */
+  usage?: ChatUsage;
 }
 
 /**
@@ -341,6 +343,8 @@ export interface ChatMessage {
    * ordering was never captured for those and cannot be recovered.
    */
   rounds?: ChatReplyRound[];
+  /** What the whole reply cost, summed over its requests, on assistant messages. Never sent to the model. */
+  usage?: ChatUsage;
   /**
    * Provider-shaped reasoning blocks (Anthropic extended thinking). Opaque: they are replayed
    * verbatim into the next request, because dropping them breaks thinking-plus-tools turns.
@@ -474,8 +478,16 @@ export interface ChatModelCatalog {
  * Absent means the server sent none, which is not the same as zero.
  */
 export interface ChatUsage {
+  /** Input the provider billed at the full rate; excludes the two cache counts below. */
   inputTokens?: number;
   outputTokens?: number;
+  /** Input served from the prompt cache, billed at a fraction of the input rate. */
+  cacheReadInputTokens?: number;
+  /** Input written to the prompt cache this request, billed above the input rate. */
+  cacheCreationInputTokens?: number;
+  /** Credits the server charged for these requests. */
+  creditsUsed?: number;
+  usdCost?: number;
 }
 
 /**
@@ -961,6 +973,8 @@ export interface ChatReplyRound {
   toolCallIds: string[];
   /** Epoch ms, display and diagnosis only; absent on rounds stored before timing was kept. */
   timing?: ChatRoundTiming;
+  /** What this round's request cost, as the server reported it. Never sent to the model. */
+  usage?: ChatUsage;
   /**
    * The model's readable reasoning before this round's prose. Captured and stored, but NOT
    * drawn: the transcript deliberately shows no thinking rows. Kept because sessions already on

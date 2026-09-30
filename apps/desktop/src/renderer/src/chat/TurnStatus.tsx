@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
-import { statusFields, type TurnProgress } from './statusLine';
+import { describeSplit, statusFields, type TurnProgress } from './statusLine';
 
 const pulse = keyframes({
   '0%, 100%': { opacity: 0.3 },
@@ -49,7 +49,12 @@ export function TurnStatus({ turn, activity }: { turn: TurnProgress | null; acti
       </Typography>
       {/* Wraps rather than truncating. The activity field is the last one and the first to be
           cut, and it is the only field that says what the turn is actually doing. */}
-      <Typography level="body-xs" textColor="text.tertiary" data-testid="chat-turn-status-text">
+      <Typography
+        level="body-xs"
+        textColor="text.tertiary"
+        title={describeSplit(turn.usage) ?? undefined}
+        data-testid="chat-turn-status-text"
+      >
         {statusFields(turn, now, activity).join(' \u00b7 ')}
       </Typography>
     </Stack>

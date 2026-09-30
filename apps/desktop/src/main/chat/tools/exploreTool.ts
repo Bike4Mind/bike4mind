@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { relative } from 'node:path';
 import type { ChatUsage } from '@shared/chat';
-import type { CompletionMessage } from '../completions';
+import { withCacheBreakpoints, type CompletionMessage } from '../completions';
+import { addUsage, foldUsage } from '../streamEvents';
 import { createThinkFilter } from '../thinkFilter';
 import { fileRead, globFiles, grepSearch } from './fileTools';
 import { createLoopTally } from '../turnTiming';
@@ -85,9 +86,10 @@ export const exploreTool: ToolDefinition = {
     const tools = EXPLORE_TOOLS.map(tool => ({ toolSchema: tool.schema }));
     let calls = 0;
     const tally = createLoopTally();
+    let spent: ChatUsage | undefined;
     // Also on the round-limit exit, which is the slow one worth explaining.
     const finish = (report: string): string => {
-      context.report?.detail(tally.summary());
+      context.report?.detail({ ...tally.summary(), ...(spent ? { usage: spent } : {}) });
       return report;
     };
 
@@ -102,7 +104,7 @@ export const exploreTool: ToolDefinition = {
         explore.complete(
           {
             model: explore.model,
-            messages,
+            messages: explore.cache ? withCacheBreakpoints(messages) : messages,
             tools,
             ...(explore.maxTokens ? { maxTokens: explore.maxTokens } : {}),
           },
@@ -113,14 +115,17 @@ export const exploreTool: ToolDefinition = {
               if (event.tools) requested.push(...event.tools);
               if (event.thinking) thinking = event.thinking;
             }
-            if (event.usage) usage = event.usage;
+            usage = foldUsage(usage, event);
           },
           context.signal
         )
       );
       text += filter.flush().text;
       // Within one request the counts are cumulative, so only the last report is billed.
-      if (usage) explore.addUsage(usage);
+      if (usage) {
+        explore.addUsage(usage);
+        spent = addUsage(spent, usage);
+      }
       if (context.signal.aborted) throw new Error('Exploring was stopped.');
 
       if (requested.length === 0)
