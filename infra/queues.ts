@@ -97,6 +97,24 @@ const githubLakeIngestQueue = new sst.aws.Queue('githubLakeIngestQueue', {
   },
 });
 
+// GitHub data-lake App access revoked -> purge and release the connection (pages/api/webhooks/github/lake.ts).
+// SQS is the retry: GitHub never redelivers on its own, and a live sync makes the purge 409.
+const githubLakeRevokeQueueDLQ = new sst.aws.Queue('githubLakeRevokeQueueDLQ', {});
+const githubLakeRevokeQueue = new sst.aws.Queue('githubLakeRevokeQueue', {
+  // Must exceed the handler's 10-minute timeout (below) or SQS redelivers mid-run. The purge is not
+  // sliced like driveDisconnectPurge, but a run cut off by the timeout resumes on the next receive:
+  // the connection stays disabled and the purge re-finds only the files still left.
+  visibilityTimeout: '12 minutes',
+  dlq: {
+    queue: githubLakeRevokeQueueDLQ.arn,
+    // The last of 7 receives starts at (7 - 1) x 12 = 72 min, past the point a sync claim goes stale
+    // (CHAINED_SYNC_CLAIM_STALE_MS, 60 min, OrgGitHubLakeConnectionModel.ts), but not a live sync that
+    // keeps renewing its claim: that one dead-letters unpurged, and the DLQ alarm (dlqAlarms.ts) is the
+    // prompt to redrive it.
+    retry: 7,
+  },
+});
+
 // FabFile Vectorize Queue
 const fabFileVectorizeQueueDLQ = new sst.aws.Queue('fabFileVectorizeQueueDLQ', {});
 const fabFileVectorizeQueue = new sst.aws.Queue('fabFileVectorizeQueue', {
@@ -912,6 +930,25 @@ const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
+const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/githubLakeRevoke.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    // fabFileBucket only: unlike githubLakeIngestQueue, this handler never re-enqueues itself, so it
+    // does not link its own queue.
+    link: [...allSecrets, fabFileBucket],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
 // What's New Highlights Queue
 // Generates weekly highlights summary from What's New modals and posts to Slack
 const whatsNewHighlightsQueueDLQ = new sst.aws.Queue('whatsNewHighlightsQueueDLQ', {
@@ -1547,6 +1584,7 @@ export {
   driveLakeIngestQueue,
   driveDisconnectPurgeQueue,
   githubLakeIngestQueue,
+  githubLakeRevokeQueue,
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
@@ -1580,6 +1618,7 @@ export {
   driveLakeIngestQueueDLQ,
   driveDisconnectPurgeQueueDLQ,
   githubLakeIngestQueueDLQ,
+  githubLakeRevokeQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -1615,6 +1654,7 @@ export {
   driveLakeIngestQueueSubscription,
   driveDisconnectPurgeQueueSubscription,
   githubLakeIngestQueueSubscription,
+  githubLakeRevokeQueueSubscription,
   liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,

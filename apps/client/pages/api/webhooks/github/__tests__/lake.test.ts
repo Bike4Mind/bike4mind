@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   findByInstallationId: vi.fn(),
   recordLastError: vi.fn(),
   sendToQueue: vi.fn(),
+  cache: new Map<string, { result: unknown }>(),
 }));
 
 vi.mock('@server/utils/config', () => ({
@@ -16,6 +17,13 @@ vi.mock('@server/utils/config', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   connectDB: h.connectDB,
+  // In memory, so the real per-delivery pinning in resolveRevokedConnectionIds runs end to end.
+  cacheRepository: {
+    findByKey: vi.fn(async (key: string) => h.cache.get(key) ?? null),
+    createOrUpdate: vi.fn(async ({ key, result }: { key: string; result: unknown }) => {
+      h.cache.set(key, { result });
+    }),
+  },
   orgGitHubLakeConnectionRepository: {
     findByInstallationId: h.findByInstallationId,
     recordLastError: h.recordLastError,
@@ -57,6 +65,19 @@ function pushPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function installationPayload(overrides: Record<string, unknown> = {}) {
+  return { action: 'deleted', installation: { id: INSTALLATION_ID }, ...overrides };
+}
+
+function installationRepositoriesPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    action: 'removed',
+    installation: { id: INSTALLATION_ID },
+    repositories_removed: [{ id: REPOSITORY_ID }],
+    ...overrides,
+  };
+}
+
 const sign = (rawBody: string, secret: string = SECRET) =>
   'sha256=' + crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
 
@@ -66,6 +87,7 @@ type Delivery = {
   event?: string | null;
   method?: string;
   signature?: string | null;
+  deliveryId?: string | null;
   reqError?: Error;
 };
 
@@ -77,10 +99,12 @@ async function deliver({
   event = 'push',
   method = 'POST',
   signature,
+  deliveryId = 'delivery-1',
   reqError,
 }: Delivery = {}) {
   const resolvedRawBody = rawBody ?? JSON.stringify(body);
-  const headers: Record<string, string> = { 'x-github-delivery': 'delivery-1' };
+  const headers: Record<string, string> = {};
+  if (deliveryId !== null) headers['x-github-delivery'] = deliveryId;
   if (event !== null) headers['x-github-event'] = event;
   const resolvedSignature = signature === undefined ? sign(resolvedRawBody) : signature;
   if (resolvedSignature !== null) headers['x-hub-signature-256'] = resolvedSignature;
@@ -112,6 +136,7 @@ async function deliver({
 describe('POST /api/webhooks/github/lake', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.cache.clear();
     h.config = {
       GITHUB_LAKE_APP_WEBHOOK_SECRET: SECRET,
       MONGODB_URI: 'mongodb://localhost:27017/%STAGE%',
@@ -160,6 +185,22 @@ describe('POST /api/webhooks/github/lake', () => {
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
+  it.each(['my-secret-placeholder-value', ' Not-Configured '])(
+    'refuses a delivery signed with the reserved placeholder secret %j',
+    async placeholder => {
+      h.config.GITHUB_LAKE_APP_WEBHOOK_SECRET = placeholder;
+      const { status } = await deliver({
+        event: 'installation',
+        body: installationPayload(),
+        signature: sign(JSON.stringify(installationPayload()), placeholder),
+      });
+
+      expect(status).toBe(503);
+      expect(h.connectDB).not.toHaveBeenCalled();
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    }
+  );
+
   it('ignores a push to a branch other than the default', async () => {
     const { status, json } = await deliver({ body: pushPayload({ ref: 'refs/heads/feature/x' }) });
 
@@ -182,11 +223,11 @@ describe('POST /api/webhooks/github/lake', () => {
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
-  it('acknowledges a signed non-push event without queueing', async () => {
+  it('acknowledges a signed non-push, non-revocation event without queueing', async () => {
     const { status, json } = await deliver({ event: 'ping', body: { zen: 'Keep it logically awesome.' } });
 
     expect(status).toBe(200);
-    expect(json).toMatchObject({ status: 'ignored' });
+    expect(json).toEqual({ status: 'ignored', reason: 'not a handled event' });
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
@@ -261,6 +302,218 @@ describe('POST /api/webhooks/github/lake', () => {
 
     expect(status).toBe(400);
     expect(json).toEqual({ message: 'Missing x-github-event header' });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('revokes every connection bound to the installation on installation.deleted', async () => {
+    h.findByInstallationId.mockResolvedValue([
+      { id: 'conn1', installationId: INSTALLATION_ID, repositoryId: 100, enabled: true },
+      { id: 'conn2', installationId: INSTALLATION_ID, repositoryId: 200, enabled: true },
+    ]);
+    const { status, json } = await deliver({ event: 'installation', body: installationPayload() });
+
+    expect(status).toBe(202);
+    expect(json).toEqual({ status: 'queued', count: 2 });
+    expect(h.connectDB).toHaveBeenCalledTimes(1);
+    expect(h.findByInstallationId).toHaveBeenCalledWith(INSTALLATION_ID);
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', {
+      connectionId: 'conn1',
+      installationId: INSTALLATION_ID,
+    });
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', {
+      connectionId: 'conn2',
+      installationId: INSTALLATION_ID,
+    });
+  });
+
+  it('revokes only the removed repositories on installation_repositories.removed', async () => {
+    h.findByInstallationId.mockResolvedValue([
+      { id: 'conn1', installationId: INSTALLATION_ID, repositoryId: REPOSITORY_ID, enabled: true },
+      { id: 'conn2', installationId: INSTALLATION_ID, repositoryId: 200, enabled: true },
+    ]);
+    const { status, json } = await deliver({
+      event: 'installation_repositories',
+      body: installationRepositoriesPayload(),
+    });
+
+    expect(status).toBe(202);
+    expect(json).toEqual({ status: 'queued', count: 1 });
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', {
+      connectionId: 'conn1',
+      installationId: INSTALLATION_ID,
+    });
+  });
+
+  it('ignores installation_repositories.added, touching no repository', async () => {
+    const { status, json } = await deliver({
+      event: 'installation_repositories',
+      body: { action: 'added', installation: { id: INSTALLATION_ID }, repositories_added: [{ id: REPOSITORY_ID }] },
+    });
+
+    expect(status).toBe(200);
+    expect(json).toEqual({ status: 'ignored', reason: 'not a revoking action' });
+    expect(h.connectDB).not.toHaveBeenCalled();
+    expect(h.findByInstallationId).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('ignores installation.suspend (reversible, not a revoke)', async () => {
+    const { status, json } = await deliver({
+      event: 'installation',
+      body: installationPayload({ action: 'suspend' }),
+    });
+
+    expect(status).toBe(200);
+    expect(json).toEqual({ status: 'ignored', reason: 'not a revoking action' });
+    expect(h.connectDB).not.toHaveBeenCalled();
+    expect(h.findByInstallationId).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('400s a malformed installation.deleted payload missing the installation id', async () => {
+    const { status, json } = await deliver({ event: 'installation', body: { action: 'deleted' } });
+
+    expect(status).toBe(400);
+    expect(json).toEqual({ message: 'Malformed payload' });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('400s a removed delivery that names no repository, rather than acknowledging it as queued: 0', async () => {
+    const { status, json } = await deliver({
+      event: 'installation_repositories',
+      body: installationRepositoriesPayload({ repositories_removed: [] }),
+    });
+
+    expect(status).toBe(400);
+    expect(json).toEqual({ message: 'Malformed payload' });
+    expect(h.findByInstallationId).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('queues count: 0 and enqueues nothing when a handled event matches no binding', async () => {
+    h.findByInstallationId.mockResolvedValue([
+      { id: 'conn1', installationId: INSTALLATION_ID, repositoryId: 999, enabled: true },
+    ]);
+    const { status, json } = await deliver({
+      event: 'installation_repositories',
+      body: installationRepositoriesPayload(),
+    });
+
+    expect(status).toBe(202);
+    expect(json).toEqual({ status: 'queued', count: 0 });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('queues count: 0 for an installation.deleted whose installation has no binding left', async () => {
+    h.findByInstallationId.mockResolvedValue([]);
+    const { status, json } = await deliver({ event: 'installation', body: installationPayload() });
+
+    expect(status).toBe(202);
+    expect(json).toEqual({ status: 'queued', count: 0 });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('500s a partial multi-connection enqueue failure, and a redelivery re-enqueues every connection', async () => {
+    h.findByInstallationId.mockResolvedValue([
+      { id: 'conn1', installationId: INSTALLATION_ID, repositoryId: 100, enabled: true },
+      { id: 'conn2', installationId: INSTALLATION_ID, repositoryId: 200, enabled: true },
+    ]);
+    h.sendToQueue.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('SQS throttled'));
+    const first = await deliver({ event: 'installation', body: installationPayload() });
+
+    expect(first.status).toBe(500);
+    expect(first.json).toEqual({ message: 'Could not queue the revoke' });
+
+    // The redelivery re-sends the pinned set, so conn1 is queued twice; revokeGitHubLakeConnection is idempotent.
+    h.sendToQueue.mockClear();
+    h.sendToQueue.mockResolvedValue(undefined);
+    const redelivery = await deliver({ event: 'installation', body: installationPayload() });
+
+    expect(redelivery.status).toBe(202);
+    expect(redelivery.json).toEqual({ status: 'queued', count: 2 });
+    expect(h.sendToQueue.mock.calls.map(([, message]) => message.connectionId)).toEqual(['conn1', 'conn2']);
+  });
+
+  it('does not revoke a connection made after the event when the same delivery is redelivered', async () => {
+    const first = await deliver({ event: 'installation_repositories', body: installationRepositoriesPayload() });
+    expect(first.status).toBe(202);
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', {
+      connectionId: 'conn1',
+      installationId: INSTALLATION_ID,
+    });
+
+    // The user re-grants the repository and reconnects: a new row binds the same repository.
+    h.findByInstallationId.mockResolvedValue([{ ...connection, id: 'conn1-prime' }]);
+    h.sendToQueue.mockClear();
+    const redelivery = await deliver({ event: 'installation_repositories', body: installationRepositoriesPayload() });
+
+    expect(redelivery.status).toBe(202);
+    expect(h.sendToQueue.mock.calls.map(([, message]) => message.connectionId)).toEqual(['conn1']);
+  });
+
+  it('resolves a different delivery against the live bindings', async () => {
+    await deliver({ event: 'installation_repositories', body: installationRepositoriesPayload() });
+    h.findByInstallationId.mockResolvedValue([{ ...connection, id: 'conn1-prime' }]);
+    h.sendToQueue.mockClear();
+
+    await deliver({
+      event: 'installation_repositories',
+      body: installationRepositoriesPayload(),
+      deliveryId: 'delivery-2',
+    });
+
+    expect(h.sendToQueue.mock.calls.map(([, message]) => message.connectionId)).toEqual(['conn1-prime']);
+  });
+
+  it('400s a revoking event with no x-github-delivery header, since it cannot be pinned', async () => {
+    const { status, json } = await deliver({ event: 'installation', body: installationPayload(), deliveryId: null });
+
+    expect(status).toBe(400);
+    expect(json).toEqual({ message: 'Missing x-github-delivery header' });
+    expect(h.findByInstallationId).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('500s and logs when resolving the affected connections fails', async () => {
+    h.findByInstallationId.mockRejectedValue(new Error('mongo down'));
+    const { status, json } = await deliver({ event: 'installation', body: installationPayload() });
+
+    expect(status).toBe(500);
+    expect(json).toEqual({ message: 'Could not resolve the revoke' });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    const { Logger } = await import('@bike4mind/observability');
+    const logger = vi.mocked(Logger).mock.results.at(-1)?.value as { error: ReturnType<typeof vi.fn> };
+    expect(logger.error).toHaveBeenCalledWith(
+      '[githubLakeWebhook] could not resolve the revoked connections',
+      expect.objectContaining({ deliveryId: 'delivery-1', installationId: INSTALLATION_ID })
+    );
+  });
+
+  it('500s when the revoke enqueue fails, without throwing', async () => {
+    h.findByInstallationId.mockResolvedValue([
+      { id: 'conn1', installationId: INSTALLATION_ID, repositoryId: REPOSITORY_ID, enabled: true },
+    ]);
+    h.sendToQueue.mockRejectedValue(new Error('SQS down'));
+    const { status, json } = await deliver({ event: 'installation', body: installationPayload() });
+
+    expect(status).toBe(500);
+    expect(json).toEqual({ message: 'Could not queue the revoke' });
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', {
+      connectionId: 'conn1',
+      installationId: INSTALLATION_ID,
+    });
+  });
+
+  it('rejects an installation event with an invalid signature', async () => {
+    const { status } = await deliver({
+      event: 'installation',
+      body: installationPayload(),
+      signature: 'sha256=deadbeef',
+    });
+
+    expect(status).toBe(401);
+    expect(h.findByInstallationId).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 });
