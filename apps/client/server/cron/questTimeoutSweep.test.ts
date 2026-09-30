@@ -12,18 +12,15 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@bike4mind/observability', () => {
-  const mockLogger: Record<string, unknown> = {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  };
-  return {
-    Logger: vi.fn(function () {
-      return mockLogger;
-    }),
-  };
-});
+const { mockLogger } = vi.hoisted(() => ({
+  mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock('@bike4mind/observability', () => ({
+  Logger: vi.fn(function () {
+    return mockLogger;
+  }),
+}));
 
 vi.mock('@server/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://localhost:27017/%STAGE%' },
@@ -100,7 +97,17 @@ describe('questTimeoutSweep cron', () => {
     );
   });
 
-  it('recovers a stuck quest with content as unfinished, never as an error', async () => {
+  it('logs a recovered quest at error level so the ERROR log subscription forwards it to Slack', async () => {
+    mockFindStaleRunning.mockResolvedValue([staleQuest()]);
+
+    await handler();
+
+    // The Slack error channel is fed only by ERROR-level lines (infra/logMonitor.ts);
+    // a warn-level recovery is invisible to LiveOps triage.
+    expect(mockLogger.error).toHaveBeenCalledWith('[QuestTimeoutSweep] Recovered stuck quest', { questId: 'q-1' });
+  });
+
+  it('recovers a stuck quest with content by flipping status only (no error clobber)', async () => {
     mockFindStaleRunning.mockResolvedValue([
       staleQuest({ id: 'q-2', reply: 'partial answer', replies: ['partial answer'] }),
     ]);

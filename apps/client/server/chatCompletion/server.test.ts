@@ -103,7 +103,7 @@ vi.mock('@bike4mind/observability', () => ({
 vi.mock('@bike4mind/utils', () => ({ registerProcessErrorHandlers: vi.fn() }));
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
 
-import { createApp } from './server';
+import { createApp, drainInFlight } from './server';
 import { GENERIC_PROCESSING_FAILURE_REPLY } from './internal/route';
 
 const VALID_BODY = { questId: 'q1', sessionId: 's1', userId: 'u1', message: 'hello' };
@@ -251,6 +251,38 @@ describe('ChatCompletion /health', () => {
     const res = await fetch(`${baseUrl}/health`);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, readyState: 1 });
+  });
+});
+
+describe('ChatCompletion SIGTERM drain', () => {
+  it('logs an error naming the count when the drain window expires with work still running', async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = { error: vi.fn() };
+      const inFlight = new Set([new Promise<void>(() => {})]);
+
+      const outcome = drainInFlight({ inFlight, logger, drainTimeoutMs: 1000 });
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(await outcome).toBe('timed-out');
+      // A quest cut off by SIGKILL must leave an ERROR line for the log subscription;
+      // the info-level "Drain complete" that follows is invisible to LiveOps.
+      expect(logger.error).toHaveBeenCalledWith('Drain window expired with in-flight quests - they will be cut off', {
+        count: 1,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not log an error when the in-flight work drains inside the window', async () => {
+    const logger = { error: vi.fn() };
+    const inFlight = new Set([Promise.resolve()]);
+
+    const outcome = await drainInFlight({ inFlight, logger, drainTimeoutMs: 1000 });
+
+    expect(outcome).toBe('drained');
+    expect(logger.error).not.toHaveBeenCalled();
   });
 });
 
