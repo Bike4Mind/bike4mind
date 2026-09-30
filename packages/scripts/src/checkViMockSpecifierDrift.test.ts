@@ -126,7 +126,8 @@ describe('vi.mock specifiers match what the mocked module exports', () => {
       checked,
       'the guard compared far fewer mocks than this tree has - has the scan or the build broken?'
     ).toBeGreaterThan(MIN_CHECKED_CALLS);
-  });
+    // Sync whole-tree scan: ~2s alone, but 25-34s when the CI misc leg runs it beside other packages.
+  }, 120_000);
 
   it('can enumerate the exports of every entry point it guards', () => {
     // Absence of a key is the whole signal, so an entry whose export list came back empty or
