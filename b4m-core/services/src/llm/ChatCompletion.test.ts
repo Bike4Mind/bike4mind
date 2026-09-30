@@ -31,6 +31,7 @@ import {
 } from '@bike4mind/utils';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { measureIdentityNamedExclusion } from '../dataLakeService/getDynamicDataLakeTags';
+import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import type { FabFileNotice } from '@bike4mind/utils';
 import {
   getLlmByModel,
@@ -172,6 +173,7 @@ const mockedGetSettingsValue = vi.mocked(getSettingsValue);
 const mockedCalculateTotalTokenLength = vi.mocked(calculateTotalTokenLength);
 const mockedProcessFabFilesServer = vi.mocked(processFabFilesServer);
 const mockedFetchAndConvertFabFiles = vi.mocked(fetchAndConvertFabFiles);
+const mockedGetEffectiveLLMApiKeys = vi.mocked(getEffectiveLLMApiKeys);
 
 const mockDb = {};
 const mockStorage = {};
@@ -2290,6 +2292,103 @@ describe('ChatCompletionProcess', () => {
           const names = offeredNames();
           expect(names).not.toContain('save_content_to_data_lake');
           expect(names).not.toContain('create_data_lake');
+        });
+
+        // The gate-added trio is a UNIT for the Smart Tools toggle - denying only the read tool
+        // must not also drop the write tools it is paired with.
+        it('strips only the request-denied read tool, keeping the write tools', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({ deniedTools: ['list_my_data_lakes'] }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          expect(names).not.toContain('list_my_data_lakes');
+          expect(names).toContain('create_data_lake');
+          expect(names).toContain('save_content_to_data_lake');
+        });
+      });
+
+      // Reviewer finding: both resolveCorpusInlinePlan's `knowledgeSearchDisabled` input (site
+      // around ChatCompletionProcess.ts:2826) and the invisible-failure warning's
+      // `knowledgeToolWithheldByConfig` gate (site around :3221) must read the RESOLVED request
+      // `deniedTools` union (resolveDeniedTools(session.disabledTools, parsedBody.deniedTools)),
+      // not session.disabledTools alone. A caller can deny search_knowledge_base only at the
+      // REQUEST level (e.g. an API-key scope - see dataLakeScopes.ts), and no existing test sent
+      // that tool through the request deniedTools field, so either site quietly reverting to
+      // session.disabledTools stayed green.
+      describe('corpus inline-defer plan and the withheld-tool warning read the resolved deniedTools', () => {
+        beforeEach(() => {
+          mockedGetSettingsValue.mockImplementation(((key: string) => {
+            if (key === 'CorpusRetrievalMinInlineTokensPerDoc') return 500;
+            if (key === 'defaultEmbeddingModel') return 'text-embedding-3-small';
+            return undefined;
+          }) as typeof getSettingsValue);
+        });
+        afterEach(() => {
+          mockedGetSettingsValue.mockReset();
+        });
+
+        it('inlines a retrievable lake corpus when only the request deniedTools names the tool', async () => {
+          mockSession.disabledTools = undefined; // session denylist does NOT deny the tool
+          mockSession.knowledgeIds = Array.from({ length: 40 }, (_, i) => `k${i}`);
+          (service as any).accessibleDataLakeAccessMemo = {
+            dataLakeTags: ['datalake:corpus'],
+            dataLakeTagPrefixes: [],
+            scopedTagPrefixes: [],
+            lakes: [],
+          };
+          (service as any).getScopeFilter = vi.fn().mockReturnValue({});
+          const files = mockSession.knowledgeIds.map((id: string) => ({
+            id,
+            tags: [{ name: 'datalake:corpus' }],
+            chunkCount: 2,
+            vectorizedChunkCount: 2,
+            embeddingModel: 'text-embedding-3-small',
+            fileName: `${id}.md`,
+            vectorized: true,
+          }));
+          mockDb.fabfiles = { getAccessibleFiles: vi.fn().mockResolvedValue(files) };
+          mockedGetEffectiveLLMApiKeys.mockResolvedValueOnce({ openai: 'sk-test-key-1234567890' });
+
+          const body = { ...wireMinimalTurn(), deniedTools: ['search_knowledge_base'] };
+          const resolveCorpusInlinePlanSpy = vi.spyOn(service as any, 'resolveCorpusInlinePlan');
+
+          await service.process({ body, logger: mockLogger });
+
+          const args = resolveCorpusInlinePlanSpy.mock.calls[0][0] as { knowledgeSearchDisabled: boolean };
+          expect(args.knowledgeSearchDisabled).toBe(true);
+          const plan = await resolveCorpusInlinePlanSpy.mock.results[0].value;
+          expect(plan.deferredToRetrieval).toBe(false);
+        });
+
+        it('suppresses the invisible-failure warning for a lake-only caller whose deniedTools is request-only', async () => {
+          mockSession.disabledTools = undefined; // session denylist does NOT deny the tool
+          mockSession.knowledgeIds = []; // lake-only: no attached knowledge, so hasAttachedKnowledge stays false
+          (service as any).accessibleDataLakeAccessMemo = {
+            dataLakeTags: ['datalake:corpus'],
+            dataLakeTagPrefixes: [],
+            scopedTagPrefixes: [],
+            lakes: [],
+          };
+          // This warning is logged through `this.logger`, set once at construction from
+          // baseOptions - not through the per-call `logger` argument service.process() takes.
+          // Point it at this test's mock so the assertion below is not vacuously true.
+          (service as any).logger = mockLogger;
+
+          const body = {
+            ...wireMinimalTurn(),
+            // Keeps offeredToolNames non-empty so the OTHER knowledgeToolWithheldByConfig disjunct
+            // (offeredToolNames.length === 0) cannot mask a broken deniedTools check.
+            tools: ['current_datetime'],
+            deniedTools: ['search_knowledge_base'],
+          };
+
+          await service.process({ body, logger: mockLogger });
+
+          expect(mockLogger.warn).not.toHaveBeenCalledWith(
+            expect.stringMatching(/has an accessible data lake but search_knowledge_base is not offered/)
+          );
         });
       });
 

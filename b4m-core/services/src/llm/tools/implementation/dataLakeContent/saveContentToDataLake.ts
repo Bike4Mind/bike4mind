@@ -46,8 +46,18 @@ const SaveContentArgsSchema = z.object({
 
 const DEFAULT_BASE_NAME = 'untitled';
 
+function isSavableMimeType(mimeType: string): mimeType is SavableMimeType {
+  return (SAVABLE_MIME_TYPES as readonly string[]).includes(mimeType);
+}
+
+/** Our alias table first (it knows `markdown`), then storage's own map (`mdx`, `log`, `sql`, ...). */
 function mimeTypeForExtension(extension: string): SavableMimeType | undefined {
-  return SAVABLE_MIME_TYPES.find(mime => (EXTENSIONS_BY_MIME_TYPE[mime] as readonly string[]).includes(extension));
+  const aliased = SAVABLE_MIME_TYPES.find(mime =>
+    (EXTENSIONS_BY_MIME_TYPE[mime] as readonly string[]).includes(extension)
+  );
+  if (aliased) return aliased;
+  const storageType = extension ? getMimeTypeByExtension(extension) : '';
+  return isSavableMimeType(storageType) ? storageType : undefined;
 }
 
 /**
@@ -55,7 +65,8 @@ function mimeTypeForExtension(extension: string): SavableMimeType | undefined {
  * `notes` saved as markdown must become `notes.md` or it would be stored as plain text. With no
  * explicit type, a recognized extension decides it; otherwise markdown. A recognized extension
  * that disagrees with the type is replaced (`notes.md` as CSV -> `notes.csv`), never stacked, and
- * one storage does not know (`notes.markdown`) is swapped for the canonical one.
+ * one storage does not know (`notes.markdown`) is swapped for the canonical one. An extension
+ * storage maps to a type this tool cannot author (`config.yaml`) stays in the stem and is stacked.
  */
 export function resolveFileNameAndType(
   rawFileName: string,

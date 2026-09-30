@@ -85,7 +85,7 @@ type StaticChatCompletionOptions = Omit<ChatCompletionOptions, 'logger' | 'token
 let cachedStaticOptions: StaticChatCompletionOptions | null = null;
 let cachedDbConnection: typeof mongoose.connection | null = null;
 
-const getStaticOptions = () => {
+export const getStaticOptions = () => {
   if (cachedStaticOptions) {
     console.log('♻️ [PERFORMANCE] Reusing cached static ChatCompletion options');
     return cachedStaticOptions;

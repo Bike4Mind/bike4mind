@@ -12,7 +12,7 @@ const TOOL_NAME = 'list_my_data_lakes';
  * read-only - the same predicate assertLakeWritable uses), and not archived. A platform admin
  * manages every lake on the platform, so for them the list narrows to lakes they actually own.
  */
-export function isWritableTarget(lake: ManageableDataLakeConfig, isAdmin: boolean): boolean {
+function isWritableTarget(lake: ManageableDataLakeConfig, isAdmin: boolean): boolean {
   if (!lake.canManage || isFallbackLake(lake)) return false;
   if (isAdmin && !lake.isOwn) return false;
   return (LAKE_ATTACHABLE_STATUSES as readonly string[]).includes(lake.status ?? 'active');

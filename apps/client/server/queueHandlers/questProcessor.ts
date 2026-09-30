@@ -72,7 +72,7 @@ let cachedDbConnection: typeof mongoose.connection | null = null;
 
 const staticOptionsLogger = new Logger({ metadata: { handler: 'questProcessor' } });
 
-const getStaticOptions = () => {
+export const getStaticOptions = () => {
   if (cachedStaticOptions) {
     staticOptionsLogger.debug('Reusing cached static ChatCompletion options');
     return cachedStaticOptions;

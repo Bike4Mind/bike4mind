@@ -217,7 +217,6 @@ import {
 } from './systemPromptFloorTelemetry';
 import { buildArtifactEmissionMessages, resolveArtifactsEnabled } from './artifactGating';
 import {
-  DATA_LAKE_TOOL_NAMES,
   shouldOfferBlogTools,
   shouldOfferDataLakeTools,
   shouldOfferDelegation,
@@ -233,6 +232,7 @@ import {
   ABSTENTION_PROMPT,
   ELISION_WARNING,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
+  DATA_LAKE_TOOL_NAMES,
 } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 

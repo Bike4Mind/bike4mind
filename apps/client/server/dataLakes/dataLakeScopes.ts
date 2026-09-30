@@ -2,7 +2,7 @@ import {
   ApiKeyScope,
   DATA_LAKE_QUERY_API_KEY_SCOPES,
   DATA_LAKE_READ_API_KEY_SCOPES,
-  DATA_LAKE_READ_TOOL_NAMES,
+  DATA_LAKE_TOOL_NAMES,
   DATA_LAKE_WRITE_API_KEY_SCOPES,
   DATA_LAKE_WRITE_TOOL_NAMES,
   type IDataLakeRepository,
@@ -107,8 +107,7 @@ export function holdsDataLakeReadScope(req: ScopedRequest): boolean {
  */
 export function dataLakeToolsDeniedFor(req: ScopedRequest): string[] {
   if (holdsScope(req, DATA_LAKE_WRITE_SCOPES)) return [];
-  const writeTools = [...DATA_LAKE_WRITE_TOOL_NAMES];
-  return holdsDataLakeReadScope(req) ? writeTools : [...DATA_LAKE_READ_TOOL_NAMES, ...writeTools];
+  return holdsDataLakeReadScope(req) ? [...DATA_LAKE_WRITE_TOOL_NAMES] : [...DATA_LAKE_TOOL_NAMES];
 }
 
 export function assertDataLakeWriteScope(req: ScopedRequest): void {

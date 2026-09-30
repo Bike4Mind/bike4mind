@@ -228,6 +228,20 @@ describe('resolveFileNameAndType', () => {
     expect(resolveFileNameAndType('notes.markdown')).toEqual({ fileName: 'notes.md', mimeType: 'text/markdown' });
   });
 
+  it('keeps an extension storage maps to a savable type instead of stacking another', () => {
+    expect(resolveFileNameAndType('report.mdx')).toEqual({ fileName: 'report.mdx', mimeType: 'text/markdown' });
+    expect(resolveFileNameAndType('schema.sql')).toEqual({ fileName: 'schema.sql', mimeType: 'text/plain' });
+    expect(resolveFileNameAndType('app.log')).toEqual({ fileName: 'app.log', mimeType: 'text/plain' });
+    expect(resolveFileNameAndType('schema.sql', 'text/markdown')).toEqual({
+      fileName: 'schema.md',
+      mimeType: 'text/markdown',
+    });
+  });
+
+  it('stacks the extension when storage maps it to a type this tool cannot author', () => {
+    expect(resolveFileNameAndType('config.yaml')).toEqual({ fileName: 'config.yaml.md', mimeType: 'text/markdown' });
+  });
+
   it('ignores trailing dots instead of reading them as an empty extension', () => {
     expect(resolveFileNameAndType('notes.md.')).toEqual({ fileName: 'notes.md', mimeType: 'text/markdown' });
     expect(resolveFileNameAndType('report.csv.')).toEqual({ fileName: 'report.csv', mimeType: 'text/csv' });
