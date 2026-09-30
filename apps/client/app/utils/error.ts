@@ -33,6 +33,14 @@ function handleAxiosError(error: AxiosError<ErrorResponse>) {
 }
 
 /**
+ * The server's `error` field off a failed API call, or undefined when the response carried none.
+ * Unlike getErrorMessage there is no generic fallback, so a caller supplies its own: `|| fallback`.
+ */
+export function getServerErrorField(error: unknown): string | undefined {
+  return (error as { response?: { data?: { error?: string } } } | null)?.response?.data?.error;
+}
+
+/**
  * The server's own explanation for a 422 tagged `insufficient_credits` - which balance ran out,
  * how much it was short by, and whether the remediation is buying credits or asking an org admin
  * to raise a per-member cap. None of that survives a caller's generic "request failed" toast, and

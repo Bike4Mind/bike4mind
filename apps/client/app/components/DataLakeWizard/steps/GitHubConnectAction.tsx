@@ -12,17 +12,14 @@ import {
   type LakeGitHubConnection,
 } from '@client/app/hooks/data/githubLake';
 import { describeGitHubConnection } from '@client/app/hooks/data/githubConnectionDisplay';
+import { getServerErrorField } from '@client/app/utils/error';
 import { saveGitHubLakeConnectHandoff } from '@client/app/utils/githubLakeConnectHandoff';
 
-/** The specific server `error` message off an axios failure, if the response carried one. */
-function serverError(e: unknown): string | undefined {
-  return (e as { response?: { data?: { error?: string } } })?.response?.data?.error;
-}
-
-/** Why re-sync is off right now, or undefined when it can run. Mirrors sync.ts's 409s. */
+/**
+ * Why re-sync is off right now, or undefined when it can run. Mirrors sync.ts's 409s. 'error' stays
+ * re-syncable on purpose: claimForSync admits it so a re-sync can retry once access is restored.
+ */
 function resyncBlockedReason(connection: LakeGitHubConnection): string | undefined {
-  if (connection.status === 'error')
-    return 'The GitHub App lost access to this repository. Disconnect and connect again.';
   if (!connection.enabled) return 'This connection is paused while the lake is archived.';
   if (connection.status === 'syncing') return 'A sync is already running.';
   return undefined;
@@ -59,7 +56,7 @@ export default function GitHubConnectAction({ lake }: { lake: { id: string } }) 
       },
       // e.g. "is curated, change its origin", "already connected to a Google Drive folder".
       onError: (e: unknown) =>
-        toast.error(serverError(e) || 'Could not start the GitHub connection. Please try again.'),
+        toast.error(getServerErrorField(e) || 'Could not start the GitHub connection. Please try again.'),
     });
 
   if (isLoading) {
@@ -132,7 +129,8 @@ export default function GitHubConnectAction({ lake }: { lake: { id: string } }) 
             onClick={() =>
               resync.mutate(lake.id, {
                 onSuccess: () => toast.success(`Re-syncing ${connection.repositoryFullName}...`),
-                onError: (e: unknown) => toast.error(serverError(e) || 'Could not start a re-sync. Please try again.'),
+                onError: (e: unknown) =>
+                  toast.error(getServerErrorField(e) || 'Could not start a re-sync. Please try again.'),
               })
             }
           >
@@ -160,7 +158,8 @@ export default function GitHubConnectAction({ lake }: { lake: { id: string } }) 
                   toast.success(`Disconnected ${connection.repositoryFullName}.`);
                 },
                 // Surfaces the 409 "a sync is in progress" so the user knows to retry later.
-                onError: (e: unknown) => toast.error(serverError(e) || 'Could not disconnect. Please try again.'),
+                onError: (e: unknown) =>
+                  toast.error(getServerErrorField(e) || 'Could not disconnect. Please try again.'),
               })
             }
           >

@@ -23,6 +23,12 @@ vi.mock('@client/app/hooks/data/githubLake', () => ({
   useCompleteLakeGitHubConnect: () => ({ mutate: h.completeMutate }),
 }));
 vi.mock('sonner', () => ({ toast: { error: h.toastError, success: h.toastSuccess } }));
+vi.mock('@client/app/utils/githubLakeConnectHandoff', async importOriginal => {
+  const actual = await importOriginal<typeof import('@client/app/utils/githubLakeConnectHandoff')>();
+  // Wraps the real save so most tests still exercise actual sessionStorage read/write/clear;
+  // the storage-blocked test overrides this one call with mockImplementationOnce.
+  return { ...actual, saveGitHubLakeConnectHandoff: vi.fn(actual.saveGitHubLakeConnectHandoff) };
+});
 
 import GitHubLakeCallbackPage from './callback';
 import { readGitHubLakeConnectHandoff, saveGitHubLakeConnectHandoff } from '@client/app/utils/githubLakeConnectHandoff';
@@ -92,5 +98,33 @@ describe('GitHubLakeCallbackPage', () => {
     expect(h.toastError).toHaveBeenCalledWith('GitHub connection cancelled.');
     expect(h.openManager).toHaveBeenCalledWith('mine', 'lake1');
     expect(h.completeMutate).not.toHaveBeenCalled();
+  });
+
+  it('shows a failure notice and returns to the lake when the install needs org-owner approval', () => {
+    h.search.current = { setup_action: 'request', state: 's1' };
+    render(<GitHubLakeCallbackPage />);
+
+    expect(h.toastError).toHaveBeenCalledWith(
+      'GitHub sent the install to an owner of that organization for approval. Connect the repository again once they approve it.'
+    );
+    expect(h.navigate).toHaveBeenCalledWith({ to: '/' });
+    expect(h.openManager).toHaveBeenCalledWith('mine', 'lake1');
+    expect(h.completeMutate).not.toHaveBeenCalled();
+    expect(readGitHubLakeConnectHandoff()).toBeNull();
+  });
+
+  it('shows a storage-blocked notice when the authorize handoff cannot be saved', () => {
+    h.search.current = { installation_id: '42', state: 's1' };
+    vi.mocked(saveGitHubLakeConnectHandoff).mockImplementationOnce(() => {
+      throw new Error('blocked');
+    });
+    render(<GitHubLakeCallbackPage />);
+
+    expect(h.toastError).toHaveBeenCalledWith(
+      'Could not continue the GitHub connection: this browser blocked session storage.'
+    );
+    expect(assign).not.toHaveBeenCalled();
+    expect(h.navigate).toHaveBeenCalledWith({ to: '/' });
+    expect(h.openManager).toHaveBeenCalledWith('mine', 'lake1');
   });
 });

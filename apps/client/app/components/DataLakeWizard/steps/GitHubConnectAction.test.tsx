@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { LakeGitHubConnection } from '@client/app/hooks/data/githubLake';
@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   disconnectMutate: vi.fn(),
   saveHandoff: vi.fn(),
   toastError: vi.fn(),
+  toastSuccess: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/data/githubLake', () => ({
@@ -22,7 +23,7 @@ vi.mock('@client/app/hooks/data/githubLake', () => ({
   useDisconnectLakeGitHub: () => ({ mutate: h.disconnectMutate, isPending: false }),
 }));
 vi.mock('@client/app/utils/githubLakeConnectHandoff', () => ({ saveGitHubLakeConnectHandoff: h.saveHandoff }));
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: h.toastError } }));
+vi.mock('sonner', () => ({ toast: { success: h.toastSuccess, error: h.toastError } }));
 
 import GitHubConnectAction from './GitHubConnectAction';
 
@@ -126,15 +127,44 @@ describe('GitHubConnectAction', () => {
     expect(h.resyncMutate).toHaveBeenCalledWith('lake1', expect.any(Object));
   });
 
+  it("surfaces the server's reason when a re-sync cannot start, and the fallback otherwise", () => {
+    h.connection.current = connected();
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    fireEvent.click(screen.getByTestId('github-resync-btn'));
+
+    const [, options] = h.resyncMutate.mock.calls[0];
+    options.onError({ response: { data: { error: 'A sync is already running for this repository' } } });
+    expect(h.toastError).toHaveBeenCalledWith('A sync is already running for this repository');
+
+    options.onError({});
+    expect(h.toastError).toHaveBeenCalledWith('Could not start a re-sync. Please try again.');
+  });
+
+  it('confirms a started re-sync with a toast naming the repository', () => {
+    h.connection.current = connected();
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    fireEvent.click(screen.getByTestId('github-resync-btn'));
+
+    const [, options] = h.resyncMutate.mock.calls[0];
+    options.onSuccess();
+    expect(h.toastSuccess).toHaveBeenCalledWith('Re-syncing acme/docs...');
+  });
+
   it.each([
     ['syncing', connected({ status: 'syncing' }), 'Syncing'],
     ['paused (archived lake)', connected({ enabled: false }), 'Paused'],
-    ['lost access', connected({ status: 'error', lastError: 'Repository access was removed' }), 'Needs reconnect'],
-  ])('blocks re-sync while %s, as sync.ts would 409 or fail it', (_name, connection, label) => {
+  ])('blocks re-sync while %s, as sync.ts would 409 it', (_name, connection, label) => {
     h.connection.current = connection;
     wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
     expect(screen.getByTestId('github-connection-status-chip')).toHaveTextContent(label);
     expect(screen.getByTestId('github-resync-btn')).toBeDisabled();
+  });
+
+  it('keeps re-sync available after the App lost access, so restoring access can recover', () => {
+    h.connection.current = connected({ status: 'error', lastError: 'Repository access was removed' });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('github-connection-status-chip')).toHaveTextContent('Needs reconnect');
+    expect(screen.getByTestId('github-resync-btn')).toBeEnabled();
   });
 
   it('does NOT report a sync that stopped short as Connected', () => {
@@ -170,5 +200,34 @@ describe('GitHubConnectAction', () => {
     fireEvent.click(screen.getByTestId('github-disconnect-cancel-btn'));
     expect(screen.queryByTestId('github-disconnect-warning')).toBeNull();
     expect(h.disconnectMutate).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the server's reason when disconnect fails, and the fallback otherwise", () => {
+    h.connection.current = connected();
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    fireEvent.click(screen.getByTestId('github-disconnect-btn'));
+    fireEvent.click(screen.getByTestId('github-disconnect-confirm-btn'));
+
+    const [, options] = h.disconnectMutate.mock.calls[0];
+    options.onError({ response: { data: { error: 'A sync is already running for this repository' } } });
+    expect(h.toastError).toHaveBeenCalledWith('A sync is already running for this repository');
+
+    options.onError({});
+    expect(h.toastError).toHaveBeenCalledWith('Could not disconnect. Please try again.');
+  });
+
+  it('closes the confirm step and shows a success toast once disconnect completes', () => {
+    h.connection.current = connected();
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    fireEvent.click(screen.getByTestId('github-disconnect-btn'));
+    fireEvent.click(screen.getByTestId('github-disconnect-confirm-btn'));
+
+    const [, options] = h.disconnectMutate.mock.calls[0];
+    act(() => {
+      options.onSuccess();
+    });
+
+    expect(h.toastSuccess).toHaveBeenCalledWith('Disconnected acme/docs.');
+    expect(screen.queryByTestId('github-disconnect-warning')).toBeNull();
   });
 });

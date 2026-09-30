@@ -1,7 +1,7 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { DriveConnectionStatus } from '@client/app/hooks/data/driveConnectionDisplay';
-import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
+import { invalidateLakeFileQueries } from '@client/app/hooks/data/invalidateLakeFileQueries';
 
 /** Safe, credential-free view returned by GET /api/data-lakes/:id/drive-connection. */
 export type LakeDriveConnection = {
@@ -119,13 +119,6 @@ export function useConnectDriveFolderToLake() {
       await queryClient.invalidateQueries({ queryKey: lakeDriveConnectionKey(dataLakeId) });
     },
   });
-}
-
-function invalidateLakeFileQueries(queryClient: ReturnType<typeof useQueryClient>, dataLakeId: string) {
-  return Promise.all([
-    queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) }),
-    queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot }),
-  ]);
 }
 
 /**

@@ -2,6 +2,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { GitHubLakeConnectionStatus } from '@bike4mind/common';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
+import { invalidateLakeFileQueries } from '@client/app/hooks/data/invalidateLakeFileQueries';
 
 /**
  * Wire shape of GET /api/data-lakes/:id/github-connection - IOrgGitHubLakeConnectionResponse with
@@ -25,8 +26,6 @@ export type LakeGitHubConnection = {
 
 export type GitHubLakeConnectUrls = { installUrl: string; authorizeUrl: string };
 
-export const lakeGitHubConnectionKey = (dataLakeId?: string) => ['lake-github-connection', dataLakeId];
-
 export const GITHUB_CONNECTION_ACTIVE_POLL_MS = 4_000;
 /** Keeps polling once connected for the same reason as DRIVE_CONNECTION_IDLE_POLL_MS (googleDrive.ts). */
 export const GITHUB_CONNECTION_IDLE_POLL_MS = 20_000;
@@ -45,7 +44,7 @@ export function gitHubConnectionPollInterval(connection: LakeGitHubConnection | 
  */
 export function useLakeGitHubConnection(dataLakeId?: string, enabled = true) {
   return useQuery({
-    queryKey: lakeGitHubConnectionKey(dataLakeId),
+    queryKey: dataLakeKeys.gitHubConnection(dataLakeId),
     enabled: !!dataLakeId && enabled,
     queryFn: async () => {
       const response = await api.get<{ connection: LakeGitHubConnection | null }>(
@@ -77,7 +76,7 @@ export function useCompleteLakeGitHubConnect() {
     },
     onSuccess: async () => {
       // The lake id lives only inside the signed state, so refresh every lake's connection read.
-      await queryClient.invalidateQueries({ queryKey: ['lake-github-connection'] });
+      await queryClient.invalidateQueries({ queryKey: dataLakeKeys.gitHubConnectionRoot });
     },
   });
 }
@@ -90,7 +89,7 @@ export function useResyncLakeGitHub() {
       await api.post(`/api/data-lakes/${dataLakeId}/github-connection/sync`);
     },
     onSuccess: async (_data, dataLakeId) => {
-      await queryClient.invalidateQueries({ queryKey: lakeGitHubConnectionKey(dataLakeId) });
+      await queryClient.invalidateQueries({ queryKey: dataLakeKeys.gitHubConnection(dataLakeId) });
     },
   });
 }
@@ -107,9 +106,8 @@ export function useDisconnectLakeGitHub() {
     },
     onSuccess: async (_data, dataLakeId) => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: lakeGitHubConnectionKey(dataLakeId) }),
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) }),
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot }),
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.gitHubConnection(dataLakeId) }),
+        invalidateLakeFileQueries(queryClient, dataLakeId),
       ]);
     },
   });

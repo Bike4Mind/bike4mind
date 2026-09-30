@@ -9,12 +9,8 @@ import {
   readGitHubLakeConnectHandoff,
   saveGitHubLakeConnectHandoff,
 } from '@client/app/utils/githubLakeConnectHandoff';
+import { getServerErrorField } from '@client/app/utils/error';
 import { resolveGitHubLakeCallbackStep, type GitHubLakeCallbackSearch } from '@client/app/utils/githubLakeCallbackStep';
-
-/** The specific server `error` message off an axios failure, if the response carried one. */
-function serverError(e: unknown): string | undefined {
-  return (e as { response?: { data?: { error?: string } } })?.response?.data?.error;
-}
 
 /**
  * Where the data-lake GitHub App returns the browser, from its install page and from its OAuth
@@ -67,9 +63,9 @@ const GitHubLakeCallbackPage = () => {
           { state: step.state, code: step.code, installationId: step.installationId },
           {
             onSuccess: connection =>
-              toast.success(`Connected ${connection.repositoryFullName}. Its first sync is running.`),
+              toast.success(`Connected ${connection.repositoryFullName}. Its first sync is queued.`),
             // The server's reason is the actionable part: install policy, no unbound repository, expired state.
-            onError: (e: unknown) => toast.error(serverError(e) || 'Could not connect the GitHub repository.'),
+            onError: (e: unknown) => toast.error(getServerErrorField(e) || 'Could not connect the GitHub repository.'),
             onSettled: () => finish(step.dataLakeId),
           }
         );

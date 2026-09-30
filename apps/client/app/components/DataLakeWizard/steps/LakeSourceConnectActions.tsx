@@ -21,7 +21,8 @@ export default function LakeSourceConnectActions({ lake }: { lake: { id: string 
   const { data: driveConnection } = useLakeDriveConnection(lake.id);
   const { data: gitHubConnection } = useLakeGitHubConnection(lake.id, gitHubEnabled);
 
-  const showDrive = !gitHubConnection;
+  // With the flag off the GitHub query never fires, so stale cache must not hide Drive.
+  const showDrive = !gitHubEnabled || !gitHubConnection;
   const showGitHub = gitHubEnabled && !driveConnection;
 
   return (

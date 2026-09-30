@@ -25,16 +25,21 @@ export function saveGitHubLakeConnectHandoff(handoff: GitHubLakeConnectHandoff):
 
 /** The pending handoff, or null when there is none or it does not parse (a stale or foreign value). */
 export function readGitHubLakeConnectHandoff(): GitHubLakeConnectHandoff | null {
-  const raw = sessionStorage.getItem(STORAGE_KEY);
-  if (!raw) return null;
   try {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
     const parsed = handoffSchema.safeParse(JSON.parse(raw));
     return parsed.success ? parsed.data : null;
   } catch {
-    return null; // not JSON: treat exactly like a value that fails the schema
+    return null; // storage blocked, or not JSON: treat exactly like a value that fails the schema
   }
 }
 
+/** Never throws: the callback clears on every exit, and a blocked storage has nothing to clear. */
 export function clearGitHubLakeConnectHandoff(): void {
-  sessionStorage.removeItem(STORAGE_KEY);
+  try {
+    sessionStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // storage blocked: nothing was saved, so there is nothing to clear
+  }
 }
