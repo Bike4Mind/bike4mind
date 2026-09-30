@@ -125,6 +125,14 @@ describe('POST /api/internal/s3/object-created', () => {
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
+  it('skips LibreOncology mock-oral objects without a lookup', async () => {
+    const res = makeRes();
+    await handler(makeReq('secret-token', 'libreoncology/mock-oral/scene-1/audio.mp3'), res);
+    expect(findOneMock).not.toHaveBeenCalled();
+    expect(sendToQueueMock).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
   it('marks the file complete and enqueues chunking on the happy path', async () => {
     const res = makeRes();
     await handler(makeReq('secret-token', 'uploads/report.pdf'), res);

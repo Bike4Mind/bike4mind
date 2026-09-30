@@ -39,7 +39,8 @@ export const func = withContext(async (event, context, logger) => {
       objectKey.startsWith('proxied-images/') ||
       objectKey.startsWith('tavern-sounds/') ||
       objectKey.startsWith('cc-bridge/') ||
-      objectKey.startsWith('cc-bridge-downloads/')
+      objectKey.startsWith('cc-bridge-downloads/') ||
+      objectKey.startsWith('libreoncology/mock-oral/')
     ) {
       logger.info(`Skipping S3 event for untracked file: ${objectKey}`);
       continue;

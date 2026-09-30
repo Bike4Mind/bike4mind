@@ -79,7 +79,8 @@ const handler = baseApi({ auth: false }).post(
       key.startsWith('proxied-images/') ||
       key.startsWith('tavern-sounds/') ||
       key.startsWith('cc-bridge/') ||
-      key.startsWith('cc-bridge-downloads/');
+      key.startsWith('cc-bridge-downloads/') ||
+      key.startsWith('libreoncology/mock-oral/');
 
     const records = ((req.body as { Records?: MinioS3Record[] } | undefined)?.Records ?? []) as MinioS3Record[];
 

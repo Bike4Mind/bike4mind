@@ -24,6 +24,8 @@ export const func = withContext(async (event, context, logger) => {
     //   speechService; no AppFile records)
     // - app-config/: public settings config artifact written by
     //   publicSettingsArtifact.ts (M2.5); a system file served via CDN, never an AppFile
+    // - libreoncology/mock-oral/: scene audio and figures written by the LibreOncology
+    //   overlay (no AppFile records)
     if (
       objectKey.includes('/backups/') ||
       objectKey.startsWith('temp/') ||
@@ -35,7 +37,8 @@ export const func = withContext(async (event, context, logger) => {
       objectKey.startsWith('cc-bridge-downloads/') ||
       objectKey.startsWith('transcribe-uploads/') ||
       objectKey.startsWith('transcripts/') ||
-      objectKey.startsWith('app-config/')
+      objectKey.startsWith('app-config/') ||
+      objectKey.startsWith('libreoncology/mock-oral/')
     ) {
       logger.info(`Skipping S3 event for untracked file: ${objectKey}`);
       continue;
