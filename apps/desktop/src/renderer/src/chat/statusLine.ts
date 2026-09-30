@@ -15,15 +15,44 @@ export interface TurnProgress {
   startedAt: number;
   /** Sum of the server's counts for the round trips that have COMPLETED. Null until the first. */
   tokens: number | null;
+  /** The same report the count came from, for the split and the cost. */
+  usage?: ChatUsage | null;
 }
 
-/** Total of what the server reported, or null when it reported nothing usable. */
+/**
+ * Everything the model processed: new input, cache reads, cache writes and output. The input
+ * count alone stopped being the whole story once caching split it in three, and a headline that
+ * leaves out the cached part understates what the turn handled by an order of magnitude.
+ */
 export function totalTokens(usage: ChatUsage | undefined): number | null {
   if (!usage) return null;
-  const input = usage.inputTokens ?? 0;
-  const output = usage.outputTokens ?? 0;
-  const total = input + output;
+  const total =
+    (usage.inputTokens ?? 0) +
+    (usage.cacheReadInputTokens ?? 0) +
+    (usage.cacheCreationInputTokens ?? 0) +
+    (usage.outputTokens ?? 0);
   return total > 0 ? total : null;
+}
+
+/** "$3.20" from the server's own figure, or "12 credits" when only credits came; null when neither. */
+export function formatCost(usage: ChatUsage | null | undefined): string | null {
+  if (!usage) return null;
+  if (usage.usdCost !== undefined) return `$${usage.usdCost.toFixed(usage.usdCost < 0.01 ? 4 : 2)}`;
+  if (usage.creditsUsed !== undefined) return `${Math.round(usage.creditsUsed).toLocaleString('en-US')} credits`;
+  return null;
+}
+
+/** The four-way split, for a tooltip: "12k new input, 1.1M cached, 40k cache write, 3.2k output". */
+export function describeSplit(usage: ChatUsage | null | undefined): string | null {
+  if (!usage) return null;
+  const parts: [number | undefined, string][] = [
+    [usage.inputTokens, 'new input'],
+    [usage.cacheReadInputTokens, 'cached'],
+    [usage.cacheCreationInputTokens, 'cache write'],
+    [usage.outputTokens, 'output'],
+  ];
+  const shown = parts.filter((part): part is [number, string] => part[0] !== undefined);
+  return shown.length === 0 ? null : shown.map(([count, label]) => `${formatTokens(count)} ${label}`).join(', ');
 }
 
 /** "12s", "3m 7s", "1h 4m" - the same shape at every scale, so the line never changes width much. */
@@ -74,6 +103,7 @@ export function statusFields(turn: TurnProgress, now: number, activity: string):
   return [
     formatElapsed(now - turn.startedAt),
     ...(turn.tokens === null ? [] : [`${formatTokens(turn.tokens)} tokens`]),
+    ...(formatCost(turn.usage) ? [formatCost(turn.usage) as string] : []),
     activity,
   ];
 }

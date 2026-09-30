@@ -121,6 +121,46 @@ describe('explore', () => {
     expect(detail.mock.calls[0][0].toolMs).toBeGreaterThan(0);
   });
 
+  it('marks the system message and the last message on every request, on copies only', async () => {
+    const { explore } = fakeExplore([
+      [toolUse([{ name: 'grep_search', input: { pattern: 'answer' } }])],
+      [{ type: 'content', text: 'done' }],
+    ]);
+    const seen: (boolean | undefined)[][] = [];
+    const complete = explore.complete;
+    explore.complete = (request, onEvent, signal) => {
+      seen.push(request.messages.map(message => message.cache));
+      return complete(request, onEvent, signal);
+    };
+
+    await exploreTool.run({ question: 'q' }, { ...context, explore });
+
+    expect(seen).toEqual([
+      [true, true],
+      [true, undefined, undefined, true],
+    ]);
+  });
+
+  it('reports what the sub-loop spent, cache included, beside the timings', async () => {
+    const detail = vi.fn();
+    const { explore } = fakeExplore([
+      [
+        toolUse([{ name: 'grep_search', input: { pattern: 'answer' } }], {
+          inputTokens: 10,
+          cacheCreationInputTokens: 500,
+        }),
+      ],
+      [{ type: 'content', text: 'done', usage: { inputTokens: 20, cacheReadInputTokens: 500, outputTokens: 7 } }],
+    ]);
+    await exploreTool.run({ question: 'q' }, { ...context, explore, report: { ...context.report!, detail } });
+    expect(detail.mock.calls[0][0].usage).toEqual({
+      inputTokens: 30,
+      cacheCreationInputTokens: 500,
+      cacheReadInputTokens: 500,
+      outputTokens: 7,
+    });
+  });
+
   it('asks for the report one round before the cap and stops at it', async () => {
     const searching = toolUse([{ name: 'glob_files', input: { pattern: '*' } }]);
     const { explore, requests } = fakeExplore(

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatToolCall, ChatToolStatus } from '@shared/chat';
-import { describeActivity, formatElapsed, formatTokens, statusFields, totalTokens } from './statusLine';
+import {
+  describeActivity,
+  describeSplit,
+  formatCost,
+  formatElapsed,
+  formatTokens,
+  statusFields,
+  totalTokens,
+} from './statusLine';
 
 function call(name: string, status: ChatToolStatus, progress?: string): ChatToolCall {
   return { id: name, name, input: {}, status, ...(progress ? { progress } : {}) };
@@ -34,6 +42,65 @@ describe('totalTokens', () => {
     expect(totalTokens(undefined)).toBeNull();
     expect(totalTokens({})).toBeNull();
     expect(totalTokens({ inputTokens: 0, outputTokens: 0 })).toBeNull();
+  });
+});
+
+describe('totalTokens with caching', () => {
+  it('counts new input, cache reads, cache writes and output', () => {
+    expect(
+      totalTokens({ inputTokens: 100, cacheReadInputTokens: 5000, cacheCreationInputTokens: 400, outputTokens: 50 })
+    ).toBe(5550);
+  });
+
+  it('counts a fully cached request as work done', () => {
+    expect(totalTokens({ cacheReadInputTokens: 900 })).toBe(900);
+  });
+});
+
+describe('formatCost', () => {
+  it('prefers the server dollar figure and falls back to credits', () => {
+    expect(formatCost({ usdCost: 3.2 })).toBe('$3.20');
+    expect(formatCost({ usdCost: 0.004 })).toBe('$0.0040');
+    expect(formatCost({ creditsUsed: 1234.4 })).toBe('1,234 credits');
+    expect(formatCost({ usdCost: 1, creditsUsed: 9 })).toBe('$1.00');
+  });
+
+  it('is null when the server sent no cost', () => {
+    expect(formatCost(undefined)).toBeNull();
+    expect(formatCost({ inputTokens: 5 })).toBeNull();
+  });
+});
+
+describe('describeSplit', () => {
+  it('lists the four parts compactly and skips what was not reported', () => {
+    expect(
+      describeSplit({
+        inputTokens: 12_000,
+        cacheReadInputTokens: 1_100_000,
+        cacheCreationInputTokens: 40_000,
+        outputTokens: 3200,
+      })
+    ).toBe('12k new input, 1.1M cached, 40k cache write, 3.2k output');
+    expect(describeSplit({ inputTokens: 300, outputTokens: 20 })).toBe('300 new input, 20 output');
+    expect(describeSplit(undefined)).toBeNull();
+    expect(describeSplit({})).toBeNull();
+  });
+});
+
+describe('statusFields with usage', () => {
+  it('shows the honest total and the cost when there is one', () => {
+    const usage = { inputTokens: 100, cacheReadInputTokens: 5000, outputTokens: 50, usdCost: 0.5 };
+    expect(statusFields({ startedAt: 0, tokens: totalTokens(usage), usage }, 12_000, 'Thinking...')).toEqual([
+      '12s',
+      '5.2k tokens',
+      '$0.50',
+      'Thinking...',
+    ]);
+  });
+
+  it('omits the cost when the server sent none', () => {
+    const usage = { inputTokens: 100, outputTokens: 50 };
+    expect(statusFields({ startedAt: 0, tokens: 150, usage }, 0, 'x')).toEqual(['0s', '150 tokens', 'x']);
   });
 });
 

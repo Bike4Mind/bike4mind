@@ -1,7 +1,7 @@
 import { PassThrough } from 'node:stream';
 import type { AxiosInstance } from 'axios';
 import { describe, expect, it, vi } from 'vitest';
-import { streamCompletion } from './completions';
+import { streamCompletion, withCacheBreakpoints } from './completions';
 import type { CompletionStreamEvent } from './streamEvents';
 
 /** One SSE frame. The blank-line terminator is what the parser splits on. */
@@ -184,5 +184,41 @@ describe('streamCompletion', () => {
     const instance = { post } as unknown as AxiosInstance;
 
     await expect(streamCompletion(instance, '/c', REQUEST, () => {})).rejects.toThrow(/session may have expired/);
+  });
+});
+
+describe('withCacheBreakpoints', () => {
+  const history = [
+    { role: 'system' as const, content: 'sys' },
+    { role: 'user' as const, content: 'one' },
+    { role: 'assistant' as const, content: [{ type: 'tool_use' }] },
+    { role: 'user' as const, content: [{ type: 'tool_result' }] },
+  ];
+
+  it('marks the system message and the last message, and nothing between', () => {
+    expect(withCacheBreakpoints(history).map(message => message.cache)).toEqual([true, undefined, undefined, true]);
+  });
+
+  it('never touches the messages it was given', () => {
+    const stamped = withCacheBreakpoints(history);
+    expect(history.some(message => 'cache' in message)).toBe(false);
+    expect(stamped[3]).not.toBe(history[3]);
+    expect(stamped[1]).toBe(history[1]);
+  });
+
+  it('moves the rolling breakpoint when the conversation grows', () => {
+    const grown = [...history, { role: 'assistant' as const, content: 'two' }, { role: 'user' as const, content: 'x' }];
+    const marked = withCacheBreakpoints(grown).flatMap((message, index) => (message.cache ? [index] : []));
+    expect(marked).toEqual([0, 5]);
+  });
+
+  it('sends the flag on the wire and nothing for a message without it', async () => {
+    const stream = new PassThrough();
+    const { instance, post } = fakeAxios(stream);
+    const done = streamCompletion(instance, '/c', { model: 'm', messages: withCacheBreakpoints(history) }, () => {});
+    stream.write(frame('[DONE]'));
+    await done;
+    const body = post.mock.calls[0][1] as { messages: { cache?: boolean }[] };
+    expect(body.messages.map(message => message.cache)).toEqual([true, undefined, undefined, true]);
   });
 });

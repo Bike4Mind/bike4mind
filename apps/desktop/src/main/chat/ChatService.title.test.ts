@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import type { ModelCatalog } from './ModelCatalog';
 import { deriveTitle, SessionStore } from './SessionStore';
-import { TITLE_INSTRUCTION, TITLE_MODELS } from './sessionTitle';
+import { TITLE_INSTRUCTION, TITLE_MAX_TOKENS, TITLE_MODELS } from './sessionTitle';
 import type { AccessStore } from './tools/AccessStore';
 
 const SESSION_MODEL = 'claude-opus-4-5-20251101';
@@ -24,7 +24,12 @@ function frame(payload: unknown): string {
 }
 
 /** What the title request looks like on the wire: the small model, and no transcript. */
-type WireRequest = { model: string; messages: { role: string; content: unknown }[]; options: { tools: unknown[] } };
+type WireRequest = {
+  model: string;
+  max_tokens?: number;
+  messages: { role: string; content: unknown }[];
+  options: { tools: unknown[] };
+};
 
 describe('ChatService session titles', () => {
   let store: SessionStore;
@@ -131,7 +136,16 @@ describe('ChatService session titles', () => {
     expect(request.model).toBe(TITLE_MODEL);
     expect(request.options.tools).toEqual([]);
     expect(request.messages.map(message => message.role)).toEqual(['system', 'user']);
-    expect(request.messages[1].content).toBe('explain event loops');
+    expect(request.messages[1].content).toContain('explain event loops');
+  });
+
+  it('caps the reply, so a model that answers instead of naming cannot run away', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'explain event loops');
+
+    const request = (await vi.waitUntil(titleCall, { timeout: 5000, interval: 5 }))[1];
+
+    expect(request.max_tokens).toBe(TITLE_MAX_TOKENS);
   });
 
   it('titles a session only once, not on every turn', async () => {

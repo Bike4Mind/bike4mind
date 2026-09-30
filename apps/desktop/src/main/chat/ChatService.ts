@@ -43,15 +43,26 @@ import { resolveWorkspace, type WorkspaceOutcome } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
 import { startRoundTimer } from './turnTiming';
-import { DEFAULT_COMPLETIONS_PATH, streamCompletion, type CompletionMessage } from './completions';
+import {
+  DEFAULT_COMPLETIONS_PATH,
+  streamCompletion,
+  withCacheBreakpoints,
+  type CompletionMessage,
+} from './completions';
+import { addUsage, foldUsage } from './streamEvents';
 import { buildExploreContext } from './explore';
 import { MediaApiClient } from './media/MediaApiClient';
 import type { MediaStore } from './media/MediaStore';
 import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
 import { createThinkFilter, type ThinkSplit } from './thinkFilter';
-import { pickTitleModel, sanitizeGeneratedTitle, titleRequestMessages } from './sessionTitle';
-import { pickSuggestionModel, sanitizeSuggestion, suggestionRequestMessages } from './nextPrompt';
+import { pickTitleModel, sanitizeGeneratedTitle, TITLE_MAX_TOKENS, titleRequestMessages } from './sessionTitle';
+import {
+  pickSuggestionModel,
+  sanitizeSuggestion,
+  SUGGESTION_MAX_TOKENS,
+  suggestionRequestMessages,
+} from './nextPrompt';
 import type { SessionActivity } from './SessionActivity';
 import { isValidSessionId, type SessionStore } from './SessionStore';
 import { expandSkill, parseSkillInvocation } from './skills/expand';
@@ -295,6 +306,7 @@ interface ResumedReply {
   rounds: ChatReplyRound[];
   toolCalls: ChatToolCall[];
   artifacts: ChatArtifact[];
+  usage?: ChatUsage;
 }
 
 /** One round as it is produced, before its artifact markup is parsed out of the text. */
@@ -303,6 +315,7 @@ interface RawRound {
   toolCallIds: string[];
   reasoning: string;
   timing: ChatRoundTiming;
+  usage?: ChatUsage;
 }
 
 /**
@@ -959,6 +972,7 @@ export class ChatService {
       rounds: last.rounds ?? [{ text: last.content, toolCallIds: (last.toolCalls ?? []).map(call => call.id) }],
       toolCalls: last.toolCalls ?? [],
       artifacts: last.artifacts ?? [],
+      ...(last.usage ? { usage: last.usage } : {}),
     });
     return { ok: true, messageId: replyId };
   }
@@ -1116,7 +1130,7 @@ export class ChatService {
     // renderer replaces the message's text with it rather than extending what it already shows.
     let content = resume?.content ?? '';
     let stopReason: string | undefined;
-    let usage: ChatUsage | undefined;
+    let usage: ChatUsage | undefined = resume?.usage;
     const toolCalls: ChatToolCall[] = [...(resume?.toolCalls ?? [])];
     let thinking: unknown[] | undefined;
     let previousRound: string | null = null;
@@ -1202,7 +1216,13 @@ export class ChatService {
         const failure = await streamRound(
           api.getAxiosInstance(),
           serverConfig.endpoint,
-          { model: session.model, messages: wire, tools, thinking: true, ...(maxTokens ? { maxTokens } : {}) },
+          {
+            model: session.model,
+            messages: withCacheBreakpoints(wire),
+            tools,
+            thinking: true,
+            ...(maxTokens ? { maxTokens } : {}),
+          },
           event => {
             // `error` never reaches here (the transport throws on it); `meta` carries no reply.
             if (event.type === 'error' || event.type === 'meta') return;
@@ -1213,7 +1233,7 @@ export class ChatService {
               if (event.thinking) turnThinking = event.thinking;
             }
             if (event.stopReason) stopReason = event.stopReason;
-            if (event.usage) turnUsage = event.usage;
+            turnUsage = foldUsage(turnUsage, event);
           },
           controller.signal
         );
@@ -1223,7 +1243,13 @@ export class ChatService {
         // Recorded before the exits below, so the round that ENDS a turn - the one carrying the
         // answer, which by definition runs no tools - is part of the structure rather than the
         // one piece of prose the thread has to guess a home for.
-        const round: RawRound = { text: turnText, toolCallIds: [], reasoning: turnReasoning, timing };
+        const round: RawRound = {
+          text: turnText,
+          toolCallIds: [],
+          reasoning: turnReasoning,
+          timing,
+          ...(turnUsage ? { usage: turnUsage } : {}),
+        };
         produced.push(round);
 
         // Within one request the server's counts are cumulative, so the last report wins; across
@@ -1331,6 +1357,7 @@ export class ChatService {
             text: entry.content.trim(),
             toolCallIds: entry.round.toolCallIds,
             timing: entry.round.timing,
+            ...(entry.round.usage ? { usage: entry.round.usage } : {}),
             ...(entry.round.reasoning.trim() ? { reasoning: entry.round.reasoning.trim() } : {}),
           }))
           .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning),
@@ -1349,6 +1376,7 @@ export class ChatService {
         ...(keepRounds ? { rounds } : {}),
         ...(thinking ? { thinking } : {}),
         ...(artifacts.length > 0 ? { artifacts } : {}),
+        ...(usage ? { usage } : {}),
       });
       this.emit({
         type: 'done',
@@ -1384,6 +1412,7 @@ export class ChatService {
         createdAt: new Date().toISOString(),
         error: message,
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        ...(usage ? { usage } : {}),
       });
       this.emit({ type: 'error', sessionId, messageId: replyId, message });
       return 'failed';
@@ -1418,6 +1447,7 @@ export class ChatService {
       rounds: message.rounds,
       thinking: message.thinking,
       artifacts: message.artifacts,
+      usage: message.usage,
     });
   }
 
@@ -2109,7 +2139,7 @@ export class ChatService {
       await streamCompletion(
         api.getAxiosInstance(),
         endpoint,
-        { model, messages: titleRequestMessages(prompt), tools: [] },
+        { model, messages: titleRequestMessages(prompt), tools: [], maxTokens: TITLE_MAX_TOKENS },
         event => {
           if (event.type === 'content' || event.type === 'tool_use') reply += event.text ?? '';
         },
@@ -2188,7 +2218,12 @@ export class ChatService {
       await streamCompletion(
         api.getAxiosInstance(),
         endpoint,
-        { model, messages: suggestionRequestMessages(prompt.content, reply.content), tools: [] },
+        {
+          model,
+          messages: suggestionRequestMessages(prompt.content, reply.content),
+          tools: [],
+          maxTokens: SUGGESTION_MAX_TOKENS,
+        },
         event => {
           if (event.type === 'content' || event.type === 'tool_use') answer += event.text ?? '';
         },
@@ -2573,22 +2608,7 @@ function describeChildOutcome(child: ChatSession): string {
   return `${header}${note}\n${read}`;
 }
 
-/**
- * Add one round trip's reported usage to the turn's running total.
- *
- * Absent stays absent: a server that reported nothing must not be made to look like it reported
- * zero, because the status line draws the field only once there is a real number behind it.
- */
-export function addUsage(total: ChatUsage | undefined, next: ChatUsage | undefined): ChatUsage | undefined {
-  if (!next) return total;
-  if (!total) return next;
-  const inputTokens = (total.inputTokens ?? 0) + (next.inputTokens ?? 0);
-  const outputTokens = (total.outputTokens ?? 0) + (next.outputTokens ?? 0);
-  return {
-    ...(total.inputTokens === undefined && next.inputTokens === undefined ? {} : { inputTokens }),
-    ...(total.outputTokens === undefined && next.outputTokens === undefined ? {} : { outputTokens }),
-  };
-}
+export { addUsage };
 
 /** Tool arguments arrive as a raw JSON string; a malformed one becomes an empty object. */
 function parseArguments(raw: string | undefined): Record<string, unknown> {

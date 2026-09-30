@@ -443,7 +443,8 @@ export function useConversation(
       // nothing survives to be shown against the next one.
       if (event.type === 'usage') {
         const counted = totalTokens(event.usage);
-        if (counted !== null) setTurn(current => (current ? { ...current, tokens: counted } : current));
+        if (counted !== null)
+          setTurn(current => (current ? { ...current, tokens: counted, usage: event.usage } : current));
         return;
       }
 

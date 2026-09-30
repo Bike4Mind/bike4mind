@@ -158,7 +158,7 @@ describe('ChatService', () => {
     expect(post.mock.calls[1][1].messages.slice(1)).toEqual([
       { role: 'user', content: 'first' },
       { role: 'assistant', content: 'reply one' },
-      { role: 'user', content: 'second' },
+      { role: 'user', content: 'second', cache: true },
     ]);
   });
 

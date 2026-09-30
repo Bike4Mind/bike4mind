@@ -32,7 +32,9 @@ describe('titleRequestMessages', () => {
     const messages = titleRequestMessages('how do I debug this websocket?');
     expect(messages).toHaveLength(2);
     expect(messages[0].role).toBe('system');
-    expect(messages[1]).toEqual({ role: 'user', content: 'how do I debug this websocket?' });
+    expect(messages[1].role).toBe('user');
+    expect(messages[1].content).toContain('how do I debug this websocket?');
+    expect(String(messages[1].content)).toMatch(/^Name this message:/);
   });
 
   it('sends an excerpt of a long paste rather than the whole thing', () => {

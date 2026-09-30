@@ -15,6 +15,25 @@ export const DEFAULT_COMPLETIONS_PATH = '/api/ai/v1/completions';
 export interface CompletionMessage {
   role: ChatRole | 'system';
   content: string | unknown[];
+  /** Asks the provider to cache the request up to and including this message. Anthropic only. */
+  cache?: boolean;
+}
+
+/**
+ * The messages as one request should send them: a copy of the system message and of the last
+ * message carrying `cache: true`, the rest untouched. The first breakpoint caches the tools and
+ * system prompt, which are stable across a whole turn; the second is a rolling one, so the next
+ * request reads everything up to it from cache instead of re-billing it.
+ *
+ * Copies, never the caller's own messages: a stamp left on a stored message would pile up into a
+ * breakpoint per round and trip the provider's limit of four.
+ */
+export function withCacheBreakpoints(messages: readonly CompletionMessage[]): CompletionMessage[] {
+  if (messages.length === 0) return [];
+  const last = messages.length - 1;
+  return messages.map((message, index) =>
+    index === last || message.role === 'system' ? { ...message, cache: true } : message
+  );
 }
 
 export interface CompletionRequest {

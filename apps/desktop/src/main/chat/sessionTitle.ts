@@ -47,6 +47,13 @@ export function pickTitleModel(available: readonly ChatModelOption[], sessionMod
   return sessionModel || null;
 }
 
+/**
+ * Output ceiling for the title request. A title is 3 to 6 words; without a ceiling the server
+ * allows 4096, and a model that answers the prompt instead of naming it spends all of them.
+ * A reply cut off by this is far past NOT_A_TITLE_LENGTH, so it is rejected, not shown.
+ */
+export const TITLE_MAX_TOKENS = 64;
+
 /** Enough of the prompt to name it. A long paste says what it is in its first lines. */
 const PROMPT_EXCERPT_CHARS = 1500;
 
@@ -56,11 +63,14 @@ const PROMPT_EXCERPT_CHARS = 1500;
  * Not the conversation, not the agent's system prompt, and no tool schemas - all three exist to
  * make the model DO the thing, and this call must only name it. Keeping them out is what makes
  * the call cost a fraction of a cent rather than a fraction of a turn.
+ *
+ * The prompt is fenced and introduced rather than sent bare: as the whole user turn it reads as
+ * a request to fulfil, and a coding prompt then gets a coding answer instead of a name.
  */
 export function titleRequestMessages(prompt: string): CompletionMessage[] {
   return [
     { role: 'system', content: TITLE_INSTRUCTION },
-    { role: 'user', content: prompt.slice(0, PROMPT_EXCERPT_CHARS) },
+    { role: 'user', content: `Name this message:\n\n<message>\n${prompt.slice(0, PROMPT_EXCERPT_CHARS)}\n</message>` },
   ];
 }
 
