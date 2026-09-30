@@ -32,12 +32,24 @@ describe('projectService - addSessions', () => {
   let mockFabFileRepo: IFabFileRepository;
   let mockUser: IUserDocument;
   let adapters: { db: { projects: IProjectRepository; sessions: ISessionRepository; fabFiles: IFabFileRepository } };
+  let sessionWrites: unknown[];
+  let fabFileWrites: unknown[];
 
   beforeEach(() => {
     mockProjectRepo = createMockProjectRepository();
     mockSessionRepo = createMockSessionRepository();
     mockFabFileRepo = createMockFabFileRepository();
     mockUser = { ...createMockUser(), id: adderId } as unknown as IUserDocument;
+    // Cloned at call time: pushShareable mutates `users` in place, so mock.calls would also match a
+    // write made before the grants were pushed.
+    sessionWrites = [];
+    fabFileWrites = [];
+    (mockSessionRepo.update as Mock).mockImplementation(async (partial: unknown) => {
+      sessionWrites.push(structuredClone(partial));
+    });
+    (mockFabFileRepo.update as Mock).mockImplementation(async (partial: unknown) => {
+      fabFileWrites.push(structuredClone(partial));
+    });
 
     adapters = {
       db: {
@@ -127,6 +139,7 @@ describe('projectService - addSessions', () => {
         updatedAt: expect.any(Date),
       },
     ]);
+    expect((mockProjectRepo.updateWithUpdateAccess as Mock).mock.calls[0][0]).toBe(mockContributor);
 
     const sharedUsers = [
       { userId: projectOwnerId, permissions: [Permission.read, Permission.update], projectId, sessionId: undefined },
@@ -134,11 +147,11 @@ describe('projectService - addSessions', () => {
     ];
     expect(mockSessionRepo.update).toHaveBeenCalledTimes(sessionIds.length);
     sessionIds.forEach((id, i) => {
-      expect((mockSessionRepo.update as Mock).mock.calls[i][0]).toStrictEqual({ id, users: sharedUsers });
+      expect(sessionWrites[i]).toStrictEqual({ id, users: sharedUsers });
     });
     expect(mockFabFileRepo.shareable.findAllAccessibleByIds).toHaveBeenCalledTimes(sessionIds.length);
     expect(mockFabFileRepo.update).toHaveBeenCalledTimes(sessionIds.length * knowledgeFileIds.length);
-    (mockFabFileRepo.update as Mock).mock.calls.forEach(([partial], i) => {
+    fabFileWrites.forEach((partial, i) => {
       expect(partial).toStrictEqual({ id: knowledgeFileIds[i % knowledgeFileIds.length], users: sharedUsers });
     });
   });
@@ -197,6 +210,7 @@ describe('projectService - addSessions', () => {
       mockContributor,
       { id: projectId, sessionIds: [...existingSessionIds, ...sessionIds], fileIds: [], updatedAt: expect.any(Date) },
     ]);
+    expect((mockProjectRepo.updateWithUpdateAccess as Mock).mock.calls[0][0]).toBe(mockContributor);
 
     const sharedUsers = [
       { userId: projectOwnerId, permissions: [Permission.read, Permission.update], projectId, sessionId: undefined },
@@ -204,7 +218,7 @@ describe('projectService - addSessions', () => {
     ];
     expect(mockSessionRepo.update).toHaveBeenCalledTimes(sessionIds.length);
     sessionIds.forEach((id, i) => {
-      expect((mockSessionRepo.update as Mock).mock.calls[i][0]).toStrictEqual({ id, users: sharedUsers });
+      expect(sessionWrites[i]).toStrictEqual({ id, users: sharedUsers });
     });
   });
 
@@ -257,10 +271,11 @@ describe('projectService - addSessions', () => {
       mockUser,
       { id: projectId, sessionIds: [...existingSessionIds, ...sessionIds], fileIds: [], updatedAt: expect.any(Date) },
     ]);
+    expect((mockProjectRepo.updateWithUpdateAccess as Mock).mock.calls[0][0]).toBe(mockUser);
     // mockUser is not the project owner, so only the owner is granted.
     expect(mockSessionRepo.update).toHaveBeenCalledTimes(sessionIds.length);
     sessionIds.forEach((id, i) => {
-      expect((mockSessionRepo.update as Mock).mock.calls[i][0]).toStrictEqual({ id, users: [ownerGrant] });
+      expect(sessionWrites[i]).toStrictEqual({ id, users: [ownerGrant] });
     });
   });
 
@@ -373,13 +388,14 @@ describe('projectService - addSessions', () => {
       mockUser,
       { id: projectId, sessionIds: sessionIds, fileIds: knowledgeFileIds, updatedAt: expect.any(Date) },
     ]);
+    expect((mockProjectRepo.updateWithUpdateAccess as Mock).mock.calls[0][0]).toBe(mockUser);
     expect(mockFabFileRepo.shareable.findAllAccessibleByIds).toHaveBeenCalledTimes(1);
     expect(mockFabFileRepo.shareable.findAllAccessibleByIds).toHaveBeenCalledWith(mockUser, knowledgeFileIds);
     expect(mockSessionRepo.update).toHaveBeenCalledTimes(1);
-    expect((mockSessionRepo.update as Mock).mock.calls[0][0]).toStrictEqual({ id: sessionIds[0], users: [ownerGrant] });
+    expect(sessionWrites[0]).toStrictEqual({ id: sessionIds[0], users: [ownerGrant] });
     expect(mockFabFileRepo.update).toHaveBeenCalledTimes(knowledgeFileIds.length);
     knowledgeFileIds.forEach((id, i) => {
-      expect((mockFabFileRepo.update as Mock).mock.calls[i][0]).toStrictEqual({ id, users: [ownerGrant] });
+      expect(fabFileWrites[i]).toStrictEqual({ id, users: [ownerGrant] });
     });
   });
 

@@ -8,10 +8,17 @@ describe('projectService - addFiles', () => {
   let mockProjectRepo: IProjectRepository;
   let mockFabFileRepo: IFabFileRepository;
   let adapters: { db: { projects: IProjectRepository; fabFiles: IFabFileRepository } };
+  let fabFileWrites: unknown[];
 
   beforeEach(() => {
     mockProjectRepo = createMockProjectRepository();
     mockFabFileRepo = createMockFabFileRepository();
+    // Cloned at call time: pushShareable mutates `users` in place, so mock.calls would also match a
+    // write made before the grants were pushed.
+    fabFileWrites = [];
+    (mockFabFileRepo.update as Mock).mockImplementation(async (partial: unknown) => {
+      fabFileWrites.push(structuredClone(partial));
+    });
     adapters = {
       db: {
         projects: mockProjectRepo,
@@ -72,10 +79,11 @@ describe('projectService - addFiles', () => {
       mockUser,
       { id: projectId, fileIds: [...existingFileIds, ...fileIds], updatedAt: expect.any(Date) },
     ]);
+    expect((mockProjectRepo.updateWithUpdateAccess as Mock).mock.calls[0][0]).toBe(mockUser);
 
     expect(mockFabFileRepo.update).toHaveBeenCalledTimes(fileIds.length);
     fileIds.forEach((id, i) => {
-      expect((mockFabFileRepo.update as Mock).mock.calls[i][0]).toStrictEqual({
+      expect(fabFileWrites[i]).toStrictEqual({
         id,
         users: [
           {
@@ -95,6 +103,9 @@ describe('projectService - addFiles', () => {
     (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce(null);
 
     await expect(addFiles(mockUser, { projectId: 'any', fileIds: ['any'] }, adapters)).rejects.toThrow(NotFoundError);
+    expect(mockProjectRepo.update).not.toHaveBeenCalled();
+    expect(mockProjectRepo.updateWithUpdateAccess).not.toHaveBeenCalled();
+    expect(mockFabFileRepo.update).not.toHaveBeenCalled();
   });
 
   it('should throw error when some files are not accessible', async () => {
@@ -109,6 +120,9 @@ describe('projectService - addFiles', () => {
     await expect(addFiles(mockUser, { projectId: 'any', fileIds }, adapters)).rejects.toThrow(
       'Some files are not accessible'
     );
+    expect(mockProjectRepo.update).not.toHaveBeenCalled();
+    expect(mockProjectRepo.updateWithUpdateAccess).not.toHaveBeenCalled();
+    expect(mockFabFileRepo.update).not.toHaveBeenCalled();
   });
 
   it('should throw validation error for invalid parameters', async () => {
