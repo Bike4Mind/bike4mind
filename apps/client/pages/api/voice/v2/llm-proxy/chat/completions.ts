@@ -5,6 +5,7 @@
 // and ElevenLabs appends "/chat/completions" when making the actual request,
 // so the file lives at that suffix. This is the canonical (and only) location
 // of the handler.
+import { DATA_LAKE_READ_TOOL_NAMES, DATA_LAKE_WRITE_TOOL_NAMES } from '@bike4mind/common';
 import { adminSettingsRepository, questRepository, userRepository } from '@bike4mind/database';
 import {
   ChatCompletionFeature,
@@ -144,6 +145,8 @@ async function runFullPipeline(
     // creation) stay off so the whole voice turn runs in-process - no separate
     // Lambda or SQS dispatch.
     tools: [...VOICE_BUILTIN_TOOLS, ...Object.keys(clientTools)],
+    // The save-intent gate would otherwise offer the data-lake tools past the list above.
+    deniedTools: [...DATA_LAKE_READ_TOOL_NAMES, ...DATA_LAKE_WRITE_TOOL_NAMES],
     enableQuestMaster: false,
     enableMementos: false,
     enableAgents: false,

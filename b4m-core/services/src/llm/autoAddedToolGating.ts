@@ -1,4 +1,9 @@
-import { DATA_LAKE_WRITE_TOOL_NAMES, detectAgentMentions, detectSkillMentions } from '@bike4mind/common';
+import {
+  DATA_LAKE_READ_TOOL_NAMES,
+  DATA_LAKE_WRITE_TOOL_NAMES,
+  detectAgentMentions,
+  detectSkillMentions,
+} from '@bike4mind/common';
 
 /**
  * Blog intent in the message itself. Two branches: a word-boundary match on `blog` and its close
@@ -68,7 +73,7 @@ export function shouldOfferBlogTools(input: {
 }
 
 /** The save-to-data-lake trio - offered, trimmed and paired together (see resolveEnabledTools). */
-export const DATA_LAKE_TOOL_NAMES: string[] = ['list_my_data_lakes', ...DATA_LAKE_WRITE_TOOL_NAMES];
+export const DATA_LAKE_TOOL_NAMES: string[] = [...DATA_LAKE_READ_TOOL_NAMES, ...DATA_LAKE_WRITE_TOOL_NAMES];
 
 /**
  * Data-lake intent: the product term itself ("data lake", "data-lakes"), a save-style verb shortly

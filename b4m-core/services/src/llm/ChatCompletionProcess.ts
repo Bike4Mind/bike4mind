@@ -2823,8 +2823,7 @@ export class ChatCompletionProcess {
         sessionKnowledgeIds: session.knowledgeIds ?? [],
         attachedFileTokenBudget,
         skipAutoOffers,
-        knowledgeSearchDisabled:
-          Array.isArray(session.disabledTools) && session.disabledTools.includes(KNOWLEDGE_SEARCH_TOOL_NAME),
+        knowledgeSearchDisabled: deniedTools?.includes(KNOWLEDGE_SEARCH_TOOL_NAME) ?? false,
         defaultAdminSettings,
         // The same mapping the tool build uses below, so the session -> filter translation cannot
         // drift between them. Narrower than "the two agree": reachability also depends on the tool
@@ -3219,8 +3218,7 @@ export class ChatCompletionProcess {
       // denies it, or a model offered no tools at all. Without this, every turn of every
       // lake-holding caller on a non-tool model logs a warning and drowns the real case.
       const knowledgeToolWithheldByConfig =
-        (Array.isArray(session.disabledTools) && session.disabledTools.includes('search_knowledge_base')) ||
-        offeredToolNames.length === 0;
+        deniedTools?.includes(KNOWLEDGE_SEARCH_TOOL_NAME) || offeredToolNames.length === 0;
       if ((hasAttachedKnowledge || (hasAccessibleDataLake && !knowledgeToolWithheldByConfig)) && !skipAutoOffers) {
         const source = hasAttachedKnowledge
           ? `${session.knowledgeIds!.length} attached document(s)`

@@ -67,13 +67,16 @@ export type B4MLLMTools = z.infer<typeof b4mLLMTools>;
 
 /**
  * The data-lake tools that write (make a lake, persist a file into one). A route withholds these
- * from an API key without datalake:write (dataLakeWriteToolsDeniedFor in the client's
+ * from an API key without datalake:write (dataLakeToolsDeniedFor in the client's
  * dataLakeScopes.ts); the services' DATA_LAKE_TOOL_NAMES builds on this list.
  */
 export const DATA_LAKE_WRITE_TOOL_NAMES = [
   'create_data_lake',
   'save_content_to_data_lake',
 ] as const satisfies readonly B4MLLMTools[];
+
+/** The data-lake tools that only read; withheld from an API key without datalake:read the same way. */
+export const DATA_LAKE_READ_TOOL_NAMES = ['list_my_data_lakes'] as const satisfies readonly B4MLLMTools[];
 
 export const B4MLLMToolsList = b4mLLMTools.options.map(tool => tool);
 

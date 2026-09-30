@@ -89,8 +89,8 @@ describe('create_data_lake', () => {
 
     expect(createDataLakeMock).toHaveBeenCalledTimes(2);
     const [first, second] = createDataLakeMock.mock.calls.map(call => call[1].fileTagPrefix);
-    expect(second).toBe(prefixCandidate(first, 1));
-    expect(second).not.toBe(first);
+    expect(first).toBe('research:');
+    expect(second).toBe('research-2:');
     expect(result).toContain('id: lake9');
   });
 

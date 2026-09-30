@@ -6,9 +6,11 @@ import {
   type IDataLakeDocument,
   type IFabFileDocument,
 } from '@bike4mind/common';
+import { getMimeTypeByExtension } from '@bike4mind/utils';
 import type { ToolContext, ToolDefinition } from '../../base/types';
 import { assertLakeAccessWithGrants, assertLakeWritable } from '../../../../dataLakeService/assertLakeAccess';
 import { canManageLake } from '../../../../dataLakeService/manageRule';
+import { assertLakeAdmission } from '../../../../dataLakeService/lakeAdmissionGate';
 import { addFileToDataLake } from '../../../../dataLakeService/addFileToDataLake';
 import { createFabFile } from '../../../../fabFileService/create';
 import { buildToolAccessContext } from '../../helpers/toolAccessContext';
@@ -52,19 +54,22 @@ function mimeTypeForExtension(extension: string): SavableMimeType | undefined {
  * The stored name and type, made to agree: createFabFile resolves the type extension-first, so a
  * `notes` saved as markdown must become `notes.md` or it would be stored as plain text. With no
  * explicit type, a recognized extension decides it; otherwise markdown. A recognized extension
- * that disagrees with the type is replaced (`notes.md` as CSV -> `notes.csv`), never stacked.
+ * that disagrees with the type is replaced (`notes.md` as CSV -> `notes.csv`), never stacked, and
+ * one storage does not know (`notes.markdown`) is swapped for the canonical one.
  */
 export function resolveFileNameAndType(
   rawFileName: string,
   requested?: SavableMimeType
 ): { fileName: string; mimeType: SavableMimeType } {
-  const baseName = rawFileName.replace(/[\\/]/g, '-');
+  // Trailing dots are dropped first so `notes.md.` reads as `notes.md`, not an empty extension.
+  const baseName = rawFileName.replace(/[\\/]/g, '-').replace(/\.+$/, '');
   const dot = baseName.lastIndexOf('.');
   const extension = dot >= 0 ? baseName.slice(dot + 1) : '';
   const extensionType = mimeTypeForExtension(extension.toLowerCase());
   const stem = (extensionType ? baseName.slice(0, dot) : baseName).trim().replace(/\.+$/, '') || DEFAULT_BASE_NAME;
   const mimeType = requested ?? extensionType ?? DEFAULT_MIME_TYPE;
-  const finalExtension = extensionType === mimeType ? extension : EXTENSIONS_BY_MIME_TYPE[mimeType][0];
+  const keepExtension = extensionType === mimeType && getMimeTypeByExtension(extension) === mimeType;
+  const finalExtension = keepExtension ? extension : EXTENSIONS_BY_MIME_TYPE[mimeType][0];
   return { fileName: `${stem}.${finalExtension}`, mimeType };
 }
 
@@ -138,7 +143,8 @@ export const saveContentToDataLakeTool: ToolDefinition = {
         if (!(await dataLakesEnabled(context.db))) return DATA_LAKES_DISABLED_MESSAGE;
 
         // Every gate runs BEFORE the file exists, so a target the user cannot write to never leaves
-        // an orphaned file behind. addFileToDataLake re-checks all of this itself.
+        // an orphaned file behind. addFileToDataLake re-checks all of this itself, but admission only
+        // after the file exists - so a server-resolved door must call it here (authorizeLakeWrite.ts).
         ctx = await buildToolAccessContext(context);
         const resolved = await assertLakeAccessWithGrants(dataLakeId, ctx, {
           db: { dataLakes: adapters.dataLakes, dataLakeAccessGrants: adapters.dataLakeAccessGrants },
@@ -152,6 +158,10 @@ export const saveContentToDataLakeTool: ToolDefinition = {
         if (lake.status && !(LAKE_ATTACHABLE_STATUSES as readonly string[]).includes(lake.status)) {
           return `Nothing was saved: the data lake "${lake.name}" is ${lake.status} and cannot take new files.`;
         }
+        await assertLakeAdmission([lake], [{ userId: context.userId }], {
+          db: { adminSettings: adapters.adminSettings, scopedSettings: adapters.scopedSettings },
+          logger: context.logger,
+        });
       } catch (error) {
         context.logger.warn('[save_content_to_data_lake] target lake refused:', error);
         return `Nothing was saved: ${describeFailure(error)}. Use list_my_data_lakes to find a lake the user can save to.`;

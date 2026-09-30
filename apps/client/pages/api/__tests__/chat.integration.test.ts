@@ -269,12 +269,13 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect(mockInvoke).toHaveBeenCalledTimes(1);
   });
 
-  it('denies the data-lake write tools to a chat key without datalake:write', async () => {
+  it('denies the data-lake tools to a chat key without any data-lake scope', async () => {
     validateWithScopes([ApiKeyScope.AI_CHAT]);
     const { req, res } = fire();
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect((mockInvoke.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools).toEqual([
+      'list_my_data_lakes',
       'create_data_lake',
       'save_content_to_data_lake',
     ]);

@@ -234,19 +234,24 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
   describe('data-lake write tools vs the key scopes', () => {
     const invokedDenied = () => (mockInvoke.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools;
 
-    it('denies create/save to an ai:chat key without datalake:write', async () => {
+    it('denies list/create/save to an ai:chat key without any data-lake scope', async () => {
       validateWithScopes([ApiKeyScope.AI_CHAT]);
       const { req, res } = fire();
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
-      expect(invokedDenied()).toEqual(['create_data_lake', 'save_content_to_data_lake']);
+      expect(invokedDenied()).toEqual(['list_my_data_lakes', 'create_data_lake', 'save_content_to_data_lake']);
     });
 
     it('keeps a client deniedTools and adds to it, so a client can never lift the denial', async () => {
       validateWithScopes([ApiKeyScope.AI_CHAT]);
       const { req, res } = fire({ body: { deniedTools: ['web_search'] } });
       await handler(req, res);
-      expect(invokedDenied()).toEqual(['web_search', 'create_data_lake', 'save_content_to_data_lake']);
+      expect(invokedDenied()).toEqual([
+        'web_search',
+        'list_my_data_lakes',
+        'create_data_lake',
+        'save_content_to_data_lake',
+      ]);
     });
 
     it('denies nothing to a key that holds datalake:write', async () => {

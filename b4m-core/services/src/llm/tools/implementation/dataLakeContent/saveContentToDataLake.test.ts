@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { DATA_LAKES, FabFileSourceType, ForbiddenError } from '@bike4mind/common';
+import { BadRequestError, DATA_LAKES, FabFileSourceType, ForbiddenError } from '@bike4mind/common';
 
 const assertLakeAccessWithGrantsMock = vi.fn();
 vi.mock('../../../../dataLakeService/assertLakeAccess', async importOriginal => ({
@@ -9,6 +9,10 @@ vi.mock('../../../../dataLakeService/assertLakeAccess', async importOriginal => 
 const canManageLakeMock = vi.fn();
 vi.mock('../../../../dataLakeService/manageRule', () => ({
   canManageLake: (...args: unknown[]) => canManageLakeMock(...args),
+}));
+const assertLakeAdmissionMock = vi.fn();
+vi.mock('../../../../dataLakeService/lakeAdmissionGate', () => ({
+  assertLakeAdmission: (...args: unknown[]) => assertLakeAdmissionMock(...args),
 }));
 const addFileToDataLakeMock = vi.fn();
 vi.mock('../../../../dataLakeService/addFileToDataLake', () => ({
@@ -65,6 +69,7 @@ describe('save_content_to_data_lake', () => {
   beforeEach(() => {
     assertLakeAccessWithGrantsMock.mockReset().mockResolvedValue({ lake: activeLake, grants: [] });
     canManageLakeMock.mockReset().mockReturnValue(true);
+    assertLakeAdmissionMock.mockReset().mockResolvedValue({ status: 'admitted' });
     createFabFileMock.mockReset().mockResolvedValue({ id: 'file1' });
     addFileToDataLakeMock.mockReset().mockResolvedValue(undefined);
   });
@@ -130,6 +135,17 @@ describe('save_content_to_data_lake', () => {
     const { context } = makeContext();
 
     await expect(run(context)).resolves.toContain('is archived');
+    expect(createFabFileMock).not.toHaveBeenCalled();
+  });
+
+  it('creates no file when an enforcing lake refuses admission', async () => {
+    assertLakeAdmissionMock.mockRejectedValue(new BadRequestError('This lake requires a different passage size'));
+    const { context } = makeContext();
+
+    const result = await run(context);
+
+    expect(result).toContain('Nothing was saved: This lake requires a different passage size');
+    expect(assertLakeAdmissionMock).toHaveBeenCalledWith([activeLake], [{ userId: 'u1' }], expect.anything());
     expect(createFabFileMock).not.toHaveBeenCalled();
   });
 
@@ -206,6 +222,15 @@ describe('resolveFileNameAndType', () => {
   it('falls back to a default base name when only an extension is given', () => {
     expect(resolveFileNameAndType('.md')).toEqual({ fileName: 'untitled.md', mimeType: 'text/markdown' });
     expect(resolveFileNameAndType('...')).toEqual({ fileName: 'untitled.md', mimeType: 'text/markdown' });
+  });
+
+  it('swaps an alias storage does not accept for the canonical extension', () => {
+    expect(resolveFileNameAndType('notes.markdown')).toEqual({ fileName: 'notes.md', mimeType: 'text/markdown' });
+  });
+
+  it('ignores trailing dots instead of reading them as an empty extension', () => {
+    expect(resolveFileNameAndType('notes.md.')).toEqual({ fileName: 'notes.md', mimeType: 'text/markdown' });
+    expect(resolveFileNameAndType('report.csv.')).toEqual({ fileName: 'report.csv', mimeType: 'text/csv' });
   });
 
   it('strips path separators', () => {

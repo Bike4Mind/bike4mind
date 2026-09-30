@@ -11,7 +11,7 @@ import {
   assertDataLakeShareScope,
   assertDataLakeWriteScope,
   assertDataLakeTagWriteScope,
-  dataLakeWriteToolsDeniedFor,
+  dataLakeToolsDeniedFor,
 } from './dataLakeScopes';
 
 const key = (...scopes: ApiKeyScope[]) => ({ apiKeyInfo: { scopes } });
@@ -139,24 +139,31 @@ describe('data-lake API-key scopes', () => {
   });
 });
 
-describe('dataLakeWriteToolsDeniedFor', () => {
-  it('denies the write tools to a chat key without datalake:write', () => {
-    expect(dataLakeWriteToolsDeniedFor(key(ApiKeyScope.AI_CHAT))).toEqual([
+describe('dataLakeToolsDeniedFor', () => {
+  it('denies only the write tools to a key holding datalake:read but not datalake:write', () => {
+    expect(dataLakeToolsDeniedFor(key(ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_READ))).toEqual([
       'create_data_lake',
       'save_content_to_data_lake',
     ]);
-    expect(dataLakeWriteToolsDeniedFor(key(ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_READ))).toHaveLength(2);
   });
 
-  it('denies them to a key whose scopes came back undefined (fails closed)', () => {
-    expect(dataLakeWriteToolsDeniedFor({ apiKeyInfo: {} })).toHaveLength(2);
+  it('also denies the list tool to a chat key without any data-lake read scope', () => {
+    expect(dataLakeToolsDeniedFor(key(ApiKeyScope.AI_CHAT))).toEqual([
+      'list_my_data_lakes',
+      'create_data_lake',
+      'save_content_to_data_lake',
+    ]);
+  });
+
+  it('denies all three to a key whose scopes came back undefined (fails closed)', () => {
+    expect(dataLakeToolsDeniedFor({ apiKeyInfo: {} })).toHaveLength(3);
   });
 
   it('denies nothing to a key holding datalake:write', () => {
-    expect(dataLakeWriteToolsDeniedFor(key(ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE))).toEqual([]);
+    expect(dataLakeToolsDeniedFor(key(ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE))).toEqual([]);
   });
 
   it('denies nothing to a JWT/browser caller', () => {
-    expect(dataLakeWriteToolsDeniedFor({})).toEqual([]);
+    expect(dataLakeToolsDeniedFor({})).toEqual([]);
   });
 });

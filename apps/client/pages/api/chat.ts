@@ -27,7 +27,7 @@ import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
-import { dataLakeWriteToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
+import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 
 // How many distinct unrecognized tool ids are named in the warn log and echoed on the response.
 // Both are bounded by the same number so the response is no less bounded than the log; the cap is
@@ -126,7 +126,7 @@ const handler = nextRouteForContract(chatContract, {
     organizationId,
     recommendations,
     requestedTools,
-    dataLakeWriteToolsDeniedFor(req)
+    dataLakeToolsDeniedFor(req)
   );
 
   // Read off internalRequest.tools rather than recomputing, so what is reported cannot drift

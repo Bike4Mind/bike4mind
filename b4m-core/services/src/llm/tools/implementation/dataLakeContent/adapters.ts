@@ -39,7 +39,8 @@ export function createLakeAdapters(db: ToolDb) {
 /**
  * Everything assertLakeAccessWithGrants + createFabFile + addFileToDataLake read. The audit sinks are
  * optional to those services but required here: a lake write this tool makes must land in the same
- * config/membership trail as one made from the manager (see lakeConfigAuditDb.ts).
+ * config/membership trail as one made from the manager (see lakeConfigAuditDb.ts). The entry is
+ * attributed to the user even when an API key drove the turn - the key id is not threaded to tools.
  */
 export function saveContentAdapters(db: ToolDb) {
   const { dataLakes, dataLakeAccessGrants, fabfiles, users, lakeMembershipRemovals } = db;

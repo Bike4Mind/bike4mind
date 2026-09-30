@@ -285,7 +285,7 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   /**
    * Tools to withhold on this turn, unioned with `session.disabledTools` and applied at every
    * denylist site including the final pass after buildTools. Set by the route, not trusted from the
-   * client: a route merges its own server-derived denials (dataLakeWriteToolsDeniedFor) over any
+   * client: a route merges its own server-derived denials (dataLakeToolsDeniedFor) over any
    * client value, so a caller can only ADD denials, never lift one.
    */
   deniedTools: z.array(z.string()).optional(),
