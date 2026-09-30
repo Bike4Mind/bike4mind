@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 const mockRefs = vi.hoisted(() => ({
+  // any: minimal stand-ins for the baseApi route chain and req.user; the real handler types add nothing to this test.
   deleteHandler: null as null | ((req: any, res: any) => unknown),
 }));
 
