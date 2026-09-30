@@ -48,7 +48,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
         code,
         logger: req.logger,
       });
-      return res.status(201).json({ connection: toGitHubLakeConnectionResponse(conn) });
+      // A connection minted just now has ingested nothing: its first sync is only enqueued.
+      return res.status(201).json({ connection: toGitHubLakeConnectionResponse(conn, 0) });
     } finally {
       clearStateNonce(res, NONCE_SLOT.githubLakeConnect);
     }

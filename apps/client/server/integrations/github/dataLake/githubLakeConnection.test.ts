@@ -78,6 +78,7 @@ import {
   revokeGitHubLakeConnection,
   disableGitHubConnectionForLake,
   enableGitHubConnectionForLake,
+  toGitHubLakeConnectionResponse,
   GITHUB_LAKE_STATE_OPTIONS,
 } from './githubLakeConnection';
 import type { GitHubLakeAppConfig, GitHubLakeInstallation, GitHubLakeRepository } from './lakeAppClient';
@@ -109,6 +110,55 @@ const CONNECTION = {
   organizationId: 'orgA',
   installationId: 42,
 } as unknown as IOrgGitHubLakeConnectionDocument;
+
+describe('toGitHubLakeConnectionResponse', () => {
+  const connectedAt = new Date('2026-01-01');
+  const base = {
+    id: 'conn1',
+    accountLogin: 'acme',
+    repositoryId: 100,
+    repositoryFullName: 'acme/one',
+    connectedBy: 'user-1',
+    connectedAt,
+  };
+
+  it('exposes sync state and the file count, never credentials or claim fields', () => {
+    const lastSyncedAt = new Date('2026-02-01');
+    const conn = {
+      ...base,
+      installationId: 42,
+      enabled: false,
+      status: 'error',
+      lastError: 'Repository access was removed',
+      defaultBranch: 'main',
+      lastSyncedAt,
+      lastSyncedCommitSha: 'sha-1',
+      syncClaimedAt: new Date(),
+      ingestClaimToken: 'token-1',
+    } as unknown as IOrgGitHubLakeConnectionDocument;
+
+    expect(toGitHubLakeConnectionResponse(conn, 5)).toEqual({
+      ...base,
+      enabled: false,
+      status: 'error',
+      lastError: 'Repository access was removed',
+      defaultBranch: 'main',
+      lastSyncedAt,
+      fileCount: 5,
+    });
+  });
+
+  it('fills the model defaults for a row that predates them', () => {
+    const conn = base as unknown as IOrgGitHubLakeConnectionDocument;
+    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({
+      enabled: true,
+      status: 'connected',
+      lastError: null,
+      defaultBranch: null,
+      lastSyncedAt: null,
+    });
+  });
+});
 
 describe('resolveConnectableLake', () => {
   beforeEach(() => {

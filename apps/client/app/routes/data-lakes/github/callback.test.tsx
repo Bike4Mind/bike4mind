@@ -1,0 +1,96 @@
+import { StrictMode } from 'react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render } from '@testing-library/react';
+
+const h = vi.hoisted(() => ({
+  search: { current: {} as Record<string, string> },
+  navigate: vi.fn(),
+  openManager: vi.fn(),
+  completeMutate: vi.fn(),
+  toastError: vi.fn(),
+  toastSuccess: vi.fn(),
+}));
+
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => h.navigate,
+  useSearch: () => h.search.current,
+}));
+vi.mock('@client/app/stores/useDataLakeWizardStore', () => ({
+  useDataLakeWizardStore: (selector: (s: { openManager: typeof h.openManager }) => unknown) =>
+    selector({ openManager: h.openManager }),
+}));
+vi.mock('@client/app/hooks/data/githubLake', () => ({
+  useCompleteLakeGitHubConnect: () => ({ mutate: h.completeMutate }),
+}));
+vi.mock('sonner', () => ({ toast: { error: h.toastError, success: h.toastSuccess } }));
+
+import GitHubLakeCallbackPage from './callback';
+import { readGitHubLakeConnectHandoff, saveGitHubLakeConnectHandoff } from '@client/app/utils/githubLakeConnectHandoff';
+
+const AUTHORIZE_URL = 'https://github.com/login/oauth/authorize?client_id=c&state=s1';
+const assign = vi.fn();
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  sessionStorage.clear();
+  saveGitHubLakeConnectHandoff({ dataLakeId: 'lake1', authorizeUrl: AUTHORIZE_URL });
+  vi.stubGlobal('location', { ...window.location, assign });
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('GitHubLakeCallbackPage', () => {
+  it('posts the single-use code exactly once, even under StrictMode double effects', () => {
+    h.search.current = { installation_id: '42', code: 'c1', state: 's1' };
+    render(
+      <StrictMode>
+        <GitHubLakeCallbackPage />
+      </StrictMode>
+    );
+    expect(h.completeMutate).toHaveBeenCalledTimes(1);
+    expect(h.completeMutate).toHaveBeenCalledWith({ state: 's1', code: 'c1', installationId: 42 }, expect.any(Object));
+  });
+
+  it('lands on the lake in the manager and clears the handoff once the connect settles', () => {
+    h.search.current = { installation_id: '42', code: 'c1', state: 's1' };
+    render(<GitHubLakeCallbackPage />);
+
+    const [, options] = h.completeMutate.mock.calls[0];
+    options.onSuccess({ repositoryFullName: 'acme/docs' });
+    options.onSettled();
+
+    expect(h.toastSuccess).toHaveBeenCalledWith(expect.stringContaining('acme/docs'));
+    expect(h.navigate).toHaveBeenCalledWith({ to: '/' });
+    expect(h.openManager).toHaveBeenCalledWith('mine', 'lake1');
+    expect(readGitHubLakeConnectHandoff()).toBeNull();
+  });
+
+  it("shows the server's reason when binding fails", () => {
+    h.search.current = { installation_id: '42', code: 'c1', state: 's1' };
+    render(<GitHubLakeCallbackPage />);
+
+    const [, options] = h.completeMutate.mock.calls[0];
+    options.onError({ response: { data: { error: 'The GitHub App was installed on all repositories.' } } });
+    expect(h.toastError).toHaveBeenCalledWith('The GitHub App was installed on all repositories.');
+  });
+
+  it('bounces an install with no code through authorize, keeping the installation id', () => {
+    h.search.current = { installation_id: '42', state: 's1' };
+    render(<GitHubLakeCallbackPage />);
+
+    expect(assign).toHaveBeenCalledWith(AUTHORIZE_URL);
+    expect(readGitHubLakeConnectHandoff()).toMatchObject({ installationId: 42 });
+    expect(h.completeMutate).not.toHaveBeenCalled();
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
+  it('returns to the lake with a cancel notice when the user declines on GitHub', () => {
+    h.search.current = { error: 'access_denied', state: 's1' };
+    render(<GitHubLakeCallbackPage />);
+
+    expect(h.toastError).toHaveBeenCalledWith('GitHub connection cancelled.');
+    expect(h.openManager).toHaveBeenCalledWith('mine', 'lake1');
+    expect(h.completeMutate).not.toHaveBeenCalled();
+  });
+});

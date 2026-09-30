@@ -1586,6 +1586,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     datalakeTag: string,
     options?: { includeDeleted?: boolean }
   ): Promise<IFabFileDocument[]>;
+  /** countByDriveConnectionIdInDataLake's GitHub twin: the number a GitHub disconnect will purge. */
+  countByGitHubConnectionIdInDataLake(githubConnectionId: string, datalakeTag: string): Promise<number>;
   /**
    * The Drive file ids a given ingest batch has already UPLOADED a FabFile for. This is what a
    * resumed ingest slice subtracts from its fresh walk, so it must exclude a row whose bytes never

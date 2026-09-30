@@ -48,6 +48,7 @@ import LakeHealthBadge from '@client/app/components/datalake/LakeHealthBadge';
 import DuplicateAdmissionsChip from '@client/app/components/datalake/DuplicateAdmissionDialog';
 import LakeFindingsChip from '@client/app/components/datalake/LakeFindingsDialog';
 import LakeDriveStatusChip from '@client/app/components/datalake/LakeDriveStatusChip';
+import LakeGitHubStatusChip from '@client/app/components/datalake/LakeGitHubStatusChip';
 import { isDraftLake, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
 import type { IDataLakeBatchSummary } from '@bike4mind/common';
 import AddExistingFilesModal from './AddExistingFilesModal';
@@ -640,9 +641,10 @@ export function LakeInfoPanel({
               Connector-fed
             </Chip>
           )}
-          {/* Attached-source marker: this panel is where a user comes to inspect or delete a lake,
+          {/* Attached-source markers: this panel is where a user comes to inspect or delete a lake,
               and it previously gave no sign a Drive folder was feeding it (#1645). */}
           <LakeDriveStatusChip lakeId={lake.id} organizationId={lake.organizationId} />
+          <LakeGitHubStatusChip lakeId={lake.id} organizationId={lake.organizationId} />
           {/* Derived retrievability health (#1666): reachable-content share + affected-file drill-down.
               Advisory only. Fetched lazily for the lake in view; renders nothing for an empty lake. */}
           <LakeHealthBadge lakeId={lake.id} failedFileCount={failedCount} />

@@ -117,6 +117,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   findByDriveConnectionIdInDataLake: vi.fn(),
   countByDriveConnectionIdInDataLake: vi.fn(),
   findByGitHubConnectionIdInDataLake: vi.fn(),
+  countByGitHubConnectionIdInDataLake: vi.fn(),
   findDriveFileIdsByBatchId: vi.fn(),
   markUploaded: vi.fn(),
   markFailedIfNotAlready: vi.fn(),

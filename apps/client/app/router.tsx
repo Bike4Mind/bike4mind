@@ -1,6 +1,7 @@
 import { lazy, Suspense, useState } from 'react';
 import { captureUtmParams } from '@client/app/utils/utmCapture';
 import { beaconVisit } from '@client/app/utils/visitBeacon';
+import type { GitHubLakeCallbackSearch } from '@client/app/utils/githubLakeCallbackStep';
 import {
   createRouter,
   createRoute,
@@ -68,6 +69,7 @@ const SubscribePage = lazy(() => import('./routes/subscribe'));
 const ArtifactsDemoPage = lazy(() => import('./routes/artifacts-demo'));
 const AdminEmergencyPage = lazy(() => import('./routes/admin-emergency'));
 const GoogleDriveCallbackPage = lazy(() => import('./routes/google-drive/callback'));
+const GitHubLakeCallbackPage = lazy(() => import('./routes/data-lakes/github/callback'));
 const HomePage = lazy(() => import('./routes/index'));
 const Admin = lazy(() => import('./routes/admin'));
 const QuestsPage = lazy(() => import('./routes/quests'));
@@ -843,6 +845,25 @@ const googleDriveCallbackRoute = createRoute({
   },
 });
 
+// Data-lake GitHub App return: both its Setup URL and its OAuth Callback URL point here.
+const gitHubLakeCallbackRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/data-lakes/github/callback',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <GitHubLakeCallbackPage />
+    </Suspense>
+  ),
+  // installation_id is String()-coerced: the default search parser has already turned it into a number.
+  validateSearch: (search: Record<string, unknown>): GitHubLakeCallbackSearch => ({
+    installation_id: optionalStringParam(search, 'installation_id'),
+    code: optionalStringParam(search, 'code'),
+    state: optionalStringParam(search, 'state'),
+    error: optionalStringParam(search, 'error'),
+    setup_action: optionalStringParam(search, 'setup_action'),
+  }),
+});
+
 // Subscribe route (replaces /subscribe.tsx)
 const subscribeRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1143,6 +1164,7 @@ const routeTree = rootRoute.addChildren([
   verifyEmailChangeRoute,
   adminEmergencyRoute,
   googleDriveCallbackRoute,
+  gitHubLakeCallbackRoute,
   subscribeRoute,
   activateRoute,
   adminRoute,

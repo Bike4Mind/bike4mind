@@ -46,7 +46,7 @@ export interface IOrgGitHubLakeConnection {
 
 export interface IOrgGitHubLakeConnectionDocument extends IOrgGitHubLakeConnection, IMongoDocument {}
 
-/** API response shape for the lake manager. */
+/** API response shape for the lake manager. Credential- and claim-free. */
 export interface IOrgGitHubLakeConnectionResponse {
   id: string;
   accountLogin: string;
@@ -54,6 +54,13 @@ export interface IOrgGitHubLakeConnectionResponse {
   repositoryFullName: string;
   connectedBy: string;
   connectedAt: Date;
+  enabled: boolean;
+  status: GitHubLakeConnectionStatus;
+  lastError: string | null;
+  defaultBranch: string | null;
+  lastSyncedAt: Date | null;
+  /** Files this connection has ingested into the lake - what a disconnect permanently deletes. */
+  fileCount: number;
 }
 
 export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrgGitHubLakeConnectionDocument> {

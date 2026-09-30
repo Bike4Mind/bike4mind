@@ -57,8 +57,10 @@ const POLICY_MESSAGES: Record<InstallationPolicyViolation, string> = {
     'The GitHub App installation cannot read repository contents. Accept its requested permissions on GitHub, then connect again.',
 };
 
+/** Model defaults (enabled true, status 'connected') are applied here too, for rows that predate them. */
 export function toGitHubLakeConnectionResponse(
-  conn: IOrgGitHubLakeConnectionDocument
+  conn: IOrgGitHubLakeConnectionDocument,
+  fileCount: number
 ): IOrgGitHubLakeConnectionResponse {
   return {
     id: conn.id,
@@ -67,6 +69,12 @@ export function toGitHubLakeConnectionResponse(
     repositoryFullName: conn.repositoryFullName,
     connectedBy: conn.connectedBy,
     connectedAt: conn.connectedAt,
+    enabled: conn.enabled !== false,
+    status: conn.status ?? 'connected',
+    lastError: conn.lastError ?? null,
+    defaultBranch: conn.defaultBranch ?? null,
+    lastSyncedAt: conn.lastSyncedAt ?? null,
+    fileCount,
   };
 }
 

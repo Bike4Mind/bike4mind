@@ -39,9 +39,9 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetDataLakes: () => ({ data: [] }),
   useDuplicatePrefixLake: () => prefixClash.current,
 }));
-// SourceSelectionStep now renders DriveConnectAction, which pulls in React Query (useConfig /
+// SourceSelectionStep renders LakeSourceConnectActions, which pulls in React Query (useConfig /
 // lake-connection hooks); stub it so this wizard test needs no QueryClientProvider.
-vi.mock('@client/app/components/DataLakeWizard/steps/DriveConnectAction', () => ({
+vi.mock('@client/app/components/DataLakeWizard/steps/LakeSourceConnectActions', () => ({
   default: () => null,
 }));
 vi.mock('@client/app/components/DataLakeWizard/steps/DrivePendingConnectAction', () => ({

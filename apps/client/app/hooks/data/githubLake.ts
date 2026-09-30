@@ -1,0 +1,116 @@
+import { api } from '@client/app/contexts/ApiContext';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { GitHubLakeConnectionStatus } from '@bike4mind/common';
+import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
+
+/**
+ * Wire shape of GET /api/data-lakes/:id/github-connection - IOrgGitHubLakeConnectionResponse with
+ * its dates serialized. Must stay in sync with toGitHubLakeConnectionResponse (githubLakeConnection.ts).
+ */
+export type LakeGitHubConnection = {
+  id: string;
+  accountLogin: string;
+  repositoryId: number;
+  repositoryFullName: string;
+  connectedBy: string;
+  connectedAt: string;
+  enabled: boolean;
+  status: GitHubLakeConnectionStatus;
+  lastError: string | null;
+  defaultBranch: string | null;
+  lastSyncedAt: string | null;
+  /** Files this connection has ingested into the lake - disconnecting deletes all of them. */
+  fileCount: number;
+};
+
+export type GitHubLakeConnectUrls = { installUrl: string; authorizeUrl: string };
+
+export const lakeGitHubConnectionKey = (dataLakeId?: string) => ['lake-github-connection', dataLakeId];
+
+export const GITHUB_CONNECTION_ACTIVE_POLL_MS = 4_000;
+/** Keeps polling once connected for the same reason as DRIVE_CONNECTION_IDLE_POLL_MS (googleDrive.ts). */
+export const GITHUB_CONNECTION_IDLE_POLL_MS = 20_000;
+
+export function gitHubConnectionPollInterval(connection: LakeGitHubConnection | null | undefined): number | false {
+  if (!connection) return false;
+  return connection.status === 'syncing' ? GITHUB_CONNECTION_ACTIVE_POLL_MS : GITHUB_CONNECTION_IDLE_POLL_MS;
+}
+
+/**
+ * The repository feeding a lake, or null (a personal lake resolves null rather than 404, as Drive's
+ * does). `isError` is a genuine failure: missing lake, or a caller who is not an org owner/manager.
+ * Every GitHub lake route 403s while EnableDataLakeGitHub is off: a caller that can mount without the
+ * flag passes it as `enabled` (LakeSourceConnectActions, LakeGitHubStatusChip); GitHubConnectAction
+ * only ever mounts behind it.
+ */
+export function useLakeGitHubConnection(dataLakeId?: string, enabled = true) {
+  return useQuery({
+    queryKey: lakeGitHubConnectionKey(dataLakeId),
+    enabled: !!dataLakeId && enabled,
+    queryFn: async () => {
+      const response = await api.get<{ connection: LakeGitHubConnection | null }>(
+        `/api/data-lakes/${dataLakeId}/github-connection`
+      );
+      return response.data.connection;
+    },
+    refetchInterval: query => (enabled ? gitHubConnectionPollInterval(query.state.data) : false),
+  });
+}
+
+/** Mint the signed install/authorize URLs for a lake (POST /api/data-lakes/:id/github-connection). */
+export function useStartLakeGitHubConnect() {
+  return useMutation({
+    mutationFn: async (dataLakeId: string) => {
+      const response = await api.post<GitHubLakeConnectUrls>(`/api/data-lakes/${dataLakeId}/github-connection`);
+      return response.data;
+    },
+  });
+}
+
+/** Bind the installed repository to the lake signed into `state` (POST /api/data-lakes/github-callback). */
+export function useCompleteLakeGitHubConnect() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { state: string; code: string; installationId: number }) => {
+      const response = await api.post<{ connection: LakeGitHubConnection }>('/api/data-lakes/github-callback', input);
+      return response.data.connection;
+    },
+    onSuccess: async () => {
+      // The lake id lives only inside the signed state, so refresh every lake's connection read.
+      await queryClient.invalidateQueries({ queryKey: ['lake-github-connection'] });
+    },
+  });
+}
+
+/** Queue a manual re-sync (POST /api/data-lakes/:id/github-connection/sync, 202). */
+export function useResyncLakeGitHub() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (dataLakeId: string) => {
+      await api.post(`/api/data-lakes/${dataLakeId}/github-connection/sync`);
+    },
+    onSuccess: async (_data, dataLakeId) => {
+      await queryClient.invalidateQueries({ queryKey: lakeGitHubConnectionKey(dataLakeId) });
+    },
+  });
+}
+
+/**
+ * Disconnect a lake's repository. The route purges every file the connection ingested before it
+ * answers, so the lake's file/count queries go stale along with the connection itself.
+ */
+export function useDisconnectLakeGitHub() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (dataLakeId: string) => {
+      await api.delete(`/api/data-lakes/${dataLakeId}/github-connection`);
+    },
+    onSuccess: async (_data, dataLakeId) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: lakeGitHubConnectionKey(dataLakeId) }),
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) }),
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot }),
+      ]);
+    },
+  });
+}

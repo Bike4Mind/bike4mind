@@ -46,6 +46,8 @@ const useLakeDriveConnection = vi.fn(() => ({ data: null as unknown, isError: fa
 vi.mock('@client/app/hooks/data/googleDrive', () => ({
   useLakeDriveConnection: () => useLakeDriveConnection(),
 }));
+// The GitHub chip reads the flag cache and its own query; it has its own suite (LakeGitHubStatusChip.test.tsx).
+vi.mock('@client/app/components/datalake/LakeGitHubStatusChip', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
   return {

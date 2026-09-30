@@ -1,0 +1,174 @@
+import type { ReactNode } from 'react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes';
+import type { LakeGitHubConnection } from '@client/app/hooks/data/githubLake';
+
+const h = vi.hoisted(() => ({
+  connection: { current: null as LakeGitHubConnection | null },
+  isError: { current: false },
+  startMutate: vi.fn(),
+  resyncMutate: vi.fn(),
+  disconnectMutate: vi.fn(),
+  saveHandoff: vi.fn(),
+  toastError: vi.fn(),
+}));
+
+vi.mock('@client/app/hooks/data/githubLake', () => ({
+  useLakeGitHubConnection: () => ({ data: h.connection.current, isLoading: false, isError: h.isError.current }),
+  useStartLakeGitHubConnect: () => ({ mutate: h.startMutate, isPending: false }),
+  useResyncLakeGitHub: () => ({ mutate: h.resyncMutate, isPending: false }),
+  useDisconnectLakeGitHub: () => ({ mutate: h.disconnectMutate, isPending: false }),
+}));
+vi.mock('@client/app/utils/githubLakeConnectHandoff', () => ({ saveGitHubLakeConnectHandoff: h.saveHandoff }));
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: h.toastError } }));
+
+import GitHubConnectAction from './GitHubConnectAction';
+
+const appTheme = extendTheme({ ...getThemeConfig() });
+const wrap = (ui: ReactNode) => render(<CssVarsProvider theme={appTheme}>{ui}</CssVarsProvider>);
+
+const connected = (over: Partial<LakeGitHubConnection> = {}): LakeGitHubConnection => ({
+  id: 'c1',
+  accountLogin: 'acme',
+  repositoryId: 100,
+  repositoryFullName: 'acme/docs',
+  connectedBy: 'u1',
+  connectedAt: '2026-01-01T00:00:00.000Z',
+  enabled: true,
+  status: 'connected',
+  lastError: null,
+  defaultBranch: 'main',
+  lastSyncedAt: null,
+  fileCount: 3,
+  ...over,
+});
+
+const URLS = {
+  installUrl: 'https://github.com/apps/lake-app/installations/new?state=s1',
+  authorizeUrl: 'https://github.com/login/oauth/authorize?client_id=c&state=s1',
+};
+
+const assign = vi.fn();
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  h.connection.current = null;
+  h.isError.current = false;
+  vi.stubGlobal('location', { ...window.location, assign });
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+/** Resolve the start mutation the way react-query would, with the server's connect URLs. */
+const resolveStart = () => {
+  const [, options] = h.startMutate.mock.calls[0];
+  options.onSuccess(URLS);
+};
+
+describe('GitHubConnectAction', () => {
+  it('offers Connect GitHub, with its read-only disclosure, when the lake has no repository', () => {
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('github-connect-btn')).not.toBeDisabled();
+    expect(screen.getByTestId('github-access-disclosure')).toHaveTextContent(/Only select repositories/);
+  });
+
+  it('saves the handoff for the callback page, then sends the browser to the install page', () => {
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    fireEvent.click(screen.getByTestId('github-connect-btn'));
+    expect(h.startMutate).toHaveBeenCalledWith('lake1', expect.any(Object));
+
+    resolveStart();
+    expect(h.saveHandoff).toHaveBeenCalledWith({ dataLakeId: 'lake1', authorizeUrl: URLS.authorizeUrl });
+    expect(assign).toHaveBeenCalledWith(URLS.installUrl);
+  });
+
+  it('does not leave for GitHub when the handoff cannot be saved, since the callback could not finish', () => {
+    h.saveHandoff.mockImplementation(() => {
+      throw new Error('SecurityError');
+    });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    fireEvent.click(screen.getByTestId('github-connect-btn'));
+
+    resolveStart();
+    expect(assign).not.toHaveBeenCalled();
+    expect(h.toastError).toHaveBeenCalledWith(expect.stringMatching(/session storage/));
+  });
+
+  it("surfaces the server's reason when the connect cannot start", () => {
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    fireEvent.click(screen.getByTestId('github-connect-btn'));
+
+    const [, options] = h.startMutate.mock.calls[0];
+    options.onError({ response: { data: { error: '"Lake" is curated.' } } });
+    expect(h.toastError).toHaveBeenCalledWith('"Lake" is curated.');
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('disables the action when the status query errors (non-manager)', () => {
+    h.isError.current = true;
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('github-connect-unavailable-btn')).toBeDisabled();
+    expect(screen.queryByTestId('github-connect-btn')).toBeNull();
+  });
+
+  it('shows the connected repository and branch with re-sync and disconnect', () => {
+    h.connection.current = connected();
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('github-connection-status')).toHaveTextContent('acme/docs @ main');
+    expect(screen.getByTestId('github-connection-status-chip')).toHaveTextContent('Connected');
+    expect(screen.queryByTestId('github-access-disclosure')).toBeNull();
+    expect(screen.queryByTestId('github-connection-last-error')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('github-resync-btn'));
+    expect(h.resyncMutate).toHaveBeenCalledWith('lake1', expect.any(Object));
+  });
+
+  it.each([
+    ['syncing', connected({ status: 'syncing' }), 'Syncing'],
+    ['paused (archived lake)', connected({ enabled: false }), 'Paused'],
+    ['lost access', connected({ status: 'error', lastError: 'Repository access was removed' }), 'Needs reconnect'],
+  ])('blocks re-sync while %s, as sync.ts would 409 or fail it', (_name, connection, label) => {
+    h.connection.current = connection;
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('github-connection-status-chip')).toHaveTextContent(label);
+    expect(screen.getByTestId('github-resync-btn')).toBeDisabled();
+  });
+
+  it('does NOT report a sync that stopped short as Connected', () => {
+    h.connection.current = connected({ lastError: 'GitHub rate-limited this sync.' });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('github-connection-status-chip')).toHaveTextContent('Stopped short');
+    expect(screen.getByTestId('github-connection-last-error')).toHaveTextContent('rate-limited');
+  });
+
+  it('requires a confirm step that states the purge and the file count before disconnecting', () => {
+    h.connection.current = connected({ fileCount: 42 });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+
+    fireEvent.click(screen.getByTestId('github-disconnect-btn'));
+    expect(h.disconnectMutate).not.toHaveBeenCalled();
+    expect(screen.getByTestId('github-disconnect-warning')).toHaveTextContent(/permanently deletes the 42 files/);
+
+    fireEvent.click(screen.getByTestId('github-disconnect-confirm-btn'));
+    expect(h.disconnectMutate).toHaveBeenCalledWith('lake1', expect.any(Object));
+  });
+
+  it('uses singular wording for exactly one file', () => {
+    h.connection.current = connected({ fileCount: 1 });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    fireEvent.click(screen.getByTestId('github-disconnect-btn'));
+    expect(screen.getByTestId('github-disconnect-warning')).toHaveTextContent('the 1 file this');
+  });
+
+  it('backs out of the confirm without disconnecting', () => {
+    h.connection.current = connected();
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    fireEvent.click(screen.getByTestId('github-disconnect-btn'));
+    fireEvent.click(screen.getByTestId('github-disconnect-cancel-btn'));
+    expect(screen.queryByTestId('github-disconnect-warning')).toBeNull();
+    expect(h.disconnectMutate).not.toHaveBeenCalled();
+  });
+});
