@@ -502,10 +502,16 @@ jobs:
             # permission rule is consulted. What covers that case is the job's fork gate:
             # `head.repo.full_name == github.repository` means the branch is in this repo, so
             # anyone who could ship such a file could edit this workflow directly.
-            # NOT fenced, and stated rather than left to be discovered: `$HOME`, and the
-            # process CWD, which on a hosted runner is the checkout. A blanket deny is
-            # not available for either - the checkout itself lives under `$HOME`
-            # (`/home/runner/work/...`), so denying `$HOME` would deny the fold. The
+            # `$HOME`'s dotfiles and dot-directories ARE fenced, on both arms: they are
+            # where startup files live, and some post-agent programs are not ours to bound
+            # per-step - checkout's post step runs `git submodule foreach` over a copy of
+            # `~/.gitconfig`, and claude-code-action's own post-agent steps run programs
+            # with no `env:` this file controls. The checkout under `work/` is not a
+            # dotfile, so the fold is unaffected.
+            # NOT fenced, and stated rather than left to be discovered: the rest of
+            # `$HOME`, and the process CWD, which on a hosted runner is the checkout. A
+            # blanket deny is not available for either - the checkout itself lives under
+            # `$HOME` (`/home/runner/work/...`), so denying `$HOME` would deny the fold. The
             # bound is therefore per-step, and the invariant a new step has to satisfy,
             # stated as the class rather than as the two instances that have bitten so
             # far: EVERY PROGRAM A POST-AGENT STEP RUNS MUST HAVE ALL OF ITS IMPLICIT,
@@ -583,7 +589,7 @@ jobs:
             # ScheduleWakeup makes sense only in an interactive session; this
             # process is single-shot, so hard-block the tool call itself
             # rather than relying on the prompt bullet above alone.
-            --disallowedTools "Edit(/${{ runner.temp }}/**),Edit(//home/runner/work/_*/**),Edit(//home/runner/runners/**),Edit(//home/runner/.bun/**),${{ env.FOLD_MODE == 'true' && 'Bash,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**),Edit(.github/**),Edit(.git/**),Edit(.claude/**),Edit(.mcp.json),Edit(.gitattributes),Edit(**/.gitattributes),Edit(.gitignore),Edit(**/.gitignore)' || 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**)' }}"
+            --disallowedTools "Edit(/${{ runner.temp }}/**),Edit(//home/runner/work/_*/**),Edit(//home/runner/runners/**),Edit(//home/runner/.bun/**),Edit(//home/runner/.*),Edit(//home/runner/.*/**),${{ env.FOLD_MODE == 'true' && 'Bash,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**),Edit(.github/**),Edit(.git/**),Edit(.claude/**),Edit(.mcp.json),Edit(.gitattributes),Edit(**/.gitattributes),Edit(.gitignore),Edit(**/.gitignore)' || 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**)' }}"
             # 40 was too tight: a normal feature PR (~25 files / ~2k additions)
             # spawns ~8 parallel review agents, and the orchestration overhead
             # (read skill, fetch PR/diff/linked issues, fan-out, classify, post)

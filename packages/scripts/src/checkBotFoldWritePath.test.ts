@@ -1221,6 +1221,10 @@ const ALWAYS_ON_EDIT_FENCES = [
   'Edit(//home/runner/work/_*/**)',
   'Edit(//home/runner/runners/**)',
   'Edit(//home/runner/.bun/**)',
+  // Every $HOME dotfile and dot-directory: startup files for post-agent programs this file
+  // cannot give an `env:`, such as checkout's post step and the action's own trailing steps.
+  'Edit(//home/runner/.*)',
+  'Edit(//home/runner/.*/**)',
 ];
 
 /** The runner the three `/home/runner/...` fences above are a premise about. */
