@@ -3,7 +3,12 @@ import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { DATA_LAKE_SHARE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { dataLakeService } from '@bike4mind/services';
 import { DATA_LAKE_ACCESS_ROLES, DATA_LAKE_PRINCIPAL_TYPES } from '@bike4mind/common';
-import { dataLakeRepository, dataLakeAccessGrantRepository, userRepository } from '@bike4mind/database';
+import {
+  withTransaction,
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  userRepository,
+} from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
@@ -59,21 +64,24 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES })
     const { id } = req.query;
     const input = GrantInput.parse(req.body);
     const ctx = await toAccessContext(req);
-
-    // The gate hands back the active grants it read to make its own decision, so the manage gate
-    // inside the service is applied to that same set rather than re-reading the lake and its grants.
-    const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
-
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
-    const data = await dataLakeService.grantLakeAccess(actor, lake, grants, input, {
-      db: {
-        dataLakeAccessGrants: dataLakeAccessGrantRepository,
-        users: userRepository,
-        ...lakeConfigAuditDb,
-      },
-      logger: req.logger,
+
+    // The gate has to be INSIDE the callback: a revoke that commits mid-request collides with this
+    // write on the lake doc, and the retry must re-read the grants rather than reuse the stale set.
+    const data = await withTransaction(async () => {
+      const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
+        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      });
+
+      return dataLakeService.grantLakeAccess(actor, lake, grants, input, {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          users: userRepository,
+          ...lakeConfigAuditDb,
+        },
+        logger: req.logger,
+      });
     });
 
     return res.json({ data });
@@ -85,21 +93,24 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES })
       principalId: firstQueryValue(req.query.principalId),
     });
     const ctx = await toAccessContext(req);
-
-    // The gate hands back the active grants it read to make its own decision, so the manage gate
-    // inside the service is applied to that same set rather than re-reading the lake and its grants.
-    const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
-
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
-    const data = await dataLakeService.revokeLakeAccess(actor, lake, grants, input, {
-      db: {
-        dataLakeAccessGrants: dataLakeAccessGrantRepository,
-        users: userRepository,
-        ...lakeConfigAuditDb,
-      },
-      logger: req.logger,
+
+    // The gate has to be INSIDE the callback: a revoke that commits mid-request collides with this
+    // write on the lake doc, and the retry must re-read the grants rather than reuse the stale set.
+    const data = await withTransaction(async () => {
+      const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
+        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      });
+
+      return dataLakeService.revokeLakeAccess(actor, lake, grants, input, {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          users: userRepository,
+          ...lakeConfigAuditDb,
+        },
+        logger: req.logger,
+      });
     });
 
     return res.json({ data });
