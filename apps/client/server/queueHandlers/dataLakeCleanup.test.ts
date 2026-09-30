@@ -229,9 +229,15 @@ describe('dataLakeCleanup consumer', () => {
     await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
     expect(logger.error).toHaveBeenCalledWith(
       expect.stringContaining('releasing the accepted purge'),
-      expect.objectContaining({ dataLakeId: 'lake1' })
+      expect.objectContaining({ dataLakeId: 'lake1', purgeClaimId: 'claim-a' })
     );
     expect(h.releasePurgingToDeleted).toHaveBeenCalledWith('lake1', 'claim-a');
+  });
+
+  it('rejects dispatch when the release itself fails, so SQS retries rather than stranding the lake purging', async () => {
+    h.cleanup.mockRejectedValue(new BadRequestError('must be soft-deleted'));
+    h.releasePurgingToDeleted.mockRejectedValueOnce(new Error('mongo down'));
+    await expect(dispatch(makeEvent(payload), {} as never, logger)).rejects.toThrow('mongo down');
   });
 
   it('releases a legacy message with no claim id anonymously', async () => {

@@ -2802,12 +2802,20 @@ describe('DataLakeRepository purge-accept claims (#1744)', () => {
 
   it('releases purging -> deleted so a refused sweep leaves a visible, retryable lake', async () => {
     const created = await dataLakeRepository.create(baseLake({ slug: 'purge-release', status: 'deleted' }));
-    await dataLakeRepository.claimPurging(created.id, 'claim-a');
+    await DataLakeModel.updateOne({ _id: created.id }, { $set: { status: 'purging' } });
 
     expect(await dataLakeRepository.releasePurgingToDeleted(created.id)).toBe(true);
     const released = await DataLakeModel.findById(created.id).lean();
     expect(released?.status).toBe('deleted');
     expect(released).not.toHaveProperty('purgeClaimId');
+  });
+
+  it('anonymous release never releases a keyed claim', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'purge-release-anon-keyed', status: 'deleted' }));
+    await dataLakeRepository.claimPurging(created.id, 'claim-a');
+
+    expect(await dataLakeRepository.releasePurgingToDeleted(created.id)).toBe(false);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('purging');
   });
 
   it('releases by claim id only the claim that id took, never a concurrent one', async () => {

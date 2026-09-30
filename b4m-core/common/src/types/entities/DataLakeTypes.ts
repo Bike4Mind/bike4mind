@@ -963,7 +963,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * With `claimId`, releases only the claim `claimPurging` stored under that id: the accepting route
    * and the consumer (via the id carried on the queue message) both pass it, so neither a failed
    * request nor a redelivered message can release a concurrent claim, which would requeue #1744.
-   * Without it, any `purging` claim - kept only for queue messages enqueued before the id rode along.
+   * Without it, only a claim that has no id (taken before ids were stored), for queue messages enqueued before the id rode along.
    */
   releasePurgingToDeleted(id: string, claimId?: string): Promise<boolean>;
   /**

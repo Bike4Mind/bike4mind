@@ -21,6 +21,7 @@ import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { sendToQueue } from '@server/utils/sqs';
+import type { DataLakeCleanupMessage } from '@server/queueHandlers/dataLakeCleanup';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { disableDriveConnectionForLake, enableDriveConnectionForLake } from '@server/integrations/google/drive/common';
 import {
@@ -244,7 +245,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
             dataLakeId: lake.id,
             actor,
             purgeClaimId,
-          });
+          } satisfies DataLakeCleanupMessage);
         } catch (err) {
           // A claim that lands with no message behind it is the one unrecoverable outcome here: no
           // list shows a 'purging' lake, restore and delete both refuse it, and there is no queued

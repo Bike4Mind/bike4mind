@@ -140,8 +140,9 @@ const DataLakeSchema = new mongoose.Schema(
     // Archive batch key (see IDataLake.filesArchivedAt): mirrors filesDeletedAt but on the
     // archive axis. Set only through claimFilesArchivedAt; cleared by unarchive and by restore.
     filesArchivedAt: { type: Date },
-    // Identifies which request's claimPurging put the lake in 'purging', so a request that failed
-    // after its own attempt can release only that claim, never a concurrent one. Unset on release.
+    // Identifies which request's claimPurging put the lake in 'purging'. It also rides on the cleanup
+    // queue message, so the accepting request and the consumer each release only that claim, never a
+    // concurrent one. Unset on release.
     purgeClaimId: { type: String },
     // Per-lake opt-in to lake memory (see IDataLake.lakeMemoryEnabled). Gates both extraction-on-ingest
     // and recall injection for this lake; `EnableLakeMemory` gates availability of the option at all. No
@@ -1074,9 +1075,10 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
   async releasePurgingToDeleted(id: string, claimId?: string): Promise<boolean> {
     // Mirror of claimPurging, and conditional for the same reason: only a lake still sitting in
     // 'purging' may be released, so this can never resurrect one another transition has moved on.
-    // With a claimId, only that claim: the anonymous release could undo a concurrent purge's.
+    // With a claimId, only that claim. Without one, only a claim stored with no id (taken before ids
+    // were stored), so a legacy message can never release a keyed claim.
     const res = await this.dataLakeModel.updateOne(
-      { _id: id, status: 'purging', ...(claimId !== undefined && { purgeClaimId: claimId }) },
+      { _id: id, status: 'purging', purgeClaimId: claimId !== undefined ? claimId : { $exists: false } },
       { $set: { status: 'deleted' }, $unset: { purgeClaimId: 1 } }
     );
     return res.modifiedCount === 1;

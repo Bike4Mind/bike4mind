@@ -38,6 +38,7 @@ const CleanupPayload = z.object({
   // that claim. Optional for messages enqueued before this field existed.
   purgeClaimId: z.string().optional(),
 });
+export type DataLakeCleanupMessage = z.input<typeof CleanupPayload>;
 
 /**
  * Background consumer for the phase-2 data-lake hard-delete sweep, offloaded off the request path
@@ -146,8 +147,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     //
     // Keyed by the message's claim id: SQS is at-least-once, so a redelivered message can be refused
     // after a NEWER purge claimed the lake, and an anonymous release would reopen that purge's lake
-    // for restore while its sweep is queued. Only a legacy message with no id falls back to the
-    // anonymous release.
+    // for restore while its sweep is queued. Only a legacy message with no id falls back to releasing
+    // a claim that has no id either.
     if (err instanceof BadRequestError) {
       logger.error('[dataLakes] cleanup sweep refused by its own guard; releasing the accepted purge', {
         dataLakeId: parsedLakeId,
