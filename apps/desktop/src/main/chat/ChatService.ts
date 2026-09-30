@@ -35,6 +35,7 @@ import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
 import { projectDisplayName } from './project/git';
+import { ProjectContextCache } from './project/projectContext';
 import { resolveWorkspace } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
@@ -346,6 +347,9 @@ export class ChatService {
    * than quietly falling back to 0 and earning a fresh chain. Dropped with the session.
    */
   private readonly turnRelay = new Map<string, { hops: number; sends: number }>();
+
+  /** Instructions and file tree per session, frozen so the cached system prompt never moves. */
+  private readonly projectContext = new ProjectContextCache();
 
   /** Resolved serverConfig fields, cached per environment URL (it is one round trip). */
   private serverConfigCache: { environmentUrl: string; config: ResolvedServerConfig } | null = null;
@@ -1111,8 +1115,19 @@ export class ChatService {
         session,
         (attachment: ChatAttachment) => this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null)
       );
+      const project = session.mode === 'code' ? session.project : undefined;
+      const projectContext = project
+        ? await this.projectContext.get(session.id, project.workingDirectory, project.directory)
+        : '';
       wire.unshift(
-        buildSystemMessage(roots, !!media, !!host, this.deps.mcp?.connectedServerNames() ?? [], session.project)
+        buildSystemMessage(
+          roots,
+          !!media,
+          !!host,
+          this.deps.mcp?.connectedServerNames() ?? [],
+          session.project,
+          projectContext
+        )
       );
       const catalog = await this.deps.models?.list();
       const maxTokens = catalog?.models.find(option => option.id === session.model)?.maxOutputTokens;
@@ -2217,7 +2232,8 @@ function buildSystemMessage(
   media: boolean,
   host: boolean,
   mcpServers: readonly string[],
-  project?: ChatProject
+  project?: ChatProject,
+  projectContext = ''
 ): CompletionMessage {
   if (roots.length === 0) {
     return {
@@ -2250,6 +2266,12 @@ function buildSystemMessage(
       'Always pass absolute paths. Any path outside those folders is denied;',
       'if you need one, ask the user to share it - from the chip row above the message box in a',
       'Code session, or the sidebar card in any conversation.',
+      ...(projectContext
+        ? [
+            'The project instructions and file tree are already below: do not list the root or re-read',
+            'CLAUDE.md or AGENTS.md; use glob_files for anything deeper than the tree shows.',
+          ]
+        : []),
       'Explore with grep_search and glob_files, not grep, find or ls through bash_execute: they need',
       'no approval, skip ignored and binary files, and are faster. Search before you read - find the',
       'symbol with grep_search, then read only the lines around it with file_read offset and limit.',
@@ -2272,6 +2294,7 @@ function buildSystemMessage(
       ...mcpGuidance(mcpServers),
       '',
       DESKTOP_ARTIFACT_PROMPT,
+      ...(projectContext ? ['', projectContext] : []),
     ].join('\n'),
   };
 }
