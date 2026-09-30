@@ -9,12 +9,15 @@ import Switch from '@mui/joy/Switch';
 import ToggleButtonGroup from '@mui/joy/ToggleButtonGroup';
 import Typography from '@mui/joy/Typography';
 import { useColorScheme, useTheme } from '@mui/joy/styles';
-import { CloseIcon, ContrastIcon, GearIcon, ServerIcon, SparkIcon } from './icons';
+import { updateAttention, updateSummary } from '@shared/update';
+import { CloseIcon, ContrastIcon, DownloadIcon, GearIcon, ServerIcon, SparkIcon } from './icons';
 import { McpServersSettings } from './McpServersSettings';
 import { NavItem } from './SessionList';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from './layout';
 import { promptSuggestionsSummary, usePromptSuggestions } from './promptSuggestions';
 import { THEME_MODES, currentThemeMode, themeModeSummary, type ResolvedThemeMode, type ThemeMode } from './themeMode';
+import { UpdateSettings } from './UpdateSettings';
+import { useAppUpdate, type AppUpdateController } from './useAppUpdate';
 import { useMcpServers, type McpServersController } from './useMcpServers';
 
 /**
@@ -36,6 +39,12 @@ export interface CustomizeEntry {
   summary: string;
   /** Set only when the entry needs the user; also surfaced on the Customize nav row. */
   attention?: string;
+  /**
+   * How to colour that chip. Danger by default, because every entry that had one until now was
+   * reporting something broken. An update is not broken - drawing "Restart" in the same red as
+   * a dead MCP server would read as a fault the user has to go and fix.
+   */
+  attentionColor?: 'danger' | 'primary';
   control?: ReactNode;
   onOpen?: () => void;
 }
@@ -135,6 +144,24 @@ function suggestionsEntry(enabled: boolean, toggle: () => void): CustomizeEntry 
 }
 
 /**
+ * The app's own version, and the only place an update is offered.
+ *
+ * It sits last so a broken MCP server still wins the one chip the nav row has room for: a
+ * server that is down is stopping work now, and an update can wait for the screen to be opened.
+ */
+function updateEntry(controller: AppUpdateController): CustomizeEntry {
+  const attention = updateAttention(controller.state);
+  return {
+    id: 'updates',
+    icon: <DownloadIcon />,
+    label: 'Updates',
+    summary: updateSummary(controller.state),
+    ...(attention ? { attention, attentionColor: 'primary' as const } : {}),
+    control: <UpdateSettings controller={controller} />,
+  };
+}
+
+/**
  * Every app-level setting, built once and read by both the nav row and the screen.
  *
  * The row needs only `attention` out of this, but it has to come from the same list the screen
@@ -142,6 +169,7 @@ function suggestionsEntry(enabled: boolean, toggle: () => void): CustomizeEntry 
  */
 function useCustomizeEntries(): CustomizeEntry[] {
   const mcp = useMcpServers();
+  const update = useAppUpdate();
   const { mode, setMode } = useColorScheme();
   const theme = useTheme();
   const [suggestions, toggleSuggestions] = usePromptSuggestions();
@@ -150,6 +178,7 @@ function useCustomizeEntries(): CustomizeEntry[] {
     appearanceEntry(mode, setMode, theme.palette.mode),
     suggestionsEntry(suggestions, toggleSuggestions),
     mcpEntry(mcp),
+    updateEntry(update),
   ];
 }
 
@@ -172,7 +201,12 @@ function EntrySection({ entry }: { entry: CustomizeEntry }) {
           </Typography>
         </Stack>
         {entry.attention && (
-          <Chip size="sm" variant="soft" color="danger" data-testid="customize-entry-attention">
+          <Chip
+            size="sm"
+            variant="soft"
+            color={entry.attentionColor ?? 'danger'}
+            data-testid="customize-entry-attention"
+          >
             {entry.attention}
           </Chip>
         )}
@@ -202,7 +236,7 @@ function EntrySection({ entry }: { entry: CustomizeEntry }) {
  * card worth the space.
  */
 export function CustomizeNavItem({ onOpen }: { onOpen: () => void }) {
-  const attention = useCustomizeEntries().find(entry => entry.attention)?.attention;
+  const flagged = useCustomizeEntries().find(entry => entry.attention);
 
   return (
     <NavItem
@@ -210,9 +244,14 @@ export function CustomizeNavItem({ onOpen }: { onOpen: () => void }) {
       label="Customize"
       onClick={onOpen}
       end={
-        attention ? (
-          <Chip size="sm" variant="soft" color="danger" data-testid="customize-attention-chip">
-            {attention}
+        flagged?.attention ? (
+          <Chip
+            size="sm"
+            variant="soft"
+            color={flagged.attentionColor ?? 'danger'}
+            data-testid="customize-attention-chip"
+          >
+            {flagged.attention}
           </Chip>
         ) : undefined
       }

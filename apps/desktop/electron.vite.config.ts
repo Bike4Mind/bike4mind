@@ -18,8 +18,12 @@ export default defineConfig(({ mode }) => {
       // always be empty; substituting only this one expression leaves every other
       // `process.env` lookup in main working normally. Empty for an unbranded fork, which
       // then has no hosted option in the environment picker.
+      // The release feed is baked in the same way and for the same reasons, plus one more:
+      // this repo is public, and a feed url is a host or a bucket behind one. Empty for a fork,
+      // which then builds an app with updates switched off rather than one pointed at ours.
       define: {
         'process.env.B4M_DEFAULT_API_URL': JSON.stringify(process.env.B4M_DEFAULT_API_URL ?? ''),
+        'process.env.B4M_UPDATE_FEED_URL': JSON.stringify(process.env.B4M_UPDATE_FEED_URL ?? ''),
       },
       plugins: [externalizeDepsPlugin()],
     },

@@ -29,6 +29,7 @@
     "@mui/system": "^5.15.15",
     "@tanstack/react-router": "^1.170.17",
     "axios": "1.18.0",
+    "electron-updater": "^6.8.9",
     "eventsource-parser": "^3.1.0",
     "gray-matter": "^4.0.3",
     "react": "^19.2.7",
