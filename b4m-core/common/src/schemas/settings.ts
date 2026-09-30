@@ -650,6 +650,9 @@ export const OrchestrationDefaultsSchema = z.object({
     'lattice_add_entity',
     'lattice_set_value',
     'lattice_create_rule',
+    // Data lake writes (create a lake, persist a file into one)
+    'create_data_lake',
+    'save_content_to_data_lake',
     // NOTE: image_generation / edit_image / excel_generation were intentionally
     // moved to `allowedTools` above (see note there) and are no longer denied.
   ]),

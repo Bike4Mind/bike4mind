@@ -40,7 +40,7 @@ import {
   useCreateLakeFromDrive,
   useDataLakeBatchCompletionSync,
 } from './dataLakeWizard';
-import { slugifyDataLakeName } from './dataLakeSlug';
+import { slugifyDataLakeName } from '@bike4mind/common';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { useUser } from '@client/app/contexts/UserContext';
 import type { DataLakeStatus, IUserDocument } from '@bike4mind/common';

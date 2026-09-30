@@ -94,6 +94,7 @@ export class ChatCompletionInvoke {
       enableLattice,
       promptMode,
       skipAutoOffers,
+      deniedTools,
       systemPrompt,
       tools,
       projectId,
@@ -436,6 +437,7 @@ export class ChatCompletionInvoke {
         // dispatchQuest ships to the async worker, so a field omitted here is silently dropped on
         // every path except `wait: true`.
         skipAutoOffers,
+        deniedTools,
         systemPrompt,
         promptMeta: PromptMetaZodSchema.parse(quest.promptMeta),
         sessionId: session.id,

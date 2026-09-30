@@ -29,6 +29,7 @@ import {
 } from './authorizeLakeWrite';
 import type { LakeGrant } from './manageRule';
 import { createDataLake } from './createDataLake';
+import { TAG_PREFIX_UNAVAILABLE_CODE } from './tagPrefixCollision';
 import { archiveDataLake } from './archiveDataLake';
 import { deleteDataLake } from './deleteDataLake';
 import type { RetrievalIndexRemoval } from './ports';
@@ -2636,7 +2637,10 @@ describe('createDataLake', () => {
     const find = vi.fn().mockResolvedValue([lake({ id: 'other', name: 'Sibling', fileTagPrefix: 'xy:' })]);
     await expect(
       createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db: { dataLakes: { create, find } } })
-    ).rejects.toThrow(/overlaps an existing data lake/i);
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/overlaps an existing data lake/i),
+      additionalInfo: { code: TAG_PREFIX_UNAVAILABLE_CODE },
+    });
     expect(create).not.toHaveBeenCalled();
   });
 
@@ -2653,7 +2657,10 @@ describe('createDataLake', () => {
     const find = vi.fn().mockResolvedValue([]);
     await expect(
       createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db: { dataLakes: { create, find } } })
-    ).rejects.toThrow(/overlaps an existing data lake/i);
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/overlaps an existing data lake/i),
+      additionalInfo: { code: TAG_PREFIX_UNAVAILABLE_CODE },
+    });
   });
 
   it('does not mislabel a duplicate-key collision on a DIFFERENT index as a prefix overlap', async () => {
@@ -2684,7 +2691,10 @@ describe('createDataLake', () => {
         { db: { dataLakes: { create: vi.fn(), find } } },
         'orgA'
       )
-    ).rejects.toThrow(/overlaps an existing data lake in this organization/i);
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/overlaps an existing data lake in this organization/i),
+      additionalInfo: { code: TAG_PREFIX_UNAVAILABLE_CODE },
+    });
 
     const mine = lake({ id: 'other', name: 'My Other Lake', fileTagPrefix: 'xy:', createdByUserId: 'owner' });
     await expect(
@@ -2694,6 +2704,27 @@ describe('createDataLake', () => {
         { db: { dataLakes: { create: vi.fn(), find: vi.fn().mockResolvedValue([mine]) } } }
       )
     ).rejects.toThrow(/"My Other Lake"/);
+  });
+
+  it('refuses a prefix that collides with a built-in registry lake, before touching the slug', async () => {
+    // Deleting the { code } tag on this throw (or collidesWithRegistryPrefix's call site) makes
+    // create_data_lake's disambiguation stop treating this as a collision, and the raw 4xx
+    // surfaces instead - the exact regression the code-based match exists to catch.
+    const registryPrefix = DATA_LAKES[0].fileTagPrefix;
+    const create = vi.fn();
+    const find = vi.fn().mockResolvedValue([]);
+    await expect(
+      createDataLake(
+        'owner',
+        { name: 'X', slug: 'xy', fileTagPrefix: registryPrefix },
+        { db: { dataLakes: { create, find } } }
+      )
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/reserved by a built-in knowledge base/i),
+      additionalInfo: { code: TAG_PREFIX_UNAVAILABLE_CODE },
+    });
+    expect(create).not.toHaveBeenCalled();
+    expect(find).not.toHaveBeenCalled();
   });
 
   it('allows a prefix that only collides outside the create scope', async () => {

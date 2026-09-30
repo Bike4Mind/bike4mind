@@ -366,6 +366,26 @@ function sourceDisabledReasonOf(contributed: ReadonlyMap<string, unknown>): stri
   return typeof reason === 'string' && reason.length > 0 ? reason : 'disabled by its source';
 }
 
+/**
+ * Does this run's `autoDisabled: false` lift a disable the same source put on the row? Only a disable
+ * credited to that source counts: the row in force holds it (discovery outranks seed for
+ * `availability`), and the superseded discovery row names the source as the group's contributor. A
+ * promotion, seed or operator disable is not the source's to take back. Operator rows never reach
+ * `base` and outrank discovery on the read path, so a manual disable stands either way.
+ */
+function clearsOwnSourceDisable(
+  candidate: Candidate,
+  contributed: ReadonlyMap<string, unknown>,
+  base: Record<string, unknown>,
+  prior: readonly ICatalogContributor[] | undefined
+): boolean {
+  if (contributed.get('autoDisabled') !== false || base.autoDisabled !== true) return false;
+  const source = candidate.sourceOfField.get('autoDisabled');
+  return (
+    source !== undefined && prior?.some(entry => entry.group === 'availability' && entry.source === source) === true
+  );
+}
+
 function planOne(
   candidate: Candidate,
   existing: ResolvedCatalogRecord | undefined,
@@ -380,8 +400,18 @@ function planOne(
   if (presentationElsewhere) {
     for (const key of FEED_CLAIMABLE_FIELDS) contributed.delete(key);
   }
+  // A source's false is a clearance, not a claim: written anywhere else it would take over the
+  // `availability` group of every row the source can vouch for.
+  const clearsSourceDisable = clearsOwnSourceDisable(
+    candidate,
+    contributed,
+    base,
+    input.priorContributors?.get(candidate.modelId)
+  );
+  if (contributed.get('autoDisabled') === false && !clearsSourceDisable) contributed.delete('autoDisabled');
   const draft: Record<string, unknown> = { ...base };
   for (const [key, value] of contributed) draft[key] = value;
+  if (clearsSourceDisable && !contributed.has('autoDisabledReason')) delete draft.autoDisabledReason;
 
   const lifecyclePatch = contributed.get('lifecycle');
   let claimsLifecycle = contributed.has('lifecycle');

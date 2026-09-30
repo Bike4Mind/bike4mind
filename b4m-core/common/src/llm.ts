@@ -283,6 +283,13 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    */
   skipAutoOffers: z.boolean().optional(),
   /**
+   * Tools to withhold on this turn, unioned with `session.disabledTools` and applied at every
+   * denylist site including the final pass after buildTools. A client may send it, but it can only add:
+   * a route merges its own server-derived denials (dataLakeToolsDeniedFor) over any
+   * client value, so a caller can only ADD denials, never lift one.
+   */
+  deniedTools: z.array(z.string()).optional(),
+  /**
    * Caller-supplied system-prompt text. Rendered as a defended, deference-postured block
    * appended last in the system-prompt stack. Reached by both POST /api/chat and /api/ai/llm.
    *
