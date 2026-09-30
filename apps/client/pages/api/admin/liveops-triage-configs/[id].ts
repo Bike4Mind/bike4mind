@@ -11,6 +11,7 @@ import {
   liveopsTriageRunRepository,
   liveopsTriageConfigAuditLogRepository,
 } from '@bike4mind/database';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@server/utils/errors';
 import { z } from 'zod';
@@ -75,7 +76,7 @@ const UpdateConfigSchema = z.object({
   postWhenNoErrors: z.boolean().optional(),
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
     try {
       if (!req.user?.isAdmin) {

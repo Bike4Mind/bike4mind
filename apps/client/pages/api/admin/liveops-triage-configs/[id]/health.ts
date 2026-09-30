@@ -12,6 +12,7 @@
 import { getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { liveopsTriageConfigRepository, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@server/utils/errors';
 import { isValidObjectId } from '@server/utils/objectId';
@@ -38,7 +39,7 @@ interface HealthCheckResult {
   timestamp: string;
 }
 
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   try {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

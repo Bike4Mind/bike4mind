@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError, BadRequestError } from '@server/utils/errors';
 import { MailService, type TestEmailResult } from '@server/utils/mailer';
@@ -10,7 +11,7 @@ const TestEmailSchema = z.object({
   to: z.email().optional(),
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .use(
     rateLimit({
       limit: 5,

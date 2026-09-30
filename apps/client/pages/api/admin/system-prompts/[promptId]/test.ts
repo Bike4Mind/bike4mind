@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { substitutePromptVariables } from '@server/utils/systemPrompts/defaults';
@@ -63,7 +64,7 @@ function findUnfilledVariables(content: string, providedVariables: Record<string
  * Test a system prompt with variable substitution. Returns a substitution
  * preview and token estimate; does not execute the LLM.
  */
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }

@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { Quest } from '@bike4mind/database';
 import { ForbiddenError } from '@server/utils/errors';
 import { resolveQuestModelType } from '@server/utils/questModelType';
-import { IChatHistoryItemDocument } from '@bike4mind/common';
+import { ApiKeyScope, IChatHistoryItemDocument } from '@bike4mind/common';
 
 interface AnalyticsMetricResponse {
   id: string;
@@ -160,7 +160,7 @@ function mapQuestToAnalyticsMetric(quest: IChatHistoryItemDocument): AnalyticsMe
   };
 }
 
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Admin access required');
   }

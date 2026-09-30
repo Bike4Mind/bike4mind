@@ -1,7 +1,7 @@
 import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ForbiddenError } from '@server/utils/errors';
-import { IMongoDocument } from '@bike4mind/common';
+import { ApiKeyScope, IMongoDocument } from '@bike4mind/common';
 import { entitlementsForPriceIds } from '@client/lib/entitlements/registry';
 import { SubscriptionOwnerType, ISubscription } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
@@ -15,7 +15,7 @@ interface RequestQuery {
   subscriptionId: string;
 }
 
-const handler = baseApi().delete(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).delete(
   asyncHandler(async (req, res) => {
     // Check admin authorization
     if (!req.user?.isAdmin) {
@@ -39,8 +39,7 @@ const handler = baseApi().delete(
 
     // Find subscription in unified Subscription model
     const subscription = (await subscriptionRepository.findByStripeSubscriptionId(subscriptionId)) as
-      | (ISubscription & IMongoDocument)
-      | null;
+      (ISubscription & IMongoDocument) | null;
 
     if (!subscription) {
       throw new NotFoundError('Subscription not found');

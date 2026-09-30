@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { User, OverwatchUserFirstSeen } from '@bike4mind/database';
 import { ForbiddenError } from '@server/utils/errors';
@@ -12,7 +13,7 @@ const bodySchema = z.object({
   skip: z.number().int().nonnegative().default(0),
 });
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Admin access required');
   }
