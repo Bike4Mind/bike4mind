@@ -75,6 +75,18 @@ describe('CookieConsentBanner', () => {
     expect(screen.getByTestId('cookie-consent-decline-btn')).toBeInTheDocument();
   });
 
+  // Nobody asked for the first-run banner, so it must not pull focus off the page.
+  it('leaves focus alone on the first-run ask', () => {
+    render(
+      <TestWrapper>
+        <CookieConsentBanner />
+      </TestWrapper>
+    );
+
+    expect(screen.getByRole('region', { name: 'Cookie settings' })).toBeInTheDocument();
+    expect(document.body).toHaveFocus();
+  });
+
   it('hides banner when consent was previously granted', () => {
     localStorageMock.setItem('cookie_consent', 'granted');
 
@@ -478,6 +490,17 @@ describe('CookieConsentBanner', () => {
       expect(screen.queryByText(/By clicking/)).not.toBeInTheDocument();
     });
 
+    // Both triggers come after the banner in the tab order, so a keyboard user who opened it
+    // has to be taken there.
+    it('moves focus into the manage screen when it opens', () => {
+      localStorageMock.setItem('cookie_consent', 'denied');
+
+      renderAndReopen();
+
+      expect(screen.getByTestId('cookie-consent-cancel-btn')).toHaveFocus();
+      expect(screen.getByRole('region', { name: 'Cookie settings' })).toBe(screen.getByTestId('cookie-consent-banner'));
+    });
+
     it('withdraws a grant: stores the decline, tells gtag, and reloads so the pixels unload', () => {
       localStorageMock.setItem('cookie_consent', 'granted');
       renderAndReopen();
@@ -590,6 +613,14 @@ describe('CookieConsentBanner', () => {
       expect(screen.getByText(/By clicking/)).toBeInTheDocument();
       expect(screen.queryByText('Cookie settings.')).not.toBeInTheDocument();
       expect(screen.queryByTestId('cookie-consent-cancel-btn')).not.toBeInTheDocument();
+    });
+
+    // The first-run ask is already on screen, so opening it changes nothing visible; focus is
+    // the only sign the request landed.
+    it('moves focus to Decline when opened before any decision', () => {
+      renderAndReopen();
+
+      expect(screen.getByTestId('cookie-consent-decline-btn')).toHaveFocus();
     });
   });
 });
