@@ -76,7 +76,7 @@ const SITE_COUNT = new Map<string, number>([
 ]);
 
 const RECEIVER =
-  /(?:^|[^\w$.])((?:[\w$]+[?!]?\.)*[\w$]+)[?!]?\s*\.(update|updateMany)(?:<(?:[^<>()]|<[^<>()]*>)*>)?\(/g;
+  /(?:^|[^\w$.])((?:[\w$]+[?!]?\.)*[\w$]+)[?!]?\s*\.(update|updateGuarded|updateMany)(?:<(?:[^<>()]|<[^<>()]*>)*>)?\(/g;
 const isRepositoryReceiver = (r: string) => /Repository$/.test(r) || /(?:^|\.)db\.[\w$]+$/.test(r);
 
 /** Returns the text of argument `index` of the call whose `(` is at `open`, or null when unbalanced or absent. */

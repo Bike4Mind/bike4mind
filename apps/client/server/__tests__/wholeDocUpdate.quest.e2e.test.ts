@@ -118,7 +118,7 @@ describe('quest: QuestMasterFeature status writes', () => {
     ]);
   });
 
-  it('do not resurrect a quest soft-deleted after the in-memory read', async () => {
+  it('does not resurrect a quest soft-deleted after the in-memory read (guards the soft-delete update filter)', async () => {
     const deletedAt = new Date();
     const quest = await readThenRace(id => Quest.collection.updateOne(questOid(id), { $set: { deletedAt } }));
 

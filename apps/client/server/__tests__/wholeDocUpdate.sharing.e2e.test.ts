@@ -1,8 +1,8 @@
 /**
  * Real-Mongo regression for the sharing flows' converted project writes (see
- * wholeDocUpdate.money.e2e.test.ts for the hazard). `addFiles` used to write the whole project it
- * read, so a share pushed onto `project.users` meanwhile was dropped, and a soft delete landing
- * meanwhile was undone by the snapshot's `deletedAt: null`.
+ * wholeDocUpdate.money.e2e.test.ts for the hazard). `addFiles` writes named project fields, and
+ * `updateShareableFiles` used to write each whole file doc it read, so a concurrent share on that
+ * file was dropped.
  *
  * Consumes the built dist (`pnpm turbo:core:build`); integration lane only.
  */
@@ -81,7 +81,7 @@ describe('sharing: projectService.addFiles', () => {
     expect(after?.fileIds).toEqual([fileId]);
   });
 
-  it('refuses, and does not resurrect, a project soft-deleted after its read', async () => {
+  it('refuses, and does not resurrect, a project soft-deleted after its read (guards the soft-delete update filter)', async () => {
     const { projectId, fileId } = await seed();
     const deletedAt = new Date();
 

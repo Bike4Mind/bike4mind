@@ -162,7 +162,12 @@ const saveSelectionHandler = asyncHandler(async (req, res) => {
   });
 
   // Leaf path: `metadata` also holds webhook/OAuth state that other writers set concurrently.
-  await mcpServerRepository.update({ id: mcpServer.id, 'metadata.selectedRepositories': formattedRepos });
+  // A stored `metadata: null` cannot take a dotted `$set`, so seed the object instead.
+  if (mcpServer.metadata == null) {
+    await mcpServerRepository.update({ id: mcpServer.id, metadata: { selectedRepositories: formattedRepos } });
+  } else {
+    await mcpServerRepository.update({ id: mcpServer.id, 'metadata.selectedRepositories': formattedRepos });
+  }
 
   req.logger.info('Successfully updated repository selection', {
     userId,
