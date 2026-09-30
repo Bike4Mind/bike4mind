@@ -29,6 +29,8 @@ const h = vi.hoisted(() => ({
   disableGitHubConnectionForLake: vi.fn(),
   enableGitHubConnectionForLake: vi.fn(),
   inTransaction: [] as string[],
+  commitError: undefined as Error | undefined,
+  retryAfterAbort: false,
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as the serve/gears tests).
@@ -64,7 +66,12 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: async (fn: () => unknown) => {
     h.inTransaction.push('enter');
     try {
-      return await fn();
+      // Simulates a transient abort after a successful first attempt, then the retry.
+      if (h.retryAfterAbort) await fn();
+      const result = await fn();
+      // Simulates a commit that fails AFTER the callback succeeded (e.g. an unknown commit result).
+      if (h.commitError) throw h.commitError;
+      return result;
     } finally {
       h.inTransaction.push('exit');
     }
@@ -166,6 +173,44 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
     expect(res.status).not.toHaveBeenCalledWith(202);
   });
 
+  it('releases the claim when the transaction fails after the claim, so the lake cannot strand in purging', async () => {
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.commitError = new Error('commit result unknown');
+    const { res } = makeRes();
+    try {
+      await expect(
+        (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res)
+      ).rejects.toThrow(/commit result unknown/);
+    } finally {
+      h.commitError = undefined;
+    }
+
+    expect(h.releasePurgingToDeleted).toHaveBeenCalledWith('lake1');
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('does NOT release when a retry loses the claim its aborted first attempt had taken', async () => {
+    // Attempt 1 claimed and was then aborted (rolled back); attempt 2 finds a concurrent purge holds
+    // the claim. Releasing here would put THAT purge's lake back in the deleted list mid-sweep.
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.acceptDataLakePurge
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('Data lake must be soft-deleted before cleanup'));
+    h.retryAfterAbort = true;
+    const { res } = makeRes();
+    try {
+      await expect(
+        (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res)
+      ).rejects.toThrow(/soft-deleted/i);
+    } finally {
+      h.retryAfterAbort = false;
+    }
+
+    expect(h.acceptDataLakePurge).toHaveBeenCalledTimes(2);
+    expect(h.releasePurgingToDeleted).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
   it('does NOT release on a successful enqueue', async () => {
     h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
     const { res } = makeRes();
@@ -182,6 +227,9 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
     await expect(
       (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res)
     ).rejects.toThrow(/soft-deleted/i);
+    // The callback threw, so the transaction rolled the claim back; releasing could only undo a
+    // concurrent purge that won it.
+    expect(h.releasePurgingToDeleted).not.toHaveBeenCalled();
 
     expect(h.sendToQueue).not.toHaveBeenCalled();
     expect(res.status).not.toHaveBeenCalledWith(202);

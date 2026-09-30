@@ -31,7 +31,9 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
  * Each race case pauses the manage write right after its gate read the grants, commits a revoke of
  * the curator, then lets the write continue. Both sides write the lake document inside a transaction,
  * so Mongo aborts the manage write and the retry must refuse the curator. Ordering is by latch,
- * never by timing. Needs a real replica set (a standalone mongod rejects writes in a session), and
+ * never by timing. Each case wraps the service itself, so this proves the collision, not the route
+ * wiring - that each route puts its gate and write inside `withTransaction` is pinned by the mocked
+ * enter/exit tests in the route suites. Needs a real replica set (a standalone mongod rejects writes in a session), and
  * consumes the built dist, so `pnpm turbo:core:build` must be current.
  */
 
@@ -68,19 +70,18 @@ const ctxFor = (userId: string): AccessContext => ({
   entitlementKeys: [],
 });
 
+const createUser = (name: string, s: string) =>
+  User.create({
+    name,
+    username: `${name}-${s}`,
+    email: `${name}-${s}@example.com`,
+    password: null,
+    hasUsablePassword: false,
+  });
+
 const seed = async (status: 'draft' | 'active' | 'deleted') => {
   const s = suffix();
-  const [owner, curator, reader] = await Promise.all(
-    ['owner', 'curator', 'reader'].map(name =>
-      User.create({
-        name,
-        username: `${name}-${s}`,
-        email: `${name}-${s}@example.com`,
-        password: null,
-        hasUsablePassword: false,
-      })
-    )
-  );
+  const [owner, curator] = await Promise.all(['owner', 'curator'].map(name => createUser(name, s)));
   const lake = await dataLakeRepository.create({
     name: `Lake ${s}`,
     slug: `lake-${s}`,
@@ -97,7 +98,7 @@ const seed = async (status: 'draft' | 'active' | 'deleted') => {
     role: 'curator',
     grantedByUserId: owner.id,
   });
-  return { owner, curator, reader, lake };
+  return { owner, curator, lake, s };
 };
 
 /**
@@ -245,7 +246,8 @@ describe('lake manage writes vs a concurrent grant revoke (replica set)', () => 
   });
 
   it('aborts a curator grant whose own grant was revoked mid-request, leaving no row for the grantee', async () => {
-    const { owner, curator, reader, lake } = await seed('active');
+    const { owner, curator, lake, s } = await seed('active');
+    const reader = await createUser('reader', s);
     const { repo, atGate, release } = pausingGrants();
     let attempts = 0;
 
@@ -292,12 +294,13 @@ describe('lake manage writes vs a concurrent grant revoke (replica set)', () => 
   it('a same-value stamp still changes the lake document', async () => {
     const { owner, lake } = await seed('active');
     await dataLakeRepository.update({ id: lake.id, lastUpdatedByUserId: owner.id });
-    const before = (await dataLakeRepository.findById(lake.id))!.updatedAt;
-    await new Promise(r => setTimeout(r, 5));
+    // Backdated without touching the timestamp plugin, so the comparison needs no real wait.
+    const before = new Date(0);
+    await DataLakeModel.updateOne({ _id: lake.id }, { $set: { updatedAt: before } }, { timestamps: false });
 
     await dataLakeRepository.update({ id: lake.id, lastUpdatedByUserId: owner.id });
 
     const after = (await dataLakeRepository.findById(lake.id))!.updatedAt;
-    expect(new Date(after!).getTime()).toBeGreaterThan(new Date(before!).getTime());
+    expect(new Date(after!).getTime()).toBeGreaterThan(before.getTime());
   });
 });

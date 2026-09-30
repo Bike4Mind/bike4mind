@@ -224,29 +224,39 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
         // land in that gap. Transactional like promote, so a grant revoke committing mid-request
         // collides on the lake doc and the service's own gate re-runs on retry; the enqueue stays
         // outside, after the commit, so a retried claim never sends a second message.
-        await withTransaction(() =>
-          dataLakeService.acceptDataLakePurge(actor, lake.id, {
-            db: {
-              dataLakes: dataLakeRepository,
-              dataLakeAccessGrants: dataLakeAccessGrantRepository,
-              ...lakeConfigAuditDb,
-            },
-            logger: req.logger,
-          })
-        );
+        //
+        // `claimed` is reset per attempt and set only once the service returned, i.e. this attempt
+        // holds the claim. A throw from INSIDE the callback aborts the transaction and rolls the
+        // claim back, so there is nothing to release - and releasing anyway could undo a concurrent
+        // purge that won the claim this attempt lost. Only a failure after the callback succeeded
+        // (the commit itself, or the enqueue) can leave our claim standing with no message behind it.
+        let claimed = false;
         try {
+          await withTransaction(async () => {
+            claimed = false;
+            await dataLakeService.acceptDataLakePurge(actor, lake.id, {
+              db: {
+                dataLakes: dataLakeRepository,
+                dataLakeAccessGrants: dataLakeAccessGrantRepository,
+                ...lakeConfigAuditDb,
+              },
+              logger: req.logger,
+            });
+            claimed = true;
+          });
           await sendToQueue(getSourceQueueUrl('dataLakeCleanupQueue'), { dataLakeId: lake.id, actor });
         } catch (err) {
           // A claim that lands with no message behind it is the one unrecoverable outcome here: no
           // list shows a 'purging' lake, restore and delete both refuse it, and there is no queued
           // message to alarm on or replay - so without this release it would need a manual DB edit.
           // Releasing puts it back in the deleted list for the owner to retry, and the 5xx tells
-          // them the purge did not take.
+          // them the purge did not take. On an ambiguous commit that never landed the release is a
+          // no-op (it is conditional on 'purging').
           //
           // Safe even if the message DID land and only the ack was lost: the sweep's guard accepts
           // 'deleted' as well as 'purging', so a delivery that survives still completes the purge
           // the user asked for.
-          await dataLakeRepository.releasePurgingToDeleted(lake.id);
+          if (claimed) await dataLakeRepository.releasePurgingToDeleted(lake.id);
           throw err;
         }
         return res.status(202).json({ success: true, queued: true });

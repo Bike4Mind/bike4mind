@@ -599,4 +599,21 @@ describe('lake-document stamp', () => {
     });
     expect(record).toHaveBeenCalled();
   });
+
+  it('warns on revoke too, falling back to console when no logger is wired', async () => {
+    const { adapters, lakeArgs, updateLake, record } = makeAdapters({
+      existing: grantRow({ principalId: 'u1', role: 'reader' }),
+    });
+    updateLake.mockResolvedValueOnce(null as never);
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await revokeLakeAccess(owner, ...lakeArgs, revokeInput, adapters);
+      expect(consoleWarn).toHaveBeenCalledWith(expect.stringContaining('not found for the actor stamp'), {
+        dataLakeId: 'lake1',
+      });
+      expect(record).toHaveBeenCalled();
+    } finally {
+      consoleWarn.mockRestore();
+    }
+  });
 });
