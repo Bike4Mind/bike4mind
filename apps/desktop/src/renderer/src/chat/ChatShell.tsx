@@ -13,7 +13,6 @@ import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
 import { MessageThread } from './MessageThread';
-import { PendingApprovalBar } from './PendingApprovalBar';
 import { columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
 import { SessionChips } from './SessionChips';
@@ -25,7 +24,7 @@ import { contextTokens, describeActivity, latestReply, type ComposerUsage } from
 import { useAccountCredits } from './useAccountCredits';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
-import { useConversation, useModelCatalog, usePendingApprovals, useSessionStatuses, useSessions } from './useChat';
+import { useConversation, useModelCatalog, useSessionStatuses, useSessions } from './useChat';
 import { usePromptSuggestion } from './usePromptSuggestion';
 import { useFileDrop } from './useFileDrop';
 import { useSkills } from './useSkills';
@@ -123,7 +122,6 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   const skills = useSkills(activeId);
   const catalog = useModelCatalog();
   const statuses = useSessionStatuses();
-  const pendingApprovals = usePendingApprovals();
   const [collapsed, setCollapsed] = useState(false);
   const [screen, setScreen] = useState<ChatScreen>('conversation');
   // Window chrome, so it is remembered per machine rather than per conversation. Seeded from
@@ -412,13 +410,6 @@ export function ChatShell({ account }: { account?: ReactNode }) {
               </Alert>
             </Box>
           )}
-
-          <PendingApprovalBar
-            pending={pendingApprovals}
-            openSessionId={activeId}
-            onRespond={conversation.respondToApproval}
-            onOpenSession={setActiveId}
-          />
 
           {codeError && (
             <Box sx={contentColumnSx}>

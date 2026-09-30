@@ -5,7 +5,6 @@ import type {
   ChatAttachment,
   ChatMessage,
   ChatModelOption,
-  ChatPendingApproval,
   ChatQueuedMessage,
   ChatSession,
   ChatSessionStatus,
@@ -169,41 +168,6 @@ export function useSessionStatuses(): ReadonlyMap<string, ChatSessionStatus> {
   }, []);
 
   return statuses;
-}
-
-/**
- * Every tool call waiting on the user, in any conversation.
- *
- * Pushed whole from main rather than derived from the stream events this window witnessed, for
- * the reason the status map is: an autonomous session parks at the approval gate without ever
- * addressing this window, and a request nobody can see is a run that has silently stalled.
- */
-export function usePendingApprovals(): ChatPendingApproval[] {
-  const [pending, setPending] = useState<ChatPendingApproval[]>([]);
-
-  useEffect(() => {
-    let live = true;
-    let pushed = false;
-
-    const unsubscribe = window.b4m.chat.onPendingApprovals(next => {
-      pushed = true;
-      setPending(next);
-    });
-
-    // Subscribing first is what stops a change landing in the gap being missed; the snapshot is
-    // then only useful if no push has already superseded it.
-    void window.b4m.chat.getPendingApprovals().then(snapshot => {
-      if (!live || pushed) return;
-      setPending(snapshot);
-    });
-
-    return () => {
-      live = false;
-      unsubscribe();
-    };
-  }, []);
-
-  return pending;
 }
 
 export interface ModelCatalogController {

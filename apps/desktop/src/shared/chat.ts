@@ -1018,29 +1018,6 @@ export type SpawnRefusal = 'depth' | 'concurrency' | 'no-project' | 'empty-promp
 export type RelayRefusal = 'hops' | 'fan-out' | 'no-target' | 'archived' | 'self' | 'empty-message' | 'unavailable';
 
 /**
- * A tool call parked at the approval gate, as the cross-session inbox lists it.
- *
- * The reason this exists as its own channel: a tool-call approval is drawn inside the
- * conversation that raised it, and an autonomous session the renderer is not showing raises
- * approvals nobody can see. The sidebar row says that session needs the user, but a badge is
- * not an answer - this is what lets them give one without first working out which row to click.
- */
-export interface ChatPendingApproval {
-  approvalId: string;
-  sessionId: string;
-  /** The conversation's title as it was when the tool asked, for naming the row. */
-  sessionTitle: string;
-  toolName: string;
-  detail: string;
-  diff?: ChatDiff;
-  /** True when "always in this chat" must not be offered; see ChatToolCall.approvalIrreversible. */
-  irreversible?: boolean;
-  /** The ways this call may be allowed; see ChatToolCall.approvalChoice. */
-  choice?: ChatApprovalChoice;
-  requestedAt: string;
-}
-
-/**
  * One tool round of a reply: what the model said, and then what it went on to run.
  *
  * Holds call IDS rather than the calls, so a call has exactly one home - the message's

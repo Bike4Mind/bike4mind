@@ -20,4 +20,13 @@ describe('IPC_CHANNELS', () => {
       expect(channel).not.toMatch(/token|secret|credential|device-code/);
     }
   });
+
+  // An approval is answered in the conversation that raised it and nowhere else. A channel
+  // carrying the whole pending set to any open window is what let one conversation's prompt
+  // interrupt another, so name the rule here rather than trusting review.
+  it('exposes no channel that feeds one conversation approvals from another', () => {
+    for (const channel of Object.values(IPC_CHANNELS)) {
+      expect(channel).not.toMatch(/pending-approval/);
+    }
+  });
 });

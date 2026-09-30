@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { ChatApprovalAnswer, ChatPendingApproval } from '@shared/chat';
+import type { ChatApprovalAnswer } from '@shared/chat';
 
 /**
  * A pending approval expires rather than waiting forever. The reply keeps streaming in main
@@ -10,15 +10,10 @@ const APPROVAL_TIMEOUT_MS = 10 * 60_000;
 
 interface PendingApproval {
   sessionId: string;
-  /** What the inbox shows for this request. See ChatPendingApproval. */
-  summary: ChatPendingApproval;
   /** False for a tool whose effect cannot be undone: 'always' is downgraded to 'once'. */
   remember: boolean;
   settle(answer: ChatApprovalAnswer): void;
 }
-
-/** Everything a caller has to say about a request beyond its key, for the inbox. */
-export type ApprovalDescription = Omit<ChatPendingApproval, 'approvalId' | 'sessionId' | 'requestedAt'>;
 
 /**
  * A recorded "always", replayed whole for a later identical call.
@@ -59,15 +54,10 @@ export interface ApprovalRequestOptions {
  * at one open conversation: the gate is what actually knows a background session is blocked.
  * Paired exactly - `settled` fires once for each `requested`, on every exit including timeout,
  * abort and dispose.
- *
- * `changed` fires whenever the pending SET moves, which is the signal the cross-session inbox
- * redraws on. It fires on paths `requested`/`settled` deliberately do not, such as an approval
- * dropped with its conversation.
  */
 export interface ApprovalGateListener {
   requested(sessionId: string): void;
   settled(sessionId: string): void;
-  changed(): void;
 }
 
 /**
@@ -103,13 +93,6 @@ export class ApprovalGate {
     return null;
   }
 
-  /** Everything waiting on the user right now, oldest first - the order it should be answered in. */
-  pendingApprovals(): ChatPendingApproval[] {
-    return [...this.pending.values()]
-      .map(entry => entry.summary)
-      .sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
-  }
-
   /**
    * Ask the user, and resolve once they answer. `announce` receives the id to show them; it is
    * called before any waiting so the request cannot be answered before the renderer knows it.
@@ -118,7 +101,6 @@ export class ApprovalGate {
     sessionId: string,
     key: string,
     signal: AbortSignal,
-    describe: ApprovalDescription,
     announce: (approvalId: string) => void,
     options: ApprovalRequestOptions = {}
   ): Promise<ChatApprovalAnswer> {
@@ -145,10 +127,7 @@ export class ApprovalGate {
           answer.decision === 'always' &&
           (!options.rememberable || (!!answer.optionId && options.rememberable.includes(answer.optionId)));
         if (keep) this.remember(sessionId, standingKey(key, answer.optionId), answer);
-        if (announced) {
-          this.listener?.settled(sessionId);
-          this.listener?.changed();
-        }
+        if (announced) this.listener?.settled(sessionId);
         resolve(answer.decision === 'always' && !keep ? { ...answer, decision: 'once' } : answer);
       };
 
@@ -157,12 +136,7 @@ export class ApprovalGate {
       // Unref so a pending approval never keeps the process alive on quit.
       timer.unref?.();
 
-      this.pending.set(approvalId, {
-        sessionId,
-        remember,
-        summary: { ...describe, approvalId, sessionId, requestedAt: new Date().toISOString() },
-        settle,
-      });
+      this.pending.set(approvalId, { sessionId, remember, settle });
       signal.addEventListener('abort', onAbort, { once: true });
       if (signal.aborted) {
         settle({ decision: 'deny' });
@@ -172,7 +146,6 @@ export class ApprovalGate {
       announced = true;
       this.listener?.requested(sessionId);
       announce(approvalId);
-      this.listener?.changed();
     });
   }
 
@@ -190,7 +163,6 @@ export class ApprovalGate {
         this.pending.delete(approvalId);
       }
     }
-    this.listener?.changed();
   }
 
   dispose(): void {

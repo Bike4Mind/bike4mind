@@ -42,7 +42,7 @@ describe('ChatService app-control tools', () => {
       streams.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
-    approvals = new ApprovalGate({ requested: vi.fn(), settled: vi.fn(), changed: vi.fn() });
+    approvals = new ApprovalGate({ requested: vi.fn(), settled: vi.fn() });
 
     service = new ChatService({
       store,

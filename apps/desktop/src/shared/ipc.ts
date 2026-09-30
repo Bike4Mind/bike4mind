@@ -10,7 +10,6 @@ import type {
   ChatArtifactLibrary,
   ChatAttachmentInput,
   ChatModelCatalog,
-  ChatPendingApproval,
   ChatQueueEvent,
   ChatQueuedMessage,
   ChatSession,
@@ -100,7 +99,6 @@ export const IPC_CHANNELS = {
   chatGetSessionStatuses: 'chat:get-session-statuses',
   /** main -> renderer push; one session started or stopped being busy. */
   chatSessionStatus: 'chat:session-status',
-  chatGetPendingApprovals: 'chat:get-pending-approvals',
   chatListSkills: 'chat:list-skills',
   /**
    * The one way a project's skills become loadable. Renderer -> main only, driven by the
@@ -108,8 +106,6 @@ export const IPC_CHANNELS = {
    * nothing the MODEL can reach may widen this - the same rule as toolsGrantAccess.
    */
   chatSetProjectSkillsTrusted: 'chat:set-project-skills-trusted',
-  /** main -> renderer push; the whole set of approvals waiting on the user, whenever it moves. */
-  chatPendingApprovals: 'chat:pending-approvals',
   mcpGetServers: 'mcp:get-servers',
   mcpAddServer: 'mcp:add-server',
   mcpUpdateServer: 'mcp:update-server',
@@ -304,16 +300,6 @@ export interface DesktopApi {
      * reads the stored title on its next list.
      */
     onSessionSummary(listener: (summary: ChatSessionSummary) => void): () => void;
-    /**
-     * Every tool call waiting on the user, in any conversation.
-     *
-     * Read once on mount for the same reason as the statuses above, and pushed whole rather
-     * than as deltas: the set is small, and a renderer that missed one push would otherwise be
-     * left showing an approval that has already been answered.
-     */
-    getPendingApprovals(): Promise<ChatPendingApproval[]>;
-    /** Subscribe to the pending-approval set; returns the unsubscribe. */
-    onPendingApprovals(listener: (pending: ChatPendingApproval[]) => void): () => void;
     /**
      * The skills this conversation can run as `/name`, for the composer picker. Scoped to the
      * session: a Chat session gets the user's own, a Code session also gets its project's once

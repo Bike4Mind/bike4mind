@@ -12,7 +12,6 @@ import type {
   ChatMessageSkill,
   ChatModelCatalog,
   ChatModelOption,
-  ChatPendingApproval,
   ChatProject,
   ChatQueuedMessage,
   ChatReplyRound,
@@ -410,17 +409,6 @@ export class ChatService {
     // A cancelled relay has no composer to go back to, so it lands in the transcript instead:
     // the user declined to let it RUN, which is not the same as never having received it.
     if (cancelled?.relay) void this.strandRelay(sessionId, [cancelled]).catch(() => undefined);
-  }
-
-  /**
-   * Every tool call waiting on the user, in any conversation.
-   *
-   * Read by the cross-session inbox. An autonomous session raises approvals inside a
-   * conversation nobody is looking at, so the answer has to be reachable from wherever the user
-   * actually is - see ChatPendingApproval.
-   */
-  pendingApprovals(): ChatPendingApproval[] {
-    return this.deps.approvals?.pendingApprovals() ?? [];
   }
 
   setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null> {
@@ -1644,7 +1632,7 @@ export class ChatService {
 
         // Asked BEFORE 'running' is announced, so the UI never shows a command as under way
         // while it is still waiting on the user, and nothing has run if they say no.
-        const gated = await this.awaitApproval(tool, call, context, sessionId, scope.title, messageId, signal);
+        const gated = await this.awaitApproval(tool, call, context, sessionId, messageId, signal);
         if (gated.settled) return gated.settled;
         // The user's choice becomes part of the call, so every later reader of this row - the
         // transcript, the stored session, the model on its next turn - sees what actually ran.
@@ -2144,7 +2132,6 @@ export class ChatService {
     call: ChatToolCall,
     context: ToolContext,
     sessionId: string,
-    sessionTitle: string,
     messageId: string,
     signal: AbortSignal
   ): Promise<ApprovalOutcome> {
@@ -2198,14 +2185,6 @@ export class ChatService {
       sessionId,
       prompt.key,
       signal,
-      {
-        sessionTitle,
-        toolName: call.name,
-        detail: prompt.detail,
-        ...(prompt.diff ? { diff: prompt.diff } : {}),
-        ...(prompt.irreversible ? { irreversible: true } : {}),
-        ...(choice ? { choice } : {}),
-      },
       approvalId => {
         this.emit({
           type: 'tool-start',
