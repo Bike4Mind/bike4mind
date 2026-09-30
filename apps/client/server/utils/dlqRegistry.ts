@@ -222,6 +222,12 @@ const DLQ_REGISTRY = [
     application: 'DataLakeManagement',
     sourceQueue: 'driveLakeIngestQueue',
   },
+  {
+    label: 'drive-disconnect-purge',
+    displayName: 'Drive Disconnect Purge',
+    application: 'DataLakeManagement',
+    sourceQueue: 'driveDisconnectPurgeQueue',
+  },
 ] as const satisfies readonly DlqDescriptor[];
 
 /** Valid source queue names - derived from DLQ_REGISTRY so they stay in sync automatically. */

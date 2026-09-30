@@ -328,4 +328,78 @@ describe('data lake purge Drive teardown - ingested content (real repos + Mongo)
     expect(increment).toHaveBeenCalledWith(OWNER, -500);
     expect(increment).toHaveBeenCalledWith(CONTRIBUTOR, -300);
   });
+
+  it('refunds each chunk as it settles, so a run killed partway keeps the refunds already earned', async () => {
+    const lake = await seedLake();
+    const connectionId = new mongoose.Types.ObjectId().toHexString();
+    const first = await seedFile({ datalakeTag: lake.datalakeTag, driveConnectionId: connectionId, fileSize: 500 });
+    const second = await seedFile({
+      datalakeTag: lake.datalakeTag,
+      driveConnectionId: connectionId,
+      userId: CONTRIBUTOR,
+      fileSize: 300,
+    });
+    const increment = vi.spyOn(userRepository, 'incrementCurrentStorage').mockResolvedValue(undefined);
+    let refundedBeforeSecondChunk = false;
+    const storage = {
+      delete: async (path: string) => {
+        if (path === second.filePath) {
+          refundedBeforeSecondChunk = increment.mock.calls.some(([userId]) => userId === OWNER);
+          // Stands in for the run dying mid-sweep: nothing after this chunk's start completes.
+          throw new Error('killed');
+        }
+      },
+    };
+    const files = [first, second].map(f => ({ ...f.toJSON(), id: f.id }));
+
+    await expect(
+      dataLakeService.purgeDataLakeConnectionFiles(
+        dataLakeService.lakeMembershipScope(lake),
+        files as Parameters<typeof dataLakeService.purgeDataLakeConnectionFiles>[1],
+        {
+          db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository, users: userRepository },
+          storage,
+          chunkSize: 1,
+        }
+      )
+    ).rejects.toThrow('killed');
+
+    expect(refundedBeforeSecondChunk).toBe(true);
+    expect(increment).toHaveBeenCalledTimes(1);
+    expect(increment).toHaveBeenCalledWith(OWNER, -500);
+    expect(await FabFile.countDocuments({ _id: second.id })).toBe(1);
+  });
+
+  it('waits for every file in a failing chunk before refunding it', async () => {
+    const lake = await seedLake();
+    const connectionId = new mongoose.Types.ObjectId().toHexString();
+    const failing = await seedFile({ datalakeTag: lake.datalakeTag, driveConnectionId: connectionId, fileSize: 500 });
+    const slow = await seedFile({
+      datalakeTag: lake.datalakeTag,
+      driveConnectionId: connectionId,
+      userId: CONTRIBUTOR,
+      fileSize: 300,
+    });
+    const increment = vi.spyOn(userRepository, 'incrementCurrentStorage').mockResolvedValue(undefined);
+    const storage = {
+      delete: async (path: string) => {
+        if (path === failing.filePath) throw new Error('storage.delete blip');
+        await new Promise(resolve => setTimeout(resolve, 50));
+      },
+    };
+    const files = [failing, slow].map(f => ({ ...f.toJSON(), id: f.id }));
+
+    await expect(
+      dataLakeService.purgeDataLakeConnectionFiles(
+        dataLakeService.lakeMembershipScope(lake),
+        files as Parameters<typeof dataLakeService.purgeDataLakeConnectionFiles>[1],
+        { db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository, users: userRepository }, storage }
+      )
+    ).rejects.toThrow('storage.delete blip');
+
+    // The slow sibling finished its hard delete after the failure; its refund must not be lost.
+    expect(await FabFile.countDocuments({ _id: slow.id })).toBe(0);
+    expect(increment).toHaveBeenCalledWith(CONTRIBUTOR, -300);
+    expect(increment).not.toHaveBeenCalledWith(OWNER, expect.anything());
+  });
 });
