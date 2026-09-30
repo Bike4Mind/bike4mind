@@ -165,12 +165,14 @@ export interface YouTubeRef {
 }
 
 /**
- * Seconds from a YouTube `t` / `start` value: plain seconds ("42", "42s") or the
- * "1h2m3s" form. Anything unparseable counts as no offset.
+ * Seconds from a YouTube `t` / `start` value: bare seconds ("42") or the "1h2m3s"
+ * form with a unit on every part ("1h2" is rejected, not read as 1h + 2s).
+ * Anything unparseable counts as no offset.
  */
 function parseYouTubeStart(raw: string | null): number {
   if (!raw) return 0;
-  const m = raw.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?$/);
+  if (/^\d+$/.test(raw)) return Number(raw);
+  const m = raw.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/);
   if (!m || (!m[1] && !m[2] && !m[3])) return 0;
   return Number(m[1] ?? 0) * 3600 + Number(m[2] ?? 0) * 60 + Number(m[3] ?? 0);
 }
@@ -181,7 +183,7 @@ function parseYouTubeStart(raw: string | null): number {
  * host, and the privacy-preserving -nocookie variant. Uses the URL parser so
  * the host is matched exactly (e.g. "notyoutube.com" is not YouTube), which
  * means authored links must be absolute https URLs. The start offset comes from
- * `?t=` or `?start=` ("42", "42s", "1m30s").
+ * `?t=` or `?start=`, whichever parses to a non-zero offset first ("42", "42s", "1m30s").
  *
  * Canonical helper shared by:
  * - The React media renderer (HelpContent.tsx) to render a YouTube embed
@@ -200,7 +202,7 @@ export function parseYouTube(url: string): YouTubeRef | null {
   }
   const host = u.hostname.replace(/^www\./, '').toLowerCase();
   const valid = (id: string | null | undefined) => (id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null);
-  const start = parseYouTubeStart(u.searchParams.get('t') ?? u.searchParams.get('start'));
+  const start = parseYouTubeStart(u.searchParams.get('t')) || parseYouTubeStart(u.searchParams.get('start'));
   const ref = (id: string | null): YouTubeRef | null => (id ? { id, start } : null);
   if (host === 'youtu.be') return ref(valid(u.pathname.slice(1).split('/')[0]));
   if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'youtube-nocookie.com') {
