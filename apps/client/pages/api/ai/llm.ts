@@ -10,6 +10,7 @@ import { ChatCompletionInvoke } from '@bike4mind/services/llm';
 import { SQSService } from '@bike4mind/utils';
 import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveBillingOrgId } from '@server/utils/orgAccess';
+import { dataLakeWriteToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
@@ -104,11 +105,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // null = personal account, undefined = fall back to the caller's own org.
     const effectiveOrgId = await resolveBillingOrgId(req, invokeParams.organizationId);
 
+    // Unioned and placed after the spread, so a client value can only ADD denials; the key's own
+    // scope gaps always win.
+    const deniedTools = [...(invokeParams.deniedTools ?? []), ...dataLakeWriteToolsDeniedFor(req)];
+
     const quest = await chatCompletion.invoke({
       body: {
         ...invokeParams,
         sessionId,
         organizationId: effectiveOrgId,
+        ...(deniedTools.length > 0 ? { deniedTools } : {}),
       },
       userId: req.user.id,
     });

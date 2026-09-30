@@ -3,6 +3,7 @@ import {
   DATA_LAKE_QUERY_API_KEY_SCOPES,
   DATA_LAKE_READ_API_KEY_SCOPES,
   DATA_LAKE_WRITE_API_KEY_SCOPES,
+  DATA_LAKE_WRITE_TOOL_NAMES,
   type IDataLakeRepository,
 } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
@@ -94,6 +95,16 @@ function assertScope(req: ScopedRequest, required: ApiKeyScope[], message: strin
  */
 export function holdsDataLakeReadScope(req: ScopedRequest): boolean {
   return holdsScope(req, DATA_LAKE_READ_SCOPES);
+}
+
+/**
+ * The chat tools a caller may not be offered on this request: the data-lake write tools when an
+ * API key lacks datalake:write (JWT/browser callers hold every scope - see holdsScope). The chat
+ * doors (`/api/chat`, `/api/ai/llm`) pass this as the turn's `deniedTools`, which is enforced at
+ * every denylist site in ChatCompletionProcess, including the pass after the intent gates run.
+ */
+export function dataLakeWriteToolsDeniedFor(req: ScopedRequest): string[] {
+  return holdsScope(req, DATA_LAKE_WRITE_SCOPES) ? [] : [...DATA_LAKE_WRITE_TOOL_NAMES];
 }
 
 export function assertDataLakeWriteScope(req: ScopedRequest): void {

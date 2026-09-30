@@ -1,4 +1,4 @@
-import { detectAgentMentions, detectSkillMentions } from '@bike4mind/common';
+import { DATA_LAKE_WRITE_TOOL_NAMES, detectAgentMentions, detectSkillMentions } from '@bike4mind/common';
 
 /**
  * Blog intent in the message itself. Two branches: a word-boundary match on `blog` and its close
@@ -65,6 +65,48 @@ export function shouldOfferBlogTools(input: {
     publish: input.hasBlogIntegration && intentOrContinuation,
     edit: input.hasBlogIntegration && intentOrContinuation,
   };
+}
+
+/** The save-to-data-lake trio - offered, trimmed and paired together (see resolveEnabledTools). */
+export const DATA_LAKE_TOOL_NAMES: string[] = ['list_my_data_lakes', ...DATA_LAKE_WRITE_TOOL_NAMES];
+
+/**
+ * Data-lake intent: the product term itself ("data lake", "data-lakes"), a save-style verb shortly
+ * followed by "to/into/in ... lake", a create request ("create a lake called Q3"), or a list
+ * request ("list my lakes", "what lakes do I have"). All case-insensitive; place names are cut out
+ * first instead (PLACE_NAME_PATTERN), so "save the photos from our trip to Lake Tahoe" stays quiet.
+ * A false positive only costs the offer - every tool still checks the flag and the caller's access.
+ */
+const PLACE_NAME_PATTERN = /\bLakes?\s+[A-Z][\w-]*/g;
+const DATA_LAKE_MENTION_PATTERN = /\bdata[\s-]?lakes?\b/i;
+const SAVE_TO_LAKE_PATTERN =
+  /\b(?:save|store|upload|archive|add|put|file|move|copy)\b[^.?!\n]{0,80}?\b(?:to|into|in)\s+(?:(?:my|our|your|the|a|an|this|that|new|one)\s+){0,2}(?:[\w-]+\s+){0,2}lakes?\b/i;
+const CREATE_LAKE_PATTERN =
+  /\b(?:create|make|set\s+up)\s+(?:me\s+)?(?:(?:a|an|another|one)\s+)?(?:new\s+)?(?:[\w-]+\s+)?lake\b/i;
+const LIST_LAKES_PATTERN =
+  /\b(?:list|show)\s+(?:me\s+)?(?:all\s+)?(?:of\s+)?(?:my|our)\s+lakes\b|\b(?:what|which)\s+lakes\s+(?:do|can|have)\s+(?:i|we)\b/i;
+
+export function mentionsDataLakeSave(message: string): boolean {
+  if (DATA_LAKE_MENTION_PATTERN.test(message)) return true;
+  const withoutPlaceNames = message.replace(PLACE_NAME_PATTERN, ' ');
+  return [SAVE_TO_LAKE_PATTERN, CREATE_LAKE_PATTERN, LIST_LAKES_PATTERN].some(pattern =>
+    pattern.test(withoutPlaceNames)
+  );
+}
+
+/**
+ * Whether the save-to-data-lake tools should be offered this turn: intent in the message or a
+ * continuation of an earlier save, AND the EnableDataLakes platform flag. The flag is a thunk so
+ * the ordinary turn (no intent) never pays for the settings read.
+ */
+export async function shouldOfferDataLakeTools(input: {
+  message: string;
+  priorToolNames: readonly string[];
+  dataLakesEnabled: () => Promise<boolean>;
+}): Promise<boolean> {
+  const intentOrContinuation =
+    mentionsDataLakeSave(input.message) || hasPriorToolUse(input.priorToolNames, DATA_LAKE_TOOL_NAMES);
+  return intentOrContinuation && (await input.dataLakesEnabled());
 }
 
 /**

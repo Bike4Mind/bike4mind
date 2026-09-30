@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { DATA_LAKE_SLUG_REGEX, MAX_DATA_LAKE_SLUG_LENGTH, MIN_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
+import { DATA_LAKE_SLUG_REGEX, MAX_DATA_LAKE_SLUG_LENGTH, MIN_DATA_LAKE_SLUG_LENGTH } from '../constants/dataLakes';
 import { slugifyDataLakeName, isValidDataLakeSlug, deriveTagPrefixFromLakeName } from './dataLakeSlug';
 
 // The server validates the slug with MIN_DATA_LAKE_SLUG_LENGTH and DATA_LAKE_SLUG_REGEX;

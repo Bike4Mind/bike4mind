@@ -269,6 +269,25 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect(mockInvoke).toHaveBeenCalledTimes(1);
   });
 
+  it('denies the data-lake write tools to a chat key without datalake:write', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect((mockInvoke.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools).toEqual([
+      'create_data_lake',
+      'save_content_to_data_lake',
+    ]);
+  });
+
+  it('denies nothing to a chat key that holds datalake:write', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect((mockInvoke.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools).toBeUndefined();
+  });
+
   it('accepts an ai:generate-only key (2xx) — proves OR semantics', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     const { req, res } = fire();

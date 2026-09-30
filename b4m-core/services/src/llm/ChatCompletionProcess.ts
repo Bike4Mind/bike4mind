@@ -216,7 +216,13 @@ import {
   sortDetailsByDeliveryOrder,
 } from './systemPromptFloorTelemetry';
 import { buildArtifactEmissionMessages, resolveArtifactsEnabled } from './artifactGating';
-import { shouldOfferBlogTools, shouldOfferDelegation, shouldOfferSkillTool } from './autoAddedToolGating';
+import {
+  DATA_LAKE_TOOL_NAMES,
+  shouldOfferBlogTools,
+  shouldOfferDataLakeTools,
+  shouldOfferDelegation,
+  shouldOfferSkillTool,
+} from './autoAddedToolGating';
 import { resolveMementoGates } from './mementoGating';
 import {
   ContextTelemetryAlertsSchema,
@@ -683,7 +689,25 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
   paired = addPairedTool(paired, 'search_knowledge_base', 'count_knowledge_base');
   // Corpus shape rides along too (#1292): topics, folders and pipeline health, same reasoning.
   paired = addPairedTool(paired, 'search_knowledge_base', 'describe_knowledge_base');
+  // The Smart Tools toggle exposes only the save tool; it cannot name a target lake without the
+  // list, or make one without the create.
+  paired = addPairedTool(paired, 'save_content_to_data_lake', 'list_my_data_lakes');
+  paired = addPairedTool(paired, 'save_content_to_data_lake', 'create_data_lake');
   return paired.filter(tool => !denied.has(tool));
+}
+
+/**
+ * The turn's denylist: the session's curated `disabledTools` plus the request's server-set
+ * `deniedTools` (e.g. write tools an API key lacks the scope for - see dataLakeScopes.ts). A union,
+ * so neither source can re-enable what the other denies. Undefined when both are empty, matching
+ * how `sessionDisabledTools` was passed before.
+ */
+export function resolveDeniedTools(sessionDisabledTools: unknown, requestDeniedTools?: string[]): string[] | undefined {
+  const merged = new Set([
+    ...(Array.isArray(sessionDisabledTools) ? sessionDisabledTools : []),
+    ...(requestDeniedTools ?? []),
+  ]);
+  return merged.size > 0 ? [...merged] : undefined;
 }
 
 /**
@@ -753,9 +777,10 @@ export function attachmentHasIndexedContent(
 
 /**
  * Tools this process auto-adds server-side regardless of user selection. Three auto-add sites
- * feed this: the request-parse method (navigate_view), the conditional blog/skill gate in
- * `process()` (blog_publish/blog_edit/blog_draft, skill - each on its own intent/catalog signal,
- * see `shouldOfferBlogTools`/`shouldOfferSkillTool`), and `resolveEnabledTools` (the
+ * feed this: the request-parse method (navigate_view), the conditional blog/skill/data-lake gate in
+ * `process()` (blog_publish/blog_edit/blog_draft, skill, and the DATA_LAKE_TOOL_NAMES trio - each on
+ * its own intent/catalog signal, see `shouldOfferBlogTools`/`shouldOfferSkillTool`/
+ * `shouldOfferDataLakeTools`), and `resolveEnabledTools` (the
  * attached-knowledge offer). Small local (Ollama) models get confused by tools they didn't ask
  * for, so the names in this list are trimmed for that backend unless the user explicitly enabled
  * them. Keep this list in sync with those auto-add sites.
@@ -766,7 +791,14 @@ export function attachmentHasIndexedContent(
  * which is the whole point of the feature for local models. Listing them here would silently
  * defeat it.
  */
-export const AUTO_ADDED_TOOL_NAMES = ['blog_draft', 'blog_publish', 'blog_edit', 'navigate_view', 'skill'];
+export const AUTO_ADDED_TOOL_NAMES = [
+  'blog_draft',
+  'blog_publish',
+  'blog_edit',
+  'navigate_view',
+  'skill',
+  ...DATA_LAKE_TOOL_NAMES,
+];
 
 /**
  * Reconciliation delta with the zero-balance floor. Pre-reservation (the only
@@ -1959,6 +1991,9 @@ export class ChatCompletionProcess {
       // the rule; the one site that cannot is the navigate_view auto-add, which runs in
       // initializeProcessContext before this exists and so calls the same helper directly.
       const skipAutoOffers = resolveSkipAutoOffers(parsedBody);
+      // Read at every denylist site below instead of `session.disabledTools`: the final pass after
+      // buildTools is load-bearing, since intent gates add tools after resolveEnabledTools runs.
+      const deniedTools = resolveDeniedTools(session.disabledTools, parsedBody.deniedTools);
       // Kicked off here (not awaited yet) so its DB read overlaps with the models/admin-settings
       // fetch below instead of serializing in front of it - folded into that Promise.all.
       //
@@ -2053,7 +2088,7 @@ export class ChatCompletionProcess {
       const resolvedTools = resolveEnabledTools({
         requestTools: enabledTools,
         sessionEnabledTools: Array.isArray(session.enabledTools) ? session.enabledTools : undefined,
-        sessionDisabledTools: Array.isArray(session.disabledTools) ? session.disabledTools : undefined,
+        sessionDisabledTools: deniedTools,
         hasAttachedKnowledge,
         hasAccessibleDataLake,
         skipAutoOffers,
@@ -2661,6 +2696,18 @@ export class ChatCompletionProcess {
         ) {
           enabledTools.push('skill');
         }
+
+        if (
+          await shouldOfferDataLakeTools({
+            message,
+            priorToolNames,
+            dataLakesEnabled: async () => Boolean(await this.db.adminSettings.getSettingsValue('EnableDataLakes')),
+          })
+        ) {
+          for (const tool of DATA_LAKE_TOOL_NAMES) {
+            if (!enabledTools.includes(tool)) enabledTools.push(tool);
+          }
+        }
       }
 
       // Local (Ollama) models run on modest hardware with small context budgets and
@@ -2979,7 +3026,7 @@ export class ChatCompletionProcess {
         // Also enforced over the returned list below; passed here as well because two things the
         // builder produces never appear in that list - MCP tools and the delegate tool's captured
         // parentTools.
-        sessionDisabledTools: session.disabledTools,
+        sessionDisabledTools: deniedTools,
         mcpToolsByServer,
         quest,
         saveQuest,
@@ -3015,8 +3062,8 @@ export class ChatCompletionProcess {
       // delegate_to_agent), so strip any session-forbidden tools here too - this
       // closes loopholes like a research subagent web-searching on a "curated
       // sources only" surface.
-      if (Array.isArray(session.disabledTools) && session.disabledTools.length > 0 && allTools) {
-        const denied = new Set(session.disabledTools);
+      if (deniedTools && allTools) {
+        const denied = new Set(deniedTools);
         allTools = allTools.filter(t => !denied.has(t.toolSchema.name));
       }
 
@@ -3025,7 +3072,15 @@ export class ChatCompletionProcess {
       // the user explicitly enabled, dropping the auto/admin-added extras
       // (blog_draft, skill, navigate_view, blog_publish/edit) unless selected.
       if (modelInfo.backend === ModelBackend.Ollama && allTools) {
-        const userSelected = new Set<string>(parsedBody.tools ?? []);
+        // Companions of a selected tool count as selected (resolveEnabledTools' pairing), so the
+        // Smart Tools save-to-data-lake toggle keeps its list/create partners on this backend too.
+        const userSelected = new Set<string>(
+          resolveEnabledTools({
+            requestTools: [...(parsedBody.tools ?? [])],
+            hasAttachedKnowledge: false,
+            skipAutoOffers: true,
+          })
+        );
         const before = allTools.length;
         allTools = allTools.filter(
           t => !AUTO_ADDED_TOOL_NAMES.includes(t.toolSchema.name) || userSelected.has(t.toolSchema.name)

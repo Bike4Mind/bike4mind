@@ -40,6 +40,10 @@ export const b4mLLMTools = z.enum([
   'count_knowledge_base',
   // Corpus shape - topics, folders, pipeline health (#1292), alongside the cardinality tool above
   'describe_knowledge_base',
+  // Saving assistant-generated content into a data lake the caller can write to
+  'list_my_data_lakes',
+  'create_data_lake',
+  'save_content_to_data_lake',
   // Agent delegation
   'delegate_to_agent',
   // OptiHashi optimization tools
@@ -60,6 +64,16 @@ export const b4mLLMTools = z.enum([
   'skill',
 ]);
 export type B4MLLMTools = z.infer<typeof b4mLLMTools>;
+
+/**
+ * The data-lake tools that write (make a lake, persist a file into one). A route withholds these
+ * from an API key without datalake:write (dataLakeWriteToolsDeniedFor in the client's
+ * dataLakeScopes.ts); the services' DATA_LAKE_TOOL_NAMES builds on this list.
+ */
+export const DATA_LAKE_WRITE_TOOL_NAMES = [
+  'create_data_lake',
+  'save_content_to_data_lake',
+] as const satisfies readonly B4MLLMTools[];
 
 export const B4MLLMToolsList = b4mLLMTools.options.map(tool => tool);
 

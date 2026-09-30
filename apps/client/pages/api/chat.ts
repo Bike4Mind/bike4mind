@@ -27,6 +27,7 @@ import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
+import { dataLakeWriteToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 
 // How many distinct unrecognized tool ids are named in the warn log and echoed on the response.
 // Both are bounded by the same number so the response is no less bounded than the log; the cap is
@@ -124,7 +125,8 @@ const handler = nextRouteForContract(chatContract, {
     req.user.id,
     organizationId,
     recommendations,
-    requestedTools
+    requestedTools,
+    dataLakeWriteToolsDeniedFor(req)
   );
 
   // Read off internalRequest.tools rather than recomputing, so what is reported cannot drift
@@ -341,7 +343,9 @@ function transformToInternalFormat(
   // Already filtered to known ids AND deduped by the caller: unknowns are dropped there so the
   // wire schema stays OpenAPI-representable and so they can be reported back on the response,
   // and repeats are collapsed there because nothing downstream of this layer collapses them.
-  requestedTools: B4MLLMTools[] = []
+  requestedTools: B4MLLMTools[] = [],
+  // Server-derived only: the public request schema has no deniedTools field for a client to set.
+  deniedTools: string[] = []
 ) {
   // Compute effective tools. `tools` is a top-level field with nothing marking it conditional on
   // toolMode, so a named tool is honored on its own rather than silently dropped; 'fast' ignores
@@ -399,6 +403,7 @@ function transformToInternalFormat(
     enableArtifacts: false,
     ...(request.promptMode ? { promptMode: request.promptMode } : {}),
     ...(request.skip_auto_offers ? { skipAutoOffers: true } : {}),
+    ...(deniedTools.length > 0 ? { deniedTools } : {}),
     includeSystemPrompt: request.includeSystemPrompt,
     ...(request.systemPrompt ? { systemPrompt: request.systemPrompt } : {}),
     ...(isToolsEnabled

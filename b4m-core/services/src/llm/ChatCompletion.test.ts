@@ -3,6 +3,7 @@ import {
   ChatCompletionProcess,
   addPairedTool,
   resolveEnabledTools,
+  resolveDeniedTools,
   shouldDeferCorpusToRetrieval,
   attachmentHasIndexedContent,
   computeSettlementDelta,
@@ -2231,6 +2232,65 @@ describe('ChatCompletionProcess', () => {
           delete (service as any).user.blogIntegration;
           mockSession.disabledTools = undefined;
         }
+      });
+
+      describe('data-lake intent gate and the request deniedTools', () => {
+        const offeredNames = () =>
+          (vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools ?? []).map(
+            (t: { toolSchema: { name: string } }) => t.toolSchema.name
+          );
+        const lakeBody = (extra: Record<string, unknown> = {}) => ({
+          ...startQuestParams,
+          message: 'save this summary to my data lake',
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          ...extra,
+        });
+
+        beforeEach(() => {
+          (service.db.adminSettings as Record<string, unknown>).getSettingsValue = vi.fn().mockResolvedValue(true);
+        });
+        afterEach(() => {
+          delete (service.db.adminSettings as Record<string, unknown>).getSettingsValue;
+        });
+
+        it('offers the data-lake trio on save-to-lake intent', async () => {
+          mockTextModel();
+          await service.process({ body: lakeBody(), logger: mockLogger });
+          expect(offeredNames()).toEqual(
+            expect.arrayContaining(['list_my_data_lakes', 'create_data_lake', 'save_content_to_data_lake'])
+          );
+        });
+
+        // Load-bearing: the intent gate pushes these AFTER resolveEnabledTools, so only the final
+        // denylist pass on the built list can strip them - this is the API-key scope case.
+        it('strips gate-added tools named in the request deniedTools, keeping the rest', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({ deniedTools: ['create_data_lake', 'save_content_to_data_lake'] }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          expect(names).toContain('list_my_data_lakes');
+          expect(names).not.toContain('create_data_lake');
+          expect(names).not.toContain('save_content_to_data_lake');
+        });
+
+        it('strips a caller-named tool in the request deniedTools too', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({
+              message: 'hello',
+              tools: ['save_content_to_data_lake'],
+              deniedTools: ['save_content_to_data_lake', 'create_data_lake'],
+            }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          expect(names).not.toContain('save_content_to_data_lake');
+          expect(names).not.toContain('create_data_lake');
+        });
       });
 
       it('suppresses auto-added tools under a mode even with blog intent in the message', async () => {
@@ -6358,6 +6418,25 @@ describe('resolveEnabledTools', () => {
     const twice = resolveEnabledTools({ requestTools: once, hasAttachedKnowledge: true });
     expect(twice).toEqual(once);
   });
+
+  it('pairs the save-to-data-lake toggle with its list and create companions', () => {
+    const result = resolveEnabledTools({ requestTools: ['save_content_to_data_lake'], hasAttachedKnowledge: false });
+    expect(result).toEqual(['save_content_to_data_lake', 'list_my_data_lakes', 'create_data_lake']);
+  });
+
+  it('does not drag the data-lake companions in without the save tool', () => {
+    const result = resolveEnabledTools({ requestTools: ['list_my_data_lakes'], hasAttachedKnowledge: false });
+    expect(result).toEqual(['list_my_data_lakes']);
+  });
+
+  it('lets the session denylist strip a data-lake companion the save tool would pair in', () => {
+    const result = resolveEnabledTools({
+      requestTools: ['save_content_to_data_lake'],
+      hasAttachedKnowledge: false,
+      sessionDisabledTools: ['create_data_lake'],
+    });
+    expect(result).toEqual(['save_content_to_data_lake', 'list_my_data_lakes']);
+  });
 });
 
 describe('shouldDeferCorpusToRetrieval (per-doc even-split depth floor)', () => {
@@ -6609,5 +6688,23 @@ describe('dropOldestHistoryTurn (overflow-recovery shed)', () => {
     history = dropOldestHistoryTurn(history!);
     expect(history).toEqual([user('q3'), assistant('a3')]);
     expect(dropOldestHistoryTurn(history!)).toBeNull();
+  });
+});
+
+describe('resolveDeniedTools', () => {
+  it('unions the session denylist with the request deniedTools', () => {
+    expect(resolveDeniedTools(['web_search'], ['create_data_lake', 'web_search'])?.sort()).toEqual([
+      'create_data_lake',
+      'web_search',
+    ]);
+  });
+
+  it('ignores a non-array session value', () => {
+    expect(resolveDeniedTools(undefined, ['create_data_lake'])).toEqual(['create_data_lake']);
+    expect(resolveDeniedTools('web_search', undefined)).toBeUndefined();
+  });
+
+  it('is undefined when neither source denies anything', () => {
+    expect(resolveDeniedTools([], [])).toBeUndefined();
   });
 });
