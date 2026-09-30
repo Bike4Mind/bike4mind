@@ -151,6 +151,7 @@ const GitHubIntegrationSection = ({ userId }: GitHubIntegrationProps) => {
         user_not_found: 'User account not found',
         oauth_not_configured: 'GitHub OAuth not configured. Contact administrator.',
         no_token: 'No access token received from GitHub',
+        github_user_lookup_failed: 'Could not read your GitHub account. Please try again.',
         callback_failed: 'Authorization failed. Please try again.',
         auth_code_reused: 'GitHub already connected. Please refresh the page.',
         bad_verification_code: 'Authorization expired. Please try connecting again.',
