@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { resolveWithinRoots } from './paths';
 import { commandEnv, launchCommand } from './commandLaunch';
-import { capOutput, optionalNumber, requireString, type ApprovalPrompt, type ToolDefinition } from './types';
+import { capOutputMiddle, optionalNumber, requireString, type ApprovalPrompt, type ToolDefinition } from './types';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_TIMEOUT_MS = 300_000;
@@ -263,7 +263,7 @@ export const bashExecute: ToolDefinition = {
     try {
       const env = await commandEnv();
       const outcome = await runCommand(launch.executable, launch.args, cwd, env, timeoutMs, context.signal);
-      return capOutput(formatOutcome(command, cwd, timeoutMs, outcome));
+      return capOutputMiddle(formatOutcome(command, cwd, timeoutMs, outcome));
     } finally {
       await launch.cleanup();
     }
