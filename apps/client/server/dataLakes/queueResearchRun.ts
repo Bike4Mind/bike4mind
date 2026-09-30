@@ -7,7 +7,7 @@ import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 /**
  * Hand a freshly started run to the research worker. Shared by Run now
  * (`pages/api/data-lakes/[id]/research/runs`) and the research scheduler
- * (`cron/dataLakeResearchSchedule.ts`).
+ * (`apps/workers/src/cron/dataLakeResearchSchedule.ts`).
  *
  * On a failed send the row is settled `failed` before rethrowing: nothing will ever pick it up, and a
  * permanently-queued run holds the one-at-a-time guard closed against every later attempt. Uses

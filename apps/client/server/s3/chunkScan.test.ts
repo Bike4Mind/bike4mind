@@ -536,7 +536,7 @@ describe('production call sites pass the stale-claim cutoff', () => {
   // the self-host worker's call lives in chunkRescueSweep.ts (exported so it's independently
   // testable - see chunkRescueSweep.test.ts), so this is what watches its source shape.
   const sources = {
-    'server/s3/chunkRescueSweep.ts': 'chunkRescueSweep.ts',
+    'apps/client/server/s3/chunkRescueSweep.ts': 'chunkRescueSweep.ts',
     'apps/workers/src/cron/dataLakeBatchReconcile.ts': '../../../workers/src/cron/dataLakeBatchReconcile.ts',
   } as const;
 

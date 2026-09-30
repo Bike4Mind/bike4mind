@@ -19,9 +19,11 @@ const MOVED = [
 
 function filesUnder(dir: string): string[] {
   if (!fs.existsSync(dir)) return [];
+  // Source files only, so OS litter (.DS_Store) left behind by a branch switch does not fail it.
   return fs
     .readdirSync(dir, { recursive: true, withFileTypes: true })
-    .flatMap(entry => (entry.isFile() ? [path.relative(REPO_ROOT, path.join(entry.parentPath, entry.name))] : []));
+    .filter(entry => entry.isFile() && /\.(ts|tsx|mts|js|mjs)$/.test(entry.name))
+    .map(entry => path.relative(REPO_ROOT, path.join(entry.parentPath, entry.name)));
 }
 
 function infraHandlers(): { file: string; handler: string }[] {
@@ -40,7 +42,6 @@ function infraHandlers(): { file: string; handler: string }[] {
 
 describe('directories moved into apps/workers stay moved', () => {
   it.each(MOVED)('$from has no files (they belong in $to)', ({ from, to }) => {
-    // An empty directory left behind by a branch switch is fine; git does not track it.
     expect(filesUnder(path.join(REPO_ROOT, from)), `move these into ${to}`).toEqual([]);
   });
 
