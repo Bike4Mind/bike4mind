@@ -373,6 +373,20 @@ export function capOutput(text: string, limit = MAX_TOOL_OUTPUT_CHARS): string {
 }
 
 /**
+ * Like capOutput, but keeps the start and the end and drops the middle. For command output,
+ * where the failure and the exit line are at the bottom and a head-only cut discards both.
+ * The result never exceeds `limit`, so a later capOutput at the same limit leaves it alone.
+ */
+export function capOutputMiddle(text: string, limit = MAX_TOOL_OUTPUT_CHARS, headShare = 0.25): string {
+  if (text.length <= limit) return text;
+  const marker = (dropped: number) => `\n\n[... ${dropped} characters omitted from the middle ...]\n\n`;
+  const room = limit - marker(text.length).length;
+  const head = Math.floor(room * headShare);
+  const tail = room - head;
+  return `${text.slice(0, head)}${marker(text.length - head - tail)}${text.slice(text.length - tail)}`;
+}
+
+/**
  * Higher than a file or search result because a report quotes the code the caller would otherwise
  * read again; cutting its tail would cut the edit points, which come last.
  */

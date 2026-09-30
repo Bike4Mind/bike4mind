@@ -13,7 +13,7 @@ import type {
   UpdateProjectRequest,
 } from '@shared/chat';
 import { describeReturn } from './queuedMessages';
-import { applyLiveEvent, startReply } from '@shared/liveReply';
+import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } from '@shared/liveReply';
 import { applyReplyDone } from './replyDone';
 import { applyStatusEvents } from './sessionStatus';
 import { totalTokens, type TurnProgress } from './statusLine';
@@ -398,7 +398,36 @@ export function useConversation(
   }, []);
 
   useEffect(() => {
-    return window.b4m.chat.onStreamEvent(event => {
+    // Live events are folded once per frame: main sends one per token, and a state update each
+    // would rebuild the whole thread far faster than it can paint.
+    let queued: LiveReplyEvent[] = [];
+    let frame: number | undefined;
+    const flushLive = () => {
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      frame = undefined;
+      if (queued.length === 0) return;
+      const events = coalesceLiveEvents(queued);
+      queued = [];
+      setMessages(current =>
+        current.map(message => events.reduce((folded, event) => applyLiveEvent(folded, event), message))
+      );
+    };
+
+    const unsubscribe = window.b4m.chat.onStreamEvent(event => {
+      const live =
+        event.type === 'delta' ||
+        event.type === 'tool-start' ||
+        event.type === 'tool-end' ||
+        event.type === 'tool-progress';
+      if (live) {
+        if (event.sessionId !== activeSessionId.current) return;
+        queued.push(event);
+        frame ??= requestAnimationFrame(flushLive);
+        return;
+      }
+      // Anything that is not a live event may depend on, or replace, what is still queued.
+      flushLive();
+
       if (event.type === 'done' || event.type === 'error') {
         settledReplies.current.add(event.messageId);
         // Counted before the session filter below, and deliberately: a reply running in a
@@ -420,16 +449,6 @@ export function useConversation(
         const counted = totalTokens(event.usage);
         if (counted !== null)
           setTurn(current => (current ? { ...current, tokens: counted, usage: event.usage } : current));
-        return;
-      }
-
-      if (
-        event.type === 'delta' ||
-        event.type === 'tool-start' ||
-        event.type === 'tool-end' ||
-        event.type === 'tool-progress'
-      ) {
-        setMessages(current => current.map(message => applyLiveEvent(message, event)));
         return;
       }
 
@@ -461,6 +480,11 @@ export function useConversation(
         });
       });
     });
+
+    return () => {
+      unsubscribe();
+      if (frame !== undefined) cancelAnimationFrame(frame);
+    };
   }, []);
 
   const send = useCallback(

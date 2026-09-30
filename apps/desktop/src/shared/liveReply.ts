@@ -15,6 +15,27 @@ export function startReply(messages: readonly ChatMessage[], messageId: string):
     : [...messages, { id: messageId, role: 'assistant', content: '', createdAt: new Date().toISOString() }];
 }
 
+/** The events a reply is built from while it streams. */
+export type LiveReplyEvent = Extract<ChatStreamEvent, { type: 'delta' | 'tool-start' | 'tool-end' | 'tool-progress' }>;
+
+/**
+ * Merge runs of consecutive deltas for one message into a single delta, so a burst of tokens
+ * costs one string concat and one rounds rebuild rather than one per token. Order across other
+ * events is untouched: a tool row must still land between the text before and after it.
+ */
+export function coalesceLiveEvents(events: readonly LiveReplyEvent[]): LiveReplyEvent[] {
+  const merged: LiveReplyEvent[] = [];
+  for (const event of events) {
+    const last = merged[merged.length - 1];
+    if (event.type === 'delta' && last?.type === 'delta' && last.messageId === event.messageId) {
+      merged[merged.length - 1] = { ...last, text: last.text + event.text };
+    } else {
+      merged.push(event);
+    }
+  }
+  return merged;
+}
+
 /** Fold one non-terminal event into its reply. Anything else leaves the message as it was. */
 export function applyLiveEvent(message: ChatMessage, event: ChatStreamEvent): ChatMessage {
   if (!('messageId' in event) || event.messageId !== message.id) return message;
