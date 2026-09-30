@@ -4,6 +4,7 @@ import type { ChatUsage } from '@shared/chat';
 import type { CompletionMessage } from '../completions';
 import { createThinkFilter } from '../thinkFilter';
 import { fileRead, globFiles, grepSearch } from './fileTools';
+import { createLoopTally } from '../turnTiming';
 import { capOutput, requireString, type ToolContext, type ToolDefinition } from './types';
 
 /**
@@ -81,6 +82,12 @@ export const exploreTool: ToolDefinition = {
     ];
     const tools = EXPLORE_TOOLS.map(tool => ({ toolSchema: tool.schema }));
     let calls = 0;
+    const tally = createLoopTally();
+    // Also on the round-limit exit, which is the slow one worth explaining.
+    const finish = (report: string): string => {
+      context.report?.detail(tally.summary());
+      return report;
+    };
 
     for (let round = 1; round <= MAX_EXPLORE_ROUNDS; round++) {
       const requested: NestedRequest[] = [];
@@ -89,43 +96,49 @@ export const exploreTool: ToolDefinition = {
       let thinking: unknown[] | undefined;
       let usage: ChatUsage | undefined;
 
-      await explore.complete(
-        {
-          model: explore.model,
-          messages,
-          tools,
-          ...(explore.maxTokens ? { maxTokens: explore.maxTokens } : {}),
-        },
-        event => {
-          if (event.type === 'error' || event.type === 'meta') return;
-          if (event.text) text += filter.push(event.text).text;
-          if (event.type === 'tool_use') {
-            if (event.tools) requested.push(...event.tools);
-            if (event.thinking) thinking = event.thinking;
-          }
-          if (event.usage) usage = event.usage;
-        },
-        context.signal
+      await tally.model(() =>
+        explore.complete(
+          {
+            model: explore.model,
+            messages,
+            tools,
+            ...(explore.maxTokens ? { maxTokens: explore.maxTokens } : {}),
+          },
+          event => {
+            if (event.type === 'error' || event.type === 'meta') return;
+            if (event.text) text += filter.push(event.text).text;
+            if (event.type === 'tool_use') {
+              if (event.tools) requested.push(...event.tools);
+              if (event.thinking) thinking = event.thinking;
+            }
+            if (event.usage) usage = event.usage;
+          },
+          context.signal
+        )
       );
       text += filter.flush().text;
       // Within one request the counts are cumulative, so only the last report is billed.
       if (usage) explore.addUsage(usage);
       if (context.signal.aborted) throw new Error('Exploring was stopped.');
 
-      if (requested.length === 0) return capOutput(text.trim() || 'The explorer finished without a report.');
+      if (requested.length === 0) return finish(capOutput(text.trim() || 'The explorer finished without a report.'));
       if (round === MAX_EXPLORE_ROUNDS) {
         const partial = text.trim();
-        return capOutput(
-          `${partial ? `${partial}\n\n` : ''}[The explorer reached its ${MAX_EXPLORE_ROUNDS}-round limit before ` +
-            'writing a full report.]'
+        return finish(
+          capOutput(
+            `${partial ? `${partial}\n\n` : ''}[The explorer reached its ${MAX_EXPLORE_ROUNDS}-round limit before ` +
+              'writing a full report.]'
+          )
         );
       }
 
-      const results = await Promise.all(
-        requested.map(request => {
-          const index = ++calls;
-          return runNested(request, readContext, line => context.report?.progress(`${line} (call ${index})`));
-        })
+      const results = await tally.tools(() =>
+        Promise.all(
+          requested.map(request => {
+            const index = ++calls;
+            return runNested(request, readContext, line => context.report?.progress(`${line} (call ${index})`));
+          })
+        )
       );
 
       messages.push({

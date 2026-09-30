@@ -57,6 +57,7 @@ describe('explore', () => {
         notice: vi.fn(),
         label: vi.fn(),
         diff: vi.fn(),
+        detail: vi.fn(),
       },
     };
   });
@@ -99,6 +100,24 @@ describe('explore', () => {
       { inputTokens: 200, outputTokens: 20 },
     ]);
     expect(progress).toContain('Reading app.ts (call 2)');
+  });
+
+  it('records how many rounds it took and where the time went', async () => {
+    const detail = vi.fn();
+    let clock = 0;
+    const tick = vi.spyOn(Date, 'now').mockImplementation(() => (clock += 5));
+    try {
+      const { explore } = fakeExplore([
+        [toolUse([{ name: 'grep_search', input: { pattern: 'answer' } }])],
+        [{ type: 'content', text: 'done' }],
+      ]);
+      await exploreTool.run({ question: 'q' }, { ...context, explore, report: { ...context.report!, detail } });
+    } finally {
+      tick.mockRestore();
+    }
+    expect(detail).toHaveBeenCalledOnce();
+    expect(detail.mock.calls[0][0]).toMatchObject({ rounds: 2, modelMs: 10 });
+    expect(detail.mock.calls[0][0].toolMs).toBeGreaterThan(0);
   });
 
   it('asks for the report one round before the cap and stops at it', async () => {

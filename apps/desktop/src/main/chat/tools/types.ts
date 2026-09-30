@@ -1,5 +1,6 @@
 import type {
   ChatDiff,
+  ChatToolDetail,
   ChatMedia,
   ChatSessionSummary,
   ChatToolNotice,
@@ -76,6 +77,8 @@ export interface ToolReporter {
    * other channels here, this one is kept off a call that failed. See ChatToolCall.diff.
    */
   diff(value: ChatDiff): void;
+  /** Record what a sub-loop spent; see ChatToolCall.detail. */
+  detail(value: ChatToolDetail): void;
 }
 
 /**

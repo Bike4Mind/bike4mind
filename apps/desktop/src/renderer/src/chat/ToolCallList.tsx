@@ -13,6 +13,7 @@ import {
   diffTotals,
   groupToolCalls,
   summarizeInput,
+  toolDuration,
   toolRowLabel,
   type DiffTotals,
   type ToolCallGroup,
@@ -283,6 +284,7 @@ function ToolCallEntry({ call, first }: { call: ChatToolCall; first: boolean }) 
           '&:hover': { opacity: 0.85 },
         }}
         data-testid="chat-tool-entry-summary"
+        title={toolDuration(call)}
       >
         <Typography level="body-xs" textColor="inherit" noWrap sx={{ minWidth: 0, flex: 1 }}>
           {toolRowLabel(call)}

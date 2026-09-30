@@ -155,6 +155,18 @@ export interface ChatToolCall {
    * it did then, with no diff panel.
    */
   diff?: ChatDiff;
+  /** Epoch ms. Display and diagnosis only; never sent to the model. Absent on older sessions. */
+  startedAt?: number;
+  endedAt?: number;
+  /** What a tool that runs its own model loop spent; today only explore. */
+  detail?: ChatToolDetail;
+}
+
+/** Sum over a sub-loop's rounds: how many requests it made and where its time went. */
+export interface ChatToolDetail {
+  rounds: number;
+  modelMs: number;
+  toolMs: number;
 }
 
 /**
@@ -937,9 +949,18 @@ export interface ChatPendingApproval {
  * `toolCalls` - and a round naming one that is no longer there draws prose with no row instead
  * of the same row twice.
  */
+export interface ChatRoundTiming {
+  startedAt: number;
+  /** The first streamed delta of any kind; absent when the stream produced nothing. */
+  firstTokenAt?: number;
+  endedAt: number;
+}
+
 export interface ChatReplyRound {
   text: string;
   toolCallIds: string[];
+  /** Epoch ms, display and diagnosis only; absent on rounds stored before timing was kept. */
+  timing?: ChatRoundTiming;
   /**
    * The model's readable reasoning before this round's prose, drawn collapsed above it. Display
    * only: what is replayed to the provider is the message's opaque `thinking`, never this.
