@@ -126,6 +126,20 @@ const isNotOnDemand = (summary: BedrockFoundationModelSummary): boolean => {
   return types.length > 0 && !types.includes('ON_DEMAND');
 };
 
+/**
+ * Positive evidence on every clause this source disables for: listed ON_DEMAND, and an availability
+ * answer that says yes to all three. Only this clears an earlier disable (planOne in catalogWrite.ts);
+ * a missing field or a failed availability call is "did not say" and clears nothing.
+ */
+const isConfirmedInvocable = (
+  summary: BedrockFoundationModelSummary,
+  entitlement: BedrockAvailability | undefined
+): boolean =>
+  (summary.inferenceTypesSupported ?? []).includes('ON_DEMAND') &&
+  entitlement?.authorizationStatus === 'AUTHORIZED' &&
+  entitlement.entitlementAvailability === 'AVAILABLE' &&
+  entitlement.regionAvailability === 'AVAILABLE';
+
 export function normalizeBedrockModels({ summaries, availability }: BedrockFacts): DiscoveredModel[] {
   const records: DiscoveredModel[] = [];
 
@@ -165,11 +179,12 @@ export function normalizeBedrockModels({ summaries, availability }: BedrockFacts
             typeof summary?.responseStreamingSupported === 'boolean' ? summary.responseStreamingSupported : undefined,
           supportsVision: inputs.length > 0 ? inputs.includes('IMAGE') : undefined,
           lifecycle,
-          // Only ever set true. An unentitled or not-on-demand model is disabled with
-          // a reason; a model we never asked about, or one whose check failed, is
-          // left alone, because clearing this flag on no evidence would re-enable a
-          // model the account cannot call.
-          autoDisabled: unauthorized || notOnDemand ? true : undefined,
+          // An unentitled or not-on-demand model is disabled with a reason. False only on
+          // positive evidence for every clause (isConfirmedInvocable); a model we never
+          // asked about, or one whose check failed, is left alone, because clearing this
+          // flag on no evidence would re-enable a model the account cannot call.
+          autoDisabled:
+            unauthorized || notOnDemand ? true : isConfirmedInvocable(summary, entitlement) ? false : undefined,
           autoDisabledReason: unauthorized
             ? 'not entitled in this AWS account'
             : notOnDemand

@@ -122,6 +122,38 @@ describe('bedrock normalization', () => {
     expect(record.patch).not.toHaveProperty('autoDisabled');
   });
 
+  describe('clearing an earlier disable', () => {
+    const confirmed: BedrockAvailability = {
+      authorizationStatus: 'AUTHORIZED',
+      entitlementAvailability: 'AVAILABLE',
+      regionAvailability: 'AVAILABLE',
+    };
+    const normalize = (inferenceTypesSupported: string[], entitlement?: BedrockAvailability) =>
+      normalizeBedrockModels({
+        summaries: [{ ...summaries[0], inferenceTypesSupported }],
+        availability: entitlement ? new Map([[String(summaries[0].modelId), entitlement]]) : undefined,
+      })[0].patch;
+
+    it('says false once it is listed on demand and every availability clause says yes', () => {
+      expect(normalize(['ON_DEMAND', 'INFERENCE_PROFILE'], confirmed)).toMatchObject({ autoDisabled: false });
+      expect(normalize(['ON_DEMAND'], confirmed)).not.toHaveProperty('autoDisabledReason');
+    });
+
+    it('says nothing without an availability answer', () => {
+      expect(normalize(['ON_DEMAND'])).not.toHaveProperty('autoDisabled');
+    });
+
+    it('says nothing when an availability clause is missing rather than positive', () => {
+      expect(normalize(['ON_DEMAND'], { ...confirmed, regionAvailability: undefined })).not.toHaveProperty(
+        'autoDisabled'
+      );
+    });
+
+    it('says nothing when the listing did not say how the model can be invoked', () => {
+      expect(normalize([], confirmed)).not.toHaveProperty('autoDisabled');
+    });
+  });
+
   it('skips malformed entries and drops an unparseable lifecycle date', () => {
     const records = normalizeBedrockModels({ summaries: malformed.modelSummaries as BedrockFoundationModelSummary[] });
     expect(records.map(record => record.modelId)).toEqual([
