@@ -20,8 +20,10 @@ import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
 
-// Retained: deployed topic with no alarm pointing at it. Removing this declaration would destroy
-// the AWS resource. Kept unsubscribed intentionally -- all alarms now route to dlqAlarmTopic.
+// Retained: this topic was already orphaned before this PR -- no alarm ever pointed at it.
+// Unlike the 36 deleted topics (which each had an alarm, just no subscriber), removing this
+// declaration would destroy the deployed AWS resource without any alarm migration needed.
+// Kept so Pulumi does not destroy a resource that may have out-of-band subscribers.
 export const dataLakeStuckBatchesAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('DataLakeStuckBatchesAlarm')
   : undefined;
