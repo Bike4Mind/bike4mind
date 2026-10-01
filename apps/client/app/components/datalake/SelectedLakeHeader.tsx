@@ -2,7 +2,7 @@ import { Box, Button, Chip, Stack, Tooltip } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import DriveConnectAction from '@client/app/components/DataLakeWizard/steps/DriveConnectAction';
-import { canConnectLakeDrive, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
+import { canConnectLakeDrive, isDraftLake, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
 import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import type { ManageableDataLakeConfig } from '@bike4mind/common';
 
@@ -49,9 +49,7 @@ export default function SelectedLakeHeader({ lake }: { lake: ManageableDataLakeC
         >
           {lake.fileTagPrefix}
         </Chip>
-        {/* Only an explicit 'draft' warns: an absent status also covers built-in registry lakes (always
-            serving), which the client cannot tell from legacy lake docs written before the field existed. */}
-        {lake.status === 'draft' && (
+        {isDraftLake(lake) && (
           <Chip
             size="sm"
             variant="soft"

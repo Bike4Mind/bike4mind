@@ -6,6 +6,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { toast } from 'sonner';
 import { LakeInfoPanel } from './LakeInfoPanel';
+import { DATA_LAKES } from '@bike4mind/common';
 import type { ManagerLake } from './shared';
 
 // LakeInfoPanel's Drive chip reaches this hook directly - stub it so the chip renders nothing
@@ -532,9 +533,17 @@ describe('LakeInfoPanel - Start chat on a draft lake', () => {
     expect(startChat).not.toHaveBeenCalled();
   });
 
-  it('treats an absent status as a draft, like Publish does', async () => {
-    await clickStart(baseLake);
+  it('treats a user lake with an absent status as a draft', async () => {
+    await clickStart({ ...baseLake, status: undefined } as ManagerLake);
     expect(screen.getByTestId('datalake-startchat-draft-modal')).toBeInTheDocument();
+    expect(startChat).not.toHaveBeenCalled();
+  });
+
+  it('starts directly on a built-in lake (registry id, no status, not manageable)', async () => {
+    const id = DATA_LAKES[0].id;
+    await clickStart({ ...baseLake, id, status: undefined, canManage: false } as ManagerLake);
+    await waitFor(() => expect(startChat).toHaveBeenCalledWith(id));
+    expect(screen.queryByTestId('datalake-startchat-draft-modal')).not.toBeInTheDocument();
   });
 
   it('publishes then starts the chat, in that order', async () => {

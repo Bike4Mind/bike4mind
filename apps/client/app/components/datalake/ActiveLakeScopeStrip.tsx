@@ -2,6 +2,7 @@ import { Box, Chip, Stack, Tooltip, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import type { ManageableDataLakeConfig } from '@bike4mind/common';
 import { useDataLakeSurface } from './surfaceTokens';
+import { isDraftLake, DRAFT_LAKE_TOOLTIP } from './lakeVisibility';
 
 /**
  * Names every lake the chat is currently grounded on, for the multi-lake scope the picker trigger
@@ -51,10 +52,9 @@ export default function ActiveLakeScopeStrip({
           </Chip>
         )}
         {lakes.map(lake => {
-          // Strict 'draft' only, same as SelectedLakeHeader.
-          const isDraft = lake.status === 'draft';
+          const isDraft = isDraftLake(lake);
           return (
-            <Tooltip key={lake.id} size="sm" title={isDraft ? 'Draft - not grounding answers until published' : ''}>
+            <Tooltip key={lake.id} size="sm" title={isDraft ? DRAFT_LAKE_TOOLTIP : ''}>
               <Chip
                 size="sm"
                 variant="soft"

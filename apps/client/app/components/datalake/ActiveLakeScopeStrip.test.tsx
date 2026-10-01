@@ -4,7 +4,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import ActiveLakeScopeStrip from './ActiveLakeScopeStrip';
-import type { ManageableDataLakeConfig } from '@bike4mind/common';
+import { DATA_LAKES, type ManageableDataLakeConfig } from '@bike4mind/common';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => (
@@ -56,7 +56,12 @@ describe('ActiveLakeScopeStrip', () => {
     render(
       <Wrapper>
         <ActiveLakeScopeStrip
-          lakes={[lake('a', 'Drafty', 'draft'), lake('b', 'Live', 'active'), lake('c', 'Built-in')]}
+          lakes={[
+            lake('a', 'Drafty', 'draft'),
+            lake('b', 'Live', 'active'),
+            lake('c', 'Legacy'),
+            lake(DATA_LAKES[0].id, 'Built-in'),
+          ]}
           onClear={vi.fn()}
         />
       </Wrapper>
@@ -65,6 +70,7 @@ describe('ActiveLakeScopeStrip', () => {
     expect(screen.getByTestId('datalake-active-scope-chip-a')).toHaveAttribute('data-draft', 'true');
     expect(screen.getByTestId('datalake-active-scope-chip-a')).toHaveTextContent('Drafty');
     expect(screen.getByTestId('datalake-active-scope-chip-b')).not.toHaveAttribute('data-draft');
-    expect(screen.getByTestId('datalake-active-scope-chip-c')).not.toHaveAttribute('data-draft');
+    expect(screen.getByTestId('datalake-active-scope-chip-c')).toHaveAttribute('data-draft', 'true');
+    expect(screen.getByTestId(`datalake-active-scope-chip-${DATA_LAKES[0].id}`)).not.toHaveAttribute('data-draft');
   });
 });

@@ -48,7 +48,7 @@ import LakeHealthBadge from '@client/app/components/datalake/LakeHealthBadge';
 import DuplicateAdmissionsChip from '@client/app/components/datalake/DuplicateAdmissionDialog';
 import LakeFindingsChip from '@client/app/components/datalake/LakeFindingsDialog';
 import LakeDriveStatusChip from '@client/app/components/datalake/LakeDriveStatusChip';
-import { lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
+import { isDraftLake, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
 import type { IDataLakeBatchSummary } from '@bike4mind/common';
 import AddExistingFilesModal from './AddExistingFilesModal';
 import type { ManagerLake } from './shared';
@@ -98,7 +98,6 @@ export function LakeInfoPanel({
   const startChatWithLake = useStartChatWithLake();
   const [startingChat, setStartingChat] = useState(false);
   const [draftChatOpen, setDraftChatOpen] = useState(false);
-  const isDraft = !lake.status || lake.status === 'draft';
   const startChat = async (failureMessage = 'Could not start a chat with this lake') => {
     setDraftChatOpen(false);
     setStartingChat(true);
@@ -229,7 +228,7 @@ export function LakeInfoPanel({
             aria-label={`Start chat with ${lake.name}`}
             data-testid={`datalake-startchat-btn-${lake.id}`}
             loading={startingChat}
-            onClick={() => (isDraft ? setDraftChatOpen(true) : void startChat())}
+            onClick={() => (isDraftLake(lake) ? setDraftChatOpen(true) : void startChat())}
             sx={{ flexShrink: 0, fontSize: '13px' }}
           >
             Start chat
@@ -328,11 +327,9 @@ export function LakeInfoPanel({
                 </Button>
               </Tooltip>
               {/* Draft is excluded from grounding until an owner or admin explicitly publishes it
-                  - adding files no longer does this as a side effect. An ABSENT status counts as
-                  draft here, matching promoteDataLake and activateIfDraft's `$in: ['draft', null]`:
-                  a lake written before the field existed is just as invisible to retrieval, so it
-                  must still get the affordance. */}
-              {isDraft && (
+                  - adding files no longer does this as a side effect. Matches promoteDataLake and
+                  activateIfDraft's `$in: ['draft', null]`. */}
+              {isDraftLake(lake) && (
                 <Tooltip title="Publish this lake so it starts grounding answers" size="sm">
                   <Button
                     size="sm"
