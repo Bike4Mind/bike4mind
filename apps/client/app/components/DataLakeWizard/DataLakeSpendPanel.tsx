@@ -84,14 +84,17 @@ export function DataLakeSpendPanel({
 
   if (!summary) return null;
 
-  const lifetimeUsd = summary.embeddingSpendMicroUsd !== null ? microToUsd(summary.embeddingSpendMicroUsd) : null;
+  const ingestionLifetimeUsd =
+    summary.embeddingSpendMicroUsd !== null ? microToUsd(summary.embeddingSpendMicroUsd) : null;
+  const researchLifetimeUsd = summary.researchLifetimeUsd ?? 0;
+  const lifetimeUsd = ingestionLifetimeUsd !== null ? ingestionLifetimeUsd + researchLifetimeUsd : null;
   const windowUsd = summary.ledger.totals.cogsUsd;
   const lakeBudgetUsd = microToUsd(summary.perLakeBudgetMicroUsd);
   const periodBudgetUsd = microToUsd(summary.perPeriodBudgetMicroUsd);
   const runBudgetUsd = microToUsd(summary.perRunBudgetMicroUsd);
   const lakePct =
-    summary.perLakeBudgetMicroUsd > 0 && summary.embeddingSpendMicroUsd !== null
-      ? (summary.embeddingSpendMicroUsd / summary.perLakeBudgetMicroUsd) * 100
+    summary.perLakeBudgetMicroUsd > 0 && ingestionLifetimeUsd !== null
+      ? ((ingestionLifetimeUsd + researchLifetimeUsd) / lakeBudgetUsd) * 100
       : null;
 
   // A lake with no ledger rows yet is either brand-new (lifetime meter also 0) or predates this
