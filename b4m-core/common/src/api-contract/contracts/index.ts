@@ -22,6 +22,7 @@ import {
   removeDataLakeFileContract,
   searchDataLakeContract,
 } from './dataLakes.contract';
+import { generateVideoContract } from './videoGeneration.contract';
 
 /**
  * Every public endpoint, as a contract. The OpenAPI generator registers each of
@@ -53,4 +54,5 @@ export const CONTRACTS: readonly EndpointContract[] = [
   addDataLakeFileContract,
   removeDataLakeFileContract,
   searchDataLakeContract,
+  generateVideoContract,
 ];

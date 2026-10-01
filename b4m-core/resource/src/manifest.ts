@@ -119,6 +119,9 @@ export const DEFAULT_MANIFEST = {
   emailJobQueue: { kind: 'queue' },
   fabFileChunkQueue: { kind: 'queue' },
   fabFileVectorizeQueue: { kind: 'queue' },
+  // Optional like the image queues below: delivers completion callbacks for their jobs, so an
+  // install without it just skips callback delivery instead of losing image/video generation.
+  generationCallbackQueue: { kind: 'queue', optional: true },
   // Optional so an install that upgraded without adding the new env vars still boots the
   // worker (it warns and skips the consumer) instead of taking every other queue down with it.
   imageEditQueue: { kind: 'queue', optional: true },

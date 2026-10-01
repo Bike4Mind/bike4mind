@@ -15,6 +15,7 @@ import {
   fabFileChunkQueue,
   driveLakeIngestQueue,
   dataLakeResearchQueue,
+  generationCallbackQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
@@ -714,7 +715,9 @@ const questTimeoutSweepCron = new sst.aws.Cron('questTimeoutSweep', {
     vpc: lambdaVpc,
     handler: 'apps/client/server/cron/questTimeoutSweep.handler',
     runtime: 'nodejs24.x',
-    link: [...allSecrets],
+    // generationCallbackQueue: a timed-out image/video generation job still owes its caller a
+    // completion callback, so the sweep enqueues one when it recovers a stuck quest.
+    link: [...allSecrets, generationCallbackQueue],
     timeout: '2 minutes',
     logging: {
       retention: '3 days',

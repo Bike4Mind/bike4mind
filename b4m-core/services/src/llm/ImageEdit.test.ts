@@ -831,7 +831,17 @@ describe('ImageEditService.invoke (retry quest bound to its session)', () => {
     const service = new ImageEditService({
       db: {
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
-        quests: { findById: vi.fn(async () => ({ id: 'quest1', sessionId: questSessionId })), update },
+        quests: {
+          findById: vi.fn(async () => ({
+            id: 'quest1',
+            sessionId: questSessionId,
+            // The prior run failed; the retry must not inherit its error state.
+            status: 'done',
+            type: 'error',
+            errorCode: 'insufficient_credits',
+          })),
+          update,
+        },
       },
       startImageEditProcess,
     } as never);
@@ -860,7 +870,21 @@ describe('ImageEditService.invoke (retry quest bound to its session)', () => {
   it('retries a quest from the same session', async () => {
     const { invoke, update } = makeInvokeService('session1');
     await invoke();
-    expect(update).toHaveBeenCalled();
+    expect(update).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'quest1', type: 'message' }), {
+      unset: ['status', 'errorCode'],
+    });
+  });
+
+  it('settles the quest as a done error when the process fails to start', async () => {
+    const { invoke, update, startImageEditProcess } = makeInvokeService('session1');
+    startImageEditProcess.mockRejectedValueOnce(new Error('queue unavailable'));
+    await invoke();
+    expect(update).toHaveBeenLastCalledWith({
+      id: 'quest1',
+      type: 'error',
+      status: 'done',
+      reply: 'queue unavailable',
+    });
   });
 });
 
@@ -940,7 +964,7 @@ describe('ImageEditService quest partial writes', () => {
     vi.mocked(getSettingsValue).mockImplementation(() => undefined);
   });
 
-  it('invoke retry writes exactly images, replies and promptMeta', async () => {
+  it('invoke retry writes exactly images, replies, type and promptMeta', async () => {
     const { service, update } = makeService();
     await invoke(service);
 
@@ -949,20 +973,22 @@ describe('ImageEditService quest partial writes', () => {
       id: 'quest1',
       images: [],
       replies: [],
+      type: 'message',
       promptMeta: {
         model: { name: 'gpt-image-1', parameters: {} },
         session: { id: 'session1', userId: 'user1' },
       },
     });
+    expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
   });
 
-  it('invoke catch writes exactly type and reply', async () => {
+  it('invoke catch writes exactly type, status and reply', async () => {
     const { service, update, startImageEditProcess } = makeService();
     startImageEditProcess.mockRejectedValue(new Error('queue down'));
     await invoke(service);
 
     const errorCall = update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.type === 'error');
-    expect(errorCall).toStrictEqual({ id: 'quest1', type: 'error', reply: 'queue down' });
+    expect(errorCall).toStrictEqual({ id: 'quest1', type: 'error', status: 'done', reply: 'queue down' });
   });
 
   it('process success writes exactly reply, replies, images, status and creditsUsed (no promptMeta)', async () => {

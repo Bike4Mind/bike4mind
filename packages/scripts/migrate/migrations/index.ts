@@ -141,6 +141,8 @@ import EnsureDataLakeResearchScheduleIndex from './20260921125000_ensure-data-la
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod's for the same reason as
 // EnsureDataLakeInconsistencyScanIndex above - see that migration's docstring.
 import BackfillShareTokens from './20260921130000_backfill-share-tokens';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod's, as EnsureDataLakeInconsistencyScanIndex.
+import EnsureQuestCallbackPendingIndex from './20260921235900_ensure-quest-callback-pending-index';
 import EnsureFabFileGitHubConnectionIndex from './20260921235958_ensure-fabfile-github-connection-index';
 import EnsureOrgGitHubLakeConnectionIndexes from './20260921235959_ensure-org-github-lake-connection-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001) to keep that
@@ -267,6 +269,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureDataLakeInconsistencyScanIndex,
   EnsureDataLakeResearchScheduleIndex,
   BackfillShareTokens,
+  EnsureQuestCallbackPendingIndex,
   EnsureFabFileGitHubConnectionIndex,
   EnsureOrgGitHubLakeConnectionIndexes,
   EnsureOAuthGrantUserRevokedUpdatedAtIndex,

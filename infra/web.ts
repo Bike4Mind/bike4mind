@@ -28,6 +28,7 @@ import { mcpHandler } from './mcp';
 import {
   fabFileChunkQueue,
   fabFileVectorizeQueue,
+  generationCallbackQueue,
   imageEditQueue,
   imageGenerationQueue,
   videoGenerationQueue,
@@ -62,6 +63,7 @@ import {
   // DLQ exports used by the dlqUrls Linkable (not directly linked to avoid IAM bloat).
   fabFileChunkQueueDLQ,
   fabFileVectorizeQueueDLQ,
+  generationCallbackQueueDLQ,
   imageGenerationDLQ,
   imageEditDLQ,
   videoGenerationDLQ,
@@ -117,6 +119,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
   properties: {
     'fab-file-vectorize': fabFileVectorizeQueueDLQ.url,
     'fab-file-chunk': fabFileChunkQueueDLQ.url,
+    'generation-callback': generationCallbackQueueDLQ.url,
     'image-generation': imageGenerationDLQ.url,
     'image-edit': imageEditDLQ.url,
     'video-generation': videoGenerationDLQ.url,
@@ -178,6 +181,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     emailJobQueue: emailJobQueue.url,
     fabFileChunkQueue: fabFileChunkQueue.url,
     fabFileVectorizeQueue: fabFileVectorizeQueue.url,
+    generationCallbackQueue: generationCallbackQueue.url,
     imageGenerationQueue: imageGenerationQueue.url,
     imageEditQueue: imageEditQueue.url,
     videoGenerationQueue: videoGenerationQueue.url,
@@ -278,6 +282,10 @@ export const web = new sst.aws.Nextjs(
       // THROWS on an unlinked key rather than returning undefined - so the route's optional-chained
       // guard would never run and every start would 500.
       dataLakeResearchQueue,
+      // Directly linked like dataLakeTaxonomyQueue: dispatchQuestCallback reads
+      // Resource.generationCallbackQueue.url, which also has to resolve in the generation queue
+      // Lambdas and the timeout sweep, where only direct links exist.
+      generationCallbackQueue,
       ...(whatsNewDistributionBucket ? [whatsNewDistributionBucket] : []),
       ...(whatsNewDistributionId ? [whatsNewDistributionId] : []),
     ],
