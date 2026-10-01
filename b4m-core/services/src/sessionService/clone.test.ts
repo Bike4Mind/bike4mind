@@ -142,8 +142,8 @@ describe('cloneSession - redaction at the copy boundary', () => {
     expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ taggedAt }));
   });
 
-  // A copy made inside a product surface must stay in that surface's list. Carried for a share
-  // holder too: the surface is where the conversation lives, not a grant like the lake scope.
+  // A copy made inside a product surface must stay in that surface's list, for a share holder too,
+  // as long as the caller can use that surface.
   it.each(['caller-1', 'owner-1'])('carries the source session surface onto the clone (owner %s)', async ownerId => {
     const { db } = makeAdapters(ownerId);
     db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
@@ -155,9 +155,53 @@ describe('cloneSession - redaction at the copy boundary', () => {
       surface: 'opti',
     });
 
-    await cloneSession('caller-1', { id: 'session-1' }, { db });
+    await cloneSession(
+      'caller-1',
+      { id: 'session-1' },
+      { db, resolveSurfaceAccess: async () => ({ entitlements: ['optihashi:pro'] }) }
+    );
 
     expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ surface: 'opti' }));
+  });
+
+  // A share holder without the workspace's entitlement could not open a copy left there.
+  it('copies into the main list when the caller cannot use the registered source workspace', async () => {
+    const { db } = makeAdapters('owner-1');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'owner-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      surface: 'opti',
+    });
+
+    await cloneSession(
+      'caller-1',
+      { id: 'session-1' },
+      { db, resolveSurfaceAccess: async () => ({ entitlements: [] }) }
+    );
+
+    expect(db.sessions.create.mock.calls[0][0].surface).toBeUndefined();
+  });
+
+  // Private surfaces are unknown here, so there is no rule to check them against: they inherit.
+  it('inherits an unregistered surface unchanged, with no access read', async () => {
+    const { db } = makeAdapters('owner-1');
+    const resolveSurfaceAccess = vi.fn(async () => ({ entitlements: [] }));
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'owner-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      surface: 'some-private-surface',
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db, resolveSurfaceAccess });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ surface: 'some-private-surface' }));
+    expect(resolveSurfaceAccess).not.toHaveBeenCalled();
   });
 
   describe('targetSurface', () => {

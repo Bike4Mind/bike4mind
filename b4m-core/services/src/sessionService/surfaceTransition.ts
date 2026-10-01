@@ -1,7 +1,9 @@
 import {
   BadRequestError,
+  canUseSurface,
   checkSurfaceTransition,
   ForbiddenError,
+  getWorkspaceSurface,
   type SurfaceAccessUser,
   type SurfaceId,
 } from '@bike4mind/common';
@@ -33,14 +35,20 @@ export async function assertSurfaceTransition(
 
 /**
  * The surface a clone or fork of a session in `sourceSurface` is created in, in the form
- * createSession takes. An absent `targetSurface` inherits the source's home unchanged, including a
- * surface this repo does not register.
+ * createSession takes. An absent `targetSurface` inherits the source's home, except that a
+ * registered workspace the caller cannot use (e.g. a share holder without its entitlement) falls
+ * back to the main list, so the copy never lands somewhere its owner cannot open. A surface this
+ * repo does not register is inherited unchanged.
  */
 export async function resolveCopySurface(
   sourceSurface: string | null | undefined,
   targetSurface: string | null | undefined,
   resolveSurfaceAccess: ResolveSurfaceAccess | undefined
 ): Promise<string | undefined> {
-  if (targetSurface === undefined) return sourceSurface ?? undefined;
+  if (targetSurface === undefined) {
+    if (!sourceSurface || !getWorkspaceSurface(sourceSurface)) return sourceSurface || undefined;
+    const user = resolveSurfaceAccess ? await resolveSurfaceAccess() : null;
+    return canUseSurface(user, sourceSurface) ? sourceSurface : undefined;
+  }
   return (await assertSurfaceTransition(sourceSurface, targetSurface, resolveSurfaceAccess)) ?? undefined;
 }

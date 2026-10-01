@@ -187,9 +187,34 @@ describe('forkSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await forkSession(
+      'caller-1',
+      { sessionId: 'session-1', messageId: 'm1' },
+      { db, resolveSurfaceAccess: async () => ({ entitlements: ['optihashi:pro'] }) }
+    );
 
     expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ surface: 'opti' }));
+  });
+
+  // E.g. the entitlement lapsed since the source was made: the fork must land where it can be opened.
+  it('forks into the main list when the caller cannot use the registered source workspace', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      surface: 'opti',
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await forkSession(
+      'caller-1',
+      { sessionId: 'session-1', messageId: 'm1' },
+      { db, resolveSurfaceAccess: async () => ({ entitlements: [] }) }
+    );
+
+    expect(db.sessions.create.mock.calls[0][0].surface).toBeUndefined();
   });
 
   it('leaves the fork of a main-list session without a surface', async () => {
