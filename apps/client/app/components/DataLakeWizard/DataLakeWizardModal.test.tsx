@@ -39,6 +39,7 @@ const prefixClash = vi.hoisted(() => ({ current: undefined as { name: string; fi
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetDataLakes: () => ({ data: [] }),
   useDuplicatePrefixLake: () => prefixClash.current,
+  usePromoteDataLake: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 // SourceSelectionStep now renders DriveConnectAction, which pulls in React Query (useConfig /
 // lake-connection hooks); stub it so this wizard test needs no QueryClientProvider.
