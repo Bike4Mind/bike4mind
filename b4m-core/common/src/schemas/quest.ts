@@ -5,13 +5,15 @@ export const QuestIdParamSchema = z.object({
   id: z.string().min(1).describe('The quest id returned by POST /api/chat or another async start.'),
 });
 
-const GeneratedFileSchema = z.object({
+export const GeneratedFileSchema = z.object({
   name: z.string(),
   url: z.string(),
   isImage: z.boolean(),
   isAudio: z.boolean(),
   isVideo: z.boolean(),
 });
+
+export type GeneratedFile = z.infer<typeof GeneratedFileSchema>;
 
 /**
  * Response of GET /api/v1/quests/{id}. Extends the outcome subset the async chat and image

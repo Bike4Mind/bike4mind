@@ -964,7 +964,7 @@ describe('ImageEditService quest partial writes', () => {
     vi.mocked(getSettingsValue).mockImplementation(() => undefined);
   });
 
-  it('invoke retry writes exactly images, replies and promptMeta', async () => {
+  it('invoke retry writes exactly images, replies, type and promptMeta', async () => {
     const { service, update } = makeService();
     await invoke(service);
 
@@ -973,20 +973,22 @@ describe('ImageEditService quest partial writes', () => {
       id: 'quest1',
       images: [],
       replies: [],
+      type: 'message',
       promptMeta: {
         model: { name: 'gpt-image-1', parameters: {} },
         session: { id: 'session1', userId: 'user1' },
       },
     });
+    expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
   });
 
-  it('invoke catch writes exactly type and reply', async () => {
+  it('invoke catch writes exactly type, status and reply', async () => {
     const { service, update, startImageEditProcess } = makeService();
     startImageEditProcess.mockRejectedValue(new Error('queue down'));
     await invoke(service);
 
     const errorCall = update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.type === 'error');
-    expect(errorCall).toStrictEqual({ id: 'quest1', type: 'error', reply: 'queue down' });
+    expect(errorCall).toStrictEqual({ id: 'quest1', type: 'error', status: 'done', reply: 'queue down' });
   });
 
   it('process success writes exactly reply, replies, images, status and creditsUsed (no promptMeta)', async () => {

@@ -1251,7 +1251,7 @@ describe('ImageGenerationService quest partial writes', () => {
       logger: silentLogger,
     });
 
-  it('invoke retry writes exactly images, replies, promptMeta and an undefined promptEnhancement when none is given', async () => {
+  it('invoke retry writes exactly images, replies, type, promptMeta and an undefined promptEnhancement when none is given', async () => {
     const { service, update } = makeService();
     await invoke(service);
 
@@ -1260,9 +1260,11 @@ describe('ImageGenerationService quest partial writes', () => {
       id: 'quest1',
       images: [],
       replies: [],
+      type: 'message',
       promptMeta: invokePromptMeta,
       promptEnhancement: undefined,
     });
+    expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
   });
 
   it('invoke retry also persists the promptEnhancement when one is given', async () => {
@@ -1275,12 +1277,14 @@ describe('ImageGenerationService quest partial writes', () => {
       id: 'quest1',
       images: [],
       replies: [],
+      type: 'message',
       promptMeta: invokePromptMeta,
       promptEnhancement,
     });
+    expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
   });
 
-  it('invoke catch writes exactly type and reply', async () => {
+  it('invoke catch writes exactly type, status and reply', async () => {
     const startImageGenerationProcess = vi.fn(async () => {
       throw new Error('queue down');
     });
@@ -1290,6 +1294,7 @@ describe('ImageGenerationService quest partial writes', () => {
     expect(callArgs(update).find(arg => arg.type === 'error')).toStrictEqual({
       id: 'quest1',
       type: 'error',
+      status: 'done',
       reply: 'queue down',
     });
   });

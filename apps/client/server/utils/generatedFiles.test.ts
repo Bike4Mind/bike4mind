@@ -52,6 +52,12 @@ describe('toGeneratedFiles', () => {
     ]);
   });
 
+  it('flags .webm and .mov as video, case-insensitively', () => {
+    process.env.NEXT_PUBLIC_CDN_URL = 'https://cdn.example.com';
+    const files = toGeneratedFiles(['a.webm', 'b.MOV', 'c.mp4.txt']);
+    expect(files.map(f => f.isVideo)).toEqual([true, true, false]);
+  });
+
   it('normalizes a trailing slash on the CDN URL so paths never double-slash', () => {
     process.env.NEXT_PUBLIC_CDN_URL = 'https://cdn.example.com/';
     expect(toGeneratedFiles(['a.png'])[0].url).toBe('https://cdn.example.com/generated/a.png');

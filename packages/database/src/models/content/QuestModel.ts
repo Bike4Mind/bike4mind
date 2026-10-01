@@ -1264,9 +1264,9 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
-   * Record one delivery attempt. `delivered` / `failed` are final; a retryable failure keeps
-   * `dispatched` and only updates the diagnostics. Matches `failed` too, so a DLQ replay of an
-   * exhausted callback can record its outcome. Scoped to the claimed `eventId`, mirroring
+   * Record one delivery attempt. `delivered` is final. `failed` ends the retry cycle but is still
+   * matched, so a DLQ replay of an exhausted callback can record its outcome over it. A retryable
+   * failure keeps `dispatched` and only updates the diagnostics. Scoped to the claimed `eventId`, mirroring
    * releaseCallbackDispatch, so a stale message cannot record against a re-armed callback.
    */
   async recordCallbackAttempt(
@@ -1286,7 +1286,9 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
           'callback.state': attempt.state,
           ...(isFinal && { 'callback.completedAt': new Date() }),
           ...(attempt.statusCode !== undefined && { 'callback.lastStatusCode': attempt.statusCode }),
-          ...(attempt.error !== undefined && { 'callback.lastError': attempt.error.slice(0, 500) }),
+          // Never alongside the `delivered` $unset below: Mongo rejects a $set and $unset on one path.
+          ...(attempt.error !== undefined &&
+            attempt.state !== 'delivered' && { 'callback.lastError': attempt.error.slice(0, 500) }),
         },
         // A success after failed attempts must not keep reporting the last failure.
         ...(attempt.state === 'delivered' && { $unset: { 'callback.lastError': 1 } }),

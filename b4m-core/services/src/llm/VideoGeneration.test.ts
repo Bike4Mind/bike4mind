@@ -101,6 +101,7 @@ describe('VideoGenerationService.invoke (retry quest bound to its session)', () 
       id: 'quest1',
       videos: [],
       replies: [],
+      type: 'message',
       promptMeta: {
         model: {
           name: VideoModels.SORA_2,
@@ -113,6 +114,7 @@ describe('VideoGenerationService.invoke (retry quest bound to its session)', () 
         statusLog: statusLog('Video generation started'),
       },
     });
+    expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
   });
 
   it('writes only the error fields when starting the process fails', async () => {
