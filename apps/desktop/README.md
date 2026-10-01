@@ -266,7 +266,7 @@ derived state - signed out, awaiting approval (with the user code to display), s
 one of the two blocked states below - and there is deliberately no IPC channel that returns a
 token.
 
-- **Client id.** This app registers as `b4m-desktop`. One `DeviceFlowClient` is constructed
+- **Client id.** This app currently registers as `b4m-cli` (the only device client production knows). One `DeviceFlowClient` is constructed
   with it and serves both `/api/oauth/device/initiate` and `/api/oauth/device/token`, because
   the token endpoint rejects a device code whose stored `clientId` differs from the redeeming
   `client_id` (RFC 8628 s3.4).
