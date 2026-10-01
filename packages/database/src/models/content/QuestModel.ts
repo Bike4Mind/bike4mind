@@ -723,6 +723,19 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
       ],
       required: false,
     },
+    // Next-step options stripped from the reply's trailing choices block - see replyChoices in common
+    suggestedChoices: {
+      type: subSchema({
+        options: [
+          subSchema({
+            label: { type: String, required: true },
+            description: { type: String, required: true },
+          }),
+        ],
+        selectedIndex: { type: Number, required: false },
+      }),
+      required: false,
+    },
     // Per-file attachment delivery problems, shown under the reply. Must stay in the
     // findPageBySessionId projection below or the banner vanishes on reload.
     attachmentNotices: { type: [String], required: false },
