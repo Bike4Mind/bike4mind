@@ -18,6 +18,8 @@ import { applyReplyDone } from './replyDone';
 import { applyStatusEvents } from './sessionStatus';
 import { totalTokens, type TurnProgress } from './statusLine';
 
+const LIVE_FLUSH_FALLBACK_MS = 100;
+
 export interface SessionsController {
   sessions: ChatSessionSummary[];
   loading: boolean;
@@ -402,9 +404,12 @@ export function useConversation(
     // would rebuild the whole thread far faster than it can paint.
     let queued: LiveReplyEvent[] = [];
     let frame: number | undefined;
+    let fallback: ReturnType<typeof setTimeout> | undefined;
     const flushLive = () => {
       if (frame !== undefined) cancelAnimationFrame(frame);
+      if (fallback !== undefined) clearTimeout(fallback);
       frame = undefined;
+      fallback = undefined;
       if (queued.length === 0) return;
       const events = coalesceLiveEvents(queued);
       queued = [];
@@ -423,6 +428,9 @@ export function useConversation(
         if (event.sessionId !== activeSessionId.current) return;
         queued.push(event);
         frame ??= requestAnimationFrame(flushLive);
+        // rAF is paused in a hidden or occluded window; without this the reply stalls until the
+        // next non-live event or until the window is shown again.
+        fallback ??= setTimeout(flushLive, LIVE_FLUSH_FALLBACK_MS);
         return;
       }
       // Anything that is not a live event may depend on, or replace, what is still queued.
@@ -484,6 +492,7 @@ export function useConversation(
     return () => {
       unsubscribe();
       if (frame !== undefined) cancelAnimationFrame(frame);
+      if (fallback !== undefined) clearTimeout(fallback);
     };
   }, []);
 
