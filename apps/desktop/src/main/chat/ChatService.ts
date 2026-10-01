@@ -75,7 +75,7 @@ import type { McpManager } from './mcp/McpManager';
 import type { AccessStore } from './tools/AccessStore';
 import type { ApprovalGate } from './tools/ApprovalGate';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
-import { findTool, toolsForRequest } from './tools/registry';
+import { findTool, isOfferedEditTool, toolsForRequest, usesApplyPatch } from './tools/registry';
 import { assessApprovalRisk, spendsCredits } from './tools/riskAssessment';
 import {
   capOutput,
@@ -1180,7 +1180,11 @@ export class ChatService {
               },
             })
           : undefined;
+      // Per turn, from the session's current model, so a model switch changes the edit tools
+      // from the next turn on.
+      const patchEdits = usesApplyPatch(session.model);
       const tools = toolsForRequest({
+        modelId: session.model,
         roots,
         media: !!media,
         host: !!host,
@@ -1207,7 +1211,8 @@ export class ChatService {
           session.project,
           this.deps.dependencies?.promptLines(session.id) ?? [],
           projectContext,
-          !!browser
+          !!browser,
+          patchEdits
         )
       );
       // Wire positions of the screenshot messages this turn added, oldest first; see pruneScreenshots.
@@ -1315,7 +1320,7 @@ export class ChatService {
         thinking = turnThinking;
         const settled = await this.runTools(
           requested,
-          { roots, workingDirectory, media, host, explore, browser, title: session.title },
+          { roots, workingDirectory, media, host, explore, browser, patchEdits, title: session.title },
           sessionId,
           replyId,
           controller.signal
@@ -1606,6 +1611,8 @@ export class ChatService {
       host: HostContext | undefined;
       explore: ExploreContext | undefined;
       browser: BrowserContext | undefined;
+      /** Whether this turn's model edits with apply_patch rather than file_edit and file_write. */
+      patchEdits: boolean;
       /** The conversation's title, so a cross-session approval names it rather than its id. */
       title: string;
     },
@@ -1613,7 +1620,7 @@ export class ChatService {
     messageId: string,
     signal: AbortSignal
   ): Promise<ChatToolCall[]> {
-    const { roots, workingDirectory, media, host, explore, browser } = scope;
+    const { roots, workingDirectory, media, host, explore, browser, patchEdits } = scope;
     return Promise.all(
       requested.map(async request => {
         const call: ChatToolCall = {
@@ -1625,9 +1632,18 @@ export class ChatService {
 
         // Built-ins are resolved FIRST and MCP tools only after, so no server can shadow one
         // even if the `mcp__` namespacing in mcp/names.ts were ever to let a name through.
-        const tool = findTool(request.name) ?? this.deps.mcp?.findTool(request.name);
+        const tool = isOfferedEditTool(request.name, patchEdits)
+          ? (findTool(request.name) ?? this.deps.mcp?.findTool(request.name))
+          : undefined;
         if (!tool) {
-          const unknown: ChatToolCall = { ...call, status: 'error', error: `Unknown tool: ${request.name}` };
+          const instead = patchEdits ? 'apply_patch' : 'file_edit or file_write';
+          const unknown: ChatToolCall = {
+            ...call,
+            status: 'error',
+            error: isOfferedEditTool(request.name, patchEdits)
+              ? `Unknown tool: ${request.name}`
+              : `${request.name} is not available in this conversation; use ${instead} to change files.`,
+          };
           this.emit({ type: 'tool-start', sessionId, messageId, call });
           this.emit({ type: 'tool-end', sessionId, messageId, call: unknown });
           return unknown;
@@ -1639,7 +1655,7 @@ export class ChatService {
         const attachments: ChatMedia[] = [];
         let notice: ChatToolNotice | undefined;
         let label: string | undefined;
-        let diff: ChatDiff | undefined;
+        const diffs: ChatDiff[] = [];
         let detail: ChatToolDetail | undefined;
         const report: ToolReporter = {
           progress: text => this.emit({ type: 'tool-progress', sessionId, messageId, callId: call.id, text }),
@@ -1651,7 +1667,7 @@ export class ChatService {
             label = text;
           },
           diff: value => {
-            diff = value;
+            diffs.push(value);
           },
           detail: value => {
             detail = value;
@@ -1676,7 +1692,8 @@ export class ChatService {
           // practice - the condition is what makes that a property of this loop rather than
           // of one tool's ordering, because a diff under a red row would claim a change the
           // user never got.
-          ...(diff && settled.status === 'done' ? { diff } : {}),
+          ...(diffs.length === 1 && settled.status === 'done' ? { diff: diffs[0] } : {}),
+          ...(diffs.length > 1 && settled.status === 'done' ? { diffs } : {}),
         });
 
         const context: ToolContext = {
@@ -2260,6 +2277,7 @@ export class ChatService {
             approvalId,
             approvalDetail: prompt.detail,
             ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
+            ...(prompt.diffs ? { approvalDiffs: prompt.diffs } : {}),
             ...(prompt.irreversible ? { approvalIrreversible: true } : {}),
             ...(choice ? { approvalChoice: choice } : {}),
           },
@@ -2562,7 +2580,8 @@ function buildSystemMessage(
   project?: ChatProject,
   dependencyLines: readonly string[] = [],
   projectContext = '',
-  browser = false
+  browser = false,
+  patchEdits = false
 ): CompletionMessage {
   if (roots.length === 0) {
     return {
@@ -2618,10 +2637,19 @@ function buildSystemMessage(
       'For a task with three or more steps, keep a plan with todo_write: send the whole list each time,',
       'mark one item in_progress before starting it and completed as soon as it is done. Skip it for',
       'anything you can finish in a step or two.',
-      'An older file_read result may show as a [stale: ...] placeholder once the file was rewritten',
-      'with file_write or re-read later; read it again if you still need it. A file_edit does not',
-      'invalidate earlier reads, and its result shows the edited lines, so edit again without',
-      'reading the file first.',
+      ...(patchEdits
+        ? [
+            'An older file_read result may show as a [stale: ...] placeholder once the file was replaced',
+            'by an apply_patch Add or Delete, or re-read later; read it again if you still need it. An',
+            'apply_patch Update does not invalidate earlier reads, and its result shows the edited lines,',
+            'so patch again without reading the file first.',
+          ]
+        : [
+            'An older file_read result may show as a [stale: ...] placeholder once the file was rewritten',
+            'with file_write or re-read later; read it again if you still need it. A file_edit does not',
+            'invalidate earlier reads, and its result shows the edited lines, so edit again without',
+            'reading the file first.',
+          ]),
       'file_read returns the whole file, up to 2000 lines; pass offset and limit only when you',
       'already know which part you need or the file is too large to read at once.',
       ...(explore
@@ -2631,17 +2659,27 @@ function buildSystemMessage(
             'mean to build so its report ends with the edit points. When you already know the file or',
             'symbol, use grep_search and file_read directly.',
             'Treat an explore report as already read: do not re-read ranges it quotes, read only what it',
-            'lacks, and file_edit can match against its quoted text directly.',
+            `lacks, and ${patchEdits ? 'an apply_patch hunk' : 'file_edit'} can match against its quoted text directly.`,
           ]
         : []),
       'Running a command needs the user to approve it first, and they see the exact command, so',
       'prefer one clear command over several speculative ones. If they decline, accept it and ask',
       'what they would like instead rather than trying a variation of the same command.',
       'Changing a file needs the same approval, and the user sees a line-by-line diff of the',
-      'change before they answer. Read a file before you edit it, and prefer file_edit over',
-      'file_write so the rest of the file is left alone; file_write replaces a file entirely.',
-      'Make all the changes you have planned for one file in a single file_edit call with edits:',
-      'they apply in order and all or nothing, and each round trip costs you the whole context.',
+      ...(patchEdits
+        ? [
+            'change before they answer. Read a file before you edit it. Change files only with',
+            'apply_patch: Add File to create one, Update File for an in-place change (hunks with',
+            'context lines, in file order), Delete File to remove one. Make all the changes you have',
+            'planned, across every file, in a single apply_patch call: it applies all or nothing, and',
+            'each round trip costs you the whole context.',
+          ]
+        : [
+            'change before they answer. Read a file before you edit it, and prefer file_edit over',
+            'file_write so the rest of the file is left alone; file_write replaces a file entirely.',
+            'Make all the changes you have planned for one file in a single file_edit call with edits:',
+            'they apply in order and all or nothing, and each round trip costs you the whole context.',
+          ]),
       'Dev servers, watchers and anything else meant to keep running go to bash_background, not',
       'bash_execute. Background processes belong to this conversation, are all killed when the app',
       'quits, and none survive a restart - so check bash_list rather than assuming one from an',

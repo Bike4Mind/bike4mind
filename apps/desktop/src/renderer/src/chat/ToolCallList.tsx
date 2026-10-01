@@ -5,7 +5,7 @@ import CircularProgress from '@mui/joy/CircularProgress';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import type { ChatApprovalAnswer, ChatToolCall, ChatToolNotice, ChatToolStatus } from '@shared/chat';
+import type { ChatApprovalAnswer, ChatDiff, ChatToolCall, ChatToolNotice, ChatToolStatus } from '@shared/chat';
 import { ApprovalChoiceButtons } from './ApprovalChoice';
 import { DiffView } from './DiffView';
 import { ChevronIcon } from './icons';
@@ -36,10 +36,11 @@ const HOST_QUESTION: Record<string, string> = {
 export type RespondToApproval = (approvalId: string, answer: ChatApprovalAnswer) => void;
 
 /** Named for what it does to the file, so nothing reads as a generic "allow this". */
-const APPROVAL_QUESTION: Record<'create' | 'overwrite' | 'edit', string> = {
+const APPROVAL_QUESTION: Record<ChatDiff['operation'], string> = {
   create: 'Create this file?',
   overwrite: 'Replace this file?',
   edit: 'Apply this edit?',
+  delete: 'Delete this file?',
 };
 
 /**
@@ -85,7 +86,8 @@ function ApprovalPrompt({
   approvalId: string;
   onRespond: RespondToApproval;
 }) {
-  const diff = call.approvalDiff;
+  const diffs = call.approvalDiffs ?? (call.approvalDiff ? [call.approvalDiff] : []);
+  const diff = diffs[0];
   // No undo behind it, so the card is red and offers no way to stop being asked. Answering
   // "always" would be a single click standing in for consent to a later, different deletion.
   const irreversible = call.approvalIrreversible === true;
@@ -101,7 +103,9 @@ function ApprovalPrompt({
     >
       <Typography level="body-xs" fontWeight="lg">
         {diff
-          ? APPROVAL_QUESTION[diff.operation]
+          ? diffs.length > 1
+            ? `Apply this patch to ${diffs.length} files?`
+            : APPROVAL_QUESTION[diff.operation]
           : (HOST_QUESTION[call.name] ??
             (isGeneration(call.name)
               ? 'Generate this? It costs credits.'
@@ -111,9 +115,11 @@ function ApprovalPrompt({
       </Typography>
 
       {diff ? (
-        <Box sx={{ mt: 0.75 }}>
-          <DiffView diff={diff} />
-        </Box>
+        <Stack spacing={0.75} sx={{ mt: 0.75 }}>
+          {diffs.map(each => (
+            <DiffView key={each.path} diff={each} />
+          ))}
+        </Stack>
       ) : (
         <Box
           sx={{
@@ -196,7 +202,8 @@ function ApprovalPrompt({
 function ToolCallDetail({ call }: { call: ChatToolCall }) {
   // The diff names the file in its own header, so repeating the path above it is the same
   // string twice in three lines - and a write has no other argument worth a line of its own.
-  const argument = call.diff ? '' : summarizeInput(call);
+  const diffs = call.diffs ?? (call.diff ? [call.diff] : []);
+  const argument = diffs.length > 0 ? '' : summarizeInput(call);
 
   return (
     <Box data-testid="chat-tool-detail">
@@ -214,10 +221,12 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
 
       {/* `diff`, never `approvalDiff`: this row is a record of a turn that has happened, and
           only the first of those is one. See ChatToolCall.diff. */}
-      {call.diff && (
-        <Box sx={{ mt: 0.5 }}>
-          <DiffView diff={call.diff} />
-        </Box>
+      {diffs.length > 0 && (
+        <Stack spacing={0.5} sx={{ mt: 0.5 }}>
+          {diffs.map(each => (
+            <DiffView key={each.path} diff={each} />
+          ))}
+        </Stack>
       )}
 
       <Typography

@@ -51,7 +51,7 @@ export const exploreTool: ToolDefinition = {
       'and reads on its own (grep_search, glob_files, file_read only) and returns a report: file ' +
       'paths with line numbers, the relevant conventions, what it could not find, and an "Edit ' +
       'points" section quoting verbatim the code you will need to change or copy a pattern from, ' +
-      'so you can file_edit against it without reading those files again. Use it for exploration that would take many searches and reads, and call it several ' +
+      'so you can edit against it without reading those files again. Use it for exploration that would take many searches and reads, and call it several ' +
       'times in one reply with different questions to explore in parallel. When you already know ' +
       'the file or symbol, use grep_search or file_read directly instead.',
     parameters: {

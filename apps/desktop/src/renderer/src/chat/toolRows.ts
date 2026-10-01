@@ -115,6 +115,14 @@ const PHRASES: Record<string, ToolPhrases> = {
     many: n => `Edited ${n} files`,
     active: 'Editing files...',
   },
+  apply_patch: {
+    did: 'Patched',
+    didAlone: 'Patched files',
+    to: 'patch',
+    toAlone: 'apply a patch',
+    many: n => `Applied ${n} patches`,
+    active: 'Patching files...',
+  },
   generate_image: {
     didAlone: 'Generated an image',
     toAlone: 'generate an image',
@@ -380,10 +388,11 @@ export function diffTotals(calls: readonly ChatToolCall[]): DiffTotals | undefin
   let wrote = false;
 
   for (const call of calls) {
-    if (!call.diff) continue;
-    wrote = true;
-    added += call.diff.added;
-    removed += call.diff.removed;
+    for (const diff of call.diffs ?? (call.diff ? [call.diff] : [])) {
+      wrote = true;
+      added += diff.added;
+      removed += diff.removed;
+    }
   }
 
   return wrote ? { added, removed } : undefined;

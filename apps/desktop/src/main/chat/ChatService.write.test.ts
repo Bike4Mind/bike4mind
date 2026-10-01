@@ -204,4 +204,89 @@ describe('ChatService write gate', () => {
       await expect(readFile(target, 'utf8')).resolves.toBe('alpha\nsomeone else got here\ngamma\n');
     });
   });
+  describe('editing tools by model', () => {
+    const declared = (request: number): string[] =>
+      post.mock.calls[request][1].options.tools.map((entry: { toolSchema: { name: string } }) => entry.toolSchema.name);
+    const systemText = (request: number): string => post.mock.calls[request][1].messages[0].content;
+
+    async function startOn(model: string, prompt: string): Promise<string> {
+      const { id } = await service.createSession();
+      await service.setSessionModel(id, model);
+      await service.send(id, prompt);
+      await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+      return id;
+    }
+
+    it('gives a GPT model apply_patch and neither file_edit nor file_write, and says so in the prompt', async () => {
+      await startOn('gpt-5', 'hi');
+      const names = declared(0);
+      expect(names).toContain('apply_patch');
+      expect(names).not.toContain('file_edit');
+      expect(names).not.toContain('file_write');
+      expect(systemText(0)).toContain('apply_patch');
+      expect(systemText(0)).not.toContain('file_edit');
+    });
+
+    it('keeps file_edit and file_write for every other model, and tells it nothing of apply_patch', async () => {
+      await startOn('claude-sonnet-5-5', 'hi');
+      const names = declared(0);
+      expect(names).toEqual(expect.arrayContaining(['file_edit', 'file_write']));
+      expect(names).not.toContain('apply_patch');
+      expect(systemText(0)).toContain('file_edit');
+      expect(systemText(0)).not.toContain('apply_patch');
+    });
+
+    it('swaps the tools on the next turn when the model is switched mid-conversation', async () => {
+      const id = await startOn('claude-sonnet-5-5', 'hi');
+      streams[0].write(frame({ type: 'text', text: 'ok' }));
+      streams[0].write(frame('[DONE]'));
+      await vi.waitUntil(() => events.some(event => event.type === 'done'), { timeout: 3000, interval: 5 });
+
+      await service.setSessionModel(id, 'gpt-5');
+      await service.send(id, 'again');
+      await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 3000, interval: 5 });
+      expect(declared(0)).toContain('file_edit');
+      expect(declared(1)).toContain('apply_patch');
+      expect(declared(1)).not.toContain('file_edit');
+    });
+
+    it('applies a patch from a GPT model once approved, with a diff per file on the settled call', async () => {
+      await startOn('gpt-5', 'fix it');
+      const patchText = [
+        '*** Begin Patch',
+        `*** Update File: ${target}`,
+        '@@',
+        '-beta',
+        '+BETA',
+        `*** Add File: ${join(root, 'extra.md')}`,
+        '+more',
+        '*** End Patch',
+      ].join('\n');
+      streams[0].write(toolTurn('c1', 'apply_patch', { patchText }));
+      streams[0].write(frame('[DONE]'));
+
+      const call = await pendingApproval();
+      expect(call.approvalDiffs?.map(diff => diff.operation)).toEqual(['edit', 'create']);
+      await expect(readFile(target, 'utf8')).resolves.toBe('alpha\nbeta\ngamma\n');
+      approvals.resolve(call.approvalId as string, { decision: 'once' });
+
+      await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 5000, interval: 10 });
+      await expect(readFile(target, 'utf8')).resolves.toBe('alpha\nBETA\ngamma\n');
+      await expect(readFile(join(root, 'extra.md'), 'utf8')).resolves.toBe('more\n');
+      expect(lastToolResult().content).toContain('Applied patch to 2 files');
+      const settled = events.find(event => event.type === 'tool-end' && event.call.status === 'done');
+      expect(settled?.type === 'tool-end' && settled.call.diffs).toHaveLength(2);
+    });
+
+    it('refuses a file_edit call from a GPT model, which was never offered it', async () => {
+      await startOn('gpt-5', 'edit');
+      streams[0].write(toolTurn('c1', 'file_edit', { path: target, oldText: 'beta', newText: 'BETA' }));
+      streams[0].write(frame('[DONE]'));
+
+      await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 5000, interval: 10 });
+      expect(toolEvents('awaiting-approval')).toHaveLength(0);
+      expect(lastToolResult()).toMatchObject({ is_error: true, content: expect.stringContaining('use apply_patch') });
+      await expect(readFile(target, 'utf8')).resolves.toBe('alpha\nbeta\ngamma\n');
+    });
+  });
 });

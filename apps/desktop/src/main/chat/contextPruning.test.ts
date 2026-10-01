@@ -220,3 +220,40 @@ describe('historyRounds', () => {
     expect(historyRounds(messages).map(round => round.map(entry => entry.id))).toEqual([[a.id], [b.id, c.id], [d.id]]);
   });
 });
+
+describe('findStaleResults with apply_patch', () => {
+  const patch = (...body: string[]): ChatToolCall =>
+    call('apply_patch', { patchText: ['*** Begin Patch', ...body, '*** End Patch'].join('\n') }, 'Applied patch');
+  const staleAfter = (...later: ChatToolCall[]) => {
+    const read = wholeRead('/p/a.ts', 100);
+    return findStaleResults([[read], ...later.map(entry => [entry]), [glob()], [glob()]], EAGER).clearIds.includes(
+      read.id
+    );
+  };
+
+  it('keeps a read the model later updated in place', () => {
+    expect(staleAfter(patch('*** Update File: /p/a.ts', '@@', '-a', '+b'))).toBe(false);
+  });
+
+  it('clears a read of a file the patch added or deleted', () => {
+    expect(staleAfter(patch('*** Add File: /p/a.ts', '+b'))).toBe(true);
+    expect(staleAfter(patch('*** Delete File: /p/a.ts'))).toBe(true);
+  });
+
+  it('clears a read of either end of a move', () => {
+    expect(staleAfter(patch('*** Update File: /p/a.ts', '*** Move to: /p/b.ts', '@@', '-a', '+b'))).toBe(true);
+    expect(staleAfter(patch('*** Update File: /p/z.ts', '*** Move to: /p/a.ts', '@@', '-a', '+b'))).toBe(true);
+  });
+
+  it('finds the file among several in one patch, and ignores other files', () => {
+    expect(staleAfter(patch('*** Update File: /p/x.ts', '@@', '-a', '+b', '*** Delete File: /p/a.ts'))).toBe(true);
+    expect(staleAfter(patch('*** Add File: /p/other.ts', '+b', '*** Update File: /p/a.ts', '@@', '-a', '+b'))).toBe(
+      false
+    );
+  });
+
+  it('ignores a patch that failed', () => {
+    const failed = { ...patch('*** Delete File: /p/a.ts'), status: 'error' as const, error: 'nope' };
+    expect(staleAfter(failed)).toBe(false);
+  });
+});
