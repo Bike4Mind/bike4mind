@@ -94,7 +94,11 @@ describe('ConnectSourceMenu', () => {
   it('keeps GitHub listed but disabled on a personal lake, with the reason inline', () => {
     const onConnectGitHub = vi.fn();
     wrap(
-      <ConnectSourceMenu lake={{ organizationId: null, isOwn: true }} onConnectDrive={vi.fn()} onConnectGitHub={onConnectGitHub} />
+      <ConnectSourceMenu
+        lake={{ organizationId: null, isOwn: true }}
+        onConnectDrive={vi.fn()}
+        onConnectGitHub={onConnectGitHub}
+      />
     );
     openMenu();
 
@@ -107,7 +111,13 @@ describe('ConnectSourceMenu', () => {
 
   it('hides GitHub entirely while EnableDataLakeGitHub is off', () => {
     isAdminFeatureEnabled.mockReturnValue(false);
-    wrap(<ConnectSourceMenu lake={{ organizationId: 'org-1', isOwn: false }} onConnectDrive={vi.fn()} onConnectGitHub={vi.fn()} />);
+    wrap(
+      <ConnectSourceMenu
+        lake={{ organizationId: 'org-1', isOwn: false }}
+        onConnectDrive={vi.fn()}
+        onConnectGitHub={vi.fn()}
+      />
+    );
     openMenu();
 
     expect(screen.getByTestId('datalake-connect-source-drive-item')).toBeInTheDocument();
