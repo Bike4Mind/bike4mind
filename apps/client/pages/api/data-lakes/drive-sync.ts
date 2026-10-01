@@ -110,10 +110,6 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       );
     }
 
-    // Same placement rationale again. Not gated on EnableDataLakeGitHub: with that flag off the client
-    // cannot see a bound repository, so this is the only thing stopping a second connector.
-    await assertLakeConnectorFree(lake.id, ['github']);
-
     const oauthRefreshToken = await captureOrgCredential(req.user.id);
 
     // Verify the connecting user can actually READ the folder before claiming it. The claim is GLOBAL
@@ -174,6 +170,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       }
       connectionId = byFolder.id;
     } else {
+      // Only a NEW claim can add a second connector, so the guard lives here and not up with the cheap
+      // gates: a same-folder Re-sync on a lake that already carries a GitHub row must still reach the
+      // reuse branch. Not gated on EnableDataLakeGitHub: with that flag off the client cannot see a
+      // bound repository, so this is the only thing stopping a second connector.
+      await assertLakeConnectorFree(lake.id, { except: 'googleDrive' });
       try {
         const created = await orgGoogleDriveConnectionRepository.create({
           organizationId: lake.organizationId,

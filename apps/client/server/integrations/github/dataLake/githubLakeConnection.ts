@@ -103,7 +103,7 @@ export async function resolveConnectableLake(user: LakeUser, dataLakeId: string)
       `"${lake.name}" is curated. Change its origin to connector-fed in the lake's settings before connecting a GitHub repository.`
     );
   }
-  await assertLakeConnectorFree(lake.id, ['github', 'googleDrive']);
+  await assertLakeConnectorFree(lake.id);
   return { lakeId: lake.id, organizationId: lake.organizationId };
 }
 

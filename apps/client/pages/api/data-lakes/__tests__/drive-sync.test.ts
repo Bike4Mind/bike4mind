@@ -239,7 +239,7 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     await expect(run(makeReq({ dataLakeId: 'nope', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(/not found/i);
   });
 
-  it('409s a lake a GitHub repository already feeds, before any Drive call or claim', async () => {
+  it('409s a NEW claim on a lake a GitHub repository already feeds (guard runs on the create branch, after the folder probe)', async () => {
     h.ghConnFindByDataLakeIdAny.mockResolvedValue({ id: 'gh1', targetDataLakeId: 'lake1' });
     const { res } = makeRes();
     await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toMatchObject({
@@ -247,10 +247,24 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
       message: expect.stringMatching(/already connected to a GitHub repository/i),
     });
     expect(h.ghConnFindByDataLakeIdAny).toHaveBeenCalledWith('lake1');
-    expect(h.userFindById).not.toHaveBeenCalled();
-    expect(h.getFolderAccess).not.toHaveBeenCalled();
-    expect(h.connFindByDriveFolderId).not.toHaveBeenCalled();
+    // Credential capture and the Drive folder probe now legitimately happen before the guard - only
+    // the write itself must be refused.
     expect(h.connCreate).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('re-syncs a same-lake same-folder Drive connection even though a GitHub row also feeds the lake (reuse branch never calls the guard)', async () => {
+    // Regression test: the guard used to run before the folder lookup and would 409 every request on
+    // a lake that also carries a GitHub row, including a harmless same-folder Re-sync. It now lives
+    // only on the NEW-claim branch, so a reuse must reach 202 regardless of what else feeds the lake.
+    h.ghConnFindByDataLakeIdAny.mockResolvedValue({ id: 'gh1', targetDataLakeId: 'lake1' });
+    h.connFindByDriveFolderId.mockResolvedValue({ id: 'conn1', targetDataLakeId: 'lake1' });
+    const { res, status } = makeRes();
+    await run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res);
+
+    expect(h.connUpdateCredential).toHaveBeenCalledWith('conn1', 'orgA', 'enc-refresh', 'u1');
+    expect(h.sendToQueue).toHaveBeenCalledWith('queue-url', { connectionId: 'conn1', forceFullWalk: true });
+    expect(status).toHaveBeenCalledWith(202);
   });
 
   it('enforces one connector per lake whatever EnableDataLakeGitHub is set to', () => {
