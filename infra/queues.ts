@@ -285,6 +285,59 @@ const fabFileBucketNotification = fabFileBucket.notify({
   ],
 });
 
+// Generation Callback Queue - declared before the image/video generation queues below because
+// their subscriptions (and the quest-timeout sweep cron) need to link it too: each enqueues a
+// signed HTTPS completion callback here after a job settles, for delivery to API-key callers.
+const generationCallbackQueueDLQ = new sst.aws.Queue('generationCallbackQueueDLQ', {
+  transform: {
+    queue: {
+      kmsMasterKeyId: 'alias/aws/sqs', // Encrypt payloads (carries the caller's callback URL)
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+const generationCallbackQueue = new sst.aws.Queue('generationCallbackQueue', {
+  visibilityTimeout: '2 minutes', // 30s Lambda timeout + safety margin for retries
+  dlq: {
+    queue: generationCallbackQueueDLQ.arn,
+    retry: 5, // Industry standard: 5 retries with exponential backoff
+  },
+  transform: {
+    queue: {
+      kmsMasterKeyId: 'alias/aws/sqs', // Encrypt payloads (carries the caller's callback URL)
+    },
+  },
+});
+const generationCallbackQueueSubscription = generationCallbackQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/generationCallback.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '30 seconds', // HTTP delivery timeout (10s per attempt + overhead)
+    vpc: lambdaVpc,
+    link: [...allSecrets],
+    logging: {
+      retention: '1 week', // Extended retention for delivery debugging
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+      // The callback body mirrors GET /api/quests/{id}, whose `files[].url` needs the CDN base.
+      NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+    concurrency: ['production', 'dev'].includes($app.stage)
+      ? {
+          reserved: 10,
+        }
+      : undefined,
+  },
+  SINGLE_RECORD_BATCH
+);
+
 // Image Generation Queue
 const imageGenerationDLQ = new sst.aws.Queue('imageGenerationDLQ', {});
 const imageGenerationQueue = new sst.aws.Queue('imageGenerationQueue', {
@@ -300,7 +353,16 @@ const imageGenerationQueueSubscription = imageGenerationQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, generatedImagesBucket, fabFileBucket, appFilesBucket, imageProcessor, eventBus],
+    link: [
+      ...allSecrets,
+      websocketApi,
+      generatedImagesBucket,
+      fabFileBucket,
+      appFilesBucket,
+      imageProcessor,
+      eventBus,
+      generationCallbackQueue,
+    ],
     logging: {
       retention: '3 days',
     },
@@ -342,7 +404,15 @@ const imageEditQueueSubscription = imageEditQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, generatedImagesBucket, fabFileBucket, appFilesBucket, imageProcessor],
+    link: [
+      ...allSecrets,
+      websocketApi,
+      generatedImagesBucket,
+      fabFileBucket,
+      appFilesBucket,
+      imageProcessor,
+      generationCallbackQueue,
+    ],
     logging: {
       retention: '3 days',
     },
@@ -1033,7 +1103,15 @@ const videoGenerationQueueSubscription = videoGenerationQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '15 minutes', // Max Lambda timeout (900 seconds)
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, generatedImagesBucket, fabFileBucket, appFilesBucket, eventBus],
+    link: [
+      ...allSecrets,
+      websocketApi,
+      generatedImagesBucket,
+      fabFileBucket,
+      appFilesBucket,
+      eventBus,
+      generationCallbackQueue,
+    ],
     logging: {
       retention: '3 days',
     },
@@ -1569,6 +1647,7 @@ export {
   // Queues
   fabFileChunkQueue,
   fabFileVectorizeQueue,
+  generationCallbackQueue,
   imageGenerationQueue,
   imageEditQueue,
   videoGenerationQueue,
@@ -1603,6 +1682,7 @@ export {
   fabFileChunkQueueDLQ,
   fabFileVectorizeQueueDLQ,
   fabFileModerationDLQ,
+  generationCallbackQueueDLQ,
   imageGenerationDLQ,
   imageEditDLQ,
   videoGenerationDLQ,
@@ -1638,6 +1718,7 @@ export {
   // Subscriptions
   fabFileChunkQueueSubscription,
   fabFileVectorizeQueueSubscription,
+  generationCallbackQueueSubscription,
   imageGenerationQueueSubscription,
   imageEditQueueSubscription,
   videoGenerationQueueSubscription,

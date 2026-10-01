@@ -56,7 +56,17 @@ describe('VideoGenerationService.invoke (retry quest bound to its session)', () 
     const service = new VideoGenerationService({
       db: {
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
-        quests: { findById: vi.fn(async () => ({ id: 'quest1', sessionId: questSessionId })), update },
+        quests: {
+          findById: vi.fn(async () => ({
+            id: 'quest1',
+            sessionId: questSessionId,
+            // The prior run failed; the retry must not inherit its error state.
+            status: 'done',
+            type: 'error',
+            errorCode: 'insufficient_credits',
+          })),
+          update,
+        },
       },
       startVideoGenerationProcess,
     } as never);
@@ -78,7 +88,9 @@ describe('VideoGenerationService.invoke (retry quest bound to its session)', () 
   it('retries a quest from the same session', async () => {
     const { invoke, update } = makeInvokeService('session1');
     await invoke();
-    expect(update).toHaveBeenCalled();
+    expect(update).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'quest1', type: 'message' }), {
+      unset: ['status', 'errorCode'],
+    });
   });
 
   it('writes only the reset fields when retrying a quest', async () => {
@@ -89,6 +101,7 @@ describe('VideoGenerationService.invoke (retry quest bound to its session)', () 
       id: 'quest1',
       videos: [],
       replies: [],
+      type: 'message',
       promptMeta: {
         model: {
           name: VideoModels.SORA_2,
@@ -101,6 +114,7 @@ describe('VideoGenerationService.invoke (retry quest bound to its session)', () 
         statusLog: statusLog('Video generation started'),
       },
     });
+    expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
   });
 
   it('writes only the error fields when starting the process fails', async () => {
@@ -109,7 +123,7 @@ describe('VideoGenerationService.invoke (retry quest bound to its session)', () 
     await invoke();
     const calls = update.mock.calls as unknown[][];
     const errorWrite = calls.find(c => (c[0] as { type?: string }).type === 'error');
-    expect(errorWrite?.[0]).toStrictEqual({ id: 'quest1', type: 'error', reply: 'queue down' });
+    expect(errorWrite?.[0]).toStrictEqual({ id: 'quest1', type: 'error', status: 'done', reply: 'queue down' });
   });
 });
 

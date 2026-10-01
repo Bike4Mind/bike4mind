@@ -7,6 +7,7 @@ import {
   imageGenerationQueueSubscription,
   githubWebhookQueueSubscription,
   webhookDeliveryQueueSubscription,
+  generationCallbackQueueSubscription,
   liveOpsTriageQueueSubscription,
   secopsTriageQueueSubscription,
   notebookCurationQueueSubscription,
@@ -138,6 +139,7 @@ const individualLogGroups = $util.all([
   // Queue handlers not previously monitored — gaps exposed by prod incident 2026-05-09
   githubWebhookQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   webhookDeliveryQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  generationCallbackQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   liveOpsTriageQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   secopsTriageQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   notebookCurationQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
