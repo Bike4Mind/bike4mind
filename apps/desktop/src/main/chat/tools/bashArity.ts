@@ -150,3 +150,30 @@ export function arityPrefix(tokens: readonly string[]): string[] {
   }
   return tokens.slice(0, 1);
 }
+
+const PACKAGE_VALUE_OPTIONS = ['--filter', '-F', '-C', '--dir', '--prefix'];
+
+const VALUE_OPTIONS: Readonly<Record<string, readonly string[]>> = {
+  pnpm: PACKAGE_VALUE_OPTIONS,
+  npm: PACKAGE_VALUE_OPTIONS,
+  yarn: PACKAGE_VALUE_OPTIONS,
+  git: ['-C', '-c'],
+};
+
+/**
+ * The command with the options that sit between the program and its subcommand dropped, so
+ * `pnpm --filter @x/y exec vitest run` is `pnpm exec vitest run` and `git -C dir commit` is
+ * `git commit`. Both the prefix an "always allow" remembers and the match against it use this
+ * form, so the two stay consistent.
+ */
+export function commandTokens(tokens: readonly string[]): string[] {
+  const [program, ...rest] = tokens;
+  if (program === undefined) return [];
+  const valued = VALUE_OPTIONS[program];
+  if (!valued) return [...tokens];
+  let index = 0;
+  while (index < rest.length && rest[index].startsWith('-')) {
+    index += valued.includes(rest[index]) ? 2 : 1;
+  }
+  return [program, ...rest.slice(index)];
+}

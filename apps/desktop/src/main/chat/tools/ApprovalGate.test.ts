@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApprovalGate, patternMatches } from './ApprovalGate';
+import { commandTokens } from './bashArity';
 import type { ApprovalAlways } from './types';
 
 /**
@@ -90,6 +91,21 @@ describe('ApprovalGate', () => {
       const mixed = always(['git commit *', 'rm *'], ['git commit -m a', 'rm -rf x']);
       expect(gate.coversCommands('s', mixed)).toBe(false);
       expect(gate.coversCommands('other', covered)).toBe(false);
+    });
+
+    it('matches after the same option-skipping the pattern was derived with', () => {
+      expect(patternMatches('git commit *', commandTokens(['git', '-C', 'sub', 'commit', '-m', 'x']).join(' '))).toBe(
+        true
+      );
+      expect(
+        patternMatches(
+          'pnpm exec vitest *',
+          commandTokens(['pnpm', '--filter', '@a/b', 'exec', 'vitest', 'run']).join(' ')
+        )
+      ).toBe(true);
+      expect(
+        patternMatches('pnpm exec vitest *', commandTokens(['pnpm', '--filter', '@a/b', 'exec', 'rm']).join(' '))
+      ).toBe(false);
     });
 
     it('keeps the two shell tools apart', async () => {

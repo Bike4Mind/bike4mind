@@ -42,11 +42,11 @@ describe('scanShell', () => {
     });
 
     it('finds the commands around a heredoc', async () => {
-      expect(await texts("cat <<'EOF' > out.txt\nhello\nEOF\nls")).toEqual(["cat <<'EOF' > out.txt\nhello\nEOF", 'ls']);
+      expect(await texts("cat <<'EOF' > out.txt\nhello\nEOF\nls")).toEqual(['cat', 'ls']);
     });
 
     it('does not count a bare assignment, and keeps the command after one', async () => {
-      expect(await texts('FOO=1 make build')).toEqual(['FOO=1 make build']);
+      expect(await texts('FOO=1 make build')).toEqual(['make build']);
       expect(await texts('FOO=1')).toEqual([]);
     });
 
@@ -64,6 +64,17 @@ describe('scanShell', () => {
       expect((await scan('cat ~/.ssh/id_rsa')).directories).toEqual([join(homedir(), '.ssh')]);
       expect((await scan('cat $HOME/.ssh/id_rsa')).directories).toEqual([join(homedir(), '.ssh')]);
       expect((await scan(`cat ~/proj/sub/x`)).directories).toEqual([]);
+    });
+
+    it('checks home paths in every spelling, for reads, writes and redirects', async () => {
+      const ssh = join(homedir(), '.ssh');
+      expect((await scan('cat ~/.ssh/id_rsa | head')).directories).toEqual([ssh]);
+      expect((await scan('ls ~/.aws')).directories).toEqual([homedir()]);
+      expect((await scan('cp ~/.npmrc .')).directories).toEqual([homedir()]);
+      expect((await scan('cat < ~/.netrc')).directories).toEqual([homedir()]);
+      expect((await scan('echo x > ~/.zshrc')).directories).toEqual([homedir()]);
+      expect((await scan('head "$HOME/.ssh/config"')).directories).toEqual([ssh]);
+      expect((await scan('head ${HOME}/.ssh/config')).directories).toEqual([ssh]);
     });
 
     it('allows the temp directories', async () => {
@@ -117,6 +128,14 @@ describe('scanShell', () => {
   });
 
   describe('what always allow remembers', () => {
+    it('skips options before the subcommand, for the prefix and for the text matched', async () => {
+      const result = await scan('pnpm --filter @x/y exec vitest run foo && git -C sub commit -m x');
+      expect(result.commands).toEqual([
+        { text: 'pnpm exec vitest run foo', always: 'pnpm exec vitest *' },
+        { text: 'git commit -m x', always: 'git commit *' },
+      ]);
+    });
+
     it('derives the prefix per sub-command', async () => {
       expect((await scan('git commit -m x && npm run dev --port 3 | tee log')).commands.map(c => c.always)).toEqual([
         'git commit *',

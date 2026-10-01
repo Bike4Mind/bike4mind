@@ -2,12 +2,12 @@ import { stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { Node } from 'web-tree-sitter';
-import { arityPrefix } from './bashArity';
+import { arityPrefix, commandTokens } from './bashArity';
 import { parseBash } from './bashParser';
 import { resolveWithinRootsPhysically } from './paths';
 
 export interface ShellCommand {
-  /** The command as written, redirects included: what a remembered pattern is matched against. */
+  /** The command's tokens with options before the subcommand dropped: what a remembered pattern is matched against. */
   text: string;
   /** What "always allow" would remember for it, e.g. `git commit *`. */
   always: string;
@@ -21,7 +21,7 @@ export interface ShellScan {
 
 const CHANGES_DIRECTORY = new Set(['cd', 'chdir', 'pushd', 'popd']);
 
-// Ported from opencode's shell tool, plus the three that also name a path they write to.
+// Ported from opencode's shell tool, plus commands that write to a path or read one by name.
 const TOUCHES_FILES = new Set([
   ...CHANGES_DIRECTORY,
   'rm',
@@ -35,6 +35,17 @@ const TOUCHES_FILES = new Set([
   'rmdir',
   'ln',
   'tee',
+  'ls',
+  'head',
+  'tail',
+  'less',
+  'more',
+  'wc',
+  'file',
+  'stat',
+  'du',
+  'find',
+  'tree',
 ]);
 
 const SUBSHELLS = new Set(['subshell', 'command_substitution', 'process_substitution']);
@@ -79,10 +90,6 @@ function words(node: Node): string[] {
     out.push(child.text);
   }
   return out;
-}
-
-function sourceOf(node: Node): string {
-  return (node.parent?.type === 'redirected_statement' ? node.parent.text : node.text).trim();
 }
 
 /**
@@ -137,7 +144,8 @@ export async function scanShell(
         return;
       }
 
-      commands.push({ text: sourceOf(node), always: `${arityPrefix(tokens).join(' ')} *` });
+      const normalised = commandTokens(tokens);
+      commands.push({ text: normalised.join(' '), always: `${arityPrefix(normalised).join(' ')} *` });
       if (!TOUCHES_FILES.has(program)) return;
       for (const arg of rest) {
         if (arg.startsWith('-') || (program === 'chmod' && arg.startsWith('+'))) continue;
