@@ -122,6 +122,7 @@ import {
 // the declaration stays beside the context contract it has to satisfy.
 export type { EntitlementResolution };
 import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
+import { countNotServingNamedLakes } from '../dataLakeService/countNotServingNamedLakes';
 import {
   buildElisionStamp,
   truncateElisionText,
@@ -3194,6 +3195,20 @@ export class ChatCompletionProcess {
         // unrecorded rather than reporting a zero that was never measured.
         const excludedLakes =
           excludedByAccessCount !== undefined ? { count: excludedByAccessCount, reason: 'access' as const } : undefined;
+        // The other reason a named lake drops out of scope: retrieval is active-only, so a draft
+        // narrows to nothing. Measured only where the session named a lake (nothing to miss
+        // otherwise), over the identity-named tags that did not survive into lakeScope.
+        const notServingCount =
+          accessForSeed !== undefined && sessionNamesALake(accessForSeed, session.retrievalTags)
+            ? await countNotServingNamedLakes(
+                this.db.dataLakes,
+                this.user.id,
+                datalakeTagsFrom(session.retrievalTags ?? []).filter(tag => !lakeScope.includes(tag)),
+                this.logger
+              )
+            : undefined;
+        const notServingLakes =
+          notServingCount !== undefined ? { count: notServingCount, reason: 'draft' as const } : undefined;
         quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
           attempted: false,
           mode: forcedRetrievalEnabled ? 'forced' : 'optional',
@@ -3201,6 +3216,7 @@ export class ChatCompletionProcess {
           dataLakeTags: [],
           lakeScope,
           ...(excludedLakes ? { excludedLakes } : {}),
+          ...(notServingLakes ? { notServingLakes } : {}),
           // Recorded only when the tool was offered: a forced-only turn never had a section to
           // ship, and writing `false` there would pad the A/B's control arm with turns that were
           // never in the experiment.

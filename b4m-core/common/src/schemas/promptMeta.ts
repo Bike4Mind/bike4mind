@@ -795,6 +795,25 @@ export const RetrievalSummarySchema = z.object({
       reason: z.enum(['access']),
     })
     .optional(),
+  /**
+   * How many lakes this session named (a `datalake:` retrieval tag) were left out of this turn's
+   * scope because they are not serving yet, and why. Retrieval is active-only by design, so a
+   * draft lake narrows the scope to nothing; without this field a turn that abstained for that
+   * reason reads, after the outcome merge, like a search that ran and found nothing.
+   *
+   * Same contract as `excludedLakes`, which it sits beside rather than inside (one session can
+   * name one gated and one draft lake, and that object holds a single reason): ABSENT MEANS NOT
+   * MEASURED, never "every named lake was serving" - a measured turn with nothing missing records
+   * `count: 0`. COUNT AND REASON ONLY, never an id or name, and only drafts the CALLER created are
+   * counted, so naming a tag cannot probe whether another user's draft exists. `reason` is a closed
+   * enum; a further non-serving cause (e.g. an archived lake) adds a value here.
+   */
+  notServingLakes: z
+    .object({
+      count: z.number().int().nonnegative(),
+      reason: z.enum(['draft']),
+    })
+    .optional(),
 });
 
 /**

@@ -123,6 +123,12 @@ const ExcludedLakesSchema = subSchema({
   reason: { type: String, required: true },
 });
 
+// Same count + reason only shape and rationale as ExcludedLakesSchema above.
+const NotServingLakesSchema = subSchema({
+  count: { type: Number, required: true },
+  reason: { type: String, required: true },
+});
+
 // Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
 // auto-vivification of `surfaces`/`dataLakeTags` as empty arrays, which would fail the Zod
 // re-parse since `attempted` is required). Top-level on promptMeta, not nested under
@@ -168,6 +174,8 @@ const RetrievalSummarySchema = subSchema({
   // default: undefined for the same auto-vivification reason as `injected` above - and here it
   // also preserves the presence contract that absence means NOT RECORDED, never "nothing excluded".
   excludedLakes: { type: ExcludedLakesSchema, required: false, default: undefined },
+  // default: undefined for the same presence contract as excludedLakes: absent means NOT MEASURED.
+  notServingLakes: { type: NotServingLakesSchema, required: false, default: undefined },
 });
 
 // Partial-grounding-coverage detail. subSchema + default:undefined for the same reason as
