@@ -465,13 +465,18 @@ function diagnoseTools(promptMeta: PromptMeta): DiagnosisCheck {
   if (failed.length > 0) {
     const names = failed.map(call => call.name).filter((n): n is string => !!n);
     const named = names.length > 0 ? ` (${names.join(', ')})` : '';
+    const allFailed = failed.length === calls.length;
+    const succeeded = calls.length - failed.length;
     return {
       id: 'tools',
       label,
-      status: 'fail',
-      detail: `${failed.length} of ${calls.length} tool ${calls.length === 1 ? 'call' : 'calls'} failed${named}.`,
-      remedy:
-        'Retry the question; a failed tool usually means the answer was written without what that tool would have returned.',
+      status: allFailed ? 'fail' : 'warn',
+      detail: allFailed
+        ? `${failed.length === 1 ? 'The only tool call' : `All ${failed.length} tool calls`} failed${named}.`
+        : `${failed.length} of ${calls.length} tool ${calls.length === 1 ? 'call' : 'calls'} failed${named}, but ${succeeded} succeeded and the model replied with what it got.`,
+      remedy: allFailed
+        ? 'Retry the question; the answer was built with none of what those tools would have returned.'
+        : 'Retry if the answer seems incomplete; otherwise the successful calls may have been enough.',
     };
   }
 
