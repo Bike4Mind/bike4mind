@@ -72,12 +72,12 @@ export function holdsDataLakeReadScope(req: ScopedRequest): boolean {
 /**
  * The chat tools a caller may not be offered on this request: the data-lake write tools when an
  * API key lacks datalake:write, and the read tool too when it also lacks datalake:read (JWT/browser
- * callers hold every scope - see holdsScope). The chat doors (`/api/chat`, `/api/ai/llm`) pass this
+ * callers hold every scope - see holdsApiKeyScope). The chat doors (`/api/chat`, `/api/ai/llm`) pass this
  * as the turn's `deniedTools`, which is enforced at every denylist site in ChatCompletionProcess,
  * including the pass after the intent gates run.
  */
 export function dataLakeToolsDeniedFor(req: ScopedRequest): string[] {
-  if (holdsScope(req, DATA_LAKE_WRITE_SCOPES)) return [];
+  if (holdsApiKeyScope(req, DATA_LAKE_WRITE_SCOPES)) return [];
   return holdsDataLakeReadScope(req) ? [...DATA_LAKE_WRITE_TOOL_NAMES] : [...DATA_LAKE_TOOL_NAMES];
 }
 
