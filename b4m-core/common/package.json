@@ -83,7 +83,7 @@
     "tsdown": "^0.22.3",
     "tsx": "4.23.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "dependencies": {
     "@bike4mind/hearth": "workspace:*",
