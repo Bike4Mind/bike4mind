@@ -6,12 +6,13 @@ import DataLakeLakePicker from './DataLakeLakePicker';
 import DataLakeTreeEmptyState from './DataLakeTreeEmptyState';
 import { UNCATEGORIZED_KEY } from './DataLakeTreeView';
 import { resolveEmptyVariant } from './resolveEmptyVariant';
-import { scopeTagCountsToLakes, seedEmptyLakeTags, type TagScopeLake } from './scopeTagCountsToLakes';
+import { scopeTagCountsToLakes, seedEmptyLakeTags } from './scopeTagCountsToLakes';
 import SelectedLakeHeader from './SelectedLakeHeader';
 import ActiveLakeScopeStrip from './ActiveLakeScopeStrip';
 import { lakeIdsForTags, tagsForLakeIds } from './tagsForLakeIds';
 import DataLakeRailViewer from './DataLakeRailViewer';
 import { resolveManageableLake } from './resolveManageableLake';
+import { isDraftLake } from './lakeVisibility';
 import { DataLakeNavProvider } from './dataLakeNavContext';
 import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -104,7 +105,7 @@ const isFileDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types ?? []
 
 /** Stable empty fallback for seedEmptyLakeTags below, so an in-flight lake list never churns
  *  the memo it feeds (see lakesInScope). */
-const EMPTY_LAKES: TagScopeLake[] = [];
+const EMPTY_LAKES: ManageableDataLakeConfig[] = [];
 
 export default function DataLakeExplorer({
   articleId,
@@ -367,6 +368,18 @@ export default function DataLakeExplorer({
     [isScopeEmpty, scopedTagCounts, lakesInScope]
   );
   const tree = useMemo(() => buildTagTree(seededTagCounts), [seededTagCounts]);
+  // Same prefix guard and trailing-colon strip as seedEmptyLakeTags, so a lake's path matches its
+  // own root node.
+  const draftLakePaths = useMemo(
+    () =>
+      new Set(
+        lakesInScope
+          .filter(lake => isDraftLake(lake) && typeof lake.fileTagPrefix === 'string')
+          .map(lake => lake.fileTagPrefix.replace(/:+$/, ''))
+          .filter(Boolean)
+      ),
+    [lakesInScope]
+  );
 
   // Derive the current leaf tag from breadcrumb + tree state. A branch node (has children) can
   // ALSO carry files tagged with its own exact path, which DataLakeTreeView renders mixed into
@@ -612,6 +625,7 @@ export default function DataLakeExplorer({
           source={source}
           uncategorized={uncategorized}
           selectedFileIds={attachedFileIds}
+          draftLakePaths={draftLakePaths}
           onAttachFile={attachFileToChat}
           onViewFile={handleViewFile}
           canDeleteFile={canDeleteFile}

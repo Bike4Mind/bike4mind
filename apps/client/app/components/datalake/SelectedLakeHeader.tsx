@@ -3,6 +3,7 @@ import AddIcon from '@mui/icons-material/Add';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import DriveConnectAction from '@client/app/components/DataLakeWizard/steps/DriveConnectAction';
 import { canConnectLakeDrive, isDraftLake, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
+import LakeDraftChip, { DRAFT_LAKE_TOOLTIP } from '@client/app/components/datalake/LakeDraftChip';
 import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import type { ManageableDataLakeConfig } from '@bike4mind/common';
 
@@ -50,17 +51,10 @@ export default function SelectedLakeHeader({ lake }: { lake: ManageableDataLakeC
           {lake.fileTagPrefix}
         </Chip>
         {isDraftLake(lake) && (
-          <Tooltip title="Draft - grounds no answers until it is published. Publish it from Configure." size="sm">
-            <Chip
-              size="sm"
-              variant="soft"
-              color="warning"
-              sx={{ fontSize: '11px' }}
-              data-testid="datalake-selected-lake-draft-chip"
-            >
-              Draft
-            </Chip>
-          </Tooltip>
+          <LakeDraftChip
+            testId="datalake-selected-lake-draft-chip"
+            tooltip={`${DRAFT_LAKE_TOOLTIP}. Publish it from Configure.`}
+          />
         )}
       </Stack>
 

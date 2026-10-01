@@ -25,6 +25,7 @@ import type { TagNode } from '@client/app/components/Files/Browser/TagView/parse
 import FileIndexingAlert from './FileIndexingAlert';
 import DataLakeTreeView, { type DataLakeTreeChrome } from './DataLakeTreeView';
 import TreeRowLabel from './TreeRowLabel';
+import LakeDraftChip from './LakeDraftChip';
 import { RowActionsMenu, RowMenuItem } from './rowActionsMenu';
 import { inkFor } from '@client/app/components/datalake/deckChrome';
 import {
@@ -61,6 +62,12 @@ interface DataLakeChatTreeProps {
    */
   uncategorized?: { files: IFabFileDocument[]; count: number };
   selectedFileIds: ReadonlySet<string>;
+  /**
+   * Tag paths (`acme:legal`, no trailing colon) of the draft lakes in view. A folder whose FULL path
+   * is one of these is that lake's root and gets the draft marker; matching on the path rather than
+   * the segment keeps a nested prefix's parent folder unmarked.
+   */
+  draftLakePaths?: ReadonlySet<string>;
   /** Menu action: attach the file to the chat session. */
   onAttachFile: (file: IFabFileDocument) => void;
   /** Open the file. Runs from the row's own click as well as the menu's View item. */
@@ -105,6 +112,7 @@ export default function DataLakeChatTree({
   source,
   uncategorized,
   selectedFileIds,
+  draftLakePaths,
   onAttachFile,
   onViewFile,
   canDeleteFile,
@@ -319,6 +327,9 @@ export default function DataLakeChatTree({
             <ListItemContent>
               <TreeRowLabel label={humanizeSegment(node.segment, depth)} />
             </ListItemContent>
+            {draftLakePaths?.has([...breadcrumb, node.segment].join(':')) && (
+              <LakeDraftChip testId={`datalake-node-draft-chip-${node.segment}`} />
+            )}
             <Chip size="sm" variant="soft" color="neutral" sx={COUNT_CHIP_SX}>
               {node.fileCount}
             </Chip>
