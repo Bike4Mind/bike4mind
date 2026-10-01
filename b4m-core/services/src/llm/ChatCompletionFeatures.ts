@@ -3468,8 +3468,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             // name, and the chip must not alias the detector's own array.
             ...(conflictsWith ? { conflictsWith: [...conflictsWith] } : {}),
             // Against the session-narrowed `lakes` this scan searched: every candidate came from
-            // that scope or the caller's own/shared base arms, which read as library.
-            ...(file
+            // that scope or the caller's own/shared base arms, which read as library. Left off when
+            // the lake read degraded, so a lake file keeps "Data Lake" rather than reading as library.
+            ...(file && access.lakeViewComplete !== false
               ? {
                   sourceOrigin: citableOriginFor(
                     { tags: fileTagNames, ownerUserId: normalizeId(file.userId), callerUserId: user.id },

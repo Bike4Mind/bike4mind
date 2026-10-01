@@ -1256,6 +1256,22 @@ describe('retrieve_knowledge_content access-event audit', () => {
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ resolvedLakeIds: ['lake-x'] }));
   });
 
+  // Path B narrows the same memoized owner-wide set the attribution reads, instead of resolving it
+  // a second time for the search.
+  it('resolves owner-wide lake access once on the tag/query path too', async () => {
+    const ctx = auditContext();
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: [makeFile({ id: 'c', fileName: 'Clean Guide.pdf', tags: [{ name: 'datalake:x' }] })],
+    });
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    await tool.toolFn({ query: 'guide' });
+    await flushAsync();
+
+    expect(getDynamicDataLakeAccessMock).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ resolvedLakeIds: ['lake-x'] }));
+  });
+
   it('records a chat-kb-retrieve event attributed to the tag-matched lake', async () => {
     const ctx = auditContext({ user: { id: 'u1', groups: [], organizationId: 'org1' } as never });
     (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
@@ -1618,6 +1634,115 @@ describe('retrieve_knowledge_content chip source origin', () => {
     expect(citables).toHaveLength(1);
     expect(citables[0].metadata).not.toHaveProperty('sourceOrigin');
     expect(getDynamicDataLakeAccessMock).not.toHaveBeenCalled();
+  });
+
+  it("labels a file from a pre-authorized ('Test this lake') lake with that lake, not as library", async () => {
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      user: { id: 'u1', groups: [], organizationId: 'org1' } as never,
+      sessionPreauthorizedLakeIds: ['lake-p'],
+      db: {
+        fabfiles: {
+          findByIdAndUserId: vi
+            .fn()
+            .mockResolvedValue(makeFile({ fileName: 'Curated.pdf', tags: [{ name: 'datalake:p' }], userId: 'u1' })),
+          findById: vi.fn(),
+          search: vi.fn(),
+        },
+        fabfilechunks: pagedTextChunkRepo([{ id: 'c1', text: 'chunk body' }]),
+        // The curator manages lake P through an org-admin grant but is not a member, so it is
+        // reachable only through the session's pre-authorization.
+        dataLakes: {
+          findById: vi.fn().mockResolvedValue({
+            id: 'lake-p',
+            name: 'Lake P',
+            slug: 'p',
+            datalakeTag: 'datalake:p',
+            status: 'active',
+            organizationId: 'org1',
+            createdByUserId: 'someone-else',
+          }),
+        },
+        organizations: { findIdsWithAdminRights: vi.fn().mockResolvedValue(['org1']) },
+      } as never,
+    });
+
+    await runById(ctx);
+
+    expect(emittedCitables(ctx)[0].metadata?.sourceOrigin).toEqual({
+      kind: 'lake',
+      lakes: [{ id: 'lake-p', name: 'Lake P' }],
+    });
+  });
+
+  // The owner arm of attributeFileToLakeIds: a dynamic lake's prefix claims only files its creator
+  // owns, so dropping the file owner from retrieve would mislabel the creator's file as library.
+  it("attributes a dynamic lake's prefix only to the creator-owned file", async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:dyn'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [
+        {
+          id: 'lake-dyn',
+          name: 'Dynamic Lake',
+          datalakeTag: 'datalake:dyn',
+          membership: {
+            kind: 'owned',
+            datalakeTag: 'datalake:dyn',
+            creatorUserId: 'creator',
+            fileTagPrefix: 'acme:',
+          },
+        },
+      ],
+    });
+    const ctx = makeContext({ retrievalFilter: undefined });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: [
+        makeFile({ id: 'fcreator', fileName: 'Creator.pdf', tags: [{ name: 'acme:x' }], userId: 'creator' }),
+        makeFile({ id: 'fother', fileName: 'Other.pdf', tags: [{ name: 'acme:x' }], userId: 'someone-else' }),
+      ],
+    });
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    await tool.toolFn({ query: 'acme' });
+
+    const originById = Object.fromEntries(emittedCitables(ctx).map(c => [c.id, c.metadata?.sourceOrigin]));
+    expect(originById).toEqual({
+      fcreator: { kind: 'lake', lakes: [{ id: 'lake-dyn', name: 'Dynamic Lake' }] },
+      fother: { kind: 'library', owned: false },
+    });
+  });
+
+  it('leaves the origin off but still audits when the lake view is incomplete', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', name: 'Lake X', datalakeTag: 'datalake:x' }],
+      lakeViewComplete: false,
+    });
+    const record = vi.fn().mockResolvedValue(undefined);
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: {
+          findByIdAndUserId: vi
+            .fn()
+            .mockResolvedValue(makeFile({ fileName: 'Clean.pdf', tags: [{ name: 'datalake:x' }], userId: 'u1' })),
+          findById: vi.fn(),
+          search: vi.fn(),
+        },
+        fabfilechunks: pagedTextChunkRepo([{ id: 'c1', text: 'chunk body' }]),
+        lakeAccessEvents: { record },
+      } as never,
+    });
+
+    await runById(ctx);
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(emittedCitables(ctx)[0].metadata).not.toHaveProperty('sourceOrigin');
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ resolvedLakeIds: ['lake-x'] }));
   });
 
   it('still ships the chips, without an origin, when the lake lookup rejects', async () => {

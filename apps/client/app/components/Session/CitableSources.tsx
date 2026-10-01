@@ -269,22 +269,29 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
             }}
           >
             {source.title}
-            {hostname && (
-              <Tooltip size="sm" placement="top" title={hostnameTitle}>
-                <Typography
-                  component="span"
-                  level="body-xs"
-                  data-testid={isInternal ? 'citable-source-origin-label' : undefined}
-                  sx={{
-                    color: 'text.tertiary',
-                    ml: 1,
-                  }}
-                >
-                  {hostname}
-                </Typography>
-              </Tooltip>
-            )}
           </Typography>
+          {/* A sibling of the title, not inside it, so a long title cannot ellipsise the lake name
+              away; capped so a long lake name or hostname clips itself rather than the title. */}
+          {hostname && (
+            <Tooltip size="sm" placement="top" title={hostnameTitle}>
+              <Typography
+                component="span"
+                level="body-xs"
+                data-testid={isInternal ? 'citable-source-origin-label' : undefined}
+                sx={{
+                  color: 'text.tertiary',
+                  ml: 0.5,
+                  flexShrink: 0,
+                  maxWidth: '50%',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {hostname}
+              </Typography>
+            </Tooltip>
+          )}
           {/* Both badges below pin placement="top": chips are full-width and stack, so Joy's
               default bottom lands the box on the next chip down. Note this does not clear the
               conflict case entirely - conflicts are stamped symmetrically, so the lower chip of

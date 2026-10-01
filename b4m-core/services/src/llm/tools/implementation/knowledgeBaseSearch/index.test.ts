@@ -3906,8 +3906,9 @@ describe('search_knowledge_base chip source origin', () => {
             data: [
               { id: 'fa', fileName: 'A.pdf', tags: [{ name: 'datalake:a' }], userId: 'someone-else' },
               { id: 'fother', fileName: 'Shared.pdf', tags: [], userId: 'someone-else' },
+              { id: 'fmine', fileName: 'Mine.pdf', tags: [], userId: 'u1' },
             ],
-            total: 2,
+            total: 3,
           }),
         },
       } as never,
@@ -3919,7 +3920,43 @@ describe('search_knowledge_base chip source origin', () => {
     expect(originById).toEqual({
       fa: { kind: 'lake', lakes: [{ id: 'lake-a', name: 'Lake A' }] },
       fother: { kind: 'library', owned: false },
+      fmine: { kind: 'library', owned: true },
     });
+  });
+
+  // A degraded lake read returns a short lake list without throwing, so a lake file would otherwise
+  // read as library; leaving the origin off keeps the chip's "Data Lake" fallback instead.
+  it('semantic and keyword arms: leave the origin off when the lake view is incomplete', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:a'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [lakeA],
+      lakeViewComplete: false,
+    });
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [hit('fb', ['datalake:b'], 'someone-else', 0.9)],
+    });
+    const semantic = semanticCtx();
+    await run(semantic);
+    expect(emittedCitables(semantic)).toHaveLength(1);
+    expect(emittedCitables(semantic)[0].metadata).not.toHaveProperty('sourceOrigin');
+
+    const keyword = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'fb', fileName: 'B.pdf', tags: [{ name: 'datalake:b' }], userId: 'someone-else' }],
+            total: 1,
+          }),
+        },
+      } as never,
+    });
+    await run(keyword);
+    expect(emittedCitables(keyword)).toHaveLength(1);
+    expect(emittedCitables(keyword)[0].metadata).not.toHaveProperty('sourceOrigin');
   });
 
   it('keyword arm (agent-scoped): chips carry no sourceOrigin key at all', async () => {

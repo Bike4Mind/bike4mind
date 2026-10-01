@@ -655,7 +655,7 @@ async function trySemanticKbSearch(
     // A personal-corpus session searches with NO lake arms: `collectScopedFiles` passes
     // `includeShared: true` alongside these, so emptying them leaves the caller's own and shared
     // files as the corpus - which is exactly the intent, and keeps their whole library rankable.
-    const { dataLakeTags, dataLakeTagPrefixes, lakes } = await resolveSessionLakeAccess(context);
+    const { dataLakeTags, dataLakeTagPrefixes, lakes, lakeViewComplete } = await resolveSessionLakeAccess(context);
     // No accessible data lake - keyword search owns the user's own files. EXCEPT when the lakes
     // were suppressed deliberately: there the caller does have a corpus worth ranking (their own
     // files), and falling through to the metadata-only keyword arm would lose content search over
@@ -780,7 +780,8 @@ async function trySemanticKbSearch(
       skipNotice,
       dataLakeTags,
       lakesWithCandidates.length > 0 ? lakesWithCandidates : undefined,
-      lakes
+      // A degraded lake read would mislabel every lake file as library; no origin keeps "Data Lake".
+      lakeViewComplete === false ? undefined : lakes
     );
     context.logger.log(
       `📚 [semantic] returning ${ranked.length}/${search.results.length} passages from ${new Set(ranked.map(r => r.fileId)).size} files (top score ${search.results[0].score.toFixed(3)}${budgets.kbResultTokenBudget > 0 ? `, ${bound.tokensUsed} tokens` : ''}${bound.budgetBound ? ', budget-bound' : ''})`
@@ -1390,9 +1391,11 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             // Search files the user has access to (owned + shared + org-shared + data lake)
             // Same treatment as the semantic arm above - a fallback that re-widened to owner-wide
             // lake access would undo the scope on exactly the turns semantic search found nothing.
-            const { dataLakeTags, dataLakeTagPrefixes, lakes } = await resolveSessionLakeAccess(context);
+            const { dataLakeTags, dataLakeTagPrefixes, lakes, lakeViewComplete } =
+              await resolveSessionLakeAccess(context);
             keywordArmLakes = lakes;
-            keywordArmOriginLakes = lakes;
+            // Same degraded-read rule as the semantic arm's origin lakes.
+            keywordArmOriginLakes = lakeViewComplete === false ? undefined : lakes;
             const lakeMemberships = lakeMembershipsFrom(lakes);
             warnIfManyLakeMemberships(lakeMemberships, context.logger, 'search_knowledge_base:keyword-fallback');
             searchResults = await context.db.fabfiles.search(

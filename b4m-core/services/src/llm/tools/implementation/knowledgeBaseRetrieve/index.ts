@@ -3,13 +3,13 @@ import { isObjectIdShaped } from '../../base/objectId';
 import { citationTagDescription, CitableSource, IFabFileDocument } from '@bike4mind/common';
 import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
-import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
+import { resolveOwnerLakeAccess, resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
 import {
-  getDynamicDataLakeAccess,
   lakeMembershipsFrom,
   warnIfManyLakeMemberships,
   type ResolvedLakeAccess,
 } from '../../../../dataLakeService/getDynamicDataLakeTags';
+import type { ResolvedLakeAccessSet } from '../../../../dataLakeService/narrowLakeAccessToSession';
 import { satisfiesMembershipScope } from '../../../../dataLakeService/lakeMembership';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
 import {
@@ -137,15 +137,15 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
         }
 
         try {
-          // Memoized per call: Path A's shared-file fallback, Path B's search, and the audit
-          // attribution below each need the caller's dynamic lake access, but at most one of the
-          // first two ever runs (Path A returns before Path B on a resolved/missing file_id) - this
-          // makes whichever one runs first, plus the attribution step, share a single round trip
-          // instead of each re-resolving it.
-          let dynamicAccessPromise: ReturnType<typeof getDynamicDataLakeAccess> | undefined;
+          // Memoized per call so each path resolves lake access at most once: the owner-wide set feeds
+          // chip and audit attribution below, and dynamicAccess() (Path A's shared-file fallback,
+          // Path B's search) narrows that same promise to the session instead of re-resolving it.
+          let ownerAccessPromise: Promise<ResolvedLakeAccessSet> | undefined;
+          const ownerAccess = () => (ownerAccessPromise ??= resolveOwnerLakeAccess(context));
           // Narrowed INSIDE the chain so the memo stays a Promise (it is shared by several later
           // awaits) and so every consumer sees the session-scoped set, not the owner-wide one.
-          const dynamicAccess = () => (dynamicAccessPromise ??= resolveSessionLakeAccess(context));
+          let dynamicAccessPromise: Promise<ResolvedLakeAccessSet> | undefined;
+          const dynamicAccess = () => (dynamicAccessPromise ??= resolveSessionLakeAccess(context, ownerAccess));
 
           let files: IFabFileDocument[] = [];
 
@@ -504,9 +504,10 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             );
           }
 
-          // Owner-wide lakes for both chip attribution and the audit, resolved ONCE on the unscoped
-          // branch. Deliberately NOT dynamicAccess(): that is the session-narrowed set, and both ask
-          // a different question - "what lake was this content", not "what may this session search".
+          // Owner-wide lakes (plus pre-authorized ones) for chip attribution and the audit, shared with
+          // dynamicAccess() through ownerAccess(). Deliberately NOT dynamicAccess(): that is the
+          // session-narrowed set, and both ask a different question - "what lake was this content",
+          // not "what may this session search".
           // A file served by the ownership fast path consults no lake state, so under a narrowed or
           // suppressed session it would attribute to zero lakes - dropping the audit row for access
           // that still happened and mislabelling a lake file's chip as library. Awaited because the
@@ -514,9 +515,14 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           // (an uncaught throw here would reach the outer catch and fail a successful read).
           // undefined on the scoped branch, which has no lake concept, so its chips carry no origin.
           let attributionLakes: ResolvedLakeAccess[] | undefined;
+          // The chips' copy: dropped when the lake read degraded, which would otherwise read every
+          // lake file as library. The audit keeps attributing against what was seen.
+          let originLakes: ResolvedLakeAccess[] | undefined;
           if (!scope) {
             try {
-              ({ lakes: attributionLakes } = await getDynamicDataLakeAccess(context));
+              const owner = await ownerAccess();
+              attributionLakes = owner.lakes;
+              if (owner.lakeViewComplete !== false) originLakes = owner.lakes;
             } catch (err) {
               context.logger.error('[lakeAccessAudit] failed to resolve retrieve attribution', err);
             }
@@ -596,11 +602,11 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 // stamping an empty array the chip would badge with no partner to name, and the
                 // chip must not alias the detector's own array.
                 ...(conflictsWith ? { conflictsWith: [...conflictsWith] } : {}),
-                ...(attributionLakes
+                ...(originLakes
                   ? {
                       sourceOrigin: citableOriginFor(
                         { tags: fileTagNames, ownerUserId: normalizeId(file.userId), callerUserId: context.userId },
-                        attributionLakes
+                        originLakes
                       ),
                     }
                   : {}),
