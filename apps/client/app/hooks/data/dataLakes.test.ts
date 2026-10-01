@@ -362,7 +362,7 @@ describe('useRemoveFileFromDataLake cache invalidation', () => {
 });
 
 describe('useReviewDataLakeProposal cache invalidation', () => {
-  const run = async (decision: 'approve' | 'decline') => {
+  const run = async (decision: 'approve' | 'decline' | 'restore') => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
@@ -383,10 +383,16 @@ describe('useReviewDataLakeProposal cache invalidation', () => {
     expect(keys).toContain(JSON.stringify(['dataLakeFiles', 'lake1']));
   });
 
-  it('decline leaves the membership-derived caches alone', async () => {
+  it('decline refreshes the lake list but not the membership-derived caches', async () => {
     const keys = await run('decline');
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
     expect(keys).not.toContain(JSON.stringify(['dataLakeTagCounts']));
-    expect(keys).not.toContain(JSON.stringify(['data-lakes']));
+  });
+
+  it('restore refreshes the lake list but not membership caches', async () => {
+    const keys = await run('restore');
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
+    expect(keys).not.toContain(JSON.stringify(['dataLakeTagCounts']));
   });
 });
 
