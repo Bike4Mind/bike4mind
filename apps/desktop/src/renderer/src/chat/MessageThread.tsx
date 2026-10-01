@@ -6,7 +6,7 @@ import Chip from '@mui/joy/Chip';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { isTurnBudgetStop, type ChatMessage } from '@shared/chat';
+import { isTurnBudgetStop, lastBoundaryIndex, type ChatMessage } from '@shared/chat';
 import { ArtifactList } from './ArtifactCard';
 import { presentReply } from './codeStream';
 import { AttachmentRow } from './Attachments';
@@ -306,6 +306,95 @@ function RelayTurn({ message }: { message: ChatMessage }) {
   );
 }
 
+/**
+ * The divider a `/clear` or `/compact` left behind.
+ *
+ * Drawn across the column rather than as a turn, because it is not one: it is the line the model
+ * no longer reads past. The wording says that and nothing stronger - nothing was deleted, and a
+ * user who reads "cleared" as "gone" would not go looking for the disclosure above it that still
+ * holds every message.
+ *
+ * A compaction's summary is shown in full rather than folded away. It is the only thing the next
+ * turn is built on, so what it says - and what it leaves out - is exactly what the user needs to
+ * be able to read before they type again.
+ */
+function BoundaryRow({ message }: { message: ChatMessage }) {
+  const compacted = message.boundary?.kind === 'compact';
+
+  return (
+    <Stack spacing={1} data-testid="chat-boundary" data-boundary-kind={message.boundary?.kind}>
+      <Stack direction="row" spacing={1} alignItems="center">
+        <Box sx={{ flex: 1, borderTop: '1px solid', borderColor: 'divider' }} />
+        <Typography level="body-xs" textColor="text.tertiary" noWrap>
+          {compacted
+            ? 'Compacted - the model reads the summary below, not what is above'
+            : 'Cleared - the model reads nothing above this line'}
+        </Typography>
+        <Box sx={{ flex: 1, borderTop: '1px solid', borderColor: 'divider' }} />
+      </Stack>
+
+      {compacted && message.content && (
+        <Sheet variant="soft" color="neutral" sx={{ px: 2, py: 1.25, borderRadius: 'md' }}>
+          <Typography level="body-xs" textColor="text.tertiary" sx={{ fontWeight: 'lg', mb: 0.5 }}>
+            Summary of the conversation so far
+          </Typography>
+          <Box data-testid="chat-boundary-summary">
+            <ReplyMarkdown text={message.content} />
+          </Box>
+        </Sheet>
+      )}
+    </Stack>
+  );
+}
+
+/**
+ * What came before the boundary, behind a disclosure.
+ *
+ * Collapsed by DEFAULT and kept whole: the point of both commands is that the conversation stops
+ * being in front of the model, not that it stops being the user's record of their own work.
+ * Mounted only when opened, so a thousand-message history costs nothing to walk past.
+ */
+function EarlierMessages({ count, children }: { count: number; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <Box
+      component="details"
+      open={open}
+      onToggle={event => setOpen(event.currentTarget.open)}
+      data-testid="chat-earlier-messages"
+    >
+      <Stack
+        component="summary"
+        direction="row"
+        spacing={0.75}
+        alignItems="center"
+        sx={{
+          cursor: 'pointer',
+          listStyle: 'none',
+          py: 0.25,
+          color: 'text.tertiary',
+          '&::-webkit-details-marker': { display: 'none' },
+          '&:hover': { color: 'text.secondary' },
+        }}
+        data-testid="chat-earlier-messages-summary"
+      >
+        <Typography level="body-xs" textColor="inherit" noWrap>
+          {open ? 'Hide' : 'Show'} the {count} earlier {count === 1 ? 'message' : 'messages'}
+        </Typography>
+        <Box sx={{ display: 'flex', opacity: 0.6 }}>
+          <ChevronIcon open={open} />
+        </Box>
+      </Stack>
+      {open && (
+        <Stack spacing={3} sx={{ pt: 2 }}>
+          {children}
+        </Stack>
+      )}
+    </Box>
+  );
+}
+
 const PIN_THRESHOLD_PX = 48;
 
 export function MessageThread({
@@ -349,6 +438,31 @@ export function MessageThread({
   const last = messages[messages.length - 1];
   const lastContent = (last?.content.length ?? 0) + (last?.toolCalls?.length ?? 0);
   const empty = messages.length === 0;
+  // Only the LAST boundary divides the thread. Earlier ones fall inside the folded section and
+  // draw their own divider there, which is what a conversation compacted twice should look like.
+  const boundary = lastBoundaryIndex(messages);
+
+  // One function for both sides of the divider, taking each message's index in the WHOLE thread,
+  // so a turn drawn inside the disclosure is the same turn with the same Continue and status
+  // rules rather than a second rendering path that can drift from this one.
+  const turn = (message: ChatMessage, index: number): ReactNode => {
+    if (message.boundary) return <BoundaryRow key={message.id} message={message} />;
+    if (message.relay) return <RelayTurn key={message.id} message={message} />;
+    if (message.system) return <SystemTurn key={message.id} message={message} />;
+    if (message.role === 'user') return <UserTurn key={message.id} message={message} sessionId={sessionId} />;
+    return (
+      <AssistantTurn
+        key={message.id}
+        message={message}
+        onRespond={onRespond}
+        {...(onMove ? { onMove } : {})}
+        // Only the last turn, and only while nothing is running: resuming writes back
+        // into its own message, so a Continue on an older one would edit history.
+        {...(index === messages.length - 1 && !streaming ? { onContinue } : {})}
+        {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
+      />
+    );
+  };
 
   // A reader who scrolled up to look at something stays there; one at the bottom follows.
   const onScroll = () => {
@@ -391,26 +505,12 @@ export function MessageThread({
     // scrollbar in the middle of the window rather than at the edge of the pane.
     <Box ref={host} onScroll={onScroll} sx={{ flex: 1, ...scrollingColumnHostSx }} data-testid="chat-thread">
       <Stack ref={column} spacing={3} sx={{ ...contentColumnSx, py: 3 }}>
-        {messages.map((message, index) =>
-          message.relay ? (
-            <RelayTurn key={message.id} message={message} />
-          ) : message.system ? (
-            <SystemTurn key={message.id} message={message} />
-          ) : message.role === 'user' ? (
-            <UserTurn key={message.id} message={message} sessionId={sessionId} />
-          ) : (
-            <AssistantTurn
-              key={message.id}
-              message={message}
-              onRespond={onRespond}
-              {...(onMove ? { onMove } : {})}
-              // Only the last turn, and only while nothing is running: resuming writes back
-              // into its own message, so a Continue on an older one would edit history.
-              {...(index === messages.length - 1 && !streaming ? { onContinue } : {})}
-              {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
-            />
-          )
+        {boundary > 0 && (
+          <EarlierMessages count={boundary}>
+            {messages.slice(0, boundary).map((message, index) => turn(message, index))}
+          </EarlierMessages>
         )}
+        {messages.slice(Math.max(boundary, 0)).map((message, index) => turn(message, Math.max(boundary, 0) + index))}
         {/* The turn line normally rides the reply, but the last message is not always that reply:
             a queued prompt or a relayed message can land after it while the turn still runs. */}
         {streaming && status && last && !(last.role === 'assistant' && !last.relay && !last.system) && (

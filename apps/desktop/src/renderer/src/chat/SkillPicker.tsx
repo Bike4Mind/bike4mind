@@ -8,6 +8,7 @@ import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { SkillSummary } from '@shared/skills';
+import type { ComposerCommand } from './commands';
 import { contentColumnSx } from './layout';
 
 /** Past this the menu scrolls rather than pushing the transcript off the top of the window. */
@@ -23,18 +24,26 @@ const MAX_HEIGHT = 280;
  *
  * Every row says where it came from. A project skill is instruction text that arrived with a
  * clone, and "it looked like one of mine" is exactly the confusion the label exists to prevent.
+ * Commands lead the list and say `command`: they are the app's own actions and never reach the
+ * model, which is the distinction that matters most on a menu where every row looks alike.
  */
 export function SkillPicker({
+  commands = [],
   skills,
   activeIndex,
   untrustedProject,
+  onPickCommand,
   onPick,
   onTrustProject,
 }: {
+  /** The app's own `/` actions, drawn above the skills. See commands.ts. */
+  commands?: readonly ComposerCommand[];
   skills: readonly SkillSummary[];
+  /** Indexes COMMANDS THEN SKILLS, as one list - which is what the arrow keys walk. */
   activeIndex: number;
   /** The bound project whose skills are being withheld, if any. See SkillsState. */
   untrustedProject: string | null;
+  onPickCommand?: (command: ComposerCommand) => void;
   onPick: (skill: SkillSummary) => void;
   onTrustProject: () => void;
 }) {
@@ -45,7 +54,7 @@ export function SkillPicker({
     activeRef.current?.scrollIntoView({ block: 'nearest' });
   }, [activeIndex]);
 
-  if (skills.length === 0 && !untrustedProject) {
+  if (skills.length === 0 && commands.length === 0 && !untrustedProject) {
     return (
       <Box sx={{ ...contentColumnSx, pt: 1 }}>
         <Sheet variant="outlined" sx={{ borderRadius: 'md', px: 2, py: 1.25 }} data-testid="skill-picker">
@@ -87,11 +96,45 @@ export function SkillPicker({
         )}
 
         <List size="sm" sx={{ '--ListItem-paddingY': '6px' }}>
+          {commands.map((command, index) => (
+            <ListItemButton
+              key={`command:${command.name}`}
+              ref={index === activeIndex ? activeRef : undefined}
+              selected={index === activeIndex}
+              onMouseDown={event => {
+                event.preventDefault();
+                onPickCommand?.(command);
+              }}
+              data-testid="command-picker-option"
+              data-command-name={command.name}
+            >
+              <Box sx={{ minWidth: 0, flex: 1 }}>
+                <Stack direction="row" spacing={0.75} alignItems="baseline" sx={{ minWidth: 0 }}>
+                  <Typography level="title-sm" noWrap>
+                    /{command.name}
+                  </Typography>
+                  {command.argumentHint && (
+                    <Typography level="body-xs" textColor="text.tertiary" noWrap>
+                      {command.argumentHint}
+                    </Typography>
+                  )}
+                  <Box sx={{ flex: 1 }} />
+                  <Chip size="sm" variant="soft" color="primary">
+                    command
+                  </Chip>
+                </Stack>
+                <Typography level="body-xs" textColor="text.tertiary" noWrap>
+                  {command.description}
+                </Typography>
+              </Box>
+            </ListItemButton>
+          ))}
+
           {skills.map((skill, index) => (
             <ListItemButton
               key={`${skill.source}:${skill.name}`}
-              ref={index === activeIndex ? activeRef : undefined}
-              selected={index === activeIndex}
+              ref={commands.length + index === activeIndex ? activeRef : undefined}
+              selected={commands.length + index === activeIndex}
               // Mouse down, not click: a click fires after the textarea has already lost focus,
               // and the caret position the insertion needs would be gone with it.
               onMouseDown={event => {

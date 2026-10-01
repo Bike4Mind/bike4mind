@@ -20,6 +20,7 @@ import type {
   CreateCodeSessionRequest,
   CreateCodeSessionResult,
   ProjectInspection,
+  ContextBoundaryResult,
   SendMessageRequest,
   SendMessageResult,
   ToolAccessState,
@@ -73,6 +74,12 @@ export const IPC_CHANNELS = {
   chatSendMessage: 'chat:send-message',
   chatStopReply: 'chat:stop-reply',
   chatContinueReply: 'chat:continue-reply',
+  /**
+   * The two context commands. Renderer -> main only, and deliberately NOT reachable from a
+   * tool: see the renderer's commands.ts for why a slash command is not a model capability.
+   */
+  chatClearContext: 'chat:clear-context',
+  chatCompactContext: 'chat:compact-context',
   chatSuggestNextPrompt: 'chat:suggest-next-prompt',
   chatGetQueued: 'chat:get-queued',
   chatCancelQueued: 'chat:cancel-queued',
@@ -226,6 +233,18 @@ export interface DesktopApi {
      * message, so the events are indistinguishable from the turn never having stopped.
      */
     continueReply(sessionId: string): Promise<SendMessageResult>;
+    /**
+     * `/clear`: insert a context boundary, carrying nothing across. Instant - no model involved.
+     * Nothing is deleted; the transcript keeps every message and folds the earlier ones away.
+     */
+    clearContext(sessionId: string): Promise<ContextBoundaryResult>;
+    /**
+     * `/compact`: summarise the conversation and insert a boundary carrying that summary.
+     *
+     * One round trip on the session's own model. Refused while a turn is streaming, and on ANY
+     * failure the conversation is left exactly as it was - see ChatService.compactContext.
+     */
+    compactContext(sessionId: string, focus?: string): Promise<ContextBoundaryResult>;
     /**
      * Guess the message the user is most likely to send next, for the composer to draw greyed
      * out in its empty input. Null when there is nothing worth offering, which includes every

@@ -26,11 +26,12 @@ import type {
   ChatUsage,
   CreateCodeSessionRequest,
   CreateCodeSessionResult,
+  ContextBoundaryResult,
   SendMessageResult,
   UpdateProjectRequest,
   UpdateProjectResult,
 } from '@shared/chat';
-import { isTurnBudgetStop } from '@shared/chat';
+import { isTurnBudgetStop, messagesSinceBoundary } from '@shared/chat';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
 import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
@@ -56,7 +57,7 @@ import {
   type CompletionMessage,
 } from './completions';
 import { addUsage, foldUsage } from './streamEvents';
-import { findStaleResults, historyRounds, toolResultContent } from './contextPruning';
+import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';
 import { stalePlanReminder, unfinishedPlanReminder } from './planReminder';
 import { buildExploreContext, shouldOfferExplore } from './explore';
 import { MediaApiClient } from './media/MediaApiClient';
@@ -64,6 +65,7 @@ import type { MediaStore } from './media/MediaStore';
 import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
 import { createThinkFilter, type ThinkSplit } from './thinkFilter';
+import { COMPACT_MAX_TOKENS, compactRequestMessages, renderForSummary, sanitizeSummary } from './compaction';
 import { pickTitleModel, sanitizeGeneratedTitle, TITLE_MAX_TOKENS, titleRequestMessages } from './sessionTitle';
 import {
   pickSuggestionModel,
@@ -195,6 +197,15 @@ const TITLE_TIMEOUT_MS = 15_000;
  * seconds is about as long as an empty composer stays empty.
  */
 const SUGGESTION_TIMEOUT_MS = 5_000;
+
+/**
+ * How long a compaction may take before it is abandoned.
+ *
+ * Generous where a title's is not: the user asked for this one and is watching it, the input is
+ * a whole conversation rather than one sentence, and the alternative to waiting is the context
+ * limit. Abandoning it changes nothing - see compactContext.
+ */
+const COMPACT_TIMEOUT_MS = 120_000;
 
 /**
  * How far a message may travel from the turn the USER typed, in agent-to-agent hops.
@@ -1003,6 +1014,123 @@ export class ChatService {
   }
 
   /**
+   * `/clear`: stop sending what came before, carrying nothing across.
+   *
+   * No round trip, so it is instant - that is the whole difference from `/compact`, which is the
+   * same insertion with a summary in the marker. Everything else about the conversation is
+   * untouched: its id, project, branch, approval mode and `remoteSessionId` all live on the
+   * session rather than on its messages, and nothing here writes to them. The notebook binding
+   * matters most of the three (see ChatSession.remoteSessionId): dropping it would strand every
+   * image this conversation has generated.
+   */
+  async clearContext(sessionId: string): Promise<ContextBoundaryResult> {
+    if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
+    const session = await this.deps.store.get(sessionId);
+    if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+    if (!hasClearableHistory(session.messages)) {
+      return { ok: false, error: 'There is nothing in this conversation to clear yet.' };
+    }
+    return this.applyBoundary(sessionId, 'clear', '');
+  }
+
+  /**
+   * `/compact`: summarise the conversation and carry only the summary across.
+   *
+   * ALL OR NOTHING. The boundary is written only once a usable summary is in hand, so every
+   * failure path - a refusal, a timeout, an empty answer, a dropped socket - leaves the message
+   * list exactly as it was. The alternative is the one outcome this must never have: history
+   * dropped with nothing put in its place, which loses the user's context irrecoverably and
+   * cannot be undone from the UI or from the file on disk.
+   *
+   * Refused while a turn is streaming rather than queued, because the conversation is still
+   * growing: a summary written against a moving transcript would be wrong about the work by the
+   * time it landed.
+   */
+  async compactContext(sessionId: string, focus = ''): Promise<ContextBoundaryResult> {
+    if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
+    if (this.active.has(sessionId)) {
+      return { ok: false, error: 'This conversation is still replying. Wait for the turn to finish, then compact it.' };
+    }
+
+    const api = this.deps.getApiClient();
+    if (!api) return { ok: false, error: 'Sign in to compact this conversation.' };
+
+    const session = await this.deps.store.get(sessionId);
+    if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+
+    if (!hasClearableHistory(session.messages)) {
+      return { ok: false, error: 'There is nothing in this conversation to compact yet.' };
+    }
+    const history = messagesSinceBoundary(session.messages);
+
+    const controller = new AbortController();
+    let timer: NodeJS.Timeout | undefined;
+    let answer = '';
+    try {
+      timer = setTimeout(() => controller.abort(), COMPACT_TIMEOUT_MS);
+      const { endpoint } = await this.resolveServerConfig(api);
+      await streamCompletion(
+        api.getAxiosInstance(),
+        endpoint,
+        {
+          // The session's own model, as asked: a summary of a long coding conversation is the
+          // kind of reading a small model does badly, and this one is the handoff everything
+          // after the boundary depends on.
+          model: session.model,
+          messages: compactRequestMessages(renderForSummary(history), focus),
+          tools: [],
+          maxTokens: COMPACT_MAX_TOKENS,
+        },
+        event => {
+          if (event.type === 'content') answer += event.text ?? '';
+        },
+        controller.signal
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.deps.logger.warn(`CHAT: could not compact ${sessionId}: ${message}`);
+      return { ok: false, error: `Could not summarise this conversation: ${message}` };
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const summary = sanitizeSummary(answer);
+    if (!summary) {
+      return { ok: false, error: 'The summary came back empty, so nothing was changed. Try again.' };
+    }
+    return this.applyBoundary(sessionId, 'compact', summary);
+  }
+
+  /**
+   * Write the marker, and tell every open window.
+   *
+   * Pushed as a 'message' event as well as returned, because a conversation can be open in more
+   * than one window and the boundary changes what the transcript means - a window that missed it
+   * would keep drawing the old history as live context.
+   */
+  private async applyBoundary(
+    sessionId: string,
+    kind: 'clear' | 'compact',
+    content: string
+  ): Promise<ContextBoundaryResult> {
+    const marker: ChatMessage = {
+      id: randomUUID(),
+      // A user turn because that is the only role out-of-band text reaches a stateless
+      // completions endpoint under, and `system` because nobody typed it - the same compromise
+      // a relay and a spawned session's report both make.
+      role: 'user',
+      content,
+      createdAt: new Date().toISOString(),
+      system: true,
+      boundary: { kind },
+    };
+    const session = await this.deps.store.appendMessage(sessionId, marker);
+    if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+    this.emit({ type: 'message', sessionId, message: marker });
+    return { ok: true, session };
+  }
+
+  /**
    * Put a reply in flight and own its lifetime. Returns the message id it will arrive under -
    * a fresh one, or the interrupted message's when this run is carrying that one on.
    */
@@ -1382,7 +1510,7 @@ export class ChatService {
         // messages and break the prompt-cache prefix on every later turn (see contextPruning).
         // The nudge is ephemeral by design: never stored on the call, never replayed.
         const nudge = stalePlanReminder(
-          activeTodos([...session.messages, replySoFar(toolCalls)], true),
+          activeTodos([...sentHistory(session.messages), replySoFar(toolCalls)], true),
           roundsSincePlanUpdate
         );
         const lastResult = results[results.length - 1];
@@ -1426,7 +1554,7 @@ export class ChatService {
       const lastRound = produced[produced.length - 1];
       if (!controller.signal.aborted && !isTurnBudgetStop(stopReason) && lastRound?.toolCallIds.length === 0) {
         const unfinished = lastRound.text.trim()
-          ? unfinishedPlanReminder(activeTodos([...session.messages, replySoFar(toolCalls)], false))
+          ? unfinishedPlanReminder(activeTodos([...sentHistory(session.messages), replySoFar(toolCalls)], false))
           : null;
         if (unfinished) this.pendingPlanReminder.set(sessionId, unfinished);
       }
@@ -1538,7 +1666,7 @@ export class ChatService {
 
     const ids = new Set(clearIds);
     const content = new Map<string, string>();
-    for (const call of [...session.messages.flatMap(message => message.toolCalls ?? []), ...toolCalls]) {
+    for (const call of [...sentHistory(session.messages).flatMap(message => message.toolCalls ?? []), ...toolCalls]) {
       if (!ids.has(call.id)) continue;
       call.cleared = true;
       content.set(call.id, toolResultContent(call));
@@ -2996,6 +3124,16 @@ function appendToLastUserTurn(wire: CompletionMessage[], text: string): void {
 }
 
 /**
+ * Whether a second boundary would move anything.
+ *
+ * A marker on its own does not count, so clearing an already-cleared conversation is refused
+ * rather than filling the transcript with dividers that separate nothing.
+ */
+function hasClearableHistory(messages: readonly ChatMessage[]): boolean {
+  return messagesSinceBoundary(messages).some(message => !message.boundary);
+}
+
+/**
  * The reply in flight as a message, so the plan helpers can read the calls THIS turn has made.
  * The real message is not stored until the turn settles, and a plan written this turn is the one
  * that matters.
@@ -3188,11 +3326,13 @@ async function toCompletionMessages(
 ): Promise<CompletionMessage[]> {
   const wire: CompletionMessage[] = [];
 
-  for (const message of session.messages) {
+  // Not `session.messages`: everything before the last `/clear` or `/compact` is deliberately
+  // not sent. See contextPruning.sentHistory, including what it costs the prompt cache.
+  for (const message of sentHistory(session.messages)) {
     const calls = message.toolCalls ?? [];
     // Artifact markup is stripped out of the stored text, so it has to go back in here: a model
     // that cannot see the artifact it just wrote cannot revise it.
-    const text = frameRelay(message, restoreArtifactMarkup(message));
+    const text = frameBoundary(message, frameRelay(message, restoreArtifactMarkup(message)));
 
     if (calls.length === 0) {
       const attachments = message.attachments ?? [];
@@ -3225,6 +3365,25 @@ async function toCompletionMessages(
   }
 
   return wire;
+}
+
+/**
+ * Say what a carried summary is, on the wire.
+ *
+ * It travels as a user turn for the same reason a relay does - that is the only role out-of-band
+ * text has here - and unframed it would read as the user having typed a wall of notes about
+ * their own conversation. Framed, the model reads it as the record of what it has already done,
+ * which is what makes the turn after a compaction continue the work rather than restart it.
+ */
+function frameBoundary(message: ChatMessage, text: string): string {
+  if (message.boundary?.kind !== 'compact' || text.length === 0) return text;
+  return [
+    '[This conversation was compacted here. Everything before this point is no longer in your',
+    'context; what follows is a summary of it, written for you. Treat it as the record of what',
+    'has already happened, not as a new request, and carry on from where it leaves off.]',
+    '',
+    text,
+  ].join('\n');
 }
 
 /**

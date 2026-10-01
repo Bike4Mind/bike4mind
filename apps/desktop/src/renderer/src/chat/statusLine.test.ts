@@ -276,6 +276,43 @@ describe('latestReply', () => {
   it('has nothing to report in a conversation with no reply yet', () => {
     expect(latestReply([])).toBeNull();
   });
+
+  /**
+   * The figure has to answer the question `/clear` and `/compact` were used to change. The
+   * request behind a reply from before the boundary measured a window that no longer exists,
+   * and reporting it would tell the user their compaction did nothing at all.
+   */
+  it('reports nothing measured once a boundary has been inserted', () => {
+    const boundary: ChatMessage = {
+      id: 'b1',
+      role: 'user',
+      content: '',
+      createdAt: '2026-01-01T00:00:02.000Z',
+      system: true,
+      boundary: { kind: 'compact' },
+    };
+    const before = reply({ id: 'before', usage: { inputTokens: 180_000 } });
+    expect(latestReply([before, boundary])).toBeNull();
+    expect(contextTokens(latestReply([before, boundary]))).toBeNull();
+    // Unknown rather than estimated, which is this file's rule everywhere: the next request is
+    // what states the new occupancy, and a client-side guess drawn as a fact would be worse.
+    expect(usageLabel({ contextTokens: null, contextWindow: 200_000, credits: 31_667 })).toBe('Context --');
+  });
+
+  it('reports the first reply measured after the boundary, not the ones before it', () => {
+    const boundary: ChatMessage = {
+      id: 'b1',
+      role: 'user',
+      content: 'summary',
+      createdAt: '2026-01-01T00:00:02.000Z',
+      system: true,
+      boundary: { kind: 'compact' },
+    };
+    const before = reply({ id: 'before', usage: { inputTokens: 180_000 } });
+    const after = reply({ id: 'after', usage: { inputTokens: 9000 } });
+    expect(latestReply([before, boundary, after])?.id).toBe('after');
+    expect(contextTokens(latestReply([before, boundary, after]))).toBe(9000);
+  });
 });
 
 describe('contextPercent', () => {

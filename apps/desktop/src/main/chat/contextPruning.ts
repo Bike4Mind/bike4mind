@@ -1,5 +1,5 @@
 import { normalize } from 'node:path';
-import type { ChatMessage, ChatToolCall } from '@shared/chat';
+import { messagesSinceBoundary, type ChatMessage, type ChatToolCall } from '@shared/chat';
 
 /**
  * Which old tool results to replace with a placeholder on the wire.
@@ -127,12 +127,30 @@ export function stalePlaceholder(call: ChatToolCall): string {
 }
 
 /**
+ * The stored messages this turn may send: everything from the most recent context boundary on.
+ *
+ * Every consumer that builds a request goes through here rather than reading `session.messages`,
+ * so `/clear` and `/compact` cannot be honoured in one place and forgotten in another - a wire
+ * that carried a pre-boundary message, or a stale-result scan that cleared one, would both be
+ * the same bug.
+ *
+ * A boundary INVALIDATES the prompt-cache prefix on the next turn, because everything the
+ * provider had cached is now missing from the front of the request. That is expected and
+ * correct: the cost of one rewrite is the price of the window the user just asked for. Do not
+ * "optimise" it by keeping the dropped messages on the wire - keeping them is the whole thing
+ * the two commands exist to stop.
+ */
+export function sentHistory(messages: readonly ChatMessage[]): readonly ChatMessage[] {
+  return messagesSinceBoundary(messages);
+}
+
+/**
  * A stored reply's calls, split back into the rounds that made them. A reply stored before rounds
  * were recorded is one round.
  */
 export function historyRounds(messages: readonly ChatMessage[]): ChatToolCall[][] {
   const rounds: ChatToolCall[][] = [];
-  for (const message of messages) {
+  for (const message of sentHistory(messages)) {
     const calls = message.toolCalls ?? [];
     if (calls.length === 0) continue;
     rounds.push(
