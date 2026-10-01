@@ -705,12 +705,13 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     }
   ): Promise<IDataLakeDocument[]>;
   /**
-   * Count-only companion to `findActiveByUserTagsAndEntitlements` (#3055): active lakes the
-   * caller can see exist - by org membership or public listing - but whose own
+   * Count-only companion to `findActiveByUserTagsAndEntitlements` (#3055). Account-wide: active
+   * lakes the caller can see exist - by org membership or public listing - but whose own
    * `requiredUserTag`/`requiredEntitlement` gate they hold neither of. Excludes lakes reached
    * through the owner or grant bypass (those are never "excluded"; the resolver restores them
    * regardless of the gate) and gateless lakes (never a candidate for THIS count - they resolve
-   * for every org member).
+   * for every org member). With `restrictToTags` the question changes to "which of these named
+   * lakes can the caller not reach at all", so a private or other-org lake counts too.
    *
    * NEVER RETURNS A LAKE DOCUMENT, deliberately - a `countDocuments`, not a `find`. This method
    * exists solely to measure denial for a caller-facing count; it must never become a second way
@@ -735,9 +736,10 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
       supersededOwnLakeIds?: string[];
       /**
        * Restricts the count to lakes whose `datalakeTag` is in this list - the per-turn-scoped
-       * question "of exactly these lakes, how many are excluded" for a caller that named specific
-       * lakes by identity, as opposed to the whole-account question this method otherwise answers.
-       * Absent or empty runs the unrestricted, account-wide count.
+       * question "of exactly these lakes, how many can the caller not reach" for a caller that named
+       * specific lakes by identity, as opposed to the whole-account question this method otherwise
+       * answers. Counts a named lake whatever its visibility (private, other-org), not only one
+       * behind a gate the caller lacks. Absent or empty runs the unrestricted, account-wide count.
        */
       restrictToTags?: string[];
     }
