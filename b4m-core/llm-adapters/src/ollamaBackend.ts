@@ -26,6 +26,7 @@ import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { executeToolsBatch } from './executeToolsBatch';
 import { attachFullToolResult, truncateToolResult } from './recordToolResult';
 import {
+  declaredArtifactType,
   createRecursiveArtifactGuard,
   handleToolResultStreaming,
   stripUnstreamedToolResult,
@@ -393,11 +394,16 @@ export class OllamaBackend implements ICompletionBackend {
           // Ollama never echoes the tool result verbatim once it is stripped below, so
           // without this the client never sees the artifact at all.
           let emitted = false;
-          await handleToolResultStreaming(tc.name, outcome.result, async (results, artifactInfo) => {
-            emitted = true;
-            if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
-            await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
-          });
+          await handleToolResultStreaming(
+            tc.name,
+            outcome.result,
+            async (results, artifactInfo) => {
+              emitted = true;
+              if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+              await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
+            },
+            declaredArtifactType(options.tools, tc.name)
+          );
           observations[i] = stripUnstreamedToolResult(tc.name, outcome.result, emitted);
           this.pushToolMessages(messages, { id: tc.id, name: tc.name, parameters: params }, observations[i]);
         } else {
