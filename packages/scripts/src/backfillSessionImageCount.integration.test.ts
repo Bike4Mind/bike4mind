@@ -57,6 +57,21 @@ describe('backfillSessionImageCounts', () => {
     expect(await countOf(withoutImages)).toBeUndefined();
   });
 
+  it('counts only image entries when quests also carry audio and spreadsheet output', async () => {
+    const mixed = await session('mixed');
+    const noImages = await session('audio-and-sheets');
+    await quest(mixed, ['a.png', 'track.mp3', 'b.JPEG', 'report.xlsx', 'c.webp?sig=1']);
+    await quest(mixed, ['d.svg', 'voice.wav']);
+    await quest(noImages, ['song.mp3', 'data.xlsx', 'notes.pdf']);
+
+    const result = await backfillSessionImageCounts({ dryRun: false, log: silent });
+
+    // c.webp?sig=1 does not end in an image extension, so the UI would not render it inline either.
+    expect(result).toEqual({ sessionsWithImages: 1, updated: 1 });
+    expect(await countOf(mixed)).toBe(3);
+    expect(await countOf(noImages)).toBeUndefined();
+  });
+
   it('skips soft-deleted quests', async () => {
     const id = await session('s');
     await quest(id, ['a.png']);

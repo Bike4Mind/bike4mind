@@ -1,3 +1,4 @@
+import { GENERATED_IMAGE_EXTENSION_RE } from '@bike4mind/common';
 import { Quest, Session } from '@bike4mind/database';
 import { Types } from 'mongoose';
 
@@ -9,18 +10,19 @@ export interface BackfillSessionImageCountOptions {
 }
 
 export interface BackfillSessionImageCountResult {
-  /** Sessions with at least one quest holding images. */
+  /** Sessions with at least one image entry on a live quest. */
   sessionsWithImages: number;
   /** Sessions whose imageCount was (or, in a dry run, would be) raised. */
   updated: number;
 }
 
 /**
- * Sets each session's imageCount from the images already on its quests: the sum of the `images`
- * array sizes across the session's live quests. Written with `$max`, so it never lowers a counter
- * the app has already moved (a generation landing mid-run keeps its increment) and a re-run is a
- * no-op. Note that `images` also carries a few non-image attachments (audio/music/sheet tools), so
- * a backfilled count can overstate; the sidebar only reads it as zero / non-zero.
+ * Sets each session's imageCount from the images already on its quests: the number of image
+ * entries in `images` across the session's live quests. `images` also carries other tool output
+ * (audio, spreadsheets), so an entry counts only if it matches GENERATED_IMAGE_EXTENSION_RE - the
+ * same test PromptReplies.classifyGeneratedFiles uses to put it in the inline image grid.
+ * Written with `$max`, so it never lowers a counter the app has already moved (a generation landing
+ * mid-run keeps its increment) and a re-run is a no-op.
  */
 export async function backfillSessionImageCounts(
   options: BackfillSessionImageCountOptions
@@ -29,7 +31,29 @@ export async function backfillSessionImageCounts(
 
   const cursor = Quest.aggregate<{ _id: string; total: number }>([
     { $match: { deletedAt: null, 'images.0': { $exists: true } } },
-    { $group: { _id: '$sessionId', total: { $sum: { $size: '$images' } } } },
+    {
+      $project: {
+        sessionId: 1,
+        imageEntries: {
+          $size: {
+            $filter: {
+              input: '$images',
+              as: 'entry',
+              // $regexMatch throws on a non-string input, so test the type first.
+              cond: {
+                $cond: [
+                  { $eq: [{ $type: '$$entry' }, 'string'] },
+                  { $regexMatch: { input: '$$entry', regex: GENERATED_IMAGE_EXTENSION_RE } },
+                  false,
+                ],
+              },
+            },
+          },
+        },
+      },
+    },
+    { $match: { imageEntries: { $gt: 0 } } },
+    { $group: { _id: '$sessionId', total: { $sum: '$imageEntries' } } },
   ])
     .allowDiskUse(true)
     .cursor({ batchSize });
