@@ -220,7 +220,8 @@ describe('google-drive callback browser-binding', () => {
     });
     (req as any).user = { id: 'user-1' };
 
-    await expect(handler(req as any, res as any)).rejects.toThrow();
+    await handler(req as any, res as any);
+    expect(res._getStatusCode()).toBe(400);
     expect(burned(res)).toBe(true);
   });
 
@@ -234,7 +235,8 @@ describe('google-drive callback browser-binding', () => {
     });
     (req as any).user = { id: 'user-1' };
 
-    await expect(handler(req as any, res as any)).rejects.toThrow('db down');
+    await handler(req as any, res as any);
+    expect(res._getStatusCode()).toBe(500);
     expect(burned(res)).toBe(true);
   });
 
@@ -250,7 +252,8 @@ describe('google-drive callback browser-binding', () => {
     (Config as { JWT_SECRET?: string }).JWT_SECRET = '';
 
     try {
-      await expect(handler(req as any, res as any)).rejects.toThrow(/Missing JWT_SECRET/);
+      await handler(req as any, res as any);
+      expect(res._getStatusCode()).toBe(500);
     } finally {
       (Config as { JWT_SECRET?: string }).JWT_SECRET = jwtSecret;
     }
