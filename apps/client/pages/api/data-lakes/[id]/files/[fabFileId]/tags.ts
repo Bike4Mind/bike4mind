@@ -1,8 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { SetLakeFileTagsRequestInput } from '@bike4mind/common';
+import { DATALAKE_TAG_PREFIX, SetLakeFileTagsRequestInput, prefixArmTagNames } from '@bike4mind/common';
+import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
@@ -42,10 +43,25 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
  * `invalidateLakeFileMembershipQueries` (apps/client/app/hooks/data/dataLakes.ts) is the
  * client-side invalidation fan-out a future UI hook for this door must call - exported for that
  * reason, since a membership-affecting write here is invisible to the query cache otherwise.
+ *
+ * GET /api/data-lakes/:id/files/:fabFileId/tags
+ *
+ * The current name of every tag this file carries UNDER THIS LAKE'S PREFIX, plus that prefix -
+ * what the retag UI needs to seed an editable set, because `setDataLakeFileTags` is replace
+ * semantics (an omitted name is a removed name, see that door). Read-SCOPED while the PUT above is
+ * write-scoped, the mixed-method split `inconsistencies.ts` documents: a browser caller is gated by
+ * the route's scope list but the PUT still asserts `datalake:write` in-handler. MANAGE-gated like
+ * the PUT and for the same reason: it returns a member file's own categorization, and it exists
+ * only to seed a write - offering it to a reader would promise a control they cannot use.
+ *
+ * The prefix comes from the SAME `decideStampPrefix` gate the write door runs (including its
+ * fail-closed overlap check), so the names returned are exactly the names a retag may submit; a
+ * prefix this lake cannot stamp under refuses here rather than seeding a set the PUT would reject.
  */
-const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .put(async (req: Request<{}, unknown, unknown, { id: string; fabFileId: string }>, res) => {
+    assertDataLakeWriteScope(req);
     const { id, fabFileId } = req.query;
     const { tags } = SetLakeFileTagsRequestInput.parse(req.body);
     const ctx = await toAccessContext(req);
@@ -69,6 +85,45 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     });
 
     return res.json(result);
+  })
+  .get(async (req: Request<{}, unknown, unknown, { id: string; fabFileId: string }>, res) => {
+    const { id, fabFileId } = req.query;
+    const ctx = await toAccessContext(req);
+
+    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    });
+    dataLakeService.assertLakeWritable(lake);
+
+    // The manage gate explicitly: unlike the PUT above, this read does not pass through a service
+    // door that would apply `canManageLake` for it. Same gate and same message as the write door,
+    // so the retag UI is offered only where the write it seeds would land.
+    const canManage = await dataLakeService.resolveCanManageLake(lake, ctx, {
+      db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    });
+    if (!canManage) {
+      throw new BadRequestError("You do not have permission to change this data lake's files");
+    }
+
+    // The same prefix gate the write door runs, including its fail-closed overlap check.
+    const decision = await dataLakeService.decideStampPrefix(lake, { dataLakes: dataLakeRepository });
+    if (!decision.stamp) throw new BadRequestError(dataLakeService.stampRefusalMessage(decision));
+    if (decision.overlapCheckFailed) {
+      throw new BadRequestError(dataLakeService.UNVERIFIED_PREFIX_OVERLAP_REFUSAL);
+    }
+
+    // Membership, not bare existence: a retag seeds from a file in THIS lake, and the write door
+    // refuses a non-member at the same point (and with the same message).
+    const file = await fabFileRepository.findById(fabFileId);
+    if (!file || file.deletedAt || !dataLakeService.lakeMembershipSignals(lake, file).inLake) {
+      throw new NotFoundError('File not found in this data lake');
+    }
+
+    const names = (file.tags ?? []).map(tag => tag?.name).filter((name): name is string => typeof name === 'string');
+    // Mirrors `setDataLakeFileTags` step 18: under the prefix, reserved-namespace names excluded.
+    const current = prefixArmTagNames(names, decision.prefix).filter(name => !name.startsWith(DATALAKE_TAG_PREFIX));
+
+    return res.json({ prefix: decision.prefix, current });
   });
 
 export const config = {
