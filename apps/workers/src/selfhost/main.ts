@@ -19,6 +19,7 @@ import { runResearchScheduleTick } from '@server/cron/dataLakeResearchSchedule';
 import { SelfHostWorker } from './selfHostWorker';
 import { registerTaskScheduler } from './taskScheduler';
 import { registerLakeMemoryQueue } from './lakeMemoryQueue';
+import { registerTelemetryCleanup } from './telemetryCleanup';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
@@ -79,6 +80,7 @@ async function main() {
   registerAbandonedExecutionSweep(worker);
   registerQuestTimeoutSweep(worker);
   registerLakeHealthSweep(worker);
+  registerTelemetryCleanup(worker);
 
   worker.registerQueueHandler('researchEngineQueue', Resource.researchEngineQueue.url, researchEngineDispatch, {
     visibilityTimeoutSec: RESEARCH_VISIBILITY_TIMEOUT_SEC,
