@@ -96,7 +96,14 @@ import {
 } from './queues';
 import { imageProcessor } from './functions';
 import { chatCompletion } from './chatCompletion';
-import { router, routerDistributionId, whatsNewDistributionId, cdnUrlForLambdaEnv, appUrlForLambdaEnv } from './router';
+import {
+  router,
+  routerDistributionId,
+  whatsNewDistributionId,
+  cdnUrlForLambdaEnv,
+  appUrlForLambdaEnv,
+  originVerifySecret,
+} from './router';
 import { secrets } from './secrets';
 import { migratorInvocation } from './database';
 import { websocketApi } from './websocket';
@@ -405,6 +412,14 @@ export const web = new sst.aws.Nextjs(
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       NEXT_PUBLIC_WEBSOCKET_URL: websocketApi.url,
       NEXT_PUBLIC_SERVER_DOMAIN: process.env.SERVER_DOMAIN || '',
+      // Locks the server function URL to the router (apps/client/proxy.ts 403s requests without the
+      // matching header). Not under `sst dev`: Next runs locally there and nothing comes via CloudFront.
+      // DISABLE_ORIGIN_VERIFY='true' ships the router stamp without the gate: use it on a stage's first
+      // deploy (the Lambda env can update before the CloudFront Function reaches the edges, 403ing
+      // everything meanwhile), then redeploy without it. Also the kill switch if the gate misfires.
+      ...(!$dev && process.env.DISABLE_ORIGIN_VERIFY !== 'true'
+        ? { ORIGIN_VERIFY_SECRET: originVerifySecret.result }
+        : {}),
       // Kill-switch for in-handler response gzip (apps/client/server/utils/sendMaybeGzip.ts).
       // Declared here so the lever is greppable from infra and survives a redeploy; set to
       // 'true' to fall back to plain res.json on every route using the helper.
