@@ -2412,7 +2412,13 @@ function describeScanResult({ countsByKind, memberCount }: LakeScanResult): stri
   // Zero members read is "nothing to scan", never "clean" - the detector draws the same line.
   if (memberCount === 0) return 'Scan complete. No document in this lake has text to compare yet.';
   const total = Object.values(countsByKind).reduce((sum, count) => sum + count, 0);
-  return `Scan complete: ${total} finding(s) across ${memberCount} document(s).`;
+  // Documents scanned first: `memberCount` is what was read, not how many documents the findings
+  // span, and "N findings across M documents" read as the latter.
+  return `Scanned ${countNoun(memberCount, 'document')}, found ${countNoun(total, 'finding')}.`;
+}
+
+function countNoun(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
 /**

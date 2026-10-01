@@ -548,6 +548,55 @@ describe('LakeFindingsDialog', () => {
     expect(screen.getByTestId('lake-findings-empty')).not.toHaveTextContent(/clean/i);
   });
 
+  it('says a never-scanned lake has not been scanned rather than blaming the filters', () => {
+    h.findings.mockReturnValue(listing([]));
+    h.health.mockReturnValue({ data: { inconsistency: null } });
+    renderDialog();
+
+    const empty = screen.getByTestId('lake-findings-empty');
+    expect(empty).toHaveTextContent(/not been scanned yet/i);
+    expect(empty).not.toHaveTextContent(/filters/i);
+  });
+
+  it('says the last scan read nothing when it had no readable documents', () => {
+    h.findings.mockReturnValue(listing([]));
+    h.health.mockReturnValue(scanned({ memberCount: 0 }));
+    renderDialog();
+
+    expect(screen.getByTestId('lake-findings-empty')).toHaveTextContent(/no documents it could read/i);
+  });
+
+  it('names the last scan on the default view and blames the filters only once narrowed', () => {
+    h.findings.mockReturnValue(listing([]));
+    h.health.mockReturnValue(scanned());
+    renderDialog();
+
+    const checked = formatFindingDate('2026-03-08T12:00:00Z');
+    expect(screen.getByTestId('lake-findings-empty')).toHaveTextContent(
+      `The last scan (${checked}) found nothing open to review.`
+    );
+
+    fireEvent.click(screen.getByTestId('lake-findings-status-filter'));
+    fireEvent.click(screen.getByRole('option', { name: 'Any status' }));
+
+    expect(screen.getByTestId('lake-findings-empty')).toHaveTextContent(
+      `Nothing matches these filters. Last scanned ${checked}.`
+    );
+  });
+
+  it('reads the shared health query only while open and manageable', () => {
+    renderDialog();
+    expect(h.health).toHaveBeenCalledWith('lake-1', true);
+  });
+
+  it('gives the close button and both filters an accessible name', () => {
+    renderDialog();
+
+    expect(screen.getByRole('button', { name: 'Close findings' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Filter by status' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Filter by kind' })).toBeInTheDocument();
+  });
+
   it('runs detection on this lake when Scan now is pressed', () => {
     renderDialog();
     fireEvent.click(screen.getByTestId('lake-findings-scan-btn'));

@@ -2180,7 +2180,17 @@ describe('useScanDataLakeFindings', () => {
     // The bare prefix, so the dialog's filtered list and the chip's open-only count both refresh.
     expect(keys).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
     expect(keys).toContain(JSON.stringify(['dataLakeHealth', 'lake1']));
-    expect(toast.success).toHaveBeenCalledWith('Scan complete: 3 finding(s) across 4 document(s).');
+    expect(toast.success).toHaveBeenCalledWith('Scanned 4 documents, found 3 findings.');
+  });
+
+  it('leads with the documents scanned and singularizes a count of one', async () => {
+    apiPost.mockResolvedValueOnce({ data: { countsByKind: { 'date-disagreement': 1 }, memberCount: 1 } });
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('Scanned 1 document, found 1 finding.');
   });
 
   it('says nothing was read rather than calling an empty lake clean', async () => {

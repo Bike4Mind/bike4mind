@@ -64,6 +64,8 @@ const FINDINGS_PAGE_LIMIT = 50;
 /** The value the filter Selects carry for "do not narrow". `undefined` cannot round-trip a Select. */
 const ANY = 'any';
 
+const DEFAULT_STATUS_FILTER: LakeFindingStatus = 'open';
+
 function FindingRow({ finding, onOpen }: { finding: IDataLakeFindingDocument; onOpen: () => void }) {
   const recurred = hasRecurredSinceResolution(finding);
   return (
@@ -392,7 +394,7 @@ export function LakeFindingsDialog({
    * without it, so it is fetched only when true. */
   canManage?: boolean;
 }) {
-  const [status, setStatus] = useState<LakeFindingStatus | undefined>('open');
+  const [status, setStatus] = useState<LakeFindingStatus | undefined>(DEFAULT_STATUS_FILTER);
   const [kind, setKind] = useState<InconsistencyKind | undefined>(undefined);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -409,6 +411,8 @@ export function LakeFindingsDialog({
     isLoadingMore,
   } = useDataLakeFindings(dataLakeId, { status, kind, limit: FINDINGS_PAGE_LIMIT }, { enabled: open });
   const scan = useScanDataLakeFindings(dataLakeId);
+  // Same query key as the chip's, so opening the dialog reads that fetch rather than adding one.
+  const { data: health } = useGetDataLakeHealth(dataLakeId, open && canManage);
 
   // Derived from the live list rather than held as a snapshot, so a refetch that drops or updates
   // the open finding takes the curator back to the list instead of leaving stale passages on screen.
@@ -425,7 +429,7 @@ export function LakeFindingsDialog({
   return (
     <Modal open={open} onClose={onClose}>
       <ModalDialog layout="fullscreen" data-testid="lake-findings-dialog">
-        <ModalClose />
+        <ModalClose aria-label="Close findings" data-testid="lake-findings-close-btn" />
         <DialogTitle>{`Findings in "${lakeName}"`}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           {selected ? (
@@ -444,7 +448,9 @@ export function LakeFindingsDialog({
                   onChange={(_, value) =>
                     narrow(() => setStatus(value === ANY ? undefined : (value as LakeFindingStatus)))
                   }
-                  slotProps={{ button: { 'data-testid': 'lake-findings-status-filter' } }}
+                  slotProps={{
+                    button: { 'data-testid': 'lake-findings-status-filter', 'aria-label': 'Filter by status' },
+                  }}
                   sx={{ minWidth: '9rem' }}
                 >
                   <Option value={ANY}>Any status</Option>
@@ -460,7 +466,9 @@ export function LakeFindingsDialog({
                   onChange={(_, value) =>
                     narrow(() => setKind(value === ANY ? undefined : (value as InconsistencyKind)))
                   }
-                  slotProps={{ button: { 'data-testid': 'lake-findings-kind-filter' } }}
+                  slotProps={{
+                    button: { 'data-testid': 'lake-findings-kind-filter', 'aria-label': 'Filter by kind' },
+                  }}
                   sx={{ minWidth: '12rem' }}
                 >
                   <Option value={ANY}>Any kind</Option>
@@ -504,10 +512,10 @@ export function LakeFindingsDialog({
                 </Alert>
               ) : !findings?.length ? (
                 <Typography level="body-sm" textColor="text.secondary" data-testid="lake-findings-empty">
-                  {/* Never "this lake is clean": detection is a pattern pass over a bounded sample, so
-                      an empty list means the runs that happened found nothing, not that none exist. */}
-                  Nothing matches these filters. Findings appear after a scan, which runs nightly or when you choose
-                  Scan now.
+                  {findingsEmptyMessage({
+                    inconsistency: health?.inconsistency,
+                    filtered: status !== DEFAULT_STATUS_FILTER || kind !== undefined,
+                  })}
                 </Typography>
               ) : (
                 <Box
@@ -537,6 +545,34 @@ export function LakeFindingsDialog({
       </ModalDialog>
     </Modal>
   );
+}
+
+const SCAN_SCHEDULE_HINT = 'Scans run nightly, or choose Scan now.';
+
+/**
+ * The dialog's empty-list copy, keyed on the last detection run the same way `findingsChipDisplay`
+ * is: an empty list alone cannot tell "never scanned" from "nothing matched". Never "this lake is
+ * clean" - detection is a pattern pass over a bounded sample, so an empty list means the runs that
+ * happened found nothing, not that none exist.
+ */
+export function findingsEmptyMessage({
+  inconsistency,
+  filtered,
+}: {
+  inconsistency: LakeHealthApiResponse['inconsistency'] | undefined;
+  /** Whether the curator has narrowed past the default open-only, any-kind view. */
+  filtered: boolean;
+}): string {
+  if (inconsistency === undefined) {
+    return `Nothing matches these filters. Findings appear after a scan. ${SCAN_SCHEDULE_HINT}`;
+  }
+  if (inconsistency === null) return `This lake has not been scanned yet. ${SCAN_SCHEDULE_HINT}`;
+  const checked = formatFindingDate(inconsistency.computedAt);
+  if (inconsistency.memberCount === 0) {
+    return `The last scan (${checked}) had no documents it could read, so it could not look for contradictions.`;
+  }
+  if (filtered) return `Nothing matches these filters. Last scanned ${checked}.`;
+  return `The last scan (${checked}) found nothing open to review.`;
 }
 
 type ChipDisplay = {
