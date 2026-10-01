@@ -517,6 +517,78 @@ describe('write tools', () => {
     });
   });
 
+  describe('pasted line-number prefixes and empty oldText', () => {
+    const file = () => join(root, 'pasted.ts');
+    const body = 'one\ntwo\nthree\nfour\nfive\n';
+    beforeEach(async () => {
+      await writeFile(file(), body, 'utf8');
+    });
+
+    it('strips grep prefixes from a contiguous oldText and newText, saying so', async () => {
+      const result = await fileEdit.run(
+        { path: file(), oldText: '  2: two\n  3- three', newText: '  2: TWO\n  3- THREE' },
+        context
+      );
+      await expect(readFile(file(), 'utf8')).resolves.toBe('one\nTWO\nTHREE\nfour\nfive\n');
+      expect(result).toContain('line-number prefixes');
+    });
+
+    it('keeps a clean newText when only oldText carried prefixes', async () => {
+      await fileEdit.run({ path: file(), oldText: '  2: two', newText: 'TWO' }, context);
+      await expect(readFile(file(), 'utf8')).resolves.toBe('one\nTWO\nthree\nfour\nfive\n');
+    });
+
+    it('refuses grep output split by -- rather than stitching regions together', async () => {
+      const message = await editFailure({ path: file(), oldText: '  1: one\n  --\n  4: four', newText: 'x' });
+      expect(message).toMatch(/grep output/);
+      expect(message).toMatch(/file_read/);
+      await expect(readFile(file(), 'utf8')).resolves.toBe(body);
+    });
+
+    it('strips file_read prefixes', async () => {
+      const result = await fileEdit.run(
+        { path: file(), oldText: '2\ttwo\n3\tthree', newText: '2\tTWO\n3\tTHREE' },
+        context
+      );
+      await expect(readFile(file(), 'utf8')).resolves.toBe('one\nTWO\nTHREE\nfour\nfive\n');
+      expect(result).toContain('line-number prefixes');
+    });
+
+    it('leaves a prefix-like string alone when it is real file content', async () => {
+      await writeFile(file(), '2: two\nother\n', 'utf8');
+      const result = await fileEdit.run({ path: file(), oldText: '2: two', newText: '2: TWO' }, context);
+      await expect(readFile(file(), 'utf8')).resolves.toBe('2: TWO\nother\n');
+      expect(result).not.toContain('line-number prefixes');
+    });
+
+    it('creates a missing file from an empty oldText through the create approval path', async () => {
+      const path = join(root, 'sub', 'fresh.ts');
+      const input = { path, edits: [{ oldText: '', newText: 'export const a = 1;\n' }] };
+      const prompt = await fileEdit.approval?.(input, context);
+      expect(prompt?.diff?.operation).toBe('create');
+      await fileEdit.run(input, context);
+      await expect(readFile(path, 'utf8')).resolves.toBe('export const a = 1;\n');
+    });
+
+    it('refuses an empty oldText on an existing file and names file_write', async () => {
+      const message = await editFailure({ path: file(), oldText: '', newText: 'replaced' });
+      expect(message).toMatch(/file_write/);
+      await expect(readFile(file(), 'utf8')).resolves.toBe(body);
+    });
+
+    it('refuses an empty oldText in a multi-edit batch', async () => {
+      const path = join(root, 'multi.ts');
+      const message = await editFailure({
+        path,
+        edits: [
+          { oldText: '', newText: 'a' },
+          { oldText: 'a', newText: 'b' },
+        ],
+      });
+      expect(message).toMatch(/single edit/);
+    });
+  });
+
   describe('why an edit missed', () => {
     const miss = async (content: string, oldText: string): Promise<string> => {
       const target = join(root, 'subject.txt');
