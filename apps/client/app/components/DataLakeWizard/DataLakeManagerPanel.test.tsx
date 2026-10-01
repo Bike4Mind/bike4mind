@@ -498,11 +498,18 @@ describe('DataLakeManagerPanel - pending-proposal chip', () => {
   it('advertises the waiting review count on the lake row', () => {
     useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 4 }, theirsLake], isLoading: false });
     renderPanel();
-    expect(screen.getByTestId('datalake-manager-pending-proposals-mine')).toHaveTextContent('4 to review');
+    expect(screen.getByTestId('datalake-manager-pending-proposals-mine')).toHaveTextContent('4 sources to review');
+  });
+
+  it('names the noun in the singular for one waiting source', () => {
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 1 }, theirsLake], isLoading: false });
+    renderPanel();
+    expect(screen.getByTestId('datalake-manager-pending-proposals-mine')).toHaveTextContent('1 source to review');
+    expect(screen.getByTestId('datalake-manager-pending-proposals-mine')).not.toHaveTextContent('1 sources');
   });
 
   it('omits the chip at zero, so a row with nothing waiting is unchanged', () => {
-    // The guard is truthiness, not presence: a `!== undefined` check would render "0 to review"
+    // The guard is truthiness, not presence: a `!== undefined` check would render "0 sources to review"
     // and invent a queue for every lake that has ever been reviewed clean.
     useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 0 }, theirsLake], isLoading: false });
     renderPanel();

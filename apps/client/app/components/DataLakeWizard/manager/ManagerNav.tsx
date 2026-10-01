@@ -522,7 +522,7 @@ export default function ManagerNav({
                                     sx={COUNT_CHIP_SX}
                                     data-testid={`datalake-manager-pending-proposals-${lake.id}`}
                                   >
-                                    {`${lake.pendingProposalCount} to review`}
+                                    {`${lake.pendingProposalCount} ${lake.pendingProposalCount === 1 ? 'source' : 'sources'} to review`}
                                   </Chip>
                                 </Tooltip>
                               )}

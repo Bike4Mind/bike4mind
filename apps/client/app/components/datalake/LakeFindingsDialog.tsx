@@ -576,7 +576,7 @@ export function findingsChipDisplay({
   if (openCount > 0) {
     return {
       // A full page is a lower bound, so it reads `50+` rather than claiming an exact count.
-      label: `${openCount}${hasMore ? '+' : ''} to review`,
+      label: `${openCount}${hasMore ? '+' : ''} ${openCount === 1 && !hasMore ? 'conflict' : 'conflicts'} to review`,
       tooltip: 'Documents in this lake appear to contradict each other. Review the passages.',
       color: 'warning',
     };
