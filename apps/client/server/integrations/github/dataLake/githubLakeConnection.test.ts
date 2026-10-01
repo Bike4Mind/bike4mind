@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Response } from 'express';
 import { createStateToken } from '@server/auth/jwtStateStore';
 import { NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { Logger } from '@bike4mind/observability';
 
 const h = vi.hoisted(() => ({
   exchangeInstallerCode: vi.fn(),
@@ -291,6 +292,22 @@ describe('completeGitHubLakeConnection', () => {
   it('revokes the installer token after a successful connect', async () => {
     await completeGitHubLakeConnection(params());
     expect(h.revokeInstallerToken).toHaveBeenCalledWith(CONFIG, 'user-token');
+  });
+
+  it('logs a failed code exchange without the request body that carries the client secret', async () => {
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
+    const httpError = Object.assign(new Error('The client_id and/or client_secret passed are incorrect.'), {
+      name: 'HttpError',
+      status: 400,
+      request: { body: { client_id: 'cid', client_secret: 'super-secret', code: 'the-code' } },
+    });
+    h.exchangeInstallerCode.mockRejectedValue(httpError);
+    await expect(completeGitHubLakeConnection(params())).rejects.toThrow(/expired or was already used/i);
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).toContain('client_secret passed are incorrect');
+    expect(logged).not.toContain('super-secret');
+    expect(logged).not.toContain('the-code');
+    warn.mockRestore();
   });
 
   it('fails the code exchange and never lists repositories or creates a connection', async () => {

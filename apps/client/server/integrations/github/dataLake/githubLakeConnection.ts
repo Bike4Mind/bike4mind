@@ -22,6 +22,7 @@ import {
   type PurgeConnectionLogger,
 } from '@server/dataLakes/purgeConnectionIngestedFiles';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { serializeError } from '@server/utils/serializeError';
 import { sendToQueue } from '@server/utils/sqs';
 import {
   BadRequestError,
@@ -168,7 +169,9 @@ async function listReposVisibleToInstaller(config: GitHubLakeAppConfig, code: st
   try {
     userToken = await exchangeInstallerCode(config, code);
   } catch (error) {
-    Logger.warn('GitHub lake install: authorization code exchange failed', { error });
+    // serializeError, never the raw error: octokit's HttpError carries the request body, which holds
+    // the App's client_secret and the OAuth code.
+    Logger.warn('GitHub lake install: authorization code exchange failed', { error: serializeError(error) });
     throw new BadRequestError('The GitHub authorization expired or was already used. Connect the repository again.');
   }
   try {
@@ -176,7 +179,9 @@ async function listReposVisibleToInstaller(config: GitHubLakeAppConfig, code: st
   } finally {
     await revokeInstallerToken(config, userToken).catch((error: unknown) => {
       // Not fatal: the token was minted for this check alone and expires on its own (8h).
-      Logger.warn('GitHub lake install: could not revoke the verification user token', { error });
+      Logger.warn('GitHub lake install: could not revoke the verification user token', {
+        error: serializeError(error),
+      });
     });
   }
 }
