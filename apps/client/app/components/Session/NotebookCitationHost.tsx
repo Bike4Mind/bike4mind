@@ -29,8 +29,11 @@ const NotebookCitationHost: FC<{ children: ReactNode }> = ({ children }) => {
         selectedArtifactId: file.id,
         citedPassage: citedPassageOf(source),
       });
-    } catch {
-      if (click === latestClickRef.current) toast.error(`Could not open "${source.title}"`);
+    } catch (error) {
+      if (click === latestClickRef.current) {
+        console.error('Failed to open cited file in viewer:', error);
+        toast.error(`Could not open "${source.title}"`);
+      }
     }
   }, []);
 
