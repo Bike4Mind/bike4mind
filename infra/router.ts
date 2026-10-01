@@ -143,6 +143,18 @@ const userFileMarkerInjection = `
   }
 `;
 
+// Shared secret proving a request came through this distribution: the server function URL is
+// public, so apps/client/proxy.ts 403s any request without it (deployed stages only, via
+// ORIGIN_VERIFY_SECRET in infra/web.ts). Any inbound value is overwritten, never trusted.
+// The header name must stay in sync with ORIGIN_VERIFY_HEADER in apps/client/proxy.ts.
+export const ORIGIN_VERIFY_HEADER = 'x-b4m-origin-verify';
+// special: false keeps the value alphanumeric, so it is safe inside the JS string literal below.
+export const originVerifySecret = new random.RandomPassword('OriginVerifySecret', { length: 48, special: false });
+const originVerifyInjection = $interpolate`
+  delete event.request.headers["${ORIGIN_VERIFY_HEADER}"];
+  event.request.headers["${ORIGIN_VERIFY_HEADER}"] = { value: "${originVerifySecret.result}" };
+`;
+
 // Applied ONLY to user-file responses so the SPA (default behavior) and the ALB API routes
 // (/api/ai/v1/completions, ...) are left untouched.
 const userFileCspInjection = `
@@ -207,12 +219,13 @@ const routerInstance = shouldUseSharedRouter
             }
           : {}),
       // Attach both edge functions on every stage that owns its router (deployed +
-      // shared-dev). The viewer-request function stamps the user-file marker BEFORE SST's URI
+      // shared-dev). The viewer-request function stamps the origin-verify secret and the
+      // user-file marker BEFORE SST's URI
       // rewrite; the viewer-response function reads it to apply the CSP backstop, and
       // additionally injects permissive CORS on personal `sst dev` stages.
       edge: {
         viewerRequest: {
-          injection: userFileMarkerInjection,
+          injection: $interpolate`${originVerifyInjection}${userFileMarkerInjection}`,
         },
         viewerResponse: {
           injection: userFileCspInjection + ($dev ? devCorsInjection : ''),
