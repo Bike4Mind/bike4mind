@@ -660,24 +660,21 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
   }
 
   /**
-   * Entitlement-aware variant of findActiveByUserTags. Returns active lakes the user can
-   * reach by a matching requiredUserTag OR a matching requiredEntitlement, plus lakes with
-   * NO restriction at all (BOTH fields null/empty). Mirrors the pure getAccessibleDataLakes
-   * rule so the DB pre-filter and the in-memory filter agree - an entitlement-only lake is
-   * NOT returned to a user lacking the key (the both-empty arm requires both fields blank).
+   * The retrieval reach arms shared by {@link findActiveByUserTagsAndEntitlements} (an OR of them
+   * is "reachable") and {@link countGateExcludedLakes}'s identity-scoped path (a `$nor` of them is
+   * "named but unreachable"), so the two can never disagree about what a caller may ground on.
    */
-  async findActiveByUserTagsAndEntitlements(
+  private buildReachArms(
     userTags: string[],
     entitlementKeys: string[],
-    organizationIds?: string[] | null,
-    userId?: string | null,
+    organizationIds: string[] | null | undefined,
+    userId: string | null | undefined,
     opts?: {
       grantedLakeIds?: string[];
       orgGrantedLakes?: Record<string, string[]>;
       supersededOwnLakeIds?: string[];
-      includeDraftLakes?: boolean;
     }
-  ): Promise<IDataLakeDocument[]> {
+  ): Record<string, unknown>[] {
     const normalizedTags = userTags.map(t => t.toLowerCase());
     const allTags = Array.from(new Set(userTags.concat(normalizedTags)));
     // Use the ONE canonical normalization rule (shared with the in-memory filter + write
@@ -751,6 +748,30 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       );
     }
 
+    return accessArms;
+  }
+
+  /**
+   * Entitlement-aware variant of findActiveByUserTags. Returns active lakes the user can
+   * reach by a matching requiredUserTag OR a matching requiredEntitlement, plus lakes with
+   * NO restriction at all (BOTH fields null/empty). Mirrors the pure getAccessibleDataLakes
+   * rule so the DB pre-filter and the in-memory filter agree - an entitlement-only lake is
+   * NOT returned to a user lacking the key (the both-empty arm requires both fields blank).
+   */
+  async findActiveByUserTagsAndEntitlements(
+    userTags: string[],
+    entitlementKeys: string[],
+    organizationIds?: string[] | null,
+    userId?: string | null,
+    opts?: {
+      grantedLakeIds?: string[];
+      orgGrantedLakes?: Record<string, string[]>;
+      supersededOwnLakeIds?: string[];
+      includeDraftLakes?: boolean;
+    }
+  ): Promise<IDataLakeDocument[]> {
+    const accessArms = this.buildReachArms(userTags, entitlementKeys, organizationIds, userId, opts);
+
     // `active` alone for retrieval; draft + active for the ATTACHMENT doors, which must track the
     // browse door that admitted the file to the workbench in the first place (see the
     // interface's `includeDraftLakes` doc). Only the status filter moves: every arm above still
@@ -766,7 +787,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
    * that helper's own `$or` (gateless OR held tag OR held entitlement): a lake matching NONE of
    * those arms has a gate the caller does not hold, which is exactly the population this counts.
    *
-   * Visibility is org membership OR public - deliberately narrower than `findActiveByUserTagsAndEntitlements`'s
+   * Without `restrictToTags`, visibility is org membership OR public - deliberately narrower than `findActiveByUserTagsAndEntitlements`'s
    * own arms (no owner bypass, no grant arm): those two arms are exactly what make a lake NOT
    * excluded regardless of its gate, so they are subtracted here instead of counted as visible.
    * The user-grant arm is an unconditional `_id: $nin` (a user-principal grant crosses orgs by
@@ -776,9 +797,12 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
    * org A would wrongly exempt a caller who belongs to both but was never granted that lake by
    * ITS org - undercounting a real exclusion.
    *
-   * `restrictToTags`, when given, further limits the count to lakes whose `datalakeTag` is in the
-   * list - the per-turn-scoped sibling question "of exactly these lakes, how many are excluded",
-   * for a caller that named specific lakes by identity rather than asking about the whole account.
+   * `restrictToTags`, when given, switches to the per-turn-scoped question "of exactly these
+   * lakes, how many can the caller not reach", for a caller that named specific lakes by identity
+   * rather than asking about the whole account. A named lake is excluded when it matches none of
+   * `buildReachArms`, whatever its visibility: a private or other-org lake carries no gate the
+   * caller lacks, so the gate-complement above would never count it, yet retrieval drops it all
+   * the same (the admin picker lists such lakes).
    *
    * The owner-bypass exemption (#3055): a lake is withheld from the count for its CREATOR
    * only when ownership has not since moved off them - `createdByUserId` is immutable, so without
@@ -799,6 +823,15 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       restrictToTags?: string[];
     }
   ): Promise<number> {
+    if (opts?.restrictToTags && opts.restrictToTags.length > 0) {
+      const reachArms = this.buildReachArms(userTags, entitlementKeys, organizationIds, userId, opts);
+      return this.dataLakeModel.countDocuments({
+        status: 'active',
+        datalakeTag: { $in: opts.restrictToTags },
+        $nor: reachArms,
+      });
+    }
+
     const memberOrgIds = organizationIds ?? [];
     const visibilityArms: Record<string, unknown>[] = [{ isPublic: true }];
     if (memberOrgIds.length > 0) visibilityArms.push({ organizationId: { $in: memberOrgIds } });
@@ -820,9 +853,6 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
         ...(userId ? [{ $or: ownerExemptionArms }] : []),
         ...(grantedLakeIds.length > 0 ? [{ _id: { $nin: grantedLakeIds } }] : []),
         ...(orgGrantExemptionArms.length > 0 ? [{ $nor: orgGrantExemptionArms }] : []),
-        ...(opts?.restrictToTags && opts.restrictToTags.length > 0
-          ? [{ datalakeTag: { $in: opts.restrictToTags } }]
-          : []),
       ],
     };
     return this.dataLakeModel.countDocuments(filter);

@@ -747,8 +747,9 @@ export async function getDynamicDataLakeAccess(
 /**
  * #3055 (scope-accounting follow-up): how many of the SPECIFIC lakes a session names by
  * IDENTITY tag (`datalake:x`, e.g. from `datalakeTagsFrom(session.retrievalTags)`) are
- * gate-excluded for this caller - the per-turn-scoped sibling of `excludedByAccessCount`
- * above, for exactly the case that function's own account-wide count cannot answer.
+ * unreachable for this caller (a gate they lack, or a private/other-org lake) - the
+ * per-turn-scoped sibling of `excludedByAccessCount` above, for exactly the case that function's
+ * own account-wide count cannot answer.
  *
  * Why a separate function rather than teaching `narrowLakeAccessToSession` this: that
  * function is a pure, synchronous filter reused by callers with no DB access, and it must
