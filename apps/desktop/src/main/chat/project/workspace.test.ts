@@ -138,6 +138,43 @@ describe('resolveWorkspace', () => {
 
     await expect(resolveWorkspace(main, 'feat/taken')).rejects.toThrow(/already exists but is not a git worktree/);
   });
+
+  /**
+   * The case this guard used to get wrong: a worktree created for one branch and later switched
+   * to another is still a worktree, so "not a git worktree" was false and sent the user off to
+   * `mv` a directory git is tracking.
+   */
+  it('names the branch a worktree at that path is actually on', async () => {
+    const occupied = await resolveWorkspace(main, 'agent/one');
+    await git(occupied.workingDirectory, ['checkout', '--quiet', '-b', 'fix/one']);
+
+    await expect(resolveWorkspace(main, 'agent/one')).rejects.toThrow(/is a git worktree holding the branch fix\/one/);
+    await expect(resolveWorkspace(main, 'agent/one')).rejects.not.toThrow(/is not a git worktree/);
+  });
+
+  it('points at git worktree move rather than telling the user to move it aside', async () => {
+    const occupied = await resolveWorkspace(main, 'agent/two');
+    await git(occupied.workingDirectory, ['checkout', '--quiet', '-b', 'fix/two']);
+
+    await expect(resolveWorkspace(main, 'agent/two')).rejects.toThrow(/git worktree move/);
+  });
+
+  it('reports a detached worktree as such rather than as a branch', async () => {
+    const occupied = await resolveWorkspace(main, 'agent/three');
+    await git(occupied.workingDirectory, ['checkout', '--quiet', '--detach', 'HEAD']);
+
+    await expect(resolveWorkspace(main, 'agent/three')).rejects.toThrow(/holding a detached HEAD/);
+  });
+
+  it('reuses a worktree registered for the branch even at an unexpected path', async () => {
+    const elsewhere = join(container, 'somewhere-else');
+    await git(main, ['worktree', 'add', '--quiet', '-b', 'feat/elsewhere', elsewhere]);
+
+    expect(await resolveWorkspace(main, 'feat/elsewhere')).toEqual({
+      workingDirectory: elsewhere,
+      outcome: 'reused',
+    });
+  });
 });
 
 describe('resolveWorkspace in an ordinary clone', () => {

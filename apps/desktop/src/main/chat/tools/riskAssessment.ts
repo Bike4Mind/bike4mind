@@ -43,15 +43,34 @@ export function spendsCredits(toolName: string): boolean {
 /**
  * Anything that could make the shell re-read, re-split or re-route the command.
  *
- * With none of these present the argv is exactly the whitespace split below, which is what
- * makes the per-token checks meaningful. A quote or a `$(` and they stop meaning anything, so
- * their presence alone is enough to send the command to the user.
+ * With none of these present outside quotes, the argv is exactly what the tokenizer below
+ * produced, which is what makes the per-token checks meaningful. A `$(` and they stop meaning
+ * anything, so its presence alone is enough to send the command to the user.
  *
- * `*` and `?` are in here for the same reason, not because a glob is dangerous: the shell
- * expands it into filenames this module never saw, so the path check below would be asserting
- * containment for arguments that do not exist yet. One of them could be a symlink out.
+ * `|` is the one separator deliberately absent: a pipeline is split on it and every segment is
+ * assessed in full, which is sound here only because nothing on the allow-list writes to a file
+ * and redirection is still rejected right here.
  */
-const SHELL_CONTROL = /[;&|`$(){}<>\\'"~!#[\]*?\n\r]/;
+const UNQUOTED_CONTROL = /[;&`$(){}<>\\~!#\n\r]/;
+
+/**
+ * Glob characters, rejected unquoted for a different reason than the rest.
+ *
+ * Not because a glob is dangerous: the shell expands it into filenames this module never saw,
+ * so the path check below would be asserting containment for arguments that do not exist yet.
+ * One of them could be a symlink out. Quoted, the pattern never becomes a name the shell chose
+ * - it reaches the program verbatim - so `find . -name '*.ts'` is fine and `cat *.txt` is not.
+ */
+const UNQUOTED_GLOB = /[*?[\]]/;
+
+/**
+ * What still expands or escapes inside double quotes.
+ *
+ * Single quotes are literal to the shell, so their contents can be taken as written. Double
+ * quotes are not: `"$(id)"` is still a substitution and a backslash still escapes, so a double
+ * quoted run holding any of these is not something that can be read off the text.
+ */
+const DOUBLE_QUOTED_EXPANDS = /[$`\\]/;
 
 /**
  * Arguments that make any command follow a symlink out of the folder it was pointed at.
@@ -86,14 +105,126 @@ const RUNNABLE_SCRIPT = /^(test|lint|typecheck)([:-][a-zA-Z0-9:-]+)?$/;
  */
 const SCRIPT_VALUE_FLAGS: readonly string[] = ['--filter', '-F', '-C', '--dir'];
 
-/** Absent `subcommands` and `scripts` means the executable is inert whatever it is asked to do. */
+/** Absent `subcommands`, `scripts` and `guard` means the executable is inert whatever it is asked to do. */
 interface InertCommand {
   /** The only first arguments that stay read-only. Anything else asks. */
   subcommands?: readonly string[];
   /** Arguments that turn this command into a write, an exec or a network call. */
   forbiddenArguments?: readonly string[];
+  /** The same, for flags that glue their value on with no `=` left to match against. */
+  forbiddenPrefixes?: readonly string[];
   /** Marks a package manager, and bounds the script names it may be asked to run. */
   scripts?: RegExp;
+  /** For the few whose SHAPE decides whether they write, where no flag list can say it. */
+  guard?: (rest: readonly string[]) => boolean;
+}
+
+/**
+ * Whether `token` is one of `flags`, in either spelling.
+ *
+ * `--output FILE` and `--output=FILE` are the same flag and the same write, so a check that
+ * only compares whole tokens lets the second form straight through.
+ */
+function isFlag(token: string, flags: readonly string[]): boolean {
+  return flags.some(flag => token === flag || token.startsWith(`${flag}=`));
+}
+
+function hasFlag(tokens: readonly string[], flags: readonly string[]): boolean {
+  return tokens.some(token => isFlag(token, flags));
+}
+
+/**
+ * Whether any token STARTS with one of `prefixes`, for flags that take no `=` at all.
+ *
+ * `git grep -O'touch x'` glues its value to the letter, so there is no separate token and no
+ * `=` for `isFlag` to find, and that one RUNS the command it is given. Matching the prefix is
+ * the only thing that sees it, at the cost of an ask for the rare `git diff -O<orderfile>`.
+ */
+function hasPrefix(tokens: readonly string[], prefixes: readonly string[]): boolean {
+  return tokens.some(token => prefixes.some(prefix => token.startsWith(prefix)));
+}
+
+/**
+ * The only options allowed BEFORE the subcommand, which is where git's own options go.
+ *
+ * An allow-list rather than a list of the dangerous ones, because several of git's globals run
+ * a program of the caller's choosing and they do not look alike: `git -c diff.external=CMD diff`
+ * runs CMD, and so do `-c core.pager` under `--paginate`, `-c alias.*` and `--exec-path`.
+ * Finding the subcommand and ignoring everything in front of it is what let `git diff` look
+ * read-only while it ran whatever it was handed.
+ *
+ * `--git-dir` and `--work-tree` are the ones worth saying out loud, because they look harmless
+ * and are not: they choose WHICH repository runs, so they choose which config file names the
+ * program git runs - and `core.fsmonitor` fires on a bare `git status`. A minimal git dir
+ * written anywhere inside a granted root is enough. Nor does the path check catch it:
+ * `--git-dir=alt` is a bare name, which `looksLikePath` reads as naming no path at all.
+ *
+ * `-C <dir>` is absent and costs nothing: its value lands where the subcommand is read from, so
+ * `git -C dir status` asked already.
+ */
+const GIT_SAFE_GLOBALS: readonly string[] = [
+  '--no-pager',
+  '--no-optional-locks',
+  '--no-replace-objects',
+  '--literal-pathspecs',
+];
+
+/** Everything after `git <subcommand>` that turns a listing into a create, a move or a delete. */
+const GIT_BRANCH_WRITES: readonly string[] = [
+  '-d',
+  '-D',
+  '-m',
+  '-M',
+  '-c',
+  '-C',
+  '-f',
+  '-u',
+  '--delete',
+  '--move',
+  '--copy',
+  '--force',
+  '--set-upstream-to',
+  '--unset-upstream',
+  '--edit-description',
+];
+
+/**
+ * What the subcommand name alone cannot say: the globals in front of it, and the three entries
+ * that read in their bare form and not in any other.
+ *
+ * `git branch` lists, `git branch foo` creates and `git branch -D foo` deletes. `git reflog`
+ * shows, while `git reflog expire` and `git reflog delete` drop the entries that are often the
+ * only remaining way back to a commit nothing else points at. `git help` prints, and
+ * `git help -w` opens a browser. All three are too useful read-only to leave off the list.
+ */
+function gitStaysReadOnly(rest: readonly string[]): boolean {
+  const start = rest.findIndex(token => !token.startsWith('-'));
+  if (start === -1) return false;
+  if (!rest.slice(0, start).every(token => isFlag(token, GIT_SAFE_GLOBALS))) return false;
+
+  const positional = rest.slice(start).filter(token => !token.startsWith('-'));
+  switch (positional[0]) {
+    case 'branch':
+      return positional.length === 1 && !hasFlag(rest, GIT_BRANCH_WRITES);
+    case 'reflog':
+      return positional.length === 1 || positional[1] === 'show';
+    case 'help':
+      return !hasFlag(rest, ['-w', '--web']);
+    default:
+      return true;
+  }
+}
+
+/**
+ * `xxd [options] [infile [outfile]]` and `uniq [options] [input [output]]` both WRITE the
+ * second path they are handed, and no flag names it.
+ *
+ * So the only bound is the count, and from here a value-taking flag's value looks exactly like
+ * a path. Rather than track which flags those are, anything with a second bare token asks:
+ * `uniq -f 1 notes.txt` is a false alarm, and a silent write is not.
+ */
+function writesNoSecondPath(rest: readonly string[]): boolean {
+  return rest.filter(token => !token.startsWith('-')).length <= 1;
 }
 
 /**
@@ -117,23 +248,49 @@ interface InertCommand {
  *
  * What this does not open: `npx`, `dlx` and `exec` are absent, and absent by default rather than
  * by denial, because they fetch and run a package that is not the repository's at all.
+ *
+ * The near misses are worth recording, because the next person to extend the list will reach
+ * for them. `sed` and `awk` write files - `sed -i`, `s///w file`, awk's `print > "file"` - and
+ * awk shells out through `system()`. `env` runs whatever follows its assignments. `less` and
+ * `more` are interactive pagers and would hang a child that has no terminal. `curl`, `wget` and
+ * `gh` reach the network. Every interpreter is already excluded by the bar above.
+ *
+ * `printenv` and `ps` are the user's own call and went the other way. Both ARE inert by the bar
+ * above - they read and print - which is the whole reason they are worth naming here: what they
+ * print is every environment secret the app was started with, and the command lines of other
+ * processes, tokens and all. Reading those into the model's context is not a filesystem risk,
+ * so the bar never saw it, and it is not something to do without asking.
  */
 const INERT_COMMANDS: Readonly<Record<string, InertCommand>> = {
+  base64: { forbiddenArguments: ['-o', '--output'] },
   basename: {},
   cat: {},
   cmp: {},
+  column: {},
+  comm: {},
   cut: {},
   date: {},
+  df: {},
   diff: {},
   dirname: {},
   du: {},
   echo: {},
+  expand: {},
   fd: { forbiddenArguments: ['-x', '--exec', '-X', '--exec-batch'] },
   file: {},
-  find: { forbiddenArguments: ['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprintf', '-fls'] },
-  // Read-only porcelain only. `add`, `commit`, `checkout` and `stash` all change the working
-  // tree or the index, and `push`, `pull`, `fetch`, `clone`, `remote` and `config` either talk
-  // to the network or read a file outside the repository.
+  find: {
+    forbiddenArguments: ['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprint0', '-fprintf', '-fls'],
+  },
+  fold: {},
+  // Read-only porcelain only, and read-only plumbing under it. `add`, `commit`, `checkout` and
+  // `stash` all change the working tree or the index, and `push`, `pull`, `fetch`, `clone`,
+  // `remote` and `config` either talk to the network or read a file outside the repository.
+  //
+  // Four more are absent for being read-only only in their bare form, which the subcommand
+  // check cannot tell apart from the rest: `tag` lists but `tag X` creates, `remote` lists but
+  // `remote add` writes, `worktree` lists but `worktree add` and `remove` write, and
+  // `symbolic-ref` reads until it is handed a value. `branch` and `reflog` are the same shape
+  // and are on the list anyway, bounded by `guard` instead.
   git: {
     subcommands: [
       'status',
@@ -149,25 +306,62 @@ const INERT_COMMANDS: Readonly<Record<string, InertCommand>> = {
       'ls-files',
       'ls-tree',
       'cat-file',
+      'show-ref',
+      'for-each-ref',
+      'merge-base',
+      'name-rev',
+      'grep',
+      'count-objects',
+      'whatchanged',
+      'reflog',
+      'check-ignore',
+      'diff-tree',
+      'verify-commit',
+      'var',
+      'help',
     ],
+    // `git diff --output=FILE` writes that file, and `git grep -O<cmd>` RUNS one. The long
+    // spelling of the second is here; the glued short one needs the prefix check.
+    forbiddenArguments: ['--output', '--open-files-in-pager'],
+    forbiddenPrefixes: ['-O'],
+    guard: gitStaysReadOnly,
   },
   grep: {},
   head: {},
+  hostname: {},
+  id: {},
+  join: {},
+  jq: {},
   ls: {},
+  md5: {},
+  md5sum: {},
   nl: {},
   npm: { scripts: RUNNABLE_SCRIPT },
+  od: {},
+  paste: {},
   pnpm: { scripts: RUNNABLE_SCRIPT },
   pwd: {},
   realpath: {},
+  rev: {},
   rg: { forbiddenArguments: ['--pre', '--pre-glob', '--hostname-bin'] },
-  sort: {},
+  seq: {},
+  sha256sum: {},
+  shasum: {},
+  // `sort -o FILE` writes that file, and GNU `sort --compress-program=PROG` runs PROG as soon
+  // as the input is big enough to spill to a temp file.
+  sort: { forbiddenArguments: ['-o', '--output', '--compress-program'] },
   stat: {},
+  sw_vers: {},
   tail: {},
   tr: {},
-  tree: {},
-  uniq: {},
+  tree: { forbiddenArguments: ['-o'] },
+  uname: {},
+  uniq: { guard: writesNoSecondPath },
+  uptime: {},
   wc: {},
   which: {},
+  whoami: {},
+  xxd: { guard: writesNoSecondPath },
   yarn: { scripts: RUNNABLE_SCRIPT },
 };
 
@@ -178,19 +372,28 @@ const INERT_COMMANDS: Readonly<Record<string, InertCommand>> = {
  * way to have arbitrary code run under their own hands the next time they commit, open a
  * shell, install a package or push a branch. These paths are inside the folders they granted,
  * so the only thing that can catch it is asking.
+ *
+ * Every pattern carries `i`, and a new one has to as well: macOS and Windows will open
+ * `.GIT/config` as `.git/config`, so a pattern that matches only the lower-case spelling
+ * guards nothing on the two platforms this app ships to.
  */
 const EXECUTED_LATER: readonly RegExp[] = [
-  /(^|\/)\.git\/hooks\//,
-  /(^|\/)\.github\/workflows\//,
-  /(^|\/)\.gitlab-ci\.yml$/,
-  /(^|\/)\.(bash|zsh)(rc|_profile|_login|env)$/,
-  /(^|\/)\.profile$/,
-  /(^|\/)\.envrc$/,
-  /(^|\/)\.npmrc$/,
-  /(^|\/)\.yarnrc(\.yml)?$/,
-  /(^|\/)Library\/LaunchAgents\//,
-  /(^|\/)\.claude\//,
-  /(^|\/)\.vscode\/tasks\.json$/,
+  // The whole directory, and the gitfile that can stand in for it. Hooks are the obvious half;
+  // `config` is the other, since `core.fsmonitor`, `diff.external`, `core.pager` and `alias.*`
+  // each NAME a command git runs, and `core.fsmonitor` fires on a bare `git status` - which is
+  // on the allow-list above. A `.git` FILE holding `gitdir: ../elsewhere` reaches a config the
+  // same way, verified. Nothing legitimate asks to write in here unasked.
+  /(^|\/)\.git(\/|$)/i,
+  /(^|\/)\.github\/workflows\//i,
+  /(^|\/)\.gitlab-ci\.yml$/i,
+  /(^|\/)\.(bash|zsh)(rc|_profile|_login|env)$/i,
+  /(^|\/)\.profile$/i,
+  /(^|\/)\.envrc$/i,
+  /(^|\/)\.npmrc$/i,
+  /(^|\/)\.yarnrc(\.yml)?$/i,
+  /(^|\/)Library\/LaunchAgents\//i,
+  /(^|\/)\.claude\//i,
+  /(^|\/)\.vscode\/tasks\.json$/i,
 ];
 
 /**
@@ -239,46 +442,123 @@ function runnableScript(rest: readonly string[], allowed: RegExp): string | null
 }
 
 /**
- * Whether a shell command is confined enough to run unasked.
+ * The command as argv, one array per pipeline segment, or null when it cannot be read safely.
  *
- * Every clause is necessary: no shell control characters, so the argv is fixed; a listed
- * executable, so what it does with that argv is bounded - by inertness for most of the list,
- * and by the script name for the three package managers; and every path argument proven inside
- * a granted root by the same resolver the tools use, so it reaches only what the user shared.
+ * Returning null is the fail-closed half of this module: anything the tokenizer is not certain
+ * it has read the way the shell will read it ends up in front of the user, and the per-token
+ * checks below only ever run on an argv this produced.
+ *
+ * Quoting is handled rather than refused because refusing it is what made `grep "foo bar" x`
+ * and `find . -name '*.ts'` ask. Single quotes are literal to the shell, so their contents are
+ * taken as written; double quotes are only taken when nothing inside them still expands.
  */
-async function assessCommand(input: Record<string, unknown>, context: ToolContext): Promise<ApprovalRisk> {
-  const command = typeof input.command === 'string' ? input.command.trim() : '';
-  if (!command) return 'sensitive';
-  if (SHELL_CONTROL.test(command)) return 'sensitive';
+function tokenizeCommand(command: string): string[][] | null {
+  const segments: string[][] = [];
+  let current: string[] = [];
+  let token: string | null = null;
 
-  const tokens = command.split(/\s+/).filter(Boolean);
+  const endToken = () => {
+    if (token !== null) current.push(token);
+    token = null;
+  };
+
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+
+    if (char === "'" || char === '"') {
+      const close = command.indexOf(char, index + 1);
+      if (close === -1) return null;
+      const body = command.slice(index + 1, close);
+      if (char === '"' && DOUBLE_QUOTED_EXPANDS.test(body)) return null;
+      token = (token ?? '') + body;
+      index = close;
+      continue;
+    }
+
+    if (char === '|') {
+      endToken();
+      segments.push(current);
+      current = [];
+      continue;
+    }
+
+    if (UNQUOTED_CONTROL.test(char) || UNQUOTED_GLOB.test(char)) return null;
+
+    if (/\s/.test(char)) {
+      endToken();
+      continue;
+    }
+
+    token = (token ?? '') + char;
+  }
+
+  endToken();
+  segments.push(current);
+  // An empty segment is a leading, trailing or doubled separator, and `||` is not a pipe at all.
+  return segments.some(segment => segment.length === 0) ? null : segments;
+}
+
+/**
+ * Whether one segment of a pipeline is confined enough to run unasked.
+ *
+ * Every clause is necessary: a listed executable, so what it does with its argv is bounded - by
+ * inertness for most of the list, and by the script name for the three package managers; and
+ * every path argument proven inside a granted root by the same resolver the tools use, so it
+ * reaches only what the user shared. `resolveWithinRoots` throws rather than returning, and the
+ * caller treats that as a reason to ask.
+ */
+async function assessSegment(tokens: readonly string[], cwd: string, context: ToolContext): Promise<boolean> {
   const [executable, ...rest] = tokens;
   // A slash in the executable means a path, not a name: `./configure` and `/usr/bin/env` are
   // both ways of running something this list was never asked about.
-  if (!executable || executable.includes('/')) return 'sensitive';
+  if (!executable || executable.includes('/')) return false;
 
   const inert = Object.prototype.hasOwnProperty.call(INERT_COMMANDS, executable)
     ? INERT_COMMANDS[executable]
     : undefined;
-  if (!inert) return 'sensitive';
+  if (!inert) return false;
 
-  if (FOLLOWS_SYMLINKS.some(flag => rest.includes(flag))) return 'sensitive';
-  if (inert.forbiddenArguments?.some(flag => rest.includes(flag))) return 'sensitive';
+  if (hasFlag(rest, FOLLOWS_SYMLINKS)) return false;
+  if (inert.forbiddenArguments && hasFlag(rest, inert.forbiddenArguments)) return false;
+  if (inert.forbiddenPrefixes && hasPrefix(rest, inert.forbiddenPrefixes)) return false;
 
   if (inert.subcommands) {
     const subcommand = rest.find(token => !token.startsWith('-'));
-    if (!subcommand || !inert.subcommands.includes(subcommand)) return 'sensitive';
+    if (!subcommand || !inert.subcommands.includes(subcommand)) return false;
   }
 
-  if (inert.scripts && !runnableScript(rest, inert.scripts)) return 'sensitive';
-
-  // Throws when `cwd` is outside every granted root, which is itself a reason to ask.
-  const cwd = await resolveCwd(input, context.roots, context.workingDirectory);
+  if (inert.guard && !inert.guard(rest)) return false;
+  if (inert.scripts && !runnableScript(rest, inert.scripts)) return false;
 
   for (const token of rest) {
     const candidate = pathArgument(token);
     if (candidate === null) continue;
     await resolveWithinRoots(candidate, context.roots, cwd);
+  }
+
+  return true;
+}
+
+/**
+ * Whether a shell command is confined enough to run unasked.
+ *
+ * A pipeline is contained only when every segment of it is, and that is sound for one reason
+ * worth stating: nothing on the allow-list writes to a file, so no chain of them can either,
+ * and the one way to turn a chain into a write - a redirect - is rejected while tokenizing.
+ * Reading `git log | head` is the same act as reading `git log`, only shorter on screen.
+ */
+async function assessCommand(input: Record<string, unknown>, context: ToolContext): Promise<ApprovalRisk> {
+  const command = typeof input.command === 'string' ? input.command.trim() : '';
+  if (!command) return 'sensitive';
+
+  const segments = tokenizeCommand(command);
+  if (!segments) return 'sensitive';
+
+  // Throws when `cwd` is outside every granted root, which is itself a reason to ask.
+  const cwd = await resolveCwd(input, context.roots, context.workingDirectory);
+
+  for (const segment of segments) {
+    if (!(await assessSegment(segment, cwd, context))) return 'sensitive';
   }
 
   return 'contained';
@@ -293,7 +573,16 @@ async function assessCommand(input: Record<string, unknown>, context: ToolContex
 function assessWrite(prompt: ApprovalPrompt): ApprovalRisk {
   const path = prompt.diff?.path;
   if (!path) return 'sensitive';
-  return EXECUTED_LATER.some(pattern => pattern.test(path)) ? 'sensitive' : 'contained';
+  return runsLater(path) ? 'sensitive' : 'contained';
+}
+
+/**
+ * The path arrives from `resolve`, which on Windows spells its separators `\`. Every pattern
+ * is written in posix, so without this they match nothing at all on that platform.
+ */
+function runsLater(path: string): boolean {
+  const separated = path.replace(/\\/g, '/');
+  return EXECUTED_LATER.some(pattern => pattern.test(separated));
 }
 
 /**
@@ -304,11 +593,7 @@ function assessPatch(prompt: ApprovalPrompt): ApprovalRisk {
   const diffs = prompt.diffs ?? (prompt.diff ? [prompt.diff] : []);
   if (diffs.length === 0) return 'sensitive';
   const risky = diffs.some(
-    diff =>
-      diff.operation === 'delete' ||
-      [diff.path, ...(diff.movedFrom ? [diff.movedFrom] : [])].some(path =>
-        EXECUTED_LATER.some(pattern => pattern.test(path))
-      )
+    diff => diff.operation === 'delete' || [diff.path, ...(diff.movedFrom ? [diff.movedFrom] : [])].some(runsLater)
   );
   return risky ? 'sensitive' : 'contained';
 }

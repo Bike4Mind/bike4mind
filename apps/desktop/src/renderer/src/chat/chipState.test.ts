@@ -79,3 +79,38 @@ describe('describeChipRow with a project', () => {
     );
   });
 });
+
+/**
+ * A worktree switched off the branch it was created for used to leave the chip naming a
+ * checkout that no longer existed, with nothing on screen admitting the two had parted.
+ */
+describe('describeChipRow when the worktree has moved off its branch', () => {
+  const relocated: ChatProject = {
+    ...project,
+    branch: 'agent/x',
+    workspace: true,
+    workingDirectory: '/Users/someone/code/agent+x',
+  };
+
+  it('labels the chip with the branch the worktree is on, not the one recorded', () => {
+    const row = describeChipRow(relocated, { isRepository: true, count: 2, checkedOut: 'fix/x' });
+    expect(row.branch.label).toBe('fix/x');
+  });
+
+  it('says in the tooltip which branch the session was started on', () => {
+    const row = describeChipRow(relocated, { isRepository: true, count: 2, checkedOut: 'fix/x' });
+    expect(row.branch.tooltip).toContain('fix/x');
+    expect(row.branch.tooltip).toContain('agent/x');
+  });
+
+  it('leaves the tooltip alone when the two agree', () => {
+    const row = describeChipRow(relocated, { isRepository: true, count: 2, checkedOut: 'agent/x' });
+    expect(row.branch.label).toBe('agent/x');
+    expect(row.branch.tooltip).toBe(relocated.directory);
+  });
+
+  it('falls back to the recorded branch before git has answered, and on a detached HEAD', () => {
+    expect(describeChipRow(relocated, { isRepository: true, count: 2 }).branch.label).toBe('agent/x');
+    expect(describeChipRow(relocated, { isRepository: true, count: 2, checkedOut: null }).branch.label).toBe('agent/x');
+  });
+});
