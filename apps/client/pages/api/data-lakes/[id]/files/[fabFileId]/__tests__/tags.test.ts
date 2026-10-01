@@ -253,6 +253,27 @@ describe('GET /api/data-lakes/[id]/files/[fabFileId]/tags', () => {
     expect(h.fabFileFindById).not.toHaveBeenCalled();
   });
 
+  it('refuses when the prefix overlap check could not be verified', async () => {
+    // `stamp` can be true while the fail-closed overlap check failed - the write door refuses
+    // there too, so the read must not seed a set the PUT would reject.
+    h.decideStampPrefix.mockResolvedValue({ stamp: true, prefix: 'lk:', overlapCheckFailed: true });
+    const { res } = makeRes();
+
+    await expect(call(req('GET', { id: 'lake1', fabFileId: 'f1' }), res)).rejects.toThrow(
+      /Could not verify this data lake tag prefix/i
+    );
+    expect(h.fabFileFindById).not.toHaveBeenCalled();
+  });
+
+  it('reads nothing when the access gate denies the lake', async () => {
+    h.assertLakeAccess.mockRejectedValue(new Error('Data lake not found'));
+    const { res } = makeRes();
+
+    await expect(call(req('GET', { id: 'lake1', fabFileId: 'f1' }), res)).rejects.toThrow(/not found/i);
+    expect(h.resolveCanManageLake).not.toHaveBeenCalled();
+    expect(h.fabFileFindById).not.toHaveBeenCalled();
+  });
+
   it('returns an empty current set when the file has no tags under the prefix', async () => {
     h.fabFileFindById.mockResolvedValue({
       id: 'f1',

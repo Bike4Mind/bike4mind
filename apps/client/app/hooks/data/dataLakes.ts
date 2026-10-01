@@ -1213,6 +1213,11 @@ export function useReprocessFabFile(dataLakeId: string | null) {
  * `useRemoveFileFromDataLake` and `useAddFileToDataLake` cannot drift apart on what "membership
  * changed" invalidates.
  *
+ * Beyond the membership-derived lake views it also refreshes the findings queue and the retag
+ * seed: both are read from lake membership, and a corpus action's Undo restores through
+ * `useAddFileToDataLake`, so a fan-out scoped only to the lake surfaces would leave the queue and
+ * the seed stale after an Undo. See `useApplyCorpusAction`.
+ *
  * Exported so a future hook for `PUT /api/data-lakes/:id/files/:fabFileId/tags`
  * (`setDataLakeFileTags`) can reuse it: that door can also change a file's tags under this lake's
  * prefix (and, via a prefix-arm join, another lake's membership), which is exactly the same
@@ -1246,6 +1251,13 @@ export function invalidateLakeFileMembershipQueries(
   // Bare prefix: the tag list carries a fileCount derived from the files that hold each tag,
   // so a membership change stales the list too, not only the counts endpoint.
   queryClient.invalidateQueries({ queryKey: ['file-tags'] });
+  // A finding cites lake members, so the findings queue moves when membership does; the forward
+  // corpus action and the supersede Undo already refresh it, and folding it in here gives the
+  // merge Undo (which mutates only through `useAddFileToDataLake`) the same refresh.
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.findingsOf(dataLakeId) });
+  // The retag seed is read from membership too; a stale seed would under-report the file's current
+  // tags and, under replace semantics, strip the ones it missed.
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.lakeFileTagsOf(dataLakeId) });
 }
 
 /** How long the Undo toast stays visible - long enough to notice, short of feeling stuck open.
@@ -2599,12 +2611,10 @@ export function useApplyCorpusAction() {
   const queryClient = useQueryClient();
   const addFileToDataLake = useAddFileToDataLake();
 
-  /** Everything a corpus action can stale: the row's own detail, membership, and the tag seed. */
-  const refresh = (dataLakeId: string) => {
-    queryClient.invalidateQueries({ queryKey: dataLakeKeys.findingsOf(dataLakeId) });
-    invalidateLakeFileMembershipQueries(queryClient, dataLakeId);
-    queryClient.invalidateQueries({ queryKey: dataLakeKeys.lakeFileTagsOf(dataLakeId) });
-  };
+  /** Everything a corpus action can stale: the row's own detail, membership, and the tag seed.
+   *  `invalidateLakeFileMembershipQueries` now carries the findings and seed keys too, so the
+   *  Undo paths (which go through `useAddFileToDataLake`) get the identical fan-out. */
+  const refresh = (dataLakeId: string) => invalidateLakeFileMembershipQueries(queryClient, dataLakeId);
 
   return useMutation({
     mutationFn: async ({ dataLakeId, findingId, body }: ApplyCorpusActionVariables) => {
@@ -2629,6 +2639,9 @@ export function useApplyCorpusAction() {
               onClick: () => {
                 // One restore per removed member - the server's own 30-minute removal records are
                 // what `useAddFileToDataLake` spends, exactly as the browse's own removal Undo does.
+                // Every restore addresses THIS toast, so a later success can overwrite an earlier
+                // refusal and the last one to land is what the curator reads - the accepted shape
+                // `useRecordMembershipDecision` uses for the same multi-restore case.
                 for (const target of removed) {
                   addFileToDataLake.mutate({ dataLakeId, fabFileId: target.fabFileId, toastId });
                 }

@@ -19,7 +19,7 @@ import {
 } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import type { IDataLakeFindingDocument, LakeFindingSource } from '@bike4mind/common';
-import { LAKE_CORPUS_ACTION_NOTE_MAX_CHARS, MAX_LAKE_FILE_TAG_NAME_LENGTH } from '@bike4mind/common';
+import { LAKE_CORPUS_ACTION_NOTE_MAX_CHARS, MAX_LAKE_FILE_TAG_NAME_LENGTH, MAX_TAXONOMY_TAGS } from '@bike4mind/common';
 import { useApplyCorpusAction, useLakeFileTags } from '@client/app/hooks/data/dataLakes';
 
 /**
@@ -160,7 +160,8 @@ function MergeDialog({
     <CorpusDialog title="Merge documents" onClose={onClose} testId="finding-corpus-merge-dialog">
       <Typography level="body-sm">
         Keep one version. The others are removed from this lake - the documents themselves survive in their owners&apos;
-        Files, and can be restored for 30 minutes from the confirmation.
+        Files. You can undo this from the toast for the next 15 seconds; after that, only the file&apos;s owner can
+        bring it back by re-adding it to the lake.
       </Typography>
       <FormControl>
         <FormLabel>Keep in this lake</FormLabel>
@@ -240,7 +241,7 @@ function SupersedeDialog({
     <CorpusDialog title="Supersede a document" onClose={onClose} testId="finding-corpus-supersede-dialog">
       <Typography level="body-sm">
         Keep both documents in this lake, but retire one from search ranking behind the current one. The retired
-        document stays retrievable by name and id.
+        document stays retrievable by name and id. You can undo this from the toast for the next 15 seconds.
       </Typography>
       <FormControl>
         <FormLabel>Current version (kept)</FormLabel>
@@ -310,6 +311,9 @@ function RetagDialog({
     if (!name.startsWith(tags.prefix)) return setError(`Tags must start with "${tags.prefix}"`);
     if (name === tags.prefix) return setError(`A tag needs a name after "${tags.prefix}"`);
     if (name.length > MAX_LAKE_FILE_TAG_NAME_LENGTH) return setError('That tag name is too long');
+    // Mirrors `SetLakeFileTagsRequestInput` so the refusal is inline, not a late 400 on submit.
+    if (/[\r\n]/.test(name)) return setError('A tag name cannot contain a line break');
+    if ((names?.length ?? 0) >= MAX_TAXONOMY_TAGS) return setError('This document is at its tag limit');
     if (names?.includes(name)) return setError('That tag is already here');
     setError(null);
     setNames(current => [...(current ?? []), name]);

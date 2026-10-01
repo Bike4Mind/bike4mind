@@ -94,6 +94,8 @@ import {
   useReprocessFabFile,
   useScanDataLakeFindings,
   useRuleOnDataLakeFinding,
+  useApplyCorpusAction,
+  useLakeFileTags,
   useUnderChunkedCount,
 } from './dataLakes';
 
@@ -2441,7 +2443,7 @@ describe('useApplyCorpusAction', () => {
     });
     // The restores land on the same mocked POST.
     apiPost.mockResolvedValue({ data: { success: true, fileCount: 1, totalSizeBytes: 1 } });
-    const { result } = mount();
+    const { result, invalidate } = mount();
 
     await act(async () => {
       await result.current.mutateAsync({
@@ -2455,12 +2457,20 @@ describe('useApplyCorpusAction', () => {
       string,
       { action: { onClick: () => void } },
     ];
+    // Scope the assertion to the Undo itself: the forward action already refreshed these keys.
+    invalidate.mockClear();
     act(() => options.action.onClick());
 
     await waitFor(() => {
       expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/files/b');
       expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/files/c');
     });
+
+    // A merge Undo is a membership change like any other, so it must stale the findings queue and
+    // the retag seed too - not just the lake's file list.
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeFileTags', 'lake1']));
   });
 
   it('undoes a supersede by posting unsupersede back to the same door', async () => {
@@ -2480,7 +2490,7 @@ describe('useApplyCorpusAction', () => {
     apiPost.mockResolvedValue({
       data: { data: { action: 'unsupersede', findingId: 'finding-1', targets: [], detail: {} } },
     });
-    const { result } = mount();
+    const { result, invalidate } = mount();
 
     await act(async () => {
       await result.current.mutateAsync({
@@ -2494,14 +2504,19 @@ describe('useApplyCorpusAction', () => {
       string,
       { action: { onClick: () => void } },
     ];
+    // Scope the assertion to the Undo itself: the forward action already refreshed these keys.
+    invalidate.mockClear();
     act(() => options.action.onClick());
 
-    await waitFor(() =>
+    await waitFor(() => {
       expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/findings/finding-1/corpus-action', {
         action: 'unsupersede',
         fabFileId: 'b',
-      })
-    );
+      });
+      const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+      expect(keys).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
+      expect(keys).toContain(JSON.stringify(['dataLakeFileTags', 'lake1']));
+    });
   });
 
   it('surfaces the server refusal text on a closed finding rather than axios status line', async () => {

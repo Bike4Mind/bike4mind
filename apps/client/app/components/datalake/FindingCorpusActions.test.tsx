@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { MAX_TAXONOMY_TAGS } from '@bike4mind/common';
 import type { IDataLakeFindingDocument } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
@@ -168,5 +169,17 @@ describe('FindingCorpusActions', () => {
     fireEvent.click(screen.getByTestId('finding-corpus-retag-add-btn'));
 
     expect(screen.getByTestId('finding-corpus-retag-invalid')).toHaveTextContent('lk:');
+  });
+
+  it('refuses to add past the tag cap the server enforces', () => {
+    renderActions();
+    const full = Array.from({ length: MAX_TAXONOMY_TAGS }, (_, i) => `lk:t${i}`);
+    h.lakeTags.mockReturnValue({ data: { prefix: 'lk:', current: full }, isLoading: false, isError: false });
+
+    fireEvent.click(screen.getByTestId('finding-corpus-retag-btn'));
+    fireEvent.change(screen.getByTestId('finding-corpus-retag-add-input'), { target: { value: 'lk:one-more' } });
+    fireEvent.click(screen.getByTestId('finding-corpus-retag-add-btn'));
+
+    expect(screen.getByTestId('finding-corpus-retag-invalid')).toHaveTextContent(/tag limit/i);
   });
 });
