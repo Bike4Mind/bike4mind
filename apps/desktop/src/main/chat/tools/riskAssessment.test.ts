@@ -115,6 +115,13 @@ describe('assessApprovalRisk', () => {
       ['an exec-path override', 'git --exec-path=/tmp/evil status'],
       ['sort compressing its temp files with a program', "sort --compress-program='touch PWNED' notes.txt"],
       ['git help opening a browser', 'git help -w status'],
+      // These choose WHICH repository runs, and so which config names the program git runs.
+      // A bare relative name is the case the path check never saw: it reads as naming no path.
+      ['a repository chosen by relative name', 'git --git-dir=alt status'],
+      ['the same, spaced', 'git --git-dir alt status'],
+      ['a repository chosen by absolute path', 'git --git-dir=/tmp/evil/.git log'],
+      ['a working tree pointed elsewhere', 'git --work-tree=/tmp status'],
+      ['both at once, which is the working exploit', 'git --git-dir=alt --work-tree=. status'],
     ])('asks for %s', async (_label, command) => {
       expect(await shell(command)).toBe('sensitive');
     });
@@ -283,8 +290,11 @@ describe('assessApprovalRisk', () => {
 
     it.each([
       ['a git hook', '.git/hooks/pre-commit'],
-      // `git diff` is on the allow-list, and this file is where `diff.external` names what it runs.
+      // `git status` is on the allow-list, and this file is where `core.fsmonitor` names what
+      // it runs. The gitfile reaches a config elsewhere the same way.
       ['the repository config', '.git/config'],
+      ['anything else in the git directory', '.git/HEAD'],
+      ['a gitfile standing in for the directory', 'sub/.git'],
       ['a CI workflow', '.github/workflows/ci.yml'],
       ['a shell rc file', '.zshrc'],
       ['a direnv file', '.envrc'],

@@ -153,6 +153,12 @@ function hasPrefix(tokens: readonly string[], prefixes: readonly string[]): bool
  * Finding the subcommand and ignoring everything in front of it is what let `git diff` look
  * read-only while it ran whatever it was handed.
  *
+ * `--git-dir` and `--work-tree` are the ones worth saying out loud, because they look harmless
+ * and are not: they choose WHICH repository runs, so they choose which config file names the
+ * program git runs - and `core.fsmonitor` fires on a bare `git status`. A minimal git dir
+ * written anywhere inside a granted root is enough. Nor does the path check catch it:
+ * `--git-dir=alt` is a bare name, which `looksLikePath` reads as naming no path at all.
+ *
  * `-C <dir>` is absent and costs nothing: its value lands where the subcommand is read from, so
  * `git -C dir status` asked already.
  */
@@ -161,8 +167,6 @@ const GIT_SAFE_GLOBALS: readonly string[] = [
   '--no-optional-locks',
   '--no-replace-objects',
   '--literal-pathspecs',
-  '--git-dir',
-  '--work-tree',
 ];
 
 /** Everything after `git <subcommand>` that turns a listing into a create, a move or a delete. */
@@ -366,11 +370,12 @@ const INERT_COMMANDS: Readonly<Record<string, InertCommand>> = {
  * so the only thing that can catch it is asking.
  */
 const EXECUTED_LATER: readonly RegExp[] = [
-  /(^|\/)\.git\/hooks\//,
-  // Not run itself, but `diff.external`, `core.pager` and `alias.*` each NAME a command git
-  // then runs, and a plain `git diff` is on the allow-list above - so writing this file and
-  // reading a diff is two contained calls that add up to arbitrary execution.
-  /(^|\/)\.git\/config$/,
+  // The whole directory, and the gitfile that can stand in for it. Hooks are the obvious half;
+  // `config` is the other, since `core.fsmonitor`, `diff.external`, `core.pager` and `alias.*`
+  // each NAME a command git runs, and `core.fsmonitor` fires on a bare `git status` - which is
+  // on the allow-list above. A `.git` FILE holding `gitdir: ../elsewhere` reaches a config the
+  // same way, verified. Nothing legitimate asks to write in here unasked.
+  /(^|\/)\.git(\/|$)/,
   /(^|\/)\.github\/workflows\//,
   /(^|\/)\.gitlab-ci\.yml$/,
   /(^|\/)\.(bash|zsh)(rc|_profile|_login|env)$/,
