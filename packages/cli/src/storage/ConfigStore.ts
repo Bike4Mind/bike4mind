@@ -1,4 +1,5 @@
 import { promises as fs, existsSync } from 'fs';
+import { createHash } from 'node:crypto';
 import path from 'path';
 import { homedir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
@@ -306,6 +307,7 @@ const CliConfigSchema = z.object({
     .prefault({}),
   trustedTools: z.array(z.string()).optional().prefault([]),
   trustedProjects: z.array(z.string()).optional().prefault([]),
+  trustedMcpDefinitions: z.record(z.string(), z.array(z.string())).optional().prefault({}),
   sandbox: SandboxConfigSchema.optional(),
   additionalDirectories: z.array(z.string()).optional().prefault([]),
   fallbackModels: z.array(z.string()).optional(),
@@ -431,6 +433,7 @@ const DEFAULT_CONFIG: CliConfig = {
   },
   trustedTools: [], // No tools trusted by default
   trustedProjects: [], // No project roots trusted by default (folder-trust gate)
+  trustedMcpDefinitions: {}, // No repo MCP definitions approved by default
   additionalDirectories: [], // No additional directories by default
 };
 
@@ -721,6 +724,41 @@ function mergeMcpServersGlobalWins(
 }
 
 /**
+ * Approval fingerprint of a repo MCP server: sha256 over every field that
+ * decides what gets spawned (full env/header VALUES included, so a changed
+ * token re-prompts). Only the hash is persisted. Distinct from
+ * McpManager.hashServerConfig, a truncated cache key that ignores headers.
+ */
+export function fingerprintMcpServer(s: NormalizedMcpServer): string {
+  const sortKeys = (o: Record<string, string> | undefined) =>
+    Object.fromEntries(Object.entries(o ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+  const { name, type, command, args, url } = s;
+  return createHash('sha256')
+    .update(JSON.stringify({ name, type, command, args, url, env: sortKeys(s.env), headers: sortKeys(s.headers) }))
+    .digest('hex');
+}
+
+/** Env keys whose values change what code a spawned process runs; shown to the user at approval. */
+const LOADER_ENV_KEY = /^(PATH|NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|RUBYOPT|PERL5OPT|PERL5LIB|LD_.*|DYLD_.*|PYTHON.*)$/i;
+
+/**
+ * A repo MCP server awaiting approval. Carries env/header KEYS, plus values only
+ * for loader-style env keys (envValues); secrets and header values never leave the store.
+ */
+export interface PendingMcpApproval {
+  name: string;
+  /** fingerprintMcpServer() of the definition shown; approval persists exactly this. */
+  fingerprint: string;
+  transport: 'stdio' | 'http';
+  command?: string;
+  args?: string[];
+  url?: string;
+  envKeys: string[];
+  envValues: Record<string, string>;
+  headerKeys: string[];
+}
+
+/**
  * Merge configs with priority: global -> project -> local, with the invariant
  * that repo layers may only TIGHTEN the user's global security posture, never
  * loosen it. Sandbox goes through `tightenSandbox`; the repo `trustedTools`
@@ -841,6 +879,10 @@ export class ConfigStore {
   private rawProjectConfig: ProjectConfig | null = null;
   private rawProjectLocalConfig: ProjectLocalConfig | null = null;
   private rawMcpJsonServers: NormalizedMcpServer[] | null = null;
+  // Repo MCP servers whose exact definition isn't approved for this root; held
+  // out of config.mcpServers so no spawn path can start them.
+  private pendingMcpApprovals: NormalizedMcpServer[] = [];
+  private pendingMcpWarned = false;
 
   constructor(configPath?: string) {
     this.configPath = configPath || path.join(homedir(), '.bike4mind', 'config.json');
@@ -1058,7 +1100,25 @@ export class ConfigStore {
     const mcpJson = this.projectTrusted ? this.rawMcpJsonServers : null;
 
     const merged = mergeConfigs(global, project, local);
-    merged.mcpServers = mergeMcpServersGlobalWins(global.mcpServers, mcpJson, project?.mcpServers, local?.mcpServers);
+    // Repo servers spawn only once their exact definition is approved for this
+    // root. Names global defines are dropped first: they never spawn, so they're
+    // never pending either.
+    const globalNames = new Set((global.mcpServers ?? []).map(s => s.name));
+    const repoServers = mergeMcpServersGlobalWins(undefined, mcpJson, project?.mcpServers, local?.mcpServers).filter(
+      s => !globalNames.has(s.name)
+    );
+    const approved = new Set((this.projectRealPath && global.trustedMcpDefinitions?.[this.projectRealPath]) || []);
+    const approvedRepo: NormalizedMcpServer[] = [];
+    this.pendingMcpApprovals = [];
+    for (const s of repoServers) {
+      // Disabled servers never spawn, so there is nothing to approve.
+      if (!s.enabled) {
+        approvedRepo.push(s);
+        continue;
+      }
+      (approved.has(fingerprintMcpServer(s)) ? approvedRepo : this.pendingMcpApprovals).push(s);
+    }
+    merged.mcpServers = mergeMcpServersGlobalWins(global.mcpServers, approvedRepo);
 
     const mcpConfigFile = process.env.B4M_MCP_CONFIG_FILE;
     if (mcpConfigFile) {
@@ -1068,12 +1128,58 @@ export class ConfigStore {
         // malformed/missing file (injected === null) yields an empty set, never
         // a silent fall-back to the broader merged config.
         merged.mcpServers = injected ?? [];
+        this.pendingMcpApprovals = [];
       } else if (injected) {
         merged.mcpServers = mergeMcpServers(merged.mcpServers, injected);
+        // An injected name replaces the repo one, so that repo def never spawns.
+        const injectedNames = new Set(injected.map(s => s.name));
+        this.pendingMcpApprovals = this.pendingMcpApprovals.filter(s => !injectedNames.has(s.name));
       }
     }
 
     return merged;
+  }
+
+  /** Repo MCP servers held back pending approval of their exact definition. */
+  getPendingMcpApprovals(): PendingMcpApproval[] {
+    return this.pendingMcpApprovals.map(s => ({
+      name: s.name,
+      fingerprint: fingerprintMcpServer(s),
+      transport: s.type ?? (s.url ? 'http' : 'stdio'),
+      command: s.command,
+      args: s.args,
+      url: s.url,
+      envKeys: Object.keys(s.env ?? {}),
+      envValues: Object.fromEntries(Object.entries(s.env ?? {}).filter(([k]) => LOADER_ENV_KEY.test(k))),
+      headerKeys: Object.keys(s.headers ?? {}),
+    }));
+  }
+
+  /**
+   * Approve pending repo MCP servers for the current (trusted) root. Persists the
+   * fingerprints the user was SHOWN, not a re-read by name, so a definition that
+   * changed while the prompt was open stays pending.
+   */
+  async approveMcpServers(servers: Pick<PendingMcpApproval, 'fingerprint'>[]): Promise<void> {
+    await this.load();
+    const root = this.projectRealPath;
+    if (!root || !this.projectTrusted) return;
+
+    const g = this.globalConfig!;
+    const defs = (g.trustedMcpDefinitions ??= {});
+    defs[root] = [...new Set([...(defs[root] ?? []), ...servers.map(s => s.fingerprint)])];
+    await this.save();
+  }
+
+  /** Warn once (stderr) about repo MCP servers skipped for lack of approval. */
+  warnPendingMcpApprovals(): void {
+    if (this.pendingMcpWarned || this.pendingMcpApprovals.length === 0) return;
+    this.pendingMcpWarned = true;
+    const names = this.pendingMcpApprovals.map(s => s.name).join(', ');
+    logger.warn(
+      `Skipping ${this.pendingMcpApprovals.length} unapproved repo MCP server(s): ${names}. ` +
+        `Run b4m interactively in ${this.projectRealPath} to approve them.`
+    );
   }
 
   /** Whether the current project root is trusted (folder-trust gate). */
@@ -1153,6 +1259,7 @@ export class ConfigStore {
 
     const g = this.globalConfig!;
     g.trustedProjects = (g.trustedProjects || []).filter(p => p !== target);
+    if (g.trustedMcpDefinitions) delete g.trustedMcpDefinitions[target];
 
     if (target === this.projectRealPath) {
       this.projectTrusted = false;
@@ -1234,8 +1341,8 @@ export class ConfigStore {
     if (config) {
       // The security-critical, repo-launderable fields never flow through a
       // generic save(): the structural sets (mcpServers / trustedTools /
-      // additionalDirectories / trustedProjects) and the security-posture fields
-      // (tools / sandbox) change ONLY via their dedicated mutators (addMcpServer,
+      // additionalDirectories / trustedProjects / trustedMcpDefinitions) and the
+      // security-posture fields (tools / sandbox) change ONLY via their dedicated mutators (addMcpServer,
       // trustTool, saveSandboxConfig, trustProject, ...). Stripping them here - a
       // runtime allowlist on top of the GlobalConfigPatch type - means even a
       // caller that casts past the type and spreads the merged effective config
@@ -1243,12 +1350,21 @@ export class ConfigStore {
       // guard defaultModel / preferences / toolApiKeys, which stay writable (that
       // is what /model and /config edit): callers must pass user-changed values,
       // not the merged rest - see buildGlobalConfigPatch.
-      const { mcpServers, trustedTools, additionalDirectories, trustedProjects, tools, sandbox, ...rest } =
-        config as Partial<CliConfig>;
+      const {
+        mcpServers,
+        trustedTools,
+        additionalDirectories,
+        trustedProjects,
+        trustedMcpDefinitions,
+        tools,
+        sandbox,
+        ...rest
+      } = config as Partial<CliConfig>;
       void mcpServers;
       void trustedTools;
       void additionalDirectories;
       void trustedProjects;
+      void trustedMcpDefinitions;
       void tools;
       void sandbox;
 
