@@ -450,4 +450,84 @@ describe('ChatService tool loop', () => {
       tick.mockRestore();
     }
   });
+  describe('plan reminders', () => {
+    const planCall = (id: string, ...statuses: string[]): Record<string, unknown> => ({
+      id,
+      name: 'todo_write',
+      arguments: JSON.stringify({
+        todos: statuses.map((status, index) => ({ content: `step ${index + 1}`, status })),
+      }),
+    });
+
+    const wireOf = (request: number): string => JSON.stringify(post.mock.calls[request][1].messages);
+
+    it('nudges a turn that has gone three rounds without touching an unfinished plan', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'do the work');
+      await firstRequest();
+
+      streams[0].write(frame({ type: 'tool_use', tools: [planCall('p0', 'in_progress', 'pending')] }));
+      streams[0].write(frame('[DONE]'));
+      for (const round of [1, 2, 3]) {
+        await vi.waitUntil(() => streams.length === round + 1, { timeout: 3000, interval: 5 });
+        streams[round].write(
+          frame({ type: 'tool_use', tools: [{ id: `c${round}`, name: 'glob_files', arguments: '{"pattern":"*"}' }] })
+        );
+        streams[round].write(frame('[DONE]'));
+      }
+      await vi.waitUntil(() => streams.length === 5, { timeout: 3000, interval: 5 });
+
+      // Three bare rounds after the plan, and not one before: the count restarts at the write.
+      expect(wireOf(2)).not.toContain('system-reminder');
+      expect(wireOf(3)).not.toContain('system-reminder');
+      expect(wireOf(4)).toContain('still has unfinished items');
+
+      streams[4].write(frame({ type: 'content', text: 'Done.' }));
+      streams[4].write(frame('[DONE]'));
+      await waitFor(events, 'done');
+
+      // Ephemeral: the rebuilt history carries only the results themselves, so the cached prefix
+      // a later turn sends is byte-for-byte the one it was built from.
+      await service.send(id, 'thanks');
+      await vi.waitUntil(() => post.mock.calls.length === 6, { timeout: 3000, interval: 5 });
+      const rebuilt = post.mock.calls[5][1].messages;
+      expect(JSON.stringify(rebuilt.slice(0, -1))).not.toContain('system-reminder');
+      const stored = (await service.getSession(id))?.messages[1];
+      expect(JSON.stringify(stored?.toolCalls)).not.toContain('system-reminder');
+    });
+
+    it('carries an item left in progress into the next turn, but lets a pending plan be', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'start it');
+      await firstRequest();
+
+      streams[0].write(frame({ type: 'tool_use', tools: [planCall('p0', 'completed', 'pending')] }));
+      streams[0].write(frame('[DONE]'));
+      await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+      streams[1].write(frame({ type: 'content', text: 'Which one next?' }));
+      streams[1].write(frame('[DONE]'));
+      await waitFor(events, 'done');
+
+      // Ending on a question with pending work left is ordinary, not a forgotten update.
+      await service.send(id, 'the first');
+      await vi.waitUntil(() => post.mock.calls.length === 3, { timeout: 3000, interval: 5 });
+      expect(wireOf(2)).not.toContain('system-reminder');
+
+      streams[2].write(frame({ type: 'tool_use', tools: [planCall('p1', 'completed', 'in_progress')] }));
+      streams[2].write(frame('[DONE]'));
+      await vi.waitUntil(() => streams.length === 4, { timeout: 3000, interval: 5 });
+      streams[3].write(frame({ type: 'content', text: 'Typecheck and lint are green.' }));
+      streams[3].write(frame('[DONE]'));
+      await vi.waitUntil(() => events.filter(event => event.type === 'done').length === 2, {
+        timeout: 3000,
+        interval: 5,
+      });
+
+      await service.send(id, 'anything else?');
+      await vi.waitUntil(() => post.mock.calls.length === 5, { timeout: 3000, interval: 5 });
+      const sent = post.mock.calls[4][1].messages;
+      expect(JSON.stringify(sent[sent.length - 1])).toContain('still in progress on the plan');
+      expect((await service.getSession(id))?.messages.map(m => m.content).join()).not.toContain('system-reminder');
+    });
+  });
 });

@@ -33,6 +33,7 @@ import type {
 import { isTurnBudgetStop } from '@shared/chat';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
+import { latestTodos, TODO_TOOL_NAME } from '@shared/todos';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
@@ -54,6 +55,7 @@ import {
 } from './completions';
 import { addUsage, foldUsage } from './streamEvents';
 import { findStaleResults, historyRounds, toolResultContent } from './contextPruning';
+import { stalePlanReminder, unfinishedPlanReminder } from './planReminder';
 import { buildExploreContext, shouldOfferExplore } from './explore';
 import { MediaApiClient } from './media/MediaApiClient';
 import type { MediaStore } from './media/MediaStore';
@@ -391,6 +393,14 @@ export class ChatService {
   private readonly projectContext: ProjectContextCache;
   /** Images a running call reported for the model, keyed by call id until its round is sent. */
   private readonly pendingImages = new Map<string, { mediaType: string; data: string }[]>();
+
+  /**
+   * Per session, a plan nudge the last turn earned, to ride along with the next one.
+   *
+   * Held here rather than sent as a request of its own: reconciling the plan is not worth a
+   * round trip, and the next turn is coming anyway. Consumed once, never stored on a message.
+   */
+  private readonly pendingPlanReminder = new Map<string, string>();
 
   /** Resolved serverConfig fields, cached per environment URL (it is one round trip). */
   private serverConfigCache: { environmentUrl: string; config: ResolvedServerConfig } | null = null;
@@ -1145,6 +1155,7 @@ export class ChatService {
     let thinking: unknown[] | undefined;
     let previousRound: string | null = null;
     let stalled = 0;
+    let roundsSincePlanUpdate = 0;
     // Only this run's rounds: the resumed ones were parsed and cleaned when they were stored,
     // and putting them back through the artifact parser would mint their ids a second time.
     const produced: RawRound[] = [];
@@ -1210,6 +1221,12 @@ export class ChatService {
           !!browser
         )
       );
+      // Taken whether or not it is used, so a nudge the model ignored once does not follow the
+      // conversation around. It rides on the newest turn only, after the cached prefix.
+      const carried = this.pendingPlanReminder.get(sessionId);
+      this.pendingPlanReminder.delete(sessionId);
+      if (carried && !resume) appendToLastUserTurn(wire, carried);
+
       // Wire positions of the screenshot messages this turn added, oldest first; see pruneScreenshots.
       const screenshotTurns: number[] = [];
 
@@ -1334,15 +1351,26 @@ export class ChatService {
             ...settled.map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input })),
           ],
         });
-        wire.push({
-          role: 'user',
-          content: settled.map(call => ({
-            type: 'tool_result',
-            tool_use_id: call.id,
-            content: toolResultContent(call),
-            ...(call.error ? { is_error: true } : {}),
-          })),
-        });
+        const results = settled.map(call => ({
+          type: 'tool_result',
+          tool_use_id: call.id,
+          content: toolResultContent(call),
+          ...(call.error ? { is_error: true } : {}),
+        }));
+        roundsSincePlanUpdate = settled.some(call => call.name === TODO_TOOL_NAME && call.status === 'done')
+          ? 0
+          : roundsSincePlanUpdate + 1;
+        // Appended HERE and nowhere else. toolResultContent is also what the two history
+        // rebuilds send, so folding this into it would rewrite the text of already-sent
+        // messages and break the prompt-cache prefix on every later turn (see contextPruning).
+        // The nudge is ephemeral by design: never stored on the call, never replayed.
+        const nudge = stalePlanReminder(
+          latestTodos([...session.messages, replySoFar(toolCalls)]),
+          roundsSincePlanUpdate
+        );
+        const lastResult = results[results.length - 1];
+        if (nudge && lastResult) lastResult.content = `${lastResult.content}\n\n${nudge}`;
+        wire.push({ role: 'user', content: results });
         const shots = settled.flatMap(call => this.takeImages(call.id));
         if (shots.length > 0 && vision) {
           // Its own user turn, not blocks beside the tool results: the OpenAI conversion keeps only
@@ -1371,6 +1399,16 @@ export class ChatService {
       }
 
       if (controller.signal.aborted) stopReason = 'aborted';
+
+      // A turn that stopped itself mid-task will be carried on by Continue, and one the user
+      // stopped is their call; neither is the model forgetting to close out an item.
+      const lastRound = produced[produced.length - 1];
+      if (!controller.signal.aborted && !isTurnBudgetStop(stopReason) && lastRound?.toolCallIds.length === 0) {
+        const unfinished = lastRound.text.trim()
+          ? unfinishedPlanReminder(latestTodos([...session.messages, replySoFar(toolCalls)]))
+          : null;
+        if (unfinished) this.pendingPlanReminder.set(sessionId, unfinished);
+      }
 
       // Artifacts are resolved BEFORE the message is stored or announced, so the thread never
       // shows raw <artifact> markup that is then replaced, and a reloaded conversation reads
@@ -2618,6 +2656,9 @@ function buildSystemMessage(
       'For a task with three or more steps, keep a plan with todo_write: send the whole list each time,',
       'mark one item in_progress before starting it and completed as soon as it is done. Skip it for',
       'anything you can finish in a step or two.',
+      'Before writing the message that ends a turn, make the plan match what actually happened: an',
+      'item whose result you are about to report as done is marked completed in that same reply, not',
+      'left for later. Never end a turn with an item still in_progress.',
       'An older file_read result may show as a [stale: ...] placeholder once the file was rewritten',
       'with file_write or re-read later; read it again if you still need it. A file_edit does not',
       'invalidate earlier reads, and its result shows the edited lines, so edit again without',
@@ -2838,6 +2879,31 @@ function joinRounds(texts: readonly string[]): string {
  */
 function roundSignature(requested: readonly RequestedTool[]): string {
   return requested.map(tool => `${tool.name}(${tool.arguments ?? ''})`).join('\n');
+}
+
+/**
+ * Hang a line on the newest user turn, in place.
+ *
+ * Only the last one, and only on the wire: everything before it is the cached prefix, and an
+ * edit there would cost every later turn its cache hit.
+ */
+function appendToLastUserTurn(wire: CompletionMessage[], text: string): void {
+  for (let i = wire.length - 1; i >= 0; i -= 1) {
+    const message = wire[i];
+    if (message.role !== 'user') continue;
+    if (typeof message.content === 'string') message.content = `${message.content}\n\n${text}`;
+    else if (Array.isArray(message.content)) message.content.push({ type: 'text', text });
+    return;
+  }
+}
+
+/**
+ * The reply in flight as a message, so the plan helpers can read the calls THIS turn has made.
+ * The real message is not stored until the turn settles, and a plan written this turn is the one
+ * that matters.
+ */
+function replySoFar(toolCalls: readonly ChatToolCall[]): ChatMessage {
+  return { id: 'live', role: 'assistant', content: '', createdAt: '', toolCalls: [...toolCalls] };
 }
 
 /** One session as plain text, for session_read. Mirrors what the thread shows, minus the chrome. */
