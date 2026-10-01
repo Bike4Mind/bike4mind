@@ -160,6 +160,63 @@ describe('cloneSession - redaction at the copy boundary', () => {
     expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ surface: 'opti' }));
   });
 
+  describe('targetSurface', () => {
+    const OPTI_ACCESS = async () => ({ entitlements: ['optihashi:pro'] });
+    const NO_ACCESS = async () => ({ entitlements: [] });
+    const cloneFrom = (
+      surface: string | undefined,
+      targetSurface: string | null,
+      resolveSurfaceAccess?: () => Promise<{ entitlements: string[] }>
+    ) => {
+      const { db } = makeAdapters('caller-1');
+      db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+        id: 'session-1',
+        userId: 'caller-1',
+        name: 'Original',
+        knowledgeIds: [],
+        tags: [],
+        surface,
+      });
+      return { db, run: cloneSession('caller-1', { id: 'session-1', targetSurface }, { db, resolveSurfaceAccess }) };
+    };
+
+    it('clones a main-list session into opti for an entitled caller', async () => {
+      const { db, run } = cloneFrom(undefined, 'opti', OPTI_ACCESS);
+      await run;
+      expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ surface: 'opti' }));
+    });
+
+    it('clones an opti session into the main list', async () => {
+      const { db, run } = cloneFrom('opti', null, NO_ACCESS);
+      await run;
+      expect(db.sessions.create.mock.calls[0][0].surface).toBeUndefined();
+    });
+
+    it('403s a destination the caller is not entitled to, copying nothing', async () => {
+      const { db, run } = cloneFrom(undefined, 'opti', NO_ACCESS);
+      await expect(run).rejects.toMatchObject({ statusCode: 403 });
+      expect(db.sessions.create).not.toHaveBeenCalled();
+      expect(db.chatHistories.create).not.toHaveBeenCalled();
+    });
+
+    it('400s an unregistered destination', async () => {
+      const { db, run } = cloneFrom(undefined, 'some-private-surface', OPTI_ACCESS);
+      await expect(run).rejects.toMatchObject({ statusCode: 400 });
+      expect(db.sessions.create).not.toHaveBeenCalled();
+    });
+
+    it('400s a targeted clone out of an unregistered surface', async () => {
+      const { db, run } = cloneFrom('some-private-surface', null, OPTI_ACCESS);
+      await expect(run).rejects.toMatchObject({ statusCode: 400 });
+      expect(db.sessions.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses a targeted clone when the route supplied no access resolver', async () => {
+      const { run } = cloneFrom(undefined, 'opti');
+      await expect(run).rejects.toMatchObject({ statusCode: 403 });
+    });
+  });
+
   it('leaves the clone of a main-list session without a surface', async () => {
     const { db } = makeAdapters('caller-1');
 

@@ -4,7 +4,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { IChatHistoryItem } from '@bike4mind/common';
+import { WORKSPACE_SURFACES, type IChatHistoryItem } from '@bike4mind/common';
 
 /**
  * Gating coverage for the per-reply "Send to Data Lake" menu item: it must be
@@ -43,7 +43,15 @@ vi.mock('@client/app/contexts/LLMContext', () => {
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
   useWebsocket: () => ({ subscribeToAction: vi.fn(() => vi.fn()) }),
 }));
+const workspaceTargets = vi.hoisted(() => ({
+  value: { current: undefined, copyTargets: [], moveTargets: [] } as Record<string, unknown>,
+}));
+vi.mock('@client/app/hooks/useWorkspaceTargets', () => ({
+  surfaceRouteExists: () => true,
+  useWorkspaceTargets: () => workspaceTargets.value,
+}));
 vi.mock('@client/app/hooks/data/sessions', () => ({
+  useGetSession: () => ({ data: undefined }),
   useForkSession: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useSnipSession: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
@@ -726,5 +734,38 @@ describe('MessageContent - proactive answer feedback prompt', () => {
     const modal = screen.getByTestId('bug-report-modal-mock');
     expect(modal).toBeInTheDocument();
     expect(modal).toHaveAttribute('data-quest-id', 'quest-1');
+  });
+});
+
+describe('MessageContent actions menu - Fork into', () => {
+  const main = WORKSPACE_SURFACES[0];
+  const opti = WORKSPACE_SURFACES[1];
+
+  beforeEach(() => {
+    isFeatureEnabled.mockReset();
+    isFeatureEnabled.mockReturnValue(true);
+  });
+  afterEach(() => {
+    workspaceTargets.value = { current: undefined, copyTargets: [], moveTargets: [] };
+  });
+
+  it('keeps the single Fork Notebook item when there is no other workspace', () => {
+    workspaceTargets.value = { current: main, copyTargets: [main], moveTargets: [] };
+
+    renderAndOpenActionsMenu();
+
+    expect(screen.getByTestId('message-menu-fork')).toBeInTheDocument();
+    expect(screen.queryByTestId('message-menu-fork-into-label')).not.toBeInTheDocument();
+  });
+
+  it('lists every usable workspace, current first, when there is another one', () => {
+    workspaceTargets.value = { current: main, copyTargets: [main, opti], moveTargets: [opti] };
+
+    renderAndOpenActionsMenu();
+
+    expect(screen.getByTestId('message-menu-fork-into-label')).toHaveTextContent('Fork into');
+    expect(screen.getByTestId('message-menu-fork-into-main')).toBeInTheDocument();
+    expect(screen.getByTestId('message-menu-fork-into-opti')).toBeInTheDocument();
+    expect(screen.queryByTestId('message-menu-fork')).not.toBeInTheDocument();
   });
 });
