@@ -1,9 +1,11 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import ActiveLakeScopeStrip from './ActiveLakeScopeStrip';
+import { DRAFT_LAKE_TOOLTIP } from '@client/app/components/datalake/lakeVisibility';
 import { DATA_LAKES, type ManageableDataLakeConfig } from '@bike4mind/common';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -52,7 +54,7 @@ describe('ActiveLakeScopeStrip', () => {
     expect(onClear).toHaveBeenCalledTimes(1);
   });
 
-  it('marks only a draft lake', () => {
+  it('explains only a draft lake on hover', async () => {
     render(
       <Wrapper>
         <ActiveLakeScopeStrip
@@ -67,10 +69,22 @@ describe('ActiveLakeScopeStrip', () => {
       </Wrapper>
     );
 
-    expect(screen.getByTestId('datalake-active-scope-chip-a')).toHaveAttribute('data-draft', 'true');
-    expect(screen.getByTestId('datalake-active-scope-chip-a')).toHaveTextContent('Drafty');
-    expect(screen.getByTestId('datalake-active-scope-chip-b')).not.toHaveAttribute('data-draft');
-    expect(screen.getByTestId('datalake-active-scope-chip-c')).toHaveAttribute('data-draft', 'true');
-    expect(screen.getByTestId(`datalake-active-scope-chip-${DATA_LAKES[0].id}`)).not.toHaveAttribute('data-draft');
+    await userEvent.hover(screen.getByTestId('datalake-active-scope-chip-a'));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(DRAFT_LAKE_TOOLTIP);
+    await userEvent.unhover(screen.getByTestId('datalake-active-scope-chip-a'));
+    await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument());
+
+    await userEvent.hover(screen.getByTestId('datalake-active-scope-chip-c'));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(DRAFT_LAKE_TOOLTIP);
+    await userEvent.unhover(screen.getByTestId('datalake-active-scope-chip-c'));
+    await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument());
+
+    for (const id of ['b', DATA_LAKES[0].id]) {
+      await userEvent.hover(screen.getByTestId(`datalake-active-scope-chip-${id}`));
+      // Joy's enterDelay is 100ms; wait past it so absence is not just "not yet".
+      await new Promise(r => setTimeout(r, 300));
+      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+      await userEvent.unhover(screen.getByTestId(`datalake-active-scope-chip-${id}`));
+    }
   });
 });

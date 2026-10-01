@@ -600,6 +600,26 @@ describe('LakeInfoPanel - Start chat on a draft lake', () => {
     expect(startChat).not.toHaveBeenCalled();
   });
 
+  it('toasts the default message when Start anyway fails on a draft lake', async () => {
+    const errorSpy = vi.spyOn(toast, 'error').mockImplementation(() => 'id');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    startChat.mockRejectedValue(new Error('boom'));
+    await clickStart(draft);
+    await userEvent.click(screen.getByTestId('datalake-startchat-draft-anyway-btn'));
+    await waitFor(() => expect(errorSpy).toHaveBeenCalledWith('Could not start a chat with this lake'));
+    expect(screen.queryByTestId('datalake-startchat-draft-modal')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('datalake-startchat-btn-lake-1')).not.toBeDisabled());
+  });
+
+  it('toasts the default message when Start chat fails on an active lake', async () => {
+    const errorSpy = vi.spyOn(toast, 'error').mockImplementation(() => 'id');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    startChat.mockRejectedValue(new Error('boom'));
+    await clickStart({ ...baseLake, status: 'active' } as ManagerLake);
+    await waitFor(() => expect(errorSpy).toHaveBeenCalledWith('Could not start a chat with this lake'));
+    expect(screen.queryByTestId('datalake-startchat-draft-modal')).not.toBeInTheDocument();
+  });
+
   it('starts directly on an active lake', async () => {
     await clickStart({ ...baseLake, status: 'active' } as ManagerLake);
     await waitFor(() => expect(startChat).toHaveBeenCalledWith('lake-1'));

@@ -61,7 +61,6 @@ export default function ActiveLakeScopeStrip({
                 color={isDraft ? 'warning' : 'neutral'}
                 sx={{ fontSize: '11px', maxWidth: '100%' }}
                 data-testid={`datalake-active-scope-chip-${lake.id}`}
-                data-draft={isDraft ? 'true' : undefined}
               >
                 {lake.name}
               </Chip>
