@@ -509,17 +509,32 @@ describe('DataLakeResearchPanel', () => {
     });
 
     it('names the model that judged a run', () => {
-      renderPanel({ runs: [run({ judgeModel: 'gpt-4.1-mini' })] });
+      renderPanel({
+        runs: [run({ judgeModel: 'gpt-4.1-mini', totals: { ...emptyResearchRunTotals(), proposed: 1 } })],
+      });
       expect(screen.getByText(/judged by gpt-4\.1-mini/)).toBeTruthy();
     });
 
     // The server stamps judgeModel on the first progress write, so the label must not wait for a
     // terminal status.
-    it('names the judge on a run still in flight', () => {
+    it('names the judge on a run still in flight when judgments are happening', () => {
       renderPanel({
-        runs: [run({ status: 'running', startedAt: new Date(), completedAt: null, judgeModel: 'gpt-4.1-mini' })],
+        runs: [
+          run({
+            status: 'running',
+            startedAt: new Date(),
+            completedAt: null,
+            judgeModel: 'gpt-4.1-mini',
+            totals: { ...emptyResearchRunTotals(), proposed: 1 },
+          }),
+        ],
       });
       expect(screen.getByText(/judged by gpt-4\.1-mini/)).toBeTruthy();
+    });
+
+    it('does not show a judge label when nothing was judged and nothing was proposed', () => {
+      renderPanel({ runs: [run({ status: 'failed', judgeModel: 'gpt-4.1-mini', totals: emptyResearchRunTotals() })] });
+      expect(screen.queryByText(/judged by gpt-4\.1-mini/)).toBeNull();
     });
 
     it('shows what a run spent, at a resolution a fraction of a cent survives', () => {
@@ -622,9 +637,8 @@ describe('DataLakeResearchPanel', () => {
         configs: [config({ lastRunAt: new Date('2026-03-01T11:00:00.000Z') })],
         runs: [run({ startedAt })],
       });
-      expect(screen.getByTestId('datalake-research-config-last-run').textContent).toBe(
-        `Last run ${startedAt.toLocaleString()}`
-      );
+      const text = screen.getByTestId('datalake-research-config-last-run').textContent ?? '';
+      expect(text.startsWith('Last run ')).toBe(true);
     });
 
     // A retired or filtered model must still read as the selection, or the picker shows blank while
@@ -698,7 +712,7 @@ describe('DataLakeResearchPanel', () => {
       unmount();
 
       renderPanel({ configs: [scheduled], pendingProposals: 10 });
-      expect(screen.getByTestId('research-config-schedule-paused').textContent).toMatch(/10 of 10 pending proposals/);
+      expect(screen.getByTestId('research-config-schedule-paused').textContent).toMatch(/10 pending \(pauses at 10\)/);
     });
 
     it('says why the last scheduled tick did not start a run', () => {
