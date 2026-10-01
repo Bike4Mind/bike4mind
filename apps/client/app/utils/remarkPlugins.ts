@@ -61,22 +61,18 @@ function looksLikeMath(content: string): boolean {
 }
 
 // `\[x\]` is also how markdown escapes literal brackets, and turndown writes exactly that into
-// stored Knowledge files (`\[Smith (2020)\]`, `[\[a\]](#cite)`, `arr\[i\]`, `\[n = 30\]`). So a
-// bracket body needs real LaTeX - a control sequence, or `^`, `_` or `=` between operands - and is
-// prose when it holds another escaped `_`, `[` or `]`. Without a control sequence it is also prose
-// when it has a `:` or a 3+ letter word, or when `^`/`=` is its only evidence and it hugs both
-// delimiters: turndown never pads, while models write `\[ x = 1 \]`. A raw `_` still counts when
-// tight (`\[a_1\]`) because turndown would have escaped it. Padded `\[ n = 30 \]` stays math: at
-// string level it is LaTeX. Parens keep the looser `looksLikeMath`: turndown never escapes them.
+// stored Knowledge files (`\[Smith (2020)\]`, `arr\[i\]`, `\[n = 30\]`). An escaped `_`, `[` or `]`
+// inside marks prose; a control sequence marks math. Otherwise, since turndown never pads, a tight
+// body needs a raw `_` (turndown escapes it) and no `:` or 3+ letter word, while a padded body needs
+// `^`, `_` or `=` between operands. Parens keep `looksLikeMath`: turndown never escapes them.
 function looksLikeBracketMath(raw: string): boolean {
   const content = raw.trim();
   const odd = String.raw`(?:^|[^\\])(?:\\\\)*\\`;
   if (new RegExp(odd + String.raw`[_[\]]`).test(content)) return false;
   if (new RegExp(odd + '[a-zA-Z]').test(content)) return true;
-  if (/:|[a-zA-Z]{3}/.test(content)) return false;
-  if (/\S\s*_\s*\S/.test(content)) return true;
   const padded = /^\s/.test(raw) && /\s$/.test(raw);
-  return padded && /\S\s*[\^=]\s*\S/.test(content);
+  if (!padded) return !/:|[a-zA-Z]{3}/.test(content) && /\S\s*_\s*\S/.test(content);
+  return /\S\s*[_^=]\s*\S/.test(content);
 }
 
 // Models write `\*` so markdown will not italicise a product, but KaTeX has no `\*` command. Scans

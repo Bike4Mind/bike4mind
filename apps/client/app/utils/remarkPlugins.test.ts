@@ -96,6 +96,14 @@ describe('promoteInlineLatexDollars', () => {
       ['escaped backslash before a star is kept', 'so \\( a \\\\*b \\) holds', 'so $$a \\\\*b$$ holds'],
       ['span touching a dollar span', '$x$\\(y^2\\)', '$$x$$ $$y^2$$'],
       ['two adjacent paren spans', '\\(a^2\\)\\(b^2\\)', '$$a^2$$ $$b^2$$'],
+      // Padded bodies skip the tight-only colon/word rule: turndown never pads, models do.
+      ['padded subscripted name', 'so \\[ x_{max} = 5 \\] holds', 'so $$x_{max} = 5$$ holds'],
+      ['padded word-named variables', 'so \\[ v_{avg} = d / t \\] holds', 'so $$v_{avg} = d / t$$ holds'],
+      ['padded bare sum', 'so \\[ sum_{i=1}^n i \\] holds', 'so $$sum_{i=1}^n i$$ holds'],
+      ['padded bare function names', 'so \\[ f(x) = max(0, x) \\] holds', 'so $$f(x) = max(0, x)$$ holds'],
+      ['own-line padded word equation', '\\[ area = pi r^2 \\]', '$$\narea = pi r^2\n$$'],
+      ['own-line padded ratio with colons', '\\[ a:b = c:d \\]', '$$\na:b = c:d\n$$'],
+      ['own-line block closing after an escaped backslash', '\\[ a = b \\\\ \\]', '$$\na = b \\\\\n$$'],
     ])('%s', (_label, input, expected) => {
       expect(promoteInlineLatexDollars(input)).toBe(expected);
     });
@@ -125,8 +133,19 @@ describe('promoteInlineLatexDollars', () => {
       ['escaped update with a colon', '\\[Update: x = 5\\]'],
       ['escaped equality with no padding', 'See \\[a=b\\] here'],
       ['escaped star with no math evidence', 'Use \\[foo\\*\\]'],
+      ['padded prose with no math evidence', 'See \\[ see note \\] here'],
+      ['own-line padded prose with no math evidence', '\\[ see note \\]'],
+      ['own-line bracket whose closer is an escaped backslash', '\\[ a = b \\\\]'],
     ])('leaves %s alone', (_label, text) => {
       expect(promoteInlineLatexDollars(text)).toBe(text);
+    });
+
+    it('stays linear on a long backslash run after an own-line opener', () => {
+      // A per-character lookbehind in the block body took ~1s on 80k backslashes; linear is ~1ms.
+      const text = '\\[ ' + '\\'.repeat(100_000);
+      const start = performance.now();
+      expect(promoteInlineLatexDollars(text)).toBe(text);
+      expect(performance.now() - start).toBeLessThan(500);
     });
 
     it('treats a bracket right after inline code as mid-line', () => {
