@@ -8,17 +8,21 @@ import { CitableSource } from '@bike4mind/common';
  *
  * Default is no handler -> CitableSources keeps its existing navigation behavior,
  * so this is invisible to every surface that doesn't provide it. Not specific to
- * any product; LibreOncology is simply the first consumer.
+ * any product.
  */
 interface CitationInteraction {
   /** If set, called instead of navigating when a citation source is clicked. */
   onCitationClick?: (source: CitableSource) => void;
   /**
-   * If set, called instead of navigating when a source with an internal (relative) URL is clicked.
-   * Unlike onCitationClick it leaves external sources alone, so a host can keep the reader in the
-   * chat for lake citations without taking over ordinary web links.
+   * If set, called when a source with an internal (relative) URL is clicked. Unlike onCitationClick
+   * it leaves external sources alone, so a host can keep the reader in the chat for lake citations
+   * without taking over ordinary web links.
+   *
+   * Return true when the host took the click; false hands it back to the default navigation, for an
+   * internal URL the host does not recognize. onCitationClick, when also set, wins and this is not
+   * called.
    */
-  onInternalCitationClick?: (source: CitableSource) => void;
+  onInternalCitationClick?: (source: CitableSource) => boolean;
 }
 
 const CitationInteractionContext = createContext<CitationInteraction>({});
