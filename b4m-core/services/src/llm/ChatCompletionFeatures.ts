@@ -116,7 +116,7 @@ import {
 } from '../dataLakeService/getDataLakePrompts';
 import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
 import { membershipOrgIdsForTurn } from '../dataLakeService/membershipOrgIdsForTurn';
-import { attributeAccessedLakeIds } from '../dataLakeService/attributeAccessedLakes';
+import { attributeAccessedLakeIds, citableOriginFor } from '../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../dataLakeService/recordLakeAccessEvent';
 import { defangBlockMarkers, renderDataLakePromptSection } from '../dataLakeService/renderDataLakePromptBlock';
 import {
@@ -3445,17 +3445,18 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         const file = fileById.get(fid);
         const cited = citedChunkByFile.get(fid);
         const conflictsWith = conflict.conflictsByFileId.get(fid);
+        const fileTagNames = file?.tags?.map(t => t.name) || [];
         return {
           id: fid,
           type: 'document' as const,
           title: file?.fileName || fid,
           url: `/opti?mode=datalake&article=${fid}`,
-          description: citationTagDescription(file?.tags?.map(t => t.name) || []),
+          description: citationTagDescription(fileTagNames),
           timestamp: new Date().toISOString(),
           status: 'complete' as const,
           metadata: {
             sourceSystem: 'knowledge_base',
-            tags: file?.tags?.map(t => t.name) || [],
+            tags: fileTagNames,
             relevanceScore: 1 - index * 0.1,
             // Spread rather than assigned: every fid in sourceFileIds was recorded in the same
             // walk, so `cited` is always present - but an absent key must leave the fields off
@@ -3466,6 +3467,16 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             // entirely rather than stamping an empty array the chip would badge with no partner to
             // name, and the chip must not alias the detector's own array.
             ...(conflictsWith ? { conflictsWith: [...conflictsWith] } : {}),
+            // Against the session-narrowed `lakes` this scan searched: every candidate came from
+            // that scope or the caller's own/shared base arms, which read as library.
+            ...(file
+              ? {
+                  sourceOrigin: citableOriginFor(
+                    { tags: fileTagNames, ownerUserId: normalizeId(file.userId), callerUserId: user.id },
+                    lakes
+                  ),
+                }
+              : {}),
           },
         };
       });
