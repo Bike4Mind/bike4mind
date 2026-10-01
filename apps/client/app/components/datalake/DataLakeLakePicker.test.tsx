@@ -237,6 +237,65 @@ describe('DataLakeLakePicker', () => {
     expect(screen.getByTestId('datalake-lake-picker-owner-icon-b')).toBeInTheDocument();
   });
 
+  it('names the unit on file counts, so they never read as the footer lake count', () => {
+    renderPicker({
+      lakes: [lake({ id: 'a', name: 'Mine' }), lake({ id: 'b', name: 'Also mine' })],
+      lakeFileCounts: { 'datalake:a': 1 },
+      totalFileCount: 255,
+    });
+
+    expect(screen.getByTestId('datalake-lake-picker-count')).toHaveTextContent('255 files');
+    openMenu();
+    expect(screen.getByTestId('datalake-lake-picker-all-count')).toHaveTextContent('255 files');
+    expect(screen.getByTestId('datalake-lake-picker-group-own')).toHaveTextContent('files');
+    expect(screen.getByLabelText('1 file')).toHaveTextContent('1');
+    expect(screen.getByTestId('datalake-lake-picker-lake-count')).toHaveTextContent('2 lakes');
+  });
+
+  it('groups lakes by owner, own first, then other owners by name, unresolved owners last', () => {
+    renderPicker({
+      lakes: [
+        lake({ id: 'z', name: 'Fallback', isOwn: false }),
+        lake({ id: 'b', name: 'Zed test lake', isOwn: false, ownerDisplayName: 'Zed' }),
+        lake({ id: 'a', name: 'Mine' }),
+        lake({ id: 'c', name: 'Dana corpus', isOwn: false, ownerDisplayName: 'Dana' }),
+        lake({ id: 'd', name: 'Dana notes', isOwn: false, ownerDisplayName: 'Dana' }),
+      ],
+    });
+    openMenu();
+
+    const order = screen
+      .getAllByTestId(/^datalake-lake-picker-(group-.+|lake-[a-z])$/)
+      .map(el => el.getAttribute('data-testid')?.replace('datalake-lake-picker-', ''));
+    expect(order).toEqual([
+      'group-own',
+      'lake-a',
+      'group-owner:Dana',
+      'lake-c',
+      'lake-d',
+      'group-owner:Zed',
+      'lake-b',
+      'group-unknown',
+      'lake-z',
+    ]);
+    // Headers stay out of the menu's arrow-key order.
+    expect(screen.getByTestId('datalake-lake-picker-group-own')).toHaveAttribute('role', 'none');
+  });
+
+  it('drops a group whose lakes the filter hides', () => {
+    renderPicker({
+      lakes: [
+        ...Array.from({ length: 7 }, (_, i) => lake({ id: `m${i}`, name: `Mine ${i}` })),
+        lake({ id: 'b', name: 'Theirs', isOwn: false, ownerDisplayName: 'Dana' }),
+      ],
+    });
+    openMenu();
+    fireEvent.change(screen.getByTestId('datalake-lake-picker-search'), { target: { value: 'theirs' } });
+
+    expect(screen.queryByTestId('datalake-lake-picker-group-own')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-lake-picker-group-owner:Dana')).toBeInTheDocument();
+  });
+
   it('only offers the filter box once the list is long enough to need one', () => {
     const few = Array.from({ length: 7 }, (_, i) => lake({ id: `l${i}`, name: `Lake ${i}` }));
     const { unmount } = renderPicker({ lakes: few });
