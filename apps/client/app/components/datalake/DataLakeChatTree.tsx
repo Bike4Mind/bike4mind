@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useCallback, type ReactNode } from 'react';
 import {
   Box,
   Button,
@@ -271,6 +271,16 @@ export default function DataLakeChatTree({
     </Box>
   );
 
+  // A lake-root row shows the lake's name and distinct member count; TreeView reads the same
+  // values for search and sort.
+  const lakeRootDisplay = useCallback(
+    (node: TagNode, depth: number) => {
+      const lake = lakeForPath?.([...breadcrumb.slice(0, depth), node.segment]);
+      return lake && { label: lake.name, count: lakeFileCounts?.[lake.datalakeTag] ?? node.fileCount };
+    },
+    [lakeForPath, lakeFileCounts, breadcrumb]
+  );
+
   const chrome: DataLakeTreeChrome = {
     containerSx: {
       width: 260,
@@ -326,7 +336,7 @@ export default function DataLakeChatTree({
     fileListSx: TREE_LIST_SX,
     renderNodeRow: (node, depth, onOpen) => {
       const branchInk = inkFor(hueForBranch(node.segment, breadcrumb), isDark);
-      const lake = lakeForPath?.([...breadcrumb.slice(0, depth), node.segment]);
+      const shown = lakeRootDisplay(node, depth);
       return (
         <ListItem>
           <ListItemButton
@@ -336,13 +346,19 @@ export default function DataLakeChatTree({
           >
             <FolderOutlinedIcon sx={{ fontSize: 16, color: branchInk, flexShrink: 0 }} />
             <ListItemContent>
-              <TreeRowLabel label={lake?.name ?? humanizeSegment(node.segment, depth)} />
+              <TreeRowLabel label={shown?.label ?? humanizeSegment(node.segment, depth)} />
             </ListItemContent>
             {draftLakePaths?.has([...breadcrumb, node.segment].join(':')) && (
               <LakeDraftChip testId={`datalake-node-draft-chip-${node.segment}`} />
             )}
-            <Chip size="sm" variant="soft" color="neutral" sx={COUNT_CHIP_SX}>
-              {(lake && lakeFileCounts?.[lake.datalakeTag]) ?? node.fileCount}
+            <Chip
+              size="sm"
+              variant="soft"
+              color="neutral"
+              sx={COUNT_CHIP_SX}
+              data-testid={`datalake-nodecount-${node.segment}`}
+            >
+              {shown?.count ?? node.fileCount}
             </Chip>
           </ListItemButton>
         </ListItem>
@@ -487,6 +503,7 @@ export default function DataLakeChatTree({
       isLoading={isLoading}
       isError={isError}
       chrome={chrome}
+      nodeDisplay={lakeRootDisplay}
       header={header}
       footer={footer}
       emptySlot={emptySlot}

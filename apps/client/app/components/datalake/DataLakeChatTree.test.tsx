@@ -287,9 +287,30 @@ describe('DataLakeChatTree lake-root rows', () => {
       lakeForPath: lookup({ 'curation-qa-0930': { name: 'Curation QA 0930', datalakeTag: 'datalake:cqa' } }),
       lakeFileCounts: { 'datalake:cqa': 3 },
     });
-    const row = screen.getByTestId('datalake-node-curation-qa-0930');
-    expect(row.textContent).toContain('3');
-    expect(row.textContent).not.toContain('12');
+    expect(screen.getByTestId('datalake-nodecount-curation-qa-0930').textContent).toBe('3');
+  });
+
+  it('shows a member count of 0 rather than falling back to the occurrence sum', () => {
+    renderTree({
+      tree: [node('curation-qa-0930', 'curation-qa-0930', 12)],
+      breadcrumb: [],
+      lakeForPath: lookup({ 'curation-qa-0930': { name: 'Curation QA 0930', datalakeTag: 'datalake:cqa' } }),
+      lakeFileCounts: { 'datalake:cqa': 0 },
+    });
+    expect(screen.getByTestId('datalake-nodecount-curation-qa-0930').textContent).toBe('0');
+  });
+
+  it('filters lake-root rows by the lake name shown', () => {
+    renderTree({
+      tree: [node('curation-qa-0930', 'curation-qa-0930', 4), node('some-other', 'some-other', 1)],
+      breadcrumb: [],
+      lakeForPath: lookup({ 'curation-qa-0930': { name: 'Curation QA 0930', datalakeTag: 'datalake:cqa' } }),
+    });
+    fireEvent.change(screen.getByTestId('datalake-search').querySelector('input')!, {
+      target: { value: 'curation qa' },
+    });
+    expect(screen.getByTestId('datalake-node-curation-qa-0930')).toBeTruthy();
+    expect(screen.queryByTestId('datalake-node-some-other')).toBeNull();
   });
 
   it('falls back to the occurrence count when the lake has no member count entry', () => {
@@ -299,7 +320,7 @@ describe('DataLakeChatTree lake-root rows', () => {
       lakeForPath: lookup({ 'curation-qa-0930': { name: 'Curation QA 0930', datalakeTag: 'datalake:cqa' } }),
       lakeFileCounts: {},
     });
-    expect(screen.getByTestId('datalake-node-curation-qa-0930').textContent).toContain('12');
+    expect(screen.getByTestId('datalake-nodecount-curation-qa-0930').textContent).toBe('12');
   });
 
   it('keeps the humanized label and occurrence count on an unmapped (shared-prefix) row', () => {
@@ -309,8 +330,7 @@ describe('DataLakeChatTree lake-root rows', () => {
       lakeForPath: () => undefined,
       lakeFileCounts: { 'datalake:cqa': 3, 'datalake:cqb': 5 },
     });
-    const row = screen.getByTestId('datalake-node-curation-qa-0930');
-    expect(row.textContent).toContain('Curation qa 0930');
-    expect(row.textContent).toContain('12');
+    expect(screen.getByTestId('datalake-node-curation-qa-0930').textContent).toContain('Curation qa 0930');
+    expect(screen.getByTestId('datalake-nodecount-curation-qa-0930').textContent).toBe('12');
   });
 });
