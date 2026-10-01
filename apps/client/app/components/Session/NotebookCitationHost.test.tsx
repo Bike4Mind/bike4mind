@@ -117,7 +117,7 @@ describe('NotebookCitationHost', () => {
     expect(useSessionLayout.getState().selectedArtifactId).toBe('file-1');
   });
 
-  it('keeps the layout untouched and reports the failure when the file cannot be fetched', async () => {
+  it('reports the failure and falls back to the article route when the file cannot be fetched', async () => {
     getFabFileByIdFromServer.mockRejectedValue(new Error('403'));
     renderInHost([lakeChip('file-1', 'Leave policy.md')]);
 
@@ -127,7 +127,9 @@ describe('NotebookCitationHost', () => {
     expect(console.error).toHaveBeenCalled();
     expect(useSessionLayout.getState().layout).toBe('hide');
     expect(useSessionLayout.getState().previewFile).toBeNull();
-    expect(navigate).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ to: '/opti', search: { mode: 'datalake', article: 'file-1' } })
+    );
   });
 
   it('leaves a relative chip that is not a lake article to the default navigation', () => {
@@ -188,6 +190,44 @@ describe('NotebookCitationHost', () => {
 
       expect(toastError).not.toHaveBeenCalled();
       expect(useSessionLayout.getState().previewFile).toMatchObject({ id: 'file-2' });
+    });
+  });
+
+  describe('leaving mid-fetch', () => {
+    it('drops a fetch that resolves after the host unmounts', async () => {
+      const pending = deferred<{ id: string }>();
+      getFabFileByIdFromServer.mockReturnValue(pending.promise);
+      const { unmount } = renderInHost([lakeChip('file-1', 'Leave policy.md')]);
+
+      fireEvent.click(screen.getByTestId('citable-source-chip'));
+      unmount();
+      await act(async () => pending.resolve({ id: 'file-1' }));
+
+      expect(useSessionLayout.getState().previewFile).toBeNull();
+      expect(useSessionLayout.getState().layout).toBe('hide');
+    });
+
+    it('drops a fetch when a later non-lake internal chip navigates away', async () => {
+      const pending = deferred<{ id: string }>();
+      getFabFileByIdFromServer.mockReturnValue(pending.promise);
+      const questChip: CitableSource = {
+        id: 'quest-1',
+        type: 'database',
+        title: 'Quest: leave policy',
+        url: '/notebooks/session-9?questId=quest-1',
+        status: 'complete',
+        metadata: { sourceSystem: 'database' },
+      };
+      renderInHost([lakeChip('file-1', 'Leave policy.md'), questChip]);
+
+      const [lake, quest] = screen.getAllByTestId('citable-source-chip');
+      fireEvent.click(lake);
+      fireEvent.click(quest);
+      await act(async () => pending.resolve({ id: 'file-1' }));
+
+      expect(navigate).toHaveBeenCalledTimes(1);
+      expect(useSessionLayout.getState().previewFile).toBeNull();
+      expect(useSessionLayout.getState().layout).toBe('hide');
     });
   });
 
