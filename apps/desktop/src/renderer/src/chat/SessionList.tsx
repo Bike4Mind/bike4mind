@@ -272,11 +272,16 @@ const RESIZE_STEP = 16;
 /**
  * The strip on the sidebar's right edge that sets its width.
  *
- * Pointer capture rather than listeners on the window: a drag routinely runs ahead of the edge
- * it is moving and out over the transcript, which has handlers of its own, and capture keeps
- * the moves arriving here either way. The width it reports is held in a ref as well as pushed
- * up, because a pointermove is not a discrete event - React is free to defer the state it sets,
- * and the prop read on pointerup would then be a frame or two behind the pointer.
+ * The drag runs on window listeners rather than on the handle's own pointer capture. Capture
+ * reads better but cannot be relied on here: the pointer leaves this 5px strip on the first
+ * frame of any drag worth making, and where the capture does not hold - which is anywhere the
+ * input is synthesised rather than a real device, so every driven test of this - the width
+ * stops following the pointer after one step and silently commits short. Listening on the
+ * window is the same handful of lines and has nothing to come loose.
+ *
+ * The width is held in a ref as well as pushed up, because a pointermove is not a discrete
+ * event: React is free to defer the state it sets, and the value read on pointerup would then
+ * be a frame or two behind the pointer.
  *
  * Wider than the line it draws: 5px is the thinnest strip a pointer finds without aiming, and
  * it straddles the border so the two pixels either side of the edge both work.
@@ -289,7 +294,6 @@ function SidebarResizeHandle({
   onDraggingChange,
 }: {
   width: number;
-  /** Held by the sidebar, which has to stop selecting its own text for the length of the drag. */
   dragging: boolean;
   onWidth: (width: number) => void;
   onCommit: (width: number) => void;
@@ -297,30 +301,47 @@ function SidebarResizeHandle({
 }) {
   const drag = useRef<{ x: number; from: number; to: number } | null>(null);
 
+  useEffect(() => {
+    if (!dragging) return;
+
+    const onMove = (event: PointerEvent) => {
+      const current = drag.current;
+      if (!current) return;
+      current.to = clampSidebarWidth(current.from + event.clientX - current.x);
+      onWidth(current.to);
+    };
+    const onEnd = () => {
+      const current = drag.current;
+      drag.current = null;
+      onDraggingChange(false);
+      if (current) onCommit(current.to);
+    };
+
+    // The pointer spends the drag over the transcript, which selects text and draws an I-beam.
+    // Both are set on the document because that is how far the drag reaches.
+    const { userSelect, cursor } = document.body.style;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onEnd);
+    window.addEventListener('pointercancel', onEnd);
+    return () => {
+      document.body.style.userSelect = userSelect;
+      document.body.style.cursor = cursor;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onEnd);
+      window.removeEventListener('pointercancel', onEnd);
+    };
+  }, [dragging, onWidth, onCommit, onDraggingChange]);
+
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     // Without this the press that starts the drag also starts a selection in the titles it
-    // began next to, and the drag then paints its way down the list.
+    // began next to, before the rule above has had a render to take effect.
     event.preventDefault();
     drag.current = { x: event.clientX, from: width, to: width };
-    event.currentTarget.setPointerCapture(event.pointerId);
     onDraggingChange(true);
-  };
-
-  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const current = drag.current;
-    if (!current) return;
-    current.to = clampSidebarWidth(current.from + event.clientX - current.x);
-    onWidth(current.to);
-  };
-
-  const onPointerEnd = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const current = drag.current;
-    if (!current) return;
-    drag.current = null;
-    event.currentTarget.releasePointerCapture(event.pointerId);
-    onDraggingChange(false);
-    onCommit(current.to);
   };
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -347,9 +368,6 @@ function SidebarResizeHandle({
       aria-valuemax={SIDEBAR_MAX_WIDTH}
       tabIndex={0}
       onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerEnd}
-      onPointerCancel={onPointerEnd}
       onKeyDown={onKeyDown}
       onDoubleClick={reset}
       sx={{
@@ -523,10 +541,6 @@ export function SessionList({
         borderColor: 'divider',
         bgcolor: 'background.level1',
         height: '100%',
-        // Belt and braces with the preventDefault on the handle's pointerdown: the pointer
-        // leaves this box almost immediately on a widening drag, and a selection started
-        // anywhere in here would keep growing under it.
-        ...(dragging && { userSelect: 'none' }),
       }}
       data-testid="sidebar"
     >
