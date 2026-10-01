@@ -66,7 +66,7 @@ const handler = baseApi()
   .put(
     asyncHandler<{}, any, any, { id?: string; messageId?: string }>(async (req, res) => {
       const { id: sessionId, messageId } = req.query;
-      const updates = req.body as { reply?: string; replies?: string[] };
+      const updates = req.body as { reply?: string; replies?: string[]; selectedChoiceIndex?: unknown };
       const userId = req.user?.id;
 
       const session = await sessionRepository.findById(sessionId!);
@@ -95,6 +95,21 @@ const handler = baseApi()
 
       if (Array.isArray(updates.replies) && updates.replies.every(item => typeof item === 'string')) {
         allowedUpdates.replies = updates.replies;
+      }
+
+      // Only the pick is writable, never the options, and only once: the options are what the server
+      // parsed from the model's reply, and the first pick is the one the conversation followed.
+      const { selectedChoiceIndex } = updates;
+      const storedChoices = message.suggestedChoices;
+      if (
+        typeof selectedChoiceIndex === 'number' &&
+        Number.isInteger(selectedChoiceIndex) &&
+        storedChoices &&
+        storedChoices.selectedIndex == null &&
+        selectedChoiceIndex >= 0 &&
+        selectedChoiceIndex < storedChoices.options.length
+      ) {
+        allowedUpdates.suggestedChoices = { ...storedChoices, selectedIndex: selectedChoiceIndex };
       }
 
       // Re-checked right before the write: the grant lives on the session and the write is to a

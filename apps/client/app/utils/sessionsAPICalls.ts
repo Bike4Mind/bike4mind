@@ -208,7 +208,12 @@ export const getChatMessage = async (sessionId: string, messageId: string): Prom
   return response.data;
 };
 
-export const updateChatMessage = async (sessionId: string, messageId: string, update: Partial<IChatHistoryItem>) => {
+export const updateChatMessage = async (
+  sessionId: string,
+  messageId: string,
+  // selectedChoiceIndex: the server owns the options, so a pick is sent as an index, never as suggestedChoices
+  update: Partial<IChatHistoryItem> & { selectedChoiceIndex?: number }
+) => {
   const response = await api.put(`/api/sessions/${sessionId}/chat/${messageId}`, update);
   return response.data;
 };
