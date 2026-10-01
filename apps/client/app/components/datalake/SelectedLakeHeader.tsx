@@ -4,8 +4,12 @@ import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import DriveConnectAction from '@client/app/components/DataLakeWizard/steps/DriveConnectAction';
 import { canConnectLakeDrive, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
 import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
-import type { ISession, ManageableDataLakeConfig } from '@bike4mind/common';
-import { isUnsearchable, UNSEARCHABLE_LAKE_REASON } from '@client/app/components/datalake/lakeRetrievability';
+import type { ManageableDataLakeConfig } from '@bike4mind/common';
+import {
+  isUnsearchable,
+  UNSEARCHABLE_LAKE_REASON,
+  type SessionAdmissionView,
+} from '@client/app/components/datalake/lakeRetrievability';
 
 /**
  * What the scoped lake is and the lake-level actions on it - the home those actions never had
@@ -25,9 +29,11 @@ import { isUnsearchable, UNSEARCHABLE_LAKE_REASON } from '@client/app/components
 export default function SelectedLakeHeader({
   lake,
   session,
+  viewerUserId,
 }: {
   lake: ManageableDataLakeConfig;
-  session?: Pick<ISession, 'preauthorizedLakeIds'> | null;
+  session?: SessionAdmissionView | null;
+  viewerUserId?: string;
 }) {
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   const openManager = useDataLakeWizardStore(s => s.openManager);
@@ -56,7 +62,7 @@ export default function SelectedLakeHeader({
         >
           {lake.fileTagPrefix}
         </Chip>
-        {isUnsearchable(lake, session) && (
+        {isUnsearchable(lake, session, viewerUserId) && (
           <Tooltip size="sm" title={UNSEARCHABLE_LAKE_REASON}>
             <Chip
               size="sm"

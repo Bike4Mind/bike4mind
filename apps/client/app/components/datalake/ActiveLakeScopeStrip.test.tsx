@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import ActiveLakeScopeStrip from './ActiveLakeScopeStrip';
@@ -68,7 +68,15 @@ describe('ActiveLakeScopeStrip', () => {
     expect(screen.getByTestId('datalake-active-scope-unsearchable-c')).toBeInTheDocument();
     expect(screen.queryByTestId('datalake-active-scope-unsearchable-a')).not.toBeInTheDocument();
     expect(screen.queryByTestId('datalake-active-scope-unsearchable-b')).not.toBeInTheDocument();
-    expect(screen.getByText('Grounded on')).toBeInTheDocument();
+    // The unsearchable lake grounds nothing, so it must not sit under "Grounded on".
+    const grounded = screen.getByTestId('datalake-active-scope-grounded');
+    expect(within(grounded).getByTestId('datalake-active-scope-chip-a')).toBeInTheDocument();
+    expect(within(grounded).getByTestId('datalake-active-scope-chip-b')).toBeInTheDocument();
+    expect(within(grounded).queryByTestId('datalake-active-scope-chip-c')).not.toBeInTheDocument();
+    const notSearched = screen.getByTestId('datalake-active-scope-unsearchable-group');
+    expect(within(notSearched).getByTestId('datalake-active-scope-chip-c')).toBeInTheDocument();
+    expect(screen.getByText('Not searched')).toBeInTheDocument();
+    expect(within(notSearched).getByTestId('datalake-active-scope-clear-btn')).toBeInTheDocument();
   });
 
   it('says chat can search none of them when every selected lake is unsearchable', () => {
@@ -86,14 +94,16 @@ describe('ActiveLakeScopeStrip', () => {
 
     expect(screen.getByTestId('datalake-active-scope-all-unsearchable')).toBeInTheDocument();
     expect(screen.queryByText('Grounded on')).not.toBeInTheDocument();
+    expect(screen.queryByText('Not searched')).not.toBeInTheDocument();
   });
 
-  it('does not flag an active lake the current session pre-authorizes', () => {
+  it('does not flag an active lake a session the viewer owns pre-authorizes', () => {
     render(
       <Wrapper>
         <ActiveLakeScopeStrip
-          lakes={[{ ...lake('a', 'Admitted'), retrievable: false, status: 'active' }]}
-          session={{ preauthorizedLakeIds: ['a'] }}
+          lakes={[{ ...lake('a', 'Admitted'), retrievable: false, status: 'active', canPreauthorize: true }]}
+          session={{ userId: 'u1', preauthorizedLakeIds: ['a'] }}
+          viewerUserId="u1"
           onClear={vi.fn()}
         />
       </Wrapper>

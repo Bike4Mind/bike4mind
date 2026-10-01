@@ -648,14 +648,18 @@ export default function DataLakeExplorer({
                 onCreate={onCreateLake}
                 onDiscover={onDiscover}
                 session={currentSession}
+                viewerUserId={currentUserId}
               />
-              {soleSelectedLake && <SelectedLakeHeader lake={soleSelectedLake} session={currentSession} />}
+              {soleSelectedLake && (
+                <SelectedLakeHeader lake={soleSelectedLake} session={currentSession} viewerUserId={currentUserId} />
+              )}
               {/* The no-lake scope shows the strip with nothing in it: that is the one state the
                   tree cannot report, since it stays browsable so the user can get back out. */}
               {(selectedLakes.length > 1 || isNoLakeScope) && (
                 <ActiveLakeScopeStrip
                   lakes={selectedLakes}
                   session={currentSession}
+                  viewerUserId={currentUserId}
                   onClear={() => handleSelectLakes([])}
                 />
               )}

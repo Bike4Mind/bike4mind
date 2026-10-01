@@ -38,9 +38,9 @@ describe('labelLakeRetrievability', () => {
     ]);
   });
 
-  it('marks a lake reached only through a session attachment false (the label is session-agnostic)', () => {
-    // Chat unions attachment and preauthorized lakes per session; the caller scope does not include them.
-    const labeled = labelLakeRetrievability([row('attached-only')], scopeOf(['datalake:other']));
+  it('marks a lake reached only through a session admission false (the label is session-agnostic)', () => {
+    // Chat unions a session's preauthorized lakes per turn; the caller scope does not include them.
+    const labeled = labelLakeRetrievability([row('preauthorized-only')], scopeOf(['datalake:other']));
     expect(labeled[0].retrievable).toBe(false);
   });
 });

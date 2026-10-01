@@ -343,7 +343,7 @@ describe('DataLakeLakePicker - unsearchable lakes', () => {
   const lakes = [
     lake({ id: 'a', name: 'Mine', retrievable: true }),
     lake({ id: 'b', name: 'Unlabeled' }),
-    lake({ id: 'c', name: 'Private', retrievable: false, status: 'active' }),
+    lake({ id: 'c', name: 'Private', retrievable: false, status: 'active', canPreauthorize: true }),
   ];
 
   it('marks only an explicit retrievable === false row', () => {
@@ -364,10 +364,17 @@ describe('DataLakeLakePicker - unsearchable lakes', () => {
     expect(onChange).toHaveBeenCalledWith(['c']);
   });
 
-  it('does not mark an active lake the current session pre-authorizes', () => {
-    renderPicker({ lakes, session: { preauthorizedLakeIds: ['c'] } });
+  it('does not mark an active lake a session the viewer owns pre-authorizes', () => {
+    renderPicker({ lakes, session: { userId: 'u1', preauthorizedLakeIds: ['c'] }, viewerUserId: 'u1' });
     openMenu();
 
     expect(screen.queryByTestId('datalake-lake-picker-unsearchable-c')).not.toBeInTheDocument();
+  });
+
+  it('still marks it when the session belongs to someone else, whose pre-authorization chat ignores', () => {
+    renderPicker({ lakes, session: { userId: 'owner', preauthorizedLakeIds: ['c'] }, viewerUserId: 'viewer' });
+    openMenu();
+
+    expect(screen.getByTestId('datalake-lake-picker-unsearchable-c')).toBeInTheDocument();
   });
 });

@@ -28,8 +28,12 @@ import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import { menuItemListSx, menuSurfaceSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
 import { lakeVisibilityLabelShort } from '@client/app/components/datalake/lakeVisibility';
-import { isUnsearchable, UnsearchableLakeIcon } from '@client/app/components/datalake/lakeRetrievability';
-import type { ISession, ManageableDataLakeConfig } from '@bike4mind/common';
+import {
+  isUnsearchable,
+  UnsearchableLakeIcon,
+  type SessionAdmissionView,
+} from '@client/app/components/datalake/lakeRetrievability';
+import type { ManageableDataLakeConfig } from '@bike4mind/common';
 
 /**
  * Which lakes the in-chat surface is scoped to: a trigger in the tree card's header opening the
@@ -79,8 +83,9 @@ export interface DataLakeLakePickerProps {
   onCreate?: () => void;
   /** Opens the public-lake browse catalog (the manager's Discover tab). */
   onDiscover?: () => void;
-  /** The current chat session, so a lake it pre-authorizes is not marked unsearchable. */
-  session?: Pick<ISession, 'preauthorizedLakeIds'> | null;
+  /** The current chat session and the viewer, so a lake the session pre-authorizes for its owner is not marked unsearchable. */
+  session?: SessionAdmissionView | null;
+  viewerUserId?: string;
 }
 
 /** Below this many lakes a filter box is noise rather than help. */
@@ -122,6 +127,7 @@ export default function DataLakeLakePicker({
   lakeFileCounts,
   totalFileCount,
   session,
+  viewerUserId,
   onCreate,
   onDiscover,
 }: DataLakeLakePickerProps) {
@@ -365,7 +371,7 @@ export default function DataLakeLakePicker({
                         </Tooltip>
                       )}
                       {/* Marked, not disabled: selection also scopes the browse tree, which still works. */}
-                      {isUnsearchable(lake, session) && (
+                      {isUnsearchable(lake, session, viewerUserId) && (
                         <UnsearchableLakeIcon testId={`datalake-lake-picker-unsearchable-${lake.id}`} />
                       )}
                       {typeof count === 'number' && (

@@ -112,12 +112,13 @@ describe('SelectedLakeHeader', () => {
     expect(screen.queryByTestId('datalake-selected-lake-unsearchable')).not.toBeInTheDocument();
   });
 
-  it('does not mark an active lake the current session pre-authorizes', () => {
+  it('does not mark an active lake a session the viewer owns pre-authorizes', () => {
     render(
       <Wrapper>
         <SelectedLakeHeader
-          lake={lake({ retrievable: false, status: 'active' })}
-          session={{ preauthorizedLakeIds: ['lake-1'] }}
+          lake={lake({ retrievable: false, status: 'active', canPreauthorize: true })}
+          session={{ userId: 'u1', preauthorizedLakeIds: ['lake-1'] }}
+          viewerUserId="u1"
         />
       </Wrapper>
     );

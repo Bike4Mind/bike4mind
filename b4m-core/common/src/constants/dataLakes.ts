@@ -486,9 +486,9 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * `?preauthorizableFor` relabels `canPreauthorize`). Set only by the GET /api/data-lakes route;
    * absent means unknown (scope unresolved or degraded) and must be treated as retrievable.
    *
-   * Session-agnostic: it ignores lakes a chat session admits on its own, via
-   * `preauthorizedLakeIds` or an attached file's lake, so such a lake can read `false` here and
-   * still be searched in that session. Drafts read `false` (retrieval excludes them).
+   * Session-agnostic: it ignores a lake a chat session admits through `preauthorizedLakeIds`, so
+   * such a lake can read `false` here and still be searched in that session. An attached file's
+   * lake is not such an admission (the file is inlined, not searched). Drafts read `false`.
    */
   retrievable?: boolean;
   /**
