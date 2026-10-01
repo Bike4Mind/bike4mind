@@ -14,10 +14,8 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { SxProps } from '@mui/joy/styles/types';
 import type { ChatProject } from '@shared/chat';
-import { EnvironmentPicker } from '../auth/EnvironmentPicker';
-import { useAuthState } from '../auth/useAuthState';
 import { describeChipRow, type ChipRowState } from './chipState';
-import { BranchIcon, CloseIcon, FolderIcon, FolderPlusIcon, ServerIcon } from './icons';
+import { BranchIcon, CloseIcon, FolderIcon, FolderPlusIcon } from './icons';
 import { contentColumnSx } from './layout';
 import type { ProjectBindingController } from './useChat';
 
@@ -71,15 +69,32 @@ function BranchFilter({
 /** The controller plus what the chips currently say; see `describeChipRow`. */
 type ChipBinding = ProjectBindingController & { chips: ChipRowState };
 
-/** One pill in the row. Matches Joy's outlined Chip so the custom pill sits level with the rest. */
+/**
+ * The height every control in this row is drawn at.
+ *
+ * Set by the branch pill, the one control here whose height is content-driven rather than
+ * declared: an 18px body-xs line inside a Joy button's 4px block padding, plus the pill's own
+ * border. Every Joy `sm` default lands under it - a Chip is 20px, an IconButton 24 - so each
+ * control is pinned to this number instead of left to find its own.
+ */
+const ROW_HEIGHT = 28;
+
+/** One pill in the row: the frame, with its controls drawn plain inside it. */
 const pillSx: SxProps = {
   display: 'flex',
   alignItems: 'center',
-  minHeight: 24,
+  minHeight: ROW_HEIGHT,
   borderRadius: '999px',
   border: '1px solid',
   borderColor: 'neutral.outlinedBorder',
   bgcolor: 'background.surface',
+};
+
+/** Joy's `sm` Chip, brought up to the row - and in to `pillButtonSx`'s padding and gap. */
+const chipSx: SxProps = {
+  '--Chip-minHeight': `${ROW_HEIGHT}px`,
+  '--Chip-paddingInline': '8px',
+  gap: '6px',
 };
 
 /** A pill's inner button: no border or background of its own, the pill provides both. */
@@ -94,48 +109,6 @@ const pillButtonSx: SxProps = {
 function lastSegments(path: string, count = 2): string {
   const parts = path.split('/').filter(Boolean);
   return parts.length <= count ? path : `.../${parts.slice(-count).join('/')}`;
-}
-
-/**
- * Which b4m backend this session talks to.
- *
- * Deliberately NOT Claude Code's Local/Cloud switch. This app's agent is the Electron main
- * process and has nowhere else to run, so a control implying remote execution would name a
- * choice that does not exist. What does vary is the server behind it, which is the T4
- * environment - and it is app-wide, which the tooltip says rather than leaving the user to
- * discover it by changing one session and finding they changed them all.
- */
-function EnvironmentChip() {
-  const state = useAuthState();
-  if (!state) return null;
-
-  return (
-    <Dropdown>
-      <Tooltip
-        title={`${state.environment.url} - the server every conversation in this app talks to`}
-        size="sm"
-        variant="soft"
-        placement="top-start"
-      >
-        <MenuButton
-          size="sm"
-          variant="outlined"
-          color="neutral"
-          startDecorator={<ServerIcon />}
-          sx={{ ...pillButtonSx, borderRadius: '999px' }}
-          slotProps={{ root: { 'data-testid': 'session-chip-environment' } }}
-        >
-          <Typography level="body-xs" textColor="inherit" noWrap>
-            {state.environment.label}
-          </Typography>
-        </MenuButton>
-      </Tooltip>
-
-      <Menu size="sm" placement="top-start" sx={{ p: 1.5, minWidth: 300 }}>
-        <EnvironmentPicker state={state} />
-      </Menu>
-    </Dropdown>
-  );
 }
 
 /**
@@ -155,6 +128,7 @@ function ProjectChip({ binding }: { binding: ChipBinding }) {
         disabled={binding.busy}
         startDecorator={<FolderIcon />}
         onClick={() => void binding.pickDirectory()}
+        sx={chipSx}
         data-testid="session-chip-project"
       >
         {folder.label}
@@ -309,7 +283,7 @@ function ContextChips({ project, binding }: { project: ChatProject | null; bindi
             disabled={binding.busy || !addContext.enabled}
             onClick={() => void binding.addContextDirectory()}
             aria-label={addContext.label}
-            sx={{ borderRadius: '999px', minWidth: 26, minHeight: 24 }}
+            sx={{ borderRadius: '999px', minWidth: ROW_HEIGHT, minHeight: ROW_HEIGHT }}
             data-testid="session-chip-add-context"
           >
             <FolderPlusIcon />
@@ -325,6 +299,7 @@ function ContextChips({ project, binding }: { project: ChatProject | null; bindi
             color="neutral"
             endDecorator={<CloseIcon />}
             onClick={() => void binding.removeContextDirectory(directory)}
+            sx={chipSx}
             data-testid="session-chip-context"
           >
             {lastSegments(directory)}
@@ -426,7 +401,6 @@ export function SessionChips({ project, binding }: { project: ChatProject | null
       )}
 
       <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexWrap: 'wrap', gap: 0.75 }}>
-        <EnvironmentChip />
         <ProjectChip binding={bound} />
         <BranchChip project={project} binding={bound} branches={branches} />
         <ContextChips project={project} binding={bound} />

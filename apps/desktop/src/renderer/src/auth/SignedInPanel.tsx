@@ -2,12 +2,14 @@ import { useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Avatar from '@mui/joy/Avatar';
 import Button from '@mui/joy/Button';
+import Divider from '@mui/joy/Divider';
 import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
 import { ChevronIcon } from '../chat/icons';
 import { RuntimeInfo } from '../components/RuntimeInfo';
+import { EnvironmentPicker } from './EnvironmentPicker';
 
 /** Two letters for the avatar. Falls back to one, then to nothing, rather than to a stray '?'. */
 function initials(name: string): string {
@@ -104,6 +106,21 @@ export function SignedInPanel({ state }: { state: AuthState }) {
           >
             Sign out
           </Button>
+
+          <Divider />
+
+          {/* The server lives here rather than in the composer's chip row because it is
+              app-wide, not session-scoped - which is also why the scope is said out loud:
+              the one thing the picker's own caption cannot tell you is how far it reaches.
+              It is a choice of backend, never of where the agent runs; this app's agent is
+              the Electron main process and has nowhere else to go. */}
+          <Typography level="body-xs" textColor="text.tertiary">
+            Every conversation in this app talks to one server.
+          </Typography>
+          <EnvironmentPicker state={state} />
+
+          <Divider />
+
           <RuntimeInfo />
         </Stack>
       )}
