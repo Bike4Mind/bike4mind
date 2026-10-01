@@ -276,6 +276,12 @@ export function toolRowLabel(call: ChatToolCall): string {
     return call.status === 'denied' ? `Did not ${attempt}` : `Failed to ${attempt}`;
   }
 
+  // Not the past tense either: the command did not finish here, it is still going in the task
+  // panel, so "Ran x" would report an outcome this row never saw.
+  if (call.status === 'moved') {
+    return argument ? `Moved ${argument} to the background` : 'Moved a command to the background';
+  }
+
   // Only on a call that succeeded: the tool writes it in the past tense as the thing it did, so
   // on a failure it would say the opposite of what happened. The failure paths above run first.
   if (call.label) return shortenArgument(call.label);
@@ -311,10 +317,13 @@ export interface ToolCallGroup {
  * so a group never reads as fine because most of it was.
  */
 const STATUS_RANK: Record<ChatToolStatus, number> = {
-  'awaiting-approval': 5,
-  error: 4,
-  denied: 3,
-  running: 2,
+  'awaiting-approval': 6,
+  error: 5,
+  denied: 4,
+  running: 3,
+  // Under 'running', which is the point: a group holding one moved command and one still in the
+  // foreground is a group that is still waiting on something.
+  moved: 2,
   done: 1,
 };
 

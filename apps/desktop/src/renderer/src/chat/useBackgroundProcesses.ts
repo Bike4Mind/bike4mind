@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { BackgroundProcessInfo } from '@shared/chat';
+import type { BackgroundProcessInfo, ChatMoveToBackgroundResult } from '@shared/chat';
 
 /** Per process, in the panel. Live output is a view, not a record - main holds the real buffer. */
 const MAX_PANEL_CHARS = 20_000;
@@ -13,6 +13,11 @@ export interface BackgroundProcessesController {
   processes: BackgroundProcessView[];
   running: number;
   stop: (processId: string) => void;
+  /**
+   * Move a command still running in the foreground here, by the tool call waiting on it. The
+   * process it becomes arrives on the usual status push, so nothing is inserted locally.
+   */
+  moveToBackground: (callId: string) => Promise<ChatMoveToBackgroundResult>;
   /** Drop the ended ones from this window's list. Kills nothing; see `clearFinished` below. */
   clearFinished: () => void;
 }
@@ -86,6 +91,14 @@ export function useBackgroundProcesses(sessionId: string | null): BackgroundProc
     [sessionId]
   );
 
+  const moveToBackground = useCallback(
+    async (callId: string): Promise<ChatMoveToBackgroundResult> => {
+      if (!sessionId) return { ok: false, message: 'That command is no longer running.' };
+      return window.b4m.chat.moveCommandToBackground(sessionId, callId);
+    },
+    [sessionId]
+  );
+
   /**
    * Clear the finished list.
    *
@@ -103,6 +116,7 @@ export function useBackgroundProcesses(sessionId: string | null): BackgroundProc
     processes,
     running: processes.filter(entry => entry.status === 'running').length,
     stop,
+    moveToBackground,
     clearFinished,
   };
 }
