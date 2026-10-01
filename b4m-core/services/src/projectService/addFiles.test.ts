@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, Mock } from 'vitest';
 import { addFiles } from './addFiles';
-import { createMockProjectRepository, createMockFabFileRepository } from '../__tests__/utils/testUtils';
+import { captureWrites, createMockProjectRepository, createMockFabFileRepository } from '../__tests__/utils/testUtils';
 import { IFabFileRepository, IProjectRepository, IUserDocument, NotFoundError, Permission } from '@bike4mind/common';
 
 describe('projectService - addFiles', () => {
@@ -13,12 +13,7 @@ describe('projectService - addFiles', () => {
   beforeEach(() => {
     mockProjectRepo = createMockProjectRepository();
     mockFabFileRepo = createMockFabFileRepository();
-    // Cloned at call time: pushShareable mutates `users` in place, so mock.calls would also match a
-    // write made before the grants were pushed.
-    fabFileWrites = [];
-    (mockFabFileRepo.update as Mock).mockImplementation(async (partial: unknown) => {
-      fabFileWrites.push(structuredClone(partial));
-    });
+    fabFileWrites = captureWrites(mockFabFileRepo.update);
     adapters = {
       db: {
         projects: mockProjectRepo,

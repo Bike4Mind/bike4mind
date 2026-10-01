@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ModelBackend, VideoModels, type ModelInfo } from '@bike4mind/common';
-import type { Logger } from '@bike4mind/observability';
+import { silentLogger, statusLog } from '../__tests__/utils/testUtils';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { aiVideoService, getSettingsValue } from '@bike4mind/utils';
 import { deductCreditsWithOrgSupport } from '../creditService';
@@ -37,17 +37,6 @@ vi.mock('../creditService', async importOriginal => {
 vi.mock('axios', () => ({ default: { get: vi.fn(async () => ({ data: new Uint8Array([1, 2, 3]) })) } }));
 
 vi.mock('./questHeartbeat', () => ({ startQuestHeartbeat: vi.fn(async () => () => {}) }));
-
-const silentLogger = {
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  updateMetadata: vi.fn(),
-} as unknown as Logger;
-
-// statusLog timestamps are wall-clock, so only the status sequence is pinned.
-const statusLog = (...statuses: string[]) => statuses.map(status => ({ status, timestamp: expect.any(Date) }));
 
 describe('VideoGenerationService.invoke (retry quest bound to its session)', () => {
   const makeInvokeService = (questSessionId: string) => {

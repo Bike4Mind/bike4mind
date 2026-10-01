@@ -6,7 +6,7 @@ import {
   type IUserDocument,
   type ModelInfo,
 } from '@bike4mind/common';
-import type { Logger } from '@bike4mind/observability';
+import { silentLogger } from '../__tests__/utils/testUtils';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { aiImageService, getSettingsValue } from '@bike4mind/utils';
 import { estimateImageCredits } from '../imageCost';
@@ -50,14 +50,6 @@ vi.mock('../creditService', async importOriginal => {
 vi.mock('./imageModerationGate', () => ({ moderateImageOrThrow: vi.fn(async () => undefined) }));
 
 vi.mock('./questHeartbeat', () => ({ startQuestHeartbeat: vi.fn(async () => () => {}) }));
-
-const silentLogger = {
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  updateMetadata: vi.fn(),
-} as unknown as Logger;
 
 const makeModelInfo = (id: string): ModelInfo =>
   ({
