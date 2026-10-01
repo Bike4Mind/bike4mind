@@ -21,26 +21,22 @@ const connectAgain = () => {
   });
 };
 
+type GoogleDriveConnectErrorCode = (typeof GOOGLE_DRIVE_CONNECT_ERROR)[keyof typeof GOOGLE_DRIVE_CONNECT_ERROR];
+
+const CONNECT_FAILURE_MESSAGES: Record<GoogleDriveConnectErrorCode, string> = {
+  [GOOGLE_DRIVE_CONNECT_ERROR.expired]: 'That Google Drive connection attempt expired. Please connect again.',
+  [GOOGLE_DRIVE_CONNECT_ERROR.invalid]:
+    'That Google Drive connection attempt is no longer valid. Please connect again.',
+  [GOOGLE_DRIVE_CONNECT_ERROR.failed]: 'Google Drive could not complete the connection. Please connect again.',
+};
+
+const isConnectErrorCode = (code: unknown): code is GoogleDriveConnectErrorCode =>
+  typeof code === 'string' && Object.hasOwn(CONNECT_FAILURE_MESSAGES, code);
+
 const reportConnectFailure = (error: unknown) => {
   const code = readErrorCode(error);
-  const connectAgainAction = { label: 'Connect again', onClick: connectAgain };
-
-  if (code === GOOGLE_DRIVE_CONNECT_ERROR.expired) {
-    toast.error('That Google Drive connection attempt expired. Please connect again.', {
-      action: connectAgainAction,
-    });
-    return;
-  }
-  if (code === GOOGLE_DRIVE_CONNECT_ERROR.invalid) {
-    toast.error('That Google Drive connection attempt is no longer valid. Please connect again.', {
-      action: connectAgainAction,
-    });
-    return;
-  }
-  if (code === GOOGLE_DRIVE_CONNECT_ERROR.failed) {
-    toast.error('Google Drive could not complete the connection. Please connect again.', {
-      action: connectAgainAction,
-    });
+  if (isConnectErrorCode(code)) {
+    toast.error(CONNECT_FAILURE_MESSAGES[code], { action: { label: 'Connect again', onClick: connectAgain } });
     return;
   }
   console.error('Error connecting to Google Drive:', error);

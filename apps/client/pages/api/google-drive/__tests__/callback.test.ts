@@ -68,9 +68,22 @@ beforeEach(() => {
   mockFindByIdAndUpdate.mockReset();
 });
 
+/**
+ * node-mocks-http accepts headers after the response ends; real Node throws ERR_HTTP_HEADERS_SENT.
+ * Enforce that so a Set-Cookie written after send() fails the test instead of passing silently.
+ */
+function enforceHeadersSent(res: any) {
+  const setHeader = res.setHeader.bind(res);
+  res.setHeader = (name: string, value: unknown) => {
+    if (res._isEndCalled()) throw new Error(`ERR_HTTP_HEADERS_SENT: ${name}`);
+    return setHeader(name, value);
+  };
+}
+
 /** baseApi is collapsed above, so route a thrown error through errorHandler the way its onError does. */
 async function handler(req: any, res: any) {
   req.logger = { warn: vi.fn(), error: vi.fn() };
+  enforceHeadersSent(res);
   try {
     await callbackHandler(req, res);
   } catch (error) {
@@ -160,6 +173,9 @@ describe('google-drive callback browser-binding', () => {
 
     await handler(req as any, res as any);
     expect(mockFindByIdAndUpdate).toHaveBeenCalledTimes(1);
+    expect(mockFindByIdAndUpdate).toHaveBeenCalledWith('user-1', {
+      $set: { googleDrive: { accessToken: 'enc:at', refreshToken: 'enc:rt', expiresAt: expect.any(Date) } },
+    });
     expect(res._getStatusCode()).toBe(204);
     expectNonceCleared(res);
   });

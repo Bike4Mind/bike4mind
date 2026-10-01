@@ -66,10 +66,11 @@ const handler = baseApi().get(
           },
         },
       });
-      return res.status(204).send();
     } finally {
       clearStateNonce(res, NONCE_SLOT.driveConnect);
     }
+    // Sent after the finally: send() ends the response, so a Set-Cookie from inside it would throw.
+    return res.status(204).send();
   })
 );
 

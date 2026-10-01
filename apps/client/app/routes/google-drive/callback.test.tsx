@@ -99,6 +99,41 @@ describe('GoogleDriveCallbackPage', () => {
     expect(h.toastError).toHaveBeenCalledWith('Error connecting to Google Drive');
   });
 
+  it('falls back to the generic error when restarting the connection fails', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    rejectWithCode('GOOGLE_DRIVE_CONNECT_EXPIRED');
+    h.startConnect.mockRejectedValue(new Error('popup blocked'));
+
+    render(<GoogleDriveCallbackPage />);
+
+    await waitFor(() => expect(h.toastError).toHaveBeenCalledTimes(1));
+    const [, options] = h.toastError.mock.calls[0];
+    options.action.onClick();
+
+    await waitFor(() => expect(h.toastError).toHaveBeenLastCalledWith('Error connecting to Google Drive'));
+    expect(consoleError).toHaveBeenCalled();
+  });
+
+  it('encodes code and state into the API request', async () => {
+    h.search = { code: 'a/b+c', state: 'x&y=z' };
+    h.apiGet.mockResolvedValue({ data: undefined });
+
+    render(<GoogleDriveCallbackPage />);
+
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith({ to: '/' }));
+    expect(h.apiGet).toHaveBeenCalledWith('/api/google-drive/callback?code=a%2Fb%2Bc&state=x%26y%3Dz');
+  });
+
+  it('shows the generic error without calling the API when a param is missing', async () => {
+    h.search = { code: 'auth-code' };
+
+    render(<GoogleDriveCallbackPage />);
+
+    expect(h.apiGet).not.toHaveBeenCalled();
+    expect(h.toastError).toHaveBeenCalledWith('Error connecting to Google Drive');
+    expect(h.navigate).toHaveBeenCalledWith({ to: '/' });
+  });
+
   it('does not call the API when consent was denied', async () => {
     h.search = { error: 'access_denied' };
 
