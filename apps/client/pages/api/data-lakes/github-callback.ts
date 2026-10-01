@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { readStateNonceHash, clearStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { consumeStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { getGitHubLakeAppConfig } from '@server/integrations/github/dataLake/lakeAppClient';
 import {
   completeGitHubLakeConnection,
@@ -32,27 +32,19 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .use(requireFeatureEnabled('EnableDataLakeGitHub'))
   .post(async (req: Request, res) => {
-    // Burn the nonce on every exit so a failed completion cannot be replayed from this browser.
-    try {
-      const { state, code, installationId } = parseOrBadRequest(Body, req.body);
-      const dataLakeId = verifyGitHubLakeState(
-        state,
-        readStateNonceHash(req, NONCE_SLOT.githubLakeConnect),
-        req.user.id
-      );
-      const conn = await completeGitHubLakeConnection({
-        config: requireGitHubLakeAppConfig(getGitHubLakeAppConfig()),
-        user: req.user,
-        dataLakeId,
-        installationId,
-        code,
-        logger: req.logger,
-      });
-      // A connection minted just now has ingested nothing: its first sync is only enqueued.
-      return res.status(201).json({ connection: toGitHubLakeConnectionResponse(conn, 0) });
-    } finally {
-      clearStateNonce(res, NONCE_SLOT.githubLakeConnect);
-    }
+    const nonceHash = consumeStateNonce(req, res, NONCE_SLOT.githubLakeConnect); // burn before parse, which can 400
+    const { state, code, installationId } = parseOrBadRequest(Body, req.body);
+    const dataLakeId = verifyGitHubLakeState(state, nonceHash, req.user.id);
+    const conn = await completeGitHubLakeConnection({
+      config: requireGitHubLakeAppConfig(getGitHubLakeAppConfig()),
+      user: req.user,
+      dataLakeId,
+      installationId,
+      code,
+      logger: req.logger,
+    });
+    // A connection minted just now has ingested nothing: its first sync is only enqueued.
+    return res.status(201).json({ connection: toGitHubLakeConnectionResponse(conn, 0) });
   });
 
 export const config = {
