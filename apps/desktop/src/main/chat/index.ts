@@ -43,6 +43,7 @@ import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { DependencyInstaller } from './project/dependencyInstall';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
+import { parseReasoningEffortSetting } from './reasoningEffort';
 import { appWindows } from '../windows';
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
@@ -62,6 +63,12 @@ const MODEL_OVERRIDE = process.env.B4M_DESKTOP_DEFAULT_MODEL?.trim();
  * other, so a value the deployment does not offer is replaced the same way.
  */
 const PREFERRED_MODEL: string = MODEL_OVERRIDE || ChatModels.CLAUDE_5_OPUS;
+
+/**
+ * Reasoning effort for models that take one, read per launch so a benchmark can compare efforts
+ * without a rebuild. There is no settings store to persist it in yet.
+ */
+const REASONING_EFFORT = parseReasoningEffortSetting(process.env.B4M_DESKTOP_REASONING_EFFORT);
 
 /** How much of a background process's output the panel asks for when it rejoins after a reload. */
 const PANEL_TAIL_CHARS = 20_000;
@@ -215,6 +222,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     models,
     logger,
     preferredModel: PREFERRED_MODEL,
+    reasoningEffort: REASONING_EFFORT,
     approvals,
     background,
     dependencies: new DependencyInstaller(background),

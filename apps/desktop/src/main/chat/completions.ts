@@ -2,6 +2,7 @@ import { StringDecoder } from 'node:string_decoder';
 import type { Readable } from 'node:stream';
 import { createParser } from 'eventsource-parser';
 import { isAxiosError, type AxiosInstance, type AxiosResponse } from 'axios';
+import type { ReasoningEffort } from '@bike4mind/common';
 import type { ChatModelOption, ChatRole } from '@shared/chat';
 import { parseStreamEvent, type CompletionStreamEvent } from './streamEvents';
 
@@ -74,6 +75,8 @@ export interface CompletionRequest {
    * this it comes back empty. A server that predates the option ignores it.
    */
   thinking?: boolean;
+  /** Lowers or raises how long a reasoning model thinks before its first token. Absent sends nothing. */
+  reasoningEffort?: ReasoningEffort;
 }
 
 /**
@@ -109,6 +112,7 @@ export async function streamCompletion(
           stream: true,
           tools: request.tools ?? [],
           ...(request.thinking ? { thinking: { enabled: true } } : {}),
+          ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
         },
       },
       { responseType: 'stream', signal }

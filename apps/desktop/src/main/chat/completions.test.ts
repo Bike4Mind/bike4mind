@@ -16,6 +16,25 @@ function fakeAxios(stream: PassThrough): { instance: AxiosInstance; post: Return
 
 const REQUEST = { model: 'm', messages: [{ role: 'user' as const, content: 'hi' }] };
 
+describe('streamCompletion reasoning effort', () => {
+  async function sentOptions(request: Parameters<typeof streamCompletion>[2]): Promise<Record<string, unknown>> {
+    const stream = new PassThrough();
+    const { instance, post } = fakeAxios(stream);
+    const done = streamCompletion(instance, '/c', request, () => undefined);
+    stream.end();
+    await done;
+    return post.mock.calls[0][1].options;
+  }
+
+  it('puts the effort under options when one is set', async () => {
+    expect(await sentOptions({ ...REQUEST, reasoningEffort: 'low' })).toMatchObject({ reasoningEffort: 'low' });
+  });
+
+  it('leaves the field off the payload when none is set', async () => {
+    expect(await sentOptions(REQUEST)).not.toHaveProperty('reasoningEffort');
+  });
+});
+
 describe('streamCompletion', () => {
   it('decodes content frames in order and stops at [DONE]', async () => {
     const stream = new PassThrough();

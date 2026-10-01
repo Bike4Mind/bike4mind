@@ -52,6 +52,7 @@ import {
   withCacheBreakpoints,
   type CompletionMessage,
 } from './completions';
+import { reasoningEffortFor, type ReasoningEffortSetting } from './reasoningEffort';
 import { addUsage, foldUsage } from './streamEvents';
 import { findStaleResults, historyRounds, toolResultContent } from './contextPruning';
 import { buildExploreContext, shouldOfferExplore } from './explore';
@@ -238,6 +239,8 @@ export interface ChatServiceDeps {
    * leaves every session on whatever model it was created with.
    */
   models?: ModelCatalog;
+  /** Reasoning effort for models that accept one. Absent or `default` sends none. */
+  reasoningEffort?: ReasoningEffortSetting;
   /** This build's preferred model, used until the server's catalog says what it really offers. */
   preferredModel?: string;
   /** Absent in tests that exercise tools needing no consent; a gated tool then never runs. */
@@ -1165,6 +1168,8 @@ export class ChatService {
       const catalog = await this.deps.models?.list();
       const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
       const maxTokens = catalog?.models.find(option => option.id === session.model)?.maxOutputTokens;
+      const effort = reasoningEffortFor(this.deps.reasoningEffort, session.model);
+      const effortField = effort ? { reasoningEffort: effort } : {};
       // Silence is not "no": see ChatModelOption.supportsVision.
       const vision = catalog?.models.find(option => option.id === session.model)?.supportsVision !== false;
       const explore =
@@ -1246,6 +1251,7 @@ export class ChatService {
             messages: cacheable ? withCacheBreakpoints(wire) : wire,
             tools,
             thinking: true,
+            ...effortField,
             ...(maxTokens ? { maxTokens } : {}),
           },
           event => {
