@@ -83,7 +83,7 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
   // Opt-in host override: when a surface provides onCitationClick (e.g. the
   // LibreOncology source drawer), the click is handled in-surface instead of
   // navigating. Default (no provider) keeps the existing navigation behavior.
-  const { onCitationClick } = useCitationInteraction();
+  const { onCitationClick, onInternalCitationClick } = useCitationInteraction();
 
   // Detect internal (relative) vs external URLs
   const isInternal = !!source.url && source.url.startsWith('/');
@@ -115,19 +115,19 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
       }
     : undefined;
 
-  const handleClick =
-    handleHostClick ??
-    (isInternal
-      ? () => {
-          // Hand the reader's destination the passage this chip cited, so the viewer can mark it
-          // instead of dropping them at the top of the document (#3038). Written on EVERY internal
-          // click, clearing on a chip that carries no passage: a leftover anchor from the previous
-          // citation would otherwise mark a stale extent in the newly-opened file.
-          setSessionLayout({ citedPassage: citedPassageOf(source) });
-          const url = new URL(source.url!, window.location.origin);
-          navigate({ to: url.pathname as never, search: Object.fromEntries(url.searchParams) as never });
-        }
-      : undefined);
+  const navigateToInternal = () => {
+    // Hand the reader's destination the passage this chip cited, so the viewer can mark it
+    // instead of dropping them at the top of the document (#3038). Written on EVERY internal
+    // click, clearing on a chip that carries no passage: a leftover anchor from the previous
+    // citation would otherwise mark a stale extent in the newly-opened file.
+    setSessionLayout({ citedPassage: citedPassageOf(source) });
+    const url = new URL(source.url!, window.location.origin);
+    navigate({ to: url.pathname as never, search: Object.fromEntries(url.searchParams) as never });
+  };
+
+  const handleInternalClick = onInternalCitationClick ? () => onInternalCitationClick(source) : navigateToInternal;
+
+  const handleClick = handleHostClick ?? (isInternal ? handleInternalClick : undefined);
 
   // When the host handles clicks, render as a button (no external navigation).
   const renderAsButton = isInternal || !!handleHostClick;
