@@ -8,7 +8,7 @@ import {
   ICompletionResponseChunk,
 } from '../backend';
 import { BaseBedrockBackend } from './base';
-import { ChatModels, ModelBackend, ModelInfo } from '@bike4mind/common';
+import type { ModelInfo } from '@bike4mind/common';
 
 interface JurassicChunk {
   completions: Array<{
@@ -39,46 +39,11 @@ export default class JurassicTwoBedrockBackend extends BaseBedrockBackend {
   }
 
   async getModelInfo(): Promise<ModelInfo[]> {
-    return [
-      {
-        id: ChatModels.JURASSIC2_ULTRA,
-        type: 'text' as const,
-        name: 'Jurassic-2 Ultra',
-        backend: ModelBackend.Bedrock,
-        contextWindow: 8192,
-        supportsImageVariation: false,
-        // Half the window, matching the GPT-4 row's 8192/4096 split. The full 8192 left
-        // context - output - buffer negative, which empties the prompt.
-        max_tokens: 4096,
-        can_stream: false,
-        pricing: {
-          4000: { input: 0.0188 / 1000, output: 0.0188 / 1000 }, // $0.0188 / 1,000 Input tokens, $0.0188 / 1,000 Output tokens. @see https://aws.amazon.com/bedrock/pricing/
-        },
-        supportsVision: false,
-        logoFile: 'AI21Labs.png',
-        rank: 50,
-        description:
-          "AI21 Labs' most powerful Jurassic-2 model with strong reasoning capabilities. Good for complex reasoning, creative tasks, and detailed analysis.",
-      },
-      {
-        id: ChatModels.JURASSIC2_MID,
-        type: 'text' as const,
-        name: 'Jurassic-2 Mid',
-        backend: ModelBackend.Bedrock,
-        contextWindow: 8192,
-        supportsImageVariation: false,
-        max_tokens: 4096,
-        can_stream: false,
-        pricing: {
-          4000: { input: 0.0125 / 1000, output: 0.0125 / 1000 }, // $0.0125 / 1,000 Input tokens, $0.0125 / 1,000 Output tokens. @see https://aws.amazon.com/bedrock/pricing/
-        },
-        supportsVision: false,
-        logoFile: 'AI21Labs.png',
-        rank: 51,
-        description:
-          "AI21 Labs' balanced Jurassic-2 model offering good performance at moderate cost. Great for everyday tasks and general content generation.",
-      },
-    ];
+    // AWS end-of-lifed ai21.j2-ultra-v1 and ai21.j2-mid-v1 on Bedrock; invoking them now fails with
+    // "The provided model identifier is invalid". Returning no models drops them from
+    // getAvailableModels() and so from every picker, the same way titan.ts retires its EOL models.
+    // The ChatModels enum members stay so persisted records that reference these ids still validate.
+    return [];
   }
 
   getPayload(
