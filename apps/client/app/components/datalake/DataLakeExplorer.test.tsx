@@ -10,7 +10,7 @@ import useSessionLayoutStore from '@client/app/hooks/useSessionLayout';
 // Real store (not mocked): the /new picker case below asserts against it directly, the same way
 // the deferred-creation seam (useCreateDataLakeSession) reads it back.
 import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
-import DataLakeExplorer from './DataLakeExplorer';
+import DataLakeExplorer, { buildLakePrefixLookup } from './DataLakeExplorer';
 
 // Browsing the tree must not mutate the chat on its own: writes come only from the row actions,
 // and an external-chat host must never have its `layout` touched. setSessionLayout is spied to
@@ -261,7 +261,10 @@ vi.mock('./DataLakeChatTree', () => ({
         data-drop-hint={props.dropHint ?? ''}
         data-segments={props.tree.map(n => n.segment).join(',')}
         data-error={String(!!props.isError)}
-        data-lake-label={props.lakeForPath?.(['acme', 'legal'])?.name ?? props.lakeForPath?.(['lakea'])?.name ?? ''}
+        data-lake-labels={JSON.stringify({
+          'acme:legal': props.lakeForPath?.(['acme', 'legal'])?.name ?? null,
+          lakea: props.lakeForPath?.(['lakea'])?.name ?? null,
+        })}
         data-lake-counts={JSON.stringify(props.lakeFileCounts ?? null)}
         data-uncategorized-count={props.uncategorized ? String(props.uncategorized.count) : ''}
         data-uncategorized-files={(props.uncategorized?.files ?? []).map(f => f.id).join(',')}
@@ -991,20 +994,62 @@ describe('DataLakeExplorer - honest empty states in chat mode (#1943)', () => {
       tagCountsState.lakeFileCounts = { 'datalake:legal': 2 };
       renderExplorer();
 
-      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-lake-label', 'Legal Vault');
+      expect(JSON.parse(screen.getByTestId('mock-tree').dataset.lakeLabels!)).toEqual({
+        'acme:legal': 'Legal Vault',
+        lakea: null,
+      });
       expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-lake-counts', '{"datalake:legal":2}');
     });
 
-    it('leaves a prefix shared by two accessible lakes unmapped', () => {
+    it('leaves a prefix shared by two accessible lakes unmapped while mapping a unique one', () => {
       lakesState.value = [
         { id: 'l1', name: 'Lake A', datalakeTag: 'datalake:a', fileTagPrefix: 'lakea:', canManage: true },
         { id: 'l2', name: 'Lake A Copy', datalakeTag: 'datalake:a2', fileTagPrefix: 'lakea', canManage: true },
+        { id: 'l3', name: 'Legal Vault', datalakeTag: 'datalake:legal', fileTagPrefix: 'acme:legal:', canManage: true },
       ];
-      tagCountsState.tagCounts = [{ tag: 'lakea:notes', count: 2 }];
-      tagCountsState.total = 2;
+      tagCountsState.tagCounts = [
+        { tag: 'lakea:notes', count: 2 },
+        { tag: 'acme:legal:nda', count: 1 },
+      ];
+      tagCountsState.total = 3;
       renderExplorer();
 
-      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-lake-label', '');
+      expect(JSON.parse(screen.getByTestId('mock-tree').dataset.lakeLabels!)).toEqual({
+        'acme:legal': 'Legal Vault',
+        lakea: null,
+      });
     });
+  });
+});
+
+describe('buildLakePrefixLookup', () => {
+  const lake = (name: string, datalakeTag: string, fileTagPrefix: string) => ({ name, datalakeTag, fileTagPrefix });
+  const entries = (m: Map<string, { name: string }>) => Object.fromEntries([...m].map(([k, v]) => [k, v.name]));
+
+  it('keys a lake by its normalized prefix path', () => {
+    expect(entries(buildLakePrefixLookup([lake('Legal Vault', 'datalake:legal', 'acme:legal:')]))).toEqual({
+      'acme:legal': 'Legal Vault',
+    });
+  });
+
+  it('omits a prefix two lakes hold, even when only one is in scope', () => {
+    const a = lake('A', 'datalake:a', 'shared:');
+    const b = lake('B', 'datalake:b', 'shared');
+    expect(entries(buildLakePrefixLookup([a, b]))).toEqual({});
+    expect(entries(buildLakePrefixLookup([a, b], [a]))).toEqual({});
+  });
+
+  it('omits a prefix that nests another lake, whose files sit under it', () => {
+    const outer = lake('Outer', 'datalake:outer', 'acme:');
+    const inner = lake('Inner', 'datalake:inner', 'acme:legal:');
+    expect(entries(buildLakePrefixLookup([outer, inner]))).toEqual({ 'acme:legal': 'Inner' });
+  });
+
+  it('maps only lakes in scope', () => {
+    const outer = lake('Outer', 'datalake:outer', 'acme:');
+    const inner = lake('Inner', 'datalake:inner', 'acme:legal:');
+    const other = lake('Other', 'datalake:other', 'zeta:');
+    expect(entries(buildLakePrefixLookup([outer, inner, other], [inner]))).toEqual({ 'acme:legal': 'Inner' });
+    expect(entries(buildLakePrefixLookup([outer, inner, other], [other]))).toEqual({ zeta: 'Other' });
   });
 });

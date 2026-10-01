@@ -105,11 +105,15 @@ interface DataLakeExplorerProps {
 const isFileDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types ?? []).includes('Files');
 
 type LakeLabel = { name: string; datalakeTag: string };
+type LakePrefixSource = LakeLabel & { fileTagPrefix: string };
 
-/** Normalized prefix path ('acme:legal') -> the lake that owns it. A prefix held by two or more
- *  accessible lakes is omitted so neither the name nor the member count is credited to the wrong one. */
+/** Normalized prefix path ('acme:legal') -> the in-scope lake that owns it. Ambiguity is judged
+ *  against EVERY accessible lake, so neither the name nor the member count is credited to the
+ *  wrong one: a prefix two lakes hold is omitted, and so is a (legacy) prefix that nests another
+ *  lake's, since that lake's files sit in its subtree too. */
 export function buildLakePrefixLookup(
-  lakes: readonly { name: string; datalakeTag: string; fileTagPrefix: string }[]
+  lakes: readonly LakePrefixSource[],
+  inScope: readonly LakePrefixSource[] = lakes
 ): Map<string, LakeLabel> {
   const byPath = new Map<string, LakeLabel | null>();
   for (const lake of lakes) {
@@ -117,8 +121,14 @@ export function buildLakePrefixLookup(
     if (!key) continue;
     byPath.set(key, byPath.has(key) ? null : { name: lake.name, datalakeTag: lake.datalakeTag });
   }
+  const scopedTags = new Set(inScope.map(l => l.datalakeTag));
+  const keys = [...byPath.keys()];
   const unique = new Map<string, LakeLabel>();
-  byPath.forEach((lake, key) => lake && unique.set(key, lake));
+  byPath.forEach((lake, key) => {
+    if (!lake || !scopedTags.has(lake.datalakeTag)) return;
+    if (keys.some(other => other.startsWith(`${key}:`))) return;
+    unique.set(key, lake);
+  });
   return unique;
 }
 
@@ -399,7 +409,10 @@ export default function DataLakeExplorer({
       ),
     [lakesInScope]
   );
-  const lakePrefixLookup = useMemo(() => buildLakePrefixLookup(lakes ?? []), [lakes]);
+  const lakePrefixLookup = useMemo(
+    () => buildLakePrefixLookup(lakes ?? [], selectedLakes.length > 0 ? selectedLakes : (lakes ?? [])),
+    [lakes, selectedLakes]
+  );
   const lakeForPath = useCallback((path: string[]) => lakePrefixLookup.get(path.join(':')), [lakePrefixLookup]);
 
   // Derive the current leaf tag from breadcrumb + tree state. A branch node (has children) can
