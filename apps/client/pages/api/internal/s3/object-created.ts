@@ -70,7 +70,7 @@ const handler = baseApi({ auth: false }).post(
       return res.status(401).json({ error: 'Invalid webhook secret' });
     }
 
-    // Keep in sync with server/s3/objectCreated.ts and appFileUploadComplete.ts.
+    // Must match the hosted fab-file skip list in server/s3/objectCreated.ts.
     const isSkippable = (key: string) =>
       key.includes('/backups/') ||
       key.startsWith('temp/') ||

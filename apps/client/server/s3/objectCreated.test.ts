@@ -59,8 +59,12 @@ vi.mock('sst', () => ({
 import { func } from './objectCreated';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() };
-const event = { Records: [{ s3: { object: { key: 'uploads/report.pdf', size: 10 } } }] };
-const run = () => (func as unknown as (e: unknown, c: unknown, l: unknown) => Promise<void>)(event, {}, logger);
+const run = (key = 'uploads/report.pdf') =>
+  (func as unknown as (e: unknown, c: unknown, l: unknown) => Promise<void>)(
+    { Records: [{ s3: { object: { key, size: 10 } } }] },
+    {},
+    logger
+  );
 
 const metadata = (over: Record<string, unknown> = {}) => ({
   id: 'ff1',
@@ -81,6 +85,25 @@ beforeEach(() => {
   h.getSettingsValue.mockResolvedValue(false);
   h.claimFileStatus.mockResolvedValue(true);
   h.incrementCounter.mockResolvedValue({ uploadedFiles: 1 });
+});
+
+describe('objectCreated - untracked-file skip list', () => {
+  it('skips a libreoncology/mock-oral/ object before any metadata lookup', async () => {
+    await run('libreoncology/mock-oral/scene-1/audio.mp3');
+
+    expect(h.findOne).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      'Skipping S3 event for untracked file: libreoncology/mock-oral/scene-1/audio.mp3'
+    );
+  });
+
+  it('still looks up a key that only shares the prefix text', async () => {
+    h.findOne.mockResolvedValue(null);
+
+    await run('libreoncology/mock-oral-archive/x');
+
+    expect(h.findOne).toHaveBeenCalledWith({ filePath: 'libreoncology/mock-oral-archive/x' });
+  });
 });
 
 describe('objectCreated - data lake stats (#1342)', () => {

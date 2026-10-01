@@ -125,12 +125,19 @@ describe('POST /api/internal/s3/object-created', () => {
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
-  it('skips LibreOncology mock-oral objects without a lookup', async () => {
+  it('skips libreoncology/mock-oral/ objects without a lookup, encoded segments included', async () => {
     const res = makeRes();
-    await handler(makeReq('secret-token', 'libreoncology/mock-oral/scene-1/audio.mp3'), res);
+    await handler(makeReq('secret-token', 'libreoncology/mock-oral/a%3Ab/scene-1/audio.mp3'), res);
     expect(findOneMock).not.toHaveBeenCalled();
     expect(sendToQueueMock).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('still looks up a key that only shares the mock-oral prefix text', async () => {
+    findOneMock.mockResolvedValue(null);
+    const res = makeRes();
+    await handler(makeReq('secret-token', 'libreoncology/mock-oral-archive/x'), res);
+    expect(findOneMock).toHaveBeenCalledWith({ filePath: 'libreoncology/mock-oral-archive/x' });
   });
 
   it('marks the file complete and enqueues chunking on the happy path', async () => {

@@ -29,8 +29,8 @@ export const func = withContext(async (event, context, logger) => {
 
     logger.updateMetadata({ objectKey });
 
-    // Skip files that intentionally have no FabFile metadata record.
-    // Keep in sync with appFileUploadComplete.ts skip list.
+    // Skip files that intentionally have no FabFile metadata record. Must match isSkippable in
+    // pages/api/internal/s3/object-created.ts, the self-host path for this bucket.
     if (
       objectKey.includes('/backups/') ||
       objectKey.startsWith('temp/') ||
