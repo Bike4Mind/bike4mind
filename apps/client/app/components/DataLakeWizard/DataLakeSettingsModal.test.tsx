@@ -468,7 +468,7 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
     // named as NOT reached by default, but the copy now also points at the opt-in toggle rather
     // than stating a flat exclusion.
     expect(help).toHaveTextContent(
-      /users given read-only access by tag, entitlement, or a reader grant don't get them unless you turn on "apply to readers"/i
+      /users given read-only access by tag or entitlement don't get them unless you turn on "apply to readers"\. users with only a reader grant never get them/i
     );
   });
 

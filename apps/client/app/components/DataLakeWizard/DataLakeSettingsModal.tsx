@@ -510,7 +510,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
             data-testid="datalake-systemprompt-input"
           />
           <FormHelperText data-testid="datalake-systemprompt-help">
-            {`Extra instructions added to answers on turns that pull content from this lake, and never on turns that don't use it. They reach you, anyone holding an owner or curator grant on this lake, members of its organization, and a manager testing it in a scoped session. Users given read-only access by tag, entitlement, or a reader grant don't get them unless you turn on "Apply to readers". Your organization's prompt stays authoritative on conflict. Only people who can manage this lake can read this text.${
+            {`Extra instructions added to answers on turns that pull content from this lake, and never on turns that don't use it. They reach you, anyone holding an owner or curator grant on this lake, members of its organization, and a manager testing it in a scoped session. Users given read-only access by tag or entitlement don't get them unless you turn on "Apply to readers". Users with only a reader grant never get them. Your organization's prompt stays authoritative on conflict. Only people who can manage this lake can read this text.${
               // Count what SAVE will persist (trimmed), not the raw field contents.
               systemPrompt.trim() ? ` (${systemPrompt.trim().length} characters)` : ''
             }`}
