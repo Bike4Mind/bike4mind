@@ -112,7 +112,8 @@ describe('buildOpenApiDocument', () => {
     // dropping it silently narrows /api/chat's published spec and generated SDKs
     // stop modelling the missing-credential / under-scoped-key paths.
     expect(chat.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
-    expect(chat.responses['403'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
+    // The scope 403 extends the envelope with the route's required scopes (apiKeyAuth.ts).
+    expect(chat.responses['403'].content['application/json'].schema).toEqual(ref('ScopeForbiddenResponse'));
     // Streaming completions opens the stream first, so auth/scope failures are
     // in-band SSE events - it must NOT declare HTTP 401/403 even though it is
     // authenticated and scoped.

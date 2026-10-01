@@ -366,6 +366,39 @@
           "tracking_info"
         ]
       },
+      "ScopeForbiddenResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route accepts. Holding any one of them satisfies it."
+          },
+          "also_required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "sendChatMessageRequest": {
         "type": "object",
         "properties": {
@@ -3846,7 +3879,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -4203,7 +4236,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -4615,7 +4648,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -4929,7 +4962,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -5512,7 +5545,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -5971,7 +6004,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -6376,7 +6409,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -6668,7 +6701,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -6867,7 +6900,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -7174,7 +7207,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -7476,7 +7509,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -7725,7 +7758,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -8117,7 +8150,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -8476,7 +8509,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },

@@ -113,7 +113,11 @@ const handler = baseApi().put(
       // middleware here would pull the whole auth/ability/model chain into a route that
       // needs one field off the request.
       if (req.apiKeyInfo && !req.apiKeyInfo.scopes.includes(ApiKeyScope.ADMIN)) {
-        return res.status(403).json({ error: 'Insufficient API key permissions' });
+        return res.status(403).json({
+          error: 'Insufficient API key permissions',
+          required_scopes: [ApiKeyScope.ADMIN],
+          request_id: req.requestId,
+        });
       }
 
       // Parse with the admin schema -- includes email, isAdmin, tags, credits, etc.

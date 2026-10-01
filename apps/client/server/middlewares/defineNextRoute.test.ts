@@ -193,6 +193,10 @@ describe('nextRouteForContract', () => {
       await route(req, res);
       expect(res._getStatusCode()).toBe(403);
       expect(handlerFn).not.toHaveBeenCalled();
+      // Names the scope the route needs, never the one the key holds.
+      const body = res._getJSONData();
+      expect(body.required_scopes).toEqual([ApiKeyScope.AI_CHAT]);
+      expect(JSON.stringify(body)).not.toContain(ApiKeyScope.READ_FILES);
     });
   });
 
@@ -249,16 +253,29 @@ describe('nextRouteForContract', () => {
       expect(seen).toEqual({ message: 'hi', count: 1 });
     });
 
-    it('404s a method the contract does not declare, rather than 422ing it', async () => {
-      // A `use`-mounted validator matches EVERY method, so GET would be validated and
-      // rejected as a bad POST body instead of falling through to next-connect's
-      // no-match 404. The body here is deliberately invalid: with a valid one both
-      // orderings end in 404 and the test would prove nothing.
+    it('405s a method the contract does not declare, with an Allow header', async () => {
+      // The body is deliberately invalid: a validator reached on GET would 422 instead.
       validKey([ApiKeyScope.AI_CHAT]);
       const route = nextRouteForContract(makeContract()).post((_req, res) => res.status(200).json({ ok: true }));
       const { req, res } = fire({ method: 'GET', apiKey: 'b4m_live_key', body: {} });
       await route(req, res);
-      expect(res._getStatusCode()).toBe(404);
+      expect(res._getStatusCode()).toBe(405);
+      expect(res.getHeader('Allow')).toBe('POST');
+      expect(res._getJSONData()).toEqual(expect.objectContaining({ error: expect.stringContaining('GET') }));
+    });
+
+    it('405s a wrong method before the scope gate can misreport it as a 403', async () => {
+      // An under-scoped key on the declared method is a 403 (see 'scopes' above); on an
+      // undeclared method the route has nothing to authorize, so the verb answer wins.
+      validKey([ApiKeyScope.READ_FILES]);
+      const handlerFn = vi.fn();
+      const route = nextRouteForContract(makeContract()).post(handlerFn);
+      const { req, res } = fire({ method: 'DELETE', apiKey: 'b4m_live_key' });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(405);
+      expect(handlerFn).not.toHaveBeenCalled();
+      // Load-bearing: the guard runs ahead of apiKeyAuth, not merely ahead of the handler.
+      expect(mockValidate).not.toHaveBeenCalled();
     });
   });
 

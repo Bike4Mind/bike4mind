@@ -5,7 +5,7 @@ import { SECURITY_REQUIREMENT, JWT_SECURITY_REQUIREMENT } from './security';
 import { ErrorResponse, DEPRECATED_NAME_METADATA } from './schemas';
 // Specific file, not the barrel (`../schemas`): the barrel re-exports actions.ts,
 // which imports @bike4mind/hearth - absent in the install-only CI openapi job.
-import { ApiErrorSchema } from '../schemas/chat';
+import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../schemas/chat';
 import type { EndpointContract } from '../api-contract';
 
 type ContractSchema = z.ZodTypeAny | { type: 'string'; contentEncoding: 'binary' };
@@ -42,6 +42,9 @@ function annotateInheritedName(schema: z.ZodTypeAny): z.ZodTypeAny {
   if (!inherited || inherited !== ApiErrorSchema.shape.name || !objectSchema.extend) return schema;
   return objectSchema.extend({ name: inherited.openapi(DEPRECATED_NAME_METADATA) });
 }
+
+/** The auto-injected scope 403's body: one shared component, $ref'd by every operation. */
+const SCOPE_FORBIDDEN_RESPONSE = annotateInheritedName(ScopeForbiddenErrorSchema).openapi('ScopeForbiddenResponse');
 
 /**
  * zod-to-openapi derives a parameter's `required`/nullable-ness from
@@ -207,7 +210,7 @@ export function registerContract(contract: EndpointContract): void {
     if (contract.scopes?.length && !responses['403']) {
       responses['403'] = {
         description: 'The API key does not hold any of the required scopes.',
-        content: { 'application/json': { schema: ErrorResponse } },
+        content: { 'application/json': { schema: SCOPE_FORBIDDEN_RESPONSE } },
       };
     }
   }

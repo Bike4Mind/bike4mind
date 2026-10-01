@@ -185,6 +185,7 @@ describe('PUT /api/users/:id/update - admin branch requires the admin scope', ()
     await promise;
 
     expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toEqual(expect.objectContaining({ required_scopes: [ApiKeyScope.ADMIN] }));
     expect(mockAdminUpdateUser).not.toHaveBeenCalled();
   });
 

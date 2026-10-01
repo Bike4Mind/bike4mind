@@ -8,7 +8,7 @@ import { apiKeyAnomalyDetection } from '@server/middlewares/apiKeyAnomalyDetecti
 import { apiKeyRateLimit } from '@server/middlewares/apiKeyRateLimit';
 import { analyticsMiddleware } from '@server/analytics/analyticsMiddleware';
 import { connectDB } from '@bike4mind/database';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, MethodNotAllowedError } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import nc from 'next-connect';
 import { Config, isDevelopment } from '@server/utils/config';
@@ -74,6 +74,13 @@ interface BaseAPIOptions {
    * who may call the route. Defaults to false.
    */
   meterAsKeyManagement?: boolean;
+  /**
+   * HTTP methods this route serves. When set, any other method is answered 405 with an
+   * `Allow` header AHEAD of the auth chain, so a wrong verb is never misreported as a
+   * missing credential or scope. Omit to leave method matching to next-connect, whose
+   * no-match answer is a 404 that only fires after auth has already run.
+   */
+  allowedMethods?: readonly string[];
 }
 
 /** Default max body size: 1MB - prevents memory exhaustion from large payloads */
@@ -137,6 +144,19 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     res.on('close', emit);
     next();
   });
+
+  // After logging (so the 405 body carries request_id), before the DB connect and every
+  // auth middleware.
+  const { allowedMethods } = resolvedOptions;
+  if (allowedMethods) {
+    const allowed = allowedMethods.map(method => method.toUpperCase());
+    const allowHeader = allowed.join(', ');
+    router.use((req, res, next) => {
+      if (allowed.includes(req.method ?? '')) return next();
+      res.setHeader('Allow', allowHeader);
+      throw new MethodNotAllowedError(`Method ${req.method} is not allowed. Allowed: ${allowHeader}`);
+    });
+  }
 
   // Check request body size to prevent memory exhaustion
   router.use((req, res, next) => {
