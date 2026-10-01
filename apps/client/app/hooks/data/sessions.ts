@@ -31,6 +31,7 @@ import {
   ISessionDocument,
   ISessionFavoriteItem,
   FavoriteDocumentType,
+  SessionListFilters,
 } from '@bike4mind/common';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useSessions, useWorkBenchFiles } from '@client/app/contexts/SessionsContext';
@@ -70,12 +71,19 @@ export function useDeleteAllSessions(options: { onSuccess?: () => void } = {}) {
 }
 
 export const OWN_SESSIONS_LIMIT = 20;
-export function useGetOwnSessions(search: string = '', surface?: string) {
+/**
+ * Query-key suffix for server-side list filters: empty when none is set, so the default list keeps
+ * its existing key (other code reads and writes it by that exact shape).
+ */
+const listFiltersKey = (filters?: SessionListFilters) => (filters ? [filters] : []);
+
+export function useGetOwnSessions(search: string = '', surface?: string, filters?: SessionListFilters) {
   const { currentUser } = useUser();
   const queryClient = useQueryClient();
+  const queryKey = ['sessions', 'own', search, surface ?? '', ...listFiltersKey(filters)];
 
   return useInfiniteQuery({
-    queryKey: ['sessions', 'own', search, surface ?? ''],
+    queryKey,
     initialPageParam: { page: 1 },
     queryFn: async params => {
       const { page = 1 } = params.pageParam || {};
@@ -85,6 +93,7 @@ export function useGetOwnSessions(search: string = '', surface?: string) {
           limit: OWN_SESSIONS_LIMIT,
         },
         surface,
+        filters,
       });
 
       result.data.forEach(session => {
@@ -108,18 +117,15 @@ export function useGetOwnSessions(search: string = '', surface?: string) {
     // Mirrors useGetSharedSessions. The initial cold fetch (no cached data) still
     // runs once - refetchOnMount only governs refetch of EXISTING data.
     refetchOnMount: () => {
-      queryClient.setQueryData<InfiniteData<{ data: ISessionDocument[]; hasMore: boolean }>>(
-        ['sessions', 'own', search, surface ?? ''],
-        data => {
-          if (!data) {
-            return;
-          }
-          return {
-            pages: data.pages.slice(0, 1),
-            pageParams: data.pageParams.slice(0, 1),
-          };
+      queryClient.setQueryData<InfiniteData<{ data: ISessionDocument[]; hasMore: boolean }>>(queryKey, data => {
+        if (!data) {
+          return;
         }
-      );
+        return {
+          pages: data.pages.slice(0, 1),
+          pageParams: data.pageParams.slice(0, 1),
+        };
+      });
       return false;
     },
     // Keep the sidebar list cached briefly so it doesn't refetch on every
@@ -130,15 +136,16 @@ export function useGetOwnSessions(search: string = '', surface?: string) {
   });
 }
 
-export function useGetSharedSessions(search?: string) {
+export function useGetSharedSessions(search?: string, filters?: SessionListFilters) {
   const queryClient = useQueryClient();
   const { currentUser } = useUser();
+  const queryKey = ['sessions', 'shared', search, ...listFiltersKey(filters)];
 
   // Set true to use mock data for shared-notebooks UI testing
   const USE_MOCK_SHARED_NOTEBOOKS = false;
 
   return useInfiniteQuery({
-    queryKey: ['sessions', 'shared', search],
+    queryKey,
     initialPageParam: { page: 1 },
     queryFn: async params => {
       const { page = 1 } = params.pageParam || {};
@@ -162,6 +169,7 @@ export function useGetSharedSessions(search?: string) {
           page,
           limit: 10,
         },
+        filters,
       });
 
       result.data.forEach(session => {
@@ -171,19 +179,16 @@ export function useGetSharedSessions(search?: string) {
       return result;
     },
     refetchOnMount: () => {
-      queryClient.setQueryData<InfiniteData<{ data: ISessionDocument[]; hasMore: boolean }>>(
-        ['sessions', 'shared', search],
-        data => {
-          if (!data) {
-            return;
-          }
-
-          return {
-            pages: data.pages.slice(0, 1),
-            pageParams: data.pageParams.slice(0, 1),
-          };
+      queryClient.setQueryData<InfiniteData<{ data: ISessionDocument[]; hasMore: boolean }>>(queryKey, data => {
+        if (!data) {
+          return;
         }
-      );
+
+        return {
+          pages: data.pages.slice(0, 1),
+          pageParams: data.pageParams.slice(0, 1),
+        };
+      });
 
       return false;
     },
