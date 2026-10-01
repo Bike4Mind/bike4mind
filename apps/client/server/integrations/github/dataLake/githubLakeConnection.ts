@@ -1,10 +1,5 @@
 import type { Response } from 'express';
-import {
-  dataLakeRepository,
-  fabFileRepository,
-  orgGitHubLakeConnectionRepository,
-  orgGoogleDriveConnectionRepository,
-} from '@bike4mind/database';
+import { dataLakeRepository, fabFileRepository, orgGitHubLakeConnectionRepository } from '@bike4mind/database';
 import {
   acceptsConnectorContent,
   isLakeIngestable,
@@ -16,6 +11,7 @@ import { Logger } from '@bike4mind/observability';
 import { createStateToken, verifyStateToken, type BaseStatePayload } from '@server/auth/jwtStateStore';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { assertLakeConnectorFree } from '@server/dataLakes/assertLakeConnectorFree';
 import {
   purgeConnectionIngestedFiles,
   type PurgeConnectionLogger,
@@ -107,17 +103,7 @@ export async function resolveConnectableLake(user: LakeUser, dataLakeId: string)
       `"${lake.name}" is curated. Change its origin to connector-fed in the lake's settings before connecting a GitHub repository.`
     );
   }
-  // One source per lake: a lake is fed by a single connector.
-  const [gitHubConnection, driveConnection] = await Promise.all([
-    orgGitHubLakeConnectionRepository.findByDataLakeIdAny(lake.id),
-    orgGoogleDriveConnectionRepository.findByDataLakeIdAny(lake.id),
-  ]);
-  if (gitHubConnection) {
-    throw new ConflictError('This data lake is already connected to a GitHub repository');
-  }
-  if (driveConnection) {
-    throw new ConflictError('This data lake is already connected to a Google Drive folder');
-  }
+  await assertLakeConnectorFree(lake.id, ['github', 'googleDrive']);
   return { lakeId: lake.id, organizationId: lake.organizationId };
 }
 

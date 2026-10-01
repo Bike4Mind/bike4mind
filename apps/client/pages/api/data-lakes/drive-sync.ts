@@ -4,6 +4,7 @@ import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeRepository, orgGoogleDriveConnectionRepository, User } from '@bike4mind/database';
 import { acceptsConnectorContent, isLakeIngestable } from '@bike4mind/common';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { assertLakeConnectorFree } from '@server/dataLakes/assertLakeConnectorFree';
 import {
   isValidDriveFolderId,
   createDriveClient,
@@ -108,6 +109,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
         `"${lake.name}" is curated. Change its origin to connector-fed in the lake's settings before connecting a Drive folder.`
       );
     }
+
+    // Same placement rationale again. Not gated on EnableDataLakeGitHub: with that flag off the client
+    // cannot see a bound repository, so this is the only thing stopping a second connector.
+    await assertLakeConnectorFree(lake.id, ['github']);
 
     const oauthRefreshToken = await captureOrgCredential(req.user.id);
 

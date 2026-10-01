@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
   getValidUserDriveAccessToken: vi.fn(),
   createDriveClient: vi.fn(),
   getFolderAccess: vi.fn(),
+  ghConnFindByDataLakeIdAny: vi.fn(),
+  gatedFlags: [] as string[],
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -30,7 +32,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+// Records which flags the route gates on, so a test can pin that the GitHub flag is not one of them.
+vi.mock('@server/middlewares/featureFlag', () => ({
+  requireFeatureEnabled: (flag: string) => (h.gatedFlags.push(flag), () => {}),
+}));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
 vi.mock('@server/integrations/google/drive/common', () => ({
   getValidUserDriveAccessToken: h.getValidUserDriveAccessToken,
@@ -50,6 +55,10 @@ vi.mock('@bike4mind/database', async importOriginal => {
     ...actual,
     dataLakeRepository: { ...actual.dataLakeRepository, findById: h.dlFindById },
     User: { findById: h.userFindById },
+    orgGitHubLakeConnectionRepository: {
+      ...actual.orgGitHubLakeConnectionRepository,
+      findByDataLakeIdAny: h.ghConnFindByDataLakeIdAny,
+    },
     orgGoogleDriveConnectionRepository: {
       ...actual.orgGoogleDriveConnectionRepository,
       findByDriveFolderId: h.connFindByDriveFolderId,
@@ -90,6 +99,7 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     h.getValidUserDriveAccessToken.mockResolvedValue('user-access-token');
     h.createDriveClient.mockReturnValue({});
     h.getFolderAccess.mockResolvedValue({ ok: true, exists: true, isFolder: true, canRead: true });
+    h.ghConnFindByDataLakeIdAny.mockResolvedValue(null);
   });
 
   it('captures the org-owned credential on the connection and enqueues ingest', async () => {
@@ -227,6 +237,26 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     h.dlFindById.mockResolvedValue(null);
     const { res } = makeRes();
     await expect(run(makeReq({ dataLakeId: 'nope', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(/not found/i);
+  });
+
+  it('409s a lake a GitHub repository already feeds, before any Drive call or claim', async () => {
+    h.ghConnFindByDataLakeIdAny.mockResolvedValue({ id: 'gh1', targetDataLakeId: 'lake1' });
+    const { res } = makeRes();
+    await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringMatching(/already connected to a GitHub repository/i),
+    });
+    expect(h.ghConnFindByDataLakeIdAny).toHaveBeenCalledWith('lake1');
+    expect(h.userFindById).not.toHaveBeenCalled();
+    expect(h.getFolderAccess).not.toHaveBeenCalled();
+    expect(h.connFindByDriveFolderId).not.toHaveBeenCalled();
+    expect(h.connCreate).not.toHaveBeenCalled();
+  });
+
+  it('enforces one connector per lake whatever EnableDataLakeGitHub is set to', () => {
+    // The route gates on EnableDataLakes alone, so the GitHub flag (off or on) cannot switch the check
+    // above off - with it off the client cannot see the bound repository, so this route is the guard.
+    expect(h.gatedFlags).toEqual(['EnableDataLakes']);
   });
 
   it('409s when the folder is already claimed by a different lake', async () => {
