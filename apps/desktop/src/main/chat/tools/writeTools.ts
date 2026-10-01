@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import type { ChatDiff } from '@shared/chat';
 import { buildDiff, diffLines, splitLines, summarizeDiff } from './diff';
 import { isWithin, PathAccessDenied, realpathNearest, resolveWithinRoots } from './paths';
+import { recordRecentFile } from './recentFiles';
 import { credentialPaths } from './sandbox';
 import { requireString, type ApprovalPrompt, type ToolContext, type ToolDefinition } from './types';
 
@@ -892,6 +893,7 @@ async function applyPlan(plan: WritePlan, context: ToolContext): Promise<string>
   await writeFile(plan.target, plan.after, 'utf8');
   recordOwnWrite(plan.target, fingerprint(plan.state.exists, plan.state.content), fingerprint(true, plan.after));
   approvedState.delete(plan.key);
+  recordRecentFile(context, plan.target);
 
   // AFTER the write, deliberately: everything above can throw - a revoked root, a stale
   // approval, a stopped turn - and a transcript row showing a diff for a write that never

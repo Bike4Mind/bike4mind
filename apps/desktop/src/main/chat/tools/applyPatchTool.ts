@@ -1,9 +1,10 @@
-import { mkdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative } from 'node:path';
 import type { ChatDiff } from '@shared/chat';
 import { buildDiff } from './diff';
-import { applyChunks, parsePatch, PatchParseError, type MatchLevel, type PatchOp } from './patch';
+import { applyChunks, parsePatch, PatchParseError, type MatchLevel, type OtherFile, type PatchOp } from './patch';
 import { realpathNearest } from './paths';
+import { recentFiles, recordRecentFile } from './recentFiles';
 import type { ApprovalPrompt, ToolContext, ToolDefinition } from './types';
 import {
   assertNoControlCharacters,
@@ -23,6 +24,27 @@ import {
 
 const MAX_PATCH_FILES = 100;
 const MAX_SNIPPET_FILES = 8;
+const MAX_HINT_FILES = 6;
+const MAX_HINT_FILE_BYTES = 300_000;
+
+/** Files the session already read or wrote, for naming the one a misplaced hunk came from. */
+async function loadOtherFiles(target: string, context: ToolContext): Promise<OtherFile[]> {
+  const others: OtherFile[] = [];
+  for (const path of recentFiles(context)) {
+    if (others.length >= MAX_HINT_FILES) break;
+    if (path === target) continue;
+    try {
+      const info = await stat(path);
+      if (!info.isFile() || info.size > MAX_HINT_FILE_BYTES) continue;
+      const text = await readFile(path, 'utf8');
+      if (text.includes('\u0000')) continue;
+      others.push({ display: displayPath(path, context), lines: splitText(text).lines });
+    } catch {
+      // Deleted or unreadable since it was recorded; it just cannot be suggested.
+    }
+  }
+  return others;
+}
 
 interface ResolvedOp {
   op: PatchOp;
@@ -220,7 +242,11 @@ async function planPatch(resolved: readonly ResolvedOp[], context: ToolContext):
     }
 
     const split = splitText(entry.content);
-    const applied = applyChunks(split.lines, op.chunks);
+    let applied = applyChunks(split.lines, op.chunks);
+    if (applied.failures.length > 0) {
+      const others = await loadOtherFiles(target, context);
+      if (others.length > 0) applied = applyChunks(split.lines, op.chunks, others);
+    }
     if (applied.failures.length > 0) {
       for (const failure of applied.failures) problems.push(`${display}, ${failure.message}`);
       continue;
@@ -422,6 +448,7 @@ async function runPatch(input: Record<string, unknown>, context: ToolContext): P
     if (context.signal.aborted) throw new Error('The turn was stopped before this change was written.');
 
     await writeChanges(plan);
+    for (const change of plan.changes) if (change.status !== 'D') recordRecentFile(context, change.to);
 
     for (const change of plan.changes) {
       const source = plan.disk.get(change.from);

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { ChatDiff } from '@shared/chat';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { applyPatch, usesApplyPatch } from './applyPatchTool';
+import { fileRead } from './fileTools';
 import { PathAccessDenied } from './paths';
 import type { ToolContext, ToolReporter } from './types';
 
@@ -67,6 +68,38 @@ describe('apply_patch', () => {
     expect(caught).toBeInstanceOf(Error);
     return (caught as Error).message;
   };
+
+  describe('misplaced hunks', () => {
+    const hunk = (path: string) =>
+      wrap(
+        `*** Update File: ${path}`,
+        '@@',
+        ' export function Chat() {',
+        '-  return explorerOnlyHelper(deepLinkTarget);',
+        '+  return null;'
+      );
+
+    beforeEach(async () => {
+      await writeFile(file('Chat.tsx'), 'export function Chat() {\n  return null;\n}\n');
+      await writeFile(
+        file('Explorer.tsx'),
+        'export function Chat() {\n  return explorerOnlyHelper(deepLinkTarget);\n}\n'
+      );
+      context = { ...context, sessionId: 'hint-session' };
+    });
+
+    it('names a file the session already read', async () => {
+      await fileRead.run({ path: file('Explorer.tsx') }, context);
+      expect(await failure(hunk('Chat.tsx'))).toContain(
+        'These lines are in Explorer.tsx; did you mean to patch that file?'
+      );
+    });
+
+    it('stays quiet about files the session never touched', async () => {
+      context = { ...context, sessionId: 'other-session' };
+      expect(await failure(hunk('Chat.tsx'))).not.toContain('did you mean');
+    });
+  });
 
   describe('operations', () => {
     it('adds, updates, moves and deletes in one patch, and summarises each file', async () => {

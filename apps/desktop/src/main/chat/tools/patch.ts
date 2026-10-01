@@ -282,8 +282,44 @@ function excerpt(lines: readonly string[], from: number, count: number): string 
     .join('\n');
 }
 
+/** A file the session already knows, offered as the likely home of a hunk that missed. */
+export interface OtherFile {
+  display: string;
+  lines: readonly string[];
+}
+
+// Statements so common that one matching says nothing about which file a hunk belongs to.
+const GENERIC_LINE =
+  /^(?:use\w+\(\(\) => \{|return(?: \(|;)?|\} else(?: if \(.*\))? \{|\} catch(?: \(\w+\))? \{|\} finally \{|try \{|else \{|break;|continue;|export default \w+;?)$/;
+
+function isDistinctive(line: string): boolean {
+  const text = line.trim();
+  return text.length >= 12 && /[A-Za-z0-9]/.test(text) && !GENERIC_LINE.test(text);
+}
+
+/** The one other file the hunk's own lines point to, or none when it is unclear or absent. */
+function findHome(
+  expected: readonly string[],
+  others: readonly OtherFile[],
+  wholeHunkOnly = false
+): string | undefined {
+  const distinctive = expected.filter(isDistinctive);
+  if (distinctive.length === 0) return undefined;
+  const homes = others.filter(
+    other =>
+      seekSequence(other.lines, expected, 0) !== null ||
+      (!wholeHunkOnly && distinctive.every(line => lineNumbers(other.lines, line).length > 0))
+  );
+  return homes.length === 1 ? homes[0].display : undefined;
+}
+
 /** Where the lines a hunk expected sit nearest to, so one retry can correct the hunk. */
-function describeMiss(lines: readonly string[], expected: readonly string[], from: number): string {
+function describeMiss(
+  lines: readonly string[],
+  expected: readonly string[],
+  from: number,
+  others: readonly OtherFile[] = []
+): string {
   const searched = from > 0 ? ` at or after line ${from + 1}` : '';
   const header = `could not find these lines${searched}:\n${quote(expected)}`;
 
@@ -295,18 +331,48 @@ function describeMiss(lines: readonly string[], expected: readonly string[], fro
     const ahead = hits.find(index => index >= from);
     if (ahead !== undefined) {
       const first = offset === 0;
+      const home = findHome(expected, others, true);
+      const homeHint = home ? `\nThese lines are in ${home}; did you mean to patch that file?` : '';
       return (
         `${header}\nThe nearest match is ${first ? 'its first line' : `its line ${offset + 1}`} at line ${ahead + 1}, ` +
-        `but the lines around it differ. The file has:\n${excerpt(lines, Math.max(0, ahead - offset), Math.min(expected.length, MAX_QUOTED_LINES))}`
+        `but the lines around it differ. The file has:\n${excerpt(lines, Math.max(0, ahead - offset), Math.min(expected.length, MAX_QUOTED_LINES))}${homeHint}`
       );
     }
+  }
+
+  const earlier = earlierEvidence(lines, expected, from);
+  if (earlier) {
     return (
-      `${header}\nIts ${offset === 0 ? 'first line' : `line ${offset + 1}`} appears only at line ${hits[0] + 1}, before ` +
+      `${header}\nIts ${earlier.offset === 0 ? 'first line' : `line ${earlier.offset + 1}`} appears only at line ${earlier.line + 1}, before ` +
       `where the previous hunk ended (line ${from}). Hunks are matched in file order, so put this one ` +
       'earlier in the patch, or include enough context to reach it.'
     );
   }
+
+  const home = findHome(expected, others);
+  if (home) return `${header}\nThese lines are in ${home}; did you mean to patch that file?`;
   return `${header}\nNone of those lines appear in the file; read it again before patching.`;
+}
+
+/**
+ * Proof that a hunk sits before the previous one: the whole hunk matches there, or a distinctive
+ * line occurs once in the file and only there. A lone `useEffect(() => {` proves nothing.
+ */
+function earlierEvidence(
+  lines: readonly string[],
+  expected: readonly string[],
+  from: number
+): { offset: number; line: number } | undefined {
+  if (!expected.some(isDistinctive)) return undefined;
+  const whole = seekSequence(lines, expected, 0);
+  if (whole && whole.index < from) return { offset: 0, line: whole.index };
+
+  for (const [offset, line] of expected.entries()) {
+    if (!isDistinctive(line)) continue;
+    const hits = lineNumbers(lines, line);
+    if (hits.length === 1 && hits[0] < from) return { offset, line: hits[0] };
+  }
+  return undefined;
 }
 
 /**
@@ -334,7 +400,11 @@ type Replacement = { start: number; length: number; lines: string[] };
  *
  * `lines` is meaningful only when `failures` is empty.
  */
-export function applyChunks(fileLines: readonly string[], chunks: readonly PatchChunk[]): AppliedChunks {
+export function applyChunks(
+  fileLines: readonly string[],
+  chunks: readonly PatchChunk[],
+  others: readonly OtherFile[] = []
+): AppliedChunks {
   const replacements: Replacement[] = [];
   const failures: ChunkFailure[] = [];
   let loosest = 0;
@@ -373,7 +443,7 @@ export function applyChunks(fileLines: readonly string[], chunks: readonly Patch
     }
 
     if (!found) {
-      failures.push({ hunk, message: `${label}: ${describeMiss(fileLines, chunk.oldLines, from)}` });
+      failures.push({ hunk, message: `${label}: ${describeMiss(fileLines, chunk.oldLines, from, others)}` });
       return;
     }
     note(found.level);
