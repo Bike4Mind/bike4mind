@@ -98,7 +98,7 @@ function NonServingLakeNotice({ status, lakeId }: { status: DataLakeStatus | und
       color="warning"
       variant="soft"
       startDecorator={<ErrorOutlineIcon />}
-      sx={{ maxWidth: 440, textAlign: 'left' }}
+      sx={{ maxWidth: 470, textAlign: 'left' }}
       data-testid="wizard-lake-not-serving"
     >
       <Box>
