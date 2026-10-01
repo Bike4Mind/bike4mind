@@ -87,6 +87,15 @@ describe('promoteInlineLatexDollars', () => {
         'Then\n$$x = 1$$ and $$y = 2$$\ndone',
       ],
       ['bracket with a subscript', 'where \\[a_1\\] is', 'where $$a_1$$ is'],
+      ['padded equation', 'so \\[ x = 1 \\] holds', 'so $$x = 1$$ holds'],
+      ['padded sum of squares', 'so \\[ x^2 + y^2 = r^2 \\] holds', 'so $$x^2 + y^2 = r^2$$ holds'],
+      ['padded subscript equation', 'so \\[ a_1 = b \\] holds', 'so $$a_1 = b$$ holds'],
+      ['escaped star in an exponent', 'so \\[ x^\\* \\] holds', 'so $$x^*$$ holds'],
+      ['escaped star in a product', 'so \\[ a\\*b = c \\] holds', 'so $$a*b = c$$ holds'],
+      ['escaped star on its own line', '\\[ a\\*b = c \\]', '$$\na*b = c\n$$'],
+      ['escaped backslash before a star is kept', 'so \\( a \\\\*b \\) holds', 'so $$a \\\\*b$$ holds'],
+      ['span touching a dollar span', '$x$\\(y^2\\)', '$$x$$ $$y^2$$'],
+      ['two adjacent paren spans', '\\(a^2\\)\\(b^2\\)', '$$a^2$$ $$b^2$$'],
     ])('%s', (_label, input, expected) => {
       expect(promoteInlineLatexDollars(input)).toBe(expected);
     });
@@ -110,12 +119,18 @@ describe('promoteInlineLatexDollars', () => {
       ['escaped single letter on its own line', '\\[a\\]'],
       ['own-line escaped brackets with prose between', '\\[a\\] see note (1)\n\\[b\\]'],
       ['blockquote block with a lazy-continuation line', '> \\[\nx^2\n> \\]\nafter'],
+      ['escaped sample size', 'Results \\[n = 30\\] were'],
+      ['escaped note with a colon on its own line', '\\[Note: n = 30 participants\\]'],
+      ['escaped exponent', '\\[2^n\\] ways'],
+      ['escaped update with a colon', '\\[Update: x = 5\\]'],
+      ['escaped equality with no padding', 'See \\[a=b\\] here'],
+      ['escaped star with no math evidence', 'Use \\[foo\\*\\]'],
     ])('leaves %s alone', (_label, text) => {
       expect(promoteInlineLatexDollars(text)).toBe(text);
     });
 
     it('treats a bracket right after inline code as mid-line', () => {
-      expect(promoteInlineLatexDollars('`f` \\[x^2\\] `g`')).toBe('`f` $$x^2$$ `g`');
+      expect(promoteInlineLatexDollars('`f` \\[ x^2 \\] `g`')).toBe('`f` $$x^2$$ `g`');
     });
 
     it('does not re-promote its own $$ output as a single-dollar span', () => {

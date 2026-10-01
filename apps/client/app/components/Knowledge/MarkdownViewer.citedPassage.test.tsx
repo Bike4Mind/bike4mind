@@ -215,8 +215,8 @@ describe('MarkdownViewer cited-passage anchor (#3038)', () => {
   });
 
   it('marks the right block after LaTeX bracket delimiters are rewritten', () => {
-    // The cited passage holds `\( \)`, which the viewer rewrites in the document, so this only
-    // passes if the passage gets the same rewrite before it is located.
+    // Regression guard: the cited passage holds `\( \)`, which the viewer rewrites in the document,
+    // so the passage must keep going through the same rewrite or it can no longer be located.
     const doc = [
       'Holidays accrue monthly.',
       '',
