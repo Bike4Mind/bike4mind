@@ -775,8 +775,8 @@ export const RetrievalSummarySchema = z.object({
    * neither its own gate/entitlement nor an ownership or grant exception for it. A lake the caller
    * could not see is never counted, so the count cannot confirm that a guessed lake tag exists.
    * Known limitation: a non-member who administers the lake's org sees it in the lake picker through
-   * the org-admin arm, but the identity count only knows membership, public listing and creator, so
-   * it stays silent for them.
+   * the org-admin arm, but the identity count only knows membership and creator, so it stays silent
+   * for them.
    *
    * A session-preauthorized lake (unionPreauthorizedLakeAccess) that is ALSO gate-dropped from
    * this account-wide count is corrected, not merely narrow: the seed's targeted measurement
