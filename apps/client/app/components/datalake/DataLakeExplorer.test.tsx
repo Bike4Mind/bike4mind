@@ -564,6 +564,14 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(setWorkBenchFiles).not.toHaveBeenCalled();
   });
 
+  it('deep-linked article with a passage never writes a layout on an overlay host', async () => {
+    renderExplorer({ chatEmbedded: false, articleId: 'deep-1', articlePassage: 'cited text' });
+    await vi.waitFor(() => expect(screen.getByTestId('datalake-rail-viewer')).toBeInTheDocument());
+    expect(setSessionLayout).not.toHaveBeenCalledWith(
+      expect.objectContaining({ layout: expect.anything() as unknown as string })
+    );
+  });
+
   it('delete is offered only for a uniquely-resolved manageable lake', () => {
     renderExplorer();
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-can-delete', 'true');

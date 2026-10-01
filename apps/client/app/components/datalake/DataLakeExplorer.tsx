@@ -222,9 +222,10 @@ export default function DataLakeExplorer({
   // surface restores it. So we set the selected artifact WITHOUT touching `layout` and mount
   // the viewer in our own rail (with its layout-switching controls hidden, for the same reason).
   const handleViewFile = useCallback(
-    (file: IFabFileDocument) => {
+    (file: IFabFileDocument, citedPassage?: Parameters<typeof openFileInChatViewer>[1]) => {
+      // The passage is only forwarded on the embedded branch: the rail viewer has no cited-passage slot.
       if (chatEmbedded) {
-        openFileInChatViewer(file);
+        openFileInChatViewer(file, citedPassage);
       } else {
         hostLayoutRef.current = useSessionLayout.getState().layout;
         setSessionLayout({ previewFile: file, selectedArtifactId: file.id });
@@ -487,15 +488,12 @@ export default function DataLakeExplorer({
   useEffect(() => {
     if (deepLinkTarget && openedDeepLinkRef.current !== deepLinkTarget.id) {
       openedDeepLinkRef.current = deepLinkTarget.id;
-      if (articlePassage && articlePassage.trim().length > 0) {
-        openFileInChatViewer(deepLinkTarget, {
-          fileId: deepLinkTarget.id,
-          chunkId: 'unknown',
-          passage: articlePassage,
-        });
-      } else {
-        handleViewFile(deepLinkTarget);
-      }
+      handleViewFile(
+        deepLinkTarget,
+        articlePassage && articlePassage.trim().length > 0
+          ? { fileId: deepLinkTarget.id, chunkId: 'unknown', passage: articlePassage }
+          : undefined
+      );
     }
   }, [deepLinkTarget, handleViewFile, articlePassage]);
 

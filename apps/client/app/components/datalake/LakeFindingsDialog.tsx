@@ -511,7 +511,7 @@ export function LakeFindingsDialog({
               ) : !findings?.length ? (
                 <Typography level="body-sm" textColor="text.secondary" data-testid="lake-findings-empty">
                   {health?.inconsistency === null
-                    ? 'This lake has not been scanned yet. Findings appear after you run Scan now.'
+                    ? 'This lake has not been scanned yet. Findings appear after the nightly scan, or when you choose Scan now.'
                     : 'Nothing matches these filters. Findings appear after a scan, which runs nightly or when you choose Scan now.'}
                 </Typography>
               ) : (
