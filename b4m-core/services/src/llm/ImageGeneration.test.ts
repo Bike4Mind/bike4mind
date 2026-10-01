@@ -1291,6 +1291,9 @@ describe('ImageGenerationService quest partial writes', () => {
     const { service, update } = makeService({ startImageGenerationProcess });
     await invoke(service);
 
+    // The retry reset, then the error write; a third (e.g. a whole-quest write) is a regression.
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
     expect(callArgs(update).find(arg => arg.type === 'error')).toStrictEqual({
       id: 'quest1',
       type: 'error',
@@ -1307,6 +1310,7 @@ describe('ImageGenerationService quest partial writes', () => {
     enforceCredits(service);
     await processEdit(service);
 
+    expect(update).toHaveBeenCalledTimes(1);
     expect(callArgs(update).some(arg => arg.type === 'error')).toBe(false);
     expect(callArgs(update).find(arg => arg.status === 'done')).toStrictEqual({
       id: 'quest1',
@@ -1344,6 +1348,7 @@ describe('ImageGenerationService quest partial writes', () => {
     enforceCredits(service);
     await processEdit(service);
 
+    expect(update).toHaveBeenCalledTimes(1);
     const call = callArgs(update).find(arg => arg.type === 'message');
     expect(call).toStrictEqual({
       id: 'quest1',
@@ -1370,9 +1375,10 @@ describe('ImageGenerationService quest partial writes', () => {
     vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
     mockGeminiEdit.mockReset();
     mockGeminiEdit.mockRejectedValue(new Error('provider down'));
-    const { service, update, quest } = makeService();
+    const { service, update } = makeService();
     await processEdit(service);
 
+    expect(update).toHaveBeenCalledTimes(1);
     expect(callArgs(update).find(arg => arg.type === 'error')).toStrictEqual({
       id: 'quest1',
       prompt: 'make it blue',
@@ -1380,7 +1386,13 @@ describe('ImageGenerationService quest partial writes', () => {
       type: 'error',
       status: 'done',
       errorCode: undefined,
-      promptMeta: quest.promptMeta,
+      // A literal, not quest.promptMeta: process() mutates that object in place, so comparing
+      // against it would pass whatever statusLog was written.
+      promptMeta: {
+        marker: 'meta',
+        session: { id: 'session1', userId: 'user1' },
+        statusLog: statusLog('Preparing to paint...', 'Now painting...', 'Error: provider down'),
+      },
     });
   });
 });
