@@ -105,6 +105,41 @@ describe('useLakeGitHubConnection', () => {
     await waitFor(() => expect(result.current.isError).toBe(true));
   });
 
+  it.each([
+    ['the ingested file count changes mid-sync', { status: 'syncing', fileCount: 39 }],
+    ['a sync finishes with the same file count', { status: 'connected', fileCount: 0 }],
+  ])('refreshes the lake file queries when %s', async (_case, nextFields) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    get.mockResolvedValueOnce({ data: { connection: { id: 'c1', status: 'syncing', fileCount: 0 } } });
+    const { result } = renderHook(() => useLakeGitHubConnection('lake1'), { wrapper: wrapperFor(queryClient) });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(invalidateSpy).not.toHaveBeenCalled();
+
+    get.mockResolvedValueOnce({ data: { connection: { id: 'c1', ...nextFields } } });
+    await act(async () => {
+      await result.current.refetch();
+    });
+
+    const invalidatedKeys = invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
+    expect(invalidatedKeys).toContainEqual(dataLakeKeys.filesOf('lake1'));
+    expect(invalidatedKeys).toContainEqual(dataLakeKeys.tagCountsRoot);
+  });
+
+  it('leaves the lake file queries alone on an idle poll that changed nothing', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    get.mockResolvedValue({ data: { connection: { id: 'c1', status: 'connected', fileCount: 135 } } });
+    const { result } = renderHook(() => useLakeGitHubConnection('lake1'), { wrapper: wrapperFor(queryClient) });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    await act(async () => {
+      await result.current.refetch();
+    });
+
+    expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
   it('does not fetch when disabled', () => {
     renderLakeGitHubConnection('lake1', false);
     expect(get).not.toHaveBeenCalled();

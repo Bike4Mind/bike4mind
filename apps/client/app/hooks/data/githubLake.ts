@@ -47,6 +47,7 @@ export function gitHubConnectionPollInterval(connection: LakeGitHubConnection | 
  * only ever mounts behind it.
  */
 export function useLakeGitHubConnection(dataLakeId?: string, enabled = true) {
+  const queryClient = useQueryClient();
   return useQuery({
     queryKey: dataLakeKeys.gitHubConnection(dataLakeId),
     enabled: !!dataLakeId && enabled,
@@ -54,7 +55,15 @@ export function useLakeGitHubConnection(dataLakeId?: string, enabled = true) {
       const response = await api.get<{ connection: LakeGitHubConnection | null }>(
         `/api/data-lakes/${dataLakeId}/github-connection`
       );
-      return response.data.connection;
+      const next = response.data.connection;
+      // A sync ingests in the background, so the lake's file lists and counts only go stale as it
+      // lands; refresh them whenever a poll shows the ingested set changed or a sync finished.
+      const previous = queryClient.getQueryData<LakeGitHubConnection | null>(dataLakeKeys.gitHubConnection(dataLakeId));
+      const syncFinished = previous?.status === 'syncing' && next?.status !== 'syncing';
+      if (dataLakeId && previous && (syncFinished || next?.fileCount !== previous.fileCount)) {
+        void invalidateLakeFileQueries(queryClient, dataLakeId);
+      }
+      return next;
     },
     refetchInterval: query => (enabled ? gitHubConnectionPollInterval(query.state.data) : false),
   });
