@@ -87,7 +87,7 @@ const makeReq = (body: Record<string, unknown>, userId: string) =>
   ({ method: 'POST', body, user: { id: userId, isAdmin: false }, logger: { error: vi.fn() } }) as never;
 const run = (req: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req, res);
 
-/** A real user carrying the encrypted Drive credential captureOrgCredential copies. */
+/** A real user carrying the encrypted Drive credential readUserDriveCredential copies. */
 async function seedUser() {
   const user = await User.create({
     username: `u-drive-claim-${Date.now()}-${Math.random().toString(36).slice(2)}`,

@@ -93,12 +93,19 @@ describe('SelectedLakeHeader', () => {
     expect(screen.getByTestId('datalake-selected-lake-source')).toBeInTheDocument();
   });
 
+  it('offers the Drive control on a personal lake the caller owns', () => {
+    // A personal lake's connection syncs on its owner's own Google grant (authorizeLakeDriveAccess),
+    // so ownership - not org management - is the gate here.
+    renderHeader({ organizationId: undefined, isOwn: true });
+    expect(screen.getByTestId('datalake-selected-lake-source')).toBeInTheDocument();
+  });
+
   it.each([
-    ['a personal lake', { organizationId: undefined }],
+    ['a personal lake the caller does not own', { organizationId: undefined, isOwn: false }],
     ['an org lake the caller cannot manage', { canManage: false }],
   ])('withholds the Drive control on %s', (_label, over) => {
-    // Server-side a personal lake has no org to hold a connection and the status route 404s for a
-    // non-manager, so a control here could only ever fail.
+    // Server-side the status route 404s for anyone but an org lake's owner/manager or a personal
+    // lake's own owner, so a control here could only ever fail.
     renderHeader(over as Partial<ManageableDataLakeConfig>);
     expect(screen.queryByTestId('datalake-selected-lake-source')).not.toBeInTheDocument();
   });

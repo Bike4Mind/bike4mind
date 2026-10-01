@@ -248,6 +248,7 @@ describe('driveLakeIngest consumer', () => {
       datalakeTag: 'lake-tag',
       fileTagPrefix: 'demo:',
       createdByUserId: 'creator1',
+      organizationId: 'org1', // matches the default connection's owner (org1)
     });
     // A FRESH document per load, recorded, so a test can prove the quota deduction re-reads the user
     // after the uploads instead of reusing the one the handler loaded for its ability check.
@@ -1733,6 +1734,7 @@ describe('driveLakeIngest consumer', () => {
         datalakeTag: 'lake-tag',
         fileTagPrefix: 'demo:',
         createdByUserId: 'creator1',
+        organizationId: 'org1',
       });
       h.batchFindById.mockResolvedValue({
         id: 'batch1',
@@ -1850,6 +1852,30 @@ describe('driveLakeIngest consumer', () => {
     expect(h.walkFolder).not.toHaveBeenCalled();
   });
 
+  it('drops the run when the connection owner no longer matches the target lake owner', async () => {
+    // The connect door only binds a connection to a lake of the same owner; re-checked here because
+    // a lake's org/creator (or a mismatched row) can drift after the connection was made. The default
+    // connection is org-owned (org1); make the lake personal (no organizationId) so the owners differ.
+    h.lakeFindById.mockResolvedValue({
+      id: 'lake1',
+      status: 'active',
+      datalakeTag: 'lake-tag',
+      fileTagPrefix: 'demo:',
+      createdByUserId: 'someone-else',
+    });
+
+    await run();
+
+    expect(h.walkFolder).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(h.batchCreate).not.toHaveBeenCalled();
+    expect(h.releaseSyncClaim).toHaveBeenCalledWith(
+      'conn1',
+      'token-claim',
+      expect.stringContaining('no longer matches its data lake owner')
+    );
+  });
+
   it('ingests a draft lake (the first sync of a freshly connected folder)', async () => {
     // The 'draft' arm of the guard is load-bearing and self-reinforcing: lakes are seeded 'draft'
     // (createDataLake), the connect door never moves the status, and the draft -> active flip only
@@ -1862,6 +1888,7 @@ describe('driveLakeIngest consumer', () => {
       datalakeTag: 'lake-tag',
       fileTagPrefix: 'demo:',
       createdByUserId: 'creator1',
+      organizationId: 'org1',
     });
     h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
     h.fetchDriveFileContent.mockResolvedValue(okBytes());

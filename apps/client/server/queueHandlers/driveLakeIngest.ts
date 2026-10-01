@@ -16,7 +16,10 @@ import {
   KnowledgeType,
   FabFileSourceType,
   type IUserDocument,
+  driveConnectionOwnerForLake,
+  driveConnectionOwnerOf,
   isLakeIngestable,
+  isSameDriveConnectionOwner,
 } from '@bike4mind/common';
 import { BadRequestError, checkStorageLimit, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { dataLakeService } from '@bike4mind/services';
@@ -601,6 +604,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await releaseClaim(null);
       return;
     }
+    // The connect door (authorizeLakeDriveAccess) only binds a connection to a lake of the same owner -
+    // the lake's org, or for a personal lake its creator. Re-checked here because the admin-actor
+    // membership writes below are justified by exactly that, and a mismatched row must not ride it.
+    const connectionOwner = driveConnectionOwnerOf(connection);
+    if (!isSameDriveConnectionOwner(connectionOwner, driveConnectionOwnerForLake(lake))) {
+      logger.warn('[driveLakeIngest] connection owner does not match the target lake; dropping', { connectionId });
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+      await releaseClaim('This Drive connection no longer matches its data lake owner. Reconnect the folder.');
+      return;
+    }
     const user = await User.findById(connection.connectedBy);
     if (!user) {
       logger.warn('[driveLakeIngest] connecting user not found; dropping', { connectionId });
@@ -610,9 +623,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     }
     const ability = defineAbilitiesFor(user as unknown as IUserDocument);
 
-    // Prefer the connection's own token; falls back to the connecting user's (D not built yet).
+    // An org connection's own token, else (every personal connection) the connecting user's live grant.
     // A credential failure marks the connection credential_error and throws so SQS retries -> DLQ.
-    const accessToken = await getValidConnectionDriveAccessToken(connectionId, connection.organizationId);
+    const accessToken = await getValidConnectionDriveAccessToken(connectionId, connectionOwner);
     const drive = createDriveClient(accessToken);
 
     // 1) Resolve this run's Drive-side signal: an incremental `changes.list` pull (scoped to what
@@ -886,7 +899,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     const candidates = [...pureAdds, ...changed].filter(f => !alreadyIngested.has(f.id));
 
     // A trusted system reconcile acts as admin for membership writes (canManageLake): the connection
-    // was authorized by an org owner/manager at connect time (verifyOrgAccess). Pass the resolved lake
+    // was authorized at connect time by an org owner/manager, or for a personal lake by its creator
+    // (authorizeLakeDriveAccess; the owner match above re-asserts it). Pass the resolved lake
     // itself (not a hand-projection) so `organizationId` reaches the org-manageable manage rung.
     const membershipActor = { userId: connection.connectedBy, isAdmin: true };
     // Every membership write in this handler is the Drive connector sync itself, not a person at

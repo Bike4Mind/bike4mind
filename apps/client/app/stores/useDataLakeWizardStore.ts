@@ -164,8 +164,8 @@ export interface WizardTargetLake {
   requiredEntitlement?: string;
   /**
    * The lake's org scope, `null` for a personal lake. Carried so the wizard can gate the Drive
-   * connect control the way `SelectedLakeHeader` does: connecting is an org-lake capability
-   * server-side, so offering it on a personal lake is a button that can only ever fail.
+   * connect control the way `SelectedLakeHeader` does (canConnectLakeDrive): an org lake needs a
+   * manager, a personal lake its owner, so offering it otherwise is a button that can only ever fail.
    *
    * REQUIRED-and-nullable rather than optional, matching `isOwn` on ManageableDataLakeConfig and for
    * the same reason: an absent field would read as "personal" and silently hide the control on a
@@ -175,6 +175,8 @@ export interface WizardTargetLake {
   organizationId: string | null;
   /** Whether the caller may manage this lake. Same gate as above - the status route 404s otherwise. */
   canManage: boolean;
+  /** Whether the caller owns this lake (ManageableDataLakeConfig.isOwn) - the personal half of that gate. */
+  isOwn: boolean;
   /**
    * Lake lifecycle, so appending files to a lake that is still `draft` discloses on the Complete
    * screen that the new files ground nothing yet (#3222). Optional because `DataLakeConfig.status`
@@ -200,6 +202,7 @@ export const toWizardTargetLake = (lake: {
   requiredEntitlement?: string;
   organizationId?: string | null;
   canManage?: boolean;
+  isOwn: boolean;
   status?: DataLakeStatus;
 }): WizardTargetLake => ({
   id: lake.id,
@@ -210,6 +213,7 @@ export const toWizardTargetLake = (lake: {
   requiredEntitlement: lake.requiredEntitlement,
   organizationId: lake.organizationId ?? null,
   canManage: lake.canManage ?? false,
+  isOwn: lake.isOwn,
   status: lake.status,
 });
 

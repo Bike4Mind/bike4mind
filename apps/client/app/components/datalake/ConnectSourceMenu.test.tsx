@@ -25,7 +25,11 @@ describe('ConnectSourceMenu', () => {
   it('lists Google Drive as a connectable source on an org lake', () => {
     const onConnectDrive = vi.fn();
     wrap(
-      <ConnectSourceMenu lake={{ organizationId: 'org-1' }} onConnectDrive={onConnectDrive} onConnectGitHub={vi.fn()} />
+      <ConnectSourceMenu
+        lake={{ organizationId: 'org-1', isOwn: false }}
+        onConnectDrive={onConnectDrive}
+        onConnectGitHub={vi.fn()}
+      />
     );
     openMenu();
 
@@ -35,16 +39,37 @@ describe('ConnectSourceMenu', () => {
     expect(onConnectDrive).toHaveBeenCalledOnce();
   });
 
-  it('keeps Google Drive listed but disabled on a personal lake, with the reason inline', () => {
+  it('enables Google Drive on a personal lake the caller owns', () => {
     const onConnectDrive = vi.fn();
     wrap(
-      <ConnectSourceMenu lake={{ organizationId: null }} onConnectDrive={onConnectDrive} onConnectGitHub={vi.fn()} />
+      <ConnectSourceMenu
+        lake={{ organizationId: null, isOwn: true }}
+        onConnectDrive={onConnectDrive}
+        onConnectGitHub={vi.fn()}
+      />
+    );
+    openMenu();
+
+    const item = screen.getByTestId('datalake-connect-source-drive-item');
+    expect(item).not.toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(item);
+    expect(onConnectDrive).toHaveBeenCalledOnce();
+  });
+
+  it("keeps Google Drive listed but disabled on someone else's personal lake, with the reason inline", () => {
+    const onConnectDrive = vi.fn();
+    wrap(
+      <ConnectSourceMenu
+        lake={{ organizationId: null, isOwn: false }}
+        onConnectDrive={onConnectDrive}
+        onConnectGitHub={vi.fn()}
+      />
     );
     openMenu();
 
     const item = screen.getByTestId('datalake-connect-source-drive-item');
     expect(item).toHaveAttribute('aria-disabled', 'true');
-    expect(screen.getByTestId('datalake-connect-source-drive-hint')).toHaveTextContent(/organization/);
+    expect(screen.getByTestId('datalake-connect-source-drive-hint')).toHaveTextContent(/Only the owner/);
     fireEvent.click(item);
     expect(onConnectDrive).not.toHaveBeenCalled();
   });
@@ -53,7 +78,7 @@ describe('ConnectSourceMenu', () => {
     const onConnectGitHub = vi.fn();
     wrap(
       <ConnectSourceMenu
-        lake={{ organizationId: 'org-1' }}
+        lake={{ organizationId: 'org-1', isOwn: false }}
         onConnectDrive={vi.fn()}
         onConnectGitHub={onConnectGitHub}
       />
@@ -69,7 +94,7 @@ describe('ConnectSourceMenu', () => {
   it('keeps GitHub listed but disabled on a personal lake, with the reason inline', () => {
     const onConnectGitHub = vi.fn();
     wrap(
-      <ConnectSourceMenu lake={{ organizationId: null }} onConnectDrive={vi.fn()} onConnectGitHub={onConnectGitHub} />
+      <ConnectSourceMenu lake={{ organizationId: null, isOwn: true }} onConnectDrive={vi.fn()} onConnectGitHub={onConnectGitHub} />
     );
     openMenu();
 
@@ -82,7 +107,7 @@ describe('ConnectSourceMenu', () => {
 
   it('hides GitHub entirely while EnableDataLakeGitHub is off', () => {
     isAdminFeatureEnabled.mockReturnValue(false);
-    wrap(<ConnectSourceMenu lake={{ organizationId: 'org-1' }} onConnectDrive={vi.fn()} onConnectGitHub={vi.fn()} />);
+    wrap(<ConnectSourceMenu lake={{ organizationId: 'org-1', isOwn: false }} onConnectDrive={vi.fn()} onConnectGitHub={vi.fn()} />);
     openMenu();
 
     expect(screen.getByTestId('datalake-connect-source-drive-item')).toBeInTheDocument();

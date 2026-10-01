@@ -34,17 +34,22 @@ export function useConnectGoogleDrive() {
   return useMutation({ mutationFn: startGoogleDriveConnect });
 }
 
+export type DriveDisconnectImpact = { affectedOrgConnections: number; affectedPersonalConnections: number };
+
 /**
- * Disconnect the user's personal Google Drive. Resolves with how many ORG Drive folder syncs were
- * broken by the revoke: the connect flow copies this user's credential, and revoking it at Google
- * kills the whole grant, so the caller must warn that those folders need reconnecting.
+ * Disconnect the user's personal Google Drive. Resolves with how many Drive folder syncs it stopped,
+ * so the caller can warn that those folders need reconnecting: ORG syncs whose copied credential the
+ * revoke killed, and the user's PERSONAL lake syncs, which ride this grant directly.
  */
 export function useDisconnectGoogleDrive() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async () => {
-      const response = await api.delete<{ affectedOrgConnections?: number }>('/api/google-drive/disconnect');
-      return response.data?.affectedOrgConnections ?? 0;
+    mutationFn: async (): Promise<DriveDisconnectImpact> => {
+      const response = await api.delete<Partial<DriveDisconnectImpact>>('/api/google-drive/disconnect');
+      return {
+        affectedOrgConnections: response.data?.affectedOrgConnections ?? 0,
+        affectedPersonalConnections: response.data?.affectedPersonalConnections ?? 0,
+      };
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['users'] });

@@ -99,9 +99,12 @@ Saving the same values again, or reordering the same entries in **Only these sit
 sites** or **Tags to propose**, does not add a row.
 
 **Who can connect a Google Drive folder to a Data Lake?**
-An organization owner or manager (or a platform admin), on an organization Data Lake that is
-connector-fed and not archived. A curated Data Lake must be switched to connector-fed in its
-settings first. Personal Data Lakes cannot be connected to Drive.
+On an organization Data Lake, an organization owner or manager (or a platform admin). On a
+personal Data Lake, only the person who created it: the folder syncs using their own linked Google
+Drive, so unlinking Google Drive from their profile stops that sync until they link it again and
+reconnect the folder. Either way the Data Lake must be connector-fed and not archived. A curated
+Data Lake must be switched to connector-fed in its settings first. A Drive folder can feed only one
+Data Lake, personal or organization.
 
 **What happens when I disconnect a Google Drive folder?**
 Every file the connection brought into the Data Lake is permanently deleted, along with its
