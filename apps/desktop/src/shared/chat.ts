@@ -13,7 +13,12 @@ import type { SkillSource } from './skills';
 
 export type ChatRole = 'user' | 'assistant';
 
-export type ChatToolStatus = 'awaiting-approval' | 'running' | 'done' | 'error' | 'denied';
+/**
+ * 'moved' is a settled state that is not an outcome: the command did not finish here, it was
+ * handed to the background and is still going. Neither 'done' nor 'error' could say that
+ * without claiming something that did not happen.
+ */
+export type ChatToolStatus = 'awaiting-approval' | 'running' | 'done' | 'error' | 'denied' | 'moved';
 
 /**
  * One line of a proposed change, as the approval prompt renders it.
@@ -515,6 +520,15 @@ export interface BackgroundProcessInfo {
   /** Set when the process could not be spawned at all. */
   error?: string;
 }
+
+/**
+ * The answer to moving a running foreground command to the background.
+ *
+ * A refusal is a result rather than a thrown error: a command that finished a moment before the
+ * click, and one turned away by the background process cap, are both things the user asked for
+ * and is entitled to read back.
+ */
+export type ChatMoveToBackgroundResult = { ok: true; process: BackgroundProcessInfo } | { ok: false; message: string };
 
 /**
  * One model this deployment offers, as the picker renders it.

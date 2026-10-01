@@ -382,6 +382,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
             // offered on top of it.
             streaming={turnOpen}
             onRespond={conversation.respondToApproval}
+            onMove={background.moveToBackground}
             onContinue={() => void conversation.continueReply()}
             status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
             // At the foot of the thread rather than above the composer: a background command is

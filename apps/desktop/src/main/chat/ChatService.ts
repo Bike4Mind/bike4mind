@@ -77,6 +77,7 @@ import type { McpManager } from './mcp/McpManager';
 import type { AccessStore } from './tools/AccessStore';
 import type { ApprovalGate } from './tools/ApprovalGate';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
+import type { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { findTool, isOfferedEditTool, toolsForRequest, usesApplyPatch } from './tools/registry';
 import { assessApprovalRisk, spendsCredits } from './tools/riskAssessment';
 import {
@@ -246,6 +247,8 @@ export interface ChatServiceDeps {
   approvals?: ApprovalGate;
   /** Owns long-running commands. Absent in tests, which then have no background tools. */
   background?: BackgroundProcessRegistry;
+  /** Where a running command offers itself up for moving. Absent in tests, which never move one. */
+  foreground?: ForegroundCommandRegistry;
   /** Installs a new worktree's dependencies. Absent in tests, which then never install. */
   dependencies?: DependencyInstaller;
   /** Where generated images and audio land. Absent in tests, which then have no generation tools. */
@@ -1699,6 +1702,7 @@ export class ChatService {
         let label: string | undefined;
         const diffs: ChatDiff[] = [];
         let detail: ChatToolDetail | undefined;
+        let moved = false;
         const report: ToolReporter = {
           progress: text => this.emit({ type: 'tool-progress', sessionId, messageId, callId: call.id, text }),
           media: item => attachments.push(item),
@@ -1718,6 +1722,9 @@ export class ChatService {
             const images = this.pendingImages.get(call.id) ?? [];
             images.push({ mediaType: mimeType, data: bytes.toString('base64') });
             this.pendingImages.set(call.id, images);
+          },
+          moved: () => {
+            moved = true;
           },
         };
         let startedAt = Date.now();
@@ -1744,7 +1751,9 @@ export class ChatService {
           signal,
           protectedPaths: this.deps.protectedPaths,
           sessionId,
+          callId: call.id,
           background: this.deps.background,
+          foreground: this.deps.foreground,
           ...(media ? { media } : {}),
           ...(host ? { host } : {}),
           ...(explore ? { explore } : {}),
@@ -1766,7 +1775,13 @@ export class ChatService {
         let settled: ChatToolCall;
         try {
           const result = await tool.run(call.input, context);
-          settled = decorate({ ...call, status: 'done', preview: capOutput(result, outputCapFor(request.name)) });
+          settled = decorate({
+            ...call,
+            // 'moved' is not a quieter 'done': the command is still running in the task panel,
+            // and a green row would tell the reader it had finished here.
+            status: moved ? 'moved' : 'done',
+            preview: capOutput(result, outputCapFor(request.name)),
+          });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.deps.logger.debug(`CHAT: tool ${request.name} failed: ${message}`);

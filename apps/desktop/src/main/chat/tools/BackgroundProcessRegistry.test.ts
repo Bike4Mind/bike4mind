@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BackgroundProcessInfo } from '@shared/chat';
 import { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
+import type { OutputStream } from './outputBuffer';
 import { resolveUserPath } from './userPath';
 
 vi.mock('./userPath', () => ({ resolveUserPath: vi.fn(async () => process.env.PATH ?? '') }));
@@ -25,6 +26,51 @@ async function waitUntilGone(marker: string, timeoutMs = 8_000): Promise<boolean
     await new Promise(resolve => setTimeout(resolve, 150));
   }
   return false;
+}
+
+/**
+ * A child spawned the way the FOREGROUND runner spawns one: detached, with its output piped
+ * and no watch pipe on fd 3. Adoption exists for exactly this process, so a test that handed
+ * the registry one of its own spawns would be testing nothing.
+ */
+function spawnForeground(command: string, cwd: string) {
+  const child = spawn('/bin/bash', ['-c', command], { cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const captured: { stream: OutputStream; text: string }[] = [];
+  const onData = (chunk: Buffer) => captured.push({ stream: 'stdout', text: chunk.toString('utf8') });
+  child.stdout?.on('data', onData);
+
+  return {
+    child,
+    /** Resolves once `text` has been printed, so the handover is tested with something in hand. */
+    printed: (text: string) =>
+      new Promise<void>((resolve, reject) => {
+        const deadline = setTimeout(() => reject(new Error(`never printed ${text}`)), 8_000);
+        const check = () => {
+          if (!captured.some(chunk => chunk.text.includes(text))) return;
+          clearTimeout(deadline);
+          child.stdout?.off('data', check);
+          resolve();
+        };
+        child.stdout?.on('data', check);
+        check();
+      }),
+    /** What the foreground runner hands over: the pipes are the registry's from here on. */
+    handover: () => {
+      child.stdout?.off('data', onData);
+      return {
+        child,
+        pgid: child.pid ?? null,
+        startedAt: new Date().toISOString(),
+        launch: noLaunch(),
+        captured: [...captured],
+      };
+    },
+  };
+}
+
+/** The sandbox is off for shell commands, so a real launch has nothing to clean up either. */
+function noLaunch() {
+  return { executable: '/bin/bash', args: [] as string[], cleanup: async () => undefined };
 }
 
 /**
@@ -193,4 +239,92 @@ describe('BackgroundProcessRegistry', () => {
 
     expect(statuses.filter(entry => entry.id === info.id).map(entry => entry.status)).toEqual(['running', 'exited']);
   }, 20_000);
+
+  describe('adopting a command already running in the foreground', () => {
+    /** Stray children of a failed adoption; the registry never took responsibility for them. */
+    let orphans: ChildProcess[];
+
+    beforeEach(() => {
+      orphans = [];
+    });
+
+    afterEach(() => {
+      for (const child of orphans) {
+        try {
+          if (child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          // Already gone.
+        }
+      }
+    });
+
+    it('registers the process and keeps what it printed before the move', async () => {
+      const marker = `b4m-adopt-${Date.now()}`;
+      const running = spawnForeground(`echo ${marker}; sleep 20`, root);
+      orphans.push(running.child);
+      await running.printed(marker);
+
+      const handover = running.handover();
+      const info = registry.adopt({
+        sessionId: 'session-a',
+        command: `echo ${marker}; sleep 20`,
+        cwd: root,
+        ...handover,
+      });
+
+      expect(info.status).toBe('running');
+      // Not the moment of the move: the panel counts elapsed time from here, and a clock that
+      // restarted would under-report a build that had already been going for ten minutes.
+      expect(info.startedAt).toBe(handover.startedAt);
+      expect(registry.list('session-a').map(entry => entry.id)).toContain(info.id);
+      expect(statuses.map(entry => entry.status)).toContain('running');
+
+      // The whole point of carrying the capture across: the model never saw this output, because
+      // the call it belonged to never returned.
+      expect(registry.readForModel(info.id, 'session-a', 5_000)?.text).toContain(marker);
+    }, 30_000);
+
+    it('counts an adopted process against the same cap as one it started', async () => {
+      for (let i = 0; i < 5; i++) await start('sleep 20');
+
+      const running = spawnForeground('sleep 20', root);
+      orphans.push(running.child);
+
+      expect(() =>
+        registry.adopt({ sessionId: 'session-a', command: 'sleep 20', cwd: root, ...running.handover() })
+      ).toThrow(/already has 5 background commands/);
+      expect(registry.list('session-a')).toHaveLength(5);
+    }, 30_000);
+
+    it('signals an adopted process group, not just the command it was handed', async () => {
+      const marker = `b4m-adopt-group-${Date.now()}`;
+      const command = `sh -c 'sleep 60 # ${marker}' & sleep 60`;
+      const running = spawnForeground(command, root);
+      orphans.push(running.child);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      expect(await isAlive(marker)).toBe(true);
+
+      const info = registry.adopt({ sessionId: 'session-a', command, cwd: root, ...running.handover() });
+      await registry.kill(info.id, 'session-a');
+
+      expect(await waitUntilGone(marker)).toBe(true);
+      expect(registry.get(info.id, 'session-a')?.status).toBe('killed');
+    }, 30_000);
+
+    it('reports an adopted process finishing like any other', async () => {
+      const running = spawnForeground('sleep 0.2; exit 4', root);
+      orphans.push(running.child);
+
+      const info = registry.adopt({
+        sessionId: 'session-a',
+        command: 'sleep 0.2; exit 4',
+        cwd: root,
+        ...running.handover(),
+      });
+      await registry.settle(info.id, 5_000);
+
+      expect(registry.get(info.id, 'session-a')?.status).toBe('exited');
+      expect(registry.get(info.id, 'session-a')?.exitCode).toBe(4);
+    }, 20_000);
+  });
 });

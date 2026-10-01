@@ -46,6 +46,28 @@ export interface StartRequest {
   protectedPaths: readonly string[];
 }
 
+/**
+ * A command that is ALREADY running, handed over by the foreground runner. See `adopt`.
+ *
+ * Everything here describes a spawn that has happened: there is nothing left to decide about
+ * how the process starts, only who is responsible for it from now on.
+ */
+export interface AdoptRequest {
+  sessionId: string;
+  command: string;
+  cwd: string;
+  /** Detached, with stdout and stderr piped, and no other reader left on them. */
+  child: ChildProcess;
+  /** The detached child's own pid, which is its process group id; null when it never spawned. */
+  pgid: number | null;
+  /** When the command started, not when it was moved: the panel's clock counts from here. */
+  startedAt: string;
+  /** Handed over with the child, and run by `finish` when the command ends. */
+  launch: SandboxedCommand;
+  /** What the foreground runner collected before the move, so none of it is lost on the way. */
+  captured?: readonly { stream: OutputStream; text: string }[];
+}
+
 export interface ReadResult {
   info: BackgroundProcessInfo;
   text: string;
@@ -113,17 +135,7 @@ export class BackgroundProcessRegistry {
     const wrapped = wrapWithParentWatchdog(request.command);
     const launch = await launchCommand(wrapped, request.roots, request.protectedPaths);
 
-    const id = randomUUID().slice(0, 8);
-    const info: BackgroundProcessInfo = {
-      id,
-      sessionId: request.sessionId,
-      command: request.command,
-      cwd: request.cwd,
-      status: 'running',
-      startedAt: new Date().toISOString(),
-      bufferedChars: 0,
-      droppedChars: 0,
-    };
+    const info = this.newInfo(request.sessionId, request.command, request.cwd, new Date().toISOString());
 
     let child: ChildProcess;
     try {
@@ -143,10 +155,75 @@ export class BackgroundProcessRegistry {
       throw err;
     }
 
+    const tracked = this.track(info, child, child.pid ?? null, launch);
+
+    // Never written to, only held open. Unref'd so an idle pipe cannot be the thing keeping
+    // the app alive at quit.
+    child.stdio[PARENT_WATCH_FD]?.on('error', () => undefined);
+    (child.stdio[PARENT_WATCH_FD] as { unref?(): void } | undefined)?.unref?.();
+
+    this.processes.set(info.id, tracked);
+    this.events.status(request.sessionId, { ...info });
+    return { ...info };
+  }
+
+  /**
+   * Take over a command that is already running in the foreground, so a build or a test run
+   * nobody wants to keep waiting on carries on without the turn waiting with it.
+   *
+   * One guarantee is weaker here than for `start`, and cannot be made stronger. `start` wraps
+   * its command in the fd-3 watchdog (see backgroundScript.ts), which is the only teardown
+   * that survives this app being SIGKILLed or crashing; a foreground command was spawned
+   * without that pipe, and a descriptor cannot be fitted to a process that is already running.
+   * So an adopted process outlives a CRASH. A graceful quit still takes it down - `shutdown`
+   * and `shutdownSync` signal its group like any other, and the group is the child's own
+   * because the foreground runner spawns detached for exactly that reason.
+   *
+   * `B4M_DESKTOP_BACKGROUND` is missing on an adopted child for the same reason - env is fixed
+   * at spawn - and nothing in this repository reads it today.
+   */
+  adopt(request: AdoptRequest): BackgroundProcessInfo {
+    if (this.shuttingDown) throw new Error('The app is shutting down; no command can be moved to the background.');
+    // The same gate `start` passes through: adoption that skipped it would be a way around the cap.
+    this.enforceLimits(request.sessionId);
+
+    const info = this.newInfo(request.sessionId, request.command, request.cwd, request.startedAt);
+    const tracked = this.track(info, request.child, request.pgid, request.launch);
+
+    for (const chunk of request.captured ?? []) {
+      if (chunk.text) tracked.buffer.push(chunk.stream, chunk.text);
+    }
+    info.bufferedChars = tracked.buffer.retainedChars;
+
+    this.processes.set(info.id, tracked);
+    this.events.status(request.sessionId, { ...info });
+    return { ...info };
+  }
+
+  private newInfo(sessionId: string, command: string, cwd: string, startedAt: string): BackgroundProcessInfo {
+    return {
+      id: randomUUID().slice(0, 8),
+      sessionId,
+      command,
+      cwd,
+      status: 'running',
+      startedAt,
+      bufferedChars: 0,
+      droppedChars: 0,
+    };
+  }
+
+  /** The lifetime wiring every tracked process shares, however this registry came by its child. */
+  private track(
+    info: BackgroundProcessInfo,
+    child: ChildProcess,
+    pgid: number | null,
+    launch: SandboxedCommand
+  ): Tracked {
     const tracked: Tracked = {
       info,
       child,
-      pgid: child.pid ?? null,
+      pgid,
       buffer: new OutputBuffer(MAX_BUFFERED_CHARS),
       modelCursor: 0,
       launch,
@@ -186,17 +263,10 @@ export class BackgroundProcessRegistry {
       });
     });
 
-    // Never written to, only held open. Unref'd so an idle pipe cannot be the thing keeping
-    // the app alive at quit.
-    child.stdio[PARENT_WATCH_FD]?.on('error', () => undefined);
-    (child.stdio[PARENT_WATCH_FD] as { unref?(): void } | undefined)?.unref?.();
-
     child.stdout?.on('data', (chunk: Buffer) => this.ingest(tracked, 'stdout', chunk));
     child.stderr?.on('data', (chunk: Buffer) => this.ingest(tracked, 'stderr', chunk));
 
-    this.processes.set(id, tracked);
-    this.events.status(request.sessionId, { ...info });
-    return { ...info };
+    return tracked;
   }
 
   /** Wait up to `ms` for the process to end on its own - how `bash_background` settles. */

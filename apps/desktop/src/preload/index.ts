@@ -103,6 +103,8 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatReadBackground, sessionId, processId),
     stopBackgroundProcess: (sessionId: string, processId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatStopBackground, sessionId, processId),
+    moveCommandToBackground: (sessionId: string, callId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatMoveToBackground, sessionId, callId),
     onStreamEvent: listener => {
       const handler = (_event: unknown, streamEvent: ChatStreamEvent) => listener(streamEvent);
       ipcRenderer.on(IPC_CHANNELS.chatStreamEvent, handler);

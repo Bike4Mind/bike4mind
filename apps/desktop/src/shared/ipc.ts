@@ -10,6 +10,7 @@ import type {
   ChatArtifactLibrary,
   ChatAttachmentInput,
   ChatModelCatalog,
+  ChatMoveToBackgroundResult,
   ChatQueueEvent,
   ChatQueuedMessage,
   ChatSession,
@@ -87,6 +88,7 @@ export const IPC_CHANNELS = {
   chatListBackground: 'chat:list-background',
   chatReadBackground: 'chat:read-background',
   chatStopBackground: 'chat:stop-background',
+  chatMoveToBackground: 'chat:move-to-background',
   /** main -> renderer push; reply tokens as they arrive. */
   chatStreamEvent: 'chat:stream-event',
   /**
@@ -283,6 +285,12 @@ export interface DesktopApi {
     readBackgroundOutput(sessionId: string, processId: string): Promise<string>;
     /** Stop a background process and everything it spawned. Unknown ids are ignored. */
     stopBackgroundProcess(sessionId: string, processId: string): Promise<void>;
+    /**
+     * Move a command still running in the foreground to the background, so the turn stops
+     * waiting on it. Keyed on the tool call it belongs to, which is what the transcript row
+     * already holds. Never rejects; see ChatMoveToBackgroundResult.
+     */
+    moveCommandToBackground(sessionId: string, callId: string): Promise<ChatMoveToBackgroundResult>;
     /** Subscribe to reply progress; returns the unsubscribe. */
     onStreamEvent(listener: (event: ChatStreamEvent) => void): () => void;
     /**

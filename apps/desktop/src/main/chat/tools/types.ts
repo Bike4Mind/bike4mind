@@ -16,6 +16,7 @@ import type { CompletionStreamEvent } from '../streamEvents';
 import type { MediaApiClient } from '../media/MediaApiClient';
 import type { MediaStore } from '../media/MediaStore';
 import type { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
+import type { ForegroundCommandRegistry } from './ForegroundCommandRegistry';
 
 /**
  * What the server-backed generation tools need, and nothing else.
@@ -95,6 +96,12 @@ export interface ToolReporter {
    * not stored, so a reloaded conversation carries the text result alone.
    */
   image(bytes: Buffer, mimeType: string): void;
+  /**
+   * This call's command was moved to the background and is still running, so the row settles as
+   * 'moved' rather than claiming the command finished here. The handle it became is in the
+   * result text the model and the user both read.
+   */
+  moved(): void;
 }
 
 /** One conversation's agent browser: a hidden window with its own cookie jar. */
@@ -162,8 +169,15 @@ export interface ToolContext {
    * conversation cannot read or stop another's just by naming a handle.
    */
   sessionId?: string;
+  /**
+   * This call's id, as the transcript row and the renderer know it. Absent outside the chat
+   * loop, which is also when there is no row for a control to sit on.
+   */
+  callId?: string;
   /** Absent in tests and in builds without it; the background tools then refuse rather than run. */
   background?: BackgroundProcessRegistry;
+  /** Where a running foreground command publishes itself as movable. Absent outside the chat loop. */
+  foreground?: ForegroundCommandRegistry;
   /** Absent when signed out, and in tests; the generation tools then refuse rather than run. */
   media?: MediaContext;
   /** Absent outside a Code session; the host-control tools are then not declared at all. */
