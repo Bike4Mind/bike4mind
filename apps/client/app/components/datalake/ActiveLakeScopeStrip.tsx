@@ -142,7 +142,7 @@ export default function ActiveLakeScopeStrip({
           size="sm"
           variant="soft"
           color="warning"
-          startDecorator={<UnsearchableLakeIcon testId={`datalake-active-scope-unsearchable-${lake.id}`} />}
+          startDecorator={<UnsearchableLakeIcon lake={lake} testId={`datalake-active-scope-unsearchable-${lake.id}`} />}
           sx={{ fontSize: '11px', maxWidth: '100%' }}
           data-testid={`datalake-active-scope-chip-${lake.id}`}
           endDecorator={removeDecorator(lake)}

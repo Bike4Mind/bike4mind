@@ -104,11 +104,17 @@ describe('SelectedLakeHeader', () => {
   });
 
   it('marks a lake chat cannot search, and only on an explicit false', () => {
-    const { unmount } = renderHeader({ retrievable: false });
+    const { unmount } = renderHeader({ retrievable: false, status: 'active' });
     expect(screen.getByTestId('datalake-selected-lake-unsearchable')).toHaveTextContent('Not searched by chat');
     unmount();
 
     renderHeader({ retrievable: undefined });
+    expect(screen.queryByTestId('datalake-selected-lake-unsearchable')).not.toBeInTheDocument();
+  });
+
+  it('lets the draft chip explain a labelled draft instead of an access warning', () => {
+    renderHeader({ status: 'draft', retrievable: false });
+    expect(screen.getByTestId('datalake-selected-draft-chip')).toBeInTheDocument();
     expect(screen.queryByTestId('datalake-selected-lake-unsearchable')).not.toBeInTheDocument();
   });
 

@@ -168,6 +168,29 @@ describe('useGetDataLakesWithRetrievability', () => {
     expect(apiGet).toHaveBeenCalledWith('/api/data-lakes', { params: { includeRetrievability: 'true' } });
     expect(queryClient.getQueryState(dataLakeKeys.listWithRetrievability(null))?.status).toBe('success');
   });
+
+  it('keeps the previous session rows while a new session id refetches, so the selection never empties', async () => {
+    const rows = [{ id: 'a', name: 'A', retrievable: true }];
+    apiGet.mockResolvedValueOnce({ data: { data: rows } });
+    let release: (v: unknown) => void = () => {};
+    apiGet.mockReturnValueOnce(new Promise(resolve => (release = resolve)));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result, rerender } = renderHook(({ sid }) => useGetDataLakesWithRetrievability(sid), {
+      wrapper,
+      initialProps: { sid: 'sess-1' as string | null },
+    });
+    await waitFor(() => expect(result.current.data).toEqual(rows));
+
+    rerender({ sid: 'sess-2' });
+    await waitFor(() => expect(apiGet).toHaveBeenCalledTimes(2));
+    expect(result.current.data).toEqual(rows);
+    expect(result.current.isPlaceholderData).toBe(true);
+
+    await act(async () => release({ data: { data: [{ ...rows[0], retrievable: false }] } }));
+    await waitFor(() => expect(result.current.data?.[0]?.retrievable).toBe(false));
+  });
 });
 
 describe('useBrowsePublicDataLakes', () => {

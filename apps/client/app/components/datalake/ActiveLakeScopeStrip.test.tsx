@@ -6,6 +6,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import ActiveLakeScopeStrip from './ActiveLakeScopeStrip';
 import { DRAFT_LAKE_TOOLTIP } from '@client/app/components/datalake/lakeVisibility';
+import { UNSEARCHABLE_LAKE_REASON } from '@client/app/components/datalake/lakeRetrievability';
 import { DATA_LAKES, type ManageableDataLakeConfig } from '@bike4mind/common';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -13,8 +14,8 @@ const Wrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const lake = (id: string, name: string, status?: string) =>
-  ({ id, name, status, datalakeTag: `datalake:${id}` }) as ManageableDataLakeConfig;
+const lake = (id: string, name: string, status?: string, retrievable?: boolean) =>
+  ({ id, name, status, retrievable, datalakeTag: `datalake:${id}` }) as ManageableDataLakeConfig;
 
 describe('ActiveLakeScopeStrip', () => {
   it('names every lake in the scope, which the trigger can only count', () => {
@@ -124,6 +125,25 @@ describe('ActiveLakeScopeStrip', () => {
     );
 
     expect(screen.queryByTestId('datalake-active-scope-remove-a')).not.toBeInTheDocument();
+  });
+
+  it('explains a server-labelled draft as a draft, in warning colour, under Not searched', async () => {
+    // The server labels an owner's own draft retrievable: false, so this is the shape drafts arrive in.
+    render(
+      <Wrapper>
+        <ActiveLakeScopeStrip
+          lakes={[lake('d', 'My draft', 'draft', false), lake('b', 'Live', 'active', true)]}
+          onClear={vi.fn()}
+        />
+      </Wrapper>
+    );
+
+    expect(
+      within(screen.getByTestId('datalake-active-scope-unsearchable-group')).getByTestId('datalake-active-scope-chip-d')
+    ).toHaveClass('MuiChip-colorWarning');
+    fireEvent.mouseOver(screen.getByTestId('datalake-active-scope-unsearchable-d'));
+    await waitFor(() => expect(screen.getByRole('tooltip')).toHaveTextContent(DRAFT_LAKE_TOOLTIP));
+    expect(screen.getByRole('tooltip')).not.toHaveTextContent(UNSEARCHABLE_LAKE_REASON);
   });
 
   it('explains only a draft lake on hover', async () => {

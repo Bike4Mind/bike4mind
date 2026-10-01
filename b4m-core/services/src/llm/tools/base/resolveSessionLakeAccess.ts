@@ -1,6 +1,6 @@
 import { getDynamicDataLakeAccess } from '../../../dataLakeService/getDynamicDataLakeTags';
 import { sessionGroundsOnNoLake, type ResolvedLakeAccessSet } from '../../../dataLakeService/narrowLakeAccessToSession';
-import { NO_SESSION_LAKES, resolveSessionLakeAdmission } from '../../../dataLakeService/sessionLakeAdmission';
+import { noSessionLakes, resolveSessionLakeAdmission } from '../../../dataLakeService/sessionLakeAdmission';
 import type { ToolContext } from './types';
 
 /**
@@ -16,8 +16,8 @@ import type { ToolContext } from './types';
 export async function resolveSessionLakeAccess(context: ToolContext): Promise<ResolvedLakeAccessSet> {
   // Two different reasons for the same answer, and the narrowing below can express neither: it
   // reads an empty scope as "no opinion" and hands back the caller's full owner-wide access.
-  if (context.suppressLakeArms) return NO_SESSION_LAKES;
-  if (sessionGroundsOnNoLake(context.sessionRetrievalTags, context.sessionLakeScopeExplicit)) return NO_SESSION_LAKES;
+  if (context.suppressLakeArms) return noSessionLakes();
+  if (sessionGroundsOnNoLake(context.sessionRetrievalTags, context.sessionLakeScopeExplicit)) return noSessionLakes();
   const resolved = await getDynamicDataLakeAccess(context);
   // `context.userId` is the session OWNER on any turn that carries preauthorizedLakeIds:
   // vetPreauthorizedLakeIds blanks the field unless the session's own userId equals the acting

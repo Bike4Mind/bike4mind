@@ -1,6 +1,7 @@
 import { Tooltip } from '@mui/joy';
 import SearchOffIcon from '@mui/icons-material/SearchOff';
 import type { RetrievabilityLabeledDataLake } from '@bike4mind/common';
+import { DRAFT_LAKE_TOOLTIP, isDraftLake } from './lakeVisibility';
 
 export const UNSEARCHABLE_LAKE_REASON =
   'Chat cannot search this lake with your current access. You can still browse it.';
@@ -27,9 +28,16 @@ export function isUnsearchableInNewTestSession(
   return isUnsearchable(lake) && !willPreauthorizeInNewTestSession(lake);
 }
 
-export function UnsearchableLakeIcon({ testId }: { testId: string }) {
+type ReasonLake = Parameters<typeof isDraftLake>[0];
+
+/** A draft reads false for its own owner too, so blaming access there would send them the wrong way. */
+export function unsearchableLakeReason(lake: ReasonLake): string {
+  return isDraftLake(lake) ? DRAFT_LAKE_TOOLTIP : UNSEARCHABLE_LAKE_REASON;
+}
+
+export function UnsearchableLakeIcon({ lake, testId }: { lake: ReasonLake; testId: string }) {
   return (
-    <Tooltip size="sm" title={UNSEARCHABLE_LAKE_REASON}>
+    <Tooltip size="sm" title={unsearchableLakeReason(lake)}>
       <SearchOffIcon data-testid={testId} sx={{ fontSize: 14, color: 'warning.400', flexShrink: 0 }} />
     </Tooltip>
   );

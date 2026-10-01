@@ -350,7 +350,14 @@ describe('DataLakeExplorer chat-first surface', () => {
   it('asks for the lake labels of the current session and surfaces a server false on the header', () => {
     lakesHookSessionIds.length = 0;
     lakesState.value = [
-      { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: true, retrievable: false },
+      {
+        id: 'lake-1',
+        name: 'Lake A',
+        datalakeTag: 'datalake:lake-a',
+        canManage: true,
+        status: 'active',
+        retrievable: false,
+      },
     ];
     sessionState.current = { id: 'sess-1', retrievalTags: ['datalake:lake-a'], lakeScopeExplicit: false };
     renderExplorer();

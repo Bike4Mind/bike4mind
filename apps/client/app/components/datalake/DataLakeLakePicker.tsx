@@ -455,7 +455,7 @@ export default function DataLakeLakePicker({
                         )}
                         {/* Marked, not disabled: selection also scopes the browse tree, which still works. */}
                         {isUnsearchable(lake) && (
-                          <UnsearchableLakeIcon testId={`datalake-lake-picker-unsearchable-${lake.id}`} />
+                          <UnsearchableLakeIcon lake={lake} testId={`datalake-lake-picker-unsearchable-${lake.id}`} />
                         )}
                         {typeof count === 'number' && (
                           <Typography level="body-xs" sx={COUNT_SX} aria-label={fileCountLabel(count)}>

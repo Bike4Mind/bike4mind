@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { NO_SESSION_LAKES, resolveSessionLakeAdmission } from './sessionLakeAdmission';
+import { noSessionLakes, resolveSessionLakeAdmission } from './sessionLakeAdmission';
 import { sessionGroundsOnNoLake, type ResolvedLakeAccessSet } from './narrowLakeAccessToSession';
 
 const ACTOR = 'maintainer-1';
@@ -80,7 +80,13 @@ describe('resolveSessionLakeAdmission', () => {
 
     const { admitted, searched } = await resolveSessionLakeAdmission(access(), session, ACTOR, db());
     expect(tagsOf(admitted)).toEqual(['datalake:alpha', 'datalake:beta', 'datalake:managed']);
-    expect(searched).toEqual(NO_SESSION_LAKES);
+    expect(searched).toEqual(noSessionLakes());
+  });
+
+  it('hands every caller its own empty set, so one caller mutating it cannot leak into the next', () => {
+    const first = noSessionLakes();
+    first.dataLakeTags.push('datalake:leak');
+    expect(noSessionLakes().dataLakeTags).toEqual([]);
   });
 
   it('treats an empty scope that is NOT explicit as unscoped', async () => {

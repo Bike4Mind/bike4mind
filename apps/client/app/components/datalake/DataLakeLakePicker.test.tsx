@@ -6,6 +6,7 @@ import menuItemClasses from '@mui/joy/MenuItem/menuItemClasses';
 import { getThemeConfig } from '@client/app/utils/themes';
 import DataLakeLakePicker from './DataLakeLakePicker';
 import { UNSEARCHABLE_LAKE_REASON } from './lakeRetrievability';
+import { DRAFT_LAKE_TOOLTIP } from './lakeVisibility';
 import { DATA_LAKES, type ManageableDataLakeConfig } from '@bike4mind/common';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -441,6 +442,15 @@ describe('DataLakeLakePicker - unsearchable lakes', () => {
 });
 
 describe('DataLakeLakePicker - draft marker', () => {
+  it('gives a labelled draft the draft reason, not an access reason its owner would misread', async () => {
+    renderPicker({ lakes: [lake({ id: 'd', name: 'My draft', status: 'draft', retrievable: false })] });
+    openMenu();
+
+    fireEvent.mouseOver(screen.getByTestId('datalake-lake-picker-unsearchable-d'));
+    await waitFor(() => expect(screen.getByRole('tooltip')).toHaveTextContent(DRAFT_LAKE_TOOLTIP));
+    expect(screen.getByRole('tooltip')).not.toHaveTextContent(UNSEARCHABLE_LAKE_REASON);
+  });
+
   it('marks draft and status-less user lakes, not built-ins', () => {
     renderPicker({
       lakes: [

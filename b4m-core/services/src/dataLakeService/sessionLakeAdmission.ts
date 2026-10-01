@@ -7,13 +7,14 @@ import {
 } from './narrowLakeAccessToSession';
 import { unionPreauthorizedLakeAccess } from './unionPreauthorizedLakeAccess';
 
-export const NO_SESSION_LAKES: ResolvedLakeAccessSet = {
+/** A factory, not a shared constant: callers receive mutable arrays. */
+export const noSessionLakes = (): ResolvedLakeAccessSet => ({
   dataLakeTags: [],
   dataLakeTagPrefixes: [],
   scopedTagPrefixes: [],
   lakes: [],
   excludedByAccessCount: 0,
-};
+});
 
 export interface SessionLakeAdmissionInput {
   retrievalTags?: string[];
@@ -42,7 +43,7 @@ export async function resolveSessionLakeAdmission(
 ): Promise<SessionLakeAdmission> {
   const admitted = await unionPreauthorizedLakeAccess(access, session.preauthorizedLakeIds, actorUserId, db);
   const searched = sessionGroundsOnNoLake(session.retrievalTags, session.lakeScopeExplicit)
-    ? NO_SESSION_LAKES
+    ? noSessionLakes()
     : narrowLakeAccessToSession(admitted, session.retrievalTags);
   return { admitted, searched };
 }

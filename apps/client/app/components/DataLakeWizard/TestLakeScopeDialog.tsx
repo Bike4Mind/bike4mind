@@ -150,7 +150,7 @@ export function TestLakeScopeDialog({ anchorLakeId, onClose, onConfirm, confirmi
                           />
                         )}
                         {isUnsearchableInNewTestSession(lake) && (
-                          <UnsearchableLakeIcon testId={`test-lake-scope-unsearchable-${lake.id}`} />
+                          <UnsearchableLakeIcon lake={lake} testId={`test-lake-scope-unsearchable-${lake.id}`} />
                         )}
                       </Stack>
                     }

@@ -50,7 +50,8 @@ export default function SelectedLakeHeader({ lake }: { lake: RetrievabilityLabel
         >
           {lake.fileTagPrefix}
         </Chip>
-        {isUnsearchable(lake) && (
+        {/* The draft chip below already says why a draft is not searched. */}
+        {isUnsearchable(lake) && !isDraftLake(lake) && (
           <Tooltip size="sm" title={UNSEARCHABLE_LAKE_REASON}>
             <Chip
               size="sm"

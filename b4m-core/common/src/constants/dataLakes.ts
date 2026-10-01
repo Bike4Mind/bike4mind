@@ -420,17 +420,6 @@ export interface DataLakeConfig {
 }
 
 /**
- * DataLakeConfig plus the fields only a lake's EDITORS may read. Returned exclusively by the
- * actor-aware list projections (listDataLakes / listAllDataLakes), which populate the extra
- * fields per lake and only when `canManage` holds for the requesting caller.
- *
- * This is a separate type on purpose: DataLakeConfig is the shared shape the access filters and
- * the tag/registry projections all operate on, and several of those have no actor to gate on.
- * `toDataLakeConfig` is therefore structurally unable to carry an editor-only field - the
- * invariant that keeps the prompt text out of every actor-less projection (see
- * getAccessibleDataLakePrompts, which reads it off the raw documents for the same reason).
- */
-/**
  * Opt-in row label on GET /api/data-lakes (`?includeRetrievability=true`), never set by the list
  * projections. The one authoritative statement of its contract:
  * - `retrievable`: whether chat retrieval searches this lake for the CALLER (always the caller, even
@@ -447,6 +436,17 @@ export interface DataLakeRetrievabilityLabel {
 
 export type RetrievabilityLabeledDataLake = ManageableDataLakeConfig & DataLakeRetrievabilityLabel;
 
+/**
+ * DataLakeConfig plus the fields only a lake's EDITORS may read. Returned exclusively by the
+ * actor-aware list projections (listDataLakes / listAllDataLakes), which populate the extra
+ * fields per lake and only when `canManage` holds for the requesting caller.
+ *
+ * This is a separate type on purpose: DataLakeConfig is the shared shape the access filters and
+ * the tag/registry projections all operate on, and several of those have no actor to gate on.
+ * `toDataLakeConfig` is therefore structurally unable to carry an editor-only field - the
+ * invariant that keeps the prompt text out of every actor-less projection (see
+ * getAccessibleDataLakePrompts, which reads it off the raw documents for the same reason).
+ */
 export interface ManageableDataLakeConfig extends DataLakeConfig {
   /**
    * Per-lake system prompt (see IDataLake.systemPrompt). EDITOR-ONLY: a user who can merely

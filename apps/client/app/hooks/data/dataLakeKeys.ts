@@ -20,6 +20,12 @@ export const dataLakeKeys = {
   /** The lake list (GET /api/data-lakes). */
   list: ['data-lakes'] as const,
   /**
+   * The lake list with the opt-in `retrievable` label, optionally for one session (GET
+   * /api/data-lakes?includeRetrievability=true&sessionId=). Distinct from `list` so an unlabeled
+   * response never answers a labeled read; under the `data-lakes` prefix so list invalidations reach it.
+   */
+  listWithRetrievability: (sessionId: string | null) => ['data-lakes', 'retrievability', sessionId] as const,
+  /**
    * The lake list as it applies to ANOTHER user - same rows, but `canPreauthorize` resolved
    * against `userId` rather than the caller (GET /api/data-lakes?preauthorizableFor=, #2945).
    *
@@ -28,12 +34,6 @@ export const dataLakeKeys = {
    * ordinary lake list and offer the caller admissions that are not theirs. Kept UNDER the
    * `data-lakes` prefix on purpose, so a rename or visibility change still refreshes it.
    */
-  /**
-   * The lake list with the opt-in `retrievable` label, optionally for one session (GET
-   * /api/data-lakes?includeRetrievability=true&sessionId=). Distinct from `list` so an unlabeled
-   * response never answers a labeled read; under the `data-lakes` prefix so list invalidations reach it.
-   */
-  listWithRetrievability: (sessionId: string | null) => ['data-lakes', 'retrievability', sessionId] as const,
   preauthorizableFor: (userId: string) => ['data-lakes', 'preauthorizable-for', userId] as const,
   /** One lake's owner-facing access & membership view (GET /api/data-lakes/:id/access). */
   access: (dataLakeId: string) => ['data-lakes', 'access', dataLakeId] as const,

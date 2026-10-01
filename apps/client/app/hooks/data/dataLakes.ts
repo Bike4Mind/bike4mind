@@ -152,6 +152,9 @@ export function useGetDataLakesWithRetrievability(sessionId: string | null | und
       });
       return response.data.data;
     },
+    // A new session id is a new key; keep the previous rows (only `retrievable` differs) so the
+    // explorer's selection does not empty out and widen the scope while the label refetches.
+    placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
     staleTime: 1000 * 60 * 2,
   });
