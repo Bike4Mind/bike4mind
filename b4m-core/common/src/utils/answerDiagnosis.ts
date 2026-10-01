@@ -82,8 +82,11 @@ type RetrievalSummary = NonNullable<PromptMeta['retrieval']>;
  * on `lakeScope` (seed-written, first-writer-wins) rather than on the merged outcome, because the
  * merge ranks a tool's 'ok' above the forced arm's 'no_lakes' (see retrievalSummaryMerge.ts), so the
  * abstain is gone from `outcome` by the time a turn is stored.
+ *
+ * Keyed off the schema enums, like ForcedSkipReason, so a new reason fails to compile in the copy maps.
  */
-type ScopeAbstainReason = 'draft' | 'access';
+type ScopeAbstainReason =
+  NonNullable<RetrievalSummary['notServingLakes']>['reason'] | NonNullable<RetrievalSummary['excludedLakes']>['reason'];
 
 /**
  * `none`: no surface searched anything (the merged outcome kept 'no_lakes'). `ownFiles`: a tool
@@ -159,8 +162,9 @@ function scopeAbstain(promptMeta: PromptMeta): ScopeAbstain | undefined {
   } else {
     return undefined;
   }
-  if (retrieval.notServingLakes.count > 0) return { reason: 'draft', searched };
-  if ((retrieval.excludedLakes?.count ?? 0) > 0) return { reason: 'access', searched };
+  if (retrieval.notServingLakes.count > 0) return { reason: retrieval.notServingLakes.reason, searched };
+  const excluded = retrieval.excludedLakes;
+  if (excluded && excluded.count > 0) return { reason: excluded.reason, searched };
   return undefined;
 }
 

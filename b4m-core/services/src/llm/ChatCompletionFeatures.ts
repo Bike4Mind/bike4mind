@@ -253,6 +253,7 @@ interface DatabaseAdapters {
     // which this type must satisfy at every ChatCompletionFeatures call site.
     | 'countGateExcludedLakes'
     | 'findByDatalakeTag'
+    | 'findByDatalakeTags'
     | 'findById'
     | 'find'
     // Required, not optional, and that is the point: it is the anchor for the ownership-supersession

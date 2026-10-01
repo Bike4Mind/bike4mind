@@ -14,7 +14,7 @@ import type { IDataLakeRepository } from '@bike4mind/common';
  * absent-means-not-measured contract.
  */
 export async function countNotServingNamedLakes(
-  dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'> | undefined,
+  dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTags'> | undefined,
   userId: string | { toString(): string } | null | undefined,
   missingTags: string[],
   logger?: { warn(message: string): void }
@@ -25,9 +25,8 @@ export async function countNotServingNamedLakes(
   if (!dataLakes) return undefined;
   const callerId = String(userId);
   try {
-    // One indexed point read per tag; a session names a handful of lakes at most.
-    const lakes = await Promise.all(missingTags.map(tag => dataLakes.findByDatalakeTag(tag)));
-    return lakes.filter(lake => lake?.status === 'draft' && String(lake.createdByUserId) === callerId).length;
+    const lakes = await dataLakes.findByDatalakeTags(missingTags);
+    return lakes.filter(lake => lake.status === 'draft' && String(lake.createdByUserId) === callerId).length;
   } catch (err) {
     logger?.warn(`[dataLakes] not-serving named lake count skipped; lookup failed: ${(err as Error)?.message}`);
     return undefined;

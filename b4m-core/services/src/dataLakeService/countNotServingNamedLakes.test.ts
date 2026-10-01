@@ -6,7 +6,7 @@ const lake = (datalakeTag: string, status: IDataLakeDocument['status'], createdB
   ({ datalakeTag, status, createdByUserId }) as IDataLakeDocument;
 
 const repo = (lakes: IDataLakeDocument[]) => ({
-  findByDatalakeTag: vi.fn(async (tag: string) => lakes.find(l => l.datalakeTag === tag) ?? null),
+  findByDatalakeTags: vi.fn(async (tags: string[]) => lakes.filter(l => tags.includes(l.datalakeTag))),
 });
 
 describe('countNotServingNamedLakes', () => {
@@ -42,7 +42,7 @@ describe('countNotServingNamedLakes', () => {
   it('records a measured zero without a read when nothing is missing', async () => {
     const db = repo([]);
     expect(await countNotServingNamedLakes(db, 'user-1', [])).toBe(0);
-    expect(db.findByDatalakeTag).not.toHaveBeenCalled();
+    expect(db.findByDatalakeTags).not.toHaveBeenCalled();
   });
 
   it('reports unknown, not zero, when the lookup is not wired', async () => {
@@ -51,7 +51,7 @@ describe('countNotServingNamedLakes', () => {
 
   it('reports unknown, not zero, and warns when the lookup throws', async () => {
     const logger = { warn: vi.fn() };
-    const db = { findByDatalakeTag: vi.fn().mockRejectedValue(new Error('boom')) };
+    const db = { findByDatalakeTags: vi.fn().mockRejectedValue(new Error('boom')) };
     expect(await countNotServingNamedLakes(db, 'user-1', ['datalake:mine'], logger)).toBeUndefined();
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('boom'));
   });

@@ -4084,7 +4084,7 @@ describe('ChatCompletionProcess', () => {
       admittedPreauthorizedTags?: string[];
       // Sets the turn's user admin flag, so a test can pin that it reaches the identity-scoped count.
       userIsAdmin?: boolean;
-      // Wires mockDb.dataLakes.findByDatalakeTag, which the seed's not-serving (draft) count reads
+      // Wires mockDb.dataLakes.findByDatalakeTags, which the seed's not-serving (draft) count reads
       // for the session-named lakes that did not make lakeScope.
       lakesByTag?: Array<{ datalakeTag: string; status: string; createdByUserId: string }>;
       // Lakes the draft-inclusive ATTACHMENT scope reaches. Unset leaves that memo unseeded, so it
@@ -4105,8 +4105,8 @@ describe('ChatCompletionProcess', () => {
             : {}),
           ...(opts.lakesByTag
             ? {
-                findByDatalakeTag: vi.fn(
-                  async (tag: string) => opts.lakesByTag!.find(lake => lake.datalakeTag === tag) ?? null
+                findByDatalakeTags: vi.fn(async (tags: string[]) =>
+                  opts.lakesByTag!.filter(lake => tags.includes(lake.datalakeTag))
                 ),
               }
             : {}),
