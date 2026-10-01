@@ -80,9 +80,10 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
 }) => {
   const [faviconError, setFaviconError] = useState(false);
   const navigate = useNavigate();
-  // Opt-in host override: when a surface provides onCitationClick (e.g. the
-  // LibreOncology source drawer), the click is handled in-surface instead of
-  // navigating. Default (no provider) keeps the existing navigation behavior.
+  // Opt-in host overrides: when a surface provides onCitationClick (any source) or
+  // onInternalCitationClick (relative URLs only), the click is handled in-surface instead of
+  // navigating. onCitationClick wins when both are set. Default (no provider) keeps the existing
+  // navigation behavior.
   const { onCitationClick, onInternalCitationClick } = useCitationInteraction();
 
   // Detect internal (relative) vs external URLs
@@ -125,7 +126,9 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
     navigate({ to: url.pathname as never, search: Object.fromEntries(url.searchParams) as never });
   };
 
-  const handleInternalClick = onInternalCitationClick ? () => onInternalCitationClick(source) : navigateToInternal;
+  const handleInternalClick = () => {
+    if (!onInternalCitationClick?.(source)) navigateToInternal();
+  };
 
   const handleClick = handleHostClick ?? (isInternal ? handleInternalClick : undefined);
 
