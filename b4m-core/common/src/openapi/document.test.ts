@@ -185,9 +185,20 @@ describe('buildOpenApiDocument', () => {
     const { requestsPerMinute, requestsPerDay } = API_KEY_RATE_LIMIT_DEFAULTS;
     expect(doc.info.description).toContain(`${requestsPerMinute} requests/minute`);
     expect(doc.info.description).toContain(`${requestsPerDay} requests/day`);
-    for (const header of Object.keys(chat.responses['200'].headers).filter(h => h.startsWith('X-RateLimit-'))) {
-      expect(doc.info.description).toContain(`\`${header}\``);
-    }
+    // Hardcoded rather than read back from the spec, so a header dropped from RATE_LIMIT_HEADER_SPEC
+    // can't vanish from both sides of the comparison at once.
+    const expectedHeaders = [
+      'X-RateLimit-Limit-Minute',
+      'X-RateLimit-Remaining-Minute',
+      'X-RateLimit-Reset-Minute',
+      'X-RateLimit-Limit-Day',
+      'X-RateLimit-Remaining-Day',
+      'X-RateLimit-Reset-Day',
+    ];
+    const publishedHeaders = Object.keys(chat.responses['200'].headers).filter(h => h.startsWith('X-RateLimit-'));
+    expect(new Set(publishedHeaders)).toEqual(new Set(expectedHeaders));
+    const describedHeaders = [...doc.info.description.matchAll(/`(X-RateLimit-[A-Za-z-]+)`/g)].map(m => m[1]);
+    expect(new Set(describedHeaders)).toEqual(new Set(expectedHeaders));
   });
 
   it('gives every tag used by an operation a top-level description', () => {
@@ -196,6 +207,9 @@ describe('buildOpenApiDocument', () => {
       Object.values(pathItem as Record<string, { tags?: string[] }>).flatMap(op => op.tags ?? [])
     );
     expect(used.filter(tag => !declared.has(tag))).toEqual([]);
+    for (const tag of doc.tags as { name: string; description?: string }[]) {
+      expect(tag.description, tag.name).toBeTruthy();
+    }
   });
 
   it('declares X-Request-ID on every response', () => {

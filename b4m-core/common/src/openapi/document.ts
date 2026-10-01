@@ -78,8 +78,9 @@ function infoDescription(): string {
     '',
     'Reset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait ' +
       'that long before retrying. `GET /api/v1/me` and the poll endpoints listed under Async jobs are exempt ' +
-      'from the per-day ceiling, so polling a job costs one daily slot, but they still count per minute. A request rejected for a bad key (`401`) or a ' +
-      'missing scope (`403`) never reaches the limiter and carries no rate-limit headers.',
+      'from the per-day ceiling: a poll consumes no daily slot, and only the per-minute limit applies. A ' +
+      'request rejected for a bad key (`401`) or a missing scope (`403`) never reaches the limiter and carries ' +
+      'no rate-limit headers.',
     '',
     '## Credits',
     'Generation endpoints spend credits from the balance shown at `credits.balance` on `GET /api/v1/me` (the ' +
@@ -88,18 +89,24 @@ function infoDescription(): string {
       '(see Async jobs), so check both places.',
     '',
     '## Errors',
-    'Every error body uses one envelope, the `ErrorResponse` schema: `{ "error": string, "request_id": string }`, ' +
+    'Error bodies use one envelope, the `ErrorResponse` schema: `{ "error": string, "request_id"?: string }`, ' +
       'plus an `errorCode` on failures a client is expected to branch on (`insufficient_credits`, ' +
-      '`spend_cap_exceeded`, `provider_not_configured`, ...). Branch on the HTTP status and `errorCode`, never ' +
-      'on the `error` prose. Each operation lists the statuses it can return.',
+      '`spend_cap_exceeded`, `provider_not_configured`, ...). A deprecated `name` field may also appear until ' +
+      'its sunset date; do not rely on it. Branch on the HTTP status and `errorCode`, never on the `error` ' +
+      'prose. A few operations declare a bespoke error shape for a specific status (e.g. the `500` of the ' +
+      'tools endpoint and the `413` of text-to-speech); each operation lists the statuses it can return and ' +
+      'the body for each.',
     '',
     '## Async jobs',
     'Work that is not provably fast is queued and polled rather than held open:',
     '- **Chat** (`POST /api/chat`) and **image generation/editing** (`POST /api/v1/image-generations`, ' +
       '`POST /api/v1/image-edits`) return a quest. Poll `GET /api/v1/quests/{id}` until `status` is `done` or `stopped`; ' +
-      'chat text arrives in `reply`, generated images in `images`, edited images in `files[].url`. A failed ' +
-      'job is still `done`, with `type: "error"` and the reason in `reply` - check `type` before reading results. The outcome schema of each queued operation is linked from its response via the ' +
-      '`x-poll-result` extension. Chat also accepts `wait: true` to block until the reply is ready.',
+      'chat text arrives in `reply`, generated images in `images`, edited images in `files[].url`. Check for ' +
+      'failure before reading results: a job that ends `done` with `type: "error"` failed (the reason is in ' +
+      '`reply`), and a job that ends `stopped` also failed even when `type` is not `"error"` (its `reply` ' +
+      'carries an explanation, not an answer). The outcome schema of each of these quest handoffs is linked ' +
+      'from its response via the `x-poll-result` extension. Chat also accepts `wait: true` to block until ' +
+      'the reply is ready.',
     '- **Agent runs** (`POST /api/v1/agent-executions`) return `202`. Poll ' +
       '`GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.',
     '- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll ' +

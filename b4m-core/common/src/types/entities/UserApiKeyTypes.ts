@@ -202,10 +202,10 @@ export interface IUserApiKeyRateLimit {
  * in services so the public OpenAPI overview (openapi/document.ts) can quote the
  * real numbers; userApiKeyService/rateLimit.ts re-exports it for the enforcer.
  */
-export const API_KEY_RATE_LIMIT_DEFAULTS: IUserApiKeyRateLimit = {
+export const API_KEY_RATE_LIMIT_DEFAULTS: Readonly<IUserApiKeyRateLimit> = Object.freeze({
   requestsPerMinute: 60,
   requestsPerDay: 1000,
-};
+});
 
 /**
  * White-label config for an embed key (epic #41), rendered by the widget serve
