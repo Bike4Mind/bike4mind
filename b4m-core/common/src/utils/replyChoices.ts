@@ -61,6 +61,27 @@ export function extractChoicesBlock(reply: string): ExtractedChoices {
   return { text, choices, found: true };
 }
 
+/**
+ * {@link extractChoicesBlock} over every reply slot (one per completion when n > 1). Options come
+ * from the first slot carrying a valid block; every slot is stripped either way.
+ */
+export function stripChoicesFromReplies(replies: readonly string[]): {
+  replies: string[];
+  choices: ChoiceOption[] | null;
+  found: boolean;
+} {
+  let choices: ChoiceOption[] | null = null;
+  let found = false;
+  const stripped = replies.map(slot => {
+    const result = extractChoicesBlock(slot);
+    if (!result.found) return slot;
+    found = true;
+    choices ??= result.choices;
+    return result.text;
+  });
+  return { replies: stripped, choices, found };
+}
+
 function parseChoiceOptions(body: string): ChoiceOption[] | null {
   let parsed: unknown;
   try {
@@ -103,4 +124,41 @@ export function parseChoiceKey(prompt: string, optionCount: number): number | nu
 /** The user-visible text a picked option sends as the user's reply. */
 export function formatChoiceReply(option: ChoiceOption): string {
   return `${option.label}: ${option.description}`;
+}
+
+/** System guidance telling the model when and how to end a reply with a choices block. */
+export const REPLY_CHOICES_GUIDANCE = [
+  '# Reply choices',
+  '',
+  `When your reply ends by asking the user to pick between ${MIN_REPLY_CHOICES} and ${MAX_REPLY_CHOICES} concrete next actions,`,
+  'write the options in your prose as usual, then end the reply with one fenced block in the',
+  `\`${CHOICES_FENCE_LANGUAGE}\` language holding the same options in the same order. The app turns it into numbered buttons.`,
+  '',
+  '```' + CHOICES_FENCE_LANGUAGE,
+  '{"options":[{"label":"Short name","description":"The whole option in one sentence."}]}',
+  '```',
+  '',
+  `- label: 1 to 3 words, at most ${MAX_CHOICE_LABEL_LENGTH} characters.`,
+  `- description: the whole option in one sentence, at most ${MAX_CHOICE_DESCRIPTION_LENGTH} characters, worded so it reads correctly when sent back as the user's own reply.`,
+  '- The block must be the very last thing in the reply, and there is at most one.',
+  '- Do not add a block for steps the user carries out themselves, ranked results or examples,',
+  '  an open question that needs a typed answer, or a single recommendation the user simply accepts or redirects.',
+].join('\n');
+
+/**
+ * Finalize step for a completed reply: strips a trailing choices block from `replies` and `reply`
+ * and sets `suggestedChoices` (cleared when this reply offered none, so a regenerated turn never
+ * keeps the previous answer's buttons). Mutates `quest`.
+ */
+export function applyReplyChoices(quest: {
+  reply?: string | null;
+  replies?: string[];
+  suggestedChoices?: SuggestedChoices;
+}): void {
+  const fromSlots = stripChoicesFromReplies(quest.replies ?? []);
+  const fromReply = typeof quest.reply === 'string' ? extractChoicesBlock(quest.reply) : null;
+  if (fromSlots.found) quest.replies = fromSlots.replies;
+  if (fromReply?.found) quest.reply = fromReply.text;
+  const options = fromSlots.choices ?? fromReply?.choices ?? null;
+  quest.suggestedChoices = options ? { options } : undefined;
 }

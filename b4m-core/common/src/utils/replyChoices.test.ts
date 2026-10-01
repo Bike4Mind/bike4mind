@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   MAX_CHOICE_LABEL_LENGTH,
   MAX_REPLY_CHOICES,
+  REPLY_CHOICES_GUIDANCE,
+  applyReplyChoices,
   extractChoicesBlock,
   formatChoiceReply,
   parseChoiceKey,
+  stripChoicesFromReplies,
 } from './replyChoices';
 
 const two = [
@@ -115,5 +118,52 @@ describe('parseChoiceKey', () => {
 describe('formatChoiceReply', () => {
   it('sends exactly the label and description the user saw', () => {
     expect(formatChoiceReply(two[0])).toBe('Reformulate: Re-formulate with all three pools.');
+  });
+});
+
+describe('stripChoicesFromReplies', () => {
+  it('strips every slot and takes options from the first valid block', () => {
+    const other = [
+      { label: 'A', description: 'a' },
+      { label: 'B', description: 'b' },
+    ];
+    const result = stripChoicesFromReplies([
+      `${prose}\n\n${block('{bad')}`,
+      `${prose}\n\n${block(JSON.stringify(two))}`,
+      `${prose}\n\n${block(JSON.stringify(other))}`,
+    ]);
+    expect(result).toEqual({ replies: [prose, prose, prose], choices: two, found: true });
+  });
+
+  it('returns the slots untouched when none carries a block', () => {
+    expect(stripChoicesFromReplies(['a', 'b'])).toEqual({ replies: ['a', 'b'], choices: null, found: false });
+  });
+});
+
+describe('REPLY_CHOICES_GUIDANCE', () => {
+  it('shows the model a block in the exact shape the parser reads', () => {
+    const example = REPLY_CHOICES_GUIDANCE.match(/```choices\n(.*)\n```/)?.[1] ?? '';
+    const parsed = JSON.parse(example) as { options: Array<{ label: string; description: string }> };
+    expect(parsed.options[0]).toEqual({ label: expect.any(String), description: expect.any(String) });
+  });
+});
+
+describe('applyReplyChoices', () => {
+  it('strips the block from replies and reply and sets the options', () => {
+    const withBlock = `${prose}\n\n${block(JSON.stringify(two))}`;
+    const quest: Parameters<typeof applyReplyChoices>[0] = { reply: withBlock, replies: [withBlock] };
+    applyReplyChoices(quest);
+    expect(quest).toEqual({ reply: prose, replies: [prose], suggestedChoices: { options: two } });
+  });
+
+  it('clears choices left over from an earlier answer to the same turn', () => {
+    const quest: Parameters<typeof applyReplyChoices>[0] = {
+      reply: null,
+      replies: [prose],
+      suggestedChoices: { options: two, selectedIndex: 0 },
+    };
+    applyReplyChoices(quest);
+    expect(quest.suggestedChoices).toBeUndefined();
+    expect(quest.replies).toEqual([prose]);
   });
 });

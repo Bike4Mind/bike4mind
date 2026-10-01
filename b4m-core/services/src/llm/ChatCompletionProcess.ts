@@ -20,6 +20,8 @@ import {
   getCurrentPathFromContext,
   getViewSummaryForLLM,
   isNavigableFeaturePath,
+  applyReplyChoices,
+  REPLY_CHOICES_GUIDANCE,
   ReasoningEffort,
   ICacheStrategy,
   generateAnonymousSessionId,
@@ -3447,6 +3449,11 @@ export class ChatCompletionProcess {
               },
             ]
           : [],
+        // Prompt-only, so unlike viewRegistry it needs no tool and runs on every in-app turn;
+        // withheld with the other auto-offers. The block it asks for is stripped by applyReplyChoices,
+        // which Research Mode's early return never reaches - so it is withheld there too.
+        replyChoices:
+          skipAutoOffers || isResearchMode ? [] : [{ role: 'system' as const, content: REPLY_CHOICES_GUIDANCE }],
         toolPrompt: toolPromptMessage ? [toolPromptMessage] : [], // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
         agentDetection: featureContextMessages['agentDetection'], // Add agent system prompts
         questMaster: featureContextMessages['questMaster'],
@@ -4988,6 +4995,8 @@ export class ChatCompletionProcess {
 
         // Mark quest as done when all the replies are received
         quest.status = successStatus();
+        // Before the incomplete-answer notice below appends its own slot, so the block is still trailing.
+        applyReplyChoices(quest);
 
         const incompleteAnswerNotice = buildIncompleteAnswerNotice({
           stopped: quest.status === 'stopped',
