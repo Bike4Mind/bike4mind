@@ -57,6 +57,48 @@ export interface WebSearchImageResult {
   source: string;
 }
 
+/**
+ * Per-process cache for web-search results. Keyed on normalized query + result count, with a
+ * short TTL so repeated/similar searches within a turn or across back-to-back turns reuse the
+ * same provider response. The cache lives in the Fargate container's memory and is never shared
+ * across containers or persisted.
+ */
+const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const SEARCH_CACHE_MAX_ENTRIES = 200;
+
+interface CachedSearch {
+  results: WebSearchProviderResult[];
+  expiresAt: number;
+}
+
+const searchCache = new Map<string, CachedSearch>();
+
+function searchCacheKey(query: string, numResults: number): string {
+  return `${query.trim().toLowerCase()}::${numResults}`;
+}
+
+function searchCacheGet(query: string, numResults: number): WebSearchProviderResult[] | undefined {
+  const key = searchCacheKey(query, numResults);
+  const entry = searchCache.get(key);
+  if (!entry) return undefined;
+  if (Date.now() > entry.expiresAt) {
+    searchCache.delete(key);
+    return undefined;
+  }
+  return entry.results;
+}
+
+function searchCacheSet(query: string, numResults: number, results: WebSearchProviderResult[]): void {
+  if (searchCache.size >= SEARCH_CACHE_MAX_ENTRIES) {
+    const firstKey = searchCache.keys().next().value;
+    if (firstKey !== undefined) searchCache.delete(firstKey);
+  }
+  searchCache.set(searchCacheKey(query, numResults), {
+    results,
+    expiresAt: Date.now() + SEARCH_CACHE_TTL_MS,
+  });
+}
+
 /** A web-search backend. `search` never assumes results exist and tolerates malformed responses. */
 export interface WebSearchProvider {
   name: 'serpapi' | 'searxng';
@@ -766,3 +808,41 @@ export async function resolveWebSearchProvider(
   if (serperKey) return createSerpApiProvider(adapters);
   return null;
 }
+
+/**
+ * Returns [primary, fallback] providers. The fallback is the other provider when both are
+ * configured, or null when only one (or neither) is available. An explicit admin choice
+ * ('serpapi' | 'searxng') still forces that one as primary; the other becomes fallback only
+ * under 'auto'.
+ */
+export async function resolveWebSearchProviders(
+  adapters: GetEffectiveApiKeyAdapters
+): Promise<[WebSearchProvider | null, WebSearchProvider | null]> {
+  const choice = (await getWebSearchProviderSetting(adapters)) ?? 'auto';
+  const searxngUrl = await getSearxngUrl(adapters);
+  const serperKey = await getSerperKey(adapters);
+
+  if (choice === 'searxng') {
+    const primary = searxngUrl ? createSearxngProvider(searxngUrl) : null;
+    const fallback = serperKey ? createSerpApiProvider(adapters) : null;
+    return [primary, fallback];
+  }
+  if (choice === 'serpapi') {
+    const primary = serperKey ? createSerpApiProvider(adapters) : null;
+    const fallback = searxngUrl ? createSearxngProvider(searxngUrl) : null;
+    return [primary, fallback];
+  }
+  // auto: prefer SearXNG, fall back to SerpAPI
+  if (searxngUrl && serperKey) {
+    return [createSearxngProvider(searxngUrl), createSerpApiProvider(adapters)];
+  }
+  if (searxngUrl) return [createSearxngProvider(searxngUrl), null];
+  if (serperKey) return [createSerpApiProvider(adapters), null];
+  return [null, null];
+}
+
+function searchCacheClear(): void {
+  searchCache.clear();
+}
+
+export { searchCacheGet, searchCacheSet, searchCacheClear };

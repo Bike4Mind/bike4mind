@@ -11,6 +11,7 @@ import {
   WEB_SEARCH_NOT_CONFIGURED_MSG,
   shouldIncludeImages,
   formatImageResults,
+  searchCacheClear,
 } from './index';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 
@@ -28,6 +29,8 @@ const mockGetSerperKey = vi.mocked(getSerperKey);
 const mockGetSearxngUrl = vi.mocked(getSearxngUrl);
 const mockGetProvider = vi.mocked(getWebSearchProviderSetting);
 const mockAdapters = {} as Parameters<typeof serpApiSearch>[0];
+
+afterEach(() => searchCacheClear());
 
 describe('serpApiSearch — missing key', () => {
   it('returns an object with empty organic_results when no API key is configured', async () => {
@@ -67,7 +70,7 @@ describe('webSearchTool - search budget', () => {
   const buildTool = () => {
     const context = {
       db: {},
-      logger: { log: vi.fn() },
+      logger: { log: vi.fn(), error: vi.fn() },
       statusUpdate: vi.fn(),
       onStart: vi.fn(),
     } as unknown as ToolContext;
@@ -147,7 +150,8 @@ describe('webSearchTool - search budget', () => {
     mockGetProvider.mockRejectedValueOnce(new Error('db down'));
     const toolFn = buildTool().toolFn;
 
-    await expect(toolFn({ query: 'a' })).rejects.toThrow('db down');
+    // Graceful degradation: the first call catches the error and returns a message
+    await expect(toolFn({ query: 'a' })).resolves.toMatch(/failed.*db down/i);
     await expect(toolFn({ query: 'b' })).resolves.toContain('example.com');
   });
 });
