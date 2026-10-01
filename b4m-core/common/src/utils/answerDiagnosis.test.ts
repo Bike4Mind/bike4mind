@@ -191,6 +191,77 @@ describe('retrieval check', () => {
   });
 });
 
+// A session naming a draft lake narrows to an empty scope, so the forced arm abstains with
+// 'no_lakes' while search_knowledge_base runs over nothing and writes 'ok' with zero chunks. The
+// merge keeps 'ok', so the stored turn is exactly this shape.
+describe("scope abstain (the chat's lake was never searched)", () => {
+  const draftAbstain: PromptMeta = {
+    retrieval: {
+      attempted: true,
+      outcome: 'ok',
+      mode: 'forced',
+      surfaces: ['forced-retrieval', 'knowledgeBaseSearch'],
+      dataLakeTags: [],
+      injected: { chunks: 0, chars: 0 },
+      lakeScope: [],
+      notServingLakes: { count: 1, reason: 'draft' },
+      excludedLakes: { count: 0, reason: 'access' },
+    },
+  };
+  const withRetrieval = (over: Partial<NonNullable<PromptMeta['retrieval']>>): PromptMeta => ({
+    retrieval: { ...draftAbstain.retrieval!, ...over },
+  });
+  const retrievalCheck = (meta: PromptMeta) => diagnoseAnswer(meta).checks.find(c => c.id === 'retrieval')!;
+
+  it('names the draft as the cause instead of reporting a broken pipeline', () => {
+    const diagnosis = diagnoseAnswer(draftAbstain);
+    const check = retrievalCheck(draftAbstain);
+    expect(check.status).toBe('warn');
+    expect(check.detail).toContain('is a draft');
+    expect(check.remedy).toContain('Publish the lake');
+    expect(diagnosis.verdict.status).toBe('warn');
+    expect(diagnosis.verdict.headline).toBe('The model may not have had what it needed');
+    expect(diagnosis.verdict.body).toContain('Retrieval');
+  });
+
+  it("does not call the lake that was never searched 'searchable'", () => {
+    expect(statusOf(draftAbstain, 'corpus')).toBe('unknown');
+    expect(detailOf(draftAbstain, 'corpus')).not.toContain('searchable');
+  });
+
+  it('gives the same answer when the merged outcome kept the abstain', () => {
+    const meta = withRetrieval({ outcome: 'no_lakes', injected: undefined });
+    expect(retrievalCheck(meta).status).toBe('warn');
+    expect(retrievalCheck(meta).detail).toContain('is a draft');
+  });
+
+  it('names an access exclusion when no draft explains the empty scope', () => {
+    const meta = withRetrieval({
+      notServingLakes: { count: 0, reason: 'draft' },
+      excludedLakes: { count: 1, reason: 'access' },
+    });
+    expect(retrievalCheck(meta).status).toBe('warn');
+    expect(retrievalCheck(meta).detail).toContain('not one you can currently reach');
+    expect(retrievalCheck(meta).remedy).toContain('access');
+  });
+
+  it('keeps a real failure on whatever did run as the headline', () => {
+    expect(retrievalCheck(withRetrieval({ outcome: 'failed' })).status).toBe('fail');
+    expect(retrievalCheck(withRetrieval({ outcome: 'not_indexed' })).status).toBe('fail');
+  });
+
+  it('still fails a genuine zero over a lake that was in scope', () => {
+    const meta = withRetrieval({ lakeScope: ['datalake:handbook'] });
+    expect(retrievalCheck(meta).status).toBe('fail');
+    expect(retrievalCheck(meta).detail).toContain('nothing was retrieved');
+  });
+
+  it('still fails an empty scope with no recorded cause, rather than guessing one', () => {
+    const meta = withRetrieval({ notServingLakes: undefined, excludedLakes: undefined });
+    expect(retrievalCheck(meta).status).toBe('fail');
+  });
+});
+
 describe('corpus check', () => {
   it('is driven off not_indexed directly', () => {
     const meta: PromptMeta = { retrieval: { attempted: true, outcome: 'not_indexed', surfaces: [], dataLakeTags: [] } };
@@ -202,6 +273,12 @@ describe('corpus check', () => {
     expect(statusOf({}, 'corpus')).toBe('unknown');
     expect(statusOf({ retrieval: { attempted: false, surfaces: [], dataLakeTags: [] } }, 'corpus')).toBe('unknown');
     expect(statusOf(healthy, 'corpus')).toBe('ok');
+  });
+
+  it('is unknown, not searchable, when no knowledge base was in scope', () => {
+    const meta: PromptMeta = { retrieval: { attempted: true, outcome: 'no_lakes', surfaces: [], dataLakeTags: [] } };
+    expect(statusOf(meta, 'corpus')).toBe('unknown');
+    expect(detailOf(meta, 'corpus')).not.toContain('searchable');
   });
 });
 

@@ -75,6 +75,36 @@ const FORCED_SKIP_REMEDY: Record<ForcedSkipReason, string> = {
   no_lake_scope: 'Pick the data lakes this chat should use, or clear the choice to use every one you can reach.',
 };
 
+type RetrievalSummary = NonNullable<PromptMeta['retrieval']>;
+
+/**
+ * Why the session's lake never reached any surface on this turn, when the seed recorded one. Keyed
+ * on `lakeScope` (seed-written, first-writer-wins) rather than on the merged outcome, because the
+ * merge ranks a tool's 'ok' above the forced arm's 'no_lakes' (see retrievalSummaryMerge.ts), so the
+ * abstain is gone from `outcome` by the time a turn is stored.
+ */
+type ScopeAbstain = 'draft' | 'access';
+
+const SCOPE_ABSTAIN_COPY: Record<ScopeAbstain, string> = {
+  draft: "This chat's data lake is a draft, so it was not searched - drafts do not ground answers.",
+  access: "This chat's data lake is not one you can currently reach, so it was not searched.",
+};
+
+const SCOPE_ABSTAIN_REMEDY: Record<ScopeAbstain, string> = {
+  draft: 'Publish the lake to ground answers in it.',
+  access: 'Check that you still have access to it, or pick a different lake for this chat.',
+};
+
+// Only an EMPTY recorded scope: a partial abstain (one named lake serving, another a draft) still
+// searched something, so its volume is judged as usual. Draft wins a tie because its remedy is the
+// caller's own to take.
+function scopeAbstain(retrieval: RetrievalSummary | undefined): ScopeAbstain | undefined {
+  if (!retrieval?.lakeScope || retrieval.lakeScope.length > 0) return undefined;
+  if ((retrieval.notServingLakes?.count ?? 0) > 0) return 'draft';
+  if ((retrieval.excludedLakes?.count ?? 0) > 0) return 'access';
+  return undefined;
+}
+
 const countDocuments = (promptMeta: PromptMeta): number =>
   promptMeta.citables?.filter(c => c.type === 'document').length ?? 0;
 
@@ -120,6 +150,19 @@ function diagnoseRetrieval(promptMeta: PromptMeta): DiagnosisCheck {
     };
   }
 
+  // Ahead of the volume and no-lakes arms, behind 'failed' and 'not_indexed': those are real faults
+  // on whatever did run, while a zero here is the expected result of searching no lake at all.
+  const abstain = scopeAbstain(retrieval);
+  if (abstain && (retrieval.outcome === 'ok' || retrieval.outcome === 'no_lakes')) {
+    return {
+      id: 'retrieval',
+      label,
+      status: 'warn',
+      detail: SCOPE_ABSTAIN_COPY[abstain],
+      remedy: SCOPE_ABSTAIN_REMEDY[abstain],
+    };
+  }
+
   switch (retrieval.outcome) {
     case 'failed':
       return {
@@ -160,7 +203,7 @@ function diagnoseRetrieval(promptMeta: PromptMeta): DiagnosisCheck {
   }
 }
 
-function diagnoseVolume(promptMeta: PromptMeta, retrieval: NonNullable<PromptMeta['retrieval']>): DiagnosisCheck {
+function diagnoseVolume(promptMeta: PromptMeta, retrieval: RetrievalSummary): DiagnosisCheck {
   const label = 'Retrieval';
   const injected = retrieval.injected;
 
@@ -274,6 +317,25 @@ function diagnoseCorpus(promptMeta: PromptMeta): DiagnosisCheck {
       label,
       status: 'unknown',
       detail: 'No search ran, so nothing is known about whether the documents in scope are indexed.',
+    };
+  }
+
+  // "Searchable" would be a claim about a lake no surface ever compared against.
+  if (scopeAbstain(promptMeta.retrieval)) {
+    return {
+      id: 'corpus',
+      label,
+      status: 'unknown',
+      detail: "This chat's data lake was not searched, so nothing is known about whether it is indexed.",
+    };
+  }
+
+  if (outcome === 'no_lakes') {
+    return {
+      id: 'corpus',
+      label,
+      status: 'unknown',
+      detail: 'No knowledge base was in scope, so nothing is known about whether one is indexed.',
     };
   }
 
