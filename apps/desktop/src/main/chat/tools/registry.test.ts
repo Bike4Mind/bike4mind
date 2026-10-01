@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findTool, toolsForRequest } from './registry';
+import { findTool, isOfferedEditTool, toolsForRequest } from './registry';
 import type { ToolSchema } from './types';
 
 const names = (options: Parameters<typeof toolsForRequest>[0]) =>
@@ -62,5 +62,44 @@ describe('toolsForRequest', () => {
     // The MCP registry is the manager's; a declared MCP schema must not become findable here,
     // or the built-ins-first lookup in ChatService would be resolving MCP tools by accident.
     expect(findTool('mcp__notion_search')).toBeUndefined();
+  });
+
+  describe('editing tools by model', () => {
+    const edit = ['file_edit', 'file_write'];
+
+    it('offers GPT models apply_patch instead of file_edit and file_write', () => {
+      const declared = names({ roots: ['/tmp'], media: false, host: false, modelId: 'gpt-5' });
+      expect(declared).toContain('apply_patch');
+      for (const name of edit) expect(declared).not.toContain(name);
+    });
+
+    it('keeps file_edit and file_write, and no apply_patch, for gpt-4, oss and non-GPT models', () => {
+      for (const modelId of ['gpt-4o', 'gpt-oss-120b', 'claude-sonnet-5-5', 'gemini-3-flash', undefined]) {
+        const declared = names({ roots: ['/tmp'], media: false, host: false, modelId });
+        expect(declared, String(modelId)).toEqual(expect.arrayContaining(edit));
+        expect(declared, String(modelId)).not.toContain('apply_patch');
+      }
+    });
+
+    it('leaves the other local tools and explore alone', () => {
+      const gpt = names({ roots: ['/tmp'], media: false, host: false, explore: true, modelId: 'gpt-5' });
+      const other = names({ roots: ['/tmp'], media: false, host: false, explore: true, modelId: 'claude-sonnet-5-5' });
+      const strip = (list: string[]) => list.filter(name => name !== 'apply_patch' && !edit.includes(name));
+      expect(strip(gpt)).toEqual(strip(other));
+      expect(gpt).toContain('explore');
+    });
+
+    it('offers no edit tool at all without a granted folder', () => {
+      expect(names({ roots: [], media: false, host: false, modelId: 'gpt-5' })).toEqual([]);
+    });
+
+    it('finds every edit tool by name, and says which family a model was offered', () => {
+      for (const name of ['apply_patch', ...edit]) expect(findTool(name)).toBeDefined();
+      expect(isOfferedEditTool('apply_patch', true)).toBe(true);
+      expect(isOfferedEditTool('apply_patch', false)).toBe(false);
+      expect(isOfferedEditTool('file_edit', true)).toBe(false);
+      expect(isOfferedEditTool('file_write', false)).toBe(true);
+      expect(isOfferedEditTool('file_read', true)).toBe(true);
+    });
   });
 });

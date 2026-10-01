@@ -1,11 +1,18 @@
-import { useState } from 'react';
+import { useState, type MouseEvent } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import CircularProgress from '@mui/joy/CircularProgress';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import type { ChatApprovalAnswer, ChatToolCall, ChatToolNotice, ChatToolStatus } from '@shared/chat';
+import type {
+  ChatApprovalAnswer,
+  ChatDiff,
+  ChatMoveToBackgroundResult,
+  ChatToolCall,
+  ChatToolNotice,
+  ChatToolStatus,
+} from '@shared/chat';
 import { ApprovalChoiceButtons } from './ApprovalChoice';
 import { DiffView } from './DiffView';
 import { ChevronIcon } from './icons';
@@ -35,11 +42,69 @@ const HOST_QUESTION: Record<string, string> = {
 
 export type RespondToApproval = (approvalId: string, answer: ChatApprovalAnswer) => void;
 
+/** Promote the foreground command one running tool call is waiting on; see BackgroundTaskPanel. */
+export type MoveCallToBackground = (callId: string) => Promise<ChatMoveToBackgroundResult>;
+
+/** The one tool whose call is a command this app is sitting and waiting on. */
+function isMovable(call: ChatToolCall): boolean {
+  return call.name === 'bash_execute' && call.status === 'running';
+}
+
+/**
+ * The way out of waiting for a command that is taking longer than anyone meant it to.
+ *
+ * Only on a running row, because that is the only moment the choice exists: once the command
+ * has settled there is nothing left to move, and the row says so by losing the control.
+ *
+ * A refusal is shown rather than swallowed. The background process cap is the one that will
+ * actually be hit, and "nothing happened" next to a command still spinning would read as a
+ * broken button rather than as a full queue.
+ */
+function MoveToBackgroundButton({ call, onMove }: { call: ChatToolCall; onMove: MoveCallToBackground }) {
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const move = (event: MouseEvent) => {
+    // The control sits inside a <summary>, where a plain click would also toggle the row open.
+    event.preventDefault();
+    event.stopPropagation();
+    setBusy(true);
+    setRefusal(null);
+    void onMove(call.id)
+      .then(result => {
+        if (!result.ok) setRefusal(result.message);
+      })
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <>
+      <Button
+        size="sm"
+        variant="plain"
+        color="neutral"
+        disabled={busy}
+        onClick={move}
+        sx={{ flex: '0 0 auto', minHeight: 0, px: 0.75, py: 0, fontSize: 'xs', fontWeight: 'md' }}
+        data-testid="component-action-element"
+      >
+        Move to background
+      </Button>
+      {refusal && (
+        <Typography level="body-xs" textColor="warning.plainColor" noWrap sx={{ flex: '0 1 auto' }}>
+          {refusal}
+        </Typography>
+      )}
+    </>
+  );
+}
+
 /** Named for what it does to the file, so nothing reads as a generic "allow this". */
-const APPROVAL_QUESTION: Record<'create' | 'overwrite' | 'edit', string> = {
+const APPROVAL_QUESTION: Record<ChatDiff['operation'], string> = {
   create: 'Create this file?',
   overwrite: 'Replace this file?',
   edit: 'Apply this edit?',
+  delete: 'Delete this file?',
 };
 
 /**
@@ -85,7 +150,8 @@ function ApprovalPrompt({
   approvalId: string;
   onRespond: RespondToApproval;
 }) {
-  const diff = call.approvalDiff;
+  const diffs = call.approvalDiffs ?? (call.approvalDiff ? [call.approvalDiff] : []);
+  const diff = diffs[0];
   // No undo behind it, so the card is red and offers no way to stop being asked. Answering
   // "always" would be a single click standing in for consent to a later, different deletion.
   const irreversible = call.approvalIrreversible === true;
@@ -101,7 +167,9 @@ function ApprovalPrompt({
     >
       <Typography level="body-xs" fontWeight="lg">
         {diff
-          ? APPROVAL_QUESTION[diff.operation]
+          ? diffs.length > 1
+            ? `Apply this patch to ${diffs.length} files?`
+            : APPROVAL_QUESTION[diff.operation]
           : (HOST_QUESTION[call.name] ??
             (isGeneration(call.name)
               ? 'Generate this? It costs credits.'
@@ -111,9 +179,11 @@ function ApprovalPrompt({
       </Typography>
 
       {diff ? (
-        <Box sx={{ mt: 0.75 }}>
-          <DiffView diff={diff} />
-        </Box>
+        <Stack spacing={0.75} sx={{ mt: 0.75 }}>
+          {diffs.map(each => (
+            <DiffView key={each.path} diff={each} />
+          ))}
+        </Stack>
       ) : (
         <Box
           sx={{
@@ -196,7 +266,8 @@ function ApprovalPrompt({
 function ToolCallDetail({ call }: { call: ChatToolCall }) {
   // The diff names the file in its own header, so repeating the path above it is the same
   // string twice in three lines - and a write has no other argument worth a line of its own.
-  const argument = call.diff ? '' : summarizeInput(call);
+  const diffs = call.diffs ?? (call.diff ? [call.diff] : []);
+  const argument = diffs.length > 0 ? '' : summarizeInput(call);
 
   return (
     <Box data-testid="chat-tool-detail">
@@ -214,10 +285,12 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
 
       {/* `diff`, never `approvalDiff`: this row is a record of a turn that has happened, and
           only the first of those is one. See ChatToolCall.diff. */}
-      {call.diff && (
-        <Box sx={{ mt: 0.5 }}>
-          <DiffView diff={call.diff} />
-        </Box>
+      {diffs.length > 0 && (
+        <Stack spacing={0.5} sx={{ mt: 0.5 }}>
+          {diffs.map(each => (
+            <DiffView key={each.path} diff={each} />
+          ))}
+        </Stack>
       )}
 
       <Typography
@@ -238,6 +311,7 @@ const ROW_TONE: Record<ChatToolStatus, string> = {
   'awaiting-approval': 'primary.plainColor',
   running: 'text.tertiary',
   done: 'text.tertiary',
+  moved: 'text.tertiary',
   error: 'danger.plainColor',
   denied: 'warning.plainColor',
 };
@@ -269,7 +343,7 @@ function DiffStat({ totals }: { totals: DiffTotals }) {
  * ChatService.ts" is the right thing to read at rest and the wrong thing to navigate by, and a
  * reader who opened the row did so to find which of the seven is the one they want.
  */
-function ToolCallEntry({ call, first }: { call: ChatToolCall; first: boolean }) {
+function ToolCallEntry({ call, first, onMove }: { call: ChatToolCall; first: boolean; onMove?: MoveCallToBackground }) {
   const [open, setOpen] = useState(false);
   const totals = diffTotals([call]);
 
@@ -303,6 +377,7 @@ function ToolCallEntry({ call, first }: { call: ChatToolCall; first: boolean }) 
           {toolRowLabel(call)}
         </Typography>
         {totals && <DiffStat totals={totals} />}
+        {onMove && isMovable(call) && <MoveToBackgroundButton call={call} onMove={onMove} />}
         <Box sx={{ display: 'flex', opacity: 0.6 }}>
           <ChevronIcon open={open} />
         </Box>
@@ -326,10 +401,13 @@ function ToolCallEntry({ call, first }: { call: ChatToolCall; first: boolean }) 
  * twenty of them, and the reader is scanning for where the answer resumes. An indented aside
  * with a rule is the shape of a transcript, and the eye skips it without having to read it.
  */
-function ToolGroupRow({ group }: { group: ToolCallGroup }) {
+function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCallToBackground }) {
   const [open, setOpen] = useState(false);
   const running = group.status === 'running';
   const single = group.calls.length === 1;
+  // On the summary only when there is no ambiguity about which command it would move; a group
+  // running several at once lists them, and each entry carries its own control instead.
+  const movable = group.calls.filter(isMovable);
 
   return (
     <Box sx={{ borderLeft: '2px solid', borderColor: 'divider', pl: 1.25 }}>
@@ -375,6 +453,7 @@ function ToolGroupRow({ group }: { group: ToolCallGroup }) {
             {group.label}
           </Typography>
           {group.diffstat && <DiffStat totals={group.diffstat} />}
+          {onMove && movable.length === 1 && <MoveToBackgroundButton call={movable[0]} onMove={onMove} />}
           <Box sx={{ display: 'flex', opacity: 0.6 }}>
             <ChevronIcon open={open} />
           </Box>
@@ -396,7 +475,12 @@ function ToolGroupRow({ group }: { group: ToolCallGroup }) {
             data-testid="chat-tool-entries"
           >
             {group.calls.map((call, index) => (
-              <ToolCallEntry key={call.id} call={call} first={index === 0} />
+              <ToolCallEntry
+                key={call.id}
+                call={call}
+                first={index === 0}
+                {...(movable.length > 1 ? { onMove } : {})}
+              />
             ))}
           </Sheet>
         )}
@@ -415,7 +499,16 @@ function ToolGroupRow({ group }: { group: ToolCallGroup }) {
   );
 }
 
-export function ToolCallList({ calls, onRespond }: { calls: ChatToolCall[]; onRespond: RespondToApproval }) {
+export function ToolCallList({
+  calls,
+  onRespond,
+  onMove,
+}: {
+  calls: ChatToolCall[];
+  onRespond: RespondToApproval;
+  /** Absent where there is no conversation to move a command in; the control is then not drawn. */
+  onMove?: MoveCallToBackground;
+}) {
   if (calls.length === 0) return null;
 
   return (
@@ -425,7 +518,7 @@ export function ToolCallList({ calls, onRespond }: { calls: ChatToolCall[]; onRe
         return group.status === 'awaiting-approval' && waiting.approvalId ? (
           <ApprovalPrompt key={group.id} call={waiting} approvalId={waiting.approvalId} onRespond={onRespond} />
         ) : (
-          <ToolGroupRow key={group.id} group={group} />
+          <ToolGroupRow key={group.id} group={group} {...(onMove ? { onMove } : {})} />
         );
       })}
     </Stack>

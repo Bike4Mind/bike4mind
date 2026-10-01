@@ -13,7 +13,12 @@ import type { SkillSource } from './skills';
 
 export type ChatRole = 'user' | 'assistant';
 
-export type ChatToolStatus = 'awaiting-approval' | 'running' | 'done' | 'error' | 'denied';
+/**
+ * 'moved' is a settled state that is not an outcome: the command did not finish here, it was
+ * handed to the background and is still going. Neither 'done' nor 'error' could say that
+ * without claiming something that did not happen.
+ */
+export type ChatToolStatus = 'awaiting-approval' | 'running' | 'done' | 'error' | 'denied' | 'moved';
 
 /**
  * One line of a proposed change, as the approval prompt renders it.
@@ -49,7 +54,9 @@ export interface ChatDiffLine {
 export interface ChatDiff {
   /** Absolute path the change applies to. */
   path: string;
-  operation: 'create' | 'overwrite' | 'edit';
+  operation: 'create' | 'overwrite' | 'edit' | 'delete';
+  /** Set when the file was renamed as well as changed: where it was before. */
+  movedFrom?: string;
   added: number;
   removed: number;
   lines: ChatDiffLine[];
@@ -133,6 +140,8 @@ export interface ChatToolCall {
    * user sees it before answering; nothing has been written while this is on screen.
    */
   approvalDiff?: ChatDiff;
+  /** Set instead of `approvalDiff` when one call proposes changes to several files. */
+  approvalDiffs?: ChatDiff[];
   /**
    * Latest progress line while `status` is 'running'. Only the tools that take tens of seconds
    * report one: image generation polls a server-side job, and a bare spinner is
@@ -161,6 +170,8 @@ export interface ChatToolCall {
    * it did then, with no diff panel.
    */
   diff?: ChatDiff;
+  /** Set instead of `diff` when one call changed several files; same contract. */
+  diffs?: ChatDiff[];
   /** Epoch ms. Display and diagnosis only; never sent to the model. Absent on older sessions. */
   startedAt?: number;
   endedAt?: number;
@@ -509,6 +520,15 @@ export interface BackgroundProcessInfo {
   /** Set when the process could not be spawned at all. */
   error?: string;
 }
+
+/**
+ * The answer to moving a running foreground command to the background.
+ *
+ * A refusal is a result rather than a thrown error: a command that finished a moment before the
+ * click, and one turned away by the background process cap, are both things the user asked for
+ * and is entitled to read back.
+ */
+export type ChatMoveToBackgroundResult = { ok: true; process: BackgroundProcessInfo } | { ok: false; message: string };
 
 /**
  * One model this deployment offers, as the picker renders it.

@@ -27,6 +27,16 @@ function markup(calls: ChatToolCall[]): string {
   return renderToStaticMarkup(<ToolCallList calls={calls} onRespond={() => {}} />);
 }
 
+function bash(overrides: Partial<ChatToolCall> = {}): ChatToolCall {
+  return { id: 'call-1', name: 'bash_execute', input: { command: 'pnpm build' }, status: 'running', ...overrides };
+}
+
+function withMove(calls: ChatToolCall[]): string {
+  return renderToStaticMarkup(
+    <ToolCallList calls={calls} onRespond={() => {}} onMove={async () => ({ ok: false, message: 'no' })} />
+  );
+}
+
 describe('ToolCallList', () => {
   it('draws the approval card for a call waiting in this conversation', () => {
     const html = markup([awaiting()]);
@@ -42,6 +52,28 @@ describe('ToolCallList', () => {
     const html = markup([awaiting({ approvalIrreversible: true })]);
     expect(html).toContain('data-irreversible="true"');
     expect(html).not.toContain('data-testid="chat-tool-approve-always"');
+  });
+
+  it('offers a running command a way out of the foreground', () => {
+    const html = withMove([bash()]);
+    expect(html).toContain('data-testid="component-action-element"');
+    expect(html).toContain('Move to background');
+  });
+
+  /** The choice only exists while the app is still waiting: after that there is nothing to move. */
+  it('draws no move control on a call that has already settled', () => {
+    expect(withMove([bash({ status: 'done', preview: 'built' })])).not.toContain(
+      'data-testid="component-action-element"'
+    );
+    expect(withMove([bash({ name: 'file_read', input: { path: 'a.ts' } })])).not.toContain(
+      'data-testid="component-action-element"'
+    );
+  });
+
+  it('says a moved command was moved rather than that it finished', () => {
+    const html = withMove([bash({ status: 'moved', preview: 'moved to the background' })]);
+    expect(html).toContain('Moved pnpm build to the background');
+    expect(html).toContain('data-status="moved"');
   });
 
   /**

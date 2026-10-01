@@ -15,7 +15,7 @@ import { contentColumnSx, scrollingColumnHostSx } from './layout';
 import { ReplyMarkdown } from './markdown/ReplyMarkdown';
 import { displayText, relaySummary } from './relayRows';
 import { callsIn, roundsOf } from './replyRounds';
-import { ToolCallList, type RespondToApproval } from './ToolCallList';
+import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
 
 /** What each budget the agent loop enforces is called in the thread. See isTurnBudgetStop. */
 const BUDGET_STOP_LABELS: Record<string, string> = {
@@ -156,12 +156,15 @@ function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: str
 function AssistantTurn({
   message,
   onRespond,
+  onMove,
   onContinue,
   status,
   live = false,
 }: {
   message: ChatMessage;
   onRespond: RespondToApproval;
+  /** Absent with no conversation open; the running-command control is then not drawn. */
+  onMove?: MoveCallToBackground;
   /** The reply still streaming: its last round may end in code that is still being written. */
   live?: boolean;
   /** Absent unless this is the turn a Continue would resume; see MessageThread. */
@@ -194,7 +197,7 @@ function AssistantTurn({
                   : 'An artifact was cut off before it was finished, so it was not saved.'}
               </Typography>
             )}
-            <ToolCallList calls={callsIn(round, toolCalls)} onRespond={onRespond} />
+            <ToolCallList calls={callsIn(round, toolCalls)} onRespond={onRespond} {...(onMove ? { onMove } : {})} />
           </Box>
         );
       })}
@@ -310,6 +313,7 @@ export function MessageThread({
   sessionId,
   streaming,
   onRespond,
+  onMove,
   onContinue,
   status,
   footer,
@@ -323,6 +327,8 @@ export function MessageThread({
    */
   streaming: boolean;
   onRespond: RespondToApproval;
+  /** Moves a command still running in the foreground into the background task panel. */
+  onMove?: MoveCallToBackground;
   onContinue: () => void;
   /**
    * The live turn line, drawn at the foot of the reply in flight. Null when no turn is running,
@@ -397,6 +403,7 @@ export function MessageThread({
               key={message.id}
               message={message}
               onRespond={onRespond}
+              {...(onMove ? { onMove } : {})}
               // Only the last turn, and only while nothing is running: resuming writes back
               // into its own message, so a Continue on an older one would edit history.
               {...(index === messages.length - 1 && !streaming ? { onContinue } : {})}

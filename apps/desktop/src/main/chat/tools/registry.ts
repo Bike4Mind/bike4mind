@@ -1,3 +1,4 @@
+import { applyPatch, usesApplyPatch } from './applyPatchTool';
 import { bashBackground, bashKill, bashList, bashOutput } from './backgroundTools';
 import { BROWSER_TOOLS } from './browserTools';
 import { exploreTool } from './exploreTool';
@@ -21,19 +22,31 @@ import type { ToolDefinition, ToolSchema } from './types';
  * already approved, so they are not gated: a second dialog to stop a dev server would just
  * make the safe action the slow one.
  */
-const LOCAL_TOOLS: readonly ToolDefinition[] = [
+const localTools = (patch: boolean): readonly ToolDefinition[] => [
   fileRead,
   globFiles,
   grepSearch,
   bashExecute,
-  fileWrite,
-  fileEdit,
+  ...(patch ? [applyPatch] : [fileWrite, fileEdit]),
   bashBackground,
   bashOutput,
   bashList,
   bashKill,
   todoWrite,
 ];
+
+/**
+ * GPT models are trained on the apply_patch format and get it in place of file_edit and
+ * file_write; every other model keeps those two. ChatService also refuses the family a model
+ * was not offered, so a stale name from an earlier turn on another model cannot run.
+ */
+export { usesApplyPatch };
+
+export function isOfferedEditTool(name: string, patch: boolean): boolean {
+  if (name === 'apply_patch') return patch;
+  if (name === 'file_edit' || name === 'file_write') return !patch;
+  return true;
+}
 
 /**
  * The tools that call the Bike4Mind server: image generation and the three Audio-tag
@@ -67,7 +80,10 @@ const HOST_TOOLS: readonly ToolDefinition[] = [
 ];
 
 const BY_NAME = new Map(
-  [...LOCAL_TOOLS, exploreTool, ...MEDIA_TOOLS, ...HOST_TOOLS, ...BROWSER_TOOLS].map(tool => [tool.schema.name, tool])
+  [...localTools(false), applyPatch, exploreTool, ...MEDIA_TOOLS, ...HOST_TOOLS, ...BROWSER_TOOLS].map(tool => [
+    tool.schema.name,
+    tool,
+  ])
 );
 
 export function findTool(name: string): ToolDefinition | undefined {
@@ -95,6 +111,8 @@ export function toolsForRequest(options: {
    * files it would read are exactly the ones they can.
    */
   explore?: boolean;
+  /** The session's model id; decides between apply_patch and file_edit/file_write. */
+  modelId?: string;
   /** A hidden browser for this session; Code sessions get one, to test what they build. */
   browser?: boolean;
   /**
@@ -105,7 +123,7 @@ export function toolsForRequest(options: {
   mcp?: readonly ToolSchema[];
 }): { toolSchema: ToolSchema }[] {
   const available = [
-    ...(options.roots.length > 0 ? LOCAL_TOOLS : []),
+    ...(options.roots.length > 0 ? localTools(usesApplyPatch(options.modelId)) : []),
     ...(options.roots.length > 0 && options.explore ? [exploreTool] : []),
     ...(options.media ? MEDIA_TOOLS : []),
     ...(options.host ? HOST_TOOLS : []),

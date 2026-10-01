@@ -46,6 +46,31 @@ export const DEFAULT_PRUNING_POLICY: PruningPolicy = {
  */
 const REWRITE_TOOLS = new Set(['file_write']);
 
+/**
+ * Normalised paths an apply_patch call rewrote whole (Add, Delete, and both ends of a Move),
+ * from the patch text it carries. An Update is in place and so stale-proof, like file_edit.
+ * A relative path never equals a file_read's absolute one, which only leaves that read unstale.
+ */
+function patchRewrites(call: ChatToolCall): Set<string> {
+  const paths = new Set<string>();
+  const text = call.input.patchText;
+  if (typeof text !== 'string') return paths;
+  let moving: string | null = null;
+  for (const line of text.split(/\r?\n/)) {
+    const add = /^\*\*\* (?:Add|Delete) File:\s*(.+?)\s*$/.exec(line);
+    const update = /^\*\*\* Update File:\s*(.+?)\s*$/.exec(line);
+    const move = /^\*\*\* Move to:\s*(.+?)\s*$/.exec(line);
+    if (add) paths.add(cleanPath(add[1]));
+    if (update) moving = update[1];
+    else if (move && moving) {
+      paths.add(cleanPath(moving));
+      paths.add(cleanPath(move[1]));
+      moving = null;
+    }
+  }
+  return paths;
+}
+
 interface LineRange {
   first: number;
   last: number;
@@ -145,7 +170,9 @@ function isStale(call: ChatToolCall, later: ToolRounds): boolean {
 
   return later.some(round =>
     round.some(next => {
-      if (!succeeded(next) || pathOf(next) !== path) return false;
+      if (!succeeded(next)) return false;
+      if (next.name === 'apply_patch') return patchRewrites(next).has(path);
+      if (pathOf(next) !== path) return false;
       if (REWRITE_TOOLS.has(next.name)) return true;
       if (next.name !== 'file_read' || !range) return false;
       const covers = shownRange(next);
@@ -158,9 +185,13 @@ function succeeded(call: ChatToolCall): boolean {
   return call.status === 'done' && !call.error;
 }
 
+function cleanPath(path: string): string {
+  return normalize(path).replace(/(.)\/+$/, '$1');
+}
+
 function pathOf(call: ChatToolCall): string | null {
   const path = call.input.path;
-  return typeof path === 'string' && path.length > 0 ? normalize(path).replace(/(.)\/+$/, '$1') : null;
+  return typeof path === 'string' && path.length > 0 ? cleanPath(path) : null;
 }
 
 /**

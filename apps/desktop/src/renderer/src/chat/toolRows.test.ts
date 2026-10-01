@@ -232,3 +232,34 @@ describe('groupToolCalls', () => {
     expect(second[0].id).toBe('1');
   });
 });
+
+describe('apply_patch rows', () => {
+  const patched = (extra: Partial<ChatToolCall> = {}): ChatToolCall => ({
+    ...call('1', 'apply_patch', { patchText: '*** Begin Patch\n*** End Patch' }),
+    ...extra,
+  });
+  const diff = (path: string, added: number, removed: number): ChatDiff => ({
+    path,
+    operation: 'edit',
+    added,
+    removed,
+    lines: [],
+  });
+
+  it('uses the label the tool set, and a patch phrase otherwise', () => {
+    expect(toolRowLabel(patched({ label: 'Edited 3 files' }))).toBe('Edited 3 files');
+    expect(toolRowLabel(patched({ label: 'Patched app.ts' }))).toBe('Patched app.ts');
+    expect(toolRowLabel(patched())).toBe('Patched files');
+  });
+
+  it('does not claim a failed or declined patch happened', () => {
+    expect(toolRowLabel(patched({ status: 'error', label: 'Edited 3 files' }))).toBe('Failed to apply a patch');
+    expect(toolRowLabel(patched({ status: 'denied' }))).toBe('Did not apply a patch');
+  });
+
+  it('counts the diffs of a multi-file patch in the group total', () => {
+    const several = patched({ diffs: [diff('/r/a.ts', 3, 1), diff('/r/b.ts', 2, 0)] });
+    expect(diffTotals([several, wrote('2', '/r/c.ts', 1, 1)])).toEqual({ added: 6, removed: 2 });
+    expect(groupToolCalls([several])[0].diffstat).toEqual({ added: 5, removed: 1 });
+  });
+});

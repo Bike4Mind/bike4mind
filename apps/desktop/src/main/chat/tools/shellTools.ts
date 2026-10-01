@@ -1,8 +1,18 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
+import type { BackgroundProcessInfo } from '@shared/chat';
+import type { OutputStream } from './outputBuffer';
 import { resolveWithinRoots } from './paths';
 import { commandEnv, launchCommand } from './commandLaunch';
-import { capOutputMiddle, optionalNumber, requireString, type ApprovalPrompt, type ToolDefinition } from './types';
+import type { SandboxedCommand } from './sandbox';
+import {
+  capOutputMiddle,
+  optionalNumber,
+  requireString,
+  type ApprovalPrompt,
+  type ToolContext,
+  type ToolDefinition,
+} from './types';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_TIMEOUT_MS = 300_000;
@@ -12,6 +22,47 @@ const MAX_STREAM_BYTES = 40_000;
 
 /** Grace between asking the process group to stop and killing it outright. */
 const SIGKILL_DELAY_MS = 3_000;
+
+/** Long enough for the runner's final summary lines to land after the idle marker. */
+const WATCH_GRACE_MS = 1_500;
+
+/** A marker can straddle two chunks; this much of the previous text is rescanned. */
+const WATCH_SCAN_CARRY = 256;
+
+// eslint-disable-next-line no-control-regex
+const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007]*\u0007/g;
+
+/** What a watch-mode tool prints once it has finished its pass and is idling for edits. */
+const WATCH_MARKERS: readonly RegExp[] = [
+  /waiting for file changes/i,
+  /press h to show help/i,
+  /watch usage/i,
+  /press w to show more/i,
+  /watching for file changes/i,
+  /waiting for changes/i,
+];
+
+const WATCH_FAILURE = /\b[1-9]\d* failed\b|\bFAIL\b|\b[1-9]\d* errors?\b|error TS\d+/;
+
+/** What the background registry needs to take a running command over; see `moveToBackground`. */
+export interface Handover {
+  child: ChildProcess;
+  /** The detached child's own pid, which is its process group id. */
+  pgid: number | null;
+  /** Everything collected so far, so nothing that scrolled past before the move is lost. */
+  captured: readonly { stream: OutputStream; text: string }[];
+}
+
+export interface RunOptions {
+  watchGraceMs?: number;
+  /**
+   * Offer this run to the user as movable while it is in flight. Returns the withdrawal, which
+   * is called the moment the command settles on its own.
+   */
+  offerMove?(move: () => BackgroundProcessInfo | null): () => void;
+  /** Perform the handover. Required alongside `offerMove`; throwing leaves the command running. */
+  adopt?(handover: Handover): BackgroundProcessInfo;
+}
 
 /**
  * Commands refused before they are run.
@@ -48,6 +99,9 @@ interface CommandOutcome {
   exitCode: number | null;
   signal: NodeJS.Signals | null;
   timedOut: boolean;
+  watchStopped: boolean;
+  /** Set instead of an exit: the user moved the command to the background and it is still running. */
+  movedToBackground?: BackgroundProcessInfo;
 }
 
 /**
@@ -85,13 +139,15 @@ function runCommand(
   cwd: string,
   env: NodeJS.ProcessEnv,
   timeoutMs: number,
-  signal: AbortSignal
+  signal: AbortSignal,
+  options: RunOptions = {}
 ): Promise<CommandOutcome> {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, [...args], {
       cwd,
       // Its own process group, so the timeout reaches the command's children too: signalling
-      // the shell alone would leave whatever it spawned running.
+      // the shell alone would leave whatever it spawned running. It is also what lets the
+      // command be moved to the background intact - see `moveToBackground` below.
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env,
@@ -100,7 +156,12 @@ function runCommand(
     const stdout = new CappedOutput();
     const stderr = new CappedOutput();
     let timedOut = false;
+    let watchStopped = false;
+    let moved = false;
+    let watchTimer: NodeJS.Timeout | undefined;
+    let scanTail = '';
     let killTimer: NodeJS.Timeout | undefined;
+    let withdrawMove: (() => void) | undefined;
 
     const signalGroup = (value: NodeJS.Signals) => {
       if (child.pid === undefined) return;
@@ -127,19 +188,40 @@ function runCommand(
 
     const finish = () => {
       clearTimeout(timer);
+      if (watchTimer) clearTimeout(watchTimer);
       if (killTimer) clearTimeout(killTimer);
       signal.removeEventListener('abort', onAbort);
+      withdrawMove?.();
     };
 
-    child.stdout?.on('data', (chunk: Buffer) => stdout.push(chunk));
-    child.stderr?.on('data', (chunk: Buffer) => stderr.push(chunk));
+    // One decoder per stream so a split multi-byte character cannot corrupt the scan text.
+    const scanDecoders = [new StringDecoder('utf8'), new StringDecoder('utf8')];
+    const scan = (chunk: Buffer, decoder: StringDecoder) => {
+      if (watchTimer) return;
+      const text = (scanTail + decoder.write(chunk)).replace(ANSI, '');
+      if (WATCH_MARKERS.some(marker => marker.test(text))) {
+        watchTimer = setTimeout(() => {
+          watchStopped = true;
+          stopChild();
+        }, options.watchGraceMs ?? WATCH_GRACE_MS);
+        return;
+      }
+      scanTail = text.slice(-WATCH_SCAN_CARRY);
+    };
 
-    child.on('error', error => {
+    const onStdout = (chunk: Buffer) => {
+      stdout.push(chunk);
+      scan(chunk, scanDecoders[0]);
+    };
+    const onStderr = (chunk: Buffer) => {
+      stderr.push(chunk);
+      scan(chunk, scanDecoders[1]);
+    };
+    const onError = (error: Error) => {
       finish();
       reject(error);
-    });
-
-    child.on('close', (code, closeSignal) => {
+    };
+    const onClose = (code: number | null, closeSignal: NodeJS.Signals | null) => {
       finish();
       resolve({
         stdout: stdout.toString(),
@@ -147,8 +229,59 @@ function runCommand(
         exitCode: code,
         signal: closeSignal,
         timedOut,
+        watchStopped,
       });
-    });
+    };
+
+    child.stdout?.on('data', onStdout);
+    child.stderr?.on('data', onStderr);
+    child.on('error', onError);
+    child.on('close', onClose);
+
+    /**
+     * Hand the running child over and answer the pending call at once.
+     *
+     * `adopt` goes FIRST and nothing is torn down until it has returned: it enforces the
+     * background process cap and throws when the cap is full, and a command refused there must
+     * be left exactly as it was, still running in the foreground on its original deadline.
+     *
+     * Once it has, every way this runner would have stopped the command on the FOREGROUND's
+     * schedule has to go: the timeout, the abort wiring and the watch-mode grace are all
+     * deadlines the user has just overruled, and one left armed would kill the promoted process
+     * minutes later with nothing on screen to explain it. The pipe and exit listeners go with
+     * them, so the registry is the only reader of the output from here on.
+     */
+    const moveToBackground = (): BackgroundProcessInfo | null => {
+      if (moved || !options.adopt) return null;
+      const info = options.adopt({
+        child,
+        pgid: child.pid ?? null,
+        captured: [
+          { stream: 'stdout', text: stdout.toString() },
+          { stream: 'stderr', text: stderr.toString() },
+        ],
+      });
+
+      moved = true;
+      finish();
+      child.stdout?.off('data', onStdout);
+      child.stderr?.off('data', onStderr);
+      child.off('error', onError);
+      child.off('close', onClose);
+
+      resolve({
+        stdout: '',
+        stderr: '',
+        exitCode: null,
+        signal: null,
+        timedOut: false,
+        watchStopped: false,
+        movedToBackground: info,
+      });
+      return info;
+    };
+
+    if (options.adopt && options.offerMove) withdrawMove = options.offerMove(moveToBackground);
 
     if (signal.aborted) stopChild();
   });
@@ -160,7 +293,17 @@ function formatOutcome(command: string, cwd: string, timeoutMs: number, outcome:
   if (outcome.stdout.trim()) sections.push('', outcome.stdout.trimEnd());
   if (outcome.stderr.trim()) sections.push('', '[stderr]', outcome.stderr.trimEnd());
 
-  if (outcome.timedOut) {
+  if (outcome.watchStopped) {
+    const failed = WATCH_FAILURE.test(`${outcome.stdout}\n${outcome.stderr}`.replace(ANSI, ''));
+    sections.push(
+      '',
+      '[stopped: the command entered watch mode and was waiting for file changes. It ran once; the results are above.',
+      'Run it without watch mode, e.g. `vitest run`, or drop -w/--watch.]',
+      failed
+        ? '[exit 1: the output before watch mode shows failures]'
+        : '[exit 0: the output before watch mode shows no failures]'
+    );
+  } else if (outcome.timedOut) {
     sections.push('', `[timed out and was killed after ${Math.round(timeoutMs / 1000)}s]`);
   } else if (outcome.exitCode === 0) {
     sections.push('', '[exit 0]');
@@ -197,6 +340,39 @@ export async function resolveCwd(
   return roots[0];
 }
 
+/** Exported so tests can shrink the grace period. */
+export const bashExecuteRunOptions: RunOptions = {};
+
+/**
+ * The move wiring for one call, or nothing when this build or this context cannot offer it.
+ *
+ * All four pieces are needed and any of them may be absent outside the chat loop - a tool run
+ * from a test has no call to key an offer on, and no registry to put it in.
+ */
+function movableOptions(
+  context: ToolContext,
+  started: { command: string; cwd: string; startedAt: string; launch: SandboxedCommand }
+): RunOptions {
+  const { foreground, background, sessionId, callId } = context;
+  if (!foreground || !background || !sessionId || !callId) return {};
+
+  return {
+    offerMove: move => foreground.register(sessionId, callId, move),
+    adopt: handover => background.adopt({ sessionId, ...started, ...handover }),
+  };
+}
+
+function formatMoved(command: string, cwd: string, info: BackgroundProcessInfo): string {
+  return [
+    `$ ${command}`,
+    `(in ${cwd})`,
+    '',
+    `[the user moved this command to the background; it is still running as [${info.id}]]`,
+    `[bash_output id="${info.id}" returns everything it has printed, including what it printed`,
+    'before the move. bash_kill stops it.]',
+  ].join('\n');
+}
+
 export const bashExecute: ToolDefinition = {
   schema: {
     name: 'bash_execute',
@@ -215,6 +391,10 @@ export const bashExecute: ToolDefinition = {
       `command exits or the timeout elapses (default ${DEFAULT_TIMEOUT_MS / 1000}s, max`,
       `${MAX_TIMEOUT_MS / 1000}s), so it is the wrong tool for a dev server, a watcher or anything`,
       'else meant to keep running: start those with bash_background instead.',
+      '',
+      'Commands must exit on their own. Never use watch flags (-w, --watch) here: use `vitest run` /',
+      '`jest --watchAll=false`. pnpm passes flags after the script name to the script, so',
+      '`pnpm test -w` runs the tests in watch mode, which is stopped after its first pass.',
     ].join('\n'),
     parameters: {
       type: 'object',
@@ -260,12 +440,25 @@ export const bashExecute: ToolDefinition = {
     const timeoutMs = Math.min(Math.max(requestedTimeout ?? DEFAULT_TIMEOUT_MS, 1_000), MAX_TIMEOUT_MS);
 
     const launch = await launchCommand(command, context.roots, context.protectedPaths ?? []);
+    const startedAt = new Date().toISOString();
+    let moved = false;
     try {
       const env = await commandEnv();
-      const outcome = await runCommand(launch.executable, launch.args, cwd, env, timeoutMs, context.signal);
+      const outcome = await runCommand(launch.executable, launch.args, cwd, env, timeoutMs, context.signal, {
+        ...bashExecuteRunOptions,
+        ...movableOptions(context, { command, cwd, startedAt, launch }),
+      });
+
+      if (outcome.movedToBackground) {
+        moved = true;
+        context.report?.moved();
+        return formatMoved(command, cwd, outcome.movedToBackground);
+      }
       return capOutputMiddle(formatOutcome(command, cwd, timeoutMs, outcome));
     } finally {
-      await launch.cleanup();
+      // The background registry owns the launch once it has the child, and runs this cleanup
+      // itself when the command finally ends.
+      if (!moved) await launch.cleanup();
     }
   },
 };

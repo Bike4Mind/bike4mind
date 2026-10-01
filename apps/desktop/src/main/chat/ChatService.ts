@@ -33,6 +33,7 @@ import type {
 import { isTurnBudgetStop } from '@shared/chat';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
+import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
@@ -55,6 +56,7 @@ import {
 import { reasoningEffortFor, type ReasoningEffortSetting } from './reasoningEffort';
 import { addUsage, foldUsage } from './streamEvents';
 import { findStaleResults, historyRounds, toolResultContent } from './contextPruning';
+import { stalePlanReminder, unfinishedPlanReminder } from './planReminder';
 import { buildExploreContext, shouldOfferExplore } from './explore';
 import { MediaApiClient } from './media/MediaApiClient';
 import type { MediaStore } from './media/MediaStore';
@@ -76,7 +78,8 @@ import type { McpManager } from './mcp/McpManager';
 import type { AccessStore } from './tools/AccessStore';
 import type { ApprovalGate } from './tools/ApprovalGate';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
-import { findTool, toolsForRequest } from './tools/registry';
+import type { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
+import { findTool, isOfferedEditTool, toolsForRequest, usesApplyPatch } from './tools/registry';
 import { assessApprovalRisk, spendsCredits } from './tools/riskAssessment';
 import {
   capOutput,
@@ -247,6 +250,8 @@ export interface ChatServiceDeps {
   approvals?: ApprovalGate;
   /** Owns long-running commands. Absent in tests, which then have no background tools. */
   background?: BackgroundProcessRegistry;
+  /** Where a running command offers itself up for moving. Absent in tests, which never move one. */
+  foreground?: ForegroundCommandRegistry;
   /** Installs a new worktree's dependencies. Absent in tests, which then never install. */
   dependencies?: DependencyInstaller;
   /** Where generated images and audio land. Absent in tests, which then have no generation tools. */
@@ -394,6 +399,14 @@ export class ChatService {
   private readonly projectContext: ProjectContextCache;
   /** Images a running call reported for the model, keyed by call id until its round is sent. */
   private readonly pendingImages = new Map<string, { mediaType: string; data: string }[]>();
+
+  /**
+   * Per session, a plan nudge the last turn earned, to ride along with the next one.
+   *
+   * Held here rather than sent as a request of its own: reconciling the plan is not worth a
+   * round trip, and the next turn is coming anyway. Consumed once, never stored on a message.
+   */
+  private readonly pendingPlanReminder = new Map<string, string>();
 
   /** Resolved serverConfig fields, cached per environment URL (it is one round trip). */
   private serverConfigCache: { environmentUrl: string; config: ResolvedServerConfig } | null = null;
@@ -1148,6 +1161,7 @@ export class ChatService {
     let thinking: unknown[] | undefined;
     let previousRound: string | null = null;
     let stalled = 0;
+    let roundsSincePlanUpdate = 0;
     // Only this run's rounds: the resumed ones were parsed and cleaned when they were stored,
     // and putting them back through the artifact parser would mint their ids a second time.
     const produced: RawRound[] = [];
@@ -1185,7 +1199,11 @@ export class ChatService {
               },
             })
           : undefined;
+      // Per turn, from the session's current model, so a model switch changes the edit tools
+      // from the next turn on.
+      const patchEdits = usesApplyPatch(session.model);
       const tools = toolsForRequest({
+        modelId: session.model,
         roots,
         media: !!media,
         host: !!host,
@@ -1212,9 +1230,16 @@ export class ChatService {
           session.project,
           this.deps.dependencies?.promptLines(session.id) ?? [],
           projectContext,
-          !!browser
+          !!browser,
+          patchEdits
         )
       );
+      // Taken whether or not it is used, so a nudge the model ignored once does not follow the
+      // conversation around. It rides on the newest turn only, after the cached prefix.
+      const carried = this.pendingPlanReminder.get(sessionId);
+      this.pendingPlanReminder.delete(sessionId);
+      if (carried && !resume) appendToLastUserTurn(wire, carried);
+
       // Wire positions of the screenshot messages this turn added, oldest first; see pruneScreenshots.
       const screenshotTurns: number[] = [];
 
@@ -1321,7 +1346,7 @@ export class ChatService {
         thinking = turnThinking;
         const settled = await this.runTools(
           requested,
-          { roots, workingDirectory, media, host, explore, browser, title: session.title },
+          { roots, workingDirectory, media, host, explore, browser, patchEdits, title: session.title },
           sessionId,
           replyId,
           controller.signal
@@ -1340,15 +1365,26 @@ export class ChatService {
             ...settled.map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input })),
           ],
         });
-        wire.push({
-          role: 'user',
-          content: settled.map(call => ({
-            type: 'tool_result',
-            tool_use_id: call.id,
-            content: toolResultContent(call),
-            ...(call.error ? { is_error: true } : {}),
-          })),
-        });
+        const results = settled.map(call => ({
+          type: 'tool_result',
+          tool_use_id: call.id,
+          content: toolResultContent(call),
+          ...(call.error ? { is_error: true } : {}),
+        }));
+        roundsSincePlanUpdate = settled.some(call => call.name === TODO_TOOL_NAME && call.status === 'done')
+          ? 0
+          : roundsSincePlanUpdate + 1;
+        // Appended HERE and nowhere else. toolResultContent is also what the two history
+        // rebuilds send, so folding this into it would rewrite the text of already-sent
+        // messages and break the prompt-cache prefix on every later turn (see contextPruning).
+        // The nudge is ephemeral by design: never stored on the call, never replayed.
+        const nudge = stalePlanReminder(
+          activeTodos([...session.messages, replySoFar(toolCalls)], true),
+          roundsSincePlanUpdate
+        );
+        const lastResult = results[results.length - 1];
+        if (nudge && lastResult) lastResult.content = `${lastResult.content}\n\n${nudge}`;
+        wire.push({ role: 'user', content: results });
         const shots = settled.flatMap(call => this.takeImages(call.id));
         if (shots.length > 0 && vision) {
           // Its own user turn, not blocks beside the tool results: the OpenAI conversion keeps only
@@ -1377,6 +1413,20 @@ export class ChatService {
       }
 
       if (controller.signal.aborted) stopReason = 'aborted';
+
+      // A turn that stopped itself mid-task will be carried on by Continue, and one the user
+      // stopped is their call; neither is the model forgetting to close out an item.
+      //
+      // Scoped to this reply alone (turnOpen false), unlike the mid-turn nudge: that is exactly
+      // the plan still on screen once the turn ends, so the model is never asked to tidy a plan
+      // the user can no longer see.
+      const lastRound = produced[produced.length - 1];
+      if (!controller.signal.aborted && !isTurnBudgetStop(stopReason) && lastRound?.toolCallIds.length === 0) {
+        const unfinished = lastRound.text.trim()
+          ? unfinishedPlanReminder(activeTodos([...session.messages, replySoFar(toolCalls)], false))
+          : null;
+        if (unfinished) this.pendingPlanReminder.set(sessionId, unfinished);
+      }
 
       // Artifacts are resolved BEFORE the message is stored or announced, so the thread never
       // shows raw <artifact> markup that is then replaced, and a reloaded conversation reads
@@ -1612,6 +1662,8 @@ export class ChatService {
       host: HostContext | undefined;
       explore: ExploreContext | undefined;
       browser: BrowserContext | undefined;
+      /** Whether this turn's model edits with apply_patch rather than file_edit and file_write. */
+      patchEdits: boolean;
       /** The conversation's title, so a cross-session approval names it rather than its id. */
       title: string;
     },
@@ -1619,7 +1671,7 @@ export class ChatService {
     messageId: string,
     signal: AbortSignal
   ): Promise<ChatToolCall[]> {
-    const { roots, workingDirectory, media, host, explore, browser } = scope;
+    const { roots, workingDirectory, media, host, explore, browser, patchEdits } = scope;
     return Promise.all(
       requested.map(async request => {
         const call: ChatToolCall = {
@@ -1631,9 +1683,18 @@ export class ChatService {
 
         // Built-ins are resolved FIRST and MCP tools only after, so no server can shadow one
         // even if the `mcp__` namespacing in mcp/names.ts were ever to let a name through.
-        const tool = findTool(request.name) ?? this.deps.mcp?.findTool(request.name);
+        const tool = isOfferedEditTool(request.name, patchEdits)
+          ? (findTool(request.name) ?? this.deps.mcp?.findTool(request.name))
+          : undefined;
         if (!tool) {
-          const unknown: ChatToolCall = { ...call, status: 'error', error: `Unknown tool: ${request.name}` };
+          const instead = patchEdits ? 'apply_patch' : 'file_edit or file_write';
+          const unknown: ChatToolCall = {
+            ...call,
+            status: 'error',
+            error: isOfferedEditTool(request.name, patchEdits)
+              ? `Unknown tool: ${request.name}`
+              : `${request.name} is not available in this conversation; use ${instead} to change files.`,
+          };
           this.emit({ type: 'tool-start', sessionId, messageId, call });
           this.emit({ type: 'tool-end', sessionId, messageId, call: unknown });
           return unknown;
@@ -1645,8 +1706,9 @@ export class ChatService {
         const attachments: ChatMedia[] = [];
         let notice: ChatToolNotice | undefined;
         let label: string | undefined;
-        let diff: ChatDiff | undefined;
+        const diffs: ChatDiff[] = [];
         let detail: ChatToolDetail | undefined;
+        let moved = false;
         const report: ToolReporter = {
           progress: text => this.emit({ type: 'tool-progress', sessionId, messageId, callId: call.id, text }),
           media: item => attachments.push(item),
@@ -1657,7 +1719,7 @@ export class ChatService {
             label = text;
           },
           diff: value => {
-            diff = value;
+            diffs.push(value);
           },
           detail: value => {
             detail = value;
@@ -1666,6 +1728,9 @@ export class ChatService {
             const images = this.pendingImages.get(call.id) ?? [];
             images.push({ mediaType: mimeType, data: bytes.toString('base64') });
             this.pendingImages.set(call.id, images);
+          },
+          moved: () => {
+            moved = true;
           },
         };
         let startedAt = Date.now();
@@ -1682,7 +1747,8 @@ export class ChatService {
           // practice - the condition is what makes that a property of this loop rather than
           // of one tool's ordering, because a diff under a red row would claim a change the
           // user never got.
-          ...(diff && settled.status === 'done' ? { diff } : {}),
+          ...(diffs.length === 1 && settled.status === 'done' ? { diff: diffs[0] } : {}),
+          ...(diffs.length > 1 && settled.status === 'done' ? { diffs } : {}),
         });
 
         const context: ToolContext = {
@@ -1691,7 +1757,9 @@ export class ChatService {
           signal,
           protectedPaths: this.deps.protectedPaths,
           sessionId,
+          callId: call.id,
           background: this.deps.background,
+          foreground: this.deps.foreground,
           ...(media ? { media } : {}),
           ...(host ? { host } : {}),
           ...(explore ? { explore } : {}),
@@ -1713,7 +1781,13 @@ export class ChatService {
         let settled: ChatToolCall;
         try {
           const result = await tool.run(call.input, context);
-          settled = decorate({ ...call, status: 'done', preview: capOutput(result, outputCapFor(request.name)) });
+          settled = decorate({
+            ...call,
+            // 'moved' is not a quieter 'done': the command is still running in the task panel,
+            // and a green row would tell the reader it had finished here.
+            status: moved ? 'moved' : 'done',
+            preview: capOutput(result, outputCapFor(request.name)),
+          });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.deps.logger.debug(`CHAT: tool ${request.name} failed: ${message}`);
@@ -2266,6 +2340,7 @@ export class ChatService {
             approvalId,
             approvalDetail: prompt.detail,
             ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
+            ...(prompt.diffs ? { approvalDiffs: prompt.diffs } : {}),
             ...(prompt.irreversible ? { approvalIrreversible: true } : {}),
             ...(choice ? { approvalChoice: choice } : {}),
           },
@@ -2568,7 +2643,8 @@ function buildSystemMessage(
   project?: ChatProject,
   dependencyLines: readonly string[] = [],
   projectContext = '',
-  browser = false
+  browser = false,
+  patchEdits = false
 ): CompletionMessage {
   if (roots.length === 0) {
     return {
@@ -2621,13 +2697,27 @@ function buildSystemMessage(
       'why - including the first batch of the turn, which otherwise draws as tool rows with nothing',
       'above them. One sentence per round of work, not per call, with no label in front of it, and',
       'none at all when a single call speaks for itself.',
-      'For a task with three or more steps, keep a plan with todo_write: send the whole list each time,',
-      'mark one item in_progress before starting it and completed as soon as it is done. Skip it for',
-      'anything you can finish in a step or two.',
-      'An older file_read result may show as a [stale: ...] placeholder once the file was rewritten',
-      'with file_write or re-read later; read it again if you still need it. A file_edit does not',
-      'invalidate earlier reads, and its result shows the edited lines, so edit again without',
-      'reading the file first.',
+      'Most work needs no plan. Keep one with todo_write only when the user gave you several separate',
+      'things to do, or the work clearly runs to five or more steps, usually across several files.',
+      'Never for a question, an explanation, an investigation, a piece of research, a single fix or a',
+      'small edit: answer those directly.',
+      'When you do keep one, send the whole list each time and mark one item in_progress before',
+      'starting it. Before writing the message that ends a turn, make the plan match what actually',
+      'happened: an item whose result you are about to report as done is marked completed in that',
+      'same reply, not left for later. Never end a turn with an item still in_progress.',
+      ...(patchEdits
+        ? [
+            'An older file_read result may show as a [stale: ...] placeholder once the file was replaced',
+            'by an apply_patch Add or Delete, or re-read later; read it again if you still need it. An',
+            'apply_patch Update does not invalidate earlier reads, and its result shows the edited lines,',
+            'so patch again without reading the file first.',
+          ]
+        : [
+            'An older file_read result may show as a [stale: ...] placeholder once the file was rewritten',
+            'with file_write or re-read later; read it again if you still need it. A file_edit does not',
+            'invalidate earlier reads, and its result shows the edited lines, so edit again without',
+            'reading the file first.',
+          ]),
       'file_read returns the whole file, up to 2000 lines; pass offset and limit only when you',
       'already know which part you need or the file is too large to read at once.',
       ...(explore
@@ -2637,17 +2727,27 @@ function buildSystemMessage(
             'mean to build so its report ends with the edit points. When you already know the file or',
             'symbol, use grep_search and file_read directly.',
             'Treat an explore report as already read: do not re-read ranges it quotes, read only what it',
-            'lacks, and file_edit can match against its quoted text directly.',
+            `lacks, and ${patchEdits ? 'an apply_patch hunk' : 'file_edit'} can match against its quoted text directly.`,
           ]
         : []),
       'Running a command needs the user to approve it first, and they see the exact command, so',
       'prefer one clear command over several speculative ones. If they decline, accept it and ask',
       'what they would like instead rather than trying a variation of the same command.',
       'Changing a file needs the same approval, and the user sees a line-by-line diff of the',
-      'change before they answer. Read a file before you edit it, and prefer file_edit over',
-      'file_write so the rest of the file is left alone; file_write replaces a file entirely.',
-      'Make all the changes you have planned for one file in a single file_edit call with edits:',
-      'they apply in order and all or nothing, and each round trip costs you the whole context.',
+      ...(patchEdits
+        ? [
+            'change before they answer. Read a file before you edit it. Change files only with',
+            'apply_patch: Add File to create one, Update File for an in-place change (hunks with',
+            'context lines, in file order), Delete File to remove one. Make all the changes you have',
+            'planned, across every file, in a single apply_patch call: it applies all or nothing, and',
+            'each round trip costs you the whole context.',
+          ]
+        : [
+            'change before they answer. Read a file before you edit it, and prefer file_edit over',
+            'file_write so the rest of the file is left alone; file_write replaces a file entirely.',
+            'Make all the changes you have planned for one file in a single file_edit call with edits:',
+            'they apply in order and all or nothing, and each round trip costs you the whole context.',
+          ]),
       'Dev servers, watchers and anything else meant to keep running go to bash_background, not',
       'bash_execute. Background processes belong to this conversation, are all killed when the app',
       'quits, and none survive a restart - so check bash_list rather than assuming one from an',
@@ -2844,6 +2944,31 @@ function joinRounds(texts: readonly string[]): string {
  */
 function roundSignature(requested: readonly RequestedTool[]): string {
   return requested.map(tool => `${tool.name}(${tool.arguments ?? ''})`).join('\n');
+}
+
+/**
+ * Hang a line on the newest user turn, in place.
+ *
+ * Only the last one, and only on the wire: everything before it is the cached prefix, and an
+ * edit there would cost every later turn its cache hit.
+ */
+function appendToLastUserTurn(wire: CompletionMessage[], text: string): void {
+  for (let i = wire.length - 1; i >= 0; i -= 1) {
+    const message = wire[i];
+    if (message.role !== 'user') continue;
+    if (typeof message.content === 'string') message.content = `${message.content}\n\n${text}`;
+    else if (Array.isArray(message.content)) message.content.push({ type: 'text', text });
+    return;
+  }
+}
+
+/**
+ * The reply in flight as a message, so the plan helpers can read the calls THIS turn has made.
+ * The real message is not stored until the turn settles, and a plan written this turn is the one
+ * that matters.
+ */
+function replySoFar(toolCalls: readonly ChatToolCall[]): ChatMessage {
+  return { id: 'live', role: 'assistant', content: '', createdAt: '', toolCalls: [...toolCalls] };
 }
 
 /** One session as plain text, for session_read. Mirrors what the thread shows, minus the chrome. */

@@ -36,8 +36,20 @@ const CHOOSE_FOLDER_FIRST = 'Choose a project folder first - branches belong to 
 export interface BranchLookup {
   isRepository: boolean;
   count: number;
+  /**
+   * HEAD of the directory the session actually runs in, when that is a worktree and git could
+   * be asked. Undefined means not looked up; null means detached, or not a repository.
+   */
+  checkedOut?: string | null;
 }
 
+/**
+ * The chip row reads the branch from `checkedOut` rather than `project.branch`, because the two
+ * diverge the moment anything switches the worktree afterwards - another session, or a
+ * `git checkout` in a terminal - and the recorded name then labels a checkout that is gone.
+ * Only the LABEL is reconciled: `project.branch` stays the user's choice, since it is also what
+ * a spawned child inherits and what the session's system prompt names.
+ */
 export function describeChipRow(project: ChatProject | null, branches: BranchLookup): ChipRowState {
   if (!project) {
     return {
@@ -61,11 +73,20 @@ export function describeChipRow(project: ChatProject | null, branches: BranchLoo
   }
 
   const relocated = project.workingDirectory !== project.directory;
+  // undefined is "not looked up yet", which falls back rather than blanking the chip mid-render.
+  const live = branches.checkedOut ?? null;
 
   return {
     unset: false,
     folder: { label: project.name, tooltip: project.directory, enabled: true },
-    branch: { label: project.branch || 'no branch', tooltip: project.directory, enabled: true },
+    branch: {
+      label: live ?? (project.branch || 'no branch'),
+      tooltip:
+        live && live !== project.branch
+          ? `${project.workingDirectory} is on ${live}; this session was started on ${project.branch}.`
+          : project.directory,
+      enabled: true,
+    },
     worktree: {
       label: 'worktree',
       tooltip: relocated

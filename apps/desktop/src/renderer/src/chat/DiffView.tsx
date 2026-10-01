@@ -178,7 +178,7 @@ export function DiffView({ diff }: { diff: ChatDiff }) {
         }}
       >
         <Typography level="body-xs" fontFamily="monospace" noWrap sx={{ minWidth: 0, flex: 1 }}>
-          {diff.path}
+          {diff.movedFrom ? `${diff.movedFrom} -> ${diff.path}` : diff.path}
         </Typography>
         <Typography level="body-xs" textColor="success.plainColor">
           +{diff.added}

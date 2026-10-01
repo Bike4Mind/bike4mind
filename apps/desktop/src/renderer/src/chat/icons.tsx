@@ -43,16 +43,6 @@ export function SearchIcon() {
   );
 }
 
-export function SlidersIcon() {
-  return (
-    <Glyph>
-      <path d="M2.5 5h11M2.5 11h11" />
-      <circle cx="6" cy="5" r="1.6" />
-      <circle cx="10" cy="11" r="1.6" />
-    </Glyph>
-  );
-}
-
 export function GearIcon() {
   return (
     <Glyph>

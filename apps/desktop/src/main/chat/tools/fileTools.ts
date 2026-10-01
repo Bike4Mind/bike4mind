@@ -188,7 +188,7 @@ export const fileRead: ToolDefinition = {
       'default. You can pass offset and limit when you already know which part of the file you ' +
       'need, or when the file is too large to read at once. Lines longer than ' +
       `${MAX_READ_LINE_CHARS} characters are cut. Each line is prefixed with its line number and ` +
-      'a tab; those prefixes are not part of the file, so never copy them into file_edit. When ' +
+      'a tab; those prefixes are not part of the file, so never copy them into an edit or a patch. When ' +
       'the output stops before the end of the file, it says the offset to continue from.',
     parameters: {
       type: 'object',

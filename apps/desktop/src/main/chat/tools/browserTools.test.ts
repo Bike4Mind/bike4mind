@@ -55,6 +55,7 @@ function contextFor(page: BrowserPage) {
       media: item => media.push(item),
       notice: () => undefined,
       label: () => undefined,
+      moved: () => undefined,
       diff: () => undefined,
       detail: () => undefined,
       image: (bytes, mimeType) => images.push({ bytes, mimeType }),

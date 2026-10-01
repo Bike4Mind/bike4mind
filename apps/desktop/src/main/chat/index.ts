@@ -44,6 +44,7 @@ import { ApprovalGate } from './tools/ApprovalGate';
 import { DependencyInstaller } from './project/dependencyInstall';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting } from './reasoningEffort';
+import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { appWindows } from '../windows';
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
@@ -213,6 +214,8 @@ export function registerChat(auth: AuthService): RegisteredChat {
     (state: McpServersState) => send(IPC_CHANNELS.mcpServersChanged, state)
   );
 
+  const foreground = new ForegroundCommandRegistry();
+
   const browser = new BrowserManager();
 
   const service = new ChatService({
@@ -225,6 +228,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     reasoningEffort: REASONING_EFFORT,
     approvals,
     background,
+    foreground,
     dependencies: new DependencyInstaller(background),
     media,
     activity,
@@ -377,6 +381,9 @@ export function registerChat(auth: AuthService): RegisteredChat {
   );
   ipcMain.handle(IPC_CHANNELS.chatStopBackground, (_event, sessionId: string, processId: string) =>
     background.kill(processId, sessionId).then(() => undefined)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatMoveToBackground, (_event, sessionId: string, callId: string) =>
+    foreground.moveToBackground(sessionId, callId)
   );
 
   // Every mutation returns the whole state rather than the one row: a change to one server can
