@@ -42,4 +42,21 @@ describe('DeviceAuthorizationModel repository', () => {
     expect(await deviceAuthorizationRepository.findByDeviceCode('nope')).toBeFalsy();
     expect(await deviceAuthorizationRepository.findByDeviceCode('raw-dead')).toBeFalsy();
   });
+
+  it('countPendingAndUnexpired counts only live pending records', async () => {
+    const past = new Date(Date.now() - 1000);
+    await deviceAuthorizationRepository.create(base({ userCode: 'EEEE-2345', deviceCode: digestDeviceCode('c-1') }));
+    await deviceAuthorizationRepository.create(base({ userCode: 'FFFF-2345', deviceCode: digestDeviceCode('c-2') }));
+    await deviceAuthorizationRepository.create(
+      base({ userCode: 'GGGG-2345', deviceCode: digestDeviceCode('c-3'), expiresAt: past })
+    );
+    for (const [userCode, status] of [
+      ['HHHH-2345', 'approved'],
+      ['JJJJ-2345', 'denied'],
+      ['KKKK-2345', 'consumed'],
+    ]) {
+      await deviceAuthorizationRepository.create(base({ userCode, status, deviceCode: digestDeviceCode(userCode) }));
+    }
+    expect(await deviceAuthorizationRepository.countPendingAndUnexpired()).toBe(2);
+  });
 });

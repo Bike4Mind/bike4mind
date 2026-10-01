@@ -576,6 +576,7 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
       status: 'uploading',
       currentBatchId: batchId,
       lakeStatus: committedLake.status,
+      lakeId: dataLakeId,
       // Clear any error from a prior attempt so a retry starts clean.
       errorMessage: undefined,
       errorKind: undefined,

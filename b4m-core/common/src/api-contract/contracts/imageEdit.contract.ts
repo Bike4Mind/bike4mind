@@ -5,6 +5,10 @@ import { EditImageRequestBodySchema } from '../../llm';
 import { ApiErrorSchema } from '../../schemas/chat';
 import { ImageQuestSchema } from '../../schemas/imageApi';
 import { imageQuestPollResult } from './imageGeneration.contract';
+import {
+  GENERATION_CALLBACK_DESCRIPTION,
+  GENERATION_CALLBACK_REJECTED_DESCRIPTION,
+} from '../../schemas/generationCallback';
 
 /**
  * Contract for POST /api/v1/image-edits. `/api/ai/edit-image` serves the same
@@ -29,7 +33,8 @@ export const editImageContract = defineEndpoint({
     'Credits are checked when ' +
     'the render runs, so insufficient credits arrive on the polled quest rather than as a 422. ' +
     '`POST /api/ai/edit-image` is a legacy alias of this endpoint. Authenticate with an API key ' +
-    '(`b4m_live_`) or a JWT.',
+    '(`b4m_live_`) or a JWT.\n\n' +
+    GENERATION_CALLBACK_DESCRIPTION,
   tags: ['Images'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_GENERATE],
@@ -50,7 +55,7 @@ export const editImageContract = defineEndpoint({
       pollResult: imageQuestPollResult,
     },
     400: {
-      description: '`fabFileIds` is empty.',
+      description: `\`fabFileIds\` is empty, or the ${GENERATION_CALLBACK_REJECTED_DESCRIPTION}`,
       schema: ApiErrorSchema,
     },
     404: {

@@ -10,6 +10,7 @@ import type { IUserDocument } from './UserTypes';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { PersistedSessionSummaryTrigger } from '../../constants/sessionSummary';
 import type { ApiErrorCode } from '../../apiErrorCodes';
+import type { IQuestCallback } from '../../schemas/generationCallback';
 
 /** Pending action for Slack/Web button-based confirmation flow */
 export interface IPendingAction {
@@ -207,6 +208,12 @@ export interface IChatHistoryItem {
    * the reply bubble); extend the union as other errors gain bespoke UI.
    */
   errorCode?: QuestErrorCode;
+
+  /**
+   * Completion callback armed by an API caller's `callbackUrl` (generation jobs only). Never
+   * part of any client or poll payload: it names the caller's endpoint and signing key.
+   */
+  callback?: IQuestCallback;
 
   /**
    * The ID of the QuestMaster plan that was created from this chat history item

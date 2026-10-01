@@ -28,6 +28,7 @@ interface QueueHandlerRegistration {
   visibilityTimeoutSec: number;
   batchSize: number;
   maxReceiveCount: number;
+  runBudgetMs?: number;
 }
 
 interface ScheduledTaskRegistration {
@@ -78,7 +79,17 @@ export class SelfHostWorker {
     name: string,
     url: string,
     dispatch: QueueDispatch,
-    opts?: { visibilityTimeoutSec?: number; maxReceiveCount?: number; batchSize?: number }
+    opts?: {
+      visibilityTimeoutSec?: number;
+      maxReceiveCount?: number;
+      batchSize?: number;
+      /**
+       * Per-dispatch deadline reported by `getRemainingTimeInMillis`, for a handler that slices its
+       * work by time and must yield before its message's visibility lapses (redelivered mid-run
+       * otherwise). Keep it under `visibilityTimeoutSec`. Unset: no deadline (NO_DEADLINE_REMAINING_MS).
+       */
+      runBudgetMs?: number;
+    }
   ): void {
     const batchSize = opts?.batchSize ?? MAX_MESSAGES_PER_RECEIVE;
     if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > MAX_MESSAGES_PER_RECEIVE) {
@@ -91,6 +102,7 @@ export class SelfHostWorker {
       dispatch,
       visibilityTimeoutSec: opts?.visibilityTimeoutSec ?? 30,
       maxReceiveCount: opts?.maxReceiveCount ?? 3,
+      runBudgetMs: opts?.runBudgetMs,
     });
   }
 
@@ -243,7 +255,7 @@ export class SelfHostWorker {
       return;
     }
     try {
-      const result = await q.dispatch(this.toSqsEvent(message), this.fakeContext(q.name));
+      const result = await q.dispatch(this.toSqsEvent(message), this.fakeContext(q.name, q.runBudgetMs));
       if (result && typeof result === 'object' && 'batchItemFailures' in result) {
         const failures = result.batchItemFailures;
         // Dispatch receives one record: any reported failure (including an invalid ID) retries it.
@@ -289,14 +301,17 @@ export class SelfHostWorker {
    * That last one is not decoration: handlers with a time budget (research runs, lake-memory
    * extraction) call it unconditionally, and the `as unknown as Context` cast hides its absence
    * from the compiler, so omitting it turns into a TypeError on the first candidate at runtime.
-   * A long-lived worker has no deadline, so the honest answer is a value no reserve can exceed.
+   * A long-lived worker has no deadline, so the honest answer is a value no reserve can exceed,
+   * unless the registration set a `runBudgetMs`.
    */
-  private fakeContext(name: string): Context {
+  private fakeContext(name: string, runBudgetMs?: number): Context {
+    const deadline = runBudgetMs === undefined ? undefined : Date.now() + runBudgetMs;
     return {
       awsRequestId: randomUUID(),
       functionName: `selfHostWorker:${name}`,
       functionVersion: '$LATEST',
-      getRemainingTimeInMillis: () => NO_DEADLINE_REMAINING_MS,
+      getRemainingTimeInMillis: () =>
+        deadline === undefined ? NO_DEADLINE_REMAINING_MS : Math.max(0, deadline - Date.now()),
     } as unknown as Context;
   }
 }

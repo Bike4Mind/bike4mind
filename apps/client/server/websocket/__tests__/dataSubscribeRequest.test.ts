@@ -28,7 +28,10 @@ vi.mock('@bike4mind/common', async importOriginal => ({
  * go red when the projection grew citables.metadata.fullContext. A new owner-only path now lands
  * in both expectations for free.
  */
-const expectedQuestExclusions = Object.fromEntries(OWNER_ONLY_PROMPT_META_PROJECTION_PATHS.map(path => [path, false]));
+const expectedQuestExclusions = {
+  ...Object.fromEntries(OWNER_ONLY_PROMPT_META_PROJECTION_PATHS.map(path => [path, false])),
+  callback: false,
+};
 
 const mockFindModelByCollectionName = vi.fn();
 const mockQuerySubscriptionFindOneAndUpdate = vi.fn();
@@ -210,6 +213,8 @@ describe('dataSubscribeRequest WS handler - quest field scoping', () => {
     const scopedFields = collection.find.mock.calls[0][1];
     expect(scopedFields).not.toHaveProperty('promptMeta.functionCalls.returnValue');
     expect(scopedFields).not.toHaveProperty('promptMeta.functionCalls.error');
+    // The callback belongs to whichever API key armed it, possibly a collaborator's.
+    expect(scopedFields).toEqual({ callback: false });
   });
 
   it('still excludes returnValue/error when the caller only has a share on the requested session', async () => {

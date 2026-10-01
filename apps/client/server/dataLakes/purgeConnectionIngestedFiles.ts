@@ -27,8 +27,10 @@ type PurgeableConnectionFile = Parameters<typeof dataLakeService.purgeDataLakeCo
  * purgeDataLakeConnectionFiles. A connection-scoped subset of the lake, not the lake itself: a
  * sibling connection's files and any manually-uploaded file in the same lake are untouched.
  *
- * Unsliced, so only GitHub's disconnect and revoke doors use it (the DELETE route and
- * queueHandlers/githubLakeRevoke.ts); Drive's purge runs in slices in queueHandlers/driveDisconnectPurge.ts.
+ * Used by GitHub's disconnect and revoke doors (the DELETE route and queueHandlers/githubLakeRevoke.ts);
+ * Drive's purge runs in slices in queueHandlers/driveDisconnectPurge.ts. Unsliced by default; with
+ * `sliceSize` it sweeps at most that many files (the finder is handed `sliceSize + 1` as its limit)
+ * and reports whether any remain, so a queue consumer can re-enqueue for the rest.
  *
  * Callers resolve files with their connector's archived/deleted-blind finder, and call this AFTER
  * the connection is disabled (stops a re-claim) but BEFORE its release hard-deletes the row - unlike
@@ -46,17 +48,21 @@ type PurgeableConnectionFile = Parameters<typeof dataLakeService.purgeDataLakeCo
  */
 export async function purgeConnectionIngestedFiles(
   lake: IDataLakeDocument,
-  findFiles: () => Promise<PurgeableConnectionFile[]>,
+  findFiles: (limit?: number) => Promise<PurgeableConnectionFile[]>,
   opts: {
     connectionId: string;
     label: string;
     logger: PurgeConnectionLogger;
     restore?: () => Promise<unknown>;
+    sliceSize?: number;
   }
-): Promise<void> {
-  const { connectionId, label, logger, restore } = opts;
+): Promise<{ remaining: boolean }> {
+  const { connectionId, label, logger, restore, sliceSize } = opts;
   try {
-    await sweep(lake, await findFiles(), logger);
+    const found = await findFiles(sliceSize === undefined ? undefined : sliceSize + 1);
+    const files = sliceSize === undefined ? found : found.slice(0, sliceSize);
+    await sweep(lake, files, logger);
+    return { remaining: files.length < found.length };
   } catch (error) {
     const ids = { connectionId, dataLakeId: lake.id };
     logger.error(`${label}: purge failed`, { ...ids, error });

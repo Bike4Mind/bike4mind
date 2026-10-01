@@ -11,12 +11,8 @@ import {
 } from '@client/app/hooks/data/googleDrive';
 import { describeDriveConnection } from '@client/app/hooks/data/driveConnectionDisplay';
 import { useDriveFolderPicker } from '@client/app/hooks/data/useDriveFolderPicker';
+import { getServerErrorField } from '@client/app/utils/error';
 import DriveAccessDisclosure from './DriveAccessDisclosure';
-
-/** The specific server `error` message off an axios failure, if the response carried one. */
-function serverError(e: unknown): string | undefined {
-  return (e as { response?: { data?: { error?: string } } })?.response?.data?.error;
-}
 
 /**
  * Connect a Google Drive FOLDER to an EXISTING data lake: pick a folder and the connection is
@@ -42,7 +38,8 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
             toast.success(`Syncing "${folder.folderName || folder.driveFolderId}" into this data lake...`),
           // Surface the server's specific message (folder claimed elsewhere, lake already bound to a
           // different folder, "connect Drive first", ...) rather than one generic string for every 409.
-          onError: (e: unknown) => toast.error(serverError(e) || 'Could not connect that folder. Please try again.'),
+          onError: (e: unknown) =>
+            toast.error(getServerErrorField(e) || 'Could not connect that folder. Please try again.'),
         }
       ),
   });
@@ -136,7 +133,8 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
                     );
                   },
                   // Surface e.g. the 409 "a sync is in progress" so the user knows to retry later.
-                  onError: (e: unknown) => toast.error(serverError(e) || 'Could not disconnect. Please try again.'),
+                  onError: (e: unknown) =>
+                    toast.error(getServerErrorField(e) || 'Could not disconnect. Please try again.'),
                 })
               }
             >
