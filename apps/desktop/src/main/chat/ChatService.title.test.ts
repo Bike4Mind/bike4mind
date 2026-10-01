@@ -54,6 +54,12 @@ describe('ChatService session titles', () => {
     return streams[post.mock.calls.findIndex(call => (call[1] as WireRequest).model === TITLE_MODEL)];
   }
 
+  // The reply goes out after more setup than the title does, so under load it is often second.
+  async function replyStream(): Promise<PassThrough> {
+    await vi.waitUntil(() => replyIndex() >= 0, { timeout: 5000, interval: 5 });
+    return streams[replyIndex()];
+  }
+
   beforeEach(async () => {
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-title-')), SESSION_MODEL);
     // The end of the title path, spied on so a test can wait for it rather than for a timeout:
@@ -66,13 +72,15 @@ describe('ChatService session titles', () => {
       return result;
     });
     available = CATALOG;
-    summaries = [];
-    streams = [];
-    post = vi.fn().mockImplementation(() => {
+    // The service closes over these consts, not the reassigned lets: an earlier test's reply
+    // that only reaches the wire after its test ended would otherwise land in this test's mocks.
+    const ownSummaries: ChatSessionSummary[] = (summaries = []);
+    const ownStreams: PassThrough[] = (streams = []);
+    const ownPost = (post = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      ownStreams.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
-    });
+    }));
 
     service = new ChatService({
       store,
@@ -83,11 +91,11 @@ describe('ChatService session titles', () => {
       getApiClient: () =>
         ({
           get: async () => ({ sseCompletionsUrl: '' }),
-          getAxiosInstance: () => ({ post }),
+          getAxiosInstance: () => ({ post: ownPost }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: () => {},
-      summaryChanged: summary => summaries.push(summary),
+      summaryChanged: summary => ownSummaries.push(summary),
     });
   });
 
@@ -115,11 +123,11 @@ describe('ChatService session titles', () => {
     expect(await service.send(id, 'explain event loops')).toMatchObject({ ok: true });
 
     const title = await titleStream();
-    const reply = streams[replyIndex()];
+    const reply = await replyStream();
     reply.write(frame({ type: 'content', text: 'An event loop', stopReason: 'end_turn' }));
     reply.write(frame('[DONE]'));
 
-    await vi.waitUntil(async () => (await service.getSession(id))?.messages.length === 2, {
+    await vi.waitUntil(async () => (await service.getSession(id))?.messages[1]?.content === 'An event loop', {
       timeout: 5000,
       interval: 5,
     });
@@ -154,9 +162,10 @@ describe('ChatService session titles', () => {
     await answerTitle('The first thing');
     await vi.waitUntil(() => summaries.length > 0, { timeout: 5000, interval: 5 });
 
-    streams[replyIndex()].write(frame({ type: 'content', text: 'ok' }));
-    streams[replyIndex()].write(frame('[DONE]'));
-    await vi.waitUntil(async () => (await service.getSession(id))?.messages.length === 2, {
+    const reply = await replyStream();
+    reply.write(frame({ type: 'content', text: 'ok' }));
+    reply.write(frame('[DONE]'));
+    await vi.waitUntil(async () => (await service.getSession(id))?.messages[1]?.content === 'ok', {
       timeout: 5000,
       interval: 5,
     });
