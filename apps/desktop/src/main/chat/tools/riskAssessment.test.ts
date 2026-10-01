@@ -303,6 +303,36 @@ describe('assessApprovalRisk', () => {
     ])('asks for %s, which something else executes later', async (_label, relative) => {
       expect(await write(join(root, relative))).toBe('sensitive');
     });
+
+    /**
+     * macOS and Windows open `.GIT/config` as `.git/config`, so a pattern matched only in lower
+     * case guards nothing on either of the two platforms this app ships to.
+     */
+    it.each([
+      ['the git directory shouted', '.GIT/config'],
+      ['a git hook in mixed case', '.Git/hooks/pre-commit'],
+      ['a launch agent in lower case', 'library/launchagents/com.example.plist'],
+      ['a shell rc in upper case', '.ZSHRC'],
+    ])('asks for %s', async (_label, relative) => {
+      expect(await write(join(root, relative))).toBe('sensitive');
+    });
+
+    /**
+     * The path comes from `resolve`, so on Windows it is spelled with `\`. Every pattern is
+     * written in posix, and without normalizing they match nothing there.
+     */
+    it.each([
+      ['a git config', 'C:\\Users\\dev\\project\\.git\\config'],
+      ['a git hook', 'C:\\Users\\dev\\project\\.git\\hooks\\pre-commit'],
+      ['a CI workflow', 'C:\\Users\\dev\\project\\.github\\workflows\\ci.yml'],
+      ['a shouted git directory', 'C:\\Users\\dev\\project\\.GIT\\config'],
+    ])('asks for %s written with native Windows separators', async (_label, windowsPath) => {
+      expect(await write(windowsPath)).toBe('sensitive');
+    });
+
+    it('still allows an ordinary Windows path', async () => {
+      expect(await write('C:\\Users\\dev\\project\\src\\index.ts')).toBe('contained');
+    });
   });
 
   describe('fails closed', () => {

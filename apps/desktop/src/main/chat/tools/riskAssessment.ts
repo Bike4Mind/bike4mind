@@ -368,6 +368,10 @@ const INERT_COMMANDS: Readonly<Record<string, InertCommand>> = {
  * way to have arbitrary code run under their own hands the next time they commit, open a
  * shell, install a package or push a branch. These paths are inside the folders they granted,
  * so the only thing that can catch it is asking.
+ *
+ * Every pattern carries `i`, and a new one has to as well: macOS and Windows will open
+ * `.GIT/config` as `.git/config`, so a pattern that matches only the lower-case spelling
+ * guards nothing on the two platforms this app ships to.
  */
 const EXECUTED_LATER: readonly RegExp[] = [
   // The whole directory, and the gitfile that can stand in for it. Hooks are the obvious half;
@@ -375,17 +379,17 @@ const EXECUTED_LATER: readonly RegExp[] = [
   // each NAME a command git runs, and `core.fsmonitor` fires on a bare `git status` - which is
   // on the allow-list above. A `.git` FILE holding `gitdir: ../elsewhere` reaches a config the
   // same way, verified. Nothing legitimate asks to write in here unasked.
-  /(^|\/)\.git(\/|$)/,
-  /(^|\/)\.github\/workflows\//,
-  /(^|\/)\.gitlab-ci\.yml$/,
-  /(^|\/)\.(bash|zsh)(rc|_profile|_login|env)$/,
-  /(^|\/)\.profile$/,
-  /(^|\/)\.envrc$/,
-  /(^|\/)\.npmrc$/,
-  /(^|\/)\.yarnrc(\.yml)?$/,
-  /(^|\/)Library\/LaunchAgents\//,
-  /(^|\/)\.claude\//,
-  /(^|\/)\.vscode\/tasks\.json$/,
+  /(^|\/)\.git(\/|$)/i,
+  /(^|\/)\.github\/workflows\//i,
+  /(^|\/)\.gitlab-ci\.yml$/i,
+  /(^|\/)\.(bash|zsh)(rc|_profile|_login|env)$/i,
+  /(^|\/)\.profile$/i,
+  /(^|\/)\.envrc$/i,
+  /(^|\/)\.npmrc$/i,
+  /(^|\/)\.yarnrc(\.yml)?$/i,
+  /(^|\/)Library\/LaunchAgents\//i,
+  /(^|\/)\.claude\//i,
+  /(^|\/)\.vscode\/tasks\.json$/i,
 ];
 
 /**
@@ -565,7 +569,10 @@ async function assessCommand(input: Record<string, unknown>, context: ToolContex
 function assessWrite(prompt: ApprovalPrompt): ApprovalRisk {
   const path = prompt.diff?.path;
   if (!path) return 'sensitive';
-  return EXECUTED_LATER.some(pattern => pattern.test(path)) ? 'sensitive' : 'contained';
+  // The path arrives from `resolve`, which on Windows spells its separators `\`. Every pattern
+  // below is written in posix, so without this they match nothing at all on that platform.
+  const separated = path.replace(/\\/g, '/');
+  return EXECUTED_LATER.some(pattern => pattern.test(separated)) ? 'sensitive' : 'contained';
 }
 
 /**
