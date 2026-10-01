@@ -1,5 +1,23 @@
 # @bike4mind/cli
 
+## 1.3.0
+
+### Minor Changes
+
+- [#3703](https://github.com/Bike4Mind/bike4mind/pull/3703) [`31f1547`](https://github.com/Bike4Mind/bike4mind/commit/31f15478fe43bea7b7d76a4104d87cf9abf812d7) Thanks [@julsanchez](https://github.com/julsanchez)! - name the bound account on login and only auto-open same-origin verification URLs
+
+- [#3708](https://github.com/Bike4Mind/bike4mind/pull/3708) [`2628352`](https://github.com/Bike4Mind/bike4mind/commit/2628352ca0036977581c53846d3b2b6133fc1e78) Thanks [@julsanchez](https://github.com/julsanchez)! - require approval of each repo MCP server definition before spawning
+
+### Patch Changes
+
+- [#3394](https://github.com/Bike4Mind/bike4mind/pull/3394) [`fb13127`](https://github.com/Bike4Mind/bike4mind/commit/fb13127fa17159715f2465edc13aa79ba9fbb371) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - scan artifact tags, titles and tool-output results in linear time
+
+- [#3605](https://github.com/Bike4Mind/bike4mind/pull/3605) [`3b49048`](https://github.com/Bike4Mind/bike4mind/commit/3b49048715891aac4f5d427f717980c5626bd4d3) Thanks [@onoya](https://github.com/onoya)! - bump axios to 1.20.0 for seven high-severity advisories
+
+- [#3701](https://github.com/Bike4Mind/bike4mind/pull/3701) [`71cb783`](https://github.com/Bike4Mind/bike4mind/commit/71cb7835d59579ea20349dfa9988ac015c2eae5f) Thanks [@julsanchez](https://github.com/julsanchez)! - ignore a model-supplied confirmedFuzzyHash in edit_local_file
+
+- [#3706](https://github.com/Bike4Mind/bike4mind/pull/3706) [`edfe671`](https://github.com/Bike4Mind/bike4mind/commit/edfe6718c78309af24d2057d0d428e5dea7f208d) Thanks [@erikbethke](https://github.com/erikbethke)! - bump vulnerable dependencies (HIGH)
+
 ## 1.2.0
 
 ### Minor Changes
