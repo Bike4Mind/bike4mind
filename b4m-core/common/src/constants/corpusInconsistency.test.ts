@@ -112,6 +112,13 @@ describe('metric disagreements', () => {
     expect(kinds([doc('a', 'Annual revenue is $12k'), doc('b', 'Annual revenue is 12000 USD')])).toEqual([]);
     expect(kinds([doc('a', 'Annual revenue is USD 99'), doc('b', 'Annual revenue is $99')])).toEqual([]);
   });
+
+  it('treats an unmapped currency symbol the same as a mapped one for default-mode comparison', () => {
+    // The rupee sign (U+20B9) has no explicit canonicalUnit mapping, unlike dollar/euro/pound/yen -
+    // but METRIC still captures it as curpre via \p{Sc}, and currency is decided from that capture
+    // rather than from whether the canonicalized string happens to be in the explicit ISO list.
+    expect(kinds([doc('a', 'Cost is ₹5'), doc('b', 'Cost is 5 inr')])).toEqual([]);
+  });
 });
 
 describe('metric disagreements with unitRequired', () => {
@@ -187,6 +194,7 @@ describe('metric units', () => {
   // same figure compares as `1200.` against `1200`. Chunked prose ends sentences on numbers
   // constantly, so this is a systematic false positive rather than an edge case.
   it.each([
+    ['Total revenue is 1,200.', 'Total revenue is 1,200 USD.'],
     ['Total revenue is 1,200.', 'Total revenue is 1,200 in Q1.'],
     ['Monthly active users: 1,200.', 'Monthly active users: 1,200 in Q1.'],
     ['Score is 7.', 'Score is 7 out of 10.'],

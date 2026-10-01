@@ -212,28 +212,43 @@ const SUPERLATIVE_SUBJECT =
 const METRIC =
   /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*(?:(?<curpre>\p{Sc}|usd|eur|gbp|jpy|aud|cad|chf|cny|inr)\s*)?(?<val>[0-9](?:[0-9,.]*[0-9])?)(?:\s*(?<mag>[kKmMbB])(?=(?:[^A-Za-z]|$)))?(?:\s*(?<unit>%|(?:percent|ms|s|gb|mb|tb|x|usd|eur|gbp|jpy|aud|cad|chf|cny|inr|dollars?|euros?|yen|rupees?|yuan)(?!\w))|(?!\w))/iu;
 
+/**
+ * Common currency words/codes/symbols, mapped to ISO-like lowercase codes for grouping.
+ *
+ * A plain lookup is the whole implementation: `raw` is always one of `METRIC`'s own currency
+ * captures (a `\p{Sc}` symbol or one of its alternation's codes/words), so there is no free text
+ * here to pattern-match against.
+ */
+const CURRENCY_UNIT: Record<string, string> = {
+  $: 'usd',
+  usd: 'usd',
+  dollar: 'usd',
+  dollars: 'usd',
+  '\u20AC': 'eur', // euro sign
+  eur: 'eur',
+  euro: 'eur',
+  euros: 'eur',
+  '\u00A3': 'gbp', // pound sign
+  gbp: 'gbp',
+  '\u00A5': 'jpy', // yen sign
+  jpy: 'jpy',
+  yen: 'jpy',
+  inr: 'inr',
+  rupee: 'inr',
+  rupees: 'inr',
+  cny: 'cny',
+  yuan: 'cny',
+  aud: 'aud',
+  cad: 'cad',
+  chf: 'chf',
+};
+
 /** `percent` and `%` are one unit written two ways, so they must group and compare as one. */
 function canonicalUnit(unit?: string): string {
   const raw = unit ?? '';
   const lower = raw.toLowerCase();
   if (lower === 'percent' || raw === '%') return '%';
-  // Map common currency words/codes/symbols to ISO-like lowercase codes for grouping.
-  // Symbols covered by \p{Sc}: map a few common ones deterministically.
-  if (raw && /\p{Sc}/u.test(raw)) {
-    // `$` is ASCII; others rely on \p{Sc} match.
-    if (raw === '$') return 'usd';
-    // Best-effort mappings for common symbols; ambiguous ones intentionally omitted.
-    if (raw === '\u20AC') return 'eur'; // €
-    if (raw === '\u00A3') return 'gbp'; // £
-    if (raw === '\u00A5') return 'jpy'; // ¥
-  }
-  if (/\b(usd|dollar|dollars)\b/i.test(raw)) return 'usd';
-  if (/\b(eur|euro|euros)\b/i.test(raw)) return 'eur';
-  if (/\b(jpy|yen)\b/i.test(raw)) return 'jpy';
-  if (/\b(inr|rupee|rupees)\b/i.test(raw)) return 'inr';
-  if (/\b(cny|yuan)\b/i.test(raw)) return 'cny';
-  if (/^(aud|cad|chf)$/i.test(raw)) return lower;
-  return lower;
+  return CURRENCY_UNIT[lower] ?? lower;
 }
 
 /**
@@ -425,6 +440,9 @@ function detectSuperlativeConflicts(documents: CorpusDocument[]): InconsistencyF
   );
 }
 
+/** Currency codes/words `METRIC` can capture in its post-value `unit` group. */
+const CURRENCY_UNIT_WORD = /^(usd|eur|gbp|jpy|aud|cad|chf|cny|inr|dollars?|euros?|yen|rupees?|yuan)$/i;
+
 /**
  * `unitRequired` narrows this rule to metrics carrying a unit from `METRIC`'s alternation, and groups
  * by label AND unit so only same-unit values are ever compared.
@@ -446,7 +464,6 @@ function detectSuperlativeConflicts(documents: CorpusDocument[]): InconsistencyF
  * gets `uptime %` rather than `uptime`.
  */
 function detectMetricDisagreements(documents: CorpusDocument[], unitRequired = false): InconsistencyFinding[] {
-  const isCurrency = (u: string): boolean => !!u && /^(usd|eur|gbp|jpy|inr|cny|aud|cad|chf)$/.test(u);
   return crossDocumentGroups(
     collect(documents, sentence => {
       const match = METRIC.exec(sentence);
@@ -460,7 +477,12 @@ function detectMetricDisagreements(documents: CorpusDocument[], unitRequired = f
       const canonical = canonicalUnit(unitRaw);
       if (unitRequired && !canonical) return null;
       const scaled = canonicalValue(value, mag);
-      const includeUnit = unitRequired || (!isCurrency(canonical) && !!canonical);
+      // Decide currency from which group matched, not the canonicalized string: an unmapped
+      // `\p{Sc}` symbol (e.g. a rupee or won sign) canonicalizes to itself, so checking the
+      // canonical form against a fixed ISO list would treat it as a non-currency unit instead and
+      // compare it inconsistently with the currencies `canonicalUnit` does map.
+      const isCurrency = !!groups.curpre || CURRENCY_UNIT_WORD.test(groups.unit ?? '');
+      const includeUnit = unitRequired || (!isCurrency && !!canonical);
       return {
         subject: unitRequired ? `${normalizeSubject(label)} ${canonical}` : normalizeSubject(label),
         detail: includeUnit ? `${scaled}${canonical}` : `${scaled}`,
