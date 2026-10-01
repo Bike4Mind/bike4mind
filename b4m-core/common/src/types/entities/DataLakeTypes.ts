@@ -738,10 +738,18 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
        * Restricts the count to lakes whose `datalakeTag` is in this list - the per-turn-scoped
        * question "of exactly these lakes, how many can the caller not reach" for a caller that named
        * specific lakes by identity, as opposed to the whole-account question this method otherwise
-       * answers. Counts a named lake whatever its visibility (private, other-org), not only one
-       * behind a gate the caller lacks. Absent or empty runs the unrestricted, account-wide count.
+       * answers. Counts a named lake the caller cannot reach even when it carries no gate the caller
+       * lacks (private, other-org), but only within what the caller could already see unless
+       * `callerMaySeeAllLakes` is set. Absent or empty runs the unrestricted, account-wide count.
        */
       restrictToTags?: string[];
+      /**
+       * Only read with `restrictToTags`. True for a caller who may already see every lake exist
+       * (an admin), so the count also covers named lakes outside their org that are neither public
+       * nor theirs. Absent or false keeps a visibility prerequisite (public, in the caller's org,
+       * or created by the caller) so the count cannot confirm a lake the caller could not see.
+       */
+      callerMaySeeAllLakes?: boolean;
     }
   ): Promise<number>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
