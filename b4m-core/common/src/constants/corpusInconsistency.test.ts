@@ -101,6 +101,17 @@ describe('metric disagreements', () => {
   it('does not flag a metric stated in only one document', () => {
     expect(kinds([doc('a', 'Latency is 40 ms'), doc('b', 'Nothing quantitative here.')])).toEqual([]);
   });
+
+  it('recognizes K/M/B magnitude suffixes and compares scaled values', () => {
+    expect(kinds([doc('a', 'Revenue is 12k USD'), doc('b', 'Revenue is 12000 USD')])).toEqual([]);
+    expect(kinds([doc('a', 'Users is 3.5M'), doc('b', 'Users is 3500000')])).toEqual([]);
+    expect(kinds([doc('a', 'Budget is 2b'), doc('b', 'Budget is 1500000000')])).toEqual(['metric-disagreement']);
+  });
+
+  it('recognizes currency symbols and codes as units, before or after the value', () => {
+    expect(kinds([doc('a', 'Annual revenue is $12k'), doc('b', 'Annual revenue is 12000 USD')])).toEqual([]);
+    expect(kinds([doc('a', 'Annual revenue is USD 99'), doc('b', 'Annual revenue is $99')])).toEqual([]);
+  });
 });
 
 describe('metric disagreements with unitRequired', () => {
@@ -128,6 +139,11 @@ describe('metric disagreements with unitRequired', () => {
   it('does not compare one label measured in two different units', () => {
     // 100 ms against 2 s is a unit change, not evidence that the documents disagree.
     expect(unitKinds([doc('a', 'Latency is 100 ms.'), doc('b', 'Latency is 2 s.')])).toEqual([]);
+  });
+
+  it('treats currency symbols and words as the same unit for grouping when required', () => {
+    expect(unitKinds([doc('a', 'Revenue is $1.2M.'), doc('b', 'Revenue is 1200000 dollars.')])).toEqual([]);
+    expect(unitKinds([doc('a', 'Cost is EUR 1,200.'), doc('b', 'Cost is 1.2k euros.')])).toEqual([]);
   });
 
   it('leaves the default behaviour alone', () => {
@@ -171,7 +187,7 @@ describe('metric units', () => {
   // same figure compares as `1200.` against `1200`. Chunked prose ends sentences on numbers
   // constantly, so this is a systematic false positive rather than an edge case.
   it.each([
-    ['Total revenue is 1,200.', 'Total revenue is 1,200 USD.'],
+    ['Total revenue is 1,200.', 'Total revenue is 1,200 in Q1.'],
     ['Monthly active users: 1,200.', 'Monthly active users: 1,200 in Q1.'],
     ['Score is 7.', 'Score is 7 out of 10.'],
     ['Version is 3.4.5.', 'Version is 3.4.5 today.'],

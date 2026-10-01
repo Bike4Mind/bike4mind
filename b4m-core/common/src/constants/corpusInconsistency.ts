@@ -206,13 +206,37 @@ const SUPERLATIVE_SUBJECT =
  * gigabytes. Closing either means refusing a match rather than shortening one, which is a different
  * change to a rule two surfaces already depend on.
  */
+// Currency symbols (via Unicode property), currency codes/words, and magnitude suffixes.
+// - Keeps the digit-ending value invariant; magnitude suffix follows outside the value.
+// - Word-shaped units still carry the same token guard; `%` remains outside it.
+// - Currency may appear before or after the value; either side canonicalizes into `unit`.
 const METRIC =
-  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*([0-9](?:[0-9,.]*[0-9])?)(?:\s*(%|(?:percent|ms|s|gb|mb|tb|x)(?!\w))|(?!\w))/i;
+  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*(?:(?<curpre>\p{Sc}|usd|eur|gbp|jpy|aud|cad|chf|cny|inr)\s*)?(?<val>[0-9](?:[0-9,.]*[0-9])?)(?:\s*(?<mag>[kKmMbB])(?=(?:[^A-Za-z]|$)))?(?:\s*(?<unit>%|(?:percent|ms|s|gb|mb|tb|x|usd|eur|gbp|jpy|aud|cad|chf|cny|inr|dollars?|euros?|pounds?|yen|rupees?|yuan|won)(?!\w))|(?!\w))/iu;
 
 /** `percent` and `%` are one unit written two ways, so they must group and compare as one. */
 function canonicalUnit(unit?: string): string {
-  const lower = unit?.toLowerCase() ?? '';
-  return lower === 'percent' ? '%' : lower;
+  const raw = unit ?? '';
+  const lower = raw.toLowerCase();
+  if (lower === 'percent' || raw === '%') return '%';
+  // Map common currency words/codes/symbols to ISO-like lowercase codes for grouping.
+  // Symbols covered by \p{Sc}: map a few common ones deterministically.
+  if (raw && /\p{Sc}/u.test(raw)) {
+    // `$` is ASCII; others rely on \p{Sc} match.
+    if (raw === '$') return 'usd';
+    // Best-effort mappings for common symbols; ambiguous ones intentionally omitted.
+    if (raw === '\u20AC') return 'eur'; // €
+    if (raw === '\u00A3') return 'gbp'; // £
+    if (raw === '\u00A5') return 'jpy'; // ¥
+  }
+  if (/(^|\b)(usd|dollar|dollars)\b/i.test(raw)) return 'usd';
+  if (/(^|\b)(eur|euro|euros)\b/i.test(raw)) return 'eur';
+  if (/(^|\b)(gbp|pound|pounds)\b/i.test(raw)) return 'gbp';
+  if (/(^|\b)(jpy|yen)\b/i.test(raw)) return 'jpy';
+  if (/(^|\b)(inr|rupee|rupees)\b/i.test(raw)) return 'inr';
+  if (/(^|\b)(cny|yuan)\b/i.test(raw)) return 'cny';
+  // KRW not captured explicitly elsewhere; omit mapping to avoid unreachable code.
+  if (/^(aud|cad|chf)$/i.test(raw)) return lower;
+  return lower;
 }
 
 /**
@@ -229,10 +253,23 @@ function canonicalUnit(unit?: string): string {
  * carries no `detail` - so the comparison changes but nothing rendered does, including the
  * exponential form `String(Number(...))` gives at those magnitudes.
  */
-function canonicalValue(value: string): string {
+function canonicalValue(value: string, mag?: string): string {
   const bare = value.replace(/,/g, '');
   const numeric = Number(bare);
-  return Number.isFinite(numeric) ? String(numeric) : bare;
+  if (!Number.isFinite(numeric)) return bare;
+  let scaled = numeric;
+  switch ((mag ?? '').toLowerCase()) {
+    case 'k':
+      scaled = numeric * 1e3;
+      break;
+    case 'm':
+      scaled = numeric * 1e6;
+      break;
+    case 'b':
+      scaled = numeric * 1e9;
+      break;
+  }
+  return String(scaled);
 }
 
 const CUSTOMER = /\b(customer|client|deployed|in production with|live with)\b/i;
@@ -414,12 +451,17 @@ function detectMetricDisagreements(documents: CorpusDocument[], unitRequired = f
     collect(documents, sentence => {
       const match = METRIC.exec(sentence);
       if (!match) return null;
-      const [, label, value, unit] = match;
-      const canonical = canonicalUnit(unit);
+      const [, label] = match;
+      const groups = (match as unknown as { groups?: Record<string, string | undefined> }).groups || {};
+      const value = groups.val;
+      if (!value) return null; // regex always captures a value, but keep TS honest
+      const unitRaw = groups.unit || groups.curpre;
+      const mag = groups.mag;
+      const canonical = canonicalUnit(unitRaw);
       if (unitRequired && !canonical) return null;
       return {
         subject: unitRequired ? `${normalizeSubject(label)} ${canonical}` : normalizeSubject(label),
-        detail: `${canonicalValue(value)}${canonical}`,
+        detail: `${canonicalValue(value, mag)}${canonical}`,
       };
     }),
     'metric-disagreement'
