@@ -3,6 +3,7 @@ import { captureUtmParams } from '@client/app/utils/utmCapture';
 import { beaconVisit } from '@client/app/utils/visitBeacon';
 import type { GitHubLakeCallbackSearch } from '@client/app/utils/githubLakeCallbackStep';
 import { captureGitHubLakeCallbackSearch, GITHUB_LAKE_CALLBACK_PATH } from '@client/app/utils/githubLakeCallbackSearch';
+import { requireGitHubLakeCallbackSession } from '@client/app/utils/githubLakeCallbackGuard';
 import {
   createRouter,
   createRoute,
@@ -850,6 +851,7 @@ const googleDriveCallbackRoute = createRoute({
 const gitHubLakeCallbackRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: GITHUB_LAKE_CALLBACK_PATH,
+  beforeLoad: ({ location }) => requireGitHubLakeCallbackSession(location),
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <GitHubLakeCallbackPage />
