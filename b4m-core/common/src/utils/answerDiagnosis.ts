@@ -95,18 +95,27 @@ const SCOPE_ABSTAIN_REMEDY: Record<ScopeAbstain, string> = {
   access: 'Check that you still have access to it, or pick a different lake for this chat.',
 };
 
+const countDocuments = (promptMeta: PromptMeta): number =>
+  promptMeta.citables?.filter(c => c.type === 'document').length ?? 0;
+
 // Only an EMPTY recorded scope: a partial abstain (one named lake serving, another a draft) still
 // searched something, so its volume is judged as usual. Draft wins a tie because its remedy is the
 // caller's own to take.
-function scopeAbstain(retrieval: RetrievalSummary | undefined): ScopeAbstain | undefined {
-  if (!retrieval?.lakeScope || retrieval.lakeScope.length > 0) return undefined;
-  if ((retrieval.notServingLakes?.count ?? 0) > 0) return 'draft';
+// `notServingLakes` is the named-lake marker: the seed (ChatCompletionProcess.ts) writes it, zero
+// included, only when the session named a lake. Otherwise `lakeScope`/`excludedLakes` are
+// account-wide, not "this chat's lake". A failed draft lookup also leaves it absent.
+function scopeAbstain(promptMeta: PromptMeta): ScopeAbstain | undefined {
+  const retrieval = promptMeta.retrieval;
+  if (!retrieval?.lakeScope || retrieval.lakeScope.length > 0 || !retrieval.notServingLakes) return undefined;
+  // The keyword fallback's own-file hits write citables but no `injected`.
+  const searchedNothing =
+    retrieval.outcome === 'no_lakes' ||
+    (retrieval.outcome === 'ok' && (retrieval.injected?.chunks ?? 0) === 0 && countDocuments(promptMeta) === 0);
+  if (!searchedNothing) return undefined;
+  if (retrieval.notServingLakes.count > 0) return 'draft';
   if ((retrieval.excludedLakes?.count ?? 0) > 0) return 'access';
   return undefined;
 }
-
-const countDocuments = (promptMeta: PromptMeta): number =>
-  promptMeta.citables?.filter(c => c.type === 'document').length ?? 0;
 
 const groundedThroughUninstrumentedTool = (promptMeta: PromptMeta): boolean =>
   !!promptMeta.functionCalls?.some(call => call.name === UNINSTRUMENTED_CONTENT_TOOL);
@@ -152,8 +161,8 @@ function diagnoseRetrieval(promptMeta: PromptMeta): DiagnosisCheck {
 
   // Ahead of the volume and no-lakes arms, behind 'failed' and 'not_indexed': those are real faults
   // on whatever did run, while a zero here is the expected result of searching no lake at all.
-  const abstain = scopeAbstain(retrieval);
-  if (abstain && (retrieval.outcome === 'ok' || retrieval.outcome === 'no_lakes')) {
+  const abstain = scopeAbstain(promptMeta);
+  if (abstain) {
     return {
       id: 'retrieval',
       label,
@@ -321,7 +330,7 @@ function diagnoseCorpus(promptMeta: PromptMeta): DiagnosisCheck {
   }
 
   // "Searchable" would be a claim about a lake no surface ever compared against.
-  if (scopeAbstain(promptMeta.retrieval)) {
+  if (scopeAbstain(promptMeta)) {
     return {
       id: 'corpus',
       label,

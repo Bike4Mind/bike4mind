@@ -213,36 +213,84 @@ describe("scope abstain (the chat's lake was never searched)", () => {
   });
   const retrievalCheck = (meta: PromptMeta) => diagnoseAnswer(meta).checks.find(c => c.id === 'retrieval')!;
 
+  const draftWarn = {
+    id: 'retrieval',
+    label: 'Retrieval',
+    status: 'warn',
+    detail: "This chat's data lake is a draft, so it was not searched - drafts do not ground answers.",
+    remedy: 'Publish the lake to ground answers in it.',
+  };
+  const accessWarn = {
+    id: 'retrieval',
+    label: 'Retrieval',
+    status: 'warn',
+    detail: "This chat's data lake is not one you can currently reach, so it was not searched.",
+    remedy: 'Check that you still have access to it, or pick a different lake for this chat.',
+  };
+  const volumeFail = {
+    id: 'retrieval',
+    label: 'Retrieval',
+    status: 'fail',
+    detail:
+      'Your knowledge base was searched and nothing was retrieved - the answer is not grounded in your documents.',
+    remedy: 'Rephrase with the wording your documents use, or widen the knowledge base in scope.',
+  };
+
   it('names the draft as the cause instead of reporting a broken pipeline', () => {
     const diagnosis = diagnoseAnswer(draftAbstain);
-    const check = retrievalCheck(draftAbstain);
-    expect(check.status).toBe('warn');
-    expect(check.detail).toContain('is a draft');
-    expect(check.remedy).toContain('Publish the lake');
+    expect(retrievalCheck(draftAbstain)).toEqual(draftWarn);
     expect(diagnosis.verdict.status).toBe('warn');
     expect(diagnosis.verdict.headline).toBe('The model may not have had what it needed');
-    expect(diagnosis.verdict.body).toContain('Retrieval');
+    expect(diagnosis.verdict.body).toBe(
+      'Retrieval below explains it. Fix that before treating this as a model-quality problem.'
+    );
   });
 
   it("does not call the lake that was never searched 'searchable'", () => {
     expect(statusOf(draftAbstain, 'corpus')).toBe('unknown');
-    expect(detailOf(draftAbstain, 'corpus')).not.toContain('searchable');
+    expect(detailOf(draftAbstain, 'corpus')).toBe(
+      "This chat's data lake was not searched, so nothing is known about whether it is indexed."
+    );
   });
 
   it('gives the same answer when the merged outcome kept the abstain', () => {
-    const meta = withRetrieval({ outcome: 'no_lakes', injected: undefined });
-    expect(retrievalCheck(meta).status).toBe('warn');
-    expect(retrievalCheck(meta).detail).toContain('is a draft');
+    expect(retrievalCheck(withRetrieval({ outcome: 'no_lakes', injected: undefined }))).toEqual(draftWarn);
   });
 
-  it('names an access exclusion when no draft explains the empty scope', () => {
-    const meta = withRetrieval({
-      notServingLakes: { count: 0, reason: 'draft' },
-      excludedLakes: { count: 1, reason: 'access' },
+  it('names an access exclusion when the session named a lake and no draft explains the empty scope', () => {
+    const named = {
+      notServingLakes: { count: 0, reason: 'draft' as const },
+      excludedLakes: { count: 1, reason: 'access' as const },
+    };
+    expect(retrievalCheck(withRetrieval(named))).toEqual(accessWarn);
+    expect(retrievalCheck(withRetrieval({ ...named, outcome: 'no_lakes', injected: undefined }))).toEqual(accessWarn);
+  });
+
+  // No named lake: lakeScope and excludedLakes are account-wide, so they say nothing about "this
+  // chat's lake" and the turn keeps the verdict it had before the abstain arm existed.
+  it('does not blame an unreachable lake when the session named no lake', () => {
+    const unnamed = { notServingLakes: undefined, excludedLakes: { count: 2, reason: 'access' as const } };
+    expect(retrievalCheck(withRetrieval(unnamed))).toEqual(volumeFail);
+    expect(retrievalCheck(withRetrieval({ ...unnamed, outcome: 'no_lakes', injected: undefined }))).toEqual({
+      id: 'retrieval',
+      label: 'Retrieval',
+      status: 'warn',
+      detail: 'Retrieval ran but no knowledge base was in scope for it to search.',
+      remedy: 'Select a data lake for this session, or check that you still have access to one.',
     });
-    expect(retrievalCheck(meta).status).toBe('warn');
-    expect(retrievalCheck(meta).detail).toContain('not one you can currently reach');
-    expect(retrievalCheck(meta).remedy).toContain('access');
+  });
+
+  it('does not claim nothing was searched when something reached the model', () => {
+    const injected = withRetrieval({ injected: { chunks: 3, chars: 600 } });
+    expect(retrievalCheck(injected).status).toBe('ok');
+    expect(statusOf(injected, 'corpus')).toBe('ok');
+
+    const ownFiles: PromptMeta = {
+      ...withRetrieval({ injected: undefined }),
+      citables: [{ id: 'a', type: 'document', title: 'A' }],
+    };
+    expect(retrievalCheck(ownFiles).detail).not.toBe(draftWarn.detail);
+    expect(statusOf(ownFiles, 'corpus')).toBe('ok');
   });
 
   it('keeps a real failure on whatever did run as the headline', () => {
