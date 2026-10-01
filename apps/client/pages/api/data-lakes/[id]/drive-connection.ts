@@ -10,6 +10,7 @@ import {
 import { isDriveDisconnectStalled } from '@bike4mind/common';
 import type { IDataLakeDocument, IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
 import type { DriveDisconnectPurgePayload } from '@server/queueHandlers/driveDisconnectPurge';
+import { listDeletableDriveOrphans } from '@server/integrations/google/drive/connectorOrphanFiles';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { sendToQueue } from '@server/utils/sqs';
@@ -110,7 +111,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       return res.json({ connection: null });
     }
     const fileCount = await fabFileRepository.countByDriveConnectionIdInDataLake(conn.id, lake.datalakeTag);
-    return res.json({ connection: toSafeConnection(conn, fileCount) });
+    // The confirm number must equal what the purge removes, so it folds in the gate-cleared orphans
+    // (files this connection unpicked and left alive) the purge sweeps the same way - the member
+    // count alone under-reports exactly the rows this change is about.
+    const orphans = await listDeletableDriveOrphans(lake, conn.id, req.logger);
+    return res.json({ connection: toSafeConnection(conn, fileCount + orphans.length) });
   })
   .delete(async (req: Request, res) => {
     assertDataLakeWriteScope(req);

@@ -16,6 +16,12 @@ const h = vi.hoisted(() => ({
   connCancelDisconnect: vi.fn(async () => true),
   fabFilesCountByDriveConnectionIdInDataLake: vi.fn(async () => 0),
   fabFilesFindByDriveConnectionIdInDataLake: vi.fn(async () => []),
+  fabFilesFindLiveNonMembersByDriveConnectionId: vi.fn(async () => []),
+  userFindById: vi.fn(async (id: string) => ({ id })),
+  // The shared connector-copy gate behind listDeletableDriveOrphans runs for real, so its service
+  // seams are stubbed here.
+  findOtherLakeClaims: vi.fn(async () => ({ metaTagNames: [], prefixArmLakes: [] })),
+  loadPrefixArmCandidateLakes: vi.fn(async () => []),
   sendToQueue: vi.fn(async () => 'msg-1'),
   getSourceQueueUrl: vi.fn(() => 'https://sqs.example.com/drive-disconnect-purge'),
 }));
@@ -51,9 +57,21 @@ vi.mock('@bike4mind/database', async importOriginal => {
       ...actual.fabFileRepository,
       findByDriveConnectionIdInDataLake: h.fabFilesFindByDriveConnectionIdInDataLake,
       countByDriveConnectionIdInDataLake: h.fabFilesCountByDriveConnectionIdInDataLake,
+      findLiveNonMembersByDriveConnectionId: h.fabFilesFindLiveNonMembersByDriveConnectionId,
     },
+    // The orphan gate resolves each owner's existence through this; a real DB read would hang the
+    // unit suite, so it is stubbed to the default "owner exists".
+    userRepository: { ...actual.userRepository, findById: h.userFindById },
   };
 });
+vi.mock('@bike4mind/services', () => ({
+  dataLakeService: {
+    findOtherLakeClaims: h.findOtherLakeClaims,
+    hasOtherLakeClaim: (claims: { metaTagNames: string[]; prefixArmLakes: unknown[] }) =>
+      claims.metaTagNames.length > 0 || claims.prefixArmLakes.length > 0,
+    loadPrefixArmCandidateLakes: h.loadPrefixArmCandidateLakes,
+  },
+}));
 
 import handler from '../drive-connection';
 
@@ -74,6 +92,10 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', datalakeTag: 'datalake:lake1' });
     h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
     h.fabFilesCountByDriveConnectionIdInDataLake.mockResolvedValue(0);
+    h.fabFilesFindLiveNonMembersByDriveConnectionId.mockResolvedValue([]);
+    h.findOtherLakeClaims.mockResolvedValue({ metaTagNames: [], prefixArmLakes: [] });
+    h.loadPrefixArmCandidateLakes.mockResolvedValue([]);
+    h.userFindById.mockImplementation(async (id: string) => ({ id }));
     h.connMarkDisconnecting.mockResolvedValue(MARK);
     h.sendToQueue.mockResolvedValue('msg-1');
   });
@@ -102,6 +124,36 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     });
     expect(JSON.stringify(payload)).not.toContain('SHOULD-NOT-LEAK');
     expect(h.fabFilesCountByDriveConnectionIdInDataLake).toHaveBeenCalledWith('conn1', 'datalake:lake1');
+  });
+
+  it('GET count folds in the deletable orphans the purge will remove, and excludes the kept ones', async () => {
+    // The member count alone under-reports exactly the rows this change is about: a file the
+    // connector unpicked keeps its driveConnectionId but loses the lake meta-tag, so the member
+    // count cannot see it. The confirm number must equal what the purge removes.
+    h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA', status: 'connected' });
+    h.fabFilesCountByDriveConnectionIdInDataLake.mockResolvedValue(5);
+    const orphanFile = (over: Record<string, unknown> = {}) => ({
+      id: 'orphan1',
+      userId: 'u1',
+      users: [],
+      groups: [],
+      isGlobalRead: false,
+      tags: [],
+      driveConnectionId: 'conn1',
+      status: 'complete',
+      fileSize: 100,
+      ...over,
+    });
+    h.fabFilesFindLiveNonMembersByDriveConnectionId.mockResolvedValue([
+      orphanFile(),
+      orphanFile({ id: 'orphan-shared', users: [{ userId: 'bob', permissions: 'read' }] }),
+    ]);
+    const { res, json } = makeRes();
+    await run(makeReq('GET'), res);
+
+    // 5 members + the one orphan the gate clears; the shared orphan is not counted.
+    expect(json.mock.calls[0][0].connection.fileCount).toBe(6);
+    expect(h.fabFilesFindLiveNonMembersByDriveConnectionId).toHaveBeenCalledWith('conn1', 'datalake:lake1');
   });
 
   it('GET reports a connection whose queued disconnect purge is still running', async () => {
