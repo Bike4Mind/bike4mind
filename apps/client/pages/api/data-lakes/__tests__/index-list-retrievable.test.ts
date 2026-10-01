@@ -34,6 +34,8 @@ vi.mock('@server/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }))
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: { listAllDataLakes: mockListAll, listDataLakes: mockList },
 }));
+vi.mock('@server/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
+vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPrincipal: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
