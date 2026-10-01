@@ -1,7 +1,11 @@
 import { deviceAuthorizationRepository, digestDeviceCode } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { generateDeviceCode, generateUserCode } from '@server/utils/oauth/deviceAuthHelpers';
+import {
+  generateDeviceCode,
+  generateUserCode,
+  MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS,
+} from '@server/utils/oauth/deviceAuthHelpers';
 import { z } from 'zod';
 import { isLocalAppUrl } from '@server/utils/validators';
 
@@ -18,6 +22,16 @@ const handler = baseApi({ auth: false })
   )
   .post(async (req, res) => {
     InitiateRequestSchema.parse(req.body);
+
+    // Global, not per-IP: IP headers are spoofable when the origin is reached directly.
+    // ponytail: count-then-create is not atomic; concurrent initiates can overshoot by the in-flight count. Atomic counter if that matters.
+    if ((await deviceAuthorizationRepository.countPendingAndUnexpired()) >= MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS) {
+      res.setHeader('Retry-After', 60);
+      return res.status(503).json({
+        error: 'temporarily_unavailable',
+        error_description: 'Too many pending device authorizations, try again later',
+      });
+    }
 
     const deviceCode = generateDeviceCode();
     const userCode = generateUserCode();

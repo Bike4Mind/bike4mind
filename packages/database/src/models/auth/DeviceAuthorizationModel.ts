@@ -74,7 +74,7 @@ export const DeviceAuthorizationModel =
 export interface IDeviceAuthorizationRepository extends IBaseRepository<IDeviceAuthorizationDocument> {
   findByUserCode(userCode: string): Promise<IDeviceAuthorizationDocument | null>;
   findByDeviceCode(deviceCode: string): Promise<IDeviceAuthorizationDocument | null>;
-  findPendingAndUnexpired(): Promise<IDeviceAuthorizationDocument[]>;
+  countPendingAndUnexpired(): Promise<number>;
 }
 
 // Repository Implementation
@@ -108,11 +108,8 @@ class DeviceAuthorizationRepository
     });
   }
 
-  async findPendingAndUnexpired(): Promise<IDeviceAuthorizationDocument[]> {
-    return this.find({
-      status: { $in: ['pending', 'approved', 'denied'] },
-      expiresAt: { $gt: new Date() },
-    });
+  countPendingAndUnexpired(): Promise<number> {
+    return this.count({ status: 'pending', expiresAt: { $gt: new Date() } });
   }
 }
 

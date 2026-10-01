@@ -1,8 +1,9 @@
-import { deviceAuthorizationRepository, userRepository } from '@bike4mind/database';
+import { cacheRepository, deviceAuthorizationRepository, userRepository } from '@bike4mind/database';
 import { issueSessionForRequest } from '@server/auth/issueSession';
 import { ACCESS_TOKEN_TTL_SECONDS } from '@server/auth/tokenGenerator';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
+import { MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS } from '@server/utils/oauth/deviceAuthHelpers';
 import { BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
 
@@ -11,6 +12,9 @@ const TokenRequestSchema = z.object({
   device_code: z.string(),
   client_id: z.literal('b4m-cli'),
 });
+
+const TOKEN_GLOBAL_KEY = 'rate-limit:device-token-global';
+const TOKEN_GLOBAL_LIMIT_PER_MIN = MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS * 12;
 
 const handler = baseApi({ auth: false })
   .use(
@@ -21,6 +25,20 @@ const handler = baseApi({ auth: false })
   )
   .post(async (req, res) => {
     const { device_code } = TokenRequestSchema.parse(req.body);
+
+    // Keyed on nothing caller-controlled: IP headers and device_code are both rotatable.
+    // Answered with slow_down rather than 429 so the CLI backs off instead of aborting the login.
+    const { success } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
+      TOKEN_GLOBAL_KEY,
+      TOKEN_GLOBAL_LIMIT_PER_MIN,
+      60_000
+    );
+    if (!success) {
+      return res.status(400).json({
+        error: 'slow_down',
+        error_description: 'Too many device token requests, slow down',
+      });
+    }
 
     const authorization = await deviceAuthorizationRepository.findByDeviceCode(device_code);
 
