@@ -399,15 +399,48 @@ describe('tools check', () => {
     expect(statusOf({}, 'tools')).toBe('unknown');
   });
 
-  it('counts a recorded error as a failure and names the tool', () => {
+  it('warns on a partial failure, names the tool, and notes the model replied with what it got', () => {
     const meta: PromptMeta = {
       functionCalls: [
         { name: 'web_search', error: 'timeout' },
         { name: 'math_evaluate', success: true },
       ],
     };
-    expect(statusOf(meta, 'tools')).toBe('fail');
+    expect(statusOf(meta, 'tools')).toBe('warn');
     expect(detailOf(meta, 'tools')).toContain('web_search');
+    expect(detailOf(meta, 'tools')).toContain('1 succeeded');
+    expect(detailOf(meta, 'tools')).toContain('the model replied with what it got');
+  });
+
+  it('distinguishes succeeded calls from no-verdict calls in the detail', () => {
+    const meta: PromptMeta = {
+      functionCalls: [
+        { name: 'web_search', error: 'timeout' },
+        { name: 'math_evaluate', success: true },
+        { name: 'code_exec' },
+      ],
+    };
+    expect(detailOf(meta, 'tools')).toContain('1 succeeded');
+    expect(detailOf(meta, 'tools')).toContain('1 had no recorded verdict');
+  });
+
+  it('fails when every tool call failed', () => {
+    const meta: PromptMeta = {
+      functionCalls: [
+        { name: 'web_search', success: false },
+        { name: 'web_search', error: 'timeout' },
+      ],
+    };
+    expect(statusOf(meta, 'tools')).toBe('fail');
+    expect(detailOf(meta, 'tools')).toContain('All 2 tool calls failed');
+  });
+
+  it('uses singular phrasing when the only tool call failed', () => {
+    const meta: PromptMeta = {
+      functionCalls: [{ name: 'web_search', success: false }],
+    };
+    expect(statusOf(meta, 'tools')).toBe('fail');
+    expect(detailOf(meta, 'tools')).toContain('The only tool call failed');
   });
 
   it('does not count a call with no recorded verdict as failed', () => {
