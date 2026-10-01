@@ -268,8 +268,9 @@ export const web = new sst.aws.Nextjs(
       driveLakeIngestQueue,
       githubLakeIngestQueue,
       // The App's webhook (pages/api/webhooks/github/lake.ts) reads Resource.githubLakeRevokeQueue.url directly
-      // to enqueue one purge message per affected connection, the same reason githubLakeIngestQueue
-      // above is linked directly rather than only through sourceQueueUrls.
+      // to enqueue one purge message per affected connection, and the GitHub DELETE route's release
+      // hands a failed post-release uninstall to it (githubLakeConnection.ts) - the same reason
+      // githubLakeIngestQueue above is linked directly rather than only through sourceQueueUrls.
       githubLakeRevokeQueue,
       // Directly linked for the plainer reason: `POST /api/data-lakes/:id/research/runs` reads
       // Resource.dataLakeResearchQueue.url to enqueue the run. Via sourceQueueUrls alone the key is
