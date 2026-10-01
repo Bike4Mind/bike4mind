@@ -616,8 +616,15 @@ export function LakeInfoPanel({
               }
               size="sm"
             >
-              <Chip size="sm" variant="outlined" color="neutral" sx={{ fontSize: '11px' }}>
-                {fileCount} {fileCount === 1 ? 'file' : 'files'} (as creator)
+              <Chip
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                sx={{ fontSize: '11px' }}
+                data-testid={`datalake-manager-file-count-chip-${lake.id}`}
+              >
+                {fileCount} {fileCount === 1 ? 'file' : 'files'}
+                {lake.isCreator === false && " (creator's view)"}
               </Chip>
             </Tooltip>
           )}
@@ -652,7 +659,7 @@ export function LakeInfoPanel({
           <LakeGitHubStatusChip lakeId={lake.id} organizationId={lake.organizationId} />
           {/* Derived retrievability health (#1666): reachable-content share + affected-file drill-down.
               Advisory only. Fetched lazily for the lake in view; renders nothing for an empty lake. */}
-          <LakeHealthBadge lakeId={lake.id} failedFileCount={failedCount} />
+          <LakeHealthBadge lakeId={lake.id} failedFileCount={failedCount} viewerIsCreator={lake.isCreator} />
           {/* Same-identity duplicates (#2238): two generations of one document in this lake, with
               the decision that resolves them. The health badge beside it only COUNTS duplicates and
               is blind to what the owner already decided; this reads the ruling-aware door and is the
