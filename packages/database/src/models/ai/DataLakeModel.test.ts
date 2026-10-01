@@ -515,22 +515,42 @@ describe('DataLakeRepository.countGateExcludedLakes', () => {
       ).toBe(1);
     });
 
-    it('drives the public arm: a public gateless lake is reachable, a public lake with an unheld gate is counted', async () => {
+    it('drives the public arm: a public gateless lake is reachable, a public gated lake is counted only where the caller could see it', async () => {
       const open = await dataLakeRepository.create(
         baseLake({ slug: 'public-open', organizationId: 'orgB', isPublic: true })
       );
-      const gated = await dataLakeRepository.create(
+      const gatedElsewhere = await dataLakeRepository.create(
         baseLake({ slug: 'public-gated', organizationId: 'orgB', isPublic: true, requiredUserTag: 'tag' })
       );
+      const gatedInOwnOrg = await dataLakeRepository.create(
+        baseLake({ slug: 'public-gated-own-org', organizationId: 'orgA', isPublic: true, requiredUserTag: 'tag' })
+      );
+      const count = (tag: string, callerMaySeeAllLakes?: boolean) =>
+        dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+          restrictToTags: [tag],
+          callerMaySeeAllLakes,
+        });
+
+      expect(await count(open.datalakeTag)).toBe(0);
+      expect(await count(open.datalakeTag, true)).toBe(0);
+      // Hidden from the caller by its gate, so a guessed tag must not confirm it exists.
+      expect(await count(gatedElsewhere.datalakeTag)).toBe(0);
+      expect(await count(gatedElsewhere.datalakeTag, true)).toBe(1);
+      expect(await count(gatedInOwnOrg.datalakeTag)).toBe(1);
+    });
+
+    it('counts an org-less private lake owned by someone else only for a caller who may see every lake', async () => {
+      const orgless = await dataLakeRepository.create(baseLake({ slug: 'private-orgless', createdByUserId: 'alice' }));
+      const restrictToTags = [orgless.datalakeTag];
 
       expect(
-        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', { restrictToTags: [open.datalakeTag] })
-      ).toBe(0);
-      expect(
-        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
-          restrictToTags: [gated.datalakeTag],
+        await dataLakeRepository.countGateExcludedLakes([], [], [], 'bob', {
+          restrictToTags,
+          callerMaySeeAllLakes: true,
         })
       ).toBe(1);
+      expect(await dataLakeRepository.countGateExcludedLakes([], [], [], 'bob', { restrictToTags })).toBe(0);
+      expect(await dataLakeRepository.countGateExcludedLakes([], [], undefined, undefined, { restrictToTags })).toBe(0);
     });
 
     it('takes the account-wide branch for an empty restrictToTags rather than matching nothing', async () => {
@@ -539,7 +559,7 @@ describe('DataLakeRepository.countGateExcludedLakes', () => {
       expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', { restrictToTags: [] })).toBe(1);
     });
 
-    it('counts exactly the active named lakes that retrieval does not return (parity with findActiveByUserTagsAndEntitlements)', async () => {
+    it('splits the named lakes into exactly the set retrieval returns and the set the count reports (parity)', async () => {
       const fixtures = [
         baseLake({ slug: 'own', createdByUserId: 'bob' }),
         baseLake({ slug: 'org-open', organizationId: 'orgA' }),
@@ -551,17 +571,23 @@ describe('DataLakeRepository.countGateExcludedLakes', () => {
         baseLake({ slug: 'private-other', createdByUserId: 'alice' }),
       ];
       const created = await Promise.all(fixtures.map(f => dataLakeRepository.create(f)));
+      const tagOf = new Map(created.map(l => [l.slug, l.datalakeTag]));
       const callerArgs = [[], [], ['orgA'], 'bob'] as const;
+      const countOf = (slugs: string[]) =>
+        dataLakeRepository.countGateExcludedLakes(...callerArgs, {
+          restrictToTags: slugs.map(slug => tagOf.get(slug) as string),
+          callerMaySeeAllLakes: true,
+        });
 
-      const reachable = await dataLakeRepository.findActiveByUserTagsAndEntitlements(...callerArgs);
-      const unreachable = await dataLakeRepository.countGateExcludedLakes(...callerArgs, {
-        restrictToTags: created.map(l => l.datalakeTag),
-        callerMaySeeAllLakes: true,
-      });
+      const reachable = (await dataLakeRepository.findActiveByUserTagsAndEntitlements(...callerArgs))
+        .map(l => l.slug)
+        .sort();
+      const unreachable = fixtures.map(f => f.slug).filter(slug => !reachable.includes(slug));
 
-      expect(reachable.length).toBeGreaterThan(0);
-      expect(unreachable).toBeGreaterThan(0);
-      expect(reachable.length + unreachable).toBe(fixtures.length);
+      expect(reachable).toEqual(['org-open', 'own', 'public-open']);
+      expect(await countOf(reachable)).toBe(0);
+      expect(await countOf(unreachable)).toBe(unreachable.length);
+      expect(unreachable).toHaveLength(5);
     });
 
     it('does not count a named lake the caller reaches (own lake, gateless org lake, held tag, user grant)', async () => {
