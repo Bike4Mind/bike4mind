@@ -1,5 +1,5 @@
 import type { BackgroundProcessInfo } from '@shared/chat';
-import { refusalReason, resolveCwd } from './shellTools';
+import { doubleWrapRefusal, refusalReason, resolveCwd } from './shellTools';
 import {
   capOutput,
   optionalNumber,
@@ -60,6 +60,11 @@ export const bashBackground: ToolDefinition = {
       'that is supposed to keep running. Use bash_execute for commands that finish on their own;',
       'backgrounding those just makes you poll for an answer you could have had directly.',
       '',
+      'The command is handed to bash as it stands, exactly as with bash_execute: write it the way',
+      'you would type it at a prompt, with no `bash -lc`, `sh -c` or other shell in front of it and',
+      'no outer layer of quoting. A command starting with such a wrapper is refused rather than run.',
+      'Pass `cwd` to start it somewhere other than the default folder rather than opening with a `cd`.',
+      '',
       'The user is shown the exact command and must approve it, exactly as with bash_execute,',
       'and they are told it will keep running. It runs as the user with their full environment, like',
       'bash_execute.',
@@ -76,11 +81,10 @@ export const bashBackground: ToolDefinition = {
       properties: {
         command: {
           type: 'string',
-          description: [
-            'The bash command to start. Do not append "&" - backgrounding is what this tool does,',
-            'and a trailing "&" makes the command need approval. Do not start it with `cd` either:',
-            'pass the directory as `cwd`.',
-          ].join(' '),
+          description:
+            'The bash command to start, exactly as you would type it at a prompt. Do not append ' +
+            '"&" - backgrounding is what this tool does - do not prefix it with another shell, and ' +
+            'do not open it with a `cd`: pass the directory as `cwd`.',
         },
         cwd: {
           type: 'string',
@@ -99,6 +103,11 @@ export const bashBackground: ToolDefinition = {
   approval(input: Record<string, unknown>): ApprovalPrompt {
     const command = typeof input.command === 'string' ? input.command : '';
     const cwd = typeof input.cwd === 'string' ? input.cwd : '';
+
+    // Same reason as bash_execute: refused before the card rather than after it.
+    const wrapped = doubleWrapRefusal(command);
+    if (wrapped) throw new Error(wrapped);
+
     return {
       detail: [
         `$ ${command}`,
@@ -116,6 +125,9 @@ export const bashBackground: ToolDefinition = {
     const registry = requireRegistry(context);
     const sessionId = requireSessionId(context);
     const command = requireString(input, 'command');
+
+    const wrapped = doubleWrapRefusal(command);
+    if (wrapped) throw new Error(wrapped);
 
     const refused = refusalReason(command);
     if (refused) throw new Error(`Refused: this command ${refused}. It was not run.`);
