@@ -859,11 +859,11 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
   });
 
   it.each([
-    [{ isAdmin: true }, true],
-    [{ isAdmin: false }, false],
-    [{ isAdmin: null }, false],
+    [{ callerMaySeeAllLakes: true }, true],
+    [{ callerMaySeeAllLakes: false }, false],
     [{}, false],
-  ])('passes callerMaySeeAllLakes from the caller (%j -> %s)', async (userFlags, expected) => {
+    [undefined, false],
+  ])('forwards callerMaySeeAllLakes from the per-call option (%j -> %s)', async (callOpts, expected) => {
     const countGateExcludedLakes = vi.fn().mockResolvedValue(1);
     await measureIdentityNamedExclusion(
       {
@@ -871,10 +871,11 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
           dataLakes: { countGateExcludedLakes } as never,
           organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']) },
         },
-        user: { id: 'u1', tags: [], ...userFlags },
+        user: { id: 'u1', tags: [] },
         entitlementKeysResolved: true,
       },
-      ['datalake:b']
+      ['datalake:b'],
+      callOpts
     );
     expect(countGateExcludedLakes).toHaveBeenCalledWith(
       [],
