@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ModelBackend, VideoModels, type ModelInfo } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
+import { getSettingsValue } from '@bike4mind/utils';
 import { deductCreditsWithOrgSupport } from '../creditService';
 import { VideoGenerationService } from './VideoGeneration';
 
@@ -22,7 +23,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
     ...actual,
     aiVideoService: vi.fn(() => ({ generate: mockVideoGenerate })),
     getSettingsMap: vi.fn(async () => ({})),
-    getSettingsValue: vi.fn((name: string) => name === 'enforceCredits' || undefined),
+    getSettingsValue: vi.fn(() => undefined),
     ClientMessageSender: class {
       sendToClient = vi.fn();
     },
@@ -59,7 +60,7 @@ const sora = {
 } as unknown as ModelInfo;
 
 describe('VideoGenerationService.process usage event on a charged generation', () => {
-  const runCharged = async (record: ReturnType<typeof vi.fn>) => {
+  const runCharged = async (record?: ReturnType<typeof vi.fn>) => {
     const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined } as Record<
       string,
       unknown
@@ -70,7 +71,7 @@ describe('VideoGenerationService.process usage event on a charged generation', (
         users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
         organizations: { findById: vi.fn(async () => null) },
         creditTransactions: { create: vi.fn() },
-        usageEvents: { record },
+        ...(record ? { usageEvents: { record } } : {}),
       },
       startVideoGenerationProcess: vi.fn(),
       wsHttpsUrl: 'https://ws.example.com',
@@ -91,8 +92,14 @@ describe('VideoGenerationService.process usage event on a charged generation', (
   beforeEach(() => {
     vi.mocked(deductCreditsWithOrgSupport).mockClear();
     vi.mocked(getAvailableModels).mockResolvedValue([sora]);
+    vi.mocked(getSettingsValue).mockImplementation(name => name === 'enforceCredits' || undefined);
+    vi.mocked(silentLogger.warn).mockClear();
     mockVideoGenerate.mockReset();
     mockVideoGenerate.mockResolvedValue(['https://example.invalid/video.mp4']);
+  });
+
+  afterEach(() => {
+    vi.mocked(getSettingsValue).mockImplementation(() => undefined);
   });
 
   it('has landed the usage event by the time process() returns', async () => {
@@ -129,6 +136,13 @@ describe('VideoGenerationService.process usage event on a charged generation', (
     expect(quest.type).not.toBe('error');
     expect(quest.status).toBe('done');
     expect(silentLogger.warn).toHaveBeenCalledWith('Failed to record usage event', expect.any(Error));
+  });
+
+  it('completes a charged run when db.usageEvents is absent', async () => {
+    const quest = await runCharged();
+
+    expect(quest.status).toBe('done');
+    expect(quest.type).not.toBe('error');
   });
 });
 

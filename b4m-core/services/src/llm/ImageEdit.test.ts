@@ -302,6 +302,7 @@ describe('ImageEditService.process model dispatch', () => {
       vi.mocked(deductCreditsWithOrgSupport).mockClear();
       vi.mocked(getAvailableModels).mockResolvedValue([gptImage]);
       vi.mocked(getSettingsValue).mockImplementation(name => name === 'enforceCredits' || undefined);
+      vi.mocked(silentLogger.warn).mockClear();
       editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/edited.png' });
     });
 
@@ -327,7 +328,7 @@ describe('ImageEditService.process model dispatch', () => {
       expect(quest.status).toBe('done');
       expect(deductCreditsWithOrgSupport).toHaveBeenCalledTimes(1);
       expect(record).toHaveBeenCalledWith(
-        expect.objectContaining({ requestId: 'quest1', feature: 'image_edit', creditsCharged: quest.creditsUsed })
+        expect.objectContaining({ requestId: 'quest1', feature: 'image_edit', creditsCharged: 68 })
       );
       expect(landed).toBe(true);
     });
@@ -343,6 +344,13 @@ describe('ImageEditService.process model dispatch', () => {
       expect(quest.type).not.toBe('error');
       expect(quest.status).toBe('done');
       expect(silentLogger.warn).toHaveBeenCalledWith('Failed to record usage event', expect.any(Error));
+    });
+
+    it('completes a charged run when db.usageEvents is absent', async () => {
+      const quest = await run(ImageModels.GPT_IMAGE_1_5, {}, { creditTransactions: { create: vi.fn() } });
+
+      expect(quest.status).toBe('done');
+      expect(quest.type).not.toBe('error');
     });
   });
 });

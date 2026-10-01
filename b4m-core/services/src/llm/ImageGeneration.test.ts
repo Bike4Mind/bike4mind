@@ -752,7 +752,7 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
     pricing: { 1: { input: 0, output: 0 } },
   } as unknown as ModelInfo;
 
-  const runCharged = async (record: ReturnType<typeof vi.fn>) => {
+  const runCharged = async (record?: ReturnType<typeof vi.fn>) => {
     const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined } as any;
     const service = new ImageGenerationService({
       db: {
@@ -761,7 +761,7 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
         organizations: { findById: vi.fn(async () => null) },
         fabFiles: { findAccessibleInIds: vi.fn(async () => []) },
         creditTransactions: { create: vi.fn() },
-        usageEvents: { record },
+        ...(record ? { usageEvents: { record } } : {}),
       },
       logEvent: vi.fn().mockResolvedValue(undefined),
       abilityGetter: vi.fn().mockReturnValue({}),
@@ -788,6 +788,7 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
     vi.mocked(deductCreditsWithOrgSupport).mockClear();
     vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
     vi.mocked(getSettingsValue).mockImplementation(((name: string) => name === 'enforceCredits' || undefined) as never);
+    vi.mocked(silentLogger.warn).mockClear();
     mockGeminiGenerate.mockReset();
     mockGeminiGenerate.mockResolvedValue(['data:image/png;base64,AAAA']);
   });
@@ -831,6 +832,13 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
     expect(quest.type).not.toBe('error');
     expect(quest.status).toBe('done');
     expect(silentLogger.warn).toHaveBeenCalledWith('Failed to record usage event', expect.any(Error));
+  });
+
+  it('completes a charged run when db.usageEvents is absent', async () => {
+    const quest = await runCharged();
+
+    expect(quest.status).toBe('done');
+    expect(quest.type).not.toBe('error');
   });
 });
 
