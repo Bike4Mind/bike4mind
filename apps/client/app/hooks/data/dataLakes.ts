@@ -2499,8 +2499,10 @@ export function useRuleOnDataLakeFinding(dataLakeId: string) {
         beliefSkipReason: data.beliefSkipReason,
       };
     },
+    // Returning the invalidation keeps `isPending` true until the list has actually refetched.
+    // Without it the buttons re-enable the instant the POST resolves while the cached row still says
+    // `open`, so a fast second click hits the route's "already been ruled on" 400.
     onSuccess: ({ beliefRecorded, beliefSkipReason }, ruling) => {
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.findingsOf(dataLakeId) });
       toast.success(
         ruling.action === 'resolve'
           ? 'Finding resolved'
@@ -2509,9 +2511,13 @@ export function useRuleOnDataLakeFinding(dataLakeId: string) {
             : 'Assignment updated'
       );
       const note = ruling.action === 'assign' ? undefined : ruling.resolution?.trim();
-      if (note && !beliefRecorded && beliefSkipReason && BELIEF_SKIP_COPY[beliefSkipReason]) {
-        toast.warning(BELIEF_SKIP_COPY[beliefSkipReason]);
+      if (note && !beliefRecorded) {
+        // An unknown or absent reason still means the note was dropped; say so rather than let the
+        // success toast imply it was kept. The ruling itself is committed either way.
+        const copy = beliefSkipReason ? BELIEF_SKIP_COPY[beliefSkipReason] : undefined;
+        toast.warning(copy ?? 'The ruling was recorded, but the note was not saved to lake memory.');
       }
+      return queryClient.invalidateQueries({ queryKey: dataLakeKeys.findingsOf(dataLakeId) });
     },
     onError: (error: unknown) => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.findingsOf(dataLakeId) });

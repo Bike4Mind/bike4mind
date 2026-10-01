@@ -2263,7 +2263,44 @@ describe('useRuleOnDataLakeFinding', () => {
       await result.current.mutateAsync({ findingId: 'f1', action: 'dismiss', resolution: 'not a real conflict' });
     });
 
-    expect(toast.warning).toHaveBeenCalledWith(expect.stringMatching(/not remembered/i));
+    // The exact copy, not /not remembered/: five of the six skip reasons share that tail, so a loose
+    // matcher cannot tell the reason the server gave from any other.
+    expect(toast.warning).toHaveBeenCalledWith('Lake memory is off for this lake, so the note was not remembered.');
+  });
+
+  it('warns generically when a sent note was dropped with no reason', async () => {
+    apiPost.mockResolvedValueOnce({ data: { data: { id: 'f1' }, beliefRecorded: false } });
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ findingId: 'f1', action: 'resolve', resolution: 'reconciled' });
+    });
+
+    // The belief writer's catch path returns no reason; the note was still dropped, so the curator
+    // must not be left with only the success toast.
+    expect(toast.warning).toHaveBeenCalledWith('The ruling was recorded, but the note was not saved to lake memory.');
+  });
+
+  it('stays silent about memory when no note was sent', async () => {
+    apiPost.mockResolvedValueOnce({
+      data: { data: { id: 'f1' }, beliefRecorded: false, beliefSkipReason: 'no-resolution' },
+    });
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ findingId: 'f1', action: 'dismiss' });
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('Finding dismissed');
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it('stays silent about memory on an assignment', async () => {
+    apiPost.mockResolvedValueOnce({ data: { data: { id: 'f1' }, beliefRecorded: false } });
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ findingId: 'f1', action: 'assign', assigneeUserId: 'u2' });
+    });
+
+    expect(toast.warning).not.toHaveBeenCalled();
   });
 
   it("surfaces the route's double-resolve refusal and refreshes the stale row", async () => {
@@ -2276,5 +2313,43 @@ describe('useRuleOnDataLakeFinding', () => {
     expect(toast.error).toHaveBeenCalledWith('This finding has already been ruled on');
     // The refusal means the cached `open` row is stale; the invalidate is what refreshes it.
     expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
+  });
+
+  it('falls back to its own sentence when the refusal carries no server text', async () => {
+    apiPost.mockRejectedValueOnce(new Error('Network Error'));
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ findingId: 'f1', action: 'resolve' }).catch(() => {});
+    });
+
+    expect(toast.error).toHaveBeenCalledWith('Could not record that ruling. Try again shortly.');
+  });
+
+  it('stays pending until the findings refetch lands, so a second click cannot slip through', async () => {
+    apiPost.mockResolvedValueOnce({ data: { data: { id: 'f1' }, beliefRecorded: true } });
+    let releaseRefetch!: () => void;
+    const refetch = new Promise<void>(resolve => {
+      releaseRefetch = resolve;
+    });
+    const { result, invalidate } = mount();
+    // Hold the invalidation open, standing in for a slow list refetch after the POST has returned.
+    invalidate.mockReturnValueOnce(refetch);
+
+    act(() => {
+      result.current.mutate({ findingId: 'f1', action: 'resolve' });
+    });
+    // Let the POST resolve and its onSuccess run while the refetch is still held open. Without the
+    // returned invalidation the mutation has already settled here, with the stale `open` row still
+    // cached and the buttons live again.
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    expect(result.current.isPending).toBe(true);
+
+    await act(async () => {
+      releaseRefetch();
+      await refetch;
+    });
+    await waitFor(() => expect(result.current.isPending).toBe(false));
   });
 });

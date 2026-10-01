@@ -200,6 +200,16 @@ describe('LakeFindingsDialog', () => {
     expect(h.rule).toHaveBeenCalledWith({ findingId: 'finding-1', action: 'dismiss', resolution: undefined });
   });
 
+  it('does not send a whitespace-only note', () => {
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    fireEvent.change(screen.getByTestId('lake-finding-resolution-input'), { target: { value: '   ' } });
+    fireEvent.click(screen.getByTestId('lake-finding-resolve-btn'));
+
+    expect(h.rule).toHaveBeenCalledWith({ findingId: 'finding-1', action: 'resolve', resolution: undefined });
+  });
+
   it('blocks a second ruling while one is in flight', () => {
     h.rulePending.value = true;
     renderDialog();
@@ -207,6 +217,16 @@ describe('LakeFindingsDialog', () => {
 
     expect(screen.getByTestId('lake-finding-resolve-btn')).toBeDisabled();
     expect(screen.getByTestId('lake-finding-dismiss-btn')).toBeDisabled();
+    expect(screen.getByTestId('lake-finding-assign-me-btn')).toBeDisabled();
+  });
+
+  it('blocks an assignment while a ruling is in flight', () => {
+    h.rulePending.value = true;
+    h.findings.mockReturnValue(listing([finding({ assigneeUserId: 'u2' })]));
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.getByTestId('lake-finding-unassign-btn')).toBeDisabled();
   });
 
   it('reads a closed finding as a ruling, with no way to rule on it again', () => {
@@ -228,6 +248,26 @@ describe('LakeFindingsDialog', () => {
     expect(screen.queryByTestId('lake-finding-dismiss-btn')).not.toBeInTheDocument();
   });
 
+  it('dates a dismissed finding and marks it as seen again in the detail view', () => {
+    const ruledAt = new Date('2026-03-04T00:00:00Z');
+    h.findings.mockReturnValue(
+      listing([
+        finding({
+          status: 'dismissed',
+          resolvedAt: ruledAt,
+          lastSeenAt: new Date('2026-03-08T00:00:00Z'),
+        }),
+      ])
+    );
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    const ruling = screen.getByTestId('lake-finding-ruling');
+    expect(ruling).toHaveTextContent('Dismissed on');
+    expect(ruling).toHaveTextContent(formatFindingDate(ruledAt));
+    expect(within(ruling).getByTestId('lake-finding-recurred')).toBeInTheDocument();
+  });
+
   it('assigns an unassigned finding to the current user', () => {
     renderDialog();
     fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
@@ -246,7 +286,7 @@ describe('LakeFindingsDialog', () => {
             {
               principalType: 'user',
               principalId: 'u2',
-              principalName: 'Dana Vetrovs',
+              principalName: 'Test Curator',
               role: 'curator',
               status: 'active',
             },
@@ -258,21 +298,172 @@ describe('LakeFindingsDialog', () => {
     renderDialog();
     fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
 
-    expect(screen.getByTestId('lake-finding-assignee')).toHaveTextContent('Dana Vetrovs');
+    expect(screen.getByTestId('lake-finding-assignee')).toHaveTextContent('Test Curator');
     fireEvent.click(screen.getByTestId('lake-finding-unassign-btn'));
 
     expect(h.rule).toHaveBeenCalledWith({ findingId: 'finding-1', action: 'assign', assigneeUserId: null });
   });
 
+  it('assigns a listed candidate chosen from the picker', () => {
+    h.access.mockReturnValue({
+      data: {
+        view: {
+          grants: [
+            {
+              principalType: 'user',
+              principalId: 'u2',
+              principalName: 'Test Curator',
+              role: 'curator',
+              status: 'active',
+            },
+          ],
+        },
+      },
+    });
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.getByTestId('lake-finding-assignee-select')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('lake-finding-assignee-select'));
+    fireEvent.click(screen.getByRole('option', { name: 'Test Curator' }));
+
+    expect(h.rule).toHaveBeenCalledWith({ findingId: 'finding-1', action: 'assign', assigneeUserId: 'u2' });
+  });
+
+  it('clears the assignee through the picker', () => {
+    h.access.mockReturnValue({
+      data: {
+        view: {
+          grants: [
+            {
+              principalType: 'user',
+              principalId: 'u2',
+              principalName: 'Test Curator',
+              role: 'curator',
+              status: 'active',
+            },
+          ],
+        },
+      },
+    });
+    h.findings.mockReturnValue(listing([finding({ assigneeUserId: 'u2' })]));
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    fireEvent.click(screen.getByTestId('lake-finding-assignee-select'));
+    fireEvent.click(screen.getByRole('option', { name: 'Unassigned' }));
+
+    expect(h.rule).toHaveBeenCalledWith({ findingId: 'finding-1', action: 'assign', assigneeUserId: null });
+  });
+
+  it('lists only active owner and curator user grants as candidates', () => {
+    h.access.mockReturnValue({
+      data: {
+        view: {
+          grants: [
+            { principalType: 'user', principalId: 'u1', principalName: 'Owner One', role: 'owner', status: 'active' },
+            {
+              principalType: 'user',
+              principalId: 'u2',
+              principalName: 'Lapsed Curator',
+              role: 'curator',
+              status: 'expired',
+            },
+            { principalType: 'user', principalId: 'u3', principalName: 'A Reader', role: 'reader', status: 'active' },
+            {
+              principalType: 'organization',
+              principalId: 'o1',
+              principalName: 'An Org',
+              role: 'owner',
+              status: 'active',
+            },
+          ],
+        },
+      },
+    });
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+    fireEvent.click(screen.getByTestId('lake-finding-assignee-select'));
+
+    expect(screen.getByRole('option', { name: 'Owner One' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Lapsed Curator' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'A Reader' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'An Org' })).not.toBeInTheDocument();
+  });
+
+  it('falls back to a placeholder name for a grant the server could not resolve', () => {
+    h.access.mockReturnValue({
+      data: {
+        view: {
+          grants: [{ principalType: 'user', principalId: 'u4', role: 'curator', status: 'active' }],
+        },
+      },
+    });
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+    fireEvent.click(screen.getByTestId('lake-finding-assignee-select'));
+
+    expect(screen.getByRole('option', { name: 'Unnamed curator' })).toBeInTheDocument();
+  });
+
+  it('names an assignee who holds no listed grant and keeps the picker on that value', () => {
+    h.access.mockReturnValue({
+      data: {
+        view: {
+          grants: [
+            {
+              principalType: 'user',
+              principalId: 'u2',
+              principalName: 'Test Curator',
+              role: 'curator',
+              status: 'active',
+            },
+          ],
+        },
+      },
+    });
+    h.findings.mockReturnValue(listing([finding({ assigneeUserId: 'org-admin-1' })]));
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.getByTestId('lake-finding-assignee')).toHaveTextContent('Assigned to someone not listed');
+    // The Select's value must stay among its options, or the control renders blank.
+    fireEvent.click(screen.getByTestId('lake-finding-assignee-select'));
+    expect(screen.getByRole('option', { name: 'Assigned to someone not listed' })).toBeInTheDocument();
+  });
+
+  it('reads a finding already assigned to the current user without offering a self-assign', () => {
+    // The default access view has no grants, so "me" is not a listed candidate - the picker hides
+    // and the label alone carries the state.
+    h.findings.mockReturnValue(listing([finding({ assigneeUserId: 'me' })]));
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.getByTestId('lake-finding-assignee')).toHaveTextContent('Assigned to you');
+    expect(screen.queryByTestId('lake-finding-assign-me-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('lake-finding-unassign-btn')).toBeInTheDocument();
+  });
+
   // The route does not validate the assignee against the access view, so a refused picker must not
   // take the self-assign controls down with it.
   it('still allows self-assign when the assignee candidates are unavailable', () => {
-    h.access.mockReturnValue({ data: undefined, isError: true });
+    h.access.mockReturnValue({ data: { view: { grants: [] } } });
     renderDialog();
     fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
 
     expect(screen.queryByTestId('lake-finding-assignee-select')).not.toBeInTheDocument();
     expect(screen.getByTestId('lake-finding-assign-me-btn')).toBeInTheDocument();
+  });
+
+  it('reads the access view only for a caller who can manage the lake', () => {
+    render(
+      <TestWrapper>
+        <LakeFindingsDialog open onClose={vi.fn()} dataLakeId="lake-1" lakeName="Acme Policies" canManage={false} />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(h.access).toHaveBeenCalledWith('lake-1', false);
   });
 
   it('opens a finding from the keyboard, not only from a mouse', () => {

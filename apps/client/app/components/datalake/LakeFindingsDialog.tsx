@@ -210,16 +210,24 @@ function FindingRuling({ finding, dataLakeId }: { finding: IDataLakeFindingDocum
  * Set or clear a finding's assignee, available in every status - the route allows an assignment at
  * any time, and who owns triage is independent of whether the problem is closed.
  *
- * Candidates are the lake's owner/curator user grants from `useLakeAccessView`. That view is
- * manage-gated, so a refusal simply hides the picker; "Assign to me" and "Unassign" do not depend on
- * it, because the route does not validate the assignee against any candidate set. An assignee who
- * no longer appears in the grants is named by their id's absence rather than looked up - no second
- * user fetch for a label.
+ * Candidates are the lake's owner/curator user grants from `useLakeAccessView`, read only while the
+ * caller may manage the lake (`enabled`). That view is manage-gated, so a refusal simply hides the
+ * picker; "Assign to me" and "Unassign" do not depend on it, because the route does not validate the
+ * assignee against any candidate set. An assignee who no longer appears in the grants reads as
+ * "Assigned to someone not listed" rather than being looked up - no second user fetch for a label.
  */
-function FindingAssignee({ finding, dataLakeId }: { finding: IDataLakeFindingDocument; dataLakeId: string }) {
+function FindingAssignee({
+  finding,
+  dataLakeId,
+  canManage,
+}: {
+  finding: IDataLakeFindingDocument;
+  dataLakeId: string;
+  canManage: boolean;
+}) {
   const currentUserId = useUser(state => state.currentUser?.id);
   const rule = useRuleOnDataLakeFinding(dataLakeId);
-  const access = useLakeAccessView(dataLakeId);
+  const access = useLakeAccessView(dataLakeId, canManage);
 
   const candidates = useMemo(() => {
     const byId = new Map<string, string>();
@@ -235,11 +243,15 @@ function FindingAssignee({ finding, dataLakeId }: { finding: IDataLakeFindingDoc
     rule.mutate({ findingId: finding.id, action: 'assign', assigneeUserId });
 
   const assignee = finding.assigneeUserId;
+  const listedName = assignee ? candidates.find(candidate => candidate.id === assignee)?.name : undefined;
   const label = !assignee
     ? 'Unassigned'
     : assignee === currentUserId
       ? 'Assigned to you'
-      : (candidates.find(candidate => candidate.id === assignee)?.name ?? 'Assigned to someone not listed');
+      : (listedName ?? 'Assigned to someone not listed');
+  // Keep the Select's value among its own options: an assignee who holds no listed grant (e.g. an
+  // org admin who used "Assign to me") would otherwise leave the control rendering blank.
+  const assigneeUnlisted = !!assignee && !candidates.some(candidate => candidate.id === assignee);
 
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
@@ -256,6 +268,11 @@ function FindingAssignee({ finding, dataLakeId }: { finding: IDataLakeFindingDoc
           sx={{ minWidth: '11rem' }}
         >
           <Option value="">Unassigned</Option>
+          {assigneeUnlisted && (
+            <Option value={assignee}>
+              {assignee === currentUserId ? 'Assigned to you' : 'Assigned to someone not listed'}
+            </Option>
+          )}
           {candidates.map(candidate => (
             <Option key={candidate.id} value={candidate.id}>
               {candidate.name}
@@ -293,10 +310,12 @@ function FindingAssignee({ finding, dataLakeId }: { finding: IDataLakeFindingDoc
 function FindingDetail({
   finding,
   dataLakeId,
+  canManage,
   onBack,
 }: {
   finding: IDataLakeFindingDocument;
   dataLakeId: string;
+  canManage: boolean;
   onBack: () => void;
 }) {
   return (
@@ -335,7 +354,7 @@ function FindingDetail({
       </Alert>
 
       <FindingRuling finding={finding} dataLakeId={dataLakeId} />
-      <FindingAssignee finding={finding} dataLakeId={dataLakeId} />
+      <FindingAssignee finding={finding} dataLakeId={dataLakeId} canManage={canManage} />
 
       {/* Two up, which is the shape of a cross-document conflict; a finding reaching more documents
           wraps into further rows rather than being cut down to the first pair. */}
@@ -363,11 +382,15 @@ export function LakeFindingsDialog({
   onClose,
   dataLakeId,
   lakeName,
+  canManage = true,
 }: {
   open: boolean;
   onClose: () => void;
   dataLakeId: string;
   lakeName: string;
+  /** Whether the caller may manage the lake; the access view behind the assignee picker is 403'd
+   * without it, so it is fetched only when true. */
+  canManage?: boolean;
 }) {
   const [status, setStatus] = useState<LakeFindingStatus | undefined>('open');
   const [kind, setKind] = useState<InconsistencyKind | undefined>(undefined);
@@ -406,7 +429,12 @@ export function LakeFindingsDialog({
         <DialogTitle>{`Findings in "${lakeName}"`}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           {selected ? (
-            <FindingDetail finding={selected} dataLakeId={dataLakeId} onBack={() => setSelectedId(null)} />
+            <FindingDetail
+              finding={selected}
+              dataLakeId={dataLakeId}
+              canManage={canManage}
+              onBack={() => setSelectedId(null)}
+            />
           ) : (
             <>
               <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
@@ -633,7 +661,13 @@ export default function LakeFindingsChip({
           derived from the OPEN query, and the curator inside may be reading dismissed ones - so an
           invalidation that empties the open query would otherwise yank the whole surface off screen
           mid-read. */}
-      <LakeFindingsDialog open={open} onClose={() => setOpen(false)} dataLakeId={lakeId} lakeName={lakeName} />
+      <LakeFindingsDialog
+        open={open}
+        onClose={() => setOpen(false)}
+        dataLakeId={lakeId}
+        lakeName={lakeName}
+        canManage={canManage}
+      />
     </>
   );
 }
