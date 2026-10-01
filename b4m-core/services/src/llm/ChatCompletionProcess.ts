@@ -3181,7 +3181,9 @@ export class ChatCompletionProcess {
         );
         const excludedByAccessCount =
           accessForSeed !== undefined && sessionNamesALake(accessForSeed, session.retrievalTags)
-            ? await measureIdentityNamedExclusion(await this.getDataLakeAccessContext(), identityTagsToMeasure)
+            ? await measureIdentityNamedExclusion(await this.getDataLakeAccessContext(), identityTagsToMeasure, {
+                callerMaySeeAllLakes: this.user?.isAdmin === true,
+              })
             : narrowedAccess?.excludedByAccessCount;
         // Written whenever the count was actually measured - INCLUDING a genuine zero, per this
         // field's own absence contract (RetrievalSummarySchema.excludedLakes: absent means not
