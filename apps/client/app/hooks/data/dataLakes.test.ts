@@ -72,6 +72,7 @@ import {
   useAddFileToDataLake,
   useRecordMembershipDecision,
   useRemoveFileFromDataLake,
+  useReviewDataLakeProposal,
   useApplyTaxonomySuggestions,
   useRechunkDataLake,
   useSetLakeVisibility,
@@ -357,6 +358,41 @@ describe('useRemoveFileFromDataLake cache invalidation', () => {
     });
 
     expect(toast.success).toHaveBeenCalledWith('File removed from data lake.');
+  });
+});
+
+describe('useReviewDataLakeProposal cache invalidation', () => {
+  const run = async (decision: 'approve' | 'decline' | 'restore') => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockResolvedValueOnce({ data: { data: { id: 'p1', title: 'Source' } } });
+
+    const { result } = renderHook(() => useReviewDataLakeProposal('lake1'), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ proposalId: 'p1', decision });
+    });
+    return invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+  };
+
+  it('approve refreshes the membership-derived caches the header count reads', async () => {
+    const keys = await run('approve');
+    expect(keys).toContain(JSON.stringify(['dataLakeTagCounts']));
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
+    expect(keys).toContain(JSON.stringify(['dataLakeFiles', 'lake1']));
+  });
+
+  it('decline refreshes the lake list but not the membership-derived caches', async () => {
+    const keys = await run('decline');
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
+    expect(keys).not.toContain(JSON.stringify(['dataLakeTagCounts']));
+  });
+
+  it('restore refreshes the lake list but not membership caches', async () => {
+    const keys = await run('restore');
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
+    expect(keys).not.toContain(JSON.stringify(['dataLakeTagCounts']));
   });
 });
 

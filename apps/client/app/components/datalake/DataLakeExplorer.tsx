@@ -6,6 +6,7 @@ import DataLakeLakePicker from './DataLakeLakePicker';
 import DataLakeTreeEmptyState from './DataLakeTreeEmptyState';
 import { UNCATEGORIZED_KEY } from './DataLakeTreeView';
 import { resolveEmptyVariant } from './resolveEmptyVariant';
+import { prefixSegments } from '@client/app/components/DataLakeWizard/manager/shared';
 import { scopeTagCountsToLakes, seedEmptyLakeTags } from './scopeTagCountsToLakes';
 import SelectedLakeHeader from './SelectedLakeHeader';
 import ActiveLakeScopeStrip from './ActiveLakeScopeStrip';
@@ -102,6 +103,34 @@ interface DataLakeExplorerProps {
 
 /** True only for drags carrying real files (not text/image-from-page drags). */
 const isFileDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types ?? []).includes('Files');
+
+type LakeLabel = { name: string; datalakeTag: string };
+type LakePrefixSource = LakeLabel & { fileTagPrefix: string };
+
+/** Normalized prefix path ('acme:legal') -> the in-scope lake that owns it. Ambiguity is judged
+ *  against EVERY accessible lake, so neither the name nor the member count is credited to the
+ *  wrong one: a prefix two lakes hold is omitted, and so is a (legacy) prefix that nests another
+ *  lake's, since that lake's files sit in its subtree too. */
+export function buildLakePrefixLookup(
+  lakes: readonly LakePrefixSource[],
+  inScope: readonly LakePrefixSource[] = lakes
+): Map<string, LakeLabel> {
+  const byPath = new Map<string, LakeLabel | null>();
+  for (const lake of lakes) {
+    const key = prefixSegments(lake.fileTagPrefix).join(':');
+    if (!key) continue;
+    byPath.set(key, byPath.has(key) ? null : { name: lake.name, datalakeTag: lake.datalakeTag });
+  }
+  const scopedTags = new Set(inScope.map(l => l.datalakeTag));
+  const keys = [...byPath.keys()];
+  const unique = new Map<string, LakeLabel>();
+  byPath.forEach((lake, key) => {
+    if (!lake || !scopedTags.has(lake.datalakeTag)) return;
+    if (keys.some(other => other.startsWith(`${key}:`))) return;
+    unique.set(key, lake);
+  });
+  return unique;
+}
 
 /** Stable empty fallback for seedEmptyLakeTags below, so an in-flight lake list never churns
  *  the memo it feeds (see lakesInScope). */
@@ -380,6 +409,11 @@ export default function DataLakeExplorer({
       ),
     [lakesInScope]
   );
+  const lakePrefixLookup = useMemo(
+    () => buildLakePrefixLookup(lakes ?? [], selectedLakes.length > 0 ? selectedLakes : (lakes ?? [])),
+    [lakes, selectedLakes]
+  );
+  const lakeForPath = useCallback((path: string[]) => lakePrefixLookup.get(path.join(':')), [lakePrefixLookup]);
 
   // Derive the current leaf tag from breadcrumb + tree state. A branch node (has children) can
   // ALSO carry files tagged with its own exact path, which DataLakeTreeView renders mixed into
@@ -619,6 +653,8 @@ export default function DataLakeExplorer({
       >
         <DataLakeChatTree
           tree={tree}
+          lakeForPath={lakeForPath}
+          lakeFileCounts={tagCountsData?.lakeFileCounts}
           articles={leafArticles}
           breadcrumb={breadcrumb}
           onNavigate={handleNavigate}
