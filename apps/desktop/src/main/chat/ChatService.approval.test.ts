@@ -32,6 +32,18 @@ describe('ChatService approval gate', () => {
   const toolEvents = (status: ChatToolCall['status']) =>
     events.filter(event => (event.type === 'tool-start' || event.type === 'tool-end') && event.call.status === status);
 
+  /**
+   * A conversation on 'ask', which is the mode this file is about.
+   *
+   * Named rather than left to the default, because the default is 'auto' and under it half the
+   * commands below never reach the gate at all. What is tested here is the gate, not the mode.
+   */
+  async function askingSession(): Promise<string> {
+    const session = await service.createSession();
+    await service.setApprovalMode(session.id, 'ask');
+    return session.id;
+  }
+
   /** The id announced with the 'awaiting-approval' event, which is the only place it appears. */
   async function pendingApprovalId(): Promise<string> {
     const event = await vi.waitUntil(() => toolEvents('awaiting-approval')[0], { timeout: 3000, interval: 5 });
@@ -66,7 +78,7 @@ describe('ChatService approval gate', () => {
   });
 
   it('declares bash_execute alongside the file tools', async () => {
-    const { id } = await service.createSession();
+    const id = await askingSession();
     await service.send(id, 'hi');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
 
@@ -78,7 +90,7 @@ describe('ChatService approval gate', () => {
 
   /** The point of the gate: nothing has run, and the turn has not advanced, until the user answers. */
   it('holds the command at the gate and runs nothing until the user answers', async () => {
-    const { id } = await service.createSession();
+    const id = await askingSession();
     await service.send(id, 'what is on port 3000?');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
 
@@ -95,7 +107,7 @@ describe('ChatService approval gate', () => {
   });
 
   it('runs the command once allowed, and feeds its output back to the model', async () => {
-    const { id } = await service.createSession();
+    const id = await askingSession();
     await service.send(id, 'run it');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
 
@@ -110,7 +122,7 @@ describe('ChatService approval gate', () => {
   });
 
   it('tells the model it was declined, without ending the turn', async () => {
-    const { id } = await service.createSession();
+    const id = await askingSession();
     await service.send(id, 'run it');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
 
@@ -132,7 +144,7 @@ describe('ChatService approval gate', () => {
   });
 
   it('stops asking for a command the user allowed always, and still asks for a different one', async () => {
-    const { id } = await service.createSession();
+    const id = await askingSession();
     await service.send(id, 'run it twice');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
 
@@ -154,7 +166,7 @@ describe('ChatService approval gate', () => {
   });
 
   it('does not gate the read-only file tools', async () => {
-    const { id } = await service.createSession();
+    const id = await askingSession();
     await service.send(id, 'list files');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
 
@@ -171,7 +183,7 @@ describe('ChatService approval gate', () => {
   });
 
   it('denies a pending approval when the reply is stopped, rather than leaving it hanging', async () => {
-    const { id } = await service.createSession();
+    const id = await askingSession();
     await service.send(id, 'run it');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
 

@@ -10,8 +10,9 @@ import type { ApprovalPrompt, ToolContext } from './types';
  * decision below is allow-list shaped: a deny list over shell text is exactly the weak detector
  * that makes a reassuring label worse than no label at all.
  *
- * One entry is a judgement rather than a proof and is marked as such where it is made: the
- * package-manager scripts under INERT_COMMANDS run repository code, and the user chose that.
+ * Two entries are judgements rather than proofs, and both are marked as such where they are
+ * made: under INERT_COMMANDS the package-manager scripts run repository code, and the
+ * read-only `gh` subcommands reach GitHub carrying the user's credential. The user chose both.
  */
 export type ApprovalRisk = 'contained' | 'sensitive';
 
@@ -84,13 +85,18 @@ const FOLLOWS_SYMLINKS: readonly string[] = ['-L', '-R', '--dereference', '--der
 /**
  * The package-manager scripts 'auto' will run unasked.
  *
- * Suffixed variants are in because the real commands are spelled that way - this repo's own
- * check is `lint:check` - and a hand-listed set would be wrong in the next repository. The
- * prefix is anchored, so `turbo:typecheck` does not match: it names a different runner that
- * happens to end in an allowed word, and widening the pattern to reach it would let any script
- * in by choosing its suffix.
+ * `test`, `lint` or `typecheck` as ANY `:` or `-` separated segment, because which segment the
+ * keyword lands in is an accident of how the script was named: this repository tells
+ * contributors to run `lint:check`, `turbo:test` and `turbo:typecheck`, and a pattern anchored
+ * at the front allows the first and asks about the other two every single time.
+ *
+ * What bounds this is not the shape of the pattern, and a narrower shape would not be a bound
+ * either. It is the one INERT_COMMANDS states for `npm`, `pnpm` and `yarn`: the script name has
+ * to be recognisably one of these three words, and whatever that script runs is the
+ * repository's own code, which the user decided was acceptable. Every other thing a package
+ * manager can be asked to do still asks.
  */
-const RUNNABLE_SCRIPT = /^(test|lint|typecheck)([:-][a-zA-Z0-9:-]+)?$/;
+const RUNNABLE_SCRIPT = /^([a-zA-Z0-9]+[:-])*(test|lint|typecheck)([:-][a-zA-Z0-9]+)*$/;
 
 /**
  * Package-manager flags whose value is the NEXT token, so that token is not the script name.
@@ -107,7 +113,13 @@ const SCRIPT_VALUE_FLAGS: readonly string[] = ['--filter', '-F', '-C', '--dir'];
 
 /** Absent `subcommands`, `scripts` and `guard` means the executable is inert whatever it is asked to do. */
 interface InertCommand {
-  /** The only first arguments that stay read-only. Anything else asks. */
+  /**
+   * The only leading positional words that stay read-only. Anything else asks.
+   *
+   * An entry may name more than one word, spelled with a space, for a command whose first word
+   * decides nothing on its own: `gh pr` carries `create`, `merge` and `close` as readily as
+   * `view`.
+   */
   subcommands?: readonly string[];
   /** Arguments that turn this command into a write, an exec or a network call. */
   forbiddenArguments?: readonly string[];
@@ -142,6 +154,18 @@ function hasFlag(tokens: readonly string[], flags: readonly string[]): boolean {
  */
 function hasPrefix(tokens: readonly string[], prefixes: readonly string[]): boolean {
   return tokens.some(token => prefixes.some(prefix => token.startsWith(prefix)));
+}
+
+/**
+ * Whether the positional words of `rest` begin with one of the allowed subcommand spellings.
+ *
+ * Read off the positionals so a flag in front of the subcommand cannot hide it, and matched as
+ * a prefix so an entry may be as many words deep as the command needs. A command called with
+ * no positional at all matches nothing and asks.
+ */
+function namesAllowedSubcommand(rest: readonly string[], allowed: readonly string[]): boolean {
+  const positional = rest.filter(token => !token.startsWith('-'));
+  return allowed.some(entry => entry.split(' ').every((word, index) => positional[index] === word));
 }
 
 /**
@@ -232,7 +256,7 @@ function writesNoSecondPath(rest: readonly string[]): boolean {
  *
  * Two different bars are being applied here, and the difference is the point.
  *
- * For everything without `scripts` the bar is provable inertness: given a fixed argv and path
+ * For most of the list the bar is provable inertness: given a fixed argv and path
  * arguments inside a granted root, the program reads and prints, and does not write, execute or
  * open a socket. That still excludes every interpreter and everything that can reach the
  * network.
@@ -243,8 +267,16 @@ function writesNoSecondPath(rest: readonly string[]): boolean {
  * on. So the claim made for these three is narrower and worth stating plainly - it is NOT that
  * the call is inert. It is that the script name is one of a bounded few, and that whatever those
  * scripts contain is the repository's own code, which the agent could in principle have just
- * written. Anyone extending this list should hold new entries to the inertness bar unless the
- * user has decided otherwise for them too, the way they did for these.
+ * written.
+ *
+ * `gh` is the second such decision and is recorded the same way, because it does not meet the
+ * inertness bar either: every call opens a socket, and it sends the user's GitHub credential
+ * with it. What was asked for is reading a pull request without a click, so the claim made for
+ * it is only that the listed subcommands read - they fetch and print, and not one of them
+ * creates, edits, merges, closes or deletes anything.
+ *
+ * Anyone extending this list should hold new entries to the inertness bar unless the user has
+ * decided otherwise for them too, the way they did for these.
  *
  * What this does not open: `npx`, `dlx` and `exec` are absent, and absent by default rather than
  * by denial, because they fetch and run a package that is not the repository's at all.
@@ -252,8 +284,8 @@ function writesNoSecondPath(rest: readonly string[]): boolean {
  * The near misses are worth recording, because the next person to extend the list will reach
  * for them. `sed` and `awk` write files - `sed -i`, `s///w file`, awk's `print > "file"` - and
  * awk shells out through `system()`. `env` runs whatever follows its assignments. `less` and
- * `more` are interactive pagers and would hang a child that has no terminal. `curl`, `wget` and
- * `gh` reach the network. Every interpreter is already excluded by the bar above.
+ * `more` are interactive pagers and would hang a child that has no terminal. `curl` and `wget`
+ * reach the network. Every interpreter is already excluded by the bar above.
  *
  * `printenv` and `ps` are the user's own call and went the other way. Both ARE inert by the bar
  * above - they read and print - which is the whole reason they are worth naming here: what they
@@ -282,6 +314,34 @@ const INERT_COMMANDS: Readonly<Record<string, InertCommand>> = {
     forbiddenArguments: ['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprint0', '-fprintf', '-fls'],
   },
   fold: {},
+  // Reads only, and spelled two words deep because the first word decides nothing: `pr` reaches
+  // `create`, `merge` and `close` as readily as `view`.
+  //
+  // `api` is absent because it reaches any endpoint and `-X POST` writes through one; `auth`
+  // because `gh auth token` prints the user's credential straight into the transcript;
+  // `browse`, and `--web` on anything listed here, because they open a browser. Every create,
+  // edit, merge, close, delete, `workflow run`, `run rerun`, `run cancel` and `release upload`
+  // is a write and is absent for that alone. `run watch` reads and is absent anyway, with
+  // `--watch` refused on the listed subcommands for the same reason: both sit there until the
+  // run finishes, which is not a thing to start with nobody watching.
+  gh: {
+    subcommands: [
+      'pr view',
+      'pr list',
+      'pr diff',
+      'pr checks',
+      'pr status',
+      'issue view',
+      'issue list',
+      'run list',
+      'run view',
+      'repo view',
+      'release view',
+      'release list',
+      'status',
+    ],
+    forbiddenArguments: ['-w', '--web', '--watch'],
+  },
   // Read-only porcelain only, and read-only plumbing under it. `add`, `commit`, `checkout` and
   // `stash` all change the working tree or the index, and `push`, `pull`, `fetch`, `clone`,
   // `remote` and `config` either talk to the network or read a file outside the repository.
@@ -522,10 +582,7 @@ async function assessSegment(tokens: readonly string[], cwd: string, context: To
   if (inert.forbiddenArguments && hasFlag(rest, inert.forbiddenArguments)) return false;
   if (inert.forbiddenPrefixes && hasPrefix(rest, inert.forbiddenPrefixes)) return false;
 
-  if (inert.subcommands) {
-    const subcommand = rest.find(token => !token.startsWith('-'));
-    if (!subcommand || !inert.subcommands.includes(subcommand)) return false;
-  }
+  if (inert.subcommands && !namesAllowedSubcommand(rest, inert.subcommands)) return false;
 
   if (inert.guard && !inert.guard(rest)) return false;
   if (inert.scripts && !runnableScript(rest, inert.scripts)) return false;

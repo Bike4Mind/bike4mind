@@ -105,6 +105,17 @@ describe('ChatService approval modes', () => {
     return session;
   }
 
+  /**
+   * The mode a conversation nobody has touched runs in. 'auto' is the floor rather than a
+   * fallback: every call it lets through has been proven confined, and the modes below are
+   * what the user moves it to from there.
+   */
+  it('starts a conversation at "Approve for me"', async () => {
+    const session = await service.createSession();
+    expect(session.approvalMode).toBe('auto');
+    expect(await store.approvalMode(session.id)).toBe('auto');
+  });
+
   describe('ask for approval', () => {
     it('holds even a read-only command at the gate', async () => {
       await startTurn('ask');

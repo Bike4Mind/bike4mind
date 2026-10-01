@@ -175,6 +175,9 @@ describe('ChatService queued messages', () => {
     });
 
     const { id } = await gated.createSession();
+    // 'ask', not the default: a queued message parked behind the gate needs the gate to hold,
+    // and under 'auto' this command would never reach it.
+    await gated.setApprovalMode(id, 'ask');
     await gated.send(id, 'what is on port 3000?');
     await waitForEvent('start');
 
