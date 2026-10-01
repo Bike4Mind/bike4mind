@@ -8,12 +8,11 @@ import {
   useDisconnectLakeGitHub,
   useLakeGitHubConnection,
   useResyncLakeGitHub,
-  useStartLakeGitHubConnect,
   type LakeGitHubConnection,
 } from '@client/app/hooks/data/githubLake';
+import { useBeginLakeGitHubConnect } from '@client/app/hooks/data/useBeginLakeGitHubConnect';
 import { describeGitHubConnection } from '@client/app/hooks/data/githubConnectionDisplay';
 import { getServerErrorField } from '@client/app/utils/error';
-import { saveGitHubLakeConnectHandoff } from '@client/app/utils/githubLakeConnectHandoff';
 
 /**
  * Why re-sync is off right now, or undefined when it can run. Mirrors sync.ts's 409s, including its
@@ -28,37 +27,19 @@ function resyncBlockedReason(connection: LakeGitHubConnection): string | undefin
 
 /**
  * Connect a GitHub repository to an EXISTING org data lake, then show its sync status, re-sync and
- * disconnect. Connecting leaves the app for GitHub's install page; the GitHubLakeCallbackPage
- * route finishes it. Create mode has no lake id to sign into the flow, so it is not offered there.
+ * disconnect. Connecting leaves the app for GitHub's OAuth authorize page; the
+ * GitHubLakeCallbackPage route exchanges the return and opens the repository picker to finish it.
+ * Create mode has no lake id to sign into the flow, so it is not offered there.
  *
  * Callers gate this on EnableDataLakeGitHub and canConnectLakeDrive (org + manage), as for Drive.
  */
 export default function GitHubConnectAction({ lake }: { lake: { id: string } }) {
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
-  const [redirecting, setRedirecting] = useState(false);
 
   const { data: connection, isLoading, isError } = useLakeGitHubConnection(lake.id);
-  const startConnect = useStartLakeGitHubConnect();
+  const { begin: beginConnect, isPending: connecting } = useBeginLakeGitHubConnect(lake.id);
   const resync = useResyncLakeGitHub();
   const disconnect = useDisconnectLakeGitHub();
-
-  const beginConnect = () =>
-    startConnect.mutate(lake.id, {
-      onSuccess: ({ installUrl, authorizeUrl }) => {
-        try {
-          saveGitHubLakeConnectHandoff({ dataLakeId: lake.id, authorizeUrl });
-        } catch {
-          // Without the handoff the callback cannot finish an already-installed account's connect.
-          toast.error('Could not start the GitHub connection: this browser blocked session storage.');
-          return;
-        }
-        setRedirecting(true);
-        window.location.assign(installUrl);
-      },
-      // e.g. "is curated, change its origin", "already connected to a Google Drive folder".
-      onError: (e: unknown) =>
-        toast.error(getServerErrorField(e) || 'Could not start the GitHub connection. Please try again.'),
-    });
 
   if (isLoading) {
     return <CircularProgress size="sm" data-testid="github-connection-loading" />;
@@ -91,14 +72,14 @@ export default function GitHubConnectAction({ lake }: { lake: { id: string } }) 
           variant="outlined"
           color="neutral"
           startDecorator={<GitHubIcon />}
-          loading={startConnect.isPending || redirecting}
+          loading={connecting}
           onClick={beginConnect}
           sx={{ alignSelf: 'flex-start' }}
         >
           Connect GitHub
         </Button>
         <Typography level="body-xs" sx={{ color: 'text.tertiary' }} data-testid="github-access-disclosure">
-          Read-only access to one repository. On GitHub, choose &quot;Only select repositories&quot; and pick it.
+          Read-only access. You&apos;ll approve the GitHub App, then pick the repository here.
         </Typography>
       </Stack>
     );

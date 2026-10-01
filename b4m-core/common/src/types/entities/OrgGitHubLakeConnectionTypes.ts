@@ -68,6 +68,39 @@ export interface IOrgGitHubLakeConnectionResponse {
   fileCount: number;
 }
 
+/** Why an installation cannot feed a lake (lakeAppPolicy.ts findInstallationPolicyViolation). */
+export type GitHubLakeInstallationPolicyViolation = 'all_repositories' | 'excess_permissions' | 'missing_contents_read';
+
+export type GitHubLakeRepositoryChoice = {
+  id: number;
+  fullName: string;
+  defaultBranch: string;
+  private: boolean;
+  /**
+   * Null when the repository is free to connect. `dataLakeName` is null when the lake it feeds
+   * belongs to another organization, whose lake names are not the caller's to see.
+   */
+  boundTo: { dataLakeName: string | null } | null;
+};
+
+export type GitHubLakeInstallationChoice = {
+  id: number;
+  accountLogin: string;
+  accountType: 'User' | 'Organization';
+  /** The installation's settings page on GitHub, where an owner changes its repository access. */
+  settingsUrl: string;
+  /** Set when the installation breaks the lake App policy; its repositories are then empty. */
+  violation: { code: GitHubLakeInstallationPolicyViolation; message: string } | null;
+  repositories: GitHubLakeRepositoryChoice[];
+};
+
+/** GET /api/data-lakes/:id/github-connection/repositories. */
+export type GitHubLakeRepositoryChoicesResponse = {
+  installations: GitHubLakeInstallationChoice[];
+  /** The App install page, bound to the same flow so its return lands back in the picker. */
+  installUrl: string;
+};
+
 export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrgGitHubLakeConnectionDocument> {
   /**
    * The connection feeding a lake, deliberately GLOBAL (no org filter) so a teardown that runs after
@@ -78,6 +111,9 @@ export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrg
 
   /** Every connection bound through an installation, across orgs (the installation is account-wide). */
   findByInstallationId(installationId: number): Promise<IOrgGitHubLakeConnectionDocument[]>;
+
+  /** The connections binding any of these repositories, across orgs (a repository binds at most one lake). */
+  findByRepositoryIds(repositoryIds: readonly number[]): Promise<IOrgGitHubLakeConnectionDocument[]>;
 
   /** Hard-deletes the row so the unique repositoryId / targetDataLakeId claims are freed. */
   release(id: string, organizationId: string): Promise<boolean>;

@@ -1,18 +1,15 @@
 import { z } from 'zod';
 
 /**
- * What the lake GitHub connect carries across its GitHub round-trips, in sessionStorage (same tab,
- * survives the redirects). Holds nothing secret: the signed `state` is what the server trusts.
+ * What the lake GitHub connect carries across the redirect to GitHub and back, in sessionStorage
+ * (same tab, survives the round-trip). Holds nothing secret: the signed `state` embedded in the
+ * authorize URL is what the server trusts, and the user's GitHub token never reaches the browser -
+ * the server holds it, keyed by an HttpOnly nonce cookie, for the repository picker to read.
  *
- * - `dataLakeId`: where to land the user once the connection completes.
- * - `authorizeUrl`: needed when GitHub returns from the install with `installation_id` but no
- *   `code` (the App was already installed on that account), see buildGitHubLakeConnectUrls.
- * - `installationId`: remembered across that authorize bounce, whose return carries only `code`.
+ * `dataLakeId`: where to land the user (and reopen the repository picker) once GitHub returns.
  */
 const handoffSchema = z.object({
   dataLakeId: z.string().min(1),
-  authorizeUrl: z.url(),
-  installationId: z.number().int().positive().optional(),
 });
 
 export type GitHubLakeConnectHandoff = z.infer<typeof handoffSchema>;

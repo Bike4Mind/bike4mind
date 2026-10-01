@@ -7,6 +7,8 @@ import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import {
   useLakeGitHubConnection,
   useStartLakeGitHubConnect,
+  useAuthorizeLakeGitHubConnect,
+  useLakeGitHubRepositoryChoices,
   useCompleteLakeGitHubConnect,
   useResyncLakeGitHub,
   useDisconnectLakeGitHub,
@@ -154,11 +156,8 @@ describe('useLakeGitHubConnection', () => {
 describe('useStartLakeGitHubConnect', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('POSTs to mint the install/authorize urls', async () => {
-    const urls = {
-      installUrl: 'https://github.com/apps/lake-app/installations/new?state=s1',
-      authorizeUrl: 'https://github.com/login/oauth/authorize?client_id=c&state=s1',
-    };
+  it('POSTs to mint the authorize url', async () => {
+    const urls = { authorizeUrl: 'https://github.com/login/oauth/authorize?client_id=c&state=s1' };
     post.mockResolvedValue({ data: urls });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const { result } = renderHook(() => useStartLakeGitHubConnect(), { wrapper: wrapperFor(queryClient) });
@@ -173,30 +172,92 @@ describe('useStartLakeGitHubConnect', () => {
   });
 });
 
+describe('useAuthorizeLakeGitHubConnect', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('exchanges the code and state for the lake id the flow is bound to', async () => {
+    post.mockResolvedValue({ data: { dataLakeId: 'lake1' } });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(() => useAuthorizeLakeGitHubConnect(), { wrapper: wrapperFor(queryClient) });
+
+    let response: unknown;
+    await act(async () => {
+      response = await result.current.mutateAsync({ state: 's1', code: 'c1' });
+    });
+
+    expect(post).toHaveBeenCalledWith('/api/data-lakes/github-callback', { state: 's1', code: 'c1' });
+    expect(response).toEqual({ dataLakeId: 'lake1' });
+  });
+});
+
+describe('useLakeGitHubRepositoryChoices', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('GETs the repository picker list for the lake', async () => {
+    const choices = { installations: [], installUrl: 'https://github.com/apps/lake-app/installations/new?state=s1' };
+    get.mockResolvedValue({ data: choices });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(() => useLakeGitHubRepositoryChoices('lake1', true), {
+      wrapper: wrapperFor(queryClient),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(get).toHaveBeenCalledWith('/api/data-lakes/lake1/github-connection/repositories');
+    expect(result.current.data).toEqual(choices);
+  });
+
+  it('does not fetch while disabled (the picker is closed)', () => {
+    renderHook(() => useLakeGitHubRepositoryChoices('lake1', false), {
+      wrapper: wrapperFor(new QueryClient({ defaultOptions: { queries: { retry: false } } })),
+    });
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it('does not fetch without a lake id', () => {
+    renderHook(() => useLakeGitHubRepositoryChoices(undefined, true), {
+      wrapper: wrapperFor(new QueryClient({ defaultOptions: { queries: { retry: false } } })),
+    });
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it('never retries: a failure here is the flow having expired, which a retry cannot fix', async () => {
+    get.mockRejectedValue(axiosError(403));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(() => useLakeGitHubRepositoryChoices('lake1', true), {
+      wrapper: wrapperFor(queryClient),
+    });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('useCompleteLakeGitHubConnect', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('posts the callback, returns the bound connection, and invalidates every lake connection read', async () => {
+  it('posts the pick, returns the bound connection, invalidates the connection, and drops the stale picker list', async () => {
     const connection = { id: 'c1', repositoryFullName: 'acme/docs' };
     post.mockResolvedValue({ data: { connection } });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const removeSpy = vi.spyOn(queryClient, 'removeQueries');
     const { result } = renderHook(() => useCompleteLakeGitHubConnect(), { wrapper: wrapperFor(queryClient) });
 
     let response: unknown;
     await act(async () => {
-      response = await result.current.mutateAsync({ state: 's1', code: 'c1', installationId: 42 });
+      response = await result.current.mutateAsync({ dataLakeId: 'lake1', installationId: 42, repositoryId: 100 });
     });
 
-    expect(post).toHaveBeenCalledWith('/api/data-lakes/github-callback', {
-      state: 's1',
-      code: 'c1',
+    expect(post).toHaveBeenCalledWith('/api/data-lakes/lake1/github-connection/complete', {
       installationId: 42,
+      repositoryId: 100,
     });
     expect(response).toEqual(connection);
 
     const invalidatedKeys = invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
-    expect(invalidatedKeys).toContainEqual(dataLakeKeys.gitHubConnectionRoot);
+    expect(invalidatedKeys).toContainEqual(dataLakeKeys.gitHubConnection('lake1'));
+    const removedKeys = removeSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
+    expect(removedKeys).toContainEqual(dataLakeKeys.gitHubRepositoryChoices('lake1'));
   });
 });
 
