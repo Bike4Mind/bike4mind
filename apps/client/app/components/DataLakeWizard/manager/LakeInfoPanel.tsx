@@ -218,12 +218,16 @@ export function LakeInfoPanel({
     >
       {/* pr clears the modal's absolutely-positioned ModalClose (top-right). */}
       <Box sx={{ px: 3, pr: 6, pt: 2.5, pb: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}>
-        {/* Wraps so a full manage row drops below the title instead of crushing it: every button
-            is flexShrink 0, so without wrap the title column shrank to one word per line. */}
+        {/* The title gets its own row: sharing one with the action buttons (all flexShrink: 0)
+            squeezed it to zero width, leaving only the wrapped last word visible. */}
+        <Typography
+          level="h4"
+          data-testid={`datalake-manager-title-${lake.id}`}
+          sx={{ mb: 1, overflowWrap: 'anywhere' }}
+        >
+          {lake.name}
+        </Typography>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 1, mb: 1 }}>
-          <Typography level="h4" sx={{ flex: '1 1 240px', minWidth: 0, overflowWrap: 'anywhere' }}>
-            {lake.name}
-          </Typography>
           {/* Start chat is available to ANY user who can reach the lake (not manage-gated; draft
               lakes confirm first): it opens a session scoped to this lake, applying the lake's preferred prompt server-side.
               Minimal placement for now - see useStartChatWithLake's note; polish is a design follow-up. */}
@@ -616,8 +620,15 @@ export function LakeInfoPanel({
               }
               size="sm"
             >
-              <Chip size="sm" variant="outlined" color="neutral" sx={{ fontSize: '11px' }}>
-                {fileCount} {fileCount === 1 ? 'file' : 'files'} (as creator)
+              <Chip
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                sx={{ fontSize: '11px' }}
+                data-testid={`datalake-manager-filecount-chip-${lake.id}`}
+              >
+                {fileCount} {fileCount === 1 ? 'file' : 'files'}
+                {lake.isCreator === false && " (creator's view)"}
               </Chip>
             </Tooltip>
           )}
@@ -652,7 +663,7 @@ export function LakeInfoPanel({
           <LakeGitHubStatusChip lakeId={lake.id} organizationId={lake.organizationId} />
           {/* Derived retrievability health (#1666): reachable-content share + affected-file drill-down.
               Advisory only. Fetched lazily for the lake in view; renders nothing for an empty lake. */}
-          <LakeHealthBadge lakeId={lake.id} failedFileCount={failedCount} />
+          <LakeHealthBadge lakeId={lake.id} failedFileCount={failedCount} viewerIsCreator={lake.isCreator} />
           {/* Same-identity duplicates (#2238): two generations of one document in this lake, with
               the decision that resolves them. The health badge beside it only COUNTS duplicates and
               is blind to what the owner already decided; this reads the ruling-aware door and is the

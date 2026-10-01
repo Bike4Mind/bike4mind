@@ -2296,9 +2296,10 @@ export function reviewProposalFailureMessage(error: unknown): string {
 
 /**
  * Approve, decline, or restore (declined back to pending) one proposal. An approval admits the source
- * into the lake through the ordinary ingestion door, so it invalidates the lake's file list and health
- * alongside the queue - the file appears immediately, and its health badge stops reflecting a corpus
- * that just changed.
+ * into the lake through the ordinary ingestion door, so it invalidates every membership-derived cache
+ * (files, health, the lake list, tag counts) alongside the queue - the file appears immediately, and
+ * the header file count and health badge stop reflecting a corpus that just changed. Every decision
+ * also refreshes the lake list, because the pending count moves.
  */
 export function useReviewDataLakeProposal(dataLakeId: string) {
   const queryClient = useQueryClient();
@@ -2324,10 +2325,9 @@ export function useReviewDataLakeProposal(dataLakeId: string) {
       // config's `reviewBacklogLimit`, so a queue that drains below the limit must clear the
       // paused state without the manager having to reopen the tab.
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.researchConfigs(dataLakeId) });
-      if (decision === 'approve') {
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
-      }
+      // The lake list carries `pendingProposalCount` (the "N sources to review" chip), which every decision moves.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      if (decision === 'approve') invalidateLakeFileMembershipQueries(queryClient, dataLakeId);
       toast.success(
         decision === 'approve'
           ? `Added "${proposal.title}" to the lake`

@@ -683,7 +683,14 @@ describe('LakeFindingsChip', () => {
     h.health.mockReturnValue(scanned());
     renderChip();
 
-    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent('1 to review');
+    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent('1 conflict to review');
+  });
+
+  it('pluralises the conflict count past one', () => {
+    h.findings.mockReturnValue(listing([finding(), finding({ id: 'finding-2' })]));
+    renderChip();
+
+    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent('2 conflicts to review');
   });
 
   // Terminal-only history (e.g. one dismissed finding, zero open) must not take the entry point
@@ -733,7 +740,7 @@ describe('LakeFindingsChip', () => {
       </TestWrapper>
     );
 
-    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent('1+ to review');
+    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent('1+ conflicts to review');
   });
 
   it('counts open findings and opens the review surface', () => {
@@ -744,7 +751,7 @@ describe('LakeFindingsChip', () => {
     );
 
     const chip = screen.getByTestId('datalake-findings-chip-lake-1');
-    expect(chip).toHaveTextContent('1 to review');
+    expect(chip).toHaveTextContent('1 conflict to review');
 
     // Joy renders the clickable chip as a button inside the chip root, which is what a curator
     // actually presses.
