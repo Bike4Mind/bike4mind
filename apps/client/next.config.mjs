@@ -171,7 +171,9 @@ const nextConfig = {
     'react-syntax-highlighter',
     '@icons-pack/react-simple-icons',
     'pdfjs-dist',
-    // ESM-only packages that need transpilation for API routes
+    // ESM-only packages that need transpilation for API routes. An entry here can only be
+    // retired once check-api-routes-cjs-require.mjs reports the built route no longer
+    // require()s it; that probe is what proves the bundler actually inlined it.
     'p-limit',
     'yocto-queue',
     // sanitize-html require()s ESM-only htmlparser2; Turbopack externalizes rather than bundles
