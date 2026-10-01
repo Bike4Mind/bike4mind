@@ -13,6 +13,12 @@ import { CitableSource } from '@bike4mind/common';
 interface CitationInteraction {
   /** If set, called instead of navigating when a citation source is clicked. */
   onCitationClick?: (source: CitableSource) => void;
+  /**
+   * If set, called instead of navigating when a source with an internal (relative) URL is clicked.
+   * Unlike onCitationClick it leaves external sources alone, so a host can keep the reader in the
+   * chat for lake citations without taking over ordinary web links.
+   */
+  onInternalCitationClick?: (source: CitableSource) => void;
 }
 
 const CitationInteractionContext = createContext<CitationInteraction>({});
