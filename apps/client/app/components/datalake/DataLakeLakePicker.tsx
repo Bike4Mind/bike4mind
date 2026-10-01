@@ -128,6 +128,10 @@ interface LakeGroup {
  * list leaves the per-row owner icon as the only thing separating them from the caller's own.
  * Own first because that is what a user scopes to most; other owners alphabetical, with lakes whose
  * owner is unresolved (built-in fallbacks, deleted accounts) last. List order is kept within a group.
+ *
+ * Known limit: buckets key on `ownerDisplayName`, the only owner field ManageableDataLakeConfig
+ * carries, so two owners sharing a display name share a header. A stable owner key on the list
+ * projection (listDataLakes.ts toManageableConfig) is what would separate them.
  */
 const groupLakesByOwner = (lakes: ManageableDataLakeConfig[]): LakeGroup[] => {
   const own: ManageableDataLakeConfig[] = [];
