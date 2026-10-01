@@ -6,7 +6,7 @@
  * queues it exactly as Run now does. The decision logic lives in
  * `dataLakeResearchService.runDueResearchSchedules`; this file only binds it to Mongo and SQS.
  *
- * runResearchScheduleTick is also the self-host worker's counterpart (worker/main.ts) - self-host
+ * runResearchScheduleTick is also the self-host worker's counterpart (../selfhost/main.ts) - self-host
  * has no SST cron, so it drives the same tick off its own scheduled-task interval.
  *
  * Schedule: every 15 minutes (infra/cron.ts). Enabled: production + dev.

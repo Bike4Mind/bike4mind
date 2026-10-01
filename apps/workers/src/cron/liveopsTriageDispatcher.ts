@@ -21,28 +21,11 @@ import { emitMetric } from '@server/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { Resource } from 'sst';
 import { shouldRunAtCurrentHour, getRunHoursForInterval } from '@client/shared/liveopsScheduleUtils';
+import type { LiveOpsTriageJobMessage } from '@server/utils/liveopsTriageJobMessage';
 
 const logger = new Logger({ metadata: { service: 'liveopsTriageDispatcher' } });
 
 const CLOUDWATCH_NAMESPACE = 'Lumina5/LiveOpsTriage';
-
-/**
- * SQS message schema for triage jobs
- */
-export interface LiveOpsTriageJobMessage {
-  /** Config ID to process */
-  configId: string;
-  /** Config name (for logging) */
-  configName: string;
-  /** Timestamp when dispatched (for idempotency) */
-  dispatchedAt: number;
-  /** Source of the job */
-  source: 'cron' | 'manual';
-  /** If true, runs in dry-run mode */
-  dryRun?: boolean;
-  /** Optional lookback hours for manual runs (defaults to config.runIntervalHours) */
-  lookbackHours?: number;
-}
 
 function isAllowedEnvironment(): boolean {
   const stage = Resource.App.stage;

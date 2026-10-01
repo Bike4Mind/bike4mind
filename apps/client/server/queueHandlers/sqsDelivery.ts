@@ -7,7 +7,7 @@ import type { SQSEvent } from 'aws-lambda';
 // (apps/workers/src/selfhost/selfHostWorker.ts) - keep all three in sync.
 export const FAB_FILE_CHUNK_MAX_RECEIVE_COUNT = 3; // mirrors fabFileChunkQueue.dlq.retry
 export const FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT = 3; // mirrors fabFileVectorizeQueue.dlq.retry
-// Also passed to the self-host worker for this queue (apps/client/server/worker/main.ts).
+// Also passed to the self-host worker for this queue (apps/workers/src/selfhost/main.ts).
 export const GENERATION_CALLBACK_MAX_RECEIVE_COUNT = 5; // mirrors generationCallbackQueue.dlq.retry
 
 /**

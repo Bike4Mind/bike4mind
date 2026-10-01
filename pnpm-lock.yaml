@@ -897,6 +897,12 @@ importers:
 
   apps/workers:
     dependencies:
+      '@aws-sdk/client-cloudwatch':
+        specifier: ^3.1080.0
+        version: 3.1080.0
+      '@aws-sdk/client-lambda':
+        specifier: ^3.1080.0
+        version: 3.1080.0
       '@aws-sdk/client-sqs':
         specifier: ^3.1080.0
         version: 3.1080.0
@@ -924,6 +930,9 @@ importers:
       '@bike4mind/resource':
         specifier: workspace:*
         version: link:../../b4m-core/resource
+      '@bike4mind/scripts':
+        specifier: workspace:*
+        version: link:../../packages/scripts
       '@bike4mind/services':
         specifier: workspace:*
         version: link:../../b4m-core/services
@@ -933,6 +942,9 @@ importers:
       '@bike4mind/utils':
         specifier: workspace:*
         version: link:../../b4m-core/utils
+      axios:
+        specifier: 1.20.0
+        version: 1.20.0
       dayjs:
         specifier: ^1.11.23
         version: 1.11.23
@@ -945,6 +957,9 @@ importers:
       uuid:
         specifier: ^14.0.2
         version: 14.0.2
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@bike4mind/typescript-config':
         specifier: workspace:*

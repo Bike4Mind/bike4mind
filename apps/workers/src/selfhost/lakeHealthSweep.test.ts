@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
 const { run } = vi.hoisted(() => ({ run: vi.fn() }));
-vi.mock('@server/cron/lakeHealthSweep', () => ({ runLakeHealthSweep: run }));
+vi.mock('@workers/cron/lakeHealthSweep', () => ({ runLakeHealthSweep: run }));
 vi.mock('@server/utils/sqs', () => ({ receiveFromQueue: vi.fn(), deleteFromQueue: vi.fn() }));
 import { SelfHostWorker } from './selfHostWorker';
 import { registerLakeHealthSweep } from './lakeHealthSweep';

@@ -1146,7 +1146,7 @@ const liveOpsTriageQueue = new sst.aws.Queue('liveOpsTriageQueue', {
 });
 const liveOpsTriageQueueSubscription = liveOpsTriageQueue.subscribe(
   {
-    handler: 'apps/client/server/cron/liveopsTriageWorker.handler',
+    handler: 'apps/workers/src/cron/liveopsTriageWorker.handler',
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     memory: '512 MB',
@@ -1195,7 +1195,7 @@ const secopsTriageQueue = new sst.aws.Queue('secopsTriageQueue', {
 
 const secopsTriageQueueSubscription = secopsTriageQueue.subscribe(
   {
-    handler: 'apps/client/server/cron/secopsTriageWorker.handler',
+    handler: 'apps/workers/src/cron/secopsTriageWorker.handler',
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     memory: '512 MB',
