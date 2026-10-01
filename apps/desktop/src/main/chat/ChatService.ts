@@ -33,7 +33,7 @@ import type {
 import { isTurnBudgetStop } from '@shared/chat';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
-import { latestTodos, TODO_TOOL_NAME } from '@shared/todos';
+import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
@@ -1370,7 +1370,7 @@ export class ChatService {
         // messages and break the prompt-cache prefix on every later turn (see contextPruning).
         // The nudge is ephemeral by design: never stored on the call, never replayed.
         const nudge = stalePlanReminder(
-          latestTodos([...session.messages, replySoFar(toolCalls)]),
+          activeTodos([...session.messages, replySoFar(toolCalls)], true),
           roundsSincePlanUpdate
         );
         const lastResult = results[results.length - 1];
@@ -1407,10 +1407,14 @@ export class ChatService {
 
       // A turn that stopped itself mid-task will be carried on by Continue, and one the user
       // stopped is their call; neither is the model forgetting to close out an item.
+      //
+      // Scoped to this reply alone (turnOpen false), unlike the mid-turn nudge: that is exactly
+      // the plan still on screen once the turn ends, so the model is never asked to tidy a plan
+      // the user can no longer see.
       const lastRound = produced[produced.length - 1];
       if (!controller.signal.aborted && !isTurnBudgetStop(stopReason) && lastRound?.toolCallIds.length === 0) {
         const unfinished = lastRound.text.trim()
-          ? unfinishedPlanReminder(latestTodos([...session.messages, replySoFar(toolCalls)]))
+          ? unfinishedPlanReminder(activeTodos([...session.messages, replySoFar(toolCalls)], false))
           : null;
         if (unfinished) this.pendingPlanReminder.set(sessionId, unfinished);
       }
@@ -2672,12 +2676,14 @@ function buildSystemMessage(
       'why - including the first batch of the turn, which otherwise draws as tool rows with nothing',
       'above them. One sentence per round of work, not per call, with no label in front of it, and',
       'none at all when a single call speaks for itself.',
-      'For a task with three or more steps, keep a plan with todo_write: send the whole list each time,',
-      'mark one item in_progress before starting it and completed as soon as it is done. Skip it for',
-      'anything you can finish in a step or two.',
-      'Before writing the message that ends a turn, make the plan match what actually happened: an',
-      'item whose result you are about to report as done is marked completed in that same reply, not',
-      'left for later. Never end a turn with an item still in_progress.',
+      'Most work needs no plan. Keep one with todo_write only when the user gave you several separate',
+      'things to do, or the work clearly runs to five or more steps, usually across several files.',
+      'Never for a question, an explanation, an investigation, a piece of research, a single fix or a',
+      'small edit: answer those directly.',
+      'When you do keep one, send the whole list each time and mark one item in_progress before',
+      'starting it. Before writing the message that ends a turn, make the plan match what actually',
+      'happened: an item whose result you are about to report as done is marked completed in that',
+      'same reply, not left for later. Never end a turn with an item still in_progress.',
       ...(patchEdits
         ? [
             'An older file_read result may show as a [stale: ...] placeholder once the file was replaced',

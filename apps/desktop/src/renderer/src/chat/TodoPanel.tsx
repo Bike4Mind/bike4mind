@@ -16,13 +16,18 @@ const MARKER: Record<TodoStatus, string> = {
  *
  * Hidden once every item is done and no turn is running: a finished plan left above the box
  * reads as work still owed. While a turn is open it stays, so the last tick is seen landing.
+ *
+ * Collapsed to its one-line bar by default. The plan is context for the reply, not the reply,
+ * and a list unfolded over the composer on every turn costs more room than it earns; the item
+ * in progress rides the bar so the closed state still says what is happening.
  */
 export function TodoPanel({ todos, turnOpen }: { todos: readonly TodoItem[] | null; turnOpen: boolean }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   if (!todos || todos.length === 0) return null;
 
   const counts = countTodos(todos);
   if (counts.completed === todos.length && !turnOpen) return null;
+  const current = todos.find(todo => todo.status === 'in_progress');
 
   return (
     <Box sx={contentColumnSx} data-testid="chat-todo-panel">
@@ -35,8 +40,11 @@ export function TodoPanel({ todos, turnOpen }: { todos: readonly TodoItem[] | nu
           data-testid="chat-todo-toggle"
           sx={{ all: 'unset', cursor: 'pointer', display: 'block', width: '100%' }}
         >
-          <Typography level="body-xs" textColor="text.tertiary">
+          <Typography level="body-xs" textColor="text.tertiary" noWrap>
             {`Plan \u00b7 ${counts.completed} of ${todos.length} done`}
+            {!open && current ? (
+              <Box component="span" sx={{ color: 'text.secondary' }}>{` \u00b7 ${current.content}`}</Box>
+            ) : null}
           </Typography>
         </Box>
         {open && (

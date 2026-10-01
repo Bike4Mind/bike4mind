@@ -54,6 +54,29 @@ export function latestTodos(messages: readonly ChatMessage[]): TodoItem[] | null
   return null;
 }
 
+/**
+ * The plan for the work in hand, or null when nothing current is being worked to.
+ *
+ * `latestTodos` reaches back through the whole thread, which is right for reading a history but
+ * wrong for deciding what to SHOW: a plan the model wrote, drifted away from and never cleared
+ * would sit above the composer for the rest of the conversation, describing work nobody is doing.
+ * A plan is current only while the model is still writing it, so the window is the newest
+ * assistant reply - plus, while a turn is open, the one before it, which is what carries a plan
+ * from the turn that wrote it into the turn that works through it.
+ *
+ * So a user message whose reply never touches the plan drops it: the reply in flight has none,
+ * the previous one does and holds it up while the turn runs, and the turn ending closes the
+ * window to the reply itself.
+ */
+export function activeTodos(messages: readonly ChatMessage[], turnOpen: boolean): TodoItem[] | null {
+  const window = turnOpen ? 2 : 1;
+  const recent: ChatMessage[] = [];
+  for (let m = messages.length - 1; m >= 0 && recent.length < window; m -= 1) {
+    if (messages[m].role === 'assistant') recent.unshift(messages[m]);
+  }
+  return latestTodos(recent);
+}
+
 export function countTodos(todos: readonly TodoItem[]): Record<TodoStatus, number> {
   const counts: Record<TodoStatus, number> = { pending: 0, in_progress: 0, completed: 0 };
   for (const todo of todos) counts[todo.status] += 1;

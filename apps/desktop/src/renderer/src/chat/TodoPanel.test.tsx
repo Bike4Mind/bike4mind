@@ -12,11 +12,20 @@ const render = (list: TodoItem[] | null, turnOpen: boolean) =>
   renderToStaticMarkup(<TodoPanel todos={list} turnOpen={turnOpen} />);
 
 describe('TodoPanel', () => {
-  it('draws the items with their progress', () => {
+  it('opens collapsed, with the count and the item in hand on its one line', () => {
     const html = render(todos, true);
     expect(html).toContain('1 of 3 done');
-    expect(html).toContain('chat-todo-item-in_progress');
-    expect(html).toContain('Run the tests');
+    expect(html).toContain('Write the fix');
+    expect(html).toContain('aria-expanded="false"');
+    // The list itself is not drawn until the bar is clicked.
+    expect(html).not.toContain('chat-todo-item-');
+    expect(html).not.toContain('Run the tests');
+  });
+
+  it('leaves the bar to the count alone when nothing is in progress', () => {
+    const html = render([{ content: 'Read the code', status: 'pending' }], true);
+    expect(html).toContain('0 of 1 done');
+    expect(html).not.toContain('Read the code');
   });
 
   it('draws nothing without a plan', () => {

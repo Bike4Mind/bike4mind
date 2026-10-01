@@ -6,7 +6,7 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatProject, ChatSessionMode } from '@shared/chat';
-import { latestTodos } from '@shared/todos';
+import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { BackgroundTaskChip, BackgroundTaskPanel } from './BackgroundTaskPanel';
 import { readPanelFlag, writePanelFlag } from './backgroundTasks';
@@ -204,8 +204,8 @@ export function ChatShell({ account }: { account?: ReactNode }) {
    * at the approval gate is still a turn, and the next message still queues behind it.
    */
   const sessionStatus = activeId ? statuses.get(activeId) : undefined;
-  const plan = useMemo(() => latestTodos(conversation.messages), [conversation.messages]);
   const turnOpen = conversation.streaming || sessionStatus === 'processing' || sessionStatus === 'needs-action';
+  const plan = useMemo(() => activeTodos(conversation.messages, turnOpen), [conversation.messages, turnOpen]);
 
   // What the turn in flight is doing, read off the reply being streamed into the thread. Only
   // the last message can be that reply, so nothing earlier is consulted.
