@@ -345,7 +345,7 @@ describe('processSlackFiles storage + MaxFileSize limits (#1685)', () => {
     const execute = () => {
       if (executed) throw new Error('Query was already executed: organizations.findOne(...)');
       executed = true;
-      return Promise.resolve({ storageLimit: 1000, currentStorageSize: 0 });
+      return Promise.resolve({ storageLimit: 1000 });
     };
     // Models the real chain: `.findById(id).select(...).lean()` still returns an un-executed,
     // one-shot Mongoose Query - only `.exec()` (or awaiting it) actually runs it.

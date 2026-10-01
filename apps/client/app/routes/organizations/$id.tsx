@@ -40,7 +40,6 @@ import VpnKeyOutlinedIcon from '@mui/icons-material/VpnKeyOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import GroupOutlinedIcon from '@mui/icons-material/GroupOutlined';
 import GroupWorkOutlinedIcon from '@mui/icons-material/GroupWorkOutlined';
-import StorageOutlinedIcon from '@mui/icons-material/StorageOutlined';
 import EventAvailableOutlinedIcon from '@mui/icons-material/EventAvailableOutlined';
 import GitHubIcon from '@mui/icons-material/GitHub';
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
@@ -407,21 +406,6 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
   const subscription = pickDisplayedSubscription(subscriptions ?? []);
   const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
   const activeSubscription = subscription && !subscription.canceledAt && !paymentIssue ? subscription : undefined;
-  // Calculate storage usage percentage
-  const storageUsed = organization.currentStorageSize || 0;
-  const storageLimit = organization.storageLimit || 0;
-  const storagePercentage =
-    storageLimit > 0 ? Math.min(100, Math.max(0, (storageUsed / (storageLimit * 1024 * 1024)) * 100)) : 0;
-
-  // Format bytes to human-readable format
-  const formatBytes = (bytes: number) => {
-    if (bytes <= 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
-    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
-  };
-
   // Format next billing date
   const formatDate = (date: Date | string | undefined) => {
     if (!date) return 'N/A';
@@ -456,35 +440,6 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
 
       {/* Second row - Detailed cards */}
       <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
-        {/* Storage Usage Card */}
-        <Card variant="outlined" sx={{ flex: 1, minWidth: 280, p: 3 }} data-testid="storage-usage-card">
-          <Stack spacing={2}>
-            <Stack direction="row" justifyContent="space-between" alignItems="center">
-              <Typography level="title-md" startDecorator={<StorageOutlinedIcon sx={{ fontSize: 20 }} />}>
-                Storage Usage
-              </Typography>
-              <Typography level="body-sm" color="neutral">
-                {storagePercentage.toFixed(1)}%
-              </Typography>
-            </Stack>
-            <LinearProgress
-              determinate
-              value={Math.min(storagePercentage, 100)}
-              color={storagePercentage > 90 ? 'danger' : storagePercentage > 70 ? 'warning' : 'primary'}
-              sx={{ '--LinearProgress-thickness': '8px' }}
-              aria-label={`Storage usage: ${storagePercentage.toFixed(1)}%`}
-            />
-            <Stack direction="row" justifyContent="space-between">
-              <Typography level="body-sm" color="neutral">
-                {formatBytes(storageUsed)} used
-              </Typography>
-              <Typography level="body-sm" color="neutral">
-                {storageLimit > 0 ? `${storageLimit} MB limit` : 'No limit'}
-              </Typography>
-            </Stack>
-          </Stack>
-        </Card>
-
         {/* Subscription Status Card */}
         <Card variant="outlined" sx={{ flex: 1, minWidth: 280, p: 3 }} data-testid="subscription-status-card">
           <Stack spacing={2}>
