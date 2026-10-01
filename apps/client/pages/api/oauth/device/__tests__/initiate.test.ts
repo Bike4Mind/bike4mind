@@ -51,6 +51,7 @@ function request(ip = '203.0.113.1') {
     body: { client_id: 'b4m-cli' },
     headers: { 'x-forwarded-for': ip, 'cloudfront-viewer-address': `${ip}:443`, 'user-agent': 'test' },
     socket: { remoteAddress: ip },
+    logger: { warn: vi.fn() },
   };
   return { req, res };
 }
@@ -77,6 +78,7 @@ describe('POST /api/oauth/device/initiate live-pending cap', () => {
     expect(res.statusCode).toBe(503);
     expect(res.headers['Retry-After']).toBe(60);
     expect(res.body).toMatchObject({ error: 'temporarily_unavailable' });
+    expect(req.logger.warn).toHaveBeenCalledTimes(1);
     expect(repo.create).not.toHaveBeenCalled();
   });
 

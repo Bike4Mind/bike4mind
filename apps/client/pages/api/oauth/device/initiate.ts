@@ -24,8 +24,11 @@ const handler = baseApi({ auth: false })
     InitiateRequestSchema.parse(req.body);
 
     // Global, not per-IP: IP headers are spoofable when the origin is reached directly.
-    // ponytail: count-then-create is not atomic; concurrent initiates can overshoot by the in-flight count. Atomic counter if that matters.
+    // count-then-create is not atomic; concurrent initiates can overshoot by the in-flight count. Atomic counter if that matters.
     if ((await deviceAuthorizationRepository.countPendingAndUnexpired()) >= MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS) {
+      req.logger.warn(
+        `[OAUTH_DEVICE_INITIATE] pending device authorization cap reached (${MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS}); returning 503`
+      );
       res.setHeader('Retry-After', 60);
       return res.status(503).json({
         error: 'temporarily_unavailable',

@@ -50,6 +50,7 @@ function request(deviceCode: string, ip = '203.0.113.1') {
     body: { grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code: deviceCode, client_id: 'b4m-cli' },
     headers: { 'x-forwarded-for': ip, 'cloudfront-viewer-address': `${ip}:443` },
     socket: { remoteAddress: ip },
+    logger: { warn: vi.fn() },
   };
   return { req, res };
 }
@@ -67,6 +68,7 @@ describe('POST /api/oauth/device/token global poll ceiling', () => {
     await mockRefs.handler!(req, res);
     expect(res.statusCode).toBe(400);
     expect(res.body).toMatchObject({ error: 'slow_down' });
+    expect(req.logger.warn).toHaveBeenCalledTimes(1);
     expect(repo.findByDeviceCode).not.toHaveBeenCalled();
   });
 

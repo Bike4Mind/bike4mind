@@ -34,6 +34,9 @@ const handler = baseApi({ auth: false })
       60_000
     );
     if (!success) {
+      req.logger.warn(
+        `[OAUTH_DEVICE_TOKEN] global poll ceiling reached (${TOKEN_GLOBAL_LIMIT_PER_MIN}/min); returning slow_down`
+      );
       return res.status(400).json({
         error: 'slow_down',
         error_description: 'Too many device token requests, slow down',
