@@ -2463,6 +2463,91 @@ export function useScanDataLakeFindings(dataLakeId: string) {
   });
 }
 
+/**
+ * The two state changes a curator can make on a finding, mirroring the route's discriminated body
+ * (#3039). `resolve`/`dismiss` are the once-only terminal transition; `assign` is idempotent and
+ * legal in any status, so the two are separate arms rather than one partial patch.
+ */
+export type LakeFindingRuling =
+  { action: 'resolve' | 'dismiss'; resolution?: string } | { action: 'assign'; assigneeUserId: string | null };
+
+/** The ruling route's response: the updated finding, and whether a resolution note reached lake memory. */
+export type LakeFindingRulingResult = {
+  finding: IDataLakeFindingDocument;
+  beliefRecorded: boolean;
+  beliefSkipReason?: string;
+};
+
+/**
+ * What to say when a written note did not become a belief. Every entry is an ordinary outcome, not
+ * a fault - the ruling is committed either way - so the copy explains the note's fate without
+ * implying the ruling failed. `no-resolution` is absent: the caller only reaches this map with a
+ * non-empty note, and the server can only skip for that reason when the note trimmed away.
+ */
+const BELIEF_SKIP_COPY: Record<string, string> = {
+  'platform-disabled': 'Lake memory is off for this workspace, so the note was not remembered.',
+  'lake-disabled': 'Lake memory is off for this lake, so the note was not remembered.',
+  'memory-gate-unreadable': 'Lake memory could not be checked, so the note was not remembered.',
+  'lake-has-no-memory-principal': 'This lake has no memory owner yet, so the note was not remembered.',
+  'no-citable-source': 'The note had nothing to cite, so it was not remembered.',
+  'shred-fence': 'This lake is being purged, so the note was not remembered.',
+};
+
+/**
+ * Rule on one finding: resolve it, dismiss it, or set/clear its assignee (#3045). Invalidates every
+ * findings filter variant of the lake, which is what drops a resolved row out of an "Open" list and
+ * moves it under "Resolved" without the dialog deriving that move itself.
+ *
+ * The error arm also invalidates: a refusal is often the route's own double-resolve guard ("already
+ * been ruled on"), which means this client's cached row says `open` when it is not - so the stale
+ * row is refreshed rather than left on screen. The server's sentence is what the toast shows; the
+ * 400 is the only place that says why.
+ */
+export function useRuleOnDataLakeFinding(dataLakeId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      findingId,
+      ...ruling
+    }: { findingId: string } & LakeFindingRuling): Promise<LakeFindingRulingResult> => {
+      const { data } = await api.post<{
+        data: IDataLakeFindingDocument;
+        beliefRecorded?: boolean;
+        beliefSkipReason?: string;
+      }>(`/api/data-lakes/${dataLakeId}/findings/${findingId}`, ruling);
+      return {
+        finding: data.data,
+        beliefRecorded: data.beliefRecorded ?? false,
+        beliefSkipReason: data.beliefSkipReason,
+      };
+    },
+    // Returning the invalidation keeps `isPending` true until the list has actually refetched.
+    // Without it the buttons re-enable the instant the POST resolves while the cached row still says
+    // `open`, so a fast second click hits the route's "already been ruled on" 400.
+    onSuccess: ({ beliefRecorded, beliefSkipReason }, ruling) => {
+      toast.success(
+        ruling.action === 'resolve'
+          ? 'Finding resolved'
+          : ruling.action === 'dismiss'
+            ? 'Finding dismissed'
+            : 'Assignment updated'
+      );
+      const note = ruling.action === 'assign' ? undefined : ruling.resolution?.trim();
+      if (note && !beliefRecorded) {
+        // An unknown or absent reason still means the note was dropped; say so rather than let the
+        // success toast imply it was kept. The ruling itself is committed either way.
+        const copy = beliefSkipReason ? BELIEF_SKIP_COPY[beliefSkipReason] : undefined;
+        toast.warning(copy ?? 'The ruling was recorded, but the note was not saved to lake memory.');
+      }
+      return queryClient.invalidateQueries({ queryKey: dataLakeKeys.findingsOf(dataLakeId) });
+    },
+    onError: (error: unknown) => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.findingsOf(dataLakeId) });
+      toast.error(serverRefusalMessage(error) || 'Could not record that ruling. Try again shortly.');
+    },
+  });
+}
+
 /** How often the run list re-reads while a run is queued or running. */
 const RESEARCH_RUN_POLL_MS = 1000 * 5;
 

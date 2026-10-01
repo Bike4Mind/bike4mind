@@ -3,6 +3,7 @@ import useSessionLayout, {
   addArtifactToRecent,
   setSessionLayout,
   clearRecentArtifacts,
+  openFileInChatViewer,
   getSelectedArtifactVersion,
   setSelectedArtifactVersion,
   patchPendingMessageFileModerationStatus,
@@ -280,6 +281,70 @@ describe('useSessionLayout - LRU Cache Functions', () => {
       setSessionLayout({ floatingChatMinimized: true });
 
       expect(useSessionLayout.getState().hiddenFromLayout).toBe('dockBottom');
+    });
+
+    describe('selection while an artifact is open', () => {
+      const openArtifact = () => {
+        setSessionLayout({ layout: 'hide', artifactData: createMockArtifact({ id: 'old-artifact' }) });
+      };
+
+      it('keeps the open artifact selected when the write names no selection', () => {
+        openArtifact();
+
+        setSessionLayout({ layout: 'vertical' });
+
+        expect(useSessionLayout.getState().selectedArtifactId).toBe('old-artifact');
+      });
+
+      it('lets a write that names its own selection win', () => {
+        openArtifact();
+
+        setSessionLayout({ layout: 'vertical', selectedArtifactId: 'file-1' });
+
+        expect(useSessionLayout.getState().selectedArtifactId).toBe('file-1');
+        expect(useSessionLayout.getState().artifactData?.id).toBe('old-artifact');
+      });
+    });
+  });
+
+  describe('openFileInChatViewer', () => {
+    const file = { id: 'file-1', fileName: 'Leave policy.md' } as IFabFileDocument;
+
+    beforeEach(() => {
+      useSessionLayout.setState({
+        layout: 'hide',
+        previewFile: null,
+        citedPassage: null,
+        selectedArtifactId: undefined,
+      });
+    });
+
+    it('opens the file as the selected preview in the vertical split', () => {
+      openFileInChatViewer(file);
+
+      const state = useSessionLayout.getState();
+      expect(state.layout).toBe('vertical');
+      expect(state.previewFile).toBe(file);
+      expect(state.selectedArtifactId).toBe('file-1');
+    });
+
+    it('leaves the citation anchor alone when none is passed', () => {
+      const anchor = { fileId: 'other', chunkId: 'c0', passage: 'kept' };
+      useSessionLayout.setState({ citedPassage: anchor });
+
+      openFileInChatViewer(file);
+
+      expect(useSessionLayout.getState().citedPassage).toEqual(anchor);
+    });
+
+    it('writes the anchor it is given, and clears it for null', () => {
+      const anchor = { fileId: 'file-1', chunkId: 'c1', passage: 'Holidays accrue monthly.' };
+
+      openFileInChatViewer(file, anchor);
+      expect(useSessionLayout.getState().citedPassage).toEqual(anchor);
+
+      openFileInChatViewer(file, null);
+      expect(useSessionLayout.getState().citedPassage).toBeNull();
     });
   });
 

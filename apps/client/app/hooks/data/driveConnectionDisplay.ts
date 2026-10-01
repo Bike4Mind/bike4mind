@@ -40,6 +40,7 @@ export type DescribableDriveConnection = {
   folderName: string | null;
   driveFolderId: string;
   disconnecting?: boolean;
+  syncStale?: boolean;
 };
 
 /**
@@ -62,6 +63,14 @@ export function describeDriveConnection(connection: DescribableDriveConnection):
     return {
       label: 'Disconnecting',
       title: `Disconnecting the Google Drive folder "${folder}" and removing its files`,
+      color: 'warning',
+    };
+  }
+
+  if (connection.status === 'syncing' && connection.syncStale) {
+    return {
+      label: 'Sync stalled',
+      title: `Sync for the Google Drive folder "${folder}" stopped responding - use Re-sync to restart it`,
       color: 'warning',
     };
   }

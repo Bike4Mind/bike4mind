@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
 import { FabFileSourceType, KnowledgeType, SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { BadRequestError, invalidateSettingsCache } from '@bike4mind/utils';
-import { createFabFile, type CreateFabFileAdapters } from './create';
+import { createFabFile, createFabFileSchema, type CreateFabFileAdapters } from './create';
 
 // Unsupported file-type gating on ingest. The rejection throws right
 // after the user lookup - before any settings/storage adapter is touched - so
@@ -50,6 +50,24 @@ describe('createFabFile — unsupported file-type gating', () => {
     await expect(
       createFabFile('u1', { ...base, fileName: 'backup.001', mimeType: 'application/octet-stream' }, adapters())
     ).rejects.toThrow(/not supported/i);
+  });
+});
+
+describe('createFabFile - reserved key prefix', () => {
+  // exports/ in the fab-file bucket is reaped after 1 day, so a durable file stored there would
+  // be deleted while its FabFile record survives.
+  it.each(['exports', 'exports/', 'exports/nested'])('rejects prefix %j', async prefix => {
+    const deps = adapters();
+    await expect(
+      createFabFile('u1', { ...base, fileName: 'notes.txt', mimeType: 'text/plain', prefix }, deps)
+    ).rejects.toThrow(/reserved/);
+    expect(deps.storage.upload).not.toHaveBeenCalled();
+    expect(deps.db.fabFiles.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['curated-notebooks', 'modals', 'exportsx'])('still accepts prefix %j', prefix => {
+    const parsed = createFabFileSchema.safeParse({ ...base, fileName: 'notes.txt', mimeType: 'text/plain', prefix });
+    expect(parsed.success).toBe(true);
   });
 });
 

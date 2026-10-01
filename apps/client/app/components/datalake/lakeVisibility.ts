@@ -1,4 +1,4 @@
-import { DATA_LAKES as BUILT_IN_LAKES } from '@bike4mind/common';
+import { DATA_LAKES as BUILT_IN_LAKES, type DataLakeStatus } from '@bike4mind/common';
 
 /**
  * The single derivation of a lake's visibility label.
@@ -55,3 +55,13 @@ export function lakeVisibilityLabelShort(lake: LakeVisibilityScope): string {
  */
 export const canConnectLakeDrive = (lake: { organizationId?: string | null; canManage?: boolean }): boolean =>
   !!lake.organizationId && !!lake.canManage;
+
+export const DRAFT_LAKE_TOOLTIP = 'Draft - not grounding answers until published';
+
+/**
+ * Only 'active' lakes ground answers. A missing status means a pre-status-field user lake (draft),
+ * except built-in registry lakes, which always serve.
+ */
+export function isDraftLake(lake: LakeVisibilityScope & { status?: DataLakeStatus | null }): boolean {
+  return lake.status === 'draft' || (!lake.status && !isBuiltInLake(lake));
+}

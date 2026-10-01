@@ -3,6 +3,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import type { RetrievabilityLabeledDataLake } from '@bike4mind/common';
 import { isUnsearchable, UnsearchableLakeIcon } from './lakeRetrievability';
 import { useDataLakeSurface } from './surfaceTokens';
+import { isDraftLake, DRAFT_LAKE_TOOLTIP } from './lakeVisibility';
 
 /**
  * Names every lake the chat is currently grounded on, for the multi-lake scope the picker trigger
@@ -90,18 +91,22 @@ export default function ActiveLakeScopeStrip({
                 {copy.noLakesLabel}
               </Chip>
             )}
-            {groundedLakes.map(lake => (
-              <Chip
-                key={lake.id}
-                size="sm"
-                variant="soft"
-                color="neutral"
-                sx={{ fontSize: '11px', maxWidth: '100%' }}
-                data-testid={`datalake-active-scope-chip-${lake.id}`}
-              >
-                {lake.name}
-              </Chip>
-            ))}
+            {groundedLakes.map(lake => {
+              const isDraft = isDraftLake(lake);
+              return (
+                <Tooltip key={lake.id} size="sm" title={isDraft ? DRAFT_LAKE_TOOLTIP : ''}>
+                  <Chip
+                    size="sm"
+                    variant="soft"
+                    color={isDraft ? 'warning' : 'neutral'}
+                    sx={{ fontSize: '11px', maxWidth: '100%' }}
+                    data-testid={`datalake-active-scope-chip-${lake.id}`}
+                  >
+                    {lake.name}
+                  </Chip>
+                </Tooltip>
+              );
+            })}
             {unsearchableLakes.length === 0 && clearChip}
           </Stack>
         </>

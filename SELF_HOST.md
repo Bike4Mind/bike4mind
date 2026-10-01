@@ -766,6 +766,8 @@ When you put the app behind a reverse proxy, forward the original `Host` header 
 
 Publishing stages each bundle under a temporary `drafts/` prefix in the artifacts bucket and promotes it on finalize; a finalized publish deletes its own draft. The `createbuckets` one-shot sets a MinIO lifecycle rule that expires anything left under `drafts/` after 7 days, so abandoned or failed publishes do not accumulate. If you point object storage at a different S3 backend, add an equivalent lifecycle rule (or a periodic cleanup) on the `drafts/` prefix yourself - only the bundled MinIO gets the rule automatically.
 
+Notebook exports are written under `exports/` in the FabFile bucket and downloaded via a short-lived signed URL; `createbuckets` sets a MinIO lifecycle rule that expires them after 1 day. On a different S3 backend, add an equivalent 1-day rule on the `exports/` prefix of that bucket.
+
 ## Share your instance with friends (secure internet exposure)
 
 The self-host stack is built for local, single-host use: it comes up on `localhost` with no authentication on its backing services. To let a few trusted people reach it, you have two supported paths (and a no-third-party variant of the first):

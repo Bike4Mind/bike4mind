@@ -7,15 +7,24 @@ import {
   stripToolArtifactMarkup,
   type StreamChannel,
 } from '@bike4mind/common';
-import type { CompletionInfo } from './backend';
+import type { CompletionInfo, ICompletionOptionTools } from './backend';
+
+/** The `artifactType` the named tool declared at registration, for the helpers below. */
+export function declaredArtifactType(
+  tools: ICompletionOptionTools[] | undefined,
+  toolName: string
+): string | undefined {
+  return tools?.find(t => t.toolSchema.name === toolName)?.artifactType;
+}
 
 /**
  * Helper function to handle tool result streaming for artifact-generating tools
  * This ensures tools like recharts that generate artifacts are streamed immediately
  * rather than waiting for recursive completion calls.
  *
- * Only the emitters in TOOL_ARTIFACT_EMITTERS stream, and only their pinned artifact type:
- * streamed text is parsed into reply artifacts, so any other tool's markup would render.
+ * Only the emitters in TOOL_ARTIFACT_EMITTERS (or a tool that declared `artifactType`, see
+ * declaredArtifactType) stream, and only their pinned artifact type: streamed text is parsed
+ * into reply artifacts, so any other tool's markup would render.
  *
  * What does stream is still a raw tool artifact rather than reply prose, so `streamCallback`
  * receives the channel tag and a public surface drops the text on that tag alone.
@@ -23,9 +32,10 @@ import type { CompletionInfo } from './backend';
 export async function handleToolResultStreaming(
   toolName: string,
   toolResult: unknown,
-  streamCallback: (results: string[], info: { channel: StreamChannel }) => Promise<void>
+  streamCallback: (results: string[], info: { channel: StreamChannel }) => Promise<void>,
+  artifactType?: string
 ): Promise<void> {
-  const filtered = filterToolArtifactMarkup(toolName, String(toolResult));
+  const filtered = filterToolArtifactMarkup(toolName, String(toolResult), artifactType);
 
   if (filtered !== null) {
     await streamCallback([filtered], { channel: 'tool-artifact' });

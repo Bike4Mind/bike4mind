@@ -4,6 +4,7 @@ import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeRepository, orgGoogleDriveConnectionRepository, User } from '@bike4mind/database';
 import { acceptsConnectorContent, isLakeIngestable } from '@bike4mind/common';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { assertLakeConnectorFree } from '@server/dataLakes/assertLakeConnectorFree';
 import {
   isValidDriveFolderId,
   createDriveClient,
@@ -169,6 +170,13 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       }
       connectionId = byFolder.id;
     } else {
+      // Only a NEW claim can add a second connector, so the guard lives here and not up with the cheap
+      // gates: a same-folder Re-sync on a lake that already carries a GitHub row must still reach the
+      // reuse branch. Not gated on EnableDataLakeGitHub: with that flag off the client cannot see a
+      // bound repository, so this is the only thing stopping a second connector.
+      // Drive is exempt here: a second Drive folder on this lake falls to the E11000 catch below, whose
+      // message is more specific than the guard's.
+      await assertLakeConnectorFree(lake.id, { except: 'googleDrive' });
       try {
         const created = await orgGoogleDriveConnectionRepository.create({
           organizationId: lake.organizationId,

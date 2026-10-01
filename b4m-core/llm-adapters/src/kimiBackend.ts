@@ -19,6 +19,7 @@ import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
+  declaredArtifactType,
   createRecursiveArtifactGuard,
   handleToolResultStreaming,
   stripUnstreamedToolResult,
@@ -422,11 +423,16 @@ export class KimiBackend implements ICompletionBackend {
                 // Kimi never echoes the tool result verbatim once it is stripped below, so
                 // without this the client never sees the artifact at all.
                 let emitted = false;
-                await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
-                  emitted = true;
-                  if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
-                  await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
-                });
+                await handleToolResultStreaming(
+                  outcome.name,
+                  outcome.result,
+                  async (results, artifactInfo) => {
+                    emitted = true;
+                    if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+                    await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
+                  },
+                  declaredArtifactType(options.tools, outcome.name)
+                );
                 const resultStr = stripUnstreamedToolResult(outcome.name, outcome.result.toString(), emitted);
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
                 this.pushToolMessages(
@@ -730,11 +736,16 @@ export class KimiBackend implements ICompletionBackend {
             // Kimi never echoes the tool result verbatim once it is stripped below, so
             // without this the client never sees the artifact at all.
             let emitted = false;
-            await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
-              emitted = true;
-              if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
-              await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
-            });
+            await handleToolResultStreaming(
+              outcome.name,
+              outcome.result,
+              async (results, artifactInfo) => {
+                emitted = true;
+                if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+                await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
+              },
+              declaredArtifactType(options.tools, outcome.name)
+            );
             const resultStr = stripUnstreamedToolResult(outcome.name, outcome.result.toString(), emitted);
             recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
             this.pushToolMessages(

@@ -91,6 +91,11 @@ vi.mock('@client/app/contexts/SessionsContext', async importOriginal => ({
 vi.mock('@client/app/hooks/useSessionLayout', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/hooks/useSessionLayout')>()),
   setSessionLayout,
+  // The real helper writes through the module's own setSessionLayout, which this spy cannot see;
+  // forwarding to the spy keeps the exact payload assertions below. The helper itself is covered
+  // in useSessionLayout.test.ts.
+  openFileInChatViewer: (file: { id: string }) =>
+    setSessionLayout({ layout: 'vertical', previewFile: file, selectedArtifactId: file.id }),
 }));
 
 // Mutable so a test can supply a real tag tree to navigate into; empty by default, which is

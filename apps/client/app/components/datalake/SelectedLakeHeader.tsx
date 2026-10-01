@@ -2,7 +2,7 @@ import { Box, Button, Chip, Stack, Tooltip } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import DriveConnectAction from '@client/app/components/DataLakeWizard/steps/DriveConnectAction';
-import { canConnectLakeDrive, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
+import { canConnectLakeDrive, isDraftLake, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
 import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import type { RetrievabilityLabeledDataLake } from '@bike4mind/common';
 import { isUnsearchable, UNSEARCHABLE_LAKE_REASON } from '@client/app/components/datalake/lakeRetrievability';
@@ -62,6 +62,17 @@ export default function SelectedLakeHeader({ lake }: { lake: RetrievabilityLabel
               Not searched by chat
             </Chip>
           </Tooltip>
+        )}
+        {isDraftLake(lake) && (
+          <Chip
+            size="sm"
+            variant="soft"
+            color="warning"
+            sx={{ fontSize: '11px' }}
+            data-testid="datalake-selected-draft-chip"
+          >
+            Draft - not grounding answers
+          </Chip>
         )}
       </Stack>
 
