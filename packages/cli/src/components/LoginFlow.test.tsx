@@ -132,6 +132,21 @@ describe('LoginFlow', () => {
     expect(open).not.toHaveBeenCalled();
   });
 
+  it('names the scheme, not an origin mismatch, for a same-origin plain-http URL', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('http://b4m.internal'));
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    const { lastFrame } = render(
+      <LoginFlow apiUrl="http://b4m.internal" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Not opening browser'));
+    const frame = (lastFrame() ?? '').replace(/\s+/g, ' ');
+    expect(frame).toContain('is not https');
+    expect(frame).not.toContain('does not match');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(open).not.toHaveBeenCalled();
+  });
+
   it('opens a localhost dev URL on the matching origin', async () => {
     oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('http://localhost:3000'));
     oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));

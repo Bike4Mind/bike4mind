@@ -244,8 +244,9 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
         <>
           <Box marginBottom={1}>
             <Text color="red" bold>
-              Not opening browser: verification URL origin {originOf(untrustedUri ?? '')} does not match the configured
-              server {originOf(apiUrl)}. Only continue if you trust it.
+              {untrustedUri && isOnApiOrigin(untrustedUri, apiUrl)
+                ? `Not opening browser: verification URL ${originOf(untrustedUri)} is not https (plain http is only auto-opened on localhost). Only continue if you trust it.`
+                : `Not opening browser: verification URL origin ${originOf(untrustedUri ?? '')} does not match the configured server ${originOf(apiUrl)}. Only continue if you trust it.`}
             </Text>
           </Box>
           <Box marginBottom={1}>
