@@ -108,7 +108,7 @@ describe('callsIn', () => {
 });
 
 describe('roundsOf while a reply streams', () => {
-  const ev = (event: Omit<ChatStreamEvent, 'sessionId' | 'messageId'>) =>
+  const ev = (event: { type: string; text?: string; call?: ChatToolCall }) =>
     ({ sessionId: 's1', messageId: 'm1', ...event }) as ChatStreamEvent;
 
   it('never moves a call out of the round it was first drawn in', () => {
