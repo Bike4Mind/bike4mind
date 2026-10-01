@@ -11,6 +11,7 @@ import {
   WEB_SEARCH_NOT_CONFIGURED_MSG,
   shouldIncludeImages,
   formatImageResults,
+  searchCacheClear,
 } from './index';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 
@@ -28,6 +29,8 @@ const mockGetSerperKey = vi.mocked(getSerperKey);
 const mockGetSearxngUrl = vi.mocked(getSearxngUrl);
 const mockGetProvider = vi.mocked(getWebSearchProviderSetting);
 const mockAdapters = {} as Parameters<typeof serpApiSearch>[0];
+
+afterEach(() => searchCacheClear());
 
 describe('serpApiSearch — missing key', () => {
   it('returns an object with empty organic_results when no API key is configured', async () => {
@@ -594,5 +597,129 @@ describe('performWebSearch - place handling', () => {
     expect(result.formattedResults).not.toContain('b4m_map');
     expect(result.citables.every(c => !c.metadata?.place)).toBe(true);
     vi.unstubAllGlobals();
+  });
+});
+
+describe('webSearchTool - failover and cache', () => {
+  type Reply = { status: number; body?: unknown };
+  const json = (r: Reply) =>
+    ({
+      ok: r.status >= 200 && r.status < 300,
+      status: r.status,
+      statusText: String(r.status),
+      json: async () => r.body ?? {},
+      text: async () => '',
+    }) as Response;
+
+  // Routes each request by host and engine, recording every call so a test can count them.
+  const stubProviders = (replies: { searxng?: Reply; serpOrganic?: Reply[]; serpImages?: Reply }) => {
+    const serpOrganic = [...(replies.serpOrganic ?? [])];
+    const fetchStub = vi.fn(async (input: string) => {
+      const url = new URL(input);
+      if (url.hostname === 'searxng.local') return json(replies.searxng ?? { status: 200, body: { results: [] } });
+      if (url.searchParams.get('engine') === 'google_images') {
+        return json(replies.serpImages ?? { status: 200, body: { images_results: [] } });
+      }
+      if (url.searchParams.get('engine') === 'google_maps') return json({ status: 200, body: { local_results: [] } });
+      return json(serpOrganic.shift() ?? { status: 500 });
+    });
+    vi.stubGlobal('fetch', fetchStub);
+    return fetchStub;
+  };
+  const calls = (fetchStub: ReturnType<typeof stubProviders>, pick: (url: URL) => boolean) =>
+    fetchStub.mock.calls.map(([input]) => new URL(input as string)).filter(pick).length;
+  const isSearxng = (url: URL) => url.hostname === 'searxng.local';
+  const isSerpOrganic = (url: URL) => url.hostname === 'serpapi.com' && url.searchParams.get('engine') === 'google';
+
+  const serpHit = {
+    status: 200,
+    body: { organic_results: [{ title: 'Serp', link: 'https://serp.example', snippet: 's' }] },
+  };
+
+  const buildTool = () =>
+    webSearchTool.implementation(
+      { db: {}, logger: { log: vi.fn() }, statusUpdate: vi.fn(), onStart: vi.fn() } as unknown as ToolContext,
+      { imageUrlSigningSecret: TEST_SECRET }
+    ) as ICompletionOptionTools;
+
+  const configure = (choice: 'auto' | 'serpapi' | 'searxng') => {
+    mockGetProvider.mockReset().mockResolvedValue(choice);
+    mockGetSearxngUrl.mockReset().mockResolvedValue('http://searxng.local');
+    mockGetSerperKey.mockReset().mockResolvedValue('serp-key');
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('falls back from SearXNG to SerpAPI under auto when SearXNG errors', async () => {
+    configure('auto');
+    const fetchStub = stubProviders({ searxng: { status: 502 }, serpOrganic: [serpHit] });
+
+    await expect(buildTool().toolFn({ query: 'q' })).resolves.toContain('serp.example');
+    expect(calls(fetchStub, isSearxng)).toBe(1);
+  });
+
+  it('sends the image search to the provider that answered, not the one that failed', async () => {
+    configure('auto');
+    const fetchStub = stubProviders({ searxng: { status: 502 }, serpOrganic: [serpHit] });
+
+    await buildTool().toolFn({ query: 'q', include_images: true });
+
+    expect(calls(fetchStub, url => url.searchParams.get('engine') === 'google_images')).toBe(1);
+    expect(calls(fetchStub, isSearxng)).toBe(1);
+  });
+
+  it('gives the fallback one attempt and throws when both providers fail, so the call records as failed', async () => {
+    configure('auto');
+    const fetchStub = stubProviders({ searxng: { status: 502 }, serpOrganic: [{ status: 503 }, { status: 503 }] });
+
+    await expect(buildTool().toolFn({ query: 'q' })).rejects.toThrow('SERP API error');
+    expect(calls(fetchStub, isSerpOrganic)).toBe(1);
+  });
+
+  it('never falls back under an explicit provider choice', async () => {
+    configure('serpapi');
+    const fetchStub = stubProviders({ serpOrganic: [{ status: 400 }] });
+
+    await expect(buildTool().toolFn({ query: 'q' })).rejects.toThrow('SERP API error');
+    expect(calls(fetchStub, isSearxng)).toBe(0);
+  });
+
+  it('keeps SearXNG fail-soft when there is no fallback to try', async () => {
+    configure('searxng');
+    stubProviders({ searxng: { status: 502 } });
+
+    await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
+  });
+
+  it('serves a repeat query from the cache without calling the provider again', async () => {
+    configure('serpapi');
+    const fetchStub = stubProviders({ serpOrganic: [serpHit, serpHit] });
+    const toolFn = buildTool().toolFn;
+
+    await toolFn({ query: 'Same Query' });
+    await expect(toolFn({ query: '  same query ' })).resolves.toContain('serp.example');
+    expect(calls(fetchStub, isSerpOrganic)).toBe(1);
+  });
+
+  it('never serves a place search from an ordinary search for the same text', async () => {
+    configure('serpapi');
+    const fetchStub = stubProviders({ serpOrganic: [serpHit, serpHit] });
+
+    await performWebSearch(mockAdapters, { query: 'coffee near Shibuya Crossing' });
+    await performWebSearch(mockAdapters, { query: 'coffee near Shibuya Crossing', include_places: true });
+
+    expect(calls(fetchStub, isSerpOrganic)).toBe(2);
+  });
+
+  it('does not cache a failure, so a retry reaches the provider again', async () => {
+    configure('serpapi');
+    const fetchStub = stubProviders({ serpOrganic: [{ status: 400 }, serpHit] });
+    const toolFn = buildTool().toolFn;
+
+    await expect(toolFn({ query: 'q' })).rejects.toThrow();
+    await expect(toolFn({ query: 'q' })).resolves.toContain('serp.example');
+    expect(calls(fetchStub, isSerpOrganic)).toBe(2);
   });
 });

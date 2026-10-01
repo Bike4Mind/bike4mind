@@ -11,6 +11,11 @@ import {
 } from '@bike4mind/common';
 import {
   resolveWebSearchProvider,
+  resolveWebSearchProviders,
+  searchCacheGet,
+  searchCacheSet,
+  SERPAPI_FALLBACK_ATTEMPTS,
+  type WebSearchOptions,
   type WebSearchImageResult,
   type WebSearchProvider,
   type WebSearchProviderResult,
@@ -32,7 +37,13 @@ export interface WebSearchToolConfig {
 
 // serpApiSearch lives in providers.ts (alongside the provider abstraction) but is re-exported here
 // so its external import path (`.../websearch`) and the existing tests stay stable.
-export { serpApiSearch, resolveWebSearchProvider, recencyBucket } from './providers';
+export {
+  serpApiSearch,
+  resolveWebSearchProvider,
+  resolveWebSearchProviders,
+  recencyBucket,
+  searchCacheClear,
+} from './providers';
 export type { WebSearchProvider, WebSearchProviderResult, WebSearchImageResult, WebSearchOptions } from './providers';
 
 export function safeHostname(url: string): string {
@@ -215,11 +226,43 @@ export function createWebSearchBudget(maxSearches: number) {
   };
 }
 
+/**
+ * Organic search on the primary, retried once on the fallback when the primary fails. With no
+ * fallback the primary keeps its own failure mode (SearXNG fail-soft, SerpAPI throws). Returns the
+ * provider that answered so the image/place calls go to a live provider, not the one that just
+ * failed. A final failure throws, so the backend records the call as failed.
+ */
+async function searchWithFailover(
+  primary: WebSearchProvider,
+  fallback: WebSearchProvider | null,
+  query: string,
+  numResults: number,
+  searchOptions?: WebSearchOptions
+): Promise<{ results: WebSearchProviderResult[]; servedBy: WebSearchProvider }> {
+  if (!fallback) return { results: await primary.search(query, numResults, searchOptions), servedBy: primary };
+  try {
+    const results = await primary.search(query, numResults, { ...searchOptions, throwOnError: true });
+    return { results, servedBy: primary };
+  } catch (primaryError) {
+    Logger.globalInstance.log('WebSearch Tool: primary provider failed, trying fallback', {
+      primary: primary.name,
+      fallback: fallback.name,
+      error: primaryError instanceof Error ? primaryError.message : String(primaryError),
+    });
+    const results = await fallback.search(query, numResults, {
+      ...searchOptions,
+      maxAttempts: SERPAPI_FALLBACK_ATTEMPTS,
+    });
+    return { results, servedBy: fallback };
+  }
+}
+
 export async function performWebSearch(
   adapters: GetEffectiveApiKeyAdapters,
   params: WebSearchParams,
   imageUrlSigningSecret = '',
-  resolvedProvider?: Promise<WebSearchProvider | null>
+  resolvedProvider?: Promise<WebSearchProvider | null>,
+  resolvedFallback?: Promise<WebSearchProvider | null>
 ): Promise<WebSearchResult> {
   Logger.globalInstance.log('🔍 WebSearch Tool: Starting search for query:', params.query);
 
@@ -234,8 +277,23 @@ export async function performWebSearch(
 
   try {
     const searchOptions = params.include_places ? { locationInQuery: true } : undefined;
-    const results = await provider.search(params.query, params.num_results, searchOptions);
-    Logger.globalInstance.log(`📊 WebSearch Tool: ${provider.name} found ${results.length} results`);
+    const numResults = params.num_results ?? 3;
+    const isPlaceSearch = !!params.include_places;
+
+    const cached = searchCacheGet(params.query, numResults, isPlaceSearch);
+    let results: WebSearchProviderResult[];
+    let servedBy = provider;
+    if (cached) {
+      Logger.globalInstance.log('WebSearch Tool: cache hit', { query: params.query });
+      results = cached;
+    } else {
+      const fallback = (await resolvedFallback) ?? null;
+      ({ results, servedBy } = await searchWithFailover(provider, fallback, params.query, numResults, searchOptions));
+      if (results.length > 0) searchCacheSet(params.query, numResults, results, isPlaceSearch);
+    }
+    Logger.globalInstance.log(
+      `📊 WebSearch Tool: ${servedBy.name} found ${results.length} results${cached ? ' (cached)' : ''}`
+    );
 
     // An unconfigured/placeholder signing secret can never produce a verifiable image URL - every
     // tile would render "Image unavailable" while still paying for the extra provider call and
@@ -249,18 +307,18 @@ export async function performWebSearch(
     const anchorQuery = params.include_places ? params.anchor_location?.trim() : undefined;
     // Only on a location query: each is another paid provider call, behind the model's own flag.
     const [imageResults, placeResults, anchorResults] = await Promise.all([
-      wantsImages ? provider.searchImages?.(params.query, undefined, searchOptions) : undefined,
-      params.include_places ? provider.searchPlaces?.(params.query) : undefined,
-      anchorQuery ? provider.searchPlaces?.(anchorQuery, 1) : undefined,
+      wantsImages ? servedBy.searchImages?.(params.query, undefined, searchOptions) : undefined,
+      params.include_places ? servedBy.searchPlaces?.(params.query) : undefined,
+      anchorQuery ? servedBy.searchPlaces?.(anchorQuery, 1) : undefined,
     ]).then(all => all.map(result => result ?? []) as [WebSearchImageResult[], WebSearchPlace[], WebSearchPlace[]]);
     const anchor = anchorResults[0];
     const places = placeResults.filter(place => place.id !== anchor?.id);
     const withPlaces = shouldIncludePlaces(places, params.include_places);
     if (placeResults.length) {
-      Logger.globalInstance.log(`WebSearch Tool: ${provider.name} found ${placeResults.length} places`);
+      Logger.globalInstance.log(`WebSearch Tool: ${servedBy.name} found ${placeResults.length} places`);
     }
     if (imageResults.length) {
-      Logger.globalInstance.log(`🖼️ WebSearch Tool: ${provider.name} found ${imageResults.length} images`);
+      Logger.globalInstance.log(`🖼️ WebSearch Tool: ${servedBy.name} found ${imageResults.length} images`);
     }
 
     const withImages = shouldIncludeImages(results, wantsImages, imageResults);
@@ -337,22 +395,26 @@ export const webSearchTool: ToolDefinition = {
   name: 'web_search',
   implementation: (context: ToolContext, config?: WebSearchToolConfig) => {
     let searchCallCount = 0;
-    let providerPromise: Promise<WebSearchProvider | null> | undefined;
+    let providersPromise: Promise<[WebSearchProvider | null, WebSearchProvider | null]> | undefined;
     return {
       toolFn: async value => {
         const params = value as WebSearchParams;
         const callNumber = ++searchCallCount;
         await context.onStart?.('web_search', params);
-        providerPromise ??= resolveWebSearchProvider({ db: context.db }).catch(error => {
-          providerPromise = undefined;
+        providersPromise ??= resolveWebSearchProviders({ db: context.db }).catch(error => {
+          providersPromise = undefined;
           throw error;
         });
         const startedAt = Date.now();
+        const [primary, fallback] = await providersPromise;
+        // A failure throws on purpose: the backend hands the error text to the model as the tool
+        // result AND records the call as failed, which is what the answer diagnosis reads.
         const { formattedResults, citables } = await performWebSearch(
           { db: context.db },
           params,
           config?.imageUrlSigningSecret,
-          providerPromise
+          Promise.resolve(primary),
+          Promise.resolve(fallback)
         );
         context.logger.log('🔍 WebSearch Tool: search timing', {
           callNumber,
