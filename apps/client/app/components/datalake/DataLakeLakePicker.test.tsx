@@ -363,18 +363,4 @@ describe('DataLakeLakePicker - unsearchable lakes', () => {
     fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-c'));
     expect(onChange).toHaveBeenCalledWith(['c']);
   });
-
-  it('does not mark an active lake a session the viewer owns pre-authorizes', () => {
-    renderPicker({ lakes, session: { userId: 'u1', preauthorizedLakeIds: ['c'] }, viewerUserId: 'u1' });
-    openMenu();
-
-    expect(screen.queryByTestId('datalake-lake-picker-unsearchable-c')).not.toBeInTheDocument();
-  });
-
-  it('still marks it when the session belongs to someone else, whose pre-authorization chat ignores', () => {
-    renderPicker({ lakes, session: { userId: 'owner', preauthorizedLakeIds: ['c'] }, viewerUserId: 'viewer' });
-    openMenu();
-
-    expect(screen.getByTestId('datalake-lake-picker-unsearchable-c')).toBeInTheDocument();
-  });
 });

@@ -111,17 +111,4 @@ describe('SelectedLakeHeader', () => {
     renderHeader({ retrievable: undefined });
     expect(screen.queryByTestId('datalake-selected-lake-unsearchable')).not.toBeInTheDocument();
   });
-
-  it('does not mark an active lake a session the viewer owns pre-authorizes', () => {
-    render(
-      <Wrapper>
-        <SelectedLakeHeader
-          lake={lake({ retrievable: false, status: 'active', canPreauthorize: true })}
-          session={{ userId: 'u1', preauthorizedLakeIds: ['lake-1'] }}
-          viewerUserId="u1"
-        />
-      </Wrapper>
-    );
-    expect(screen.queryByTestId('datalake-selected-lake-unsearchable')).not.toBeInTheDocument();
-  });
 });

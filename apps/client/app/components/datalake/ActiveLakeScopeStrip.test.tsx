@@ -96,20 +96,4 @@ describe('ActiveLakeScopeStrip', () => {
     expect(screen.queryByText('Grounded on')).not.toBeInTheDocument();
     expect(screen.queryByText('Not searched')).not.toBeInTheDocument();
   });
-
-  it('does not flag an active lake a session the viewer owns pre-authorizes', () => {
-    render(
-      <Wrapper>
-        <ActiveLakeScopeStrip
-          lakes={[{ ...lake('a', 'Admitted'), retrievable: false, status: 'active', canPreauthorize: true }]}
-          session={{ userId: 'u1', preauthorizedLakeIds: ['a'] }}
-          viewerUserId="u1"
-          onClear={vi.fn()}
-        />
-      </Wrapper>
-    );
-
-    expect(screen.queryByTestId('datalake-active-scope-unsearchable-a')).not.toBeInTheDocument();
-    expect(screen.getByText('Grounded on')).toBeInTheDocument();
-  });
 });

@@ -1,7 +1,7 @@
 import { Box, Chip, Stack, Tooltip, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
-import type { ManageableDataLakeConfig } from '@bike4mind/common';
-import { isUnsearchable, UnsearchableLakeIcon, type SessionAdmissionView } from './lakeRetrievability';
+import type { RetrievabilityLabeledDataLake } from '@bike4mind/common';
+import { isUnsearchable, UnsearchableLakeIcon } from './lakeRetrievability';
 import { useDataLakeSurface } from './surfaceTokens';
 
 /**
@@ -23,13 +23,9 @@ import { useDataLakeSurface } from './surfaceTokens';
 export default function ActiveLakeScopeStrip({
   lakes,
   onClear,
-  session,
-  viewerUserId,
 }: {
-  lakes: ManageableDataLakeConfig[];
+  lakes: RetrievabilityLabeledDataLake[];
   onClear: () => void;
-  session?: SessionAdmissionView | null;
-  viewerUserId?: string;
 }) {
   const { copy } = useDataLakeSurface();
   // A lake chat cannot search is selected but grounds nothing, so it gets its own group rather than
@@ -37,7 +33,7 @@ export default function ActiveLakeScopeStrip({
   const groundedLakes: typeof lakes = [];
   const unsearchableLakes: typeof lakes = [];
   for (const lake of lakes) {
-    (isUnsearchable(lake, session, viewerUserId) ? unsearchableLakes : groundedLakes).push(lake);
+    (isUnsearchable(lake) ? unsearchableLakes : groundedLakes).push(lake);
   }
   const showGrounded = lakes.length === 0 || groundedLakes.length > 0;
   const allUnsearchable = !showGrounded;

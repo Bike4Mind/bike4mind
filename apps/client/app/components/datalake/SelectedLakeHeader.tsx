@@ -4,12 +4,8 @@ import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import DriveConnectAction from '@client/app/components/DataLakeWizard/steps/DriveConnectAction';
 import { canConnectLakeDrive, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
 import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
-import type { ManageableDataLakeConfig } from '@bike4mind/common';
-import {
-  isUnsearchable,
-  UNSEARCHABLE_LAKE_REASON,
-  type SessionAdmissionView,
-} from '@client/app/components/datalake/lakeRetrievability';
+import type { RetrievabilityLabeledDataLake } from '@bike4mind/common';
+import { isUnsearchable, UNSEARCHABLE_LAKE_REASON } from '@client/app/components/datalake/lakeRetrievability';
 
 /**
  * What the scoped lake is and the lake-level actions on it - the home those actions never had
@@ -26,15 +22,7 @@ import {
  * in the manager panel, and Configure deep-links there with this lake preselected. A second set
  * of destructive controls on a second surface is how the two drift apart.
  */
-export default function SelectedLakeHeader({
-  lake,
-  session,
-  viewerUserId,
-}: {
-  lake: ManageableDataLakeConfig;
-  session?: SessionAdmissionView | null;
-  viewerUserId?: string;
-}) {
+export default function SelectedLakeHeader({ lake }: { lake: RetrievabilityLabeledDataLake }) {
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   const openManager = useDataLakeWizardStore(s => s.openManager);
 
@@ -62,7 +50,7 @@ export default function SelectedLakeHeader({
         >
           {lake.fileTagPrefix}
         </Chip>
-        {isUnsearchable(lake, session, viewerUserId) && (
+        {isUnsearchable(lake) && (
           <Tooltip size="sm" title={UNSEARCHABLE_LAKE_REASON}>
             <Chip
               size="sm"

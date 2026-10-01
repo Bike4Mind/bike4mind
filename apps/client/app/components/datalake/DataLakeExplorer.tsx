@@ -24,7 +24,7 @@ import type { DefaultLayoutType } from '@client/app/hooks/useSessionLayout';
 import { useNotebookLayout } from '@client/app/components/layouts/Notebook';
 import {
   useGetDataLakeArticles,
-  useGetDataLakes,
+  useGetDataLakesWithRetrievability,
   useGetDataLakeTagCounts,
   useGetDataLakeUncategorizedFiles,
   useRemoveFileFromDataLake,
@@ -234,7 +234,12 @@ export default function DataLakeExplorer({
 
   // Drives the lake picker, gates row deletes, and answers "do I have any lakes?" - the question
   // the empty state used to answer from the file scope instead, and got wrong (#1645).
-  const { data: lakes, isLoading: lakesLoading, isError: lakesError, refetch: refetchLakes } = useGetDataLakes();
+  const {
+    data: lakes,
+    isLoading: lakesLoading,
+    isError: lakesError,
+    refetch: refetchLakes,
+  } = useGetDataLakesWithRetrievability(currentSessionId);
   const removeFile = useRemoveFileFromDataLake(deleteTarget?.lake.id ?? null);
   const currentUserId = useUser(s => s.currentUser?.id);
   const canDeleteFile = useCallback((file: IFabFileDocument) => resolveManageableLake(file, lakes) != null, [lakes]);
@@ -647,21 +652,12 @@ export default function DataLakeExplorer({
                 totalFileCount={tagCountsData?.totalLakeFileCount}
                 onCreate={onCreateLake}
                 onDiscover={onDiscover}
-                session={currentSession}
-                viewerUserId={currentUserId}
               />
-              {soleSelectedLake && (
-                <SelectedLakeHeader lake={soleSelectedLake} session={currentSession} viewerUserId={currentUserId} />
-              )}
+              {soleSelectedLake && <SelectedLakeHeader lake={soleSelectedLake} />}
               {/* The no-lake scope shows the strip with nothing in it: that is the one state the
                   tree cannot report, since it stays browsable so the user can get back out. */}
               {(selectedLakes.length > 1 || isNoLakeScope) && (
-                <ActiveLakeScopeStrip
-                  lakes={selectedLakes}
-                  session={currentSession}
-                  viewerUserId={currentUserId}
-                  onClear={() => handleSelectLakes([])}
-                />
+                <ActiveLakeScopeStrip lakes={selectedLakes} onClear={() => handleSelectLakes([])} />
               )}
             </>
           }

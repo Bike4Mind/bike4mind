@@ -430,6 +430,23 @@ export interface DataLakeConfig {
  * invariant that keeps the prompt text out of every actor-less projection (see
  * getAccessibleDataLakePrompts, which reads it off the raw documents for the same reason).
  */
+/**
+ * Opt-in row label on GET /api/data-lakes (`?includeRetrievability=true`), never set by the list
+ * projections. The one authoritative statement of its contract:
+ * - `retrievable`: whether chat retrieval searches this lake for the CALLER (always the caller, even
+ *   when `?preauthorizableFor` relabels `canPreauthorize`). With `&sessionId=` naming one of the
+ *   caller's own sessions, it also counts that session's still-managed pre-authorizations, i.e.
+ *   whether chat searches the lake in that session once the session's scope includes it. Any other
+ *   session id is treated as no session. Drafts read `false`.
+ * - Absent means unknown (not requested, or the scope was unresolved or degraded) and must be
+ *   treated as searchable.
+ */
+export interface DataLakeRetrievabilityLabel {
+  retrievable?: boolean;
+}
+
+export type RetrievabilityLabeledDataLake = ManageableDataLakeConfig & DataLakeRetrievabilityLabel;
+
 export interface ManageableDataLakeConfig extends DataLakeConfig {
   /**
    * Per-lake system prompt (see IDataLake.systemPrompt). EDITOR-ONLY: a user who can merely
@@ -481,16 +498,6 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * document (session-create resolves ids via `findById`), so `false`.
    */
   canPreauthorize: boolean;
-  /**
-   * Whether the CALLER's chat retrieval scope reaches this lake (always the caller, even when
-   * `?preauthorizableFor` relabels `canPreauthorize`). Set only by the GET /api/data-lakes route;
-   * absent means unknown (scope unresolved or degraded) and must be treated as retrievable.
-   *
-   * Session-agnostic: it ignores a lake a chat session admits through `preauthorizedLakeIds`, so
-   * such a lake can read `false` here and still be searched in that session. An attached file's
-   * lake is not such an admission (the file is inlined, not searched). Drafts read `false`.
-   */
-  retrievable?: boolean;
   /**
    * Display name (name || username, never email) of the lake's creator. Populated ONLY for lakes
    * the caller does NOT own, and ONLY when the list projection was given a user lookup (the

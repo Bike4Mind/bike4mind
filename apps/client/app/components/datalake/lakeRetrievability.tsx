@@ -1,32 +1,23 @@
 import { Tooltip } from '@mui/joy';
 import SearchOffIcon from '@mui/icons-material/SearchOff';
-import type { ISession, ManageableDataLakeConfig } from '@bike4mind/common';
+import type { RetrievabilityLabeledDataLake } from '@bike4mind/common';
 
 export const UNSEARCHABLE_LAKE_REASON =
   'Chat can not search this lake with your current access. You can still browse it.';
 
-export type SessionAdmissionView = Pick<ISession, 'preauthorizedLakeIds' | 'userId'>;
+/** Reads the server's `retrievable` label (contract: DataLakeRetrievabilityLabel); no client-side admission logic. */
+export function isUnsearchable(lake: Pick<RetrievabilityLabeledDataLake, 'id' | 'retrievable'>): boolean {
+  return lake.retrievable === false;
+}
 
 /**
- * Whether chat retrieval will skip this lake for the viewer. Only an explicit `retrievable === false`
- * from GET /api/data-lakes marks it (absent = unknown, treated as searchable). The server label is
- * session-agnostic, so a session pre-authorization exempts the lake, but only where chat honours it:
- * the viewer owns the session (vetPreauthorizedLakeIds) and can still pre-authorize the lake
- * (filterStillManagedLakes in unionPreauthorizedLakeAccess), and the lake is active.
+ * For a lake picked into a NEW test session, which session-create will pre-authorize exactly when
+ * the server labelled the row `canPreauthorize`. No session id exists yet to ask the server about.
  */
-export function isUnsearchable(
-  lake: Pick<ManageableDataLakeConfig, 'id' | 'retrievable' | 'status' | 'canPreauthorize'>,
-  session?: SessionAdmissionView | null,
-  viewerUserId?: string
+export function isUnsearchableInNewTestSession(
+  lake: Pick<RetrievabilityLabeledDataLake, 'id' | 'retrievable' | 'canPreauthorize'>
 ): boolean {
-  if (lake.retrievable !== false) return false;
-  const admitted =
-    !!viewerUserId &&
-    session?.userId === viewerUserId &&
-    lake.canPreauthorize === true &&
-    lake.status === 'active' &&
-    !!session.preauthorizedLakeIds?.includes(lake.id);
-  return !admitted;
+  return isUnsearchable(lake) && !lake.canPreauthorize;
 }
 
 export function UnsearchableLakeIcon({ testId }: { testId: string }) {

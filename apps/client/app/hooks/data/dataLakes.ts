@@ -27,6 +27,7 @@ import type {
   LakeMemoryHealth,
   LakeConfigHistoryView,
   ManageableDataLakeConfig,
+  RetrievabilityLabeledDataLake,
   TaxonomyTag,
   TransitionalDataLakeSummary,
   TransitionalRetryAction,
@@ -132,6 +133,27 @@ export function useGetDataLakes(
     },
     refetchOnWindowFocus: opts?.refetchOnWindowFocus ?? false,
     staleTime: opts?.staleTime ?? 1000 * 60 * 2,
+  });
+}
+
+/**
+ * The lake list labelled with `retrievable` (contract: DataLakeRetrievabilityLabel). Pass the
+ * current session id so the server counts that session's pre-authorizations; `null` for none.
+ */
+export function useGetDataLakesWithRetrievability(sessionId: string | null | undefined, enabled = true) {
+  const sid = sessionId || null;
+  return useQuery({
+    queryKey: dataLakeKeys.listWithRetrievability(sid),
+    enabled,
+    retry: false,
+    queryFn: async () => {
+      const response = await api.get<{ data: RetrievabilityLabeledDataLake[] }>('/api/data-lakes', {
+        params: { includeRetrievability: 'true', ...(sid ? { sessionId: sid } : {}) },
+      });
+      return response.data.data;
+    },
+    refetchOnWindowFocus: false,
+    staleTime: 1000 * 60 * 2,
   });
 }
 

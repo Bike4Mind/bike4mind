@@ -1,19 +1,7 @@
 import { getDynamicDataLakeAccess } from '../../../dataLakeService/getDynamicDataLakeTags';
-import {
-  narrowLakeAccessToSession,
-  sessionGroundsOnNoLake,
-  type ResolvedLakeAccessSet,
-} from '../../../dataLakeService/narrowLakeAccessToSession';
-import { unionPreauthorizedLakeAccess } from '../../../dataLakeService/unionPreauthorizedLakeAccess';
+import { sessionGroundsOnNoLake, type ResolvedLakeAccessSet } from '../../../dataLakeService/narrowLakeAccessToSession';
+import { NO_SESSION_LAKES, resolveSessionLakeAdmission } from '../../../dataLakeService/sessionLakeAdmission';
 import type { ToolContext } from './types';
-
-const NO_LAKES: ResolvedLakeAccessSet = {
-  dataLakeTags: [],
-  dataLakeTagPrefixes: [],
-  scopedTagPrefixes: [],
-  lakes: [],
-  excludedByAccessCount: 0,
-};
 
 /**
  * The lake access a knowledge tool should run on for THIS session: the caller's owner-wide access,
@@ -28,17 +16,21 @@ const NO_LAKES: ResolvedLakeAccessSet = {
 export async function resolveSessionLakeAccess(context: ToolContext): Promise<ResolvedLakeAccessSet> {
   // Two different reasons for the same answer, and the narrowing below can express neither: it
   // reads an empty scope as "no opinion" and hands back the caller's full owner-wide access.
-  if (context.suppressLakeArms) return NO_LAKES;
-  if (sessionGroundsOnNoLake(context.sessionRetrievalTags, context.sessionLakeScopeExplicit)) return NO_LAKES;
+  if (context.suppressLakeArms) return NO_SESSION_LAKES;
+  if (sessionGroundsOnNoLake(context.sessionRetrievalTags, context.sessionLakeScopeExplicit)) return NO_SESSION_LAKES;
   const resolved = await getDynamicDataLakeAccess(context);
   // `context.userId` is the session OWNER on any turn that carries preauthorizedLakeIds:
   // vetPreauthorizedLakeIds blanks the field unless the session's own userId equals the acting
   // user, and the identity-substituting worker paths never reach that call at all.
-  const unioned = await unionPreauthorizedLakeAccess(
+  const { searched } = await resolveSessionLakeAdmission(
     resolved,
-    context.sessionPreauthorizedLakeIds,
+    {
+      retrievalTags: context.sessionRetrievalTags,
+      lakeScopeExplicit: context.sessionLakeScopeExplicit,
+      preauthorizedLakeIds: context.sessionPreauthorizedLakeIds,
+    },
     context.userId,
     context.db
   );
-  return narrowLakeAccessToSession(unioned, context.sessionRetrievalTags);
+  return searched;
 }

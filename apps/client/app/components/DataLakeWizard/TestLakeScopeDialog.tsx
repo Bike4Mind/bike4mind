@@ -16,8 +16,11 @@ import {
 } from '@mui/joy';
 import SearchIcon from '@mui/icons-material/Search';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
-import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
-import { isUnsearchable, UnsearchableLakeIcon } from '@client/app/components/datalake/lakeRetrievability';
+import { useGetDataLakesWithRetrievability } from '@client/app/hooks/data/dataLakes';
+import {
+  isUnsearchableInNewTestSession,
+  UnsearchableLakeIcon,
+} from '@client/app/components/datalake/lakeRetrievability';
 
 /** Below this many lakes a filter box is noise rather than help - mirrors DataLakeLakePicker. */
 const SEARCH_THRESHOLD = 8;
@@ -42,7 +45,7 @@ export interface TestLakeScopeDialogProps {
  * lake list, not a second copy of that list's fetch/loading/error handling.
  */
 export function TestLakeScopeDialog({ anchorLakeId, onClose, onConfirm, confirming }: TestLakeScopeDialogProps) {
-  const { data: lakes, isLoading, isError, refetch } = useGetDataLakes();
+  const { data: lakes, isLoading, isError, refetch } = useGetDataLakesWithRetrievability(null);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<string>>(() => new Set([anchorLakeId]));
 
@@ -145,8 +148,7 @@ export function TestLakeScopeDialog({ anchorLakeId, onClose, onConfirm, confirmi
                             sx={{ fontSize: 14, color: 'warning.400' }}
                           />
                         )}
-                        {/* A pre-authorizable lake is admitted to the test session, so only the rest go unsearched. */}
-                        {isUnsearchable(lake) && !lake.canPreauthorize && (
+                        {isUnsearchableInNewTestSession(lake) && (
                           <UnsearchableLakeIcon testId={`test-lake-scope-unsearchable-${lake.id}`} />
                         )}
                       </Stack>

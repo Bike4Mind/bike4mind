@@ -20,7 +20,7 @@ const useGetDataLakesMock = vi.fn<
   { data: MockLake[] | undefined; isLoading: boolean; isError: boolean; refetch: () => void }
 >();
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
-  useGetDataLakes: () => useGetDataLakesMock(),
+  useGetDataLakesWithRetrievability: () => useGetDataLakesMock(),
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });

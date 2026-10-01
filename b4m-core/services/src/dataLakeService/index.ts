@@ -80,6 +80,7 @@ export * from './applyTaxonomySuggestions';
 export * from './dismissTaxonomySuggestion';
 export * from './getDynamicDataLakeTags';
 export * from './narrowLakeAccessToSession';
+export * from './sessionLakeAdmission';
 export * from './embeddingMismatch';
 export * from './retrievalUnavailable';
 export * from './supersession';
