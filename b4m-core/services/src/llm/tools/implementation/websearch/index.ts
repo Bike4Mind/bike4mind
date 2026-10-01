@@ -11,6 +11,9 @@ import {
 } from '@bike4mind/common';
 import {
   resolveWebSearchProvider,
+  resolveWebSearchProviders,
+  searchCacheGet,
+  searchCacheSet,
   type WebSearchImageResult,
   type WebSearchProvider,
   type WebSearchProviderResult,
@@ -32,7 +35,13 @@ export interface WebSearchToolConfig {
 
 // serpApiSearch lives in providers.ts (alongside the provider abstraction) but is re-exported here
 // so its external import path (`.../websearch`) and the existing tests stay stable.
-export { serpApiSearch, resolveWebSearchProvider, recencyBucket } from './providers';
+export {
+  serpApiSearch,
+  resolveWebSearchProvider,
+  resolveWebSearchProviders,
+  recencyBucket,
+  searchCacheClear,
+} from './providers';
 export type { WebSearchProvider, WebSearchProviderResult, WebSearchImageResult, WebSearchOptions } from './providers';
 
 export function safeHostname(url: string): string {
@@ -215,11 +224,37 @@ export function createWebSearchBudget(maxSearches: number) {
   };
 }
 
+/**
+ * Layer 2: try the primary provider, then fall back to the other on timeout or error. The
+ * fallback adds at most one extra search latency, never a full second retry cycle.
+ */
+async function searchWithFailover(
+  primary: WebSearchProvider,
+  resolvedFallback: Promise<WebSearchProvider | null> | undefined,
+  query: string,
+  numResults: number,
+  searchOptions?: { locationInQuery?: boolean }
+): Promise<WebSearchProviderResult[]> {
+  try {
+    return await primary.search(query, numResults, searchOptions);
+  } catch (primaryError) {
+    const fallback = await resolvedFallback;
+    if (!fallback) throw primaryError;
+    Logger.globalInstance.log('🔍 WebSearch Tool: primary provider failed, trying fallback', {
+      primary: primary.name,
+      fallback: fallback.name,
+      error: primaryError instanceof Error ? primaryError.message : String(primaryError),
+    });
+    return await fallback.search(query, numResults, searchOptions);
+  }
+}
+
 export async function performWebSearch(
   adapters: GetEffectiveApiKeyAdapters,
   params: WebSearchParams,
   imageUrlSigningSecret = '',
-  resolvedProvider?: Promise<WebSearchProvider | null>
+  resolvedProvider?: Promise<WebSearchProvider | null>,
+  resolvedFallback?: Promise<WebSearchProvider | null>
 ): Promise<WebSearchResult> {
   Logger.globalInstance.log('🔍 WebSearch Tool: Starting search for query:', params.query);
 
@@ -234,8 +269,18 @@ export async function performWebSearch(
 
   try {
     const searchOptions = params.include_places ? { locationInQuery: true } : undefined;
-    const results = await provider.search(params.query, params.num_results, searchOptions);
-    Logger.globalInstance.log(`📊 WebSearch Tool: ${provider.name} found ${results.length} results`);
+    const numResults = params.num_results ?? 3;
+
+    // Layer 3: check cache before hitting the provider
+    const cached = searchCacheGet(params.query, numResults);
+    const results = cached
+      ? (() => {
+          Logger.globalInstance.log('🔍 WebSearch Tool: cache hit', { query: params.query });
+          return cached;
+        })()
+      : await searchWithFailover(provider, resolvedFallback, params.query, numResults, searchOptions);
+    if (!cached && results.length > 0) searchCacheSet(params.query, numResults, results);
+    Logger.globalInstance.log(`📊 WebSearch Tool: found ${results.length} results${cached ? ' (cached)' : ''}`);
 
     // An unconfigured/placeholder signing secret can never produce a verifiable image URL - every
     // tile would render "Image unavailable" while still paying for the extra provider call and
@@ -337,45 +382,67 @@ export const webSearchTool: ToolDefinition = {
   name: 'web_search',
   implementation: (context: ToolContext, config?: WebSearchToolConfig) => {
     let searchCallCount = 0;
-    let providerPromise: Promise<WebSearchProvider | null> | undefined;
+    let providersPromise: Promise<[WebSearchProvider | null, WebSearchProvider | null]> | undefined;
     return {
       toolFn: async value => {
         const params = value as WebSearchParams;
         const callNumber = ++searchCallCount;
         await context.onStart?.('web_search', params);
-        providerPromise ??= resolveWebSearchProvider({ db: context.db }).catch(error => {
-          providerPromise = undefined;
+        providersPromise ??= resolveWebSearchProviders({ db: context.db }).catch(error => {
+          providersPromise = undefined;
           throw error;
         });
         const startedAt = Date.now();
-        const { formattedResults, citables } = await performWebSearch(
-          { db: context.db },
-          params,
-          config?.imageUrlSigningSecret,
-          providerPromise
-        );
-        context.logger.log('🔍 WebSearch Tool: search timing', {
-          callNumber,
-          query: params.query,
-          durationMs: Date.now() - startedAt,
-          resultCount: citables.length,
-        });
 
-        // statusUpdate Object.assigns this partial onto the quest, so citables must be nested
-        // under promptMeta; the receiver is responsible for merging promptMeta.citables.
-        if (citables.length > 0) {
-          await context.statusUpdate(
-            {
-              promptMeta: {
-                citables,
-              },
-            } as any,
-            'Web search complete'
+        // Layer 1: catch errors and return a message instead of throwing, so the tool
+        // records as success and the model composes from whatever else it has.
+        try {
+          const [primary, fallback] = await providersPromise;
+          const primaryPromise = primary ? Promise.resolve(primary) : Promise.resolve(null);
+          const fallbackPromise = fallback ? Promise.resolve(fallback) : Promise.resolve(null);
+
+          const { formattedResults, citables } = await performWebSearch(
+            { db: context.db },
+            params,
+            config?.imageUrlSigningSecret,
+            primaryPromise,
+            fallbackPromise
           );
-          Logger.globalInstance.log(`📚 WebSearch Tool: Stored ${citables.length} citables`);
-        }
+          context.logger.log('🔍 WebSearch Tool: search timing', {
+            callNumber,
+            query: params.query,
+            durationMs: Date.now() - startedAt,
+            resultCount: citables.length,
+          });
 
-        return formattedResults;
+          if (citables.length > 0) {
+            await context.statusUpdate(
+              {
+                promptMeta: {
+                  citables,
+                },
+              } as any,
+              'Web search complete'
+            );
+            Logger.globalInstance.log(`📚 WebSearch Tool: Stored ${citables.length} citables`);
+          }
+
+          return formattedResults;
+        } catch (error) {
+          const durationMs = Date.now() - startedAt;
+          context.logger.error('🔍 WebSearch Tool: all providers failed, degrading gracefully', {
+            callNumber,
+            query: params.query,
+            durationMs,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return (
+            `Web search for "${params.query}" failed after ${Math.round(durationMs / 1000)}s ` +
+            `(${error instanceof Error ? error.message : 'unknown error'}). ` +
+            `Compose your answer from the other search results and your own knowledge, ` +
+            `and note which claims you could not verify.`
+          );
+        }
       },
       toolSchema: {
         name: 'web_search',
