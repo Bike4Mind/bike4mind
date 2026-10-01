@@ -453,6 +453,92 @@ describe('DataLakeRepository.countGateExcludedLakes', () => {
     ).toBe(0);
   });
 
+  describe('restrictToTags (identity-named lakes)', () => {
+    it('counts a named PRIVATE gateless lake owned by someone else, which the visibility arms alone would hide', async () => {
+      const privateLake = await dataLakeRepository.create(
+        baseLake({ slug: 'private-other', organizationId: 'orgA', createdByUserId: 'alice' })
+      );
+      await dataLakeRepository.create(baseLake({ slug: 'mine', createdByUserId: 'bob' }));
+
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], [], 'bob', {
+          restrictToTags: [privateLake.datalakeTag],
+        })
+      ).toBe(1);
+    });
+
+    it('counts a named lake in another org, gated or not', async () => {
+      const gated = await dataLakeRepository.create(
+        baseLake({ slug: 'gated-in-b', organizationId: 'orgB', requiredUserTag: 'tag' })
+      );
+      const gateless = await dataLakeRepository.create(baseLake({ slug: 'open-in-b', organizationId: 'orgB' }));
+
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+          restrictToTags: [gated.datalakeTag, gateless.datalakeTag],
+        })
+      ).toBe(2);
+    });
+
+    it('does not count a named lake the caller reaches (own lake, gateless org lake, held tag, user grant)', async () => {
+      const own = await dataLakeRepository.create(baseLake({ slug: 'own', createdByUserId: 'bob' }));
+      const orgOpen = await dataLakeRepository.create(baseLake({ slug: 'org-open', organizationId: 'orgA' }));
+      const tagged = await dataLakeRepository.create(
+        baseLake({ slug: 'tagged', organizationId: 'orgA', requiredUserTag: 'medlib' })
+      );
+      const granted = await dataLakeRepository.create(
+        baseLake({ slug: 'granted', organizationId: 'orgB', createdByUserId: 'alice' })
+      );
+
+      expect(
+        await dataLakeRepository.countGateExcludedLakes(['medlib'], [], ['orgA'], 'bob', {
+          grantedLakeIds: [granted.id],
+          restrictToTags: [own.datalakeTag, orgOpen.datalakeTag, tagged.datalakeTag, granted.datalakeTag],
+        })
+      ).toBe(0);
+    });
+
+    it('counts a named lake the caller created but no longer owns (superseded)', async () => {
+      const transferred = await dataLakeRepository.create(baseLake({ slug: 'transferred', createdByUserId: 'alice' }));
+
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], [], 'alice', {
+          supersededOwnLakeIds: [transferred.id],
+          restrictToTags: [transferred.datalakeTag],
+        })
+      ).toBe(1);
+    });
+
+    it('an ORG grant exempts a named lake only in its own org (multi-org caller)', async () => {
+      const inB = await dataLakeRepository.create(
+        baseLake({ slug: 'named-in-b', organizationId: 'orgB', createdByUserId: 'alice', requiredUserTag: 'tag' })
+      );
+
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA', 'orgB'], 'bob', {
+          orgGrantedLakes: { orgB: [inB.id] },
+          restrictToTags: [inB.datalakeTag],
+        })
+      ).toBe(0);
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA', 'orgB'], 'bob', {
+          orgGrantedLakes: { orgA: [inB.id] },
+          restrictToTags: [inB.datalakeTag],
+        })
+      ).toBe(1);
+    });
+
+    it('does not count a named lake that is not active', async () => {
+      const draft = await dataLakeRepository.create(
+        baseLake({ slug: 'draft-other', createdByUserId: 'alice', status: 'draft' })
+      );
+
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], [], 'bob', { restrictToTags: [draft.datalakeTag] })
+      ).toBe(0);
+    });
+  });
+
   it('never returns a lake document - count only, defense-in-depth stays with the caller', async () => {
     // Not a behavior a TypeScript signature alone proves - the return type is checked here against
     // the actual resolved value, not just declared.
