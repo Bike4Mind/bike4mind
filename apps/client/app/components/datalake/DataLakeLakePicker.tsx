@@ -28,7 +28,8 @@ import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import { menuItemListSx, menuSurfaceSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
 import { lakeVisibilityLabelShort } from '@client/app/components/datalake/lakeVisibility';
-import type { ManageableDataLakeConfig } from '@bike4mind/common';
+import { isUnsearchable, UnsearchableLakeIcon } from '@client/app/components/datalake/lakeRetrievability';
+import type { ISession, ManageableDataLakeConfig } from '@bike4mind/common';
 
 /**
  * Which lakes the in-chat surface is scoped to: a trigger in the tree card's header opening the
@@ -78,6 +79,8 @@ export interface DataLakeLakePickerProps {
   onCreate?: () => void;
   /** Opens the public-lake browse catalog (the manager's Discover tab). */
   onDiscover?: () => void;
+  /** The current chat session, so a lake it pre-authorizes is not marked unsearchable. */
+  session?: Pick<ISession, 'preauthorizedLakeIds'> | null;
 }
 
 /** Below this many lakes a filter box is noise rather than help. */
@@ -118,6 +121,7 @@ export default function DataLakeLakePicker({
   noLakeScope = false,
   lakeFileCounts,
   totalFileCount,
+  session,
   onCreate,
   onDiscover,
 }: DataLakeLakePickerProps) {
@@ -359,6 +363,10 @@ export default function DataLakeLakePicker({
                             sx={{ fontSize: 14, color: 'warning.400', flexShrink: 0 }}
                           />
                         </Tooltip>
+                      )}
+                      {/* Marked, not disabled: selection also scopes the browse tree, which still works. */}
+                      {isUnsearchable(lake, session) && (
+                        <UnsearchableLakeIcon testId={`datalake-lake-picker-unsearchable-${lake.id}`} />
                       )}
                       {typeof count === 'number' && (
                         <Typography level="body-xs" sx={COUNT_SX}>

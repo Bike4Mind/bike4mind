@@ -17,6 +17,7 @@ import {
 import SearchIcon from '@mui/icons-material/Search';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
+import { isUnsearchable, UnsearchableLakeIcon } from '@client/app/components/datalake/lakeRetrievability';
 
 /** Below this many lakes a filter box is noise rather than help - mirrors DataLakeLakePicker. */
 const SEARCH_THRESHOLD = 8;
@@ -143,6 +144,10 @@ export function TestLakeScopeDialog({ anchorLakeId, onClose, onConfirm, confirmi
                             data-testid={`test-lake-scope-owner-icon-${lake.id}`}
                             sx={{ fontSize: 14, color: 'warning.400' }}
                           />
+                        )}
+                        {/* A pre-authorizable lake is admitted to the test session, so only the rest go unsearched. */}
+                        {isUnsearchable(lake) && !lake.canPreauthorize && (
+                          <UnsearchableLakeIcon testId={`test-lake-scope-unsearchable-${lake.id}`} />
                         )}
                       </Stack>
                     }

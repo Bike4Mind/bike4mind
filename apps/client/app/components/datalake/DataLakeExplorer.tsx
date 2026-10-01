@@ -647,12 +647,17 @@ export default function DataLakeExplorer({
                 totalFileCount={tagCountsData?.totalLakeFileCount}
                 onCreate={onCreateLake}
                 onDiscover={onDiscover}
+                session={currentSession}
               />
-              {soleSelectedLake && <SelectedLakeHeader lake={soleSelectedLake} />}
+              {soleSelectedLake && <SelectedLakeHeader lake={soleSelectedLake} session={currentSession} />}
               {/* The no-lake scope shows the strip with nothing in it: that is the one state the
                   tree cannot report, since it stays browsable so the user can get back out. */}
               {(selectedLakes.length > 1 || isNoLakeScope) && (
-                <ActiveLakeScopeStrip lakes={selectedLakes} onClear={() => handleSelectLakes([])} />
+                <ActiveLakeScopeStrip
+                  lakes={selectedLakes}
+                  session={currentSession}
+                  onClear={() => handleSelectLakes([])}
+                />
               )}
             </>
           }

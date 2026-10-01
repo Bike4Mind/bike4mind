@@ -50,4 +50,56 @@ describe('ActiveLakeScopeStrip', () => {
     fireEvent.click(screen.getByTestId('datalake-active-scope-clear-btn'));
     expect(onClear).toHaveBeenCalledTimes(1);
   });
+
+  it('flags a lake chat cannot search, and leaves unlabeled and searchable lakes alone', () => {
+    render(
+      <Wrapper>
+        <ActiveLakeScopeStrip
+          lakes={[
+            { ...lake('a', 'Mine'), retrievable: true },
+            lake('b', 'Unlabeled'),
+            { ...lake('c', 'Private'), retrievable: false },
+          ]}
+          onClear={vi.fn()}
+        />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-active-scope-unsearchable-c')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-active-scope-unsearchable-a')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-active-scope-unsearchable-b')).not.toBeInTheDocument();
+    expect(screen.getByText('Grounded on')).toBeInTheDocument();
+  });
+
+  it('says chat can search none of them when every selected lake is unsearchable', () => {
+    render(
+      <Wrapper>
+        <ActiveLakeScopeStrip
+          lakes={[
+            { ...lake('a', 'One'), retrievable: false },
+            { ...lake('b', 'Two'), retrievable: false },
+          ]}
+          onClear={vi.fn()}
+        />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-active-scope-all-unsearchable')).toBeInTheDocument();
+    expect(screen.queryByText('Grounded on')).not.toBeInTheDocument();
+  });
+
+  it('does not flag an active lake the current session pre-authorizes', () => {
+    render(
+      <Wrapper>
+        <ActiveLakeScopeStrip
+          lakes={[{ ...lake('a', 'Admitted'), retrievable: false, status: 'active' }]}
+          session={{ preauthorizedLakeIds: ['a'] }}
+          onClear={vi.fn()}
+        />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId('datalake-active-scope-unsearchable-a')).not.toBeInTheDocument();
+    expect(screen.getByText('Grounded on')).toBeInTheDocument();
+  });
 });

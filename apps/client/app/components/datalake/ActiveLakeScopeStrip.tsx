@@ -1,6 +1,7 @@
 import { Box, Chip, Stack, Tooltip, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
-import type { ManageableDataLakeConfig } from '@bike4mind/common';
+import type { ISession, ManageableDataLakeConfig } from '@bike4mind/common';
+import { isUnsearchable, UnsearchableLakeIcon } from './lakeRetrievability';
 import { useDataLakeSurface } from './surfaceTokens';
 
 /**
@@ -22,20 +23,31 @@ import { useDataLakeSurface } from './surfaceTokens';
 export default function ActiveLakeScopeStrip({
   lakes,
   onClear,
+  session,
 }: {
   lakes: ManageableDataLakeConfig[];
   onClear: () => void;
+  session?: Pick<ISession, 'preauthorizedLakeIds'> | null;
 }) {
   const { copy } = useDataLakeSurface();
+  // A lake chat cannot search is selected but grounds nothing, so it is not listed as grounding.
+  const groundedCount = lakes.filter(lake => !isUnsearchable(lake, session)).length;
+  const allUnsearchable = lakes.length > 0 && groundedCount === 0;
 
   return (
     <Box
       data-testid="datalake-active-scope-strip"
       sx={{ px: '12px', pt: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}
     >
-      <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-        Grounded on
-      </Typography>
+      {allUnsearchable ? (
+        <Typography level="body-xs" sx={{ color: 'warning.400' }} data-testid="datalake-active-scope-all-unsearchable">
+          Chat can not search any selected lake
+        </Typography>
+      ) : (
+        <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+          Grounded on
+        </Typography>
+      )}
       <Stack direction="row" alignItems="center" gap={0.5} flexWrap="wrap">
         {/* Warning, not neutral: a chat that retrieves from nothing looks identical to one that
             simply found no match, and the colour is the only thing separating them at a glance. */}
@@ -50,18 +62,26 @@ export default function ActiveLakeScopeStrip({
             {copy.noLakesLabel}
           </Chip>
         )}
-        {lakes.map(lake => (
-          <Chip
-            key={lake.id}
-            size="sm"
-            variant="soft"
-            color="neutral"
-            sx={{ fontSize: '11px', maxWidth: '100%' }}
-            data-testid={`datalake-active-scope-chip-${lake.id}`}
-          >
-            {lake.name}
-          </Chip>
-        ))}
+        {lakes.map(lake => {
+          const unsearchable = isUnsearchable(lake, session);
+          return (
+            <Chip
+              key={lake.id}
+              size="sm"
+              variant="soft"
+              color={unsearchable ? 'warning' : 'neutral'}
+              startDecorator={
+                unsearchable ? (
+                  <UnsearchableLakeIcon testId={`datalake-active-scope-unsearchable-${lake.id}`} />
+                ) : undefined
+              }
+              sx={{ fontSize: '11px', maxWidth: '100%' }}
+              data-testid={`datalake-active-scope-chip-${lake.id}`}
+            >
+              {lake.name}
+            </Chip>
+          );
+        })}
         {/* Clears back to every reachable lake. The picker can do this too (its "All data lakes"
             row), but that is two clicks behind a trigger whose label is the thing being
             questioned, and undoing a narrow scope should not require reading the menu again. */}

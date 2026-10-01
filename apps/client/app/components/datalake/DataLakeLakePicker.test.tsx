@@ -338,3 +338,36 @@ describe('DataLakeLakePicker', () => {
     expect(labelColor).not.toMatch(/text-tertiary/i);
   });
 });
+
+describe('DataLakeLakePicker - unsearchable lakes', () => {
+  const lakes = [
+    lake({ id: 'a', name: 'Mine', retrievable: true }),
+    lake({ id: 'b', name: 'Unlabeled' }),
+    lake({ id: 'c', name: 'Private', retrievable: false, status: 'active' }),
+  ];
+
+  it('marks only an explicit retrievable === false row', () => {
+    renderPicker({ lakes });
+    openMenu();
+
+    expect(screen.getByTestId('datalake-lake-picker-unsearchable-c')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-lake-picker-unsearchable-a')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-lake-picker-unsearchable-b')).not.toBeInTheDocument();
+  });
+
+  it('keeps an unsearchable row selectable, since selection also scopes the browse tree', () => {
+    const onChange = vi.fn();
+    renderPicker({ lakes, onChange });
+    openMenu();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-c'));
+    expect(onChange).toHaveBeenCalledWith(['c']);
+  });
+
+  it('does not mark an active lake the current session pre-authorizes', () => {
+    renderPicker({ lakes, session: { preauthorizedLakeIds: ['c'] } });
+    openMenu();
+
+    expect(screen.queryByTestId('datalake-lake-picker-unsearchable-c')).not.toBeInTheDocument();
+  });
+});

@@ -102,4 +102,25 @@ describe('SelectedLakeHeader', () => {
     renderHeader(over as Partial<ManageableDataLakeConfig>);
     expect(screen.queryByTestId('datalake-selected-lake-source')).not.toBeInTheDocument();
   });
+
+  it('marks a lake chat cannot search, and only on an explicit false', () => {
+    const { unmount } = renderHeader({ retrievable: false });
+    expect(screen.getByTestId('datalake-selected-lake-unsearchable')).toBeInTheDocument();
+    unmount();
+
+    renderHeader({ retrievable: undefined });
+    expect(screen.queryByTestId('datalake-selected-lake-unsearchable')).not.toBeInTheDocument();
+  });
+
+  it('does not mark an active lake the current session pre-authorizes', () => {
+    render(
+      <Wrapper>
+        <SelectedLakeHeader
+          lake={lake({ retrievable: false, status: 'active' })}
+          session={{ preauthorizedLakeIds: ['lake-1'] }}
+        />
+      </Wrapper>
+    );
+    expect(screen.queryByTestId('datalake-selected-lake-unsearchable')).not.toBeInTheDocument();
+  });
 });
