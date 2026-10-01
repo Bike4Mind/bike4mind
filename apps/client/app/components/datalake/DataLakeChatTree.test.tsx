@@ -4,6 +4,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { IFabFileDocument } from '@bike4mind/common';
 import DataLakeChatTree from './DataLakeChatTree';
+import { buildTagTree } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 
 // DataLakeChatTree's underlying DataLakeTreeView always calls this (cross-tree search, #1693);
 // no `source` is passed in these tests so the query stays disabled, but the hook itself still
@@ -211,5 +212,28 @@ describe('DataLakeChatTree uncategorized bucket', () => {
     renderTree({ breadcrumb: [] });
 
     expect(screen.queryByTestId('datalake-node-uncategorized')).toBeNull();
+  });
+});
+
+describe('DataLakeChatTree draft marker', () => {
+  const tree = buildTagTree([
+    { tag: 'drafty', count: 1 },
+    { tag: 'live', count: 2 },
+    { tag: 'acme:legal', count: 1 },
+  ]);
+
+  it('marks the root folder of a draft lake and no other', () => {
+    renderTree({ tree, breadcrumb: [], articles: [], draftLakePaths: new Set(['drafty']) });
+    expect(screen.getByTestId('datalake-node-draft-chip-drafty')).toHaveTextContent('Draft');
+    expect(screen.queryByTestId('datalake-node-draft-chip-live')).toBeNull();
+  });
+
+  it('matches a nested prefix on its full path, leaving the parent folder unmarked', () => {
+    const { unmount } = renderTree({ tree, breadcrumb: [], articles: [], draftLakePaths: new Set(['acme:legal']) });
+    expect(screen.queryByTestId('datalake-node-draft-chip-acme')).toBeNull();
+    unmount();
+
+    renderTree({ tree, breadcrumb: ['acme'], articles: [], draftLakePaths: new Set(['acme:legal']) });
+    expect(screen.getByTestId('datalake-node-draft-chip-legal')).toBeInTheDocument();
   });
 });
