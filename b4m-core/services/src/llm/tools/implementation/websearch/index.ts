@@ -14,6 +14,8 @@ import {
   resolveWebSearchProviders,
   searchCacheGet,
   searchCacheSet,
+  SERPAPI_FALLBACK_ATTEMPTS,
+  type WebSearchOptions,
   type WebSearchImageResult,
   type WebSearchProvider,
   type WebSearchProviderResult,
@@ -225,27 +227,33 @@ export function createWebSearchBudget(maxSearches: number) {
 }
 
 /**
- * Layer 2: try the primary provider, then fall back to the other on timeout or error. The
- * fallback adds at most one extra search latency, never a full second retry cycle.
+ * Organic search on the primary, retried once on the fallback when the primary fails. With no
+ * fallback the primary keeps its own failure mode (SearXNG fail-soft, SerpAPI throws). Returns the
+ * provider that answered so the image/place calls go to a live provider, not the one that just
+ * failed. A final failure throws, so the backend records the call as failed.
  */
 async function searchWithFailover(
   primary: WebSearchProvider,
-  resolvedFallback: Promise<WebSearchProvider | null> | undefined,
+  fallback: WebSearchProvider | null,
   query: string,
   numResults: number,
-  searchOptions?: { locationInQuery?: boolean }
-): Promise<WebSearchProviderResult[]> {
+  searchOptions?: WebSearchOptions
+): Promise<{ results: WebSearchProviderResult[]; servedBy: WebSearchProvider }> {
+  if (!fallback) return { results: await primary.search(query, numResults, searchOptions), servedBy: primary };
   try {
-    return await primary.search(query, numResults, searchOptions);
+    const results = await primary.search(query, numResults, { ...searchOptions, throwOnError: true });
+    return { results, servedBy: primary };
   } catch (primaryError) {
-    const fallback = await resolvedFallback;
-    if (!fallback) throw primaryError;
-    Logger.globalInstance.log('🔍 WebSearch Tool: primary provider failed, trying fallback', {
+    Logger.globalInstance.log('WebSearch Tool: primary provider failed, trying fallback', {
       primary: primary.name,
       fallback: fallback.name,
       error: primaryError instanceof Error ? primaryError.message : String(primaryError),
     });
-    return await fallback.search(query, numResults, searchOptions);
+    const results = await fallback.search(query, numResults, {
+      ...searchOptions,
+      maxAttempts: SERPAPI_FALLBACK_ATTEMPTS,
+    });
+    return { results, servedBy: fallback };
   }
 }
 
@@ -272,17 +280,20 @@ export async function performWebSearch(
     const numResults = params.num_results ?? 3;
     const isPlaceSearch = !!params.include_places;
 
-    // Layer 3: check cache before hitting the provider
     const cached = searchCacheGet(params.query, numResults, isPlaceSearch);
     let results: WebSearchProviderResult[];
+    let servedBy = provider;
     if (cached) {
-      Logger.globalInstance.log('🔍 WebSearch Tool: cache hit', { query: params.query });
+      Logger.globalInstance.log('WebSearch Tool: cache hit', { query: params.query });
       results = cached;
     } else {
-      results = await searchWithFailover(provider, resolvedFallback, params.query, numResults, searchOptions);
+      const fallback = (await resolvedFallback) ?? null;
+      ({ results, servedBy } = await searchWithFailover(provider, fallback, params.query, numResults, searchOptions));
       if (results.length > 0) searchCacheSet(params.query, numResults, results, isPlaceSearch);
     }
-    Logger.globalInstance.log(`📊 WebSearch Tool: found ${results.length} results${cached ? ' (cached)' : ''}`);
+    Logger.globalInstance.log(
+      `📊 WebSearch Tool: ${servedBy.name} found ${results.length} results${cached ? ' (cached)' : ''}`
+    );
 
     // An unconfigured/placeholder signing secret can never produce a verifiable image URL - every
     // tile would render "Image unavailable" while still paying for the extra provider call and
@@ -296,18 +307,18 @@ export async function performWebSearch(
     const anchorQuery = params.include_places ? params.anchor_location?.trim() : undefined;
     // Only on a location query: each is another paid provider call, behind the model's own flag.
     const [imageResults, placeResults, anchorResults] = await Promise.all([
-      wantsImages ? provider.searchImages?.(params.query, undefined, searchOptions) : undefined,
-      params.include_places ? provider.searchPlaces?.(params.query) : undefined,
-      anchorQuery ? provider.searchPlaces?.(anchorQuery, 1) : undefined,
+      wantsImages ? servedBy.searchImages?.(params.query, undefined, searchOptions) : undefined,
+      params.include_places ? servedBy.searchPlaces?.(params.query) : undefined,
+      anchorQuery ? servedBy.searchPlaces?.(anchorQuery, 1) : undefined,
     ]).then(all => all.map(result => result ?? []) as [WebSearchImageResult[], WebSearchPlace[], WebSearchPlace[]]);
     const anchor = anchorResults[0];
     const places = placeResults.filter(place => place.id !== anchor?.id);
     const withPlaces = shouldIncludePlaces(places, params.include_places);
     if (placeResults.length) {
-      Logger.globalInstance.log(`WebSearch Tool: ${provider.name} found ${placeResults.length} places`);
+      Logger.globalInstance.log(`WebSearch Tool: ${servedBy.name} found ${placeResults.length} places`);
     }
     if (imageResults.length) {
-      Logger.globalInstance.log(`🖼️ WebSearch Tool: ${provider.name} found ${imageResults.length} images`);
+      Logger.globalInstance.log(`🖼️ WebSearch Tool: ${servedBy.name} found ${imageResults.length} images`);
     }
 
     const withImages = shouldIncludeImages(results, wantsImages, imageResults);
@@ -395,64 +406,38 @@ export const webSearchTool: ToolDefinition = {
           throw error;
         });
         const startedAt = Date.now();
+        const [primary, fallback] = await providersPromise;
+        // A failure throws on purpose: the backend hands the error text to the model as the tool
+        // result AND records the call as failed, which is what the answer diagnosis reads.
+        const { formattedResults, citables } = await performWebSearch(
+          { db: context.db },
+          params,
+          config?.imageUrlSigningSecret,
+          Promise.resolve(primary),
+          Promise.resolve(fallback)
+        );
+        context.logger.log('🔍 WebSearch Tool: search timing', {
+          callNumber,
+          query: params.query,
+          durationMs: Date.now() - startedAt,
+          resultCount: citables.length,
+        });
 
-        // Layer 1: catch errors and return a message instead of throwing, so the tool
-        // records as success and the model composes from whatever else it has.
-        try {
-          const [resolved, fallback] = await providersPromise;
-          // When the primary is unconfigured, promote the fallback so performWebSearch
-          // actually tries it instead of returning "not configured".
-          const effective = resolved ?? fallback;
-          const effectiveFallback = resolved ? fallback : null;
-
-          const { formattedResults, citables } = await performWebSearch(
-            { db: context.db },
-            params,
-            config?.imageUrlSigningSecret,
-            Promise.resolve(effective),
-            Promise.resolve(effectiveFallback)
+        // statusUpdate Object.assigns this partial onto the quest, so citables must be nested
+        // under promptMeta; the receiver is responsible for merging promptMeta.citables.
+        if (citables.length > 0) {
+          await context.statusUpdate(
+            {
+              promptMeta: {
+                citables,
+              },
+            } as any,
+            'Web search complete'
           );
-          context.logger.log('🔍 WebSearch Tool: search timing', {
-            callNumber,
-            query: params.query,
-            durationMs: Date.now() - startedAt,
-            resultCount: citables.length,
-          });
-
-          if (citables.length > 0) {
-            await context.statusUpdate(
-              {
-                promptMeta: {
-                  citables,
-                },
-              } as any,
-              'Web search complete'
-            );
-            Logger.globalInstance.log(`📚 WebSearch Tool: Stored ${citables.length} citables`);
-          }
-
-          return formattedResults;
-        } catch (error) {
-          // Re-throw programming errors so they surface in logs and diagnosis rather than
-          // being silently swallowed as "search failed". Only degrade gracefully for
-          // expected failures: network errors, provider timeouts, and provider HTTP errors.
-          if (error instanceof TypeError || error instanceof RangeError || error instanceof SyntaxError) {
-            throw error;
-          }
-          const durationMs = Date.now() - startedAt;
-          context.logger.error('🔍 WebSearch Tool: all providers failed, degrading gracefully', {
-            callNumber,
-            query: params.query,
-            durationMs,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          return (
-            `Web search for "${params.query}" failed after ${Math.round(durationMs / 1000)}s ` +
-            `(${error instanceof Error ? error.message : 'unknown error'}). ` +
-            `Compose your answer from the other search results and your own knowledge, ` +
-            `and note which claims you could not verify.`
-          );
+          Logger.globalInstance.log(`📚 WebSearch Tool: Stored ${citables.length} citables`);
         }
+
+        return formattedResults;
       },
       toolSchema: {
         name: 'web_search',
