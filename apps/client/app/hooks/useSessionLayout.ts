@@ -268,13 +268,32 @@ export const setSessionLayout = (
     useSessionLayout.setState({
       ...newState,
       artifactData: currentState.artifactData,
-      selectedArtifactId: currentState.selectedArtifactId,
+      // A caller that names its own selection wins: falling back unconditionally would leave the
+      // viewer on the old artifact's tab while a newly set previewFile sits unselected.
+      selectedArtifactId: newState.selectedArtifactId ?? currentState.selectedArtifactId,
     });
   } else {
     // If artifactData is provided or we're hiding the panel, update normally
     useSessionLayout.setState(newState);
   }
 };
+
+/**
+ * Opens a file in the chat's own KnowledgeViewer, beside the conversation, through the transient
+ * `previewFile` slot - viewing never attaches the file to the notebook. For hosts whose chat embeds
+ * the viewer (SessionContainer renders it once the layout is `vertical`); docked-chat hosts render
+ * no viewer and must not use this.
+ *
+ * `citedPassage` is written only when passed, `null` included: a citation chip passes its anchor
+ * (or `null` to clear a stale one), while a plain View leaves the slot alone.
+ */
+export const openFileInChatViewer = (file: IFabFileDocument, citedPassage?: CitedPassage | null) =>
+  setSessionLayout({
+    layout: 'vertical',
+    previewFile: file,
+    selectedArtifactId: file.id,
+    ...(citedPassage !== undefined && { citedPassage }),
+  });
 
 /**
  * Returns the version selected for a specific artifact, or undefined if none was chosen
