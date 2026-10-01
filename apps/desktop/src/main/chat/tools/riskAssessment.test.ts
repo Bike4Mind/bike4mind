@@ -212,6 +212,30 @@ describe('assessApprovalRisk', () => {
     });
   });
 
+  describe('apply_patch', () => {
+    const diff = (path: string, operation: 'create' | 'edit' | 'delete', movedFrom?: string) => ({
+      path,
+      operation,
+      added: 1,
+      removed: 0,
+      lines: [],
+      ...(movedFrom ? { movedFrom } : {}),
+    });
+    const patch = (diffs: ReturnType<typeof diff>[]) =>
+      assessApprovalRisk('apply_patch', {}, { detail: '', key: 'k', diffs }, context);
+
+    it('is contained when every file is, and sensitive when any one is executed later', async () => {
+      expect(await patch([diff('/p/a.ts', 'edit'), diff('/p/b.ts', 'create')])).toBe('contained');
+      expect(await patch([diff('/p/a.ts', 'edit'), diff('/p/.github/workflows/ci.yml', 'edit')])).toBe('sensitive');
+      expect(await patch([diff('/p/a.ts', 'edit', '/p/.envrc')])).toBe('sensitive');
+    });
+
+    it('always asks about a deletion, and when no diff was reported', async () => {
+      expect(await patch([diff('/p/a.ts', 'delete')])).toBe('sensitive');
+      expect(await assessApprovalRisk('apply_patch', {}, NO_PROMPT, context)).toBe('sensitive');
+    });
+  });
+
   /**
    * Cost is a separate axis from filesystem risk: these ask in every mode, including 'full',
    * so the classifier reports them as sensitive rather than leaving it to the caller alone.

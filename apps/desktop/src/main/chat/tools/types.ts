@@ -290,6 +290,8 @@ export interface ApprovalPrompt {
    * on disk right now, before anything is written.
    */
   diff?: ChatDiff;
+  /** Instead of `diff`, for a call that changes several files; one entry per file. */
+  diffs?: ChatDiff[];
   /**
    * This call cannot be undone, so it is asked EVERY time: a standing approval is neither
    * honoured nor recordable against it, and the card does not offer one. Deleting a

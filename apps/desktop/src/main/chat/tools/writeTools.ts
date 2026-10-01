@@ -12,7 +12,7 @@ import { requireString, type ApprovalPrompt, type ToolContext, type ToolDefiniti
  * cannot meaningfully read in a diff is one they cannot meaningfully consent to, and holding
  * two copies of a huge file in memory to diff them is its own problem.
  */
-const MAX_WRITE_BYTES = 1_000_000;
+export const MAX_WRITE_BYTES = 1_000_000;
 
 /**
  * Where `path` may be written, or a refusal.
@@ -26,7 +26,7 @@ const MAX_WRITE_BYTES = 1_000_000;
  * Called at approval time AND again at execution time. The second call is the one that counts:
  * a root can be revoked, or a path replaced with a symlink, while the prompt is on screen.
  */
-async function resolveWritablePath(requested: string, context: ToolContext): Promise<string> {
+export async function resolveWritablePath(requested: string, context: ToolContext): Promise<string> {
   const target = await resolveWithinRoots(requested, context.roots, context.workingDirectory);
   const real = await realpathNearest(target);
 
@@ -43,12 +43,12 @@ async function resolveWritablePath(requested: string, context: ToolContext): Pro
   return target;
 }
 
-function sha(text: string): string {
+export function sha(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
 
 /** Identity of the file as it was when the diff was built. 'absent' is not the same as empty. */
-function fingerprint(exists: boolean, content: string): string {
+export function fingerprint(exists: boolean, content: string): string {
   return exists ? sha(content) : 'absent';
 }
 
@@ -63,12 +63,16 @@ function fingerprint(exists: boolean, content: string): string {
 const approvedState = new Map<string, string>();
 const MAX_REMEMBERED = 50;
 
-function remember(key: string, state: string): void {
+export function remember(key: string, state: string): void {
   if (approvedState.size >= MAX_REMEMBERED) {
     const oldest = approvedState.keys().next().value;
     if (oldest !== undefined) approvedState.delete(oldest);
   }
   approvedState.set(key, state);
+}
+
+export function forget(key: string): void {
+  approvedState.delete(key);
 }
 
 /**
@@ -80,7 +84,7 @@ function remember(key: string, state: string): void {
 const ownWrites = new Map<string, string>();
 const MAX_OWN_WRITES = 200;
 
-function recordOwnWrite(target: string, before: string, after: string): void {
+export function recordOwnWrite(target: string, before: string, after: string): void {
   if (ownWrites.size >= MAX_OWN_WRITES) {
     const oldest = ownWrites.keys().next().value;
     if (oldest !== undefined) ownWrites.delete(oldest);
@@ -100,7 +104,7 @@ function descendsFrom(target: string, approved: string, current: string): boolea
 }
 
 /** Reject a stale approval. Absent state means no gate ran, which the gate itself decides. */
-function assertUnchanged(key: string, target: string, current: string): void {
+export function assertUnchanged(key: string, target: string, current: string): void {
   const approved = approvedState.get(key);
   if (approved !== undefined && !descendsFrom(target, approved, current)) {
     throw new Error(
@@ -117,7 +121,7 @@ function assertUnchanged(key: string, target: string, current: string): void {
  */
 const pathLocks = new Map<string, Promise<unknown>>();
 
-async function withPathLock<T>(key: string, task: () => Promise<T>): Promise<T> {
+export async function withPathLock<T>(key: string, task: () => Promise<T>): Promise<T> {
   const previous = pathLocks.get(key) ?? Promise.resolve();
   const current = previous.catch(() => undefined).then(task);
   pathLocks.set(key, current);
@@ -146,12 +150,12 @@ function requireText(input: Record<string, unknown>, key: string): string {
   return value;
 }
 
-interface TargetState {
+export interface TargetState {
   exists: boolean;
   content: string;
 }
 
-async function readTarget(target: string, options: { allowBinary?: boolean } = {}): Promise<TargetState> {
+export async function readTarget(target: string, options: { allowBinary?: boolean } = {}): Promise<TargetState> {
   let info;
   try {
     info = await stat(target);
@@ -179,7 +183,7 @@ async function readTarget(target: string, options: { allowBinary?: boolean } = {
 const isForbiddenControl = (code: number): boolean =>
   code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d && code !== 0x0c;
 
-function assertNoControlCharacters(text: string, label: string): void {
+export function assertNoControlCharacters(text: string, label: string): void {
   let index = 0;
   while (index < text.length && !isForbiddenControl(text.charCodeAt(index))) index += 1;
   if (index === text.length) return;
@@ -827,7 +831,7 @@ const MAX_SNIPPET_TOTAL_LINES = 300;
  * The edited regions as the file now reads, in file_read's `N<TAB>line` format. Lets the model
  * chain the next edit from this result instead of reading the whole file again.
  */
-function editSnippets(before: string, after: string): string {
+export function editSnippets(before: string, after: string): string {
   const fileLines = splitLines(after);
   if (fileLines.length === 0) return '';
 

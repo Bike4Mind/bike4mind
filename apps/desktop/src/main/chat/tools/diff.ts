@@ -183,6 +183,7 @@ export function buildDiff(
 
 /** The headline above the diff, and the line the model is given back once the write lands. */
 export function summarizeDiff(diff: ChatDiff): string {
-  const verb = diff.operation === 'create' ? 'Create' : diff.operation === 'overwrite' ? 'Overwrite' : 'Edit';
+  const verbs = { create: 'Create', overwrite: 'Overwrite', edit: 'Edit', delete: 'Delete' } as const;
+  const verb = verbs[diff.operation];
   return `${verb} ${diff.path}  (+${diff.added} -${diff.removed})`;
 }

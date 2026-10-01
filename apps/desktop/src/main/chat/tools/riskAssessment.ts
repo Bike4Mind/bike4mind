@@ -297,6 +297,23 @@ function assessWrite(prompt: ApprovalPrompt): ApprovalRisk {
 }
 
 /**
+ * A patch is contained only when every file it touches is. A deletion is never waved through:
+ * unlike a rewrite, there is no diff left behind to review.
+ */
+function assessPatch(prompt: ApprovalPrompt): ApprovalRisk {
+  const diffs = prompt.diffs ?? (prompt.diff ? [prompt.diff] : []);
+  if (diffs.length === 0) return 'sensitive';
+  const risky = diffs.some(
+    diff =>
+      diff.operation === 'delete' ||
+      [diff.path, ...(diff.movedFrom ? [diff.movedFrom] : [])].some(path =>
+        EXECUTED_LATER.some(pattern => pattern.test(path))
+      )
+  );
+  return risky ? 'sensitive' : 'contained';
+}
+
+/**
  * Classify one gated call for 'auto'.
  *
  * Fails closed in three directions, all of which matter more than the convenience:
@@ -324,6 +341,8 @@ export async function assessApprovalRisk(
       case 'file_write':
       case 'file_edit':
         return assessWrite(prompt);
+      case 'apply_patch':
+        return assessPatch(prompt);
       // Reversible from the same menu it came from, and scoped to the caller's own project.
       case 'session_archive':
         return 'contained';

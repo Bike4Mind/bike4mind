@@ -49,7 +49,9 @@ export interface ChatDiffLine {
 export interface ChatDiff {
   /** Absolute path the change applies to. */
   path: string;
-  operation: 'create' | 'overwrite' | 'edit';
+  operation: 'create' | 'overwrite' | 'edit' | 'delete';
+  /** Set when the file was renamed as well as changed: where it was before. */
+  movedFrom?: string;
   added: number;
   removed: number;
   lines: ChatDiffLine[];
@@ -133,6 +135,8 @@ export interface ChatToolCall {
    * user sees it before answering; nothing has been written while this is on screen.
    */
   approvalDiff?: ChatDiff;
+  /** Set instead of `approvalDiff` when one call proposes changes to several files. */
+  approvalDiffs?: ChatDiff[];
   /**
    * Latest progress line while `status` is 'running'. Only the tools that take tens of seconds
    * report one: image generation polls a server-side job, and a bare spinner is
@@ -161,6 +165,8 @@ export interface ChatToolCall {
    * it did then, with no diff panel.
    */
   diff?: ChatDiff;
+  /** Set instead of `diff` when one call changed several files; same contract. */
+  diffs?: ChatDiff[];
   /** Epoch ms. Display and diagnosis only; never sent to the model. Absent on older sessions. */
   startedAt?: number;
   endedAt?: number;
