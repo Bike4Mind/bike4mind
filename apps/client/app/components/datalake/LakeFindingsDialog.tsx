@@ -510,6 +510,7 @@ export function LakeFindingsDialog({
                 </Alert>
               ) : !findings?.length ? (
                 <Typography level="body-sm" textColor="text.secondary" data-testid="lake-findings-empty">
+                  {/* Never "this lake is clean": detection samples, so an empty list means the runs found nothing, not that none exist. */}
                   {health?.inconsistency === null
                     ? 'This lake has not been scanned yet. Findings appear after the nightly scan, or when you choose Scan now.'
                     : 'Nothing matches these filters. Findings appear after a scan, which runs nightly or when you choose Scan now.'}

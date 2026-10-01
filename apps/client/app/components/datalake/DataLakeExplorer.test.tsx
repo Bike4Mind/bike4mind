@@ -92,8 +92,13 @@ vi.mock('@client/app/hooks/useSessionLayout', async importOriginal => ({
   // The real helper writes through the module's own setSessionLayout, which this spy cannot see;
   // forwarding to the spy keeps the exact payload assertions below. The helper itself is covered
   // in useSessionLayout.test.ts.
-  openFileInChatViewer: (file: { id: string }) =>
-    setSessionLayout({ layout: 'vertical', previewFile: file, selectedArtifactId: file.id }),
+  openFileInChatViewer: (file: { id: string }, citedPassage?: unknown) =>
+    setSessionLayout({
+      layout: 'vertical',
+      previewFile: file,
+      selectedArtifactId: file.id,
+      ...(citedPassage !== undefined && { citedPassage }),
+    }),
 }));
 
 // Mutable so a test can supply a real tag tree to navigate into; empty by default, which is
@@ -562,6 +567,26 @@ describe('DataLakeExplorer chat-first surface', () => {
       });
     });
     expect(setWorkBenchFiles).not.toHaveBeenCalled();
+  });
+
+  it('deep-linked article with a passage hands the cited excerpt to the viewer', async () => {
+    renderExplorer({ articleId: 'deep-1', articlePassage: 'cited text' });
+    await vi.waitFor(() =>
+      expect(setSessionLayout).toHaveBeenCalledWith(
+        expect.objectContaining({
+          selectedArtifactId: 'deep-1',
+          citedPassage: { fileId: 'deep-1', chunkId: 'unknown', passage: 'cited text' },
+        })
+      )
+    );
+  });
+
+  it('deep-linked article with a blank passage opens the document without a cited passage', async () => {
+    renderExplorer({ articleId: 'deep-1', articlePassage: '   ' });
+    await vi.waitFor(() =>
+      expect(setSessionLayout).toHaveBeenCalledWith(expect.objectContaining({ selectedArtifactId: 'deep-1' }))
+    );
+    expect(setSessionLayout.mock.calls.every(([arg]) => !('citedPassage' in (arg as object)))).toBe(true);
   });
 
   it('deep-linked article with a passage never writes a layout on an overlay host', async () => {
