@@ -36,7 +36,7 @@ import {
  *
  * Run as its own compose service (reuses Dockerfile.chatcompletion.selfhost with a
  * command override, run from apps/workers) via
- * `tsx --import ../client/server/chatCompletion/selfhostSstAlias.mjs`
+ * `tsx --tsconfig tsconfig.selfhost.json --import ../client/server/chatCompletion/selfhostSstAlias.mjs`
  * so `Resource.*` reads resolve from env. It is the self-host stand-in for the hosted
  * SST queue consumers (infra/queues.ts) and cron (infra/cron.ts):
  *   - polls researchEngineQueue -> researchEngineQueue.dispatch (same handler as hosted)
