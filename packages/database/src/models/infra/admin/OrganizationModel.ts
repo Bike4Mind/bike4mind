@@ -474,18 +474,6 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     return orgs.map(org => org._id.toString());
   }
 
-  async incrementCurrentStorage(organizationId: string, count: number): Promise<void> {
-    await this.organizationModel.updateOne({ _id: organizationId }, [
-      {
-        $set: {
-          currentStorageSize: {
-            $max: [0, { $add: [{ $ifNull: ['$currentStorageSize', 0] }, count] }],
-          },
-        },
-      },
-    ]);
-  }
-
   /**
    * Atomically drop a member from `users`, `userDetails` and `adminUserIds`, and vacate
    * `managerId` if they held it, in one pipeline update, so a concurrent add or credit `$inc` on
