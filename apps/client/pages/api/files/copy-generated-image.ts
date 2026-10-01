@@ -21,6 +21,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { userCanAccessGeneratedImage } from '@server/utils/generatedImageAccess';
+import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 import { z } from 'zod';
 
 const copyGeneratedImageSchema = z.object({
@@ -30,7 +31,7 @@ const copyGeneratedImageSchema = z.object({
 
 type CopyGeneratedImageInput = z.infer<typeof copyGeneratedImageSchema>;
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
   .use((req, res, next) => {
     if (!req.ability?.can(Permission.create, FabFile)) {
       throw new BadRequestError('Unauthorized');

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ImageGenerationService } from './ImageGeneration';
 import { SUMMARIZATION_CONFIG } from './ChatCompletionFeatures';
 import {
@@ -12,6 +12,8 @@ import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { getSettingsMap } from '@bike4mind/utils';
 import { OMITTED_QUALITY_TIER } from './imageCostCalculator/OpenAIImageCostCalculator';
 import type { Logger } from '@bike4mind/observability';
+import { getSettingsValue } from '@bike4mind/utils';
+import { deductCreditsWithOrgSupport } from '../creditService';
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
@@ -31,6 +33,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
     ...actual,
     aiImageService: vi.fn(() => ({ edit: mockGeminiEdit, generate: mockGeminiGenerate })),
     getSettingsMap: vi.fn().mockResolvedValue({}),
+    getSettingsValue: vi.fn(actual.getSettingsValue),
     ClientMessageSender: vi.fn().mockImplementation(function () {
       return { sendToClient: vi.fn().mockResolvedValue(undefined) };
     }),
@@ -41,6 +44,8 @@ vi.mock('../creditService', async importOriginal => {
   const actual = await importOriginal<typeof import('../creditService')>();
   return { ...actual, deductCreditsWithOrgSupport: vi.fn(async () => undefined) };
 });
+
+vi.mock('./imageModerationGate', () => ({ moderateImageOrThrow: vi.fn(async () => undefined) }));
 
 vi.mock('./questHeartbeat', () => ({
   startQuestHeartbeat: vi.fn().mockResolvedValue(() => undefined),
@@ -732,6 +737,108 @@ describe('ImageGenerationService.process (prompt truncation)', () => {
     expect(sent).toContain('a red apple');
     // The old code emitted a space-separated list of token ids.
     expect(sent).not.toMatch(/(^|\s)\d+(\s|$)/);
+  });
+});
+
+describe('ImageGenerationService.process (usage event on a charged generation)', () => {
+  const geminiModelInfo = {
+    id: ImageModels.GEMINI_2_5_FLASH_IMAGE,
+    type: 'image',
+    name: ImageModels.GEMINI_2_5_FLASH_IMAGE,
+    backend: ModelBackend.Gemini,
+    contextWindow: 10000,
+    max_tokens: 10000,
+    supportsImageVariation: false,
+    pricing: { 1: { input: 0, output: 0 } },
+  } as unknown as ModelInfo;
+
+  const runCharged = async (record?: ReturnType<typeof vi.fn>) => {
+    const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined } as any;
+    const service = new ImageGenerationService({
+      db: {
+        quests: { findById: vi.fn(async () => quest), update: vi.fn(), updateMany: vi.fn() },
+        users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
+        organizations: { findById: vi.fn(async () => null) },
+        fabFiles: { findAccessibleInIds: vi.fn(async () => []) },
+        creditTransactions: { create: vi.fn() },
+        ...(record ? { usageEvents: { record } } : {}),
+      },
+      logEvent: vi.fn().mockResolvedValue(undefined),
+      abilityGetter: vi.fn().mockReturnValue({}),
+      storage: { upload: vi.fn().mockResolvedValue('generated/output.png') } as any,
+      fabFileStorage: {} as any,
+      wsHttpsUrl: 'https://ws.example.com',
+    } as any);
+    (service as any).validateUserCredits = vi.fn(async () => ({ requiredCredits: 40, usdCost: 0.04 }));
+
+    await service.process({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        userId: 'user1',
+        prompt: 'a red bicycle',
+        model: ImageModels.GEMINI_2_5_FLASH_IMAGE,
+      } as any,
+      logger: silentLogger,
+    });
+    return quest;
+  };
+
+  beforeEach(() => {
+    vi.mocked(deductCreditsWithOrgSupport).mockClear();
+    vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
+    vi.mocked(getSettingsValue).mockImplementation(((name: string) => name === 'enforceCredits' || undefined) as never);
+    vi.mocked(silentLogger.warn).mockClear();
+    mockGeminiGenerate.mockReset();
+    mockGeminiGenerate.mockResolvedValue(['data:image/png;base64,AAAA']);
+  });
+
+  afterEach(async () => {
+    const actual = await vi.importActual<typeof import('@bike4mind/utils')>('@bike4mind/utils');
+    vi.mocked(getSettingsValue).mockImplementation(actual.getSettingsValue);
+  });
+
+  it('has landed the usage event by the time process() returns', async () => {
+    let landed = false;
+    // Settles on a later macrotask, so an unawaited write is still pending when process() resolves.
+    const record = vi.fn(
+      () =>
+        new Promise<void>(resolve =>
+          setTimeout(() => {
+            landed = true;
+            resolve();
+          }, 0)
+        )
+    );
+
+    const quest = await runCharged(record);
+
+    expect(quest.status).toBe('done');
+    expect(deductCreditsWithOrgSupport).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: 'quest1', feature: 'image_generation', creditsCharged: 40 })
+    );
+    expect(landed).toBe(true);
+  });
+
+  it('still completes the generation when the usage-event write fails', async () => {
+    const record = vi.fn(async () => {
+      throw new Error('usage store down');
+    });
+
+    const quest = await runCharged(record);
+
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(quest.type).not.toBe('error');
+    expect(quest.status).toBe('done');
+    expect(silentLogger.warn).toHaveBeenCalledWith('Failed to record usage event', expect.any(Error));
+  });
+
+  it('completes a charged run when db.usageEvents is absent', async () => {
+    const quest = await runCharged();
+
+    expect(quest.status).toBe('done');
+    expect(quest.type).not.toBe('error');
   });
 });
 

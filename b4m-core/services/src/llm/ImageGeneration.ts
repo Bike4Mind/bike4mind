@@ -1540,8 +1540,10 @@ export class ImageGenerationService {
           }
         );
 
-        // Dual-write usage event: analytics only, never billing.
-        this.db.usageEvents
+        // Dual-write usage event: analytics only, never billing. Awaited because a write still in
+        // flight when the Lambda handler returns can be frozen and never land; the catch keeps it
+        // from failing the request.
+        await this.db.usageEvents
           ?.record({
             requestId: questId,
             userId,

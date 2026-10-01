@@ -894,6 +894,7 @@ describe('DataLakeSettingsModal - Spend tab visibility', () => {
           byFeature: [],
           totals: { requests: 3, cogsUsd: 5, creditsCharged: 0 },
         },
+        researchLifetimeUsd: 0,
       },
       isLoading: false,
       isFetching: false,

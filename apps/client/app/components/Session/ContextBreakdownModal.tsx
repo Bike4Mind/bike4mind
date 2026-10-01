@@ -47,7 +47,7 @@ const CategoryTable: FC<{ breakdown: ContextBreakdown }> = ({ breakdown }) => {
   const { categories, window: contextWindow } = breakdown;
   const rows: Array<[string, number | null]> = [
     ['System prompts', billedSystemPrompt(categories)],
-    ['Lake retrieval', categories.lakeRetrieval],
+    ['Lake content', categories.lakeRetrieval],
     ['Tool definitions', categories.toolDefinitions],
     ['Attached files', categories.attachedFiles],
     ['Conversation history', categories.conversationHistory],
@@ -140,8 +140,8 @@ const RetrievalSummary: FC<{ retrieval: NonNullable<ContextBreakdown['retrieval'
     {retrieval.mode && <Chip size="sm">mode: {retrieval.mode}</Chip>}
     {retrieval.injected && (
       <Chip size="sm">
-        injected: {retrieval.injected.chunks.toLocaleString()} chunks / {retrieval.injected.chars.toLocaleString()}{' '}
-        chars
+        injected (all surfaces): {retrieval.injected.chunks.toLocaleString()} chunks /{' '}
+        {retrieval.injected.chars.toLocaleString()} chars
       </Chip>
     )}
     {retrieval.dataLakeTags?.length > 0 && <Chip size="sm">lakes: {retrieval.dataLakeTags.join(', ')}</Chip>}

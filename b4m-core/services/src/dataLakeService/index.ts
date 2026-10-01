@@ -58,6 +58,7 @@ export * from './restoreDeletedDataLake';
 export * from './deleteDataLake';
 export * from './lakeMembership';
 export * from './recordLakeMembershipChange';
+export * from './recordLakeUploadBatch';
 export * from './prefixArmMembership';
 export * from './chunkPolicyConflict';
 export * from './admissionContract';

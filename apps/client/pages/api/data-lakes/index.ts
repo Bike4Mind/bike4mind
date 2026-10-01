@@ -18,6 +18,8 @@ import { resolveLakeListRetrievalScope } from '@server/dataLakes/resolveLakeList
 import { labelLakeRetrievability } from '@server/dataLakes/labelLakeRetrievability';
 import { isValidObjectId } from '@server/utils/objectId';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -102,10 +104,15 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       userId,
       params,
       {
-        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          ...lakeConfigAuditDb,
+        },
         logger: req.logger,
       },
-      organizationId
+      organizationId,
+      lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo)
     );
 
     return res.status(201).json(dataLake);

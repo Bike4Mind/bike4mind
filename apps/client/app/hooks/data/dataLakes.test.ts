@@ -94,6 +94,8 @@ import {
   useReprocessFabFile,
   useScanDataLakeFindings,
   useRuleOnDataLakeFinding,
+  useApplyCorpusAction,
+  useLakeFileTags,
   useUnderChunkedCount,
   useGetDataLakesWithRetrievability,
 } from './dataLakes';
@@ -2412,5 +2414,186 @@ describe('useRuleOnDataLakeFinding', () => {
       await refetch;
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
+  });
+});
+
+describe('useLakeFileTags', () => {
+  it('reads one file current prefixed tags from the lake-scoped route', async () => {
+    apiGet.mockReset();
+    apiGet.mockResolvedValueOnce({ data: { prefix: 'lk:', current: ['lk:finance'] } });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(() => useLakeFileTags('lake1', 'f1'), { wrapper });
+
+    await waitFor(() => expect(result.current.data).toEqual({ prefix: 'lk:', current: ['lk:finance'] }));
+    expect(apiGet).toHaveBeenCalledWith('/api/data-lakes/lake1/files/f1/tags');
+  });
+});
+
+describe('useApplyCorpusAction', () => {
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result } = renderHook(() => useApplyCorpusAction(), { wrapper });
+    return { result, invalidate };
+  };
+
+  beforeEach(() => {
+    apiPost.mockReset();
+    (toast.success as ReturnType<typeof vi.fn>).mockReset();
+    (toast.error as ReturnType<typeof vi.fn>).mockReset();
+  });
+
+  it('posts the action to the finding door and re-reads findings, membership and the tag seed', async () => {
+    apiPost.mockResolvedValueOnce({
+      data: {
+        data: {
+          action: 'merge',
+          findingId: 'finding-1',
+          targets: [
+            { fabFileId: 'a', fileName: 'a.md', role: 'kept' },
+            { fabFileId: 'b', fileName: 'b.md', role: 'retired' },
+          ],
+          detail: { removedFabFileIds: ['b'] },
+        },
+      },
+    });
+    const { result, invalidate } = mount();
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        dataLakeId: 'lake1',
+        findingId: 'finding-1',
+        body: { action: 'merge', keepFabFileId: 'a', retireFabFileIds: ['b'] },
+      });
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/findings/finding-1/corpus-action', {
+      action: 'merge',
+      keepFabFileId: 'a',
+      retireFabFileIds: ['b'],
+    });
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeFiles', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeFileTags', 'lake1']));
+    expect(toast.success).toHaveBeenCalledWith(
+      'Removed 1 document from this lake.',
+      expect.objectContaining({ duration: expect.any(Number) })
+    );
+  });
+
+  it('offers Undo on a merge that restores every removed document through the membership door', async () => {
+    apiPost.mockResolvedValueOnce({
+      data: {
+        data: {
+          action: 'merge',
+          findingId: 'finding-1',
+          targets: [
+            { fabFileId: 'a', fileName: 'a.md', role: 'kept' },
+            { fabFileId: 'b', fileName: 'b.md', role: 'retired' },
+            { fabFileId: 'c', fileName: 'c.md', role: 'retired' },
+          ],
+          detail: { removedFabFileIds: ['b', 'c'] },
+        },
+      },
+    });
+    // The restores land on the same mocked POST.
+    apiPost.mockResolvedValue({ data: { success: true, fileCount: 1, totalSizeBytes: 1 } });
+    const { result, invalidate } = mount();
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        dataLakeId: 'lake1',
+        findingId: 'finding-1',
+        body: { action: 'merge', keepFabFileId: 'a', retireFabFileIds: ['b', 'c'] },
+      });
+    });
+
+    const [, options] = (toast.success as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { action: { onClick: () => void } },
+    ];
+    // Scope the assertion to the Undo itself: the forward action already refreshed these keys.
+    invalidate.mockClear();
+    act(() => options.action.onClick());
+
+    await waitFor(() => {
+      expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/files/b');
+      expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/files/c');
+    });
+
+    // A merge Undo is a membership change like any other, so it must stale the findings queue and
+    // the retag seed too - not just the lake's file list.
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeFileTags', 'lake1']));
+  });
+
+  it('undoes a supersede by posting unsupersede back to the same door', async () => {
+    apiPost.mockResolvedValueOnce({
+      data: {
+        data: {
+          action: 'supersede',
+          findingId: 'finding-1',
+          targets: [
+            { fabFileId: 'a', fileName: 'a.md', role: 'kept' },
+            { fabFileId: 'b', fileName: 'b.md', role: 'retired' },
+          ],
+          detail: { suppressedFromRanking: 'b', removedFromCorpus: false },
+        },
+      },
+    });
+    apiPost.mockResolvedValue({
+      data: { data: { action: 'unsupersede', findingId: 'finding-1', targets: [], detail: {} } },
+    });
+    const { result, invalidate } = mount();
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        dataLakeId: 'lake1',
+        findingId: 'finding-1',
+        body: { action: 'supersede', keepFabFileId: 'a', retireFabFileId: 'b' },
+      });
+    });
+
+    const [, options] = (toast.success as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { action: { onClick: () => void } },
+    ];
+    // Scope the assertion to the Undo itself: the forward action already refreshed these keys.
+    invalidate.mockClear();
+    act(() => options.action.onClick());
+
+    await waitFor(() => {
+      expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/findings/finding-1/corpus-action', {
+        action: 'unsupersede',
+        fabFileId: 'b',
+      });
+      const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+      expect(keys).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
+      expect(keys).toContain(JSON.stringify(['dataLakeFileTags', 'lake1']));
+    });
+  });
+
+  it('surfaces the server refusal text on a closed finding rather than axios status line', async () => {
+    apiPost.mockRejectedValueOnce(axiosRefusal(400, 'This finding has already been ruled on'));
+    const { result } = mount();
+
+    await act(async () => {
+      await result.current
+        .mutateAsync({
+          dataLakeId: 'lake1',
+          findingId: 'finding-1',
+          body: { action: 'retag', fabFileId: 'a', tags: [] },
+        })
+        .catch(() => {});
+    });
+
+    expect(toast.error).toHaveBeenCalledWith('This finding has already been ruled on');
   });
 });

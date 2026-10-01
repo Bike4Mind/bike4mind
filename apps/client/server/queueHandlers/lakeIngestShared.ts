@@ -17,6 +17,7 @@ import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { createFabFile } from '@server/managers/fabFileManager';
+import { evaluateConnectorCopyDeletion } from '@server/integrations/google/drive/connectorCopyGate';
 import { getFilesStorage } from '@server/utils/storage';
 import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { finalizeBatchIfComplete } from '@server/queueHandlers/dataLakeBatchProgress';
@@ -145,51 +146,26 @@ export function createLakeIngestRetirer(ctx: LakeIngestRetirerContext) {
       return 'unpicked';
     }
 
-    // A grant to anyone other than the owner is a claim too (the other-lake check below leans on this
-    // same reasoning): the delete is global, so it would take the share vector with it and leave the
-    // sharee holding a notebook reference they can no longer resolve - silently, because
-    // getAccessibleFiles just drops an id the reader has no grant on. The replacement carries no
-    // shares (minted for connection.connectedBy alone), so there is nothing to hand them instead.
-    // Keep the retired copy alive and merely unpicked: the sharee sees the PRE-EDIT content, which
-    // they can re-request, rather than losing the file outright.
-    const shareClaims = {
-      users: (retiredCopy.users ?? []).length,
-      groups: (retiredCopy.groups ?? []).length,
-      globalRead: !!retiredCopy.isGlobalRead,
-    };
-    if (shareClaims.users > 0 || shareClaims.groups > 0 || shareClaims.globalRead) {
-      logger.info(`${logTag} superseded copy is shared outside its owner; unpicked only`, {
-        fabFileId: staleCopy.id,
-        ...shareClaims,
-      });
-      return 'unpicked';
-    }
-
-    const tagNames = (retiredCopy.tags ?? [])
-      .map(tag => tag?.name)
-      .filter((name): name is string => typeof name === 'string');
-
-    const claims = await dataLakeService.findOtherLakeClaims({ userId: retiredCopy.userId, tagNames }, lake, {
-      db: { dataLakes: dataLakeRepository },
-      candidateLakes: await prefixArmCandidateLakes(),
+    // The three "keep it alive" checks - a share to anyone but the owner, another lake under either
+    // membership arm, no living owner - are shared verbatim with the disconnect orphan sweep; see
+    // connectorCopyGate for why each one is fatal to a global, unrecoverable delete. A refused copy
+    // stays live and merely unpicked: recoverable staleness beats a silent loss.
+    const verdict = await evaluateConnectorCopyDeletion(retiredCopy, lake, {
+      adapters: { db: { dataLakes: dataLakeRepository }, candidateLakes: await prefixArmCandidateLakes() },
+      ownerStillExists,
     });
-    if (dataLakeService.hasOtherLakeClaim(claims)) {
-      // Someone curated this file into another lake; deleting it would evict a member of a lake this
-      // poll has no business touching. Same "nothing may reach further than the retired copy did"
-      // reasoning as the share check above - unpicked-but-alive is recoverable, a silent evict is not.
-      logger.info(`${logTag} superseded copy belongs to another lake; unpicked only`, {
-        fabFileId: staleCopy.id,
-        otherLakeTags: claims.metaTagNames,
-        otherLakeIds: claims.prefixArmLakes.map(other => other.id),
-      });
+    if (!verdict.deletable) {
+      const detail = { fabFileId: staleCopy.id, ...verdict.detail };
+      if (verdict.reason === 'shared') {
+        logger.info(`${logTag} superseded copy is shared outside its owner; unpicked only`, detail);
+      } else if (verdict.reason === 'other-lake') {
+        logger.info(`${logTag} superseded copy belongs to another lake; unpicked only`, detail);
+      } else {
+        logger.warn(`${logTag} superseded copy has no living owner; left unpicked`, detail);
+      }
       return 'unpicked';
     }
-
-    const ownerId = retiredCopy.userId;
-    if (!ownerId || !(await ownerStillExists(ownerId))) {
-      logger.warn(`${logTag} superseded copy has no living owner; left unpicked`, { fabFileId: staleCopy.id, ownerId });
-      return 'unpicked';
-    }
+    const ownerId = verdict.ownerId;
 
     if (replacementFabFileId) await carryForwardToReplacement(retiredCopy, replacementFabFileId);
 

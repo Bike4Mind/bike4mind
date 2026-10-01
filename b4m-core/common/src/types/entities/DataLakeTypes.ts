@@ -1581,6 +1581,15 @@ export interface IDataLakeSpendResponse {
   days: number;
   /** Lifetime reservation-time meter (see doc comment above); null when unset (pre-existing lake). */
   embeddingSpendMicroUsd: number | null;
+  /**
+   * Lifetime research spend attributed to this lake, in USD, summed from UsageEvent rows
+   * carrying { dataLakeId, feature: 'operations' } across all time. Separate from the
+   * ingestion-only lifetime meter above (which is reserve-first and stored on the lake).
+   * Included in the UI's displayed lifetime total and per-lake budget percentage, so a
+   * research run's cost is visible alongside ingestion spend. Not enforced by the ingestion
+   * spend gate, which reads only the embedding meter.
+   */
+  researchLifetimeUsd: number;
   spendEnabled: boolean;
   perRunBudgetMicroUsd: number;
   perLakeBudgetMicroUsd: number;
