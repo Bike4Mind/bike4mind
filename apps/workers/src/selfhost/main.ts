@@ -19,6 +19,7 @@ import { runResearchScheduleTick } from '@server/cron/dataLakeResearchSchedule';
 import { SelfHostWorker } from './selfHostWorker';
 import { registerTaskScheduler } from './taskScheduler';
 import { registerLakeMemoryQueue } from './lakeMemoryQueue';
+import { registerGitHubLakeQueues } from './githubLakeQueues';
 import { registerTelemetryCleanup } from './telemetryCleanup';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
@@ -178,6 +179,11 @@ async function main() {
   } else {
     bootLogger.warn('driveDisconnectPurgeQueue not configured; Google Drive disconnects will be refused');
   }
+
+  registerGitHubLakeQueues(worker, {
+    ingest: Resource.githubLakeIngestQueue.url,
+    revoke: Resource.githubLakeRevokeQueue.url,
+  });
 
   // Enrichment events (naming, summaries, tags, memento embedding) arrive here from
   // eventBus.publishSelfHost as { detailType, detail }. Read straight from env (not the

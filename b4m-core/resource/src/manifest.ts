@@ -109,9 +109,8 @@ export const DEFAULT_MANIFEST = {
   // connect path reads it after the binding row is written, the same hazard as driveLakeIngestQueue above.
   githubLakeIngestQueue: { kind: 'queue' },
   // Read by the App's webhook (webhooks/github/lake.ts) only after it verifies the signature and
-  // resolves affected connections - no row is written first. Registered so the webhook resolves the
-  // key instead of throwing; the self-host worker runner (apps/workers/src/selfhost) has no consumer
-  // for this queue (nor githubLakeIngestQueue), so on a self-host the queued revokes still wait for one.
+  // resolves affected connections - no row is written first. Both GitHub lake queues are consumed on
+  // self-host by apps/workers/src/selfhost/githubLakeQueues.ts.
   githubLakeRevokeQueue: { kind: 'queue' },
   emailAnalysisQueue: { kind: 'queue', optional: true },
   emailBatchQueue: { kind: 'queue' },
