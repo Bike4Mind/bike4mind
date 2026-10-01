@@ -6,7 +6,7 @@ import { LAKE_FINDING_RESOLUTION_MAX_CHARS, type LakeFindingTerminalStatus } fro
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
-import { loadFindingForLake } from '@server/dataLakes/loadFindingForLake';
+import { loadFindingForLake, readFindingForLake } from '@server/dataLakes/loadFindingForLake';
 import { recordFindingResolutionBelief } from '@server/dataLakes/recordFindingResolutionBelief';
 
 /**
@@ -36,6 +36,10 @@ const UpdateBody = z.discriminatedUnion('action', [
 ]);
 
 /**
+ * GET /api/data-lakes/:id/findings/:findingId - one finding, for a deep link that opens a document
+ * at the passage the finding quotes. The finding id rides the URL instead of the passage itself, so
+ * no document text lands in browser history, server logs or referrers.
+ *
  * POST /api/data-lakes/:id/findings/:findingId - rule on one detected corpus problem (#3039).
  *
  * DETECT, DO NOT REJECT (#2242). Resolving or dismissing a finding records a HUMAN'S JUDGEMENT and
@@ -52,6 +56,11 @@ const UpdateBody = z.discriminatedUnion('action', [
  */
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
+  .get(async (req: Request, res) => {
+    const { id, findingId } = req.query as { id: string; findingId: string };
+    const { finding } = await readFindingForLake(req, { lakeId: id, findingId });
+    return res.json({ data: finding });
+  })
   .post(async (req: Request, res) => {
     // Restated even though `loadFindingForLake` asserts it too: `dataLakeApiKeyScopeCoverage.test.ts`
     // scans SOURCE for this call on every mutating handler of a read-gated route, and cannot follow

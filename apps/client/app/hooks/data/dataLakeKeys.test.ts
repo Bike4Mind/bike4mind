@@ -37,6 +37,12 @@ describe('dataLakeKeys parity', () => {
   // Two roots, deliberately: the run list is polled while a run is in flight, and a shared prefix
   // would drag the config list along on every tick. The invalidation on settle relies on
   // `proposalsOf` prefix-matching `proposals`, so that pairing is asserted here too.
+  it("one finding sits under its lake's findings prefix, so a scan or ruling re-reads it", () => {
+    const key = dataLakeKeys.finding('lake1', 'f1');
+    expect(key.slice(0, 2)).toEqual([...dataLakeKeys.findingsOf('lake1')]);
+    expect(key).not.toEqual(dataLakeKeys.findings('lake1'));
+  });
+
   it('research configs and runs are separate roots', () => {
     expect(dataLakeKeys.researchConfigs('lake1')).toEqual(['dataLakeResearchConfigs', 'lake1']);
     expect(dataLakeKeys.researchRuns('lake1', 20)).toEqual(['dataLakeResearchRuns', 'lake1', { limit: 20 }]);

@@ -41,7 +41,7 @@ const source: LakeFindingSource = {
 const renderPane = (over: Partial<LakeFindingSource> = {}) =>
   render(
     <TestWrapper>
-      <FindingSourcePane source={{ ...source, ...over }} />
+      <FindingSourcePane source={{ ...source, ...over }} dataLakeId="lake-1" findingId="finding-1" />
     </TestWrapper>
   );
 
@@ -61,11 +61,15 @@ describe('FindingSourcePane', () => {
     );
   });
 
-  it('names the document and cites it with a deep link a curator can open', () => {
+  it('names the document and cites it with a deep link that marks the quoted passage', () => {
     renderPane();
 
     expect(screen.getByTestId('finding-source-title')).toHaveTextContent('investor-update.md');
-    expect(screen.getByTestId('finding-source-citation')).toHaveAttribute('href', '/data-lakes?article=file-a');
+    // The finding's id, never the excerpt: document text must not ride the URL.
+    expect(screen.getByTestId('finding-source-citation')).toHaveAttribute(
+      'href',
+      '/data-lakes?article=file-a&lake=lake-1&finding=finding-1'
+    );
   });
 
   // The finding's own name is what the detector saw, so it survives a file read that came back

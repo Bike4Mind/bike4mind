@@ -8,7 +8,7 @@
  * - and an exact `indexOf` would miss on most real passages.
  */
 
-import type { CitableSource } from '@bike4mind/common';
+import type { CitableSource, LakeFindingSource } from '@bike4mind/common';
 
 /**
  * The passage anchor a citation chip carries. Declared HERE rather than in the zustand store that
@@ -132,4 +132,18 @@ export function citedPassageOf(source: CitableSource): CitedPassage | null {
   if (typeof chunkId !== 'string' || chunkId.length === 0) return null;
   if (typeof fullContext !== 'string' || fullContext.trim().length === 0) return null;
   return { fileId: source.id, chunkId, passage: fullContext };
+}
+
+/**
+ * The anchor for the passage a lake finding quotes from one document, or null when it quotes
+ * nothing from that file - the `?finding=` deep link from the findings dialog. An excerpt is not a
+ * chunk, so `chunkId` is empty; nothing on the viewer side reads it.
+ */
+export function citedPassageOfFinding(
+  finding: { sources: LakeFindingSource[] } | undefined,
+  fileId: string
+): CitedPassage | null {
+  const excerpt = finding?.sources.find(source => source.fabFileId === fileId)?.excerpt;
+  if (!excerpt?.trim()) return null;
+  return { fileId, chunkId: '', passage: excerpt };
 }

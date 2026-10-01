@@ -2405,6 +2405,26 @@ export function useDataLakeFindings(
   };
 }
 
+/**
+ * One finding by id, for the `?finding=` deep link that opens a document at the passage the
+ * finding quotes. Manage-gated like the list; `retry: false` so a refusal or a since-deleted
+ * finding settles at once and the document opens unmarked instead of waiting on retries.
+ */
+export function useDataLakeFinding(dataLakeId: string | null, findingId: string | null) {
+  return useQuery({
+    queryKey: dataLakeKeys.finding(dataLakeId, findingId),
+    queryFn: async () => {
+      const { data } = await api.get<{ data: IDataLakeFindingDocument }>(
+        `/api/data-lakes/${dataLakeId}/findings/${findingId}`
+      );
+      return data.data;
+    },
+    enabled: !!dataLakeId && !!findingId,
+    retry: false,
+    staleTime: 1000 * 60,
+  });
+}
+
 /** The run summary POST /api/data-lakes/:id/inconsistencies answers with - the fields read here. */
 type LakeScanResult = Pick<LakeInconsistencyScanSummary, 'countsByKind' | 'memberCount'>;
 

@@ -11,7 +11,7 @@ vi.mock('@client/app/contexts/SessionsContext', () => ({
 }));
 // The surface reads `?article=` off the route so deep links forwarded from the retired
 // /data-lakes route land in the viewer (#1943).
-const routerMocks = vi.hoisted(() => ({ search: {} as { article?: string } }));
+const routerMocks = vi.hoisted(() => ({ search: {} as { article?: string; lake?: string; finding?: string } }));
 vi.mock('@tanstack/react-router', () => ({ useSearch: () => routerMocks.search }));
 // The surface re-checks EnableDataLakes itself before rendering the tree, since the mode store
 // has writers that never saw the flag (the /data-lakes redirect, seedFromSession).
@@ -39,7 +39,7 @@ vi.mock('@client/app/hooks/useCreateDataLakeSession', () => ({
 // contract (View may own the layout only when the chat is inside), and the create-session wiring.
 vi.mock('./DataLakeExplorer', () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test stub
-  default: ({ chatSlot, chatEmbedded, createSessionForFile, onManage, onDiscover, articleId }: any) => (
+  default: ({ chatSlot, chatEmbedded, createSessionForFile, onManage, onDiscover, articleId, articleFinding }: any) => (
     <div
       data-testid="explorer"
       data-chat-embedded={String(!!chatEmbedded)}
@@ -47,6 +47,7 @@ vi.mock('./DataLakeExplorer', () => ({
       data-can-manage={String(typeof onManage === 'function')}
       data-can-discover={String(typeof onDiscover === 'function')}
       data-article-id={String(articleId)}
+      data-article-finding={JSON.stringify(articleFinding)}
       onClick={onManage}
     >
       {/* stopPropagation: the stub's outer div carries onManage, which would otherwise
@@ -132,6 +133,21 @@ describe('DataLakeChatSurface', () => {
     render(<DataLakeChatSurface chat={<div data-testid="chat" />} />);
 
     expect(screen.getByTestId('explorer')).toHaveAttribute('data-article-id', 'file-42');
+  });
+
+  it('forwards a finding deep link only when both its lake and finding are named', () => {
+    useDataLakeMode.setState({ enabled: true, seededSessionId: 's1' });
+    routerMocks.search = { article: 'file-42', lake: 'lake-1', finding: 'finding-1' };
+    const { unmount } = render(<DataLakeChatSurface chat={<div data-testid="chat" />} />);
+    expect(screen.getByTestId('explorer')).toHaveAttribute(
+      'data-article-finding',
+      JSON.stringify({ lakeId: 'lake-1', findingId: 'finding-1' })
+    );
+    unmount();
+
+    routerMocks.search = { article: 'file-42', finding: 'finding-1' };
+    render(<DataLakeChatSurface chat={<div data-testid="chat" />} />);
+    expect(screen.getByTestId('explorer')).toHaveAttribute('data-article-finding', 'null');
   });
 
   it('offers Discover behind the manage gate, as a shortcut to the manager tab', () => {

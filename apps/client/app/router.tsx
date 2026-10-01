@@ -300,19 +300,34 @@ const notebookShellRoute = createRoute({
   ),
 });
 
+/**
+ * The Data Lake article deep link: `article` opens a document, and `lake` + `finding` (both or
+ * neither) name the finding whose quoted passage to mark in it. The finding's id rides the URL
+ * rather than the passage, so no document text lands in history, logs or referrers.
+ */
+type DataLakeArticleSearch = { article?: string; lake?: string; finding?: string };
+
+function dataLakeArticleSearch(search: Record<string, unknown>): DataLakeArticleSearch {
+  const article = optionalStringParam(search, 'article');
+  const lake = optionalStringParam(search, 'lake');
+  const finding = optionalStringParam(search, 'finding');
+  if (!article) return {};
+  return lake && finding ? { article, lake, finding } : { article };
+}
+
 // New notebook route (replaces /new.tsx)
 const newRoute = createRoute({
   getParentRoute: () => notebookShellRoute,
   path: '/new',
   validateSearch: (
     search: Record<string, unknown>
-  ): { projectId?: string; questmaster?: string; goal?: string; article?: string } => {
+  ): DataLakeArticleSearch & { projectId?: string; questmaster?: string; goal?: string } => {
     return {
       projectId: optionalStringParam(search, 'projectId'),
       questmaster: optionalStringParam(search, 'questmaster'),
       goal: optionalStringParam(search, 'goal'),
       // Data Lake article deep link, forwarded here from the retired /data-lakes route (#1943).
-      article: optionalStringParam(search, 'article'),
+      ...dataLakeArticleSearch(search),
     };
   },
 });
@@ -903,10 +918,7 @@ const questsV5Route = createRoute({
 const dataLakesRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/data-lakes',
-  validateSearch: (search: Record<string, unknown>): { article?: string } => ({
-    // Shareable deep link to a specific article within a lake.
-    article: typeof search.article === 'string' && search.article ? search.article : undefined,
-  }),
+  validateSearch: dataLakeArticleSearch,
   beforeLoad: ({ search }) => {
     // The store is the mode's source of truth on /new (no session exists yet to carry
     // forceKnowledgeRetrieval), so flipping it here is what makes the tree open on arrival.
@@ -915,7 +927,7 @@ const dataLakesRoute = createRoute({
     // "off" and break the deep link for entitled users. DataLakeChatSurface re-checks the flag
     // before rendering, so an unentitled arrival leaves this flag set but inert.
     useDataLakeMode.getState().setEnabled(true);
-    throw redirect({ to: '/new', search: search.article ? { article: search.article } : {} });
+    throw redirect({ to: '/new', search: search.article ? search : {} });
   },
   component: () => null,
 });

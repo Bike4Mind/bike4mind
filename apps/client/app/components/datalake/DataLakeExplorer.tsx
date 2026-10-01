@@ -21,8 +21,10 @@ import useSetLakeScope from '@client/app/hooks/useSetLakeScope';
 import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
 import useSessionLayout, { openFileInChatViewer, setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import type { DefaultLayoutType } from '@client/app/hooks/useSessionLayout';
+import { citedPassageOfFinding, type CitedPassage } from '@client/app/components/Knowledge/citedPassage';
 import { useNotebookLayout } from '@client/app/components/layouts/Notebook';
 import {
+  useDataLakeFinding,
   useGetDataLakeArticles,
   useGetDataLakes,
   useGetDataLakeTagCounts,
@@ -55,6 +57,8 @@ import type { IFabFileDocument, ManageableDataLakeConfig } from '@bike4mind/comm
 interface DataLakeExplorerProps {
   /** When set (from URL param), auto-select and display this article on mount. */
   articleId?: string | null;
+  /** The finding whose quoted passage to mark in `articleId`'s document (`?lake=&finding=`). */
+  articleFinding?: { lakeId: string; findingId: string } | null;
   /** Which browse backend to read. Only the react-query cache key differs; a branded
    *  surface passes its own value to keep its cache separate from the main app's. */
   source?: DataLakeBrowseSource;
@@ -108,6 +112,7 @@ const EMPTY_LAKES: TagScopeLake[] = [];
 
 export default function DataLakeExplorer({
   articleId,
+  articleFinding,
   source = 'datalakes',
   rootLabel,
   onManage,
@@ -219,12 +224,16 @@ export default function DataLakeExplorer({
   // surface restores it. So we set the selected artifact WITHOUT touching `layout` and mount
   // the viewer in our own rail (with its layout-switching controls hidden, for the same reason).
   const handleViewFile = useCallback(
-    (file: IFabFileDocument) => {
+    (file: IFabFileDocument, citedPassage?: CitedPassage | null) => {
       if (chatEmbedded) {
-        openFileInChatViewer(file);
+        openFileInChatViewer(file, citedPassage);
       } else {
         hostLayoutRef.current = useSessionLayout.getState().layout;
-        setSessionLayout({ previewFile: file, selectedArtifactId: file.id });
+        setSessionLayout({
+          previewFile: file,
+          selectedArtifactId: file.id,
+          ...(citedPassage !== undefined && { citedPassage }),
+        });
         railViewerOpenRef.current = true;
         setRailViewerOpen(true);
       }
@@ -456,6 +465,10 @@ export default function DataLakeExplorer({
   // the viewer (effect below).
   const { data: deepLinkResult } = useGetDataLakeArticles(articleId ? { id: articleId, limit: 1 } : null, source);
   const deepLinkTarget = deepLinkResult?.data?.[0] ?? null;
+  const { data: deepLinkFinding, isPending: deepLinkFindingPending } = useDataLakeFinding(
+    articleFinding?.lakeId ?? null,
+    articleFinding?.findingId ?? null
+  );
 
   // Track global layout changes so the rail viewer follows the viewer actually on screen. Only
   // relevant to external-chat hosts - railViewerOpenRef is set only from the non-embedded branch
@@ -482,11 +495,17 @@ export default function DataLakeExplorer({
 
   const openedDeepLinkRef = useRef<string | null>(null);
   useEffect(() => {
-    if (deepLinkTarget && openedDeepLinkRef.current !== deepLinkTarget.id) {
+    // Held until the finding settles, so the document opens once, already marked. A failed or
+    // refused read settles too, and the document then opens unmarked rather than not at all.
+    const findingSettled = !articleFinding || !deepLinkFindingPending;
+    if (deepLinkTarget && findingSettled && openedDeepLinkRef.current !== deepLinkTarget.id) {
       openedDeepLinkRef.current = deepLinkTarget.id;
-      handleViewFile(deepLinkTarget);
+      handleViewFile(
+        deepLinkTarget,
+        articleFinding ? citedPassageOfFinding(deepLinkFinding, deepLinkTarget.id) : undefined
+      );
     }
-  }, [deepLinkTarget, handleViewFile]);
+  }, [deepLinkTarget, articleFinding, deepLinkFindingPending, deepLinkFinding, handleViewFile]);
 
   // Browsing deliberately leaves the open file alone: the tree and the viewer are separate panels,
   // so browsing categories - including back out of one - must not dismiss what you are reading. The

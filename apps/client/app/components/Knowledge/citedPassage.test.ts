@@ -1,6 +1,12 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { locateCitedPassage, blockIntersectsPassage, citedPassageOf, citedPassageForFile } from './citedPassage';
+import {
+  locateCitedPassage,
+  blockIntersectsPassage,
+  citedPassageOf,
+  citedPassageForFile,
+  citedPassageOfFinding,
+} from './citedPassage';
 
 const DOC = [
   '# Leave policy',
@@ -136,5 +142,28 @@ describe('citedPassageForFile', () => {
     // the only thing rejecting here, so it is pinned alongside the nullish pair.
     expect(citedPassageForFile(anchor, '')).toBeUndefined();
     expect(citedPassageForFile({ ...anchor, fileId: '' }, '')).toBeUndefined();
+  });
+});
+
+describe('citedPassageOfFinding', () => {
+  const finding = {
+    sources: [
+      { fabFileId: 'file-a', excerpt: 'ARR reached $4.2M in Q1.' },
+      { fabFileId: 'file-b', excerpt: 'ARR reached $3.7M in Q1.' },
+    ],
+  };
+
+  it("anchors the excerpt the finding quotes from THIS file, not its sibling's", () => {
+    expect(citedPassageOfFinding(finding, 'file-b')).toEqual({
+      fileId: 'file-b',
+      chunkId: '',
+      passage: 'ARR reached $3.7M in Q1.',
+    });
+  });
+
+  it('has no anchor for a file the finding does not quote, an empty excerpt, or no finding', () => {
+    expect(citedPassageOfFinding(finding, 'file-c')).toBeNull();
+    expect(citedPassageOfFinding({ sources: [{ fabFileId: 'file-a', excerpt: '  ' }] }, 'file-a')).toBeNull();
+    expect(citedPassageOfFinding(undefined, 'file-a')).toBeNull();
   });
 });

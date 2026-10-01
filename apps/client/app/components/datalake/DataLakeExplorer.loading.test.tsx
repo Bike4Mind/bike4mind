@@ -11,6 +11,7 @@ import DataLakeExplorer from './DataLakeExplorer';
 // fetch is in flight. "docs:policy:v2" is a true leaf, where nothing renders without its fetch,
 // so that case is a regression control - it must stay gated on isLoading as before.
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
+  useDataLakeFinding: () => ({ data: undefined, isPending: false }),
   activeOrgId: () => undefined,
   useGetDataLakeTagCounts: () => ({
     data: {

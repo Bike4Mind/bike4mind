@@ -372,7 +372,7 @@ function FindingDetail({
         }}
       >
         {finding.sources.map(source => (
-          <FindingSourcePane key={source.fabFileId} source={source} />
+          <FindingSourcePane key={source.fabFileId} source={source} dataLakeId={dataLakeId} findingId={finding.id} />
         ))}
       </Box>
     </Box>

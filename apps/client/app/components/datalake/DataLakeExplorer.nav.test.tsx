@@ -8,6 +8,7 @@ import DataLakeExplorer from './DataLakeExplorer';
 // A 2-level tag structure so buildTagTree yields prefix -> children with counts. The Explorer
 // exposes the richest second-level branches (sorted, top 6) + tree navigation via context.
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
+  useDataLakeFinding: () => ({ data: undefined, isPending: false }),
   activeOrgId: () => undefined,
   useGetDataLakeTagCounts: () => ({
     data: {

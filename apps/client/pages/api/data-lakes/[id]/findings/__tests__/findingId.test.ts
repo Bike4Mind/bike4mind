@@ -92,6 +92,45 @@ beforeEach(() => {
   h.recordFindingResolutionBelief.mockResolvedValue({ recorded: true });
 });
 
+describe('GET /api/data-lakes/[id]/findings/[findingId]', () => {
+  const read = (findingId = 'f1') => {
+    const json = vi.fn();
+    const res = { json, status: vi.fn(() => ({ json })) };
+    return {
+      json,
+      done: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
+        { method: 'GET', query: { id: 'lake1', findingId }, user: { id: 'curator-1' }, logger, receivedAt },
+        res
+      ),
+    };
+  };
+
+  it('returns the finding to a manager without demanding the write scope', async () => {
+    const { json, done } = read();
+    await done;
+
+    expect(h.assertLakeWriteAccess).toHaveBeenCalledTimes(1);
+    expect(h.assertDataLakeWriteScope).not.toHaveBeenCalled();
+    expect(json).toHaveBeenCalledWith({ data: existing });
+  });
+
+  it('refuses a finding belonging to ANOTHER lake as not found', async () => {
+    h.findById.mockResolvedValue({ ...existing, lakeId: 'someone-elses-lake' });
+    const { json, done } = read();
+
+    await expect(done).rejects.toThrow(/not found/i);
+    expect(json).not.toHaveBeenCalled();
+  });
+
+  it('refuses before reading the finding when the caller cannot manage the lake', async () => {
+    h.assertLakeWriteAccess.mockRejectedValue(new Error('Forbidden'));
+    const { done } = read();
+
+    await expect(done).rejects.toThrow('Forbidden');
+    expect(h.findById).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /api/data-lakes/[id]/findings/[findingId] (#3039)', () => {
   it('gates on manage access and on the write scope', async () => {
     const { done } = invoke({ action: 'resolve' });

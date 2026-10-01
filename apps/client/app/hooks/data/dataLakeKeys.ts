@@ -125,6 +125,9 @@ export const dataLakeKeys = {
     ['dataLakeFindings', dataLakeId, filters ?? {}] as const,
   /** Invalidation prefix covering every filter variant of one lake's findings. */
   findingsOf: (dataLakeId: string) => ['dataLakeFindings', dataLakeId] as const,
+  /** One finding by id. Under `findingsOf`, so a ruling or a scan re-reads it with the lists. */
+  finding: (dataLakeId: string | null, findingId: string | null) =>
+    ['dataLakeFindings', dataLakeId, 'finding', findingId] as const,
   /**
    * One lake's saved research configurations (GET /api/data-lakes/:id/research/configs), #1682.
    * Outside `list` for the same reason as `spend` and `proposals`.

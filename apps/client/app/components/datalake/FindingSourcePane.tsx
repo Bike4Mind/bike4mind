@@ -17,7 +17,15 @@ import MarkdownViewer, { UnmarkedCitedPassage } from '@client/app/components/Kno
  * Fetches its own document rather than taking content as a prop: a finding carries file IDS, the
  * panes are independent, and a slow S3 read on one source must not hold up the other.
  */
-export default function FindingSourcePane({ source }: { source: LakeFindingSource }) {
+export default function FindingSourcePane({
+  source,
+  dataLakeId,
+  findingId,
+}: {
+  source: LakeFindingSource;
+  dataLakeId: string;
+  findingId: string;
+}) {
   const { data: file, isLoading: fileLoading, isError: fileError } = useGetFabFile(source.fabFileId);
   const {
     data: content,
@@ -49,10 +57,11 @@ export default function FindingSourcePane({ source }: { source: LakeFindingSourc
           {title}
         </Typography>
         {/* The citation, and a working one: the `?article=` deep link is the shareable form the
-            router keeps alive for exactly this. New tab, because losing the comparison to follow
-            one side of it defeats the surface. */}
+            router keeps alive for exactly this, and `lake` + `finding` mark the quoted passage on
+            arrival. New tab, because losing the comparison to follow one side of it defeats the
+            surface. */}
         <Link
-          href={`/data-lakes?article=${encodeURIComponent(source.fabFileId)}`}
+          href={findingDocumentHref({ fabFileId: source.fabFileId, dataLakeId, findingId })}
           target="_blank"
           rel="noopener noreferrer"
           level="body-xs"
@@ -97,4 +106,18 @@ export default function FindingSourcePane({ source }: { source: LakeFindingSourc
       </Box>
     </Box>
   );
+}
+
+/** Must stay in sync with `dataLakeArticleSearch` in app/router.tsx, which parses these params. */
+export function findingDocumentHref({
+  fabFileId,
+  dataLakeId,
+  findingId,
+}: {
+  fabFileId: string;
+  dataLakeId: string;
+  findingId: string;
+}): string {
+  const params = new URLSearchParams({ article: fabFileId, lake: dataLakeId, finding: findingId });
+  return `/data-lakes?${params.toString()}`;
 }

@@ -31,6 +31,7 @@ const {
   lakesState,
   workBenchState,
   mockFileOwnerId,
+  deepLinkFindingState,
 } = vi.hoisted(() => ({
   setWorkBenchFiles: vi.fn(),
   setSessionLayout: vi.fn(),
@@ -60,6 +61,10 @@ const {
   },
   // Mutable so a test can exercise the non-owner copy branch of the remove-confirm dialog.
   mockFileOwnerId: { value: 'owner-1' },
+  // What the `?finding=` read returns; settled with no finding by default, as when none is linked.
+  deepLinkFindingState: {
+    value: { data: undefined, isPending: false } as { data: unknown; isPending: boolean },
+  },
 }));
 vi.mock('@client/app/contexts/SessionsContext', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/contexts/SessionsContext')>()),
@@ -92,8 +97,13 @@ vi.mock('@client/app/hooks/useSessionLayout', async importOriginal => ({
   // The real helper writes through the module's own setSessionLayout, which this spy cannot see;
   // forwarding to the spy keeps the exact payload assertions below. The helper itself is covered
   // in useSessionLayout.test.ts.
-  openFileInChatViewer: (file: { id: string }) =>
-    setSessionLayout({ layout: 'vertical', previewFile: file, selectedArtifactId: file.id }),
+  openFileInChatViewer: (file: { id: string }, citedPassage?: unknown) =>
+    setSessionLayout({
+      layout: 'vertical',
+      previewFile: file,
+      selectedArtifactId: file.id,
+      ...(citedPassage !== undefined && { citedPassage }),
+    }),
 }));
 
 // Mutable so a test can supply a real tag tree to navigate into; empty by default, which is
@@ -151,6 +161,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
     };
   },
   useGetDataLakes: () => ({ data: lakesState.value }),
+  useDataLakeFinding: () => deepLinkFindingState.value,
   useRemoveFileFromDataLake: (lakeId: string | null) => {
     removeFileLakeIds.push(lakeId);
     return { mutate: removeFileMutate, isPending: false };
@@ -324,6 +335,7 @@ describe('DataLakeExplorer chat-first surface', () => {
     removeFileLakeIds.length = 0;
     mockFileOwnerId.value = 'owner-1';
     lakesState.value = [{ id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: true }];
+    deepLinkFindingState.value = { data: undefined, isPending: false };
     workBenchState.files = [];
     // Re-applied each test since clearAllMocks only clears call history, not implementation -
     // runs the functional updater the way the real zustand store does, persists the result, and
@@ -562,6 +574,47 @@ describe('DataLakeExplorer chat-first surface', () => {
       });
     });
     expect(setWorkBenchFiles).not.toHaveBeenCalled();
+  });
+
+  it('a finding deep link opens the document with the passage that finding quotes from it marked', async () => {
+    deepLinkFindingState.value = {
+      data: {
+        sources: [
+          { fabFileId: 'other-file', excerpt: 'Not this one.' },
+          { fabFileId: 'deep-1', excerpt: 'ARR reached $4.2M in Q1.' },
+        ],
+      },
+      isPending: false,
+    };
+    renderExplorer({ articleId: 'deep-1', articleFinding: { lakeId: 'lake-1', findingId: 'finding-1' } });
+
+    await vi.waitFor(() => {
+      expect(setSessionLayout).toHaveBeenCalledWith(
+        expect.objectContaining({
+          previewFile: expect.objectContaining({ id: 'deep-1' }),
+          citedPassage: { fileId: 'deep-1', chunkId: '', passage: 'ARR reached $4.2M in Q1.' },
+        })
+      );
+    });
+  });
+
+  it('holds a finding deep link until the finding settles, so the document opens once, already marked', () => {
+    deepLinkFindingState.value = { data: undefined, isPending: true };
+    renderExplorer({ articleId: 'deep-1', articleFinding: { lakeId: 'lake-1', findingId: 'finding-1' } });
+
+    expect(setSessionLayout).not.toHaveBeenCalledWith(
+      expect.objectContaining({ previewFile: expect.objectContaining({ id: 'deep-1' }) })
+    );
+  });
+
+  it('still opens a finding deep link, unmarked, when the finding cannot be read', async () => {
+    renderExplorer({ articleId: 'deep-1', articleFinding: { lakeId: 'lake-1', findingId: 'gone' } });
+
+    await vi.waitFor(() => {
+      expect(setSessionLayout).toHaveBeenCalledWith(
+        expect.objectContaining({ previewFile: expect.objectContaining({ id: 'deep-1' }), citedPassage: null })
+      );
+    });
   });
 
   it('delete is offered only for a uniquely-resolved manageable lake', () => {

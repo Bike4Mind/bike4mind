@@ -6,6 +6,9 @@ import type { Request } from 'express';
 import { assertDataLakeWriteScope } from './dataLakeScopes';
 import { toAccessContext } from './toAccessContext';
 
+type FindingParams = { lakeId: string; findingId: string };
+type LoadedFinding = { lake: IDataLakeDocument; finding: IDataLakeFindingDocument; ctx: AccessContext };
+
 /**
  * Authorize a caller to WRITE against one finding, and hand back the finding with the lake it
  * belongs to. The single front door for `POST /api/data-lakes/:id/findings/:findingId` and its
@@ -22,11 +25,18 @@ import { toAccessContext } from './toAccessContext';
  * must still carry `lake.id` as a filter term on the write: this read decides the status code, the
  * filter is what refuses the write. See the resolve route for why both exist.
  */
-export async function loadFindingForLake(
-  req: Request,
-  params: { lakeId: string; findingId: string }
-): Promise<{ lake: IDataLakeDocument; finding: IDataLakeFindingDocument; ctx: AccessContext }> {
+export async function loadFindingForLake(req: Request, params: FindingParams): Promise<LoadedFinding> {
   assertDataLakeWriteScope(req);
+  return readFindingForLake(req, params);
+}
+
+/**
+ * The READ half of `loadFindingForLake`: manage access on the lake plus belongs-to-lake, without
+ * the API-key write scope. For GET /api/data-lakes/:id/findings/:findingId, which is manage-gated
+ * for the same reason as the list route (rows carry document excerpts) but mutates nothing, so a
+ * read-scoped key may call it exactly as it may call the list.
+ */
+export async function readFindingForLake(req: Request, params: FindingParams): Promise<LoadedFinding> {
   const ctx = await toAccessContext(req);
 
   const lake = await dataLakeService.assertLakeWriteAccess(params.lakeId, ctx, {
