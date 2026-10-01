@@ -167,6 +167,12 @@ const handler = baseApi({ auth: false })
       }
       throw err;
     }
+    if (federatedIdp.subjectSource !== 'sub') {
+      req.logger.warn(
+        `[OAUTH_AI_TOKEN] would-reject: client ${client_id} uses the self-asserted ` +
+          "'identities' subject source; set OAUTH_AI_TOKEN_REQUIRE_SUB=true to enforce subjectSource='sub'"
+      );
+    }
 
     // 5. Load the user; a sub that resolves to no B4M user is an invalid grant.
     const user = await userRepository.findById(b4mUserId);
