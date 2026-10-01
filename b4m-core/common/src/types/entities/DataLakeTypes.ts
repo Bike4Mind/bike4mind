@@ -248,6 +248,25 @@ export type LakeSettleFields = {
 export type ConflictResolution = 'skip' | 'update' | 'duplicate';
 
 /**
+ * Inputs that decide which lakes a caller REACHES, shared by every query built on the retrieval reach
+ * arms (retrieval, browse, the identity-scoped excluded-lake count) so a new arm input is declared
+ * once and cannot be wired into only some of them.
+ */
+export interface ReachArmsOpts {
+  grantedLakeIds?: string[];
+  orgGrantedLakes?: Record<string, string[]>;
+  /**
+   * Lakes to withhold from the CREATOR arm: ones the caller created but no longer effectively
+   * owns (`resolveEffectiveOwnerIds`). Pre-resolved by the caller via `supersededOwnLakeIdsForTurn`,
+   * the same seam `grantedLakeIds` uses, because the answer lives in the grant collection. It
+   * narrows ONLY that arm - a superseded creator who still holds a grant, the lake's tag, or its
+   * entitlement keeps reaching it through the arm that actually authorizes them. Absent leaves the
+   * arm at bare creator provenance, which over-matches once ownership has moved.
+   */
+  supersededOwnLakeIds?: string[];
+}
+
+/**
  * The acting principal, resolved from auth - never from the request body/query.
  * Used by the single lake access gate (assertLakeAccess).
  */
@@ -676,19 +695,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     entitlementKeys: string[],
     organizationIds?: string[] | null,
     userId?: string | null,
-    opts?: {
-      grantedLakeIds?: string[];
-      orgGrantedLakes?: Record<string, string[]>;
-      /**
-       * Lakes to withhold from the CREATOR arm: ones the caller created but no longer effectively
-       * owns (`resolveEffectiveOwnerIds`). Pre-resolved by the caller via
-       * `supersededOwnLakeIdsForTurn`, the same seam `grantedLakeIds` uses, because the answer
-       * lives in the grant collection. It narrows ONLY that arm - a superseded creator who still
-       * holds a grant, the lake's tag, or its entitlement keeps reaching it through the arm that
-       * actually authorizes them. Absent leaves the arm at bare creator provenance, which
-       * over-matches once ownership has moved.
-       */
-      supersededOwnLakeIds?: string[];
+    opts?: ReachArmsOpts & {
       /**
        * Widens the status filter from `active` alone to `LAKE_ATTACHABLE_STATUSES` (draft +
        * active) - the set browse already admits. Opt-in and OFF by default, because it is an
@@ -722,18 +729,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     entitlementKeys: string[],
     organizationIds: string[] | undefined,
     userId: string | undefined,
-    opts?: {
-      grantedLakeIds?: string[];
-      orgGrantedLakes?: Record<string, string[]>;
-      /**
-       * Lakes to withhold from the owner-bypass exemption (#3055): ones the caller
-       * created but no longer effectively owns (`resolveEffectiveOwnerIds`), the same set
-       * `findActiveByUserTagsAndEntitlements` withholds from its own creator arm. `createdByUserId`
-       * is immutable, so without this a caller whose ownership was transferred away keeps reporting
-       * a false zero for a lake they can no longer reach through the owner bypass - the count and
-       * the resolver's own read-side would disagree about who still owns it.
-       */
-      supersededOwnLakeIds?: string[];
+    opts?: ReachArmsOpts & {
       /**
        * Restricts the count to lakes whose `datalakeTag` is in this list - the per-turn-scoped
        * question "of exactly these lakes, how many can the caller not reach" for a caller that named
