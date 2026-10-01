@@ -7,6 +7,7 @@ import type { IDataLakeResearchConfigDocument, IDataLakeResearchRunDocument } fr
 import {
   emptyResearchRunTotals,
   RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
+  RESEARCH_MAX_RESULTS_LIMIT,
   RESEARCH_MIN_RELEVANCE_DEFAULT,
   RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
   RESEARCH_RUN_STALE_AFTER_MS,
@@ -598,6 +599,20 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.getByText('Enter a whole number from 1 to 25.')).toBeTruthy();
     });
 
+    // Joy colours FormHelperText from the FormControl's error class, so `error` set on the Input
+    // instead still shows the message but leaves it grey. Assert on the class Joy keys off.
+    it('marks the out-of-range field as an error, and only that field', () => {
+      openFilledForm();
+      fireEvent.change(screen.getByTestId('datalake-research-max-results-input'), {
+        target: { value: String(RESEARCH_MAX_RESULTS_LIMIT + 1) },
+      });
+      const helper = screen.getByText(`Enter a whole number from 1 to ${RESEARCH_MAX_RESULTS_LIMIT}.`);
+      expect(helper.closest('.MuiFormControl-root')).toHaveClass('Mui-error');
+      expect(
+        screen.getByTestId('datalake-research-max-proposals-input').closest('.MuiFormControl-root')
+      ).not.toHaveClass('Mui-error');
+    });
+
     it('explains a Save disabled for a missing name or question', () => {
       renderPanel();
       fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
@@ -696,13 +711,16 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.queryByTestId('research-config-schedule')).toBeNull();
     });
 
-    it('names the cadence and the next run time on the config card', () => {
+    it('names the cadence, the next run time and the pause threshold on the config card', () => {
       renderPanel({
-        configs: [config({ cadence: 'weekly', nextRunAt: new Date('2026-04-01T00:00:00.000Z') })],
+        configs: [
+          config({ cadence: 'weekly', nextRunAt: new Date('2026-04-01T00:00:00.000Z'), reviewBacklogLimit: 7 }),
+        ],
       });
       const line = screen.getByTestId('research-config-schedule').textContent ?? '';
       expect(line).toMatch(/Runs weekly/);
       expect(line).toMatch(/next/);
+      expect(line).toMatch(/pauses at 7\b/);
     });
 
     it('shows the paused line once pending proposals reach the limit, and not one below it', () => {
