@@ -10,13 +10,18 @@ import {
   listApiRouteModules,
   routePathForModule,
   packageNameFromPath,
-  describeEsmError,
+  findLoadFailureCode,
+  describeLoadError,
   classifyLoadResult,
   summarizeWarnings,
   parseChildReport,
 } from './check-api-routes-cjs-require.mjs';
 
 const SCRIPT = fileURLToPath(new URL('./check-api-routes-cjs-require.mjs', import.meta.url));
+
+const SELF_HOST_CONFIG_MISSING =
+  'Self-host config missing: environment variable "MONGODB_URI" is not set. ' +
+  'Add it to your .env (see .env.selfhost.example).';
 
 const tempDirs: string[] = [];
 const makeTempDir = (): string => {
@@ -40,7 +45,11 @@ const writeCjsPackage = (root: string, name: string): void => {
 };
 
 const writeEsmPackage = (root: string, name: string): void => {
-  write(root, `node_modules/${name}/package.json`, JSON.stringify({ name, version: '11.0.0', type: 'module', main: 'index.js' }));
+  write(
+    root,
+    `node_modules/${name}/package.json`,
+    JSON.stringify({ name, version: '11.0.0', type: 'module', main: 'index.js' })
+  );
   write(root, `node_modules/${name}/index.js`, 'export const x = 1;\n');
 };
 
@@ -86,8 +95,19 @@ describe('packageNameFromPath', () => {
   });
 
   it('keeps a scoped package whole', () => {
-    expect(packageNameFromPath('/app/node_modules/.pnpm/@scope+esm@1.0.0/node_modules/@scope/esm/index.js')).toBe('@scope/esm');
+    expect(packageNameFromPath('/app/node_modules/.pnpm/@scope+esm@1.0.0/node_modules/@scope/esm/index.js')).toBe(
+      '@scope/esm'
+    );
     expect(packageNameFromPath('/app/node_modules/@scope/pkg/index.js')).toBe('@scope/pkg');
+  });
+
+  it('strips the hash Turbopack appends to an externalized module directory', () => {
+    expect(packageNameFromPath('/app/apps/client/.next/node_modules/sanitize-html-edcbf62180965ef2/index.js')).toBe(
+      'sanitize-html'
+    );
+    expect(packageNameFromPath('/app/apps/client/.next/node_modules/@scope/pkg-0123456789abcdef/index.js')).toBe(
+      '@scope/pkg'
+    );
   });
 
   it('returns null when there is no node_modules boundary', () => {
@@ -95,8 +115,36 @@ describe('packageNameFromPath', () => {
   });
 });
 
-describe('describeEsmError', () => {
-  it('names the ESM package and its requirer from a real Node 22 ERR_REQUIRE_ESM message', () => {
+describe('findLoadFailureCode', () => {
+  it.each([...['ERR_REQUIRE_ESM', 'MODULE_NOT_FOUND', 'ERR_MODULE_NOT_FOUND', 'ERR_PACKAGE_PATH_NOT_EXPORTED']])(
+    'reads %s off error.code',
+    code => {
+      expect(findLoadFailureCode({ code, message: '' })).toBe(code);
+    }
+  );
+
+  it('reads the code out of Turbopack external-loader wrapper that has no error.code', () => {
+    const message =
+      'Failed to load external module sanitize-html-edcbf62180965ef2: Error [ERR_REQUIRE_ESM]: ' +
+      'require() of ES Module /x/htmlparser2/dist/index.js from /x/sanitize-html/index.js not supported.';
+    expect(findLoadFailureCode({ code: undefined, message })).toBe('ERR_REQUIRE_ESM');
+  });
+
+  it('reads a bare "Cannot find module" with no code', () => {
+    expect(findLoadFailureCode({ message: "Cannot find module 'left-pad'\nRequire stack:\n- /x/a.js" })).toBe(
+      'MODULE_NOT_FOUND'
+    );
+  });
+
+  it('returns null for a non-resolution error', () => {
+    expect(findLoadFailureCode({ code: 'ECONNREFUSED', message: 'connect ECONNREFUSED' })).toBeNull();
+    expect(findLoadFailureCode({ message: 'Error: boom' })).toBeNull();
+    expect(findLoadFailureCode()).toBeNull();
+  });
+});
+
+describe('describeLoadError', () => {
+  it('names the ESM package and its requirer from a real Node ERR_REQUIRE_ESM message', () => {
     const message =
       'require() of ES Module /app/node_modules/.pnpm/htmlparser2@11.0.0/node_modules/htmlparser2/dist/esm/index.js ' +
       'from /app/node_modules/.pnpm/sanitize-html@2.17.0/node_modules/sanitize-html/index.js not supported.\n' +
@@ -104,24 +152,70 @@ describe('describeEsmError', () => {
       'in /app/node_modules/.pnpm/sanitize-html@2.17.0/node_modules/sanitize-html/index.js to a dynamic import() ' +
       'which is available in all CommonJS modules.';
 
-    expect(describeEsmError(message)).toEqual({ esmPackage: 'htmlparser2', requiredFrom: 'sanitize-html' });
+    expect(describeLoadError(message)).toEqual({ missingPackage: 'htmlparser2', requiredFrom: 'sanitize-html' });
+  });
+
+  it('names the package through Turbopack wrapping a failed external load', () => {
+    const message =
+      'Failed to load external module sanitize-html-edcbf62180965ef2: Error [ERR_REQUIRE_ESM]: ' +
+      'require() of ES Module /app/apps/client/.next/standalone/node_modules/.pnpm/htmlparser2@12.0.0/node_modules/htmlparser2/dist/index.js ' +
+      'from /app/apps/client/.next/standalone/node_modules/.pnpm/sanitize-html@2.17.7/node_modules/sanitize-html/index.js not supported.\n' +
+      'Instead change the require of /app/.../htmlparser2/dist/index.js in /app/.../sanitize-html/index.js to a dynamic import().';
+
+    expect(describeLoadError(message)).toEqual({ missingPackage: 'htmlparser2', requiredFrom: 'sanitize-html' });
+  });
+
+  it('names a missing module and its requirer from a Cannot find module + Require stack shape', () => {
+    const message =
+      "Cannot find module 'htmlparser2'\n" +
+      'Require stack:\n' +
+      '- /app/node_modules/.pnpm/sanitize-html@2.17.7/node_modules/sanitize-html/index.js\n' +
+      '- /app/apps/client/.next/server/pages/api/feedback.js';
+
+    expect(describeLoadError(message)).toEqual({ missingPackage: 'htmlparser2', requiredFrom: 'sanitize-html' });
+  });
+
+  it('names a package missing via an ESM "Cannot find package ... imported from" message', () => {
+    const message = "Cannot find package 'not-installed-pkg' imported from /app/apps/client/.next/server/chunks/x.js";
+    // The importer has no node_modules boundary, so the raw path is the best label available.
+    expect(describeLoadError(message)).toEqual({
+      missingPackage: 'not-installed-pkg',
+      requiredFrom: '/app/apps/client/.next/server/chunks/x.js',
+    });
   });
 
   it('degrades to nulls on a message shape it does not recognise, without throwing', () => {
-    expect(describeEsmError('some other failure')).toEqual({ esmPackage: null, requiredFrom: null });
-    expect(describeEsmError(undefined)).toEqual({ esmPackage: null, requiredFrom: null });
+    expect(describeLoadError('some other failure')).toEqual({ missingPackage: null, requiredFrom: null });
+    expect(describeLoadError(undefined)).toEqual({ missingPackage: null, requiredFrom: null });
   });
 });
 
 describe('classifyLoadResult', () => {
-  it('fails on ERR_REQUIRE_ESM only', () => {
-    expect(classifyLoadResult({ code: 'ERR_REQUIRE_ESM', message: 'require() of ES Module ...' })).toBe('fail');
+  it.each([...['ERR_REQUIRE_ESM', 'MODULE_NOT_FOUND', 'ERR_MODULE_NOT_FOUND', 'ERR_PACKAGE_PATH_NOT_EXPORTED']])(
+    'fails on the resolution code %s',
+    code => {
+      expect(classifyLoadResult({ code, message: `Error [${code}]: ...` })).toBe('fail');
+    }
+  );
+
+  it('fails when Turbopack wraps the code in the message but leaves error.code empty', () => {
+    expect(
+      classifyLoadResult({
+        code: undefined,
+        message:
+          'Failed to load external module sanitize-html-abc: Error [ERR_REQUIRE_ESM]: require() of ES Module ...',
+      })
+    ).toBe('fail');
+  });
+
+  it('fails an env-masked route, since it never reached its own requires', () => {
+    expect(classifyLoadResult({ message: SELF_HOST_CONFIG_MISSING })).toBe('fail');
   });
 
   it.each([
     ['a clean load', {}],
     ['a timeout', { timedOut: true }],
-    ['a missing module', { code: 'MODULE_NOT_FOUND', message: "Cannot find module 'x'" }],
+    ['a connection error', { code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 127.0.0.1:27017' }],
     ['a generic load error', { message: 'Error: boom' }],
   ])('warns or passes %s instead of failing the build', (_label, result) => {
     expect(classifyLoadResult(result)).not.toBe('fail');
@@ -137,12 +231,12 @@ describe('summarizeWarnings', () => {
   it('groups by code or first message line, most frequent first', () => {
     expect(
       summarizeWarnings([
-        { result: { code: 'MODULE_NOT_FOUND' } },
-        { result: { code: 'MODULE_NOT_FOUND' } },
+        { result: { code: 'ECONNREFUSED' } },
+        { result: { code: 'ECONNREFUSED' } },
         { result: { message: 'Error: no database\n  at x' } },
       ])
     ).toEqual([
-      ['MODULE_NOT_FOUND', 2],
+      ['ECONNREFUSED', 2],
       ['Error: no database', 1],
     ]);
   });
@@ -166,12 +260,16 @@ describe('CLI', () => {
     const dir = makeTempDir();
     writeCjsPackage(dir, 'cjs-helper');
     // The route logs at load, so the report has to survive stdout noise from the route itself.
-    write(dir, 'server/pages/api/good.js', "console.log('route noise at load');\nmodule.exports = require('cjs-helper');\n");
+    write(
+      dir,
+      'server/pages/api/good.js',
+      "console.log('route noise at load');\nmodule.exports = require('cjs-helper');\n"
+    );
     write(dir, 'server/pages/api/help/index.js', 'module.exports = {};\n');
 
     const result = run(dir);
-    expect(result.stderr).not.toContain('ERR_REQUIRE_ESM');
-    expect(result.stdout).toContain('2 routes probed, 0 ERR_REQUIRE_ESM');
+    expect(result.stderr).not.toContain('cannot load');
+    expect(result.stdout).toContain('2 routes probed, 0 failed to load');
     expect(result.status).toBe(0);
   });
 
@@ -184,6 +282,27 @@ describe('CLI', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('/api/bad');
     expect(result.stderr).toContain('esm-only');
+  });
+
+  it('fails a tree with an unresolvable require, naming the route and the missing package', () => {
+    const dir = makeTempDir();
+    write(dir, 'server/pages/api/missing.js', "module.exports = require('not-installed-pkg');\n");
+
+    const result = run(dir);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('/api/missing');
+    expect(result.stderr).toContain('not-installed-pkg');
+  });
+
+  it('fails a tree with an env-masked route, pointing at the self-host template', () => {
+    const dir = makeTempDir();
+    write(dir, 'server/pages/api/masked.js', `throw new Error(${JSON.stringify(SELF_HOST_CONFIG_MISSING)});\n`);
+
+    const result = run(dir);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('/api/masked');
+    expect(result.stderr).toContain('Self-host config missing');
+    expect(result.stderr).toContain('.env.selfhost.example');
   });
 
   it('fails a tree with no routes, so a moved build root cannot read as all clear', () => {

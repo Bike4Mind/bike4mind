@@ -171,13 +171,16 @@ const nextConfig = {
     'react-syntax-highlighter',
     '@icons-pack/react-simple-icons',
     'pdfjs-dist',
-    // ESM-only packages that need transpilation for API routes. An entry here can only be
-    // retired once check-api-routes-cjs-require.mjs reports the built route no longer
-    // require()s it; that probe is what proves the bundler actually inlined it.
+    // ESM-only packages that need transpilation for API routes. An entry here can be retired
+    // once check-api-routes-cjs-require.mjs reports the built route still loads without it; that
+    // probe runs on the built standalone tree and is what proves the bundler inlined it.
     'p-limit',
     'yocto-queue',
-    // sanitize-html require()s ESM-only htmlparser2; Turbopack externalizes rather than bundles
-    // that pair, and the hoisted copy cannot resolve its own deps, so every importer 500s.
+    // sanitize-html require()s ESM-only htmlparser2. This entry bundles the pair; the
+    // dual-published-htmlparser2 override in root package.json is the backstop. Dropping this
+    // entry alone still loads (the override covers it); dropping both makes every importer 500
+    // with ERR_REQUIRE_ESM at module load, which check-api-routes-cjs-require.mjs reproduces
+    // against the built standalone tree.
     'sanitize-html',
     // Nivo packages
     '@nivo/pie',

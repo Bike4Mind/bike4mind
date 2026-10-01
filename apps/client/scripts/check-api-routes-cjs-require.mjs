@@ -1,12 +1,23 @@
 #!/usr/bin/env node
-// Fails the build when a BUILT API route cannot be require()d at module load.
+// Fails the build when a BUILT API route cannot be LOADED at module load.
 //
-// Failure class: an ESM-only package reached by a real require() from the CommonJS API-route
-// bundle throws ERR_REQUIRE_ESM the moment the route module is loaded. Next has not started the
+// Failure class: a module-load resolution failure in the compiled route. The motivating case is
+// ERR_REQUIRE_ESM - an ESM-only package reached by a real require() from the CommonJS route
+// bundle - but a module that does not resolve at all (MODULE_NOT_FOUND, ERR_MODULE_NOT_FOUND,
+// ERR_PACKAGE_PATH_NOT_EXPORTED) is the same production symptom. Next has not started the
 // handler and has not run auth middleware, so the caller gets a framework HTML 500 before any
 // app code runs - and every unit test stays green, because vitest imports the source as ESM and
 // never exercises a real require(). This probe loads the compiled route, so the bundler's
 // bundled-vs-externalized decision is the thing under test.
+//
+// Scope: the SELF-HOST image only. This runs against the `output: 'standalone'` tree Turbopack
+// emits for the self-host builder (B4M_SELF_HOST=true). The hosted/OpenNext build externalizes
+// traced modules into a Lambda layout this repo does not produce at PR time, so that layout is
+// NOT covered here; the deployer is where that gap can be closed. The sanitize-html/htmlparser2
+// case that motivated the guard is defused upstream in this repo by the transpilePackages entry
+// (apps/client/next.config.mjs, pinned by packages/scripts/src/checkSanitizeHtmlTranspile.test.ts)
+// plus the dual-published-htmlparser2 override; this probe is the built-artifact check that would
+// catch either mitigation being dropped.
 //
 // Why the built module and not reachability from pages/api/**: reachability is ~100% false
 // positives here - Turbopack bundles most ESM-only dependencies into the route chunk, so only
@@ -24,11 +35,19 @@
 // stage already hosts the post-build guards (pruneTestRoutes.mjs, check-standalone-tree.mjs).
 // Option A fires after the environment is live - an alarm, not a gate - and lives in another
 // repo. Option B duplicates a build this workflow already pays for, at ~12GB of heap per PR,
-// for no extra signal. Running here costs zero extra build minutes and probes the standalone
-// tree, which is the closest PR-time artifact to what OpenNext traces into the Lambda.
+// for no extra signal. Running here costs zero extra build minutes. Turbopack reports an
+// external module's load failure as an async unhandled rejection whose message WRAPS the
+// underlying error code ("Failed to load external module <name>: Error [ERR_REQUIRE_ESM]: ..."),
+// so classification reads the code out of the message too, not just off `error.code`.
 //
-// Usage: node apps/client/scripts/check-api-routes-cjs-require.mjs <.next/standalone/<app>/.next>
-// Exit 1 on any ERR_REQUIRE_ESM, or when zero routes are found (the guard cannot pass silently).
+// The builder runs this with --env-file=.env.selfhost.example: without runtime env the resource
+// shim throws at load for most routes (it reads required vars eagerly), which both masks any
+// real resolution failure behind that throw and would make the guard blind. A route that still
+// aborts on missing config is therefore a FAILURE, not a warning - an env-masked route is an
+// unprobed route, and a missing key in the template is itself a self-host defect.
+//
+// Usage: node --env-file=.env.selfhost.example apps/client/scripts/check-api-routes-cjs-require.mjs <.next/standalone/<app>/.next>
+// Exit 1 on any load failure, or when zero routes are found (the guard cannot pass silently).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -40,7 +59,19 @@ export const FAIL = 'fail';
 export const WARN = 'warn';
 export const PASS = 'pass';
 
-const ERR_REQUIRE_ESM = 'ERR_REQUIRE_ESM';
+// Resolution failures that make a shipped route unreachable. ERR_REQUIRE_ESM is the motivating
+// case; the rest are a module the tree cannot resolve at load. An env var or a network hiccup is
+// NOT in this set and stays a warning.
+export const LOAD_FAILURE_CODES = new Set([
+  'ERR_REQUIRE_ESM',
+  'MODULE_NOT_FOUND',
+  'ERR_MODULE_NOT_FOUND',
+  'ERR_PACKAGE_PATH_NOT_EXPORTED',
+]);
+
+// The resource shim's message (b4m-core/resource/src/index.ts). A route that dies on this never
+// reached its own requires, so the probe learned nothing about it.
+export const SELF_HOST_CONFIG_MISSING = 'Self-host config missing';
 
 // A route module may itself write to stdout at load, so the child tags its report and the parent
 // extracts the last tagged line rather than parsing the whole stream.
@@ -107,7 +138,11 @@ export function routePathForModule(moduleRelPath) {
   return `/${route}`;
 }
 
-/** The package a file path belongs to: the segment after the LAST node_modules (pnpm-aware), scoped-aware. */
+/**
+ * The package a file path belongs to: the segment after the LAST node_modules (pnpm-aware),
+ * scoped-aware. Turbopack's externalized modules live in `.next/node_modules/<name>-<16 hex>`;
+ * that disambiguating hash is stripped so the named package is the real one.
+ */
 export function packageNameFromPath(filePath) {
   const normalized = String(filePath).split(path.sep).join('/');
   const marker = '/node_modules/';
@@ -115,34 +150,83 @@ export function packageNameFromPath(filePath) {
   if (index === -1) return null;
   const segments = normalized.slice(index + marker.length).split('/');
   if (!segments[0]) return null;
-  if (segments[0].startsWith('@')) return segments.length >= 2 && segments[1] ? `${segments[0]}/${segments[1]}` : null;
-  return segments[0];
+  const stripHash = (name) => name.replace(/-[0-9a-f]{16}$/, '');
+  if (segments[0].startsWith('@')) return segments.length >= 2 && segments[1] ? `${segments[0]}/${stripHash(segments[1])}` : null;
+  return stripHash(segments[0]);
+}
+
+/** The code of a load failure, read off `error.code` OR out of a wrapping message. */
+export function findLoadFailureCode({ code, message } = {}) {
+  if (code && LOAD_FAILURE_CODES.has(code)) return code;
+  const text = String(message ?? '');
+  for (const candidate of LOAD_FAILURE_CODES) {
+    if (text.includes(candidate)) return candidate;
+  }
+  // Node's un-wrapped CJS shape carries no code in some paths; the phrase is the signal.
+  if (/Cannot find (?:module|package) /.test(text)) return 'MODULE_NOT_FOUND';
+  return null;
+}
+
+/** The first path on Node's "Require stack:" list, or undefined. */
+function requireStackEntry(message) {
+  const lines = String(message ?? '').split('\n');
+  const start = lines.findIndex((line) => line.trim() === 'Require stack:');
+  if (start === -1) return undefined;
+  for (const line of lines.slice(start + 1)) {
+    const match = line.match(/^\s*-\s*(.+)$/);
+    if (match) return match[1].trim();
+  }
+  return undefined;
 }
 
 /**
- * Names the ESM package and its requirer out of a Node ERR_REQUIRE_ESM message, e.g.
- * "require() of ES Module <esm> from <requirer> not supported." Best-effort: classification is by
- * error code, so a message shape change degrades the label, never the gate.
+ * Names the offending package and its requirer out of a load-failure message. Handles Node's
+ * ERR_REQUIRE_ESM ("require() of ES Module <esm> from <requirer> not supported."), its
+ * "Cannot find module/package" shapes (with an optional Require stack), and Turbopack's wrapper
+ * that embeds the original message verbatim. Best-effort: classification is by failure code, so
+ * a message shape change degrades the label, never the gate.
+ * Returns { missingPackage, requiredFrom } - either may be null.
  */
-export function describeEsmError(message) {
-  const match = String(message ?? '').match(/require\(\) of ES Module (.*?) from (.*?) not supported\./);
-  if (!match) return { esmPackage: null, requiredFrom: null };
-  return { esmPackage: packageNameFromPath(match[1]), requiredFrom: packageNameFromPath(match[2]) };
+export function describeLoadError(message) {
+  const text = String(message ?? '');
+
+  const esm = text.match(/require\(\) of ES Module (.*?) from (.*?) not supported\./);
+  if (esm) {
+    return {
+      missingPackage: packageNameFromPath(esm[1]) ?? esm[1],
+      requiredFrom: packageNameFromPath(esm[2]),
+    };
+  }
+
+  const cannotFind = text.match(/Cannot find (?:module|package) '([^']+)'(?: imported from ([^\s,]+))?/);
+  if (cannotFind) {
+    const specifier = cannotFind[1];
+    const fromPath = cannotFind[2] ?? requireStackEntry(text);
+    return {
+      missingPackage: packageNameFromPath(specifier) ?? specifier,
+      requiredFrom: fromPath ? (packageNameFromPath(fromPath) ?? fromPath) : null,
+    };
+  }
+
+  return { missingPackage: null, requiredFrom: null };
 }
 
 /**
- * Pass/fail is on the error CODE only. A clean load is `{}`; any other load error (missing env,
- * network, a side effect that throws) is a warning - it is not the failure class this guards and
- * must not fail every build that lacks a credential.
+ * Pass/fail is on a resolution failure only. A route whose load dies on missing self-host config
+ * fails too: it never reached its own requires, so a real external-ESM bug behind it would go
+ * unseen. A clean load is `{}`; anything else (network, a side effect that throws) is a warning -
+ * it is not the failure class this guards and must not fail every build that lacks a credential.
  */
 export function classifyLoadResult({ code, message, timedOut } = {}) {
   if (timedOut) return WARN;
-  if (code === ERR_REQUIRE_ESM) return FAIL;
+  const text = String(message ?? '');
+  if (text.includes(SELF_HOST_CONFIG_MISSING)) return FAIL;
+  if (findLoadFailureCode({ code, message })) return FAIL;
   if (code || message) return WARN;
   return PASS;
 }
 
-/** Groups warnings so a build with many non-ESM load errors prints a bounded summary. */
+/** Groups warnings so a build with many non-resolution load errors prints a bounded summary. */
 export function summarizeWarnings(results) {
   const counts = new Map();
   for (const { result } of results) {
@@ -225,7 +309,7 @@ async function main() {
   const modules = listApiRouteModules(nextDir);
   if (modules.length === 0) {
     // A guard that finds nothing to guard must not pass: a moved build root would otherwise
-    // read as "all clear" and the ERR_REQUIRE_ESM class would go unchecked.
+    // read as "all clear" and the load-failure class would go unchecked.
     console.error(`check-api-routes-cjs-require: no API route modules under ${path.join(nextDir, 'server/pages/api')}`);
     process.exit(1);
   }
@@ -242,26 +326,29 @@ async function main() {
   const warnings = results.filter((r) => r.status === WARN);
 
   if (warnings.length > 0) {
-    console.warn(`check-api-routes-cjs-require: ${warnings.length} route(s) did not load cleanly but are not ERR_REQUIRE_ESM (not a failure):`);
+    console.warn(`check-api-routes-cjs-require: ${warnings.length} route(s) did not load cleanly but are not a resolution failure (not a failure):`);
     for (const [key, count] of summarizeWarnings(warnings)) {
       console.warn(`  ${count}x ${key}`);
     }
   }
 
   if (failures.length > 0) {
-    console.error(`check-api-routes-cjs-require: ${failures.length} API route(s) throw ERR_REQUIRE_ESM at module load:`);
+    console.error(`check-api-routes-cjs-require: ${failures.length} API route(s) cannot load at module load:`);
     for (const { rel, result } of failures) {
-      const { esmPackage, requiredFrom } = describeEsmError(result.message);
-      const named = [esmPackage && `package ${esmPackage}`, requiredFrom && `required from ${requiredFrom}`].filter(Boolean).join(', ');
-      console.error(`  ${routePathForModule(rel)}${named ? ` (${named})` : ''}`);
+      const masked = String(result.message ?? '').includes(SELF_HOST_CONFIG_MISSING);
+      const { missingPackage, requiredFrom } = describeLoadError(result.message);
+      const named = [missingPackage && `module ${missingPackage}`, requiredFrom && `required from ${requiredFrom}`].filter(Boolean).join(', ');
+      const hint = masked ? ' [Self-host config missing - add the key to .env.selfhost.example]' : '';
+      console.error(`  ${routePathForModule(rel)}${named ? ` (${named})` : ''}${hint}`);
     }
     console.error(
-      'An ESM-only package reaches a real require() from the built route, so production returns a framework HTML 500 before the handler runs. ' +
-        'Pin or override the package to a dual-published version whose "exports" carries a require condition, or add it to transpilePackages in apps/client/next.config.mjs so the bundler inlines it.'
+      'A module the bundler left external cannot be loaded from the built route, so production returns a framework HTML 500 before the handler runs. ' +
+        'Pin or override the package to a dual-published version whose "exports" carries a require condition, add it to transpilePackages in apps/client/next.config.mjs so the bundler inlines it, ' +
+        'or (for "Self-host config missing") add the key to .env.selfhost.example so the route is not masked.'
     );
   }
 
-  console.log(`check-api-routes-cjs-require: ${results.length} routes probed, ${failures.length} ERR_REQUIRE_ESM`);
+  console.log(`check-api-routes-cjs-require: ${results.length} routes probed, ${failures.length} failed to load`);
   process.exit(failures.length > 0 ? 1 : 0);
 }
 
