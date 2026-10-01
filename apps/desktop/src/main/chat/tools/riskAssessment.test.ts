@@ -278,6 +278,12 @@ describe('assessApprovalRisk', () => {
       ['a stream editor that can write in place', 'sed -i s/a/b/ notes.txt'],
       ['an env wrapper around anything at all', 'env FOO=1 rm -rf .'],
       ['an interactive pager', 'less notes.txt'],
+      // Inert by the filesystem bar, and asked about anyway: what they print is every secret
+      // the app was started with, and other processes' command lines, tokens and all.
+      ['the environment', 'printenv'],
+      ['one environment variable', 'printenv AWS_SECRET_ACCESS_KEY'],
+      ['other processes and their arguments', 'ps aux'],
+      ['the same inside a pipeline', 'printenv | grep -i token'],
     ])('asks for %s', async (_label, command) => {
       expect(await shell(command)).toBe('sensitive');
     });

@@ -254,6 +254,12 @@ function writesNoSecondPath(rest: readonly string[]): boolean {
  * awk shells out through `system()`. `env` runs whatever follows its assignments. `less` and
  * `more` are interactive pagers and would hang a child that has no terminal. `curl`, `wget` and
  * `gh` reach the network. Every interpreter is already excluded by the bar above.
+ *
+ * `printenv` and `ps` are the user's own call and went the other way. Both ARE inert by the bar
+ * above - they read and print - which is the whole reason they are worth naming here: what they
+ * print is every environment secret the app was started with, and the command lines of other
+ * processes, tokens and all. Reading those into the model's context is not a filesystem risk,
+ * so the bar never saw it, and it is not something to do without asking.
  */
 const INERT_COMMANDS: Readonly<Record<string, InertCommand>> = {
   base64: { forbiddenArguments: ['-o', '--output'] },
@@ -334,8 +340,6 @@ const INERT_COMMANDS: Readonly<Record<string, InertCommand>> = {
   od: {},
   paste: {},
   pnpm: { scripts: RUNNABLE_SCRIPT },
-  printenv: {},
-  ps: {},
   pwd: {},
   realpath: {},
   rev: {},
