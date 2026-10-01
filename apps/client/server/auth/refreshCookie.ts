@@ -1,3 +1,4 @@
+import type { ServerResponse } from 'http';
 import type { Request, Response } from 'express';
 
 /**
@@ -58,7 +59,9 @@ export const secureAttribute = (): string => (process.env.NODE_ENV === 'producti
  * cookies in one response, so this must accumulate. Shared with the OAuth flow-cookie helpers
  * (oauthFlowCookie.ts), which set a browser-binding nonce alongside the refresh cookie.
  */
-export function appendSetCookie(res: Response, cookie: string): void {
+export type CookieResponse = Pick<ServerResponse, 'getHeader' | 'setHeader' | 'headersSent'>;
+
+export function appendSetCookie(res: CookieResponse, cookie: string): void {
   const existing = res.getHeader('Set-Cookie');
   const next = existing
     ? Array.isArray(existing)
