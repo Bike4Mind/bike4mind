@@ -17,12 +17,14 @@ const MOVED = [
   { from: 'apps/client/server/cron', to: 'apps/workers/src/cron' },
 ] as const;
 
+const OS_LITTER = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
+
 function filesUnder(dir: string): string[] {
   if (!fs.existsSync(dir)) return [];
-  // Source files only, so OS litter (.DS_Store) left behind by a branch switch does not fail it.
+  // Every file except OS litter a branch switch can leave behind; a stale fixture or .json counts too.
   return fs
     .readdirSync(dir, { recursive: true, withFileTypes: true })
-    .filter(entry => entry.isFile() && /\.(ts|tsx|mts|js|mjs)$/.test(entry.name))
+    .filter(entry => entry.isFile() && !OS_LITTER.has(entry.name))
     .map(entry => path.relative(REPO_ROOT, path.join(entry.parentPath, entry.name)));
 }
 
