@@ -56,6 +56,20 @@ describe('stripFrontmatter', () => {
     expect(stripFrontmatter(content)).toBe(content);
   });
 
+  it('keeps a lone heading between two leading rules', () => {
+    const content = '---\n# Title\n---\nBody';
+    expect(stripFrontmatter(content)).toBe(content);
+  });
+
+  it('keeps a bulleted list between two leading rules', () => {
+    const content = '---\n- Step one\n- Step two\n---\nRest of doc';
+    expect(stripFrontmatter(content)).toBe(content);
+  });
+
+  it('strips a block of blank lines only', () => {
+    expect(stripFrontmatter('---\n\n---\nBody')).toBe('Body');
+  });
+
   it('keeps a horizontal rule that follows the block', () => {
     expect(stripFrontmatter('---\ntitle: Hello\n---\n\n---\n\nBody')).toBe('---\n\nBody');
   });
