@@ -53,6 +53,8 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
       summaryTrigger: toPersistedSummaryTrigger(session.summaryTrigger),
       taggedAt: session.taggedAt,
       forkedSourceId: session.id,
+      // The session's home: without it a fork made inside a product surface lands in the main list.
+      surface: session.surface ?? undefined,
       // Carried from the source, not re-derived: the parent's scope is already correct and explicit,
       // and re-deriving it here would go through the OWNERSHIP arm alone (no resolveLakeAccess is
       // threaded to this path), which cannot see a teammate-authored organization-lake file. That

@@ -142,6 +142,32 @@ describe('cloneSession - redaction at the copy boundary', () => {
     expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ taggedAt }));
   });
 
+  // A copy made inside a product surface must stay in that surface's list. Carried for a share
+  // holder too: the surface is where the conversation lives, not a grant like the lake scope.
+  it.each(['caller-1', 'owner-1'])('carries the source session surface onto the clone (owner %s)', async ownerId => {
+    const { db } = makeAdapters(ownerId);
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: ownerId,
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      surface: 'opti',
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ surface: 'opti' }));
+  });
+
+  it('leaves the clone of a main-list session without a surface', async () => {
+    const { db } = makeAdapters('caller-1');
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create.mock.calls[0][0].surface).toBeUndefined();
+  });
+
   /**
    * Mirror image of the bug this field guards: a source carrying tags from before `taggedAt` existed
    * must not come out of the copy looking already-tagged, or the spider skips the tag pass it never
