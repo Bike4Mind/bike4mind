@@ -4,6 +4,7 @@ import {
   MAX_REPLY_CHOICES,
   REPLY_CHOICES_GUIDANCE,
   applyReplyChoices,
+  expandChoiceKey,
   extractChoicesBlock,
   formatChoiceReply,
   parseChoiceKey,
@@ -165,5 +166,23 @@ describe('applyReplyChoices', () => {
     applyReplyChoices(quest);
     expect(quest.suggestedChoices).toBeUndefined();
     expect(quest.replies).toEqual([prose]);
+  });
+});
+
+describe('expandChoiceKey', () => {
+  it('expands a bare key into the option text the button would send', () => {
+    expect(expandChoiceKey('2', { options: two })).toEqual({
+      prompt: 'Extend: Extend the loaded brief.',
+      pickedIndex: 1,
+    });
+  });
+
+  it.each([
+    ['a longer prompt', '2 but keep the caps', { options: two }],
+    ['no open choices', '2', undefined],
+    ['an already-picked set', '2', { options: two, selectedIndex: 0 }],
+    ['an out-of-range key', '3', { options: two }],
+  ])('passes %s through untouched', (_, prompt, choices) => {
+    expect(expandChoiceKey(prompt, choices)).toEqual({ prompt, pickedIndex: null });
   });
 });

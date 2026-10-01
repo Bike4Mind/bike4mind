@@ -162,3 +162,17 @@ export function applyReplyChoices(quest: {
   const options = fromSlots.choices ?? fromReply?.choices ?? null;
   quest.suggestedChoices = options ? { options } : undefined;
 }
+
+/**
+ * Expands a prompt that is only a choice key into that option's reply text, when `choices` are
+ * still open (offered and not yet picked). Anything else passes through with `pickedIndex` null.
+ */
+export function expandChoiceKey(
+  prompt: string,
+  choices: SuggestedChoices | undefined
+): { prompt: string; pickedIndex: number | null } {
+  if (!choices || choices.selectedIndex != null) return { prompt, pickedIndex: null };
+  const index = parseChoiceKey(prompt, choices.options.length);
+  if (index === null) return { prompt, pickedIndex: null };
+  return { prompt: formatChoiceReply(choices.options[index]), pickedIndex: index };
+}

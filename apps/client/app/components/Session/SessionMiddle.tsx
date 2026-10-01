@@ -43,6 +43,7 @@ import { useVirtuosoPagination } from './hooks/useVirtuosoPagination';
 import { useStreamingMessageMerge } from './hooks/useStreamingMessageMerge';
 import { shouldShowEmptySessionSplash } from './emptySessionSplashGate';
 import { buildChatHistory } from './buildChatHistory';
+import { useReplyChoices, type NewestTurn } from '@client/app/hooks/useReplyChoices';
 
 interface IProps {
   isFullWidth?: boolean;
@@ -208,6 +209,29 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
       return true;
     });
   }, [quests?.pages]);
+
+  // By timestamp, not list position: pages overlap and reorder as new quests land. A quest with no
+  // timestamp yet is the one being created, so it counts as newest and retires the old buttons.
+  const newestTurn = useMemo((): NewestTurn | undefined => {
+    let newest: (typeof flattenQuests)[number] | undefined;
+    let newestTime = Number.NEGATIVE_INFINITY;
+    for (const q of flattenQuests) {
+      const time = q.timestamp ? new Date(q.timestamp).getTime() : Number.POSITIVE_INFINITY;
+      if (time >= newestTime) {
+        newest = q;
+        newestTime = time;
+      }
+    }
+    return newest?.id ? { questId: newest.id, suggestedChoices: newest.suggestedChoices } : undefined;
+  }, [flattenQuests]);
+  const setNewestTurn = useReplyChoices(state => state.setNewestTurn);
+  useEffect(() => {
+    if (sessionId) setNewestTurn(sessionId, newestTurn);
+  }, [sessionId, newestTurn, setNewestTurn]);
+  useEffect(() => {
+    if (!sessionId) return;
+    return () => setNewestTurn(sessionId, undefined);
+  }, [sessionId, setNewestTurn]);
 
   // Clear the quest preparation overlay when quests data appears, so it stays
   // visible until the user can actually see their prompt in the chat.

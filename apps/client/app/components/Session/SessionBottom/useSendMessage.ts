@@ -57,7 +57,9 @@ import {
 } from '@client/app/hooks/useAgentMentions';
 import { useAgentExecutionDispatch } from '@client/app/hooks/useAgentExecution';
 import { useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStore';
-import { classifyQueryComplexity, isImageAttachment, routeQuery } from '@bike4mind/common';
+import { classifyQueryComplexity, expandChoiceKey, isImageAttachment, routeQuery } from '@bike4mind/common';
+import { useReplyChoices } from '@client/app/hooks/useReplyChoices';
+import { recordReplyChoice } from '@client/app/hooks/data/quests';
 import { pickOrchestrationAgent } from '@client/app/utils/agentOrchestration';
 import { evaluateShortCircuits, hasExplicitAgentLiteral } from '@client/app/utils/intentClassifierShortCircuits';
 import { useIntentClassifier } from '@client/app/hooks/useIntentClassifier';
@@ -362,7 +364,12 @@ export function useSendMessage({
     // literal-markdown senders are unaffected. Falls back to the plain chatInputValue
     // when the editor ref isn't mounted. Programmatic sends pass newPrompt explicitly
     // and bypass the editor (mirrors the getMentions() guard below).
-    const prompt = newPrompt ?? lexicalInputRef.current?.getSerializedValue() ?? chatInputValue;
+    const typedPrompt = newPrompt ?? lexicalInputRef.current?.getSerializedValue() ?? chatInputValue;
+    // A typed bare key ("2") picks that option of the newest reply's open choices, sending exactly
+    // what its button would. Editor sends only: a programmatic prompt is already what it means.
+    const newestTurn = currentSession ? useReplyChoices.getState().newestBySession[currentSession.id] : undefined;
+    const choiceKey = newPrompt === undefined ? expandChoiceKey(typedPrompt, newestTurn?.suggestedChoices) : null;
+    const prompt = choiceKey?.prompt ?? typedPrompt;
     // Validation (and the message the server stores) sees the serialized prompt,
     // so a formatted message counts its markdown syntax toward the input budget
     // (e.g. `**bold**` is 4 chars over `bold`). The overhead is markup-only and
@@ -383,6 +390,14 @@ export function useSendMessage({
       toast.error(errorMessage);
       setSubmitting(false);
       return;
+    }
+    if (currentSession && newestTurn?.suggestedChoices && choiceKey?.pickedIndex != null) {
+      void recordReplyChoice(queryClient, {
+        sessionId: currentSession.id,
+        questId: newestTurn.questId,
+        suggestedChoices: newestTurn.suggestedChoices,
+        index: choiceKey.pickedIndex,
+      });
     }
 
     // Host-managed first-message creation (e.g. /opti's TREATED OptiHashi session).
