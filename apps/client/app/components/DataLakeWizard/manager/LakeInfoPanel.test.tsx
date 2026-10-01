@@ -14,6 +14,8 @@ import type { ManagerLake } from './shared';
 vi.mock('@client/app/hooks/data/googleDrive', () => ({
   useLakeDriveConnection: () => ({ data: null, isError: false, isLoading: false }),
 }));
+// The GitHub chip reads the flag cache and its own query; it has its own suite (LakeGitHubStatusChip.test.tsx).
+vi.mock('@client/app/components/datalake/LakeGitHubStatusChip', () => ({ default: () => null }));
 
 // "Start chat" pulls in SessionsContext/react-router/react-query transitively - irrelevant to this
 // suite (build/rebuild + state chips + purge), so stub it to a no-op, same as DataLakeManagerPanel's suite.

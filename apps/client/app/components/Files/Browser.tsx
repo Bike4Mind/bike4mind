@@ -55,7 +55,7 @@ const FileBrowser: FC = () => {
             borderRadius: { xs: 0, md: 'md' },
           }}
         >
-          <ModalClose data-testid="data-lake-manager-close-btn" />
+          <ModalClose aria-label="Close data lake manager" data-testid="data-lake-manager-close-btn" />
           {isManagerOpen ? <DataLakeManagerPanel /> : null}
         </ModalDialog>
       </Modal>

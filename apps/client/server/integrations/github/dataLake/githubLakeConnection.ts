@@ -1,5 +1,10 @@
 import type { Response } from 'express';
-import { dataLakeRepository, fabFileRepository, orgGitHubLakeConnectionRepository } from '@bike4mind/database';
+import {
+  dataLakeRepository,
+  fabFileRepository,
+  isGitHubLakeSyncClaimLive,
+  orgGitHubLakeConnectionRepository,
+} from '@bike4mind/database';
 import {
   acceptsConnectorContent,
   isLakeIngestable,
@@ -17,6 +22,7 @@ import {
   type PurgeConnectionLogger,
 } from '@server/dataLakes/purgeConnectionIngestedFiles';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { serializeError } from '@server/utils/serializeError';
 import { sendToQueue } from '@server/utils/sqs';
 import {
   BadRequestError,
@@ -63,8 +69,10 @@ const POLICY_MESSAGES: Record<InstallationPolicyViolation, string> = {
     'The GitHub App installation cannot read repository contents. Accept its requested permissions on GitHub, then connect again.',
 };
 
+/** Model defaults (enabled true, status 'connected') are applied here too, for rows that predate them. */
 export function toGitHubLakeConnectionResponse(
-  conn: IOrgGitHubLakeConnectionDocument
+  conn: IOrgGitHubLakeConnectionDocument,
+  fileCount: number
 ): IOrgGitHubLakeConnectionResponse {
   return {
     id: conn.id,
@@ -73,6 +81,13 @@ export function toGitHubLakeConnectionResponse(
     repositoryFullName: conn.repositoryFullName,
     connectedBy: conn.connectedBy,
     connectedAt: conn.connectedAt,
+    enabled: conn.enabled !== false,
+    status: conn.status ?? 'connected',
+    lastError: conn.lastError ?? null,
+    defaultBranch: conn.defaultBranch ?? null,
+    lastSyncedAt: conn.lastSyncedAt ?? null,
+    syncStale: conn.status === 'syncing' && !isGitHubLakeSyncClaimLive(conn),
+    fileCount,
   };
 }
 
@@ -160,7 +175,9 @@ async function listReposVisibleToInstaller(config: GitHubLakeAppConfig, code: st
   try {
     userToken = await exchangeInstallerCode(config, code);
   } catch (error) {
-    Logger.warn('GitHub lake install: authorization code exchange failed', { error });
+    // serializeError, never the raw error: octokit's HttpError carries the request body, which holds
+    // the App's client_secret and the OAuth code.
+    Logger.warn('GitHub lake install: authorization code exchange failed', { error: serializeError(error) });
     throw new BadRequestError('The GitHub authorization expired or was already used. Connect the repository again.');
   }
   try {
@@ -168,7 +185,9 @@ async function listReposVisibleToInstaller(config: GitHubLakeAppConfig, code: st
   } finally {
     await revokeInstallerToken(config, userToken).catch((error: unknown) => {
       // Not fatal: the token was minted for this check alone and expires on its own (8h).
-      Logger.warn('GitHub lake install: could not revoke the verification user token', { error });
+      Logger.warn('GitHub lake install: could not revoke the verification user token', {
+        error: serializeError(error),
+      });
     });
   }
 }

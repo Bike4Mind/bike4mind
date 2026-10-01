@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Response } from 'express';
 import { createStateToken } from '@server/auth/jwtStateStore';
 import { NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { Logger } from '@bike4mind/observability';
 
 const h = vi.hoisted(() => ({
   exchangeInstallerCode: vi.fn(),
@@ -78,6 +79,7 @@ import {
   revokeGitHubLakeConnection,
   disableGitHubConnectionForLake,
   enableGitHubConnectionForLake,
+  toGitHubLakeConnectionResponse,
   GITHUB_LAKE_STATE_OPTIONS,
   REVOKE_PURGE_SLICE_SIZE,
 } from './githubLakeConnection';
@@ -110,6 +112,88 @@ const CONNECTION = {
   organizationId: 'orgA',
   installationId: 42,
 } as unknown as IOrgGitHubLakeConnectionDocument;
+
+describe('toGitHubLakeConnectionResponse', () => {
+  const connectedAt = new Date('2026-01-01');
+  const base = {
+    id: 'conn1',
+    accountLogin: 'acme',
+    repositoryId: 100,
+    repositoryFullName: 'acme/one',
+    connectedBy: 'user-1',
+    connectedAt,
+  };
+
+  it('exposes sync state and the file count, never credentials or claim fields', () => {
+    const lastSyncedAt = new Date('2026-02-01');
+    const conn = {
+      ...base,
+      installationId: 42,
+      enabled: false,
+      status: 'error',
+      lastError: 'Repository access was removed',
+      defaultBranch: 'main',
+      lastSyncedAt,
+      lastSyncedCommitSha: 'sha-1',
+      syncClaimedAt: new Date(),
+      ingestClaimToken: 'token-1',
+    } as unknown as IOrgGitHubLakeConnectionDocument;
+
+    expect(toGitHubLakeConnectionResponse(conn, 5)).toEqual({
+      ...base,
+      enabled: false,
+      status: 'error',
+      lastError: 'Repository access was removed',
+      defaultBranch: 'main',
+      lastSyncedAt,
+      syncStale: false,
+      fileCount: 5,
+    });
+  });
+
+  it('fills the model defaults for a row that predates them', () => {
+    const conn = base as unknown as IOrgGitHubLakeConnectionDocument;
+    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({
+      enabled: true,
+      status: 'connected',
+      lastError: null,
+      defaultBranch: null,
+      lastSyncedAt: null,
+      syncStale: false,
+    });
+  });
+
+  // @bike4mind/database is mocked above with importOriginal and only overrides specific repository
+  // methods, so isGitHubLakeSyncClaimLive itself is the real implementation here.
+  it('marks a syncing row syncStale once its claim is older than the 20-minute window', () => {
+    const conn = {
+      ...base,
+      status: 'syncing',
+      syncClaimedAt: new Date(Date.now() - 21 * 60 * 1000),
+      activeIngestBatchId: null,
+    } as unknown as IOrgGitHubLakeConnectionDocument;
+    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ syncStale: true });
+  });
+
+  it('does not mark a syncing row syncStale while its claim is fresh', () => {
+    const conn = {
+      ...base,
+      status: 'syncing',
+      syncClaimedAt: new Date(Date.now() - 60 * 1000),
+      activeIngestBatchId: null,
+    } as unknown as IOrgGitHubLakeConnectionDocument;
+    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ syncStale: false });
+  });
+
+  it('never reads a connected row as syncStale, regardless of an old syncClaimedAt', () => {
+    const conn = {
+      ...base,
+      status: 'connected',
+      syncClaimedAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
+    } as unknown as IOrgGitHubLakeConnectionDocument;
+    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ syncStale: false });
+  });
+});
 
 describe('resolveConnectableLake', () => {
   beforeEach(() => {
@@ -209,6 +293,22 @@ describe('completeGitHubLakeConnection', () => {
   it('revokes the installer token after a successful connect', async () => {
     await completeGitHubLakeConnection(params());
     expect(h.revokeInstallerToken).toHaveBeenCalledWith(CONFIG, 'user-token');
+  });
+
+  it('logs a failed code exchange without the request body that carries the client secret', async () => {
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
+    const httpError = Object.assign(new Error('The client_id and/or client_secret passed are incorrect.'), {
+      name: 'HttpError',
+      status: 400,
+      request: { body: { client_id: 'cid', client_secret: 'super-secret', code: 'the-code' } },
+    });
+    h.exchangeInstallerCode.mockRejectedValue(httpError);
+    await expect(completeGitHubLakeConnection(params())).rejects.toThrow(/expired or was already used/i);
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).toContain('client_secret passed are incorrect');
+    expect(logged).not.toContain('super-secret');
+    expect(logged).not.toContain('the-code');
+    warn.mockRestore();
   });
 
   it('fails the code exchange and never lists repositories or creates a connection', async () => {

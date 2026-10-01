@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   verifyOrgAccess: vi.fn(),
   dlFindById: vi.fn(),
   connFindByDataLakeIdAny: vi.fn(),
+  countByGitHubConnectionIdInDataLake: vi.fn(),
   getGitHubLakeAppConfig: vi.fn(),
   buildGitHubLakeConnectUrls: vi.fn(),
   disconnectGitHubLakeConnection: vi.fn(),
@@ -47,6 +48,10 @@ vi.mock('@bike4mind/database', async importOriginal => {
   return {
     ...actual,
     dataLakeRepository: { ...actual.dataLakeRepository, findById: h.dlFindById },
+    fabFileRepository: {
+      ...actual.fabFileRepository,
+      countByGitHubConnectionIdInDataLake: h.countByGitHubConnectionIdInDataLake,
+    },
     orgGitHubLakeConnectionRepository: {
       ...actual.orgGitHubLakeConnectionRepository,
       findByDataLakeIdAny: h.connFindByDataLakeIdAny,
@@ -99,22 +104,24 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       await expect(run(makeReq('GET'), res)).rejects.toThrow(/not found/i);
     });
 
-    it('returns a response with exactly the documented connection fields', async () => {
+    it("counts the connection's files under the lake's tag and hands the count to the response", async () => {
+      h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', datalakeTag: 'datalake:one' });
       h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA' });
-      h.toGitHubLakeConnectionResponse.mockReturnValue({
-        id: 'conn1',
-        accountLogin: 'acme',
-        repositoryId: 100,
-        repositoryFullName: 'acme/one',
-        connectedBy: 'u1',
-        connectedAt: new Date('2024-01-01'),
-      });
+      h.countByGitHubConnectionIdInDataLake.mockResolvedValue(7);
+      h.toGitHubLakeConnectionResponse.mockReturnValue({ id: 'conn1', fileCount: 7 });
       const { res, json } = makeRes();
       await run(makeReq('GET'), res);
-      const { connection } = json.mock.calls[0][0];
-      expect(Object.keys(connection).sort()).toEqual(
-        ['accountLogin', 'connectedAt', 'connectedBy', 'id', 'repositoryFullName', 'repositoryId'].sort()
-      );
+      expect(h.countByGitHubConnectionIdInDataLake).toHaveBeenCalledWith('conn1', 'datalake:one');
+      expect(h.toGitHubLakeConnectionResponse).toHaveBeenCalledWith({ id: 'conn1', organizationId: 'orgA' }, 7);
+      expect(json).toHaveBeenCalledWith({ connection: { id: 'conn1', fileCount: 7 } });
+    });
+
+    it('resolves null without counting when the org lake has no connection', async () => {
+      h.connFindByDataLakeIdAny.mockResolvedValue(null);
+      const { res, json } = makeRes();
+      await run(makeReq('GET'), res);
+      expect(json).toHaveBeenCalledWith({ connection: null });
+      expect(h.countByGitHubConnectionIdInDataLake).not.toHaveBeenCalled();
     });
 
     it('404s a connection whose org does not match the lake (global finder, org-scoped defence)', async () => {
