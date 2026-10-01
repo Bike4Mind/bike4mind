@@ -38,6 +38,22 @@ export class SessionRevokedError extends Error {
 }
 
 /**
+ * Thrown by the response interceptor when a 401 arrives and there is no credential to
+ * present at all - no API key (handled before the interceptor runs) and no stored tokens.
+ * That is a configuration gap, not a revocation or an expiry, so it is typed distinctly to
+ * let callers (e.g. the MCP tools) say "no credential configured" instead of reusing the
+ * refresh-failure copy. Deliberately NOT a {@link SessionRevokedError}: checkSessionValid
+ * must keep answering "not revoked" for this case. The message keeps the substring
+ * `Authentication failed` so existing string-matching callers are unaffected.
+ */
+export class NotAuthenticatedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NotAuthenticatedError';
+  }
+}
+
+/**
  * Authenticated API client for B4M services
  * Automatically injects access tokens from ConfigStore
  */
@@ -110,13 +126,19 @@ export class ApiClient {
         if (error.response?.status === 401 && !originalRequest._retry) {
           originalRequest._retry = true;
 
+          // Read the tokens BEFORE the try: "no stored tokens" is not a refresh failure,
+          // and a throw inside the try would be rewritten by the catch below into the
+          // misleading "Authentication expired" message. Surface the distinct typed error
+          // directly instead.
+          const tokens = await this.configStore.getAuthTokens();
+
+          if (!tokens) {
+            throw new NotAuthenticatedError(
+              'Authentication failed: not logged in. Please run `b4m login` to authenticate.'
+            );
+          }
+
           try {
-            const tokens = await this.configStore.getAuthTokens();
-
-            if (!tokens) {
-              throw new Error('Not authenticated');
-            }
-
             // Skip refresh while the stored access token has not expired yet: a 401 against a
             // token that is still inside its own lifetime is far more likely a transient server
             // error than an auth failure, and refreshing would spend a rotation for nothing.

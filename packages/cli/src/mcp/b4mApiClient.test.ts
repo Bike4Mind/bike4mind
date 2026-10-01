@@ -10,9 +10,18 @@ vi.mock('../auth/ApiClient', () => ({
     post = mockPost;
     getAxiosInstance = () => ({ post: mockAxiosPost });
   },
+  // Mirrors the real class identity mapApiError keys on: the mocked module and the
+  // code under test must share the same class, or `instanceof` would never match.
+  NotAuthenticatedError: class NotAuthenticatedError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'NotAuthenticatedError';
+    }
+  },
 }));
 
 import { B4mApiClient, mapApiError } from './b4mApiClient';
+import { NotAuthenticatedError } from '../auth/ApiClient';
 
 const axiosError = (status: number, opts: { headers?: Record<string, string>; data?: unknown; code?: string } = {}) =>
   new AxiosError('request failed', opts.code, {} as InternalAxiosRequestConfig, {}, {
@@ -329,6 +338,13 @@ describe('mapApiError', () => {
 
   it('maps 401 to a re-auth hint', () => {
     expect(mapApiError(axiosError(401), 'http://x')).toContain('authentication failed');
+  });
+
+  it('maps NotAuthenticatedError to a no-credential message naming both fixes', () => {
+    const msg = mapApiError(new NotAuthenticatedError('Authentication failed'), 'http://x');
+    expect(msg).toContain('B4M_API_KEY');
+    expect(msg).toContain('b4m login');
+    expect(msg).not.toContain('expired');
   });
 
   it('gives a broad forbidden message on 403 with the recommended scope', () => {
