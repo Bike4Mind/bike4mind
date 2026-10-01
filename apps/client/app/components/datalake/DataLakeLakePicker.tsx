@@ -27,7 +27,11 @@ import SearchIcon from '@mui/icons-material/Search';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import { menuItemListSx, menuSurfaceSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
-import { lakeVisibilityLabelShort } from '@client/app/components/datalake/lakeVisibility';
+import {
+  isDraftLake,
+  lakeVisibilityLabelShort,
+  DRAFT_LAKE_TOOLTIP,
+} from '@client/app/components/datalake/lakeVisibility';
 import type { ManageableDataLakeConfig } from '@bike4mind/common';
 
 /**
@@ -414,9 +418,24 @@ export default function DataLakeLakePicker({
                           <Typography noWrap level="body-sm">
                             {lake.name}
                           </Typography>
-                          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                            {lakeVisibilityLabelShort(lake)}
-                          </Typography>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+                            <Typography noWrap level="body-xs" sx={{ color: 'text.tertiary', minWidth: 0 }}>
+                              {lakeVisibilityLabelShort(lake)}
+                            </Typography>
+                            {isDraftLake(lake) && (
+                              <Tooltip size="sm" title={DRAFT_LAKE_TOOLTIP}>
+                                <Chip
+                                  size="sm"
+                                  variant="soft"
+                                  color="warning"
+                                  sx={{ fontSize: '11px', flexShrink: 0 }}
+                                  data-testid={`datalake-lake-picker-draft-chip-${lake.id}`}
+                                >
+                                  Draft
+                                </Chip>
+                              </Tooltip>
+                            )}
+                          </Box>
                         </ListItemContent>
                         {/* Mirrors the manager list's marker: an admin sees every tenant's lakes,
                           so an unmarked row would read as their own. */}

@@ -9,6 +9,8 @@ export type LakeDriveConnection = {
   driveFolderId: string;
   folderName: string | null;
   status: DriveConnectionStatus;
+  /** 'syncing' with a claim past its staleness window: the run died, so Re-sync is the only way out. */
+  syncStale: boolean;
   enabled: boolean;
   lastError: string | null;
   lastUsedAt: string | null;
@@ -72,9 +74,9 @@ export const DRIVE_CONNECTION_IDLE_POLL_MS = 20_000;
 /** Exported so the interval logic is unit-testable without mounting the query. */
 export function driveConnectionPollInterval(connection: LakeDriveConnection | null | undefined): number | false {
   if (!connection) return false;
-  return connection.status === 'syncing' || connection.disconnecting
-    ? DRIVE_CONNECTION_ACTIVE_POLL_MS
-    : DRIVE_CONNECTION_IDLE_POLL_MS;
+  // A stalled claim will not change on its own, so polling it at the active cadence forever is waste.
+  const active = connection.disconnecting || (connection.status === 'syncing' && !connection.syncStale);
+  return active ? DRIVE_CONNECTION_ACTIVE_POLL_MS : DRIVE_CONNECTION_IDLE_POLL_MS;
 }
 
 /**

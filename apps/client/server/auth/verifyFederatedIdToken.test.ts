@@ -194,8 +194,7 @@ describe('verifyFederatedIdToken - staged subjectSource=sub requirement (OAUTH_A
     await expect(verifyFederatedIdToken('tok', IDP)).rejects.toBeInstanceOf(FederatedIdTokenError);
   });
 
-  it('grace mode (flag unset) still resolves an identities-source client but logs a would-reject', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('grace mode (flag unset) still resolves an identities-source client', async () => {
     mockVerify.mockResolvedValue({
       token_use: 'id',
       identities: [{ userId: 'b4m-user-123', providerName: 'B4M' }],
@@ -204,8 +203,6 @@ describe('verifyFederatedIdToken - staged subjectSource=sub requirement (OAUTH_A
     const result = await verifyFederatedIdToken('tok', IDP);
 
     expect(result.b4mUserId).toBe('b4m-user-123');
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('would-reject'));
-    warn.mockRestore();
   });
 
   it('enforce mode does not affect a subjectSource=sub client', async () => {

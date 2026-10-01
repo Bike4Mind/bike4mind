@@ -2,6 +2,7 @@ import { Box, Chip, ChipDelete, Stack, Tooltip, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import type { ManageableDataLakeConfig } from '@bike4mind/common';
 import { useDataLakeSurface } from './surfaceTokens';
+import { isDraftLake, DRAFT_LAKE_TOOLTIP } from './lakeVisibility';
 
 /**
  * Names every lake the chat is currently grounded on, for the multi-lake scope the picker trigger
@@ -56,27 +57,31 @@ export default function ActiveLakeScopeStrip({
             {copy.noLakesLabel}
           </Chip>
         )}
-        {lakes.map(lake => (
-          <Chip
-            key={lake.id}
-            size="sm"
-            variant="soft"
-            color="neutral"
-            sx={{ fontSize: '11px', maxWidth: '100%' }}
-            data-testid={`datalake-active-scope-chip-${lake.id}`}
-            endDecorator={
-              onRemove && (
-                <ChipDelete
-                  onDelete={() => onRemove(lake.id)}
-                  aria-label={`Remove ${lake.name} from scope`}
-                  data-testid={`datalake-active-scope-remove-${lake.id}`}
-                />
-              )
-            }
-          >
-            {lake.name}
-          </Chip>
-        ))}
+        {lakes.map(lake => {
+          const isDraft = isDraftLake(lake);
+          return (
+            <Tooltip key={lake.id} size="sm" title={isDraft ? DRAFT_LAKE_TOOLTIP : ''}>
+              <Chip
+                size="sm"
+                variant="soft"
+                color={isDraft ? 'warning' : 'neutral'}
+                sx={{ fontSize: '11px', maxWidth: '100%' }}
+                data-testid={`datalake-active-scope-chip-${lake.id}`}
+                endDecorator={
+                  onRemove && (
+                    <ChipDelete
+                      onDelete={() => onRemove(lake.id)}
+                      aria-label={`Remove ${lake.name} from scope`}
+                      data-testid={`datalake-active-scope-remove-${lake.id}`}
+                    />
+                  )
+                }
+              >
+                {lake.name}
+              </Chip>
+            </Tooltip>
+          );
+        })}
         {/* Clears back to every reachable lake. The picker can do this too (its "All data lakes"
             row), but that is two clicks behind a trigger whose label is the thing being
             questioned, and undoing a narrow scope should not require reading the menu again. */}

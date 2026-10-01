@@ -20,6 +20,7 @@ import {
   type ICompletionOptionTools,
 } from '@bike4mind/common';
 import { OpenAIBackend } from './openaiBackend';
+import type { ICompletionOptionTools as AdapterTool } from './backend';
 
 type AnyRecord = Record<string, unknown>;
 
@@ -281,4 +282,61 @@ describe('OpenAIBackend (Responses path) does not duplicate an echoed tool artif
 
     expect(clientText(calls)).toContain('identifier="mermaid-2"');
   });
+});
+
+describe('OpenAIBackend (Responses path) honors a tool-declared artifactType', () => {
+  const HTML_ARTIFACT = '<artifact identifier="panel" type="text/html" title="Panel"><p>rows</p></artifact>';
+
+  it.each([
+    ['declared', 'text/html', ARTIFACT_DELIVERED_PLACEHOLDER, ARTIFACT_REMOVED_PLACEHOLDER],
+    ['undeclared', undefined, ARTIFACT_REMOVED_PLACEHOLDER, ARTIFACT_DELIVERED_PLACEHOLDER],
+  ])(
+    'gives the matching history placeholder to an external tool whose type is %s',
+    async (_label, artifactType, want, notWant) => {
+      const panelTool: AdapterTool = {
+        toolSchema: {
+          name: 'external_panel',
+          description: 'Render a panel',
+          parameters: { type: 'object', properties: {} },
+        },
+        toolFn: async () => `Here is the panel:\n${HTML_ARTIFACT}`,
+        ...(artifactType ? { artifactType } : {}),
+      };
+      const backend = new OpenAIBackend('test-key');
+      const turn2Requests: string[] = [];
+      (backend as unknown as { _api: unknown })._api = {
+        responses: {
+          create: async () =>
+            responsesEventStream({
+              output: [{ type: 'function_call', call_id: 'call_1', name: 'external_panel', arguments: '{}' }],
+              usage: { input_tokens: 10, output_tokens: 4 },
+            }),
+        },
+        chat: {
+          completions: {
+            create: async (params: AnyRecord) => {
+              turn2Requests.push(JSON.stringify(params));
+              return {
+                choices: [{ index: 0, message: { role: 'assistant', content: 'Done.' } }],
+                usage: { prompt_tokens: 5, completion_tokens: 3 },
+              };
+            },
+          },
+        },
+      };
+
+      const { cb } = captureCb();
+      await backend.complete(
+        ChatModels.GPT5,
+        [{ role: 'user', content: 'show the panel' }],
+        { tools: [panelTool] },
+        cb
+      );
+
+      expect(turn2Requests).toHaveLength(1);
+      expect(turn2Requests[0]).not.toContain('<artifact');
+      expect(turn2Requests[0]).toContain(want);
+      expect(turn2Requests[0]).not.toContain(notWant);
+    }
+  );
 });

@@ -7,6 +7,7 @@ import {
   filterToolArtifactMarkup,
   hasDeliverablePinnedArtifact,
   parseToolArtifactAttributes,
+  resolveToolArtifactType,
   stripDeliveredArtifactBlocks,
   stripToolArtifactMarkup,
 } from './toolArtifactEmitters';
@@ -335,5 +336,32 @@ describe('stripDeliveredArtifactBlocks: the recursive-reply guard only removes a
     stripDeliveredArtifactBlocks(`${'<artifact>'.repeat(50_000)}</artifact>`, MERMAID_ARTIFACT);
     stripDeliveredArtifactBlocks(MERMAID_ARTIFACT.repeat(20_000), MERMAID_ARTIFACT);
     expect(Date.now() - started).toBeLessThan(2_000);
+  });
+});
+
+describe('declared artifact type: a tool registered at runtime through externalTools', () => {
+  const HTML_ARTIFACT = '<artifact identifier="panel" type="text/html" title="Panel"><p>rows</p></artifact>';
+
+  it('resolves to the declared type for a name the static map does not hold', () => {
+    expect(resolveToolArtifactType('external_panel', 'text/html')).toBe('text/html');
+    expect(resolveToolArtifactType('external_panel')).toBeUndefined();
+    expect(resolveToolArtifactType('external_panel', '')).toBeUndefined();
+  });
+
+  it('keeps the static pin when a runtime tool shadows a built-in name', () => {
+    expect(resolveToolArtifactType('chess_engine', 'text/html')).toBe(ClaudeArtifactMimeTypes.CHESS);
+    expect(filterToolArtifactMarkup('chess_engine', HTML_ARTIFACT, 'text/html')).toBeNull();
+  });
+
+  it('filters and detects markup of the declared type only', () => {
+    const text = `Here is the panel:\n${HTML_ARTIFACT}\n${CHESS_ARTIFACT}`;
+
+    expect(filterToolArtifactMarkup('external_panel', text)).toBeNull();
+    expect(filterToolArtifactMarkup('external_panel', text, 'text/html')).toBe(
+      `Here is the panel:\n${HTML_ARTIFACT}\n`
+    );
+    expect(hasDeliverablePinnedArtifact('external_panel', text)).toBe(false);
+    expect(hasDeliverablePinnedArtifact('external_panel', text, 'text/html')).toBe(true);
+    expect(hasDeliverablePinnedArtifact('external_panel', CHESS_ARTIFACT, 'text/html')).toBe(false);
   });
 });
