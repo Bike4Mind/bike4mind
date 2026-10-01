@@ -12,6 +12,7 @@ import { ApiKeyScope, MethodNotAllowedError } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import nc from 'next-connect';
 import { Config, isDevelopment } from '@server/utils/config';
+import { resolveAllowedMethods } from '@server/utils/allowedMethods';
 
 // Gears: hook the shared tool pipeline once per lambda (fire-and-forget observer).
 registerToolGearObserver();
@@ -75,12 +76,33 @@ interface BaseAPIOptions {
    */
   meterAsKeyManagement?: boolean;
   /**
-   * HTTP methods this route serves. When set, any other method is answered 405 with an
-   * `Allow` header AHEAD of the auth chain, so a wrong verb is never misreported as a
-   * missing credential or scope. Omit to leave method matching to next-connect, whose
+   * HTTP methods this route serves (GET implies HEAD). When set, any other method is answered
+   * 405 with an `Allow` header AHEAD of the auth chain, so a wrong verb is never misreported as
+   * a missing credential or scope. Omit to leave method matching to next-connect, whose
    * no-match answer is a 404 that only fires after auth has already run.
    */
   allowedMethods?: readonly string[];
+}
+
+/** 405s any method outside `allowedMethods` (GET implies HEAD), setting `Allow`; passes the rest. */
+function methodGuard(allowedMethods: readonly string[]) {
+  const allowed = resolveAllowedMethods(allowedMethods);
+  const allowHeader = allowed.join(', ');
+  return (req: Request, res: Response, next: () => void) => {
+    if (allowed.includes(req.method ?? '')) return next();
+    res.setHeader('Allow', allowHeader);
+    throw new MethodNotAllowedError(`Method ${req.method} is not allowed. Allowed: ${allowHeader}`);
+  };
+}
+
+/**
+ * A handler that only ever answers 405, for a page that dispatches each method to its own
+ * contract router: those routers' `Allow` names only their own method, while this one names
+ * everything the path serves. It has no auth because it serves nothing - the dispatcher must
+ * route every listed method elsewhere.
+ */
+export function methodNotAllowedHandler(allowedMethods: readonly string[]) {
+  return nc<Request, Response>({ onError: errorHandler }).use(logging).all(methodGuard(allowedMethods));
 }
 
 /** Default max body size: 1MB - prevents memory exhaustion from large payloads */
@@ -149,13 +171,10 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
   // auth middleware.
   const { allowedMethods } = resolvedOptions;
   if (allowedMethods) {
-    const allowed = allowedMethods.map(method => method.toUpperCase());
-    const allowHeader = allowed.join(', ');
-    router.use((req, res, next) => {
-      if (allowed.includes(req.method ?? '')) return next();
-      res.setHeader('Allow', allowHeader);
-      throw new MethodNotAllowedError(`Method ${req.method} is not allowed. Allowed: ${allowHeader}`);
-    });
+    // `all`, not `use`: next-connect 404s without running any middleware when only `use`
+    // handlers match the method, so a `use` guard is skipped on any route without a mounted
+    // auth sub-router (every `auth: false` route). An `all` handler matches every method.
+    router.all(methodGuard(allowedMethods));
   }
 
   // Check request body size to prevent memory exhaustion

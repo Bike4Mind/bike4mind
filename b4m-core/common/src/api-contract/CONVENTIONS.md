@@ -143,7 +143,7 @@ re-deciding per endpoint:
 | Request body failed schema validation | `422` | - |
 | Missing or invalid credential | `401` | - |
 | Valid key, missing scope | `403` | - (the body carries `required_scopes`, and `also_required_scopes` when set) |
-| Method the contract does not declare | `405` | - (`Allow` header; answered before auth, never declared by a contract) |
+| Method the contract does not declare | `405` | - (`Allow` header; answered before auth, auto-documented on every operation) |
 | Provider rejected *our* credentials | `401` | `provider_rejected` |
 | Provider failed to generate (upstream error) | `502` | - |
 | No provider key configured for this deployment | `503` | `provider_not_configured` |

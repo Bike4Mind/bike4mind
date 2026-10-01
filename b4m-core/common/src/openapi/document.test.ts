@@ -121,6 +121,17 @@ describe('buildOpenApiDocument', () => {
     expect(completions.responses['403']).toBeUndefined();
   });
 
+  it('auto-injects 405 with an Allow header on every operation, streaming and Lambda-served included', () => {
+    // Both transports guard the contract's method ahead of auth and before a stream opens
+    // (baseApi `allowedMethods`, defineLambdaRoute), so unlike 401/403 there is no exclusion.
+    for (const op of [chat, completions, tools]) {
+      expect(op.responses['405'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
+      expect(op.responses['405'].headers.Allow).toBeDefined();
+      // Answered ahead of apiKeyRateLimit, so the limiter never sets its headers on it.
+      expect(op.responses['405'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
+    }
+  });
+
   it('documents OR semantics for required scopes in info.description', () => {
     expect(doc.info.description.toLowerCase()).toContain('any one');
   });

@@ -298,9 +298,10 @@ const RATE_LIMIT_HEADER_SPEC = {
 };
 
 /**
- * The auth failures `registerContract` INJECTS carry no rate-limit headers:
+ * The failures `registerContract` INJECTS carry no rate-limit headers:
  * `apiKeyAuth` throws on an invalid key (401) or an under-scoped one (403), and
- * `apiKeyRateLimit` is mounted AFTER it, so it never runs.
+ * the method guard 405s ahead of the whole auth chain (baseApi `allowedMethods`,
+ * defineLambdaRoute). `apiKeyRateLimit` is mounted AFTER all of them, so it never runs.
  *
  * That reasoning covers only the injected pair. A contract declaring its own 401
  * or 403 means something else entirely - `/api/ai/tts` 401s `provider_not_configured`
@@ -309,10 +310,10 @@ const RATE_LIMIT_HEADER_SPEC = {
  * status alone. 429 is never excluded: the middleware sets the headers before
  * throwing TooManyRequests.
  */
-const INJECTED_AUTH_STATUSES = new Set(['401', '403']);
+const INJECTED_PRE_LIMIT_STATUSES = new Set(['401', '403', '405']);
 
-function isInjectedAuthFailure(status: string, declaredStatuses: ReadonlySet<string> | undefined): boolean {
-  return INJECTED_AUTH_STATUSES.has(status) && !declaredStatuses?.has(status);
+function isInjectedPreLimitFailure(status: string, declaredStatuses: ReadonlySet<string> | undefined): boolean {
+  return INJECTED_PRE_LIMIT_STATUSES.has(status) && !declaredStatuses?.has(status);
 }
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace']);
@@ -384,7 +385,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
         if (pollResultStatuses?.has(status)) {
           response['x-poll-result'] = { schema: { $ref: `#/components/schemas/${opId}${status}PollResult` } };
         }
-        if (emitsRateLimitHeaders && !isInjectedAuthFailure(status, declaredStatuses)) {
+        if (emitsRateLimitHeaders && !isInjectedPreLimitFailure(status, declaredStatuses)) {
           response.headers = { ...response.headers, ...RATE_LIMIT_HEADER_SPEC };
         }
       }

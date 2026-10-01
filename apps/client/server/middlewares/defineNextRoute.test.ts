@@ -78,8 +78,9 @@ vi.mock('@server/auth/auth', async orig => {
   return { ...actual, auth: authRouter };
 });
 
-import { ApiKeyScope, defineEndpoint } from '@bike4mind/common';
+import { ApiKeyScope, ScopeForbiddenErrorSchema, defineEndpoint } from '@bike4mind/common';
 import { UnauthorizedError } from '@server/utils/errors';
+import { baseApi, methodNotAllowedHandler } from './baseApi';
 import { nextRouteForContract } from './defineNextRoute';
 
 const BodySchema = z.object({ message: z.string(), count: z.number().positive().default(1) });
@@ -197,6 +198,12 @@ describe('nextRouteForContract', () => {
       const body = res._getJSONData();
       expect(body.required_scopes).toEqual([ApiKeyScope.AI_CHAT]);
       expect(JSON.stringify(body)).not.toContain(ApiKeyScope.READ_FILES);
+      // The published schema must describe the real wire body: strict, so a field renamed in
+      // apiKeyAuth fails here instead of silently drifting from the spec.
+      const parsed = ScopeForbiddenErrorSchema.strict().parse(body);
+      // The schema types scopes as plain strings (ApiKeyScope is not import-safe there), so pin
+      // that what goes on the wire is the real scope vocabulary.
+      expect(Object.values(ApiKeyScope)).toEqual(expect.arrayContaining(parsed.required_scopes ?? []));
     });
   });
 
@@ -276,6 +283,49 @@ describe('nextRouteForContract', () => {
       expect(handlerFn).not.toHaveBeenCalled();
       // Load-bearing: the guard runs ahead of apiKeyAuth, not merely ahead of the handler.
       expect(mockValidate).not.toHaveBeenCalled();
+    });
+
+    it('serves HEAD on a GET contract and advertises it in Allow', async () => {
+      const getContract = makeContract({ method: 'get', auth: 'public', scopes: undefined, request: undefined });
+      const handlerFn = vi.fn((_req, res) => res.status(200).json({ ok: true }));
+      const route = nextRouteForContract(getContract).get(handlerFn);
+
+      const head = fire({ method: 'HEAD', body: {} });
+      await route(head.req, head.res);
+      expect(head.res._getStatusCode()).toBe(200);
+      expect(handlerFn).toHaveBeenCalledTimes(1);
+
+      const wrong = fire({ method: 'DELETE', body: {} });
+      await route(wrong.req, wrong.res);
+      expect(wrong.res._getStatusCode()).toBe(405);
+      expect(wrong.res.getHeader('Allow')).toBe('GET, HEAD');
+    });
+  });
+
+  describe('baseApi allowedMethods', () => {
+    it('405s OPTIONS on a route that does not list it', async () => {
+      const route = baseApi({ auth: false, allowedMethods: ['post'] }).post((_req, res) => res.status(200).end());
+      const { req, res } = fire({ method: 'OPTIONS', body: {} });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(405);
+      expect(res.getHeader('Allow')).toBe('POST');
+    });
+
+    it('methodNotAllowedHandler 405s with the full Allow set, with no handler registered', async () => {
+      const handler = methodNotAllowedHandler(['get', 'post', 'delete']);
+      const { req, res } = fire({ method: 'PATCH', body: {} });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(405);
+      expect(res.getHeader('Allow')).toBe('GET, HEAD, POST, DELETE');
+      expect(res._getJSONData()).toEqual(expect.objectContaining({ request_id: expect.any(String) }));
+    });
+
+    it('leaves method matching to next-connect when the option is omitted', async () => {
+      const route = baseApi({ auth: false }).post((_req, res) => res.status(200).end());
+      const { req, res } = fire({ method: 'DELETE', body: {} });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(404);
+      expect(res.getHeader('Allow')).toBeUndefined();
     });
   });
 

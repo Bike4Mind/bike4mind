@@ -215,6 +215,22 @@ export function registerContract(contract: EndpointContract): void {
     }
   }
 
+  // Both transports 405 any method but the contract's own, ahead of auth and before a stream
+  // opens (baseApi's `allowedMethods` for Next, defineLambdaRoute's guard for Function URLs), so
+  // this holds for public and streaming contracts too.
+  if (!responses['405']) {
+    responses['405'] = {
+      description: 'The path does not serve this HTTP method.',
+      content: { 'application/json': { schema: ErrorResponse } },
+      headers: {
+        Allow: {
+          description: 'The methods this path serves. GET implies HEAD.',
+          schema: { type: 'string' },
+        },
+      },
+    };
+  }
+
   const requestSchema = contract.requestDoc ?? contract.request;
   // No `.openapi(name)` here: zod-to-openapi always inlines `request.params`/
   // `request.query` into the operation's `parameters` array rather than a

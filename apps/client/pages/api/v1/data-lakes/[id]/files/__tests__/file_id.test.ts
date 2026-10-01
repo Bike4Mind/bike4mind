@@ -22,6 +22,7 @@ const {
   mockFindFile,
   mockFeatureEnabled,
   mockRateLimitOptions,
+  mockMethodNotAllowed,
 } = vi.hoisted(() => ({
   mockAssertLakeAccess: vi.fn(),
   mockAssertLakeAccessWithGrants: vi.fn(),
@@ -31,11 +32,14 @@ const {
   mockFindFile: vi.fn(),
   mockFeatureEnabled: { value: true },
   mockRateLimitOptions: vi.fn(),
+  mockMethodNotAllowed: vi.fn(),
 }));
 
 // Keeps next-connect's registrar shape and runs `.use()` middleware ahead of each handler, so the
 // feature-flag gate is exercised alongside the contract prelude.
 vi.mock('@server/middlewares/baseApi', () => ({
+  methodNotAllowedHandler: (allowedMethods: readonly string[]) => (req: unknown, res: unknown) =>
+    mockMethodNotAllowed(allowedMethods, req, res),
   baseApi: () => {
     type Mw = (req: unknown, res: unknown, next: () => void) => unknown;
     const used: Mw[] = [];
@@ -136,7 +140,7 @@ const memberFile = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-async function run(method: 'GET' | 'POST' | 'DELETE', fileId: string = FILE_ID, id = 'handbook') {
+async function run(method: 'GET' | 'POST' | 'DELETE' | 'PATCH', fileId: string = FILE_ID, id = 'handbook') {
   const { req, res } = createMocks({ method, query: { id, file_id: fileId } });
   Object.assign(req, { user: { id: 'u1' }, logger });
   await handler(req as never, res as never);
@@ -311,4 +315,18 @@ describe('feature flag', () => {
       expect(mockAssertLakeAccessWithGrants).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('method dispatch', () => {
+  it('hands a method no contract serves to the path-level 405 handler, advertising every verb', async () => {
+    await run('PATCH');
+    expect(mockMethodNotAllowed).toHaveBeenCalledWith(['get', 'post', 'delete'], expect.anything(), expect.anything());
+    expect(mockAssertLakeAccess).not.toHaveBeenCalled();
+    expect(mockAssertLakeAccessWithGrants).not.toHaveBeenCalled();
+  });
+
+  it('serves GET without touching the 405 handler', async () => {
+    await run('GET');
+    expect(mockMethodNotAllowed).not.toHaveBeenCalled();
+  });
 });

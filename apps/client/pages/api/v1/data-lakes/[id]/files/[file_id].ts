@@ -34,6 +34,7 @@ import {
   lakeMembershipRemovalRepository,
   scopedSettingsRepository,
 } from '@bike4mind/database';
+import { methodNotAllowedHandler } from '@server/middlewares/baseApi';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
@@ -170,6 +171,12 @@ const removeRouter = nextRouteForContract(removeDataLakeFileContract, { rateLimi
     return res.json(body);
   });
 
+const methodNotAllowed = methodNotAllowedHandler([
+  getDataLakeFileContract.method,
+  addDataLakeFileContract.method,
+  removeDataLakeFileContract.method,
+]);
+
 // One contract per method, and nextRouteForContract refuses a verb its contract does not declare,
 // so each method has its own router and this dispatches between them.
 export default function handler(req: Request, res: Response) {
@@ -178,7 +185,8 @@ export default function handler(req: Request, res: Response) {
   // structurally, hence the casts.
   if (req.method === 'POST') return addRouter(req as Parameters<typeof addRouter>[0], res);
   if (req.method === 'DELETE') return removeRouter(req as Parameters<typeof removeRouter>[0], res);
-  return getRouter(req as Parameters<typeof getRouter>[0], res);
+  if (req.method === 'GET' || req.method === 'HEAD') return getRouter(req as Parameters<typeof getRouter>[0], res);
+  return methodNotAllowed(req, res);
 }
 
 export const config = {

@@ -57,6 +57,8 @@ export function nextRouteForContract<C extends EndpointContract>(
   const { rateLimit, ...baseOptions } = options;
 
   const router = baseApi<ValidatedReq, Response>({
+    // First, so the contract-derived options below always win over a stray runtime field.
+    ...baseOptions,
     // 'jwtOnly' is enforced in baseApi by not installing the api-key chain at all,
     // so a key is never validated/metered/billed before being rejected.
     auth: contract.auth === 'public' ? false : contract.auth === 'jwtOnly' ? 'jwtOnly' : true,
@@ -67,7 +69,6 @@ export function nextRouteForContract<C extends EndpointContract>(
     // A contract serves exactly one method (the verb guard below enforces it), so any
     // other method 405s before the scope gate can misreport it as a 403.
     allowedMethods: [contract.method],
-    ...baseOptions,
   });
 
   const prelude: Handler[] = [];
