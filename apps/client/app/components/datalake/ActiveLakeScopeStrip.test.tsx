@@ -54,6 +54,32 @@ describe('ActiveLakeScopeStrip', () => {
     expect(onClear).toHaveBeenCalledTimes(1);
   });
 
+  it('removes one lake from the scope without clearing the rest', () => {
+    const onRemove = vi.fn();
+    render(
+      <Wrapper>
+        <ActiveLakeScopeStrip
+          lakes={[lake('a', 'Research Corpus'), lake('b', 'Design Docs')]}
+          onClear={vi.fn()}
+          onRemove={onRemove}
+        />
+      </Wrapper>
+    );
+
+    fireEvent.click(screen.getByTestId('datalake-active-scope-remove-b'));
+    expect(onRemove).toHaveBeenCalledWith('b');
+  });
+
+  it('offers no per-lake remove when the host does not handle one', () => {
+    render(
+      <Wrapper>
+        <ActiveLakeScopeStrip lakes={[lake('a', 'Research Corpus'), lake('b', 'Design Docs')]} onClear={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId('datalake-active-scope-remove-a')).not.toBeInTheDocument();
+  });
+
   it('explains only a draft lake on hover', async () => {
     render(
       <Wrapper>

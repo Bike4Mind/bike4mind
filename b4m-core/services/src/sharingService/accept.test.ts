@@ -70,7 +70,16 @@ describe('sharingService - acceptInvite (Organization)', () => {
 
     await acceptInvite(userId, { id: inviteId }, mockAdapters as any);
 
-    expect(mockAdapters.db.users.update).toHaveBeenCalledWith(expect.objectContaining({ id: userId, organizationId }));
+    expect(mockAdapters.db.users.update).toHaveBeenCalledTimes(1);
+    expect(mockAdapters.db.users.update.mock.calls[0][0]).toStrictEqual({ id: userId, organizationId });
+    expect(mockAdapters.db.users.update.mock.calls[0][1]).toBeUndefined();
+    expect(mockAdapters.db.invites.update).toHaveBeenCalledTimes(1);
+    expect(mockAdapters.db.invites.update.mock.calls[0][0]).toStrictEqual({
+      id: inviteId,
+      recipients: { pending: [], refused: [], accepted: ['member@example.com'] },
+      accepted: 1,
+      remaining: 4,
+    });
   });
 
   it('adds the user to the organization users[] via a targeted write and seeds the credit row atomically', async () => {
@@ -83,9 +92,9 @@ describe('sharingService - acceptInvite (Organization)', () => {
     // users[] persisted through a targeted write - never the whole document (which would $set a
     // stale userDetails snapshot able to clobber a concurrent credit increment).
     const updateArg = mockAdapters.db.organization.update.mock.calls[0][0];
-    expect(updateArg).toEqual({
+    expect(updateArg).toStrictEqual({
       id: organizationId,
-      users: expect.arrayContaining([expect.objectContaining({ userId, permissions: [Permission.read] })]),
+      users: [{ userId, permissions: [Permission.read], projectId: undefined, sessionId: undefined }],
     });
     expect(updateArg).not.toHaveProperty('userDetails');
 
@@ -147,7 +156,8 @@ describe('sharingService - acceptInvite (Organization)', () => {
 
     await acceptInvite(userId, { id: inviteId }, mockAdapters as any);
 
-    expect(mockAdapters.db.users.update).toHaveBeenCalledWith(expect.objectContaining({ organizationId }));
+    expect(mockAdapters.db.users.update).toHaveBeenCalledTimes(1);
+    expect(mockAdapters.db.users.update.mock.calls[0][0]).toStrictEqual({ id: userId, organizationId });
   });
 
   it('throws when the organization is full and does not update the user', async () => {
@@ -251,7 +261,15 @@ describe('sharingService - acceptInvite (Group)', () => {
 
     await acceptInvite(userId, { id: inviteId }, mockAdapters as any);
 
-    expect(mockAdapters.db.users.update).toHaveBeenCalledWith(expect.objectContaining({ groups: [groupId] }));
+    expect(mockAdapters.db.users.update).toHaveBeenCalledTimes(1);
+    expect(mockAdapters.db.users.update.mock.calls[0][0]).toStrictEqual({ id: userId, groups: [groupId] });
+    expect(mockAdapters.db.invites.update).toHaveBeenCalledTimes(1);
+    expect(mockAdapters.db.invites.update.mock.calls[0][0]).toStrictEqual({
+      id: inviteId,
+      recipients: { pending: [], refused: [], accepted: ['member@example.com'] },
+      accepted: 1,
+      remaining: 0,
+    });
   });
 
   it('rejects a caller who is not a member of the group organization, and does not write', async () => {
@@ -293,7 +311,8 @@ describe('sharingService - acceptInvite (Group)', () => {
 
     await acceptInvite(userId, { id: inviteId }, mockAdapters as any);
 
-    expect(mockAdapters.db.users.update).toHaveBeenCalledWith(expect.objectContaining({ groups: [groupId] }));
+    expect(mockAdapters.db.users.update).toHaveBeenCalledTimes(1);
+    expect(mockAdapters.db.users.update.mock.calls[0][0]).toStrictEqual({ id: userId, groups: [groupId] });
   });
 });
 
@@ -385,8 +404,18 @@ describe('sharingService - acceptInvite (FabFile recipient membership)', () => {
 
     await acceptInvite(userId, { id: inviteId }, adapters as any);
 
-    expect(adapters.db.invites.update).toHaveBeenCalled();
-    expect(adapters.db.fabFiles.update).toHaveBeenCalled();
+    expect(adapters.db.invites.update).toHaveBeenCalledTimes(1);
+    expect(adapters.db.invites.update.mock.calls[0][0]).toStrictEqual({
+      id: inviteId,
+      recipients: { pending: ['b@x.com'], refused: [], accepted: ['a@x.com'] },
+      accepted: 1,
+      remaining: 1,
+    });
+    expect(adapters.db.fabFiles.update).toHaveBeenCalledTimes(1);
+    expect(adapters.db.fabFiles.update.mock.calls[0][0]).toStrictEqual({
+      id: fileId,
+      users: [{ userId, permissions: [Permission.read, Permission.share], projectId: undefined, sessionId: undefined }],
+    });
   });
 
   it('allows anyone to accept a link-only invite (pending was never populated)', async () => {
@@ -544,7 +573,25 @@ describe('sharingService - acceptInvite (Session knowledgeId propagation)', () =
 
     expect(adapters.db.fabFiles.update).not.toHaveBeenCalled();
     // The session share itself still goes through - only the file grant is skipped.
-    expect(adapters.db.sessions.update).toHaveBeenCalled();
+    expect(adapters.db.sessions.update).toHaveBeenCalledTimes(1);
+    expect(adapters.db.sessions.update.mock.calls[0][0]).toStrictEqual({
+      id: sessionId,
+      users: [
+        {
+          userId,
+          permissions: [Permission.read, Permission.update, Permission.share],
+          projectId: undefined,
+          sessionId: undefined,
+        },
+      ],
+    });
+    expect(adapters.db.invites.update).toHaveBeenCalledTimes(1);
+    expect(adapters.db.invites.update.mock.calls[0][0]).toStrictEqual({
+      id: inviteId,
+      recipients: { pending: [], refused: [], accepted: ['accepter@x.com'] },
+      accepted: 1,
+      remaining: 0,
+    });
   });
 
   it('propagates nothing when the inviter cannot share the file, even if they can read it', async () => {
@@ -602,19 +649,20 @@ describe('sharingService - acceptInvite (Session knowledgeId propagation)', () =
 
     await acceptInvite(userId, { id: inviteId }, adapters as any);
 
-    expect(adapters.db.fabFiles.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        users: expect.arrayContaining([
-          expect.objectContaining({
-            userId,
-            permissions: expect.arrayContaining([Permission.read, Permission.update, Permission.share]),
-            // The provenance tag, asserted here because this is its only write site: without it the
-            // row is untagged, merges with a direct share, and both cascades delete the pair.
-            sessionId,
-          }),
-        ]),
-      })
-    );
+    expect(adapters.db.fabFiles.update).toHaveBeenCalledTimes(1);
+    // sessionId is the provenance tag, asserted here because this is its only write site: without
+    // it the row is untagged, merges with a direct share, and both cascades delete the pair.
+    expect(adapters.db.fabFiles.update.mock.calls[0][0]).toStrictEqual({
+      id: 'file-owned',
+      users: [
+        {
+          userId,
+          permissions: [Permission.read, Permission.update, Permission.share],
+          projectId: undefined,
+          sessionId,
+        },
+      ],
+    });
   });
 
   it('falls back to the session-owner-only rule for a legacy invite with no inviterId', async () => {
@@ -632,7 +680,17 @@ describe('sharingService - acceptInvite (Session knowledgeId propagation)', () =
     await acceptInvite(userId, { id: inviteId }, adapters as any);
 
     expect(adapters.db.fabFiles.update).toHaveBeenCalledTimes(1);
-    expect(adapters.db.fabFiles.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'file-owned' }));
+    expect(adapters.db.fabFiles.update.mock.calls[0][0]).toStrictEqual({
+      id: 'file-owned',
+      users: [
+        {
+          userId,
+          permissions: [Permission.read, Permission.update, Permission.share],
+          projectId: undefined,
+          sessionId,
+        },
+      ],
+    });
   });
 });
 
@@ -681,7 +739,13 @@ describe('sharingService - acceptInvite (addressing)', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await acceptInvite('user-1', { id: TOKEN }, adapters as any);
 
-    expect(adapters.db.invites.update).toHaveBeenCalledWith(expect.objectContaining({ accepted: 1, remaining: 0 }));
+    expect(adapters.db.invites.update).toHaveBeenCalledTimes(1);
+    expect(adapters.db.invites.update.mock.calls[0][0]).toStrictEqual({
+      id: ID,
+      recipients: { pending: [], refused: [], accepted: ['me@example.com'] },
+      accepted: 1,
+      remaining: 0,
+    });
   });
 
   it('accepts that same invite by id, as the inbox addresses it', async () => {
@@ -691,7 +755,13 @@ describe('sharingService - acceptInvite (addressing)', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await acceptInvite('user-1', { id: ID }, adapters as any);
 
-    expect(adapters.db.invites.update).toHaveBeenCalledWith(expect.objectContaining({ accepted: 1, remaining: 0 }));
+    expect(adapters.db.invites.update).toHaveBeenCalledTimes(1);
+    expect(adapters.db.invites.update.mock.calls[0][0]).toStrictEqual({
+      id: ID,
+      recipients: { pending: [], refused: [], accepted: ['me@example.com'] },
+      accepted: 1,
+      remaining: 0,
+    });
   });
 
   // The finding stays closed where it applies: a link invite names nobody, so the key is the whole
@@ -707,5 +777,70 @@ describe('sharingService - acceptInvite (addressing)', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await expect(acceptInvite('user-1', { id: ID }, adapters as any)).rejects.toThrow(/invite not found/i);
     expect(adapters.db.invites.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('sharingService - acceptInvite (Project)', () => {
+  const userId = 'user-1';
+  const projectId = 'project-1';
+  const inviteId = '65a1f77bcf86cd7994390001';
+
+  it('writes the invite, project, and each attached file and session as targeted partials', async () => {
+    const db = {
+      invites: {
+        findById: vi.fn(async () => ({
+          id: inviteId,
+          type: InviteType.Project,
+          documentId: projectId,
+          isLinkOnly: true,
+          permissions: [Permission.read],
+          remaining: 3,
+          accepted: 0,
+          recipients: { pending: [], refused: [], accepted: [] },
+        })),
+        findByToken: vi.fn(async () => null),
+        update: vi.fn(),
+      },
+      projects: {
+        findById: vi.fn(async () => ({
+          id: projectId,
+          users: [],
+          fileIds: ['file-1'],
+          systemPrompts: [{ fileId: 'prompt-1' }],
+          sessionIds: ['session-1'],
+        })),
+        update: vi.fn(),
+      },
+      fabFiles: {
+        findAllByIds: vi.fn(async () => [
+          { id: 'file-1', users: [] },
+          { id: 'prompt-1', users: [] },
+        ]),
+        update: vi.fn(),
+      },
+      sessions: { findAllByIds: vi.fn(async () => [{ id: 'session-1', users: [] }]), update: vi.fn() },
+      users: { findById: vi.fn(async () => ({ id: userId, email: 'a@x.com', username: 'a' })), update: vi.fn() },
+    };
+
+    await acceptInvite(userId, { id: inviteId }, { db } as never);
+
+    const grant = [{ userId, permissions: [Permission.read], projectId, sessionId: undefined }];
+    expect(db.invites.update).toHaveBeenCalledTimes(1);
+    expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
+      id: inviteId,
+      recipients: { pending: [], refused: [], accepted: ['a@x.com'] },
+      accepted: 1,
+      remaining: 2,
+    });
+    expect(db.projects.update).toHaveBeenCalledTimes(1);
+    expect(db.projects.update.mock.calls[0][0]).toStrictEqual({
+      id: projectId,
+      users: [{ userId, permissions: [Permission.read], projectId: undefined, sessionId: undefined }],
+    });
+    expect(db.fabFiles.update).toHaveBeenCalledTimes(2);
+    expect(db.fabFiles.update.mock.calls[0][0]).toStrictEqual({ id: 'file-1', users: grant });
+    expect(db.fabFiles.update.mock.calls[1][0]).toStrictEqual({ id: 'prompt-1', users: grant });
+    expect(db.sessions.update).toHaveBeenCalledTimes(1);
+    expect(db.sessions.update.mock.calls[0][0]).toStrictEqual({ id: 'session-1', users: grant });
   });
 });

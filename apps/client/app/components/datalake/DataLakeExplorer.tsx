@@ -666,7 +666,12 @@ export default function DataLakeExplorer({
               {/* The no-lake scope shows the strip with nothing in it: that is the one state the
                   tree cannot report, since it stays browsable so the user can get back out. */}
               {(selectedLakes.length > 1 || isNoLakeScope) && (
-                <ActiveLakeScopeStrip lakes={selectedLakes} onClear={() => handleSelectLakes([])} />
+                <ActiveLakeScopeStrip
+                  lakes={selectedLakes}
+                  onClear={() => handleSelectLakes([])}
+                  // From the resolved lakes, not the raw ids, so a stale id is dropped on the way.
+                  onRemove={lakeId => handleSelectLakes(selectedLakes.filter(l => l.id !== lakeId).map(l => l.id))}
+                />
               )}
             </>
           }
