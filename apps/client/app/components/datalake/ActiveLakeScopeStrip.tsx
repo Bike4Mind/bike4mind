@@ -50,18 +50,24 @@ export default function ActiveLakeScopeStrip({
             {copy.noLakesLabel}
           </Chip>
         )}
-        {lakes.map(lake => (
-          <Chip
-            key={lake.id}
-            size="sm"
-            variant="soft"
-            color="neutral"
-            sx={{ fontSize: '11px', maxWidth: '100%' }}
-            data-testid={`datalake-active-scope-chip-${lake.id}`}
-          >
-            {lake.name}
-          </Chip>
-        ))}
+        {lakes.map(lake => {
+          // Strict 'draft' only, same as SelectedLakeHeader.
+          const isDraft = lake.status === 'draft';
+          return (
+            <Tooltip key={lake.id} size="sm" title={isDraft ? 'Draft - not grounding answers until published' : ''}>
+              <Chip
+                size="sm"
+                variant="soft"
+                color={isDraft ? 'warning' : 'neutral'}
+                sx={{ fontSize: '11px', maxWidth: '100%' }}
+                data-testid={`datalake-active-scope-chip-${lake.id}`}
+                data-draft={isDraft ? 'true' : undefined}
+              >
+                {lake.name}
+              </Chip>
+            </Tooltip>
+          );
+        })}
         {/* Clears back to every reachable lake. The picker can do this too (its "All data lakes"
             row), but that is two clicks behind a trigger whose label is the thing being
             questioned, and undoing a narrow scope should not require reading the menu again. */}

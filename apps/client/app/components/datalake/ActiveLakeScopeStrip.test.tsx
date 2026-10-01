@@ -11,7 +11,8 @@ const Wrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const lake = (id: string, name: string) => ({ id, name, datalakeTag: `datalake:${id}` }) as ManageableDataLakeConfig;
+const lake = (id: string, name: string, status?: string) =>
+  ({ id, name, status, datalakeTag: `datalake:${id}` }) as ManageableDataLakeConfig;
 
 describe('ActiveLakeScopeStrip', () => {
   it('names every lake in the scope, which the trigger can only count', () => {
@@ -49,5 +50,21 @@ describe('ActiveLakeScopeStrip', () => {
 
     fireEvent.click(screen.getByTestId('datalake-active-scope-clear-btn'));
     expect(onClear).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks only a draft lake', () => {
+    render(
+      <Wrapper>
+        <ActiveLakeScopeStrip
+          lakes={[lake('a', 'Drafty', 'draft'), lake('b', 'Live', 'active'), lake('c', 'Built-in')]}
+          onClear={vi.fn()}
+        />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-active-scope-chip-a')).toHaveAttribute('data-draft', 'true');
+    expect(screen.getByTestId('datalake-active-scope-chip-a')).toHaveTextContent('Drafty');
+    expect(screen.getByTestId('datalake-active-scope-chip-b')).not.toHaveAttribute('data-draft');
+    expect(screen.getByTestId('datalake-active-scope-chip-c')).not.toHaveAttribute('data-draft');
   });
 });

@@ -49,6 +49,19 @@ export default function SelectedLakeHeader({ lake }: { lake: ManageableDataLakeC
         >
           {lake.fileTagPrefix}
         </Chip>
+        {/* Only an explicit 'draft' warns: an absent status also covers built-in registry lakes (always
+            serving), which the client cannot tell from legacy lake docs written before the field existed. */}
+        {lake.status === 'draft' && (
+          <Chip
+            size="sm"
+            variant="soft"
+            color="warning"
+            sx={{ fontSize: '11px' }}
+            data-testid="datalake-selected-draft-chip"
+          >
+            Draft - not grounding answers
+          </Chip>
+        )}
       </Stack>
 
       <Stack direction="row" gap={0.5} flexWrap="wrap">

@@ -102,4 +102,14 @@ describe('SelectedLakeHeader', () => {
     renderHeader(over as Partial<ManageableDataLakeConfig>);
     expect(screen.queryByTestId('datalake-selected-lake-source')).not.toBeInTheDocument();
   });
+
+  it('flags a draft lake as not grounding answers', () => {
+    renderHeader({ status: 'draft' });
+    expect(screen.getByTestId('datalake-selected-draft-chip')).toHaveTextContent('Draft - not grounding answers');
+  });
+
+  it.each([undefined, 'active'] as const)('shows no draft chip for status %s', status => {
+    renderHeader({ status });
+    expect(screen.queryByTestId('datalake-selected-draft-chip')).not.toBeInTheDocument();
+  });
 });

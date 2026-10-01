@@ -97,6 +97,31 @@ export function LakeInfoPanel({
   const demoteLake = useDemoteDataLake();
   const startChatWithLake = useStartChatWithLake();
   const [startingChat, setStartingChat] = useState(false);
+  const [draftChatOpen, setDraftChatOpen] = useState(false);
+  const isDraft = !lake.status || lake.status === 'draft';
+  const startChat = async (failureMessage = 'Could not start a chat with this lake') => {
+    setDraftChatOpen(false);
+    setStartingChat(true);
+    try {
+      await startChatWithLake(lake.id);
+    } catch (error) {
+      console.error('Start chat failed for lake', lake.id, error);
+      toast.error(failureMessage);
+    } finally {
+      // Reset in finally, not only on error: a success that does not unmount this panel
+      // (e.g. navigation interrupted) would otherwise leave the spinner stuck forever.
+      setStartingChat(false);
+    }
+  };
+  const publishAndStartChat = async () => {
+    try {
+      await promoteLake.mutateAsync(lake.id);
+    } catch {
+      // usePromoteDataLake already toasted the server reason.
+      return;
+    }
+    await startChat('Published, but could not start a chat');
+  };
   // Mounted only while open so the picker's file query does not fire (and page through the
   // caller's whole knowledge base) until it is actually needed.
   const [addExistingOpen, setAddExistingOpen] = useState(false);
@@ -193,8 +218,8 @@ export function LakeInfoPanel({
           <Typography level="h4" sx={{ flex: 1, minWidth: 0 }}>
             {lake.name}
           </Typography>
-          {/* Start chat is available to ANY user who can reach the lake (not manage-gated): it
-              opens a session scoped to this lake, applying the lake's preferred prompt server-side.
+          {/* Start chat is available to ANY user who can reach the lake (not manage-gated; draft
+              lakes confirm first): it opens a session scoped to this lake, applying the lake's preferred prompt server-side.
               Minimal placement for now - see useStartChatWithLake's note; polish is a design follow-up. */}
           <Button
             size="sm"
@@ -204,22 +229,52 @@ export function LakeInfoPanel({
             aria-label={`Start chat with ${lake.name}`}
             data-testid={`datalake-startchat-btn-${lake.id}`}
             loading={startingChat}
-            onClick={async () => {
-              setStartingChat(true);
-              try {
-                await startChatWithLake(lake.id);
-              } catch {
-                toast.error('Could not start a chat with this lake');
-              } finally {
-                // Reset in finally, not only on error: a success that does not unmount this panel
-                // (e.g. navigation interrupted) would otherwise leave the spinner stuck forever.
-                setStartingChat(false);
-              }
-            }}
+            onClick={() => (isDraft ? setDraftChatOpen(true) : void startChat())}
             sx={{ flexShrink: 0, fontSize: '13px' }}
           >
             Start chat
           </Button>
+          <Modal open={draftChatOpen} onClose={() => !promoteLake.isPending && setDraftChatOpen(false)}>
+            <ModalDialog data-testid="datalake-startchat-draft-modal" role="alertdialog">
+              <DialogTitle>This lake is a draft</DialogTitle>
+              <DialogContent>
+                <Typography level="body-sm">
+                  Drafts don{"'"}t ground answers, so the chat will find nothing in this lake until it is published.
+                </Typography>
+              </DialogContent>
+              <DialogActions>
+                {lake.canManage && (
+                  <Button
+                    variant="solid"
+                    color="primary"
+                    data-testid="datalake-startchat-draft-publish-btn"
+                    loading={promoteLake.isPending}
+                    onClick={publishAndStartChat}
+                  >
+                    Publish and start chat
+                  </Button>
+                )}
+                <Button
+                  variant="soft"
+                  color="neutral"
+                  data-testid="datalake-startchat-draft-anyway-btn"
+                  disabled={promoteLake.isPending}
+                  onClick={() => void startChat()}
+                >
+                  Start anyway
+                </Button>
+                <Button
+                  variant="plain"
+                  color="neutral"
+                  data-testid="datalake-startchat-draft-cancel-btn"
+                  disabled={promoteLake.isPending}
+                  onClick={() => setDraftChatOpen(false)}
+                >
+                  Cancel
+                </Button>
+              </DialogActions>
+            </ModalDialog>
+          </Modal>
           {/* Add files / Settings / Archive are owner-or-admin only (the backend enforces the
               same rule). The nav surfaces other users' read-only public lakes too. */}
           {lake.canManage && (
@@ -277,7 +332,7 @@ export function LakeInfoPanel({
                   draft here, matching promoteDataLake and activateIfDraft's `$in: ['draft', null]`:
                   a lake written before the field existed is just as invisible to retrieval, so it
                   must still get the affordance. */}
-              {(!lake.status || lake.status === 'draft') && (
+              {isDraft && (
                 <Tooltip title="Publish this lake so it starts grounding answers" size="sm">
                   <Button
                     size="sm"
