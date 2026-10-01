@@ -7,6 +7,7 @@ import { usableObjectIds } from '../../utils/mongo';
 import type {
   IDataLakeDocument,
   IDataLakeRepository,
+  ReachArmsOpts,
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
   IDataLakeBatchRepository,
@@ -426,12 +427,9 @@ function buildStalenessScanFilter(
  */
 export const buildAccessibleQuery = (
   ctx: AccessContext,
-  opts?: {
+  opts?: ReachArmsOpts & {
     statuses?: DataLakeStatus[];
     includePublic?: boolean;
-    grantedLakeIds?: string[];
-    orgGrantedLakes?: Record<string, string[]>;
-    supersededOwnLakeIds?: string[];
   }
 ): { filter: Record<string, unknown>; arms: FindAccessibleArm[] } => {
   // Same list the attachment door opts into, read from one constant so browse cannot widen
@@ -548,11 +546,24 @@ export const buildAccessibleQuery = (
   };
 };
 
-/** Reach inputs shared by retrieval (`findActiveByUserTagsAndEntitlements`) and the identity-scoped count, so a new arm input cannot be wired into only one. */
-type ReachArmsOpts = {
-  grantedLakeIds?: string[];
-  orgGrantedLakes?: Record<string, string[]>;
-  supersededOwnLakeIds?: string[];
+/**
+ * Arms deciding which lakes the caller could already see exist, for the counts shown back to them.
+ * `publicArm` is a parameter because the two callers differ on purpose: the account-wide count lists
+ * every public lake, while the identity-scoped count cannot (a public lake gated against the caller
+ * is hidden from them, so listing it would let a guessed tag confirm it exists) and passes none.
+ */
+const callerVisibilityArms = (params: {
+  organizationIds: string[] | undefined;
+  userId?: string;
+  publicArm?: Record<string, unknown>;
+}): Record<string, unknown>[] => {
+  const arms: Record<string, unknown>[] = [];
+  if (params.publicArm) arms.push(params.publicArm);
+  if (params.organizationIds && params.organizationIds.length > 0) {
+    arms.push({ organizationId: { $in: params.organizationIds } });
+  }
+  if (params.userId) arms.push({ createdByUserId: params.userId });
+  return arms;
 };
 
 class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements IDataLakeRepository {
@@ -835,22 +846,17 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       // The count is shown to the caller, so a lake they could not already know exists must not
       // move it: restrictToTags is client-influenced, and a nonzero count for a guessed tag would
       // confirm that lake exists. Only a caller who may see every lake skips the prerequisite.
-      const visibleToCaller: Record<string, unknown>[] = [{ isPublic: true }];
-      if (organizationIds && organizationIds.length > 0) {
-        visibleToCaller.push({ organizationId: { $in: organizationIds } });
-      }
-      if (userId) visibleToCaller.push({ createdByUserId: userId });
+      const visibleToCaller = opts.callerMaySeeAllLakes ? undefined : callerVisibilityArms({ organizationIds, userId });
+      if (visibleToCaller?.length === 0) return 0;
       return this.dataLakeModel.countDocuments({
         status: 'active',
         datalakeTag: { $in: opts.restrictToTags },
-        ...(opts.callerMaySeeAllLakes ? {} : { $or: visibleToCaller }),
+        ...(visibleToCaller ? { $or: visibleToCaller } : {}),
         $nor: reachArms,
       });
     }
 
-    const memberOrgIds = organizationIds ?? [];
-    const visibilityArms: Record<string, unknown>[] = [{ isPublic: true }];
-    if (memberOrgIds.length > 0) visibilityArms.push({ organizationId: { $in: memberOrgIds } });
+    const visibilityArms = callerVisibilityArms({ organizationIds, publicArm: { isPublic: true } });
 
     const grantedLakeIds = usableObjectIds(opts?.grantedLakeIds, 'DataLakeModel.countGateExcludedLakes');
     const orgGrantExemptionArms = orgGrantArms(opts?.orgGrantedLakes);
