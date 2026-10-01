@@ -528,6 +528,23 @@ describe('DataLakeRepository.countGateExcludedLakes', () => {
       ).toBe(1);
     });
 
+    it('counts a named lake gated only by an entitlement the caller lacks, and not one the caller holds', async () => {
+      const gated = await dataLakeRepository.create(
+        baseLake({ slug: 'entitled', organizationId: 'orgA', requiredEntitlement: 'medlib:pro' })
+      );
+
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+          restrictToTags: [gated.datalakeTag],
+        })
+      ).toBe(1);
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], ['medlib:pro'], ['orgA'], 'bob', {
+          restrictToTags: [gated.datalakeTag],
+        })
+      ).toBe(0);
+    });
+
     it('does not count a named lake that is not active', async () => {
       const draft = await dataLakeRepository.create(
         baseLake({ slug: 'draft-other', createdByUserId: 'alice', status: 'draft' })
