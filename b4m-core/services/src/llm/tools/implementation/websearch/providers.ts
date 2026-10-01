@@ -40,6 +40,14 @@ export interface WebSearchOptions {
    * intent query toward US pages - a Tokyo query came back as US mall and airport "shops" sites.
    */
   locationInQuery?: boolean;
+  /**
+   * Throw on a timeout, network error or non-OK response instead of resolving to no hits. SerpAPI
+   * always throws; SearXNG fails soft unless this is set. The chat tool sets it so its failover can
+   * tell a dead provider from an empty result; deep research and lake research rely on fail-soft.
+   */
+  throwOnError?: boolean;
+  /** Caps SerpAPI's organic attempts (default SERPAPI_MAX_ATTEMPTS). Used to bound failover. */
+  maxAttempts?: number;
 }
 
 /**
@@ -162,15 +170,21 @@ const SERPAPI_ATTEMPT_TIMEOUT_MS = 10_000;
 const SERPAPI_MAX_ATTEMPTS = 2;
 // Fixed delay before the retry.
 const SERPAPI_RETRY_DELAY_MS = 500;
+// SerpAPI runs a single attempt when it is the fallback, so failover stays inside the
+// SerpAPI-only budget instead of stacking a full retry cycle on top of the SearXNG timeout.
+export const SERPAPI_FALLBACK_ATTEMPTS = 1;
+const SERPAPI_ONLY_ORGANIC_MS = SERPAPI_MAX_ATTEMPTS * SERPAPI_ATTEMPT_TIMEOUT_MS + SERPAPI_RETRY_DELAY_MS;
+// Failover runs only under 'auto', which always puts SearXNG first (resolveWebSearchProviders).
+const FAILOVER_ORGANIC_MS = SEARCH_TIMEOUT_MS + SERPAPI_FALLBACK_ATTEMPTS * SERPAPI_ATTEMPT_TIMEOUT_MS;
 /**
- * The longest one web_search call can hold a turn: the organic search's attempts and retry delay,
- * then the image/places calls, which run in parallel AFTER it. An inline chat turn runs inside the
- * 60s server Lambda (infra/web.ts) and has already spent part of that on retrieval and the first
- * model call before the tool starts. If this is anywhere near 60s, a stalled provider never errors
- * back to the model: the Lambda is hard-killed mid-call and the turn dies with a partial answer.
+ * The longest one web_search call can hold a turn: the slower organic path (SerpAPI with its retry,
+ * or SearXNG timing out then the single-attempt SerpAPI fallback), then the image/places calls,
+ * which run in parallel AFTER it. An inline chat turn runs inside the 60s server Lambda
+ * (infra/web.ts) and has already spent part of that on retrieval and the first model call before
+ * the tool starts. If this is anywhere near 60s, a stalled provider never errors back to the model:
+ * the Lambda is hard-killed mid-call and the turn dies with a partial answer.
  */
-export const WEB_SEARCH_WORST_CASE_MS =
-  SERPAPI_MAX_ATTEMPTS * SERPAPI_ATTEMPT_TIMEOUT_MS + SERPAPI_RETRY_DELAY_MS + SEARCH_TIMEOUT_MS;
+export const WEB_SEARCH_WORST_CASE_MS = Math.max(SERPAPI_ONLY_ORGANIC_MS, FAILOVER_ORGANIC_MS) + SEARCH_TIMEOUT_MS;
 // Citables are persisted with the quest, so keep the per-hit image list bounded.
 const MAX_IMAGES_PER_RESULT = 4;
 // Enough to build a card row from without flooding the model's context with URLs.
@@ -472,12 +486,13 @@ export async function serpApiSearch(
 
   url.search = searchParams.toString();
 
+  const maxAttempts = Math.min(Math.max(1, options?.maxAttempts ?? SERPAPI_MAX_ATTEMPTS), SERPAPI_MAX_ATTEMPTS);
   const failures: SerpApiAttemptFailure[] = [];
-  for (let attempt = 1; attempt <= SERPAPI_MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const outcome = await attemptSerpApiRequest(url, attempt);
     if (outcome.ok) return outcome.data;
     failures.push(outcome);
-    if (!outcome.retryable || attempt === SERPAPI_MAX_ATTEMPTS) break;
+    if (!outcome.retryable || attempt === maxAttempts) break;
     Logger.globalInstance.log('📡 WebSearch Tool: retrying SerpAPI after transient failure', {
       attempt,
       status: outcome.status,
@@ -778,13 +793,18 @@ export function createSearxngProvider(baseUrl: string): WebSearchProvider {
             status: response.status,
             statusText: response.statusText,
           });
+          if (options?.throwOnError) throw new Error(`SearXNG error: HTTP ${response.status}`);
           return [];
         }
         const data: unknown = await response.json();
         return parseSearxngResults(data, limit);
       } catch (error) {
         Logger.globalInstance.error('❌ WebSearch Tool: SearXNG request failed:', error);
-        return [];
+        if (!options?.throwOnError) return [];
+        if (isAbortError(error)) {
+          throw new Error(`Web search timed out: SearXNG did not respond within ${SEARCH_TIMEOUT_MS / 1000}s`);
+        }
+        throw error;
       } finally {
         clearTimeout(timeoutId);
       }
@@ -802,10 +822,26 @@ export function createSearxngProvider(baseUrl: string): WebSearchProvider {
 export async function resolveWebSearchProvider(
   adapters: GetEffectiveApiKeyAdapters
 ): Promise<WebSearchProvider | null> {
+  return pickPrimaryProvider(adapters, await readProviderSettings(adapters));
+}
+
+interface ProviderSettings {
+  choice: string;
+  searxngUrl: string | null | undefined;
+  serperKey: string | null | undefined;
+}
+
+async function readProviderSettings(adapters: GetEffectiveApiKeyAdapters): Promise<ProviderSettings> {
   const choice = (await getWebSearchProviderSetting(adapters)) ?? 'auto';
   const searxngUrl = await getSearxngUrl(adapters);
   const serperKey = await getSerperKey(adapters);
+  return { choice, searxngUrl, serperKey };
+}
 
+function pickPrimaryProvider(
+  adapters: GetEffectiveApiKeyAdapters,
+  { choice, searxngUrl, serperKey }: ProviderSettings
+): WebSearchProvider | null {
   if (choice === 'searxng') {
     return searxngUrl ? createSearxngProvider(searxngUrl) : null;
   }
@@ -819,35 +855,19 @@ export async function resolveWebSearchProvider(
 }
 
 /**
- * Returns [primary, fallback] providers. The fallback is the other provider when both are
- * configured, or null when only one (or neither) is available. An explicit admin choice
- * ('serpapi' | 'searxng') forces that one as primary; the other becomes the fallback in
- * every mode, not only 'auto'.
+ * Returns [primary, fallback]. The primary is exactly what resolveWebSearchProvider picks. A
+ * fallback exists only under 'auto' with both providers configured, and is always SerpAPI behind
+ * SearXNG: an explicit admin choice means that provider alone, so it never gets a fallback.
+ * WEB_SEARCH_WORST_CASE_MS relies on failover only ever running SearXNG -> SerpAPI.
  */
 export async function resolveWebSearchProviders(
   adapters: GetEffectiveApiKeyAdapters
 ): Promise<[WebSearchProvider | null, WebSearchProvider | null]> {
-  const choice = (await getWebSearchProviderSetting(adapters)) ?? 'auto';
-  const searxngUrl = await getSearxngUrl(adapters);
-  const serperKey = await getSerperKey(adapters);
-
-  if (choice === 'searxng') {
-    const primary = searxngUrl ? createSearxngProvider(searxngUrl) : null;
-    const fallback = serperKey ? createSerpApiProvider(adapters) : null;
-    return [primary, fallback];
-  }
-  if (choice === 'serpapi') {
-    const primary = serperKey ? createSerpApiProvider(adapters) : null;
-    const fallback = searxngUrl ? createSearxngProvider(searxngUrl) : null;
-    return [primary, fallback];
-  }
-  // auto: prefer SearXNG, fall back to SerpAPI
-  if (searxngUrl && serperKey) {
-    return [createSearxngProvider(searxngUrl), createSerpApiProvider(adapters)];
-  }
-  if (searxngUrl) return [createSearxngProvider(searxngUrl), null];
-  if (serperKey) return [createSerpApiProvider(adapters), null];
-  return [null, null];
+  const settings = await readProviderSettings(adapters);
+  const primary = pickPrimaryProvider(adapters, settings);
+  const fallback =
+    settings.choice === 'auto' && settings.searxngUrl && settings.serperKey ? createSerpApiProvider(adapters) : null;
+  return [primary, fallback];
 }
 
 function searchCacheClear(): void {
