@@ -25,16 +25,14 @@ export type LakeDriveConnection = {
 
 const lakeDriveConnectionKey = (dataLakeId?: string) => ['lake-drive-connection', dataLakeId];
 
+/** Start the personal Google Drive OAuth flow by sending the browser to Google's consent screen. */
+export async function startGoogleDriveConnect(): Promise<void> {
+  const response = await api.post<{ authUrl: string }>('/api/google-drive/connect');
+  window.location.href = response.data.authUrl;
+}
+
 export function useConnectGoogleDrive() {
-  return useMutation({
-    mutationFn: async () => {
-      const response = await api.post<{ authUrl: string }>('/api/google-drive/connect');
-      return response.data.authUrl;
-    },
-    onSuccess: async authUrl => {
-      window.location.href = authUrl;
-    },
-  });
+  return useMutation({ mutationFn: startGoogleDriveConnect });
 }
 
 /**

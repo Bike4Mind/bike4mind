@@ -5,7 +5,7 @@ import { getTokens, GOOGLE_DRIVE_STATE_OPTIONS } from '@server/integrations/goog
 import { encryptToken } from '@server/security/tokenEncryption';
 import { verifyStateToken, type BaseStatePayload } from '@server/auth/jwtStateStore';
 import { readStateNonceHash, clearStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
-import { UnauthorizedError } from '@server/utils/errors';
+import { GOOGLE_DRIVE_CONNECT_ERROR } from '@client/shared/googleDriveConnectErrors';
 
 const handler = baseApi().get(
   asyncHandler<{}, unknown, unknown, { code?: string; state?: string }>(async (req, res) => {
@@ -22,14 +22,20 @@ const handler = baseApi().get(
         GOOGLE_DRIVE_STATE_OPTIONS,
         readStateNonceHash(req, NONCE_SLOT.driveConnect)
       );
+      // A failed connect answers 400 + a code, never a 401: ApiContext treats a code-less 401
+      // as a dead login session, and the post-login redirectTo would replay this callback forever.
       if (!stateResult.valid) {
-        throw new UnauthorizedError('Invalid authorization state.');
+        const code =
+          stateResult.reason === 'expired' ? GOOGLE_DRIVE_CONNECT_ERROR.expired : GOOGLE_DRIVE_CONNECT_ERROR.invalid;
+        return res.status(400).json({ error: stateResult.message, code });
       }
       // Defense-in-depth beyond the browser binding: the tokens must land on the
       // account that started the flow, not whoever the completion request is authed
       // as, in case the session changed between flow start and completion.
       if (stateResult.payload.userId !== user.id) {
-        throw new UnauthorizedError('Invalid authorization state.');
+        return res
+          .status(400)
+          .json({ error: 'Invalid authorization state.', code: GOOGLE_DRIVE_CONNECT_ERROR.invalid });
       }
 
       const tokens = await getTokens(code as string);

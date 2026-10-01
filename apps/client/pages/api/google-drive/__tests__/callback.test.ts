@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 /**
@@ -66,6 +66,20 @@ beforeEach(() => {
   mockFindByIdAndUpdate.mockReset();
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+/**
+ * A failed connect must answer a coded 400, never a 401: ApiContext tears the login
+ * session down on a code-less 401, and redirectTo then replays this callback forever.
+ */
+function expectRejectedConnect(res: ReturnType<typeof createMocks>['res'], code: string) {
+  expect(res._getStatusCode()).toBe(400);
+  expect(res._getJSONData()).toMatchObject({ code });
+  expect(mockFindByIdAndUpdate).not.toHaveBeenCalled();
+}
+
 describe('google-drive callback browser-binding', () => {
   it('rejects completion from a different browser and writes no tokens', async () => {
     const { state } = mintStateWithCookie();
@@ -76,8 +90,8 @@ describe('google-drive callback browser-binding', () => {
     });
     (req as any).user = { id: 'victim' };
 
-    await expect(handler(req as any, res as any)).rejects.toThrow();
-    expect(mockFindByIdAndUpdate).not.toHaveBeenCalled();
+    await handler(req as any, res as any);
+    expectRejectedConnect(res, 'GOOGLE_DRIVE_CONNECT_INVALID');
   });
 
   it('rejects when the completing session is not the user that started the flow', async () => {
@@ -89,8 +103,8 @@ describe('google-drive callback browser-binding', () => {
     });
     (req as any).user = { id: 'someone-else' };
 
-    await expect(handler(req as any, res as any)).rejects.toThrow();
-    expect(mockFindByIdAndUpdate).not.toHaveBeenCalled();
+    await handler(req as any, res as any);
+    expectRejectedConnect(res, 'GOOGLE_DRIVE_CONNECT_INVALID');
   });
 
   it('rejects when the browser presents no nonce cookie', async () => {
@@ -98,8 +112,23 @@ describe('google-drive callback browser-binding', () => {
     const { req, res } = createMocks({ method: 'GET', query: { code: 'auth-code', state } });
     (req as any).user = { id: 'victim' };
 
-    await expect(handler(req as any, res as any)).rejects.toThrow();
-    expect(mockFindByIdAndUpdate).not.toHaveBeenCalled();
+    await handler(req as any, res as any);
+    expectRejectedConnect(res, 'GOOGLE_DRIVE_CONNECT_INVALID');
+  });
+
+  it('reports an expired consent as expired rather than invalid', async () => {
+    vi.useFakeTimers();
+    const { state, nonceCookie } = mintStateWithCookie();
+    vi.advanceTimersByTime(11 * 60 * 1000);
+    const { req, res } = createMocks({
+      method: 'GET',
+      query: { code: 'auth-code', state },
+      headers: { cookie: nonceCookie },
+    });
+    (req as any).user = { id: 'user-1' };
+
+    await handler(req as any, res as any);
+    expectRejectedConnect(res, 'GOOGLE_DRIVE_CONNECT_EXPIRED');
   });
 
   it('completes when the initiating browser presents its nonce cookie', async () => {
