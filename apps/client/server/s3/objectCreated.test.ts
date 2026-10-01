@@ -97,13 +97,16 @@ describe('objectCreated - untracked-file skip list', () => {
     );
   });
 
-  it('still looks up a key that only shares the prefix text', async () => {
-    h.findOne.mockResolvedValue(null);
+  it.each(['libreoncology/mock-oral-archive/x', 'uploads/libreoncology/mock-oral/x'])(
+    'still looks up %s, which only contains the prefix text',
+    async key => {
+      h.findOne.mockResolvedValue(null);
 
-    await run('libreoncology/mock-oral-archive/x');
+      await run(key);
 
-    expect(h.findOne).toHaveBeenCalledWith({ filePath: 'libreoncology/mock-oral-archive/x' });
-  });
+      expect(h.findOne).toHaveBeenCalledWith({ filePath: key });
+    }
+  );
 });
 
 describe('objectCreated - data lake stats (#1342)', () => {

@@ -10,6 +10,7 @@ import {
 import { moderateImageOrThrow } from '@bike4mind/services/llm';
 import { isAudioMimeType } from '@bike4mind/common';
 import { decodeS3Key, findWithRetry, withContext } from '@server/s3/utils';
+import { isUntrackedFabFileKey } from '@server/s3/untrackedFabFileKey';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getFilesStorage } from '@server/utils/storage';
@@ -29,19 +30,7 @@ export const func = withContext(async (event, context, logger) => {
 
     logger.updateMetadata({ objectKey });
 
-    // Skip files that intentionally have no FabFile metadata record. Must match isSkippable in
-    // pages/api/internal/s3/object-created.ts, the self-host path for this bucket.
-    if (
-      objectKey.includes('/backups/') ||
-      objectKey.startsWith('temp/') ||
-      objectKey.startsWith('tmp/') ||
-      objectKey.startsWith('exports/') ||
-      objectKey.startsWith('proxied-images/') ||
-      objectKey.startsWith('tavern-sounds/') ||
-      objectKey.startsWith('cc-bridge/') ||
-      objectKey.startsWith('cc-bridge-downloads/') ||
-      objectKey.startsWith('libreoncology/mock-oral/')
-    ) {
+    if (isUntrackedFabFileKey(objectKey)) {
       logger.info(`Skipping S3 event for untracked file: ${objectKey}`);
       continue;
     }
