@@ -243,7 +243,7 @@ function readEdits(input: Record<string, unknown>): { edits: EditSpec[]; batch: 
     return {
       edits: [
         {
-          oldText: requireString(input, 'oldText'),
+          oldText: requireText(input, 'oldText'),
           newText: requireText(input, 'newText'),
           replaceAll: input.replaceAll === true,
         },
@@ -273,7 +273,7 @@ function readEdits(input: Record<string, unknown>): { edits: EditSpec[]; batch: 
     const record = entry as Record<string, unknown>;
     try {
       return {
-        oldText: requireString(record, 'oldText'),
+        oldText: requireText(record, 'oldText'),
         newText: requireText(record, 'newText'),
         replaceAll: record.replaceAll === true,
       };
@@ -533,13 +533,95 @@ function applyLoose(content: string, oldText: string, newText: string): LooseRes
   return ambiguous.length > 0 ? { kind: 'ambiguous', lines: ambiguous, fileLines } : { kind: 'none' };
 }
 
+type PrefixFormat = 'read' | 'grep';
+
+// The line formats our own tools emit: file_read `N<TAB>line`, grep_search `  N: line` for a
+// match and `  N- line` for context, with `  --` between separate blocks.
+const PREFIX_PATTERNS: Record<PrefixFormat, RegExp> = {
+  read: /^\s*(\d+)\t(.*)$/,
+  grep: /^\s*(\d+)[:-](?: (.*))?$/,
+};
+const GREP_SEPARATOR = /^\s*--\s*$/;
+
+type StrippedPrefixes = { kind: 'block'; format: PrefixFormat; text: string } | { kind: 'regions' };
+
+/**
+ * `oldText` pasted from file_read or grep_search output, line-number prefixes and all. Only
+ * consistent, consecutively numbered prefixes qualify: anything looser would rewrite text that
+ * merely happens to start with digits. Chunks split by grep's `--` are never stitched together,
+ * since the lines between them are unknown.
+ */
+function stripLinePrefixes(oldText: string): StrippedPrefixes | null {
+  const lines = oldText.split('\n');
+  for (const format of ['read', 'grep'] as const) {
+    const pattern = PREFIX_PATTERNS[format];
+    const chunks: string[][] = [[]];
+    let prefixed = 0;
+    let expected: number | null = null;
+    let ok = true;
+    for (const raw of lines) {
+      const line = raw.replace(/\r$/, '');
+      if (format === 'grep' && GREP_SEPARATOR.test(line)) {
+        chunks.push([]);
+        expected = null;
+        continue;
+      }
+      if (isBlank(line)) {
+        chunks[chunks.length - 1].push('');
+        if (expected !== null) expected += 1;
+        continue;
+      }
+      const match = pattern.exec(line);
+      if (!match || (expected !== null && Number(match[1]) !== expected)) {
+        ok = false;
+        break;
+      }
+      expected = Number(match[1]) + 1;
+      prefixed += 1;
+      chunks[chunks.length - 1].push(match[2] ?? '');
+    }
+    if (!ok || prefixed === 0) continue;
+
+    const filled = chunks.filter(chunk => chunk.some(line => line !== ''));
+    if (filled.length > 1) return { kind: 'regions' };
+    return { kind: 'block', format, text: (filled[0] ?? []).join('\n') + (oldText.endsWith('\n') ? '\n' : '') };
+  }
+  return null;
+}
+
+/** `newText` carrying the same prefix format, with nothing but numbered lines in it. */
+function stripSameFormat(newText: string, format: PrefixFormat): string | null {
+  const pattern = PREFIX_PATTERNS[format];
+  const out: string[] = [];
+  let prefixed = 0;
+  for (const raw of newText.split('\n')) {
+    const line = raw.replace(/\r$/, '');
+    if (isBlank(line)) {
+      out.push('');
+      continue;
+    }
+    const match = pattern.exec(line);
+    if (!match) return null;
+    prefixed += 1;
+    out.push(match[2] ?? '');
+  }
+  return prefixed > 0 ? out.join('\n') : null;
+}
+
 interface EditOutcome {
   content: string;
   status: 'applied' | 'loose' | 'noop';
+  strippedPrefixes?: boolean;
 }
 
 /** Applies one edit to `content`, or throws. `position` names the edit in a batch, null for a lone edit. */
-function applyEdit(content: string, edit: EditSpec, target: string, position: EditPosition | null): EditOutcome {
+function applyEdit(
+  content: string,
+  edit: EditSpec,
+  target: string,
+  position: EditPosition | null,
+  allowPrefixStrip = true
+): EditOutcome {
   const { oldText, newText, replaceAll } = edit;
   const label = position
     ? `edits[${position.index}] (edit ${position.index + 1} of ${position.total}, nothing was written)`
@@ -556,6 +638,34 @@ function applyEdit(content: string, edit: EditSpec, target: string, position: Ed
   if (occurrences === 0) {
     const loose = applyLoose(content, oldText, newText);
     if (loose.kind === 'applied') return { content: loose.content, status: 'loose' };
+
+    const stripped = allowPrefixStrip ? stripLinePrefixes(oldText) : null;
+    if (stripped?.kind === 'regions') {
+      throw new Error(
+        `${subject} was copied from grep output: it has line-number prefixes and separate regions ` +
+          '(the "--" lines), and those regions are not adjacent in the file. Copy the text from file_read ' +
+          'output instead, without the line-number prefixes, and edit one region at a time.'
+      );
+    }
+    if (stripped?.kind === 'block') {
+      const stripNew = stripSameFormat(newText, stripped.format);
+      try {
+        const inner = applyEdit(
+          content,
+          { oldText: stripped.text, newText: stripNew ?? newText, replaceAll },
+          target,
+          position,
+          false
+        );
+        return { ...inner, strippedPrefixes: true };
+      } catch (error) {
+        throw new Error(
+          `${subject} carried line-number prefixes, which were removed before matching. ` +
+            (error instanceof Error ? error.message : String(error))
+        );
+      }
+    }
+
     if (loose.kind === 'ambiguous') {
       throw new Error(
         `${subject} does not match ${where} exactly, and ignoring indentation and spacing it matches ` +
@@ -592,8 +702,36 @@ async function planEdit(input: Record<string, unknown>, context: ToolContext): P
 
   const target = await resolveWritablePath(requested, context);
   const state = await readTarget(target);
+
+  const emptyAt = edits.findIndex(edit => edit.oldText === '');
+  if (emptyAt !== -1) {
+    if (edits.length > 1) {
+      throw new Error(
+        'An empty "oldText" creates a new file and is only allowed as the single edit in a call. ' +
+          'Put the whole file in one edit, or use file_write.'
+      );
+    }
+    if (state.exists && state.content.length > 0) {
+      throw new Error(
+        `"oldText" is empty but ${target} already has content. An empty "oldText" only creates a new file; ` +
+          'use file_write to replace a whole file, or pass the text to replace.'
+      );
+    }
+    const after = edits[0].newText;
+    if (Buffer.byteLength(after, 'utf8') > MAX_WRITE_BYTES) {
+      throw new Error(`"newText" is larger than the ${MAX_WRITE_BYTES} byte limit for a single write.`);
+    }
+    return {
+      target,
+      state,
+      after,
+      diff: buildDiff(target, state.exists ? 'overwrite' : 'create', state.content, after),
+      key: editsKeyFor(target, edits),
+    };
+  }
+
   if (!state.exists) {
-    throw new Error(`${target} does not exist. Use file_write to create it.`);
+    throw new Error(`${target} does not exist. Use file_write to create it, or file_edit with an empty "oldText".`);
   }
 
   // All in memory and in order, each against the previous result: nothing is written unless
@@ -613,6 +751,11 @@ async function planEdit(input: Record<string, unknown>, context: ToolContext): P
         notes.push(`${name} was skipped: "newText" is identical to "oldText", so it would change nothing.`);
       } else {
         changed += 1;
+        if (outcome.strippedPrefixes) {
+          notes.push(
+            `${name} was applied after removing line-number prefixes from "oldText"; copy text without them next time.`
+          );
+        }
         if (outcome.status === 'loose') {
           notes.push(
             `${name} was applied with whitespace-normalized matching: "oldText" differed from the file in indentation or spacing.`
@@ -796,6 +939,8 @@ export const fileEdit: ToolDefinition = {
     name: 'file_edit',
     description: [
       'Replace exact stretches of text in an existing file, leaving the rest untouched.',
+      'An empty "oldText" as the only edit creates a file that does not exist yet (use file_write',
+      'to replace an existing file).',
       '',
       'Make every change you have planned for one file in a single call: pass them as "edits",',
       'applied in order, each against the result of the one before, and all-or-nothing - if any',
