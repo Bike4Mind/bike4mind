@@ -24,7 +24,7 @@ import {
 import { stripToolDependentMessages } from './toolPairingUtils';
 import pick from 'lodash/pick.js';
 import { v4 as uuidv4 } from 'uuid';
-import { handleToolResultStreaming, createRecursiveArtifactGuard } from './toolStreamingHelper';
+import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from './toolStreamingHelper';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
 import { withAbortListener } from './withAbortListener';
@@ -856,7 +856,8 @@ export class GeminiBackend implements ICompletionBackend {
                     thisToolHadArtifact = true;
                     if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
                     await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
-                  }
+                  },
+                  declaredArtifactType(options.tools, outcome.toolCall.name)
                 );
 
                 // Strip artifact markup from every tool result, not only the ones that
@@ -1113,11 +1114,16 @@ export class GeminiBackend implements ICompletionBackend {
             let thisToolHadArtifact = false;
 
             // Stream tool results for artifact-generating tools (like recharts)
-            await handleToolResultStreaming(outcome.toolCall.name, outcome.result, async (results, artifactInfo) => {
-              thisToolHadArtifact = true;
-              if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
-              await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
-            });
+            await handleToolResultStreaming(
+              outcome.toolCall.name,
+              outcome.result,
+              async (results, artifactInfo) => {
+                thisToolHadArtifact = true;
+                if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+                await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
+              },
+              declaredArtifactType(options.tools, outcome.toolCall.name)
+            );
 
             // Strip artifact markup from every tool result, not only the ones that streamed,
             // so the model never sees markup it could echo into its reply.

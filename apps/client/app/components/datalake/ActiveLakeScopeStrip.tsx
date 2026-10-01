@@ -1,7 +1,8 @@
-import { Box, Chip, Stack, Tooltip, Typography } from '@mui/joy';
+import { Box, Chip, ChipDelete, Stack, Tooltip, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import type { ManageableDataLakeConfig } from '@bike4mind/common';
 import { useDataLakeSurface } from './surfaceTokens';
+import { isDraftLake, DRAFT_LAKE_TOOLTIP } from './lakeVisibility';
 
 /**
  * Names every lake the chat is currently grounded on, for the multi-lake scope the picker trigger
@@ -13,7 +14,11 @@ import { useDataLakeSurface } from './surfaceTokens';
  * the two are mutually exclusive, so the card never grows a second header. It deliberately
  * carries no lake-level ACTIONS, unlike that header: every one of them (Add files, Configure,
  * Connect Drive) addresses one lake, and a row of them per chip is how a compact strip turns into
- * a second manager panel.
+ * a second manager panel. The per-chip remove is a SCOPE edit, not a lake action, so it belongs.
+ *
+ * `onRemove` receives one lake id; the host computes the next set. The strip only renders for a
+ * scope of two or more, so a remove always leaves at least one lake - it can never silently widen
+ * the scope to all lakes, which is what an empty set means.
  *
  * An EMPTY `lakes` is the deliberate no-lake scope, not "nothing to show": the strip is what makes
  * that state visible and escapable, since the tree stays browsable (the user has to be able to
@@ -22,9 +27,11 @@ import { useDataLakeSurface } from './surfaceTokens';
 export default function ActiveLakeScopeStrip({
   lakes,
   onClear,
+  onRemove,
 }: {
   lakes: ManageableDataLakeConfig[];
   onClear: () => void;
+  onRemove?: (lakeId: string) => void;
 }) {
   const { copy } = useDataLakeSurface();
 
@@ -50,18 +57,31 @@ export default function ActiveLakeScopeStrip({
             {copy.noLakesLabel}
           </Chip>
         )}
-        {lakes.map(lake => (
-          <Chip
-            key={lake.id}
-            size="sm"
-            variant="soft"
-            color="neutral"
-            sx={{ fontSize: '11px', maxWidth: '100%' }}
-            data-testid={`datalake-active-scope-chip-${lake.id}`}
-          >
-            {lake.name}
-          </Chip>
-        ))}
+        {lakes.map(lake => {
+          const isDraft = isDraftLake(lake);
+          return (
+            <Tooltip key={lake.id} size="sm" title={isDraft ? DRAFT_LAKE_TOOLTIP : ''}>
+              <Chip
+                size="sm"
+                variant="soft"
+                color={isDraft ? 'warning' : 'neutral'}
+                sx={{ fontSize: '11px', maxWidth: '100%' }}
+                data-testid={`datalake-active-scope-chip-${lake.id}`}
+                endDecorator={
+                  onRemove && (
+                    <ChipDelete
+                      onDelete={() => onRemove(lake.id)}
+                      aria-label={`Remove ${lake.name} from scope`}
+                      data-testid={`datalake-active-scope-remove-${lake.id}`}
+                    />
+                  )
+                }
+              >
+                {lake.name}
+              </Chip>
+            </Tooltip>
+          );
+        })}
         {/* Clears back to every reachable lake. The picker can do this too (its "All data lakes"
             row), but that is two clicks behind a trigger whose label is the thing being
             questioned, and undoing a narrow scope should not require reading the menu again. */}

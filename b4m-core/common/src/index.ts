@@ -92,6 +92,7 @@ export * from './utils/artifactOpenTag';
 export * from './utils/scanArtifactTags';
 export * from './utils/forcedRetrievalFloors';
 export * from './utils/modelHelpers';
+export * from './utils/tokenEstimateMultiplier';
 export * from './utils/imageSizes';
 export * from './utils/activity';
 export * from './utils/sseEvents';

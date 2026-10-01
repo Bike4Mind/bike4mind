@@ -19,7 +19,7 @@ import { useSessions, useWorkBenchActions, useWorkBenchFiles } from '@client/app
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
 import useSetLakeScope from '@client/app/hooks/useSetLakeScope';
 import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
-import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import useSessionLayout, { openFileInChatViewer, setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import type { DefaultLayoutType } from '@client/app/hooks/useSessionLayout';
 import { useNotebookLayout } from '@client/app/components/layouts/Notebook';
 import {
@@ -221,7 +221,7 @@ export default function DataLakeExplorer({
   const handleViewFile = useCallback(
     (file: IFabFileDocument) => {
       if (chatEmbedded) {
-        setSessionLayout({ layout: 'vertical', previewFile: file, selectedArtifactId: file.id });
+        openFileInChatViewer(file);
       } else {
         hostLayoutRef.current = useSessionLayout.getState().layout;
         setSessionLayout({ previewFile: file, selectedArtifactId: file.id });
@@ -652,7 +652,12 @@ export default function DataLakeExplorer({
               {/* The no-lake scope shows the strip with nothing in it: that is the one state the
                   tree cannot report, since it stays browsable so the user can get back out. */}
               {(selectedLakes.length > 1 || isNoLakeScope) && (
-                <ActiveLakeScopeStrip lakes={selectedLakes} onClear={() => handleSelectLakes([])} />
+                <ActiveLakeScopeStrip
+                  lakes={selectedLakes}
+                  onClear={() => handleSelectLakes([])}
+                  // From the resolved lakes, not the raw ids, so a stale id is dropped on the way.
+                  onRemove={lakeId => handleSelectLakes(selectedLakes.filter(l => l.id !== lakeId).map(l => l.id))}
+                />
               )}
             </>
           }

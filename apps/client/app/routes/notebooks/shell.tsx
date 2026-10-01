@@ -1,6 +1,7 @@
 import { useParams } from '@tanstack/react-router';
 import { NotebookFilepondProvider } from '@client/app/components/Session/NotebookFilepondProvider';
 import SessionContainer from '@client/app/components/Session/SessionContainer';
+import NotebookCitationHost from '@client/app/components/Session/NotebookCitationHost';
 import DataLakeChatSurface from '@client/app/components/datalake/DataLakeChatSurface';
 import { useGetSession } from '@client/app/hooks/data/sessions';
 import NewNotebookPage from './new';
@@ -25,7 +26,9 @@ const NotebookShell = () => {
   return (
     <NotebookFilepondProvider>
       {id ? <NotebookPage /> : <NewNotebookPage />}
-      <DataLakeChatSurface chat={<SessionContainer currentSessionId={id} isLoading={!!id && session.isPending} />} />
+      <NotebookCitationHost sessionId={id}>
+        <DataLakeChatSurface chat={<SessionContainer currentSessionId={id} isLoading={!!id && session.isPending} />} />
+      </NotebookCitationHost>
     </NotebookFilepondProvider>
   );
 };

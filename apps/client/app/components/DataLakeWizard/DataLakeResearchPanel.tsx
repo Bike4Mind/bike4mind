@@ -722,8 +722,8 @@ export function DataLakeResearchPanel({
                 ))}
               </Select>
               <FormHelperText>
-                Judges each search result before it is fetched. A cheaper model costs less per run and reads less
-                carefully.
+                Judges each search result before it is fetched. Models are listed in recommended order, not by price. A
+                cheaper model costs less per run and reads less carefully.
               </FormHelperText>
             </FormControl>
 

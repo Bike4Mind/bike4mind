@@ -9,6 +9,7 @@ import { ContentCopy, Check } from '@mui/icons-material';
 import MermaidChart from '../Charts/MermaidChart';
 import { locateCitedPassage, blockIntersectsPassage, type PassageRange } from './citedPassage';
 import { extractMermaidFence } from '@client/app/utils/mermaidFence';
+import { stripFrontmatter } from '@client/app/utils/stripFrontmatter';
 
 interface Props {
   content: string;
@@ -111,7 +112,9 @@ const MarkdownViewer: React.FC<Props> = ({ content, citedPassage }) => {
   // Offsets are into the string ReactMarkdown actually parses, so the passage has to be located in
   // the PROMOTED source - locating it in `content` would shift every offset by whatever that
   // transform inserted and mark the wrong blocks.
-  const promotedContent = useMemo(() => promoteInlineLatexDollars(content), [content]);
+  // Frontmatter is stripped in the same step: left in, its closing `---` parses as a setext heading
+  // underline. The Mermaid checks below still read the raw `content`.
+  const promotedContent = useMemo(() => promoteInlineLatexDollars(stripFrontmatter(content)), [content]);
   const citedRange = useMemo(() => {
     if (!citedPassage) return null;
     // Preserve literal matches inside code; otherwise apply the document's math transform.
