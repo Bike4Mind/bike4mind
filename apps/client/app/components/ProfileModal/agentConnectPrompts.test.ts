@@ -20,10 +20,15 @@ describe('buildAgentPrompt', () => {
     expect(prompt).toContain(`B4M_API_URL=${ORIGIN}`);
   });
 
+  it('sends the user to the API Keys tab by deep link when the key is unset', () => {
+    expect(buildAgentPrompt(ORIGIN)).toContain(`${ORIGIN}/profile?tab=api-keys`);
+  });
+
   it('tells the agent to read the key from the environment, never from the chat', () => {
     const prompt = buildAgentPrompt(ORIGIN);
 
-    expect(prompt).toContain('X-API-Key');
+    expect(prompt).toContain('Authorization: Bearer $B4M_API_KEY');
+    expect(prompt).not.toContain('X-API-Key');
     expect(prompt).toContain('B4M_API_KEY');
     expect(prompt).toMatch(/never ask me to paste the key/i);
     expect(prompt).not.toContain(LIVE_KEY_PREFIX);

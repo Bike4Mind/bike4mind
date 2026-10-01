@@ -4,6 +4,8 @@
 
 const API_KEY_ENV_VAR = 'B4M_API_KEY';
 const API_URL_ENV_VAR = 'B4M_API_URL';
+// Must stay in sync with ProfileTab.ApiKeys (apps/client/app/routes/profile/index.tsx).
+const API_KEYS_PAGE_PATH = '/profile?tab=api-keys';
 
 const MCP_SERVER_NAME = 'bike4mind';
 const MCP_COMMAND = 'npx';
@@ -17,9 +19,9 @@ export const buildAgentPrompt = (origin: string): string =>
   [
     `You are connecting to Bike4Mind at ${origin}.`,
     `1. Read ${origin}/llms.txt first. It indexes the API, the MCP server and the agent onboarding quest.`,
-    `2. HTTP API: the OpenAPI 3.1 contract is ${origin}/api/v1/openapi.json, rendered for reading at ${origin}/api/v1/docs. Send the key in the X-API-Key header, read from the environment variable ${API_KEY_ENV_VAR}.`,
+    `2. HTTP API: the OpenAPI 3.1 contract is ${origin}/api/v1/openapi.json, rendered for reading at ${origin}/api/v1/docs. Send the key as \`Authorization: Bearer $${API_KEY_ENV_VAR}\`, reading it from the environment variable ${API_KEY_ENV_VAR}.`,
     `3. MCP: run \`${MCP_SERVE_COMMAND}\` with ${API_KEY_ENV_VAR} set, and ${API_URL_ENV_VAR}=${origin}.`,
-    `4. Never ask me to paste the key into this chat, and never print it. If ${API_KEY_ENV_VAR} is unset, tell me to create a key at ${origin} under Profile > API, with the narrowest scopes the task needs.`,
+    `4. Never ask me to paste the key into this chat, and never print it. If ${API_KEY_ENV_VAR} is unset, tell me to create a key at ${origin}${API_KEYS_PAGE_PATH} (Profile > API Keys), with the narrowest scopes the task needs.`,
     '5. Some routes are not in the contract yet. If one you need is missing, say so. Do not guess its shape.',
   ].join('\n');
 
