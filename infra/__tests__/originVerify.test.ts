@@ -31,8 +31,10 @@ describe('origin verification wiring', () => {
     expect(router).toMatch(/new random\.RandomPassword\('OriginVerifySecret', \{[^}]*special: false/);
   });
 
-  it('passes ORIGIN_VERIFY_SECRET to the server only outside sst dev', () => {
-    expect(web).toContain('...(!$dev ? { ORIGIN_VERIFY_SECRET: originVerifySecret.result } : {})');
+  it('passes ORIGIN_VERIFY_SECRET to the server only outside sst dev and unless disabled', () => {
+    expect(web).toMatch(
+      /\.\.\.\(!\$dev && process\.env\.DISABLE_ORIGIN_VERIFY !== 'true'\s*\? \{ ORIGIN_VERIFY_SECRET: originVerifySecret\.result \}\s*: \{\}\)/
+    );
     expect(web.match(/ORIGIN_VERIFY_SECRET/g)).toHaveLength(1);
   });
 });
