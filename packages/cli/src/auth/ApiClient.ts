@@ -38,13 +38,9 @@ export class SessionRevokedError extends Error {
 }
 
 /**
- * Thrown by the response interceptor when a 401 arrives and there is no credential to
- * present at all - no API key (handled before the interceptor runs) and no stored tokens.
- * That is a configuration gap, not a revocation or an expiry, so it is typed distinctly to
- * let callers (e.g. the MCP tools) say "no credential configured" instead of reusing the
- * refresh-failure copy. Deliberately NOT a {@link SessionRevokedError}: checkSessionValid
- * must keep answering "not revoked" for this case. The message keeps the substring
- * `Authentication failed` so existing string-matching callers are unaffected.
+ * 401 with no credential at all (no API key, no stored tokens): a config gap, not an expiry.
+ * Not a SessionRevokedError, so checkSessionValid still reports "not revoked". The message keeps
+ * `Authentication failed` for string-matching callers (turnController, handoff, ServerLlmBackend).
  */
 export class NotAuthenticatedError extends Error {
   constructor(message: string) {
@@ -126,10 +122,7 @@ export class ApiClient {
         if (error.response?.status === 401 && !originalRequest._retry) {
           originalRequest._retry = true;
 
-          // Read the tokens BEFORE the try: "no stored tokens" is not a refresh failure,
-          // and a throw inside the try would be rewritten by the catch below into the
-          // misleading "Authentication expired" message. Surface the distinct typed error
-          // directly instead.
+          // Outside the try: the catch below would rewrite a no-token throw as "Authentication expired".
           const tokens = await this.configStore.getAuthTokens();
 
           if (!tokens) {

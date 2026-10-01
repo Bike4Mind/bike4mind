@@ -342,9 +342,7 @@ describe('mapApiError', () => {
 
   it('maps NotAuthenticatedError to a no-credential message naming both fixes', () => {
     const msg = mapApiError(new NotAuthenticatedError('Authentication failed'), 'http://x');
-    expect(msg).toContain('B4M_API_KEY');
-    expect(msg).toContain('b4m login');
-    expect(msg).not.toContain('expired');
+    expect(msg).toBe('not authenticated: no credential configured (set B4M_API_KEY or run `b4m login`)');
   });
 
   it('gives a broad forbidden message on 403 with the recommended scope', () => {

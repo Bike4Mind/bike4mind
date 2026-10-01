@@ -313,9 +313,7 @@ export class B4mApiClient {
  * gap that may not be the cause.
  */
 export function mapApiError(error: unknown, baseURL: string, scope?: string): string {
-  // No credential was configured at all (no API key, no stored tokens), so the 401 is not
-  // an expiry or a revocation - name both ways to fix it instead of telling the caller to
-  // log in again.
+  // No credential at all: name both fixes instead of "log in again".
   if (error instanceof NotAuthenticatedError) {
     return 'not authenticated: no credential configured (set B4M_API_KEY or run `b4m login`)';
   }

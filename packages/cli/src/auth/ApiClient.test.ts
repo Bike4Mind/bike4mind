@@ -4,11 +4,12 @@ import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRe
 vi.mock('../utils/Logger', () => ({ logger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
 const mockGetAuthTokens = vi.fn();
+const mockClearAuthTokens = vi.fn();
 vi.mock('../storage/ConfigStore', () => ({
   ConfigStore: class {
     getAuthTokens = mockGetAuthTokens;
     setAuthTokens = vi.fn();
-    clearAuthTokens = vi.fn();
+    clearAuthTokens = mockClearAuthTokens;
     isAuthenticated = vi.fn();
   },
 }));
@@ -188,6 +189,35 @@ describe('ApiClient no-credential 401', () => {
       Promise.reject(make401(config))) as AxiosAdapter;
 
     expect(await client.checkSessionValid()).toBe(true);
+  });
+
+  it('reports no-credential (not expired) on the call after a failed refresh cleared the tokens', async () => {
+    let stored: unknown = {
+      accessToken: 'stale',
+      refreshToken: 'refresh',
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      userId: 'user-1',
+    };
+    mockGetAuthTokens.mockImplementation(async () => stored);
+    mockClearAuthTokens.mockImplementation(async () => {
+      stored = null;
+    });
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(make401(config))) as AxiosAdapter;
+    mockRefreshToken.mockRejectedValue(refreshHttpError(400));
+
+    try {
+      expect(await rejection(client.get('/api/sessions'))).toBeInstanceOf(SessionRevokedError);
+      expect(mockClearAuthTokens).toHaveBeenCalled();
+
+      const second = await rejection(client.get('/api/sessions'));
+
+      expect(second).toBeInstanceOf(NotAuthenticatedError);
+      expect(second.message).not.toContain('expired');
+    } finally {
+      mockGetAuthTokens.mockReset();
+      mockClearAuthTokens.mockReset();
+    }
   });
 });
 
