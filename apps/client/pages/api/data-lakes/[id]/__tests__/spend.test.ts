@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   resolveSpendLevers: vi.fn(),
   scopeForLake: vi.fn(),
   lakeUsageSummary: vi.fn(),
+  lakeResearchLifetimeUsd: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false, administeredOrgIds: [] })),
 }));
 
@@ -39,7 +40,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   usageEventRepository: {
     lakeUsageSummary: h.lakeUsageSummary,
-    lakeResearchLifetimeUsd: (h as any).lakeResearchLifetimeUsd,
+    lakeResearchLifetimeUsd: h.lakeResearchLifetimeUsd,
   },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
@@ -81,7 +82,7 @@ describe('GET /api/data-lakes/[id]/spend', () => {
       tierMultiplier: 5,
     });
     h.lakeUsageSummary.mockResolvedValue(emptyLedger);
-    (h as any).lakeResearchLifetimeUsd = vi.fn().mockResolvedValue(0);
+    h.lakeResearchLifetimeUsd.mockResolvedValue(0);
   });
 
   it('returns the spend payload for an owner/curator', async () => {
@@ -91,7 +92,7 @@ describe('GET /api/data-lakes/[id]/spend', () => {
 
     // assertLakeAccess resolves id-or-slug, so the ledger query must use lake.id, not the raw query value.
     expect(h.lakeUsageSummary).toHaveBeenCalledWith('lake-oid-1', 30);
-    expect((h as any).lakeResearchLifetimeUsd).toHaveBeenCalledWith('lake-oid-1');
+    expect(h.lakeResearchLifetimeUsd).toHaveBeenCalledWith('lake-oid-1');
     expect(json).toHaveBeenCalledWith(
       expect.objectContaining({
         dataLakeId: 'lake-oid-1',
