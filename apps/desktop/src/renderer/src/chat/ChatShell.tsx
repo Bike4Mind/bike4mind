@@ -394,6 +394,16 @@ export function ChatShell({ account }: { account?: ReactNode }) {
 
           <TodoPanel todos={plan} turnOpen={turnOpen} />
 
+          {/* A compaction is a round trip the user is waiting on, with nothing streaming into the
+              thread to show for it. Above the error slot, because a refusal replaces it. */}
+          {conversation.commandProgress && (
+            <Box sx={contentColumnSx}>
+              <Alert size="sm" color="neutral" variant="soft" data-testid="chat-command-progress">
+                {conversation.commandProgress}
+              </Alert>
+            </Box>
+          )}
+
           {conversation.sendError && (
             <Box sx={contentColumnSx}>
               <Alert size="sm" color="danger" variant="soft" data-testid="chat-send-error">
@@ -451,6 +461,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
             }
             onSend={text => void onSend(text)}
             onStop={conversation.stop}
+            onRunCommand={(name, args) => void conversation.runCommand(name, args)}
             suggestion={nextPrompt.suggestion}
             onSuggestionDismissed={nextPrompt.dismiss}
             queued={conversation.queued}

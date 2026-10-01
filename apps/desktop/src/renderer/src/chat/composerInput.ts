@@ -1,3 +1,5 @@
+import { parseCommandInvocation, type CommandInvocation } from './commands';
+
 /**
  * The decisions the composer's input makes that are worth stating away from the JSX: which
  * placeholder wins, what a keypress means, and which single control the button is right now.
@@ -37,6 +39,57 @@ export function composerKeyAction(key: string, shiftKey: boolean, hasSuggestion:
   // Shift+Enter breaks the line - the convention every chat client here shares.
   if (key === 'Enter' && !shiftKey) return 'submit';
   return 'default';
+}
+
+/** What a keypress means while the `/` menu is up. */
+export type ComposerMenuAction =
+  /** Move the highlight down one, wrapping. */
+  | 'next'
+  /** Move it up one, wrapping. */
+  | 'previous'
+  /** Take the highlighted row: run a command, or fill the draft with a skill name. */
+  | 'run'
+  /** Not the menu's; the ordinary rules decide it. */
+  | 'default';
+
+/**
+ * Which of the four a keypress is while the menu is open.
+ *
+ * Asked BEFORE the ordinary rules, because while the menu is up it is the list the user is
+ * looking at and Enter/Tab belong to it. An EMPTY menu claims nothing at all - a filter that
+ * matched no row must not swallow the Enter that would send what was typed, which is what makes
+ * "a slash that names nothing is an ordinary message" true at the keyboard as well as in
+ * commands.ts.
+ */
+export function composerMenuAction(
+  key: string,
+  shiftKey: boolean,
+  input: { open: boolean; count: number }
+): ComposerMenuAction {
+  if (!input.open || input.count === 0) return 'default';
+  if (key === 'ArrowDown') return 'next';
+  if (key === 'ArrowUp') return 'previous';
+  if (key === 'Tab' || (key === 'Enter' && !shiftKey)) return 'run';
+  return 'default';
+}
+
+/** What a submitted draft turns out to be. */
+export type ComposerSubmit =
+  /** A registered slash command, with whatever followed its name. Never reaches the model. */
+  | { kind: 'command'; invocation: CommandInvocation }
+  /** Anything else, including text that merely starts with a slash. */
+  | { kind: 'send' };
+
+/**
+ * What pressing Send does with this draft.
+ *
+ * The one branch worth stating: a draft beginning with `/` is only a command when it NAMES one.
+ * `/etc/hosts`, `/review src/x.ts` and `/nonsense` are all messages, and sending them is this
+ * function returning 'send' rather than any caller remembering to check.
+ */
+export function composerSubmitAction(text: string): ComposerSubmit {
+  const invocation = parseCommandInvocation(text);
+  return invocation ? { kind: 'command', invocation } : { kind: 'send' };
 }
 
 /** What the composer's one button does when clicked. */
@@ -81,7 +134,7 @@ export const COMPOSER_BUTTON_LABELS: Record<ComposerButtonAction, string> = {
 
 /** What Escape in the composer's input means. */
 export type ComposerEscapeAction =
-  /** Close the skill menu, leaving the text alone. */
+  /** Close the `/` menu, leaving the text alone. */
   | 'dismiss-picker'
   /** End the turn that is running. */
   | 'stop'
@@ -89,7 +142,7 @@ export type ComposerEscapeAction =
   | 'default';
 
 /**
- * Escape's precedence: the skill menu first, the running turn second.
+ * Escape's precedence: the `/` menu first, the running turn second.
  *
  * The menu wins while it is open because it is the thing the user is looking at and Escape is
  * the only way to refuse it - taking that away to stop a turn would make a mis-typed `/` a trap.

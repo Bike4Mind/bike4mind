@@ -73,8 +73,11 @@ describe('ChatService write gate', () => {
     });
   });
 
+  // Put on 'ask' rather than left on the default, which is 'auto': what this file is about is
+  // the diff the user is shown before answering, so every write here has to reach the gate.
   async function startTurn(prompt: string): Promise<void> {
     const { id } = await service.createSession();
+    await service.setApprovalMode(id, 'ask');
     await service.send(id, prompt);
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
   }
@@ -211,6 +214,7 @@ describe('ChatService write gate', () => {
 
     async function startOn(model: string, prompt: string): Promise<string> {
       const { id } = await service.createSession();
+      await service.setApprovalMode(id, 'ask');
       await service.setSessionModel(id, model);
       await service.send(id, prompt);
       await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });

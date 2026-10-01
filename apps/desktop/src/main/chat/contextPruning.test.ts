@@ -4,6 +4,7 @@ import {
   DEFAULT_PRUNING_POLICY,
   findStaleResults,
   historyRounds,
+  sentHistory,
   stalePlaceholder,
   toolResultContent,
   type PruningPolicy,
@@ -218,6 +219,40 @@ describe('historyRounds', () => {
       { id: 'm3', role: 'assistant', content: '', createdAt: '', toolCalls: [d] },
     ];
     expect(historyRounds(messages).map(round => round.map(entry => entry.id))).toEqual([[a.id], [b.id, c.id], [d.id]]);
+  });
+});
+
+describe('sentHistory', () => {
+  const turn = (id: string, extra: Partial<ChatMessage> = {}): ChatMessage => ({
+    id,
+    role: 'user',
+    content: id,
+    createdAt: '',
+    ...extra,
+  });
+  const marker = (id: string): ChatMessage => turn(id, { system: true, boundary: { kind: 'clear' }, content: '' });
+
+  it('starts at the most recent boundary, so nothing before it can reach the wire', () => {
+    const cut = marker('b1');
+    expect(sentHistory([turn('m1'), turn('m2'), cut, turn('m3')]).map(message => message.id)).toEqual(['b1', 'm3']);
+  });
+
+  it('leaves a conversation with no boundary whole', () => {
+    const messages = [turn('m1'), turn('m2')];
+    expect(sentHistory(messages)).toEqual(messages);
+  });
+
+  // The pairing that matters: the stale-result scan walks the same history the wire does, so a
+  // batch can never clear a result in a message the request no longer carries.
+  it('keeps the stale-result scan to the same messages', () => {
+    const before = glob();
+    const after = glob();
+    const rounds = historyRounds([
+      turn('m1', { role: 'assistant', toolCalls: [before] }),
+      marker('b1'),
+      turn('m2', { role: 'assistant', toolCalls: [after] }),
+    ]);
+    expect(rounds.map(round => round.map(entry => entry.id))).toEqual([[after.id]]);
   });
 });
 

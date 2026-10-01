@@ -13,6 +13,7 @@ import type {
 import type { CompletionRequest } from '../completions';
 import type { CompletionStreamEvent } from '../streamEvents';
 
+import type { MemoryStore } from '../project/memory';
 import type { MediaApiClient } from '../media/MediaApiClient';
 import type { MediaStore } from '../media/MediaStore';
 import type { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
@@ -186,6 +187,11 @@ export interface ToolContext {
   explore?: ExploreContext;
   /** Absent outside a Code session; the browser tools are then not declared at all. */
   browser?: BrowserContext;
+  /**
+   * Where this project's memories live. Resolved from the project, never from the tool's
+   * arguments: the model names a memory, and nothing it can say chooses the folder.
+   */
+  memory?: MemoryStore;
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
 }

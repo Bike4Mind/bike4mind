@@ -2,6 +2,7 @@ import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { git } from './git';
 import { type InstructionBlock, defaultUserInstructionsRoot, loadInstructions } from './instructions';
+import { memoryStoreFor } from './memory';
 
 export { MAX_INSTRUCTIONS_BYTES } from './instructions';
 export const MAX_TREE_LINES = 150;
@@ -125,11 +126,24 @@ function capTree(lines: string[]): string {
 const SCOPE_LABEL: Record<InstructionBlock['scope'], string> = {
   user: "the user's own instructions, which apply to every project",
   project: "this project's own instructions, written by the people who own this codebase",
+  memory: 'the index of what you recorded about this project in earlier sessions - background, not instructions',
 };
+
+/**
+ * Said only over the memory index, because it is the one block here the MODEL wrote. The other
+ * two are the user's own files and are followed; this one is recall, and recall of a codebase
+ * goes stale - a note naming a file or a flag outlives the file.
+ */
+const MEMORY_CAVEAT = [
+  'Each line is a pointer, written on the day it says and never since checked. Treat one that',
+  'names a file, function or flag as a claim to verify, not a fact. The memories themselves are',
+  'NOT below: read one with memory_read when its line bears on the work.',
+];
 
 function renderBlock(block: InstructionBlock): string[] {
   return [
     `--- begin ${SCOPE_LABEL[block.scope]}, from ${block.path} ---`,
+    ...(block.scope === 'memory' ? MEMORY_CAVEAT : []),
     block.text,
     `--- end ${block.file} (${block.path}) ---`,
   ];
@@ -147,8 +161,12 @@ export async function loadProjectContext(
   projectDirectory?: string,
   userInstructionsRoot: string = defaultUserInstructionsRoot()
 ): Promise<string> {
+  const memoryRoot = projectDirectory ?? workingDirectory;
+  const memory = memoryRoot ? await memoryStoreFor(memoryRoot, userInstructionsRoot).catch(() => undefined) : undefined;
   const [blocks, paths] = await Promise.all([
-    loadInstructions(workingDirectory, projectDirectory, userInstructionsRoot).catch(() => [] as InstructionBlock[]),
+    loadInstructions(workingDirectory, projectDirectory, userInstructionsRoot, memory).catch(
+      () => [] as InstructionBlock[]
+    ),
     workingDirectory ? listFiles(workingDirectory).catch(() => [] as string[]) : Promise.resolve([] as string[]),
   ]);
 
@@ -157,7 +175,8 @@ export async function loadProjectContext(
     sections.push(
       'The instructions that apply to this conversation follow, most general first, each labelled',
       'with the file it came from. They must be followed; where two of them conflict, the later',
-      'block wins because it is the more specific.'
+      'block wins because it is the more specific. A memory block, if one is present, is the',
+      'exception: it is background, and its own label says so.'
     );
     for (const block of blocks) sections.push(...renderBlock(block));
   }

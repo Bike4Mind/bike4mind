@@ -8,12 +8,15 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatQueuedMessage } from '@shared/chat';
 import { AttachmentRow } from './Attachments';
+import { matchCommands, type ComposerCommand } from './commands';
 import {
   COMPOSER_BUTTON_LABELS,
   composerButtonAction,
   composerEscapeAction,
   composerKeyAction,
+  composerMenuAction,
   composerPlaceholder,
+  composerSubmitAction,
   shownSuggestion,
 } from './composerInput';
 import { ArrowUpIcon, StopIcon } from './icons';
@@ -37,6 +40,7 @@ export function Composer({
   placeholder = 'Send a message...',
   onSend,
   onStop,
+  onRunCommand,
   queued,
   onCancelQueued,
   returned,
@@ -74,6 +78,14 @@ export function Composer({
   usage?: ComposerUsage | null;
   onSend: (text: string) => void;
   onStop: () => void;
+  /**
+   * Run a slash command. Omitted in tests and in any host that offers none, which leaves the
+   * command rows out of the `/` menu and `/clear` an ordinary message.
+   *
+   * It is a separate channel from `onSend` on purpose: a command is an action this app takes,
+   * and nothing typed here can reach the model through it. See commands.ts.
+   */
+  onRunCommand?: (name: string, args: string) => void;
   /** Typed ahead of the live turn, waiting to be sent. Drawn above the input. */
   queued?: readonly ChatQueuedMessage[];
   onCancelQueued?: (queuedId: string) => void;
@@ -129,15 +141,36 @@ export function Composer({
   // the first condition, which is why pressing Enter mid-reply did nothing at all.
   const canSubmit = hasContent && !disabled && !attachments.busy && !blocked;
 
+  // A draft that names a command is sendable whatever is blocking a TURN: see submit. Without
+  // this the button would sit disabled on `/clear` in exactly the conversations most in need of
+  // it, while Enter ran it anyway.
+  const commandDraft = !!onRunCommand && !disabled && composerSubmitAction(text).kind === 'command';
+
   // Which of Send/Stop/Queue the one button is. See composerButtonAction, and
   // composerEscapeAction for the way to Stop that Queue takes the button away from.
-  const buttonAction = composerButtonAction({ streaming, hasContent });
+  // A command draft is never queued: it is an action on this conversation, not the next turn,
+  // so the button has to offer to run it now rather than to hold it behind the live reply.
+  const buttonAction = composerButtonAction({ streaming: streaming && !commandDraft, hasContent });
 
+  /**
+   * Send what is in the box - or run it, when what is in the box names a command.
+   *
+   * The command branch bypasses `canSubmit`'s attachment and blocked checks, because those
+   * describe a TURN: `/clear` with an image half uploaded, or in a Code session with no folder
+   * chosen, is still a perfectly good thing to ask for. It does need a conversation to act on,
+   * which `disabled` is.
+   */
   const submit = () => {
+    const draft = text.trim();
+    const action = composerSubmitAction(draft);
+    if (action.kind === 'command' && onRunCommand && !disabled) {
+      setText('');
+      onRunCommand(action.invocation.command.name, action.invocation.args);
+      return;
+    }
     if (!canSubmit) return;
-    const prompt = text.trim();
     setText('');
-    onSend(prompt);
+    onSend(draft);
   };
 
   // Text coming back out of the queue - cancelled, or its turn stopped or failed. Tracked by
@@ -163,9 +196,15 @@ export function Composer({
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
 
-  const query = skills && !disabled ? skillQuery(text) : null;
-  const pickerOpen = query !== null && dismissed !== text;
+  const query = (skills || onRunCommand) && !disabled ? skillQuery(text) : null;
+  const commandMatches = useMemo(
+    () => (onRunCommand && query !== null ? matchCommands(query) : []),
+    [onRunCommand, query]
+  );
   const matches = useMemo(() => (skills && query !== null ? matchSkills(skills.skills, query) : []), [skills, query]);
+  // One list for the keyboard: commands first, then skills, which is also the order drawn.
+  const menuCount = commandMatches.length + matches.length;
+  const pickerOpen = query !== null && dismissed !== text && (menuCount > 0 || !!skills);
 
   // Whenever the filter changes the old highlight means nothing: it pointed into a different
   // list, and leaving it would arm Enter with whatever now happens to sit at that index.
@@ -195,6 +234,31 @@ export function Composer({
   };
 
   /**
+   * Taking a command out of the menu RUNS it, where taking a skill only fills the draft.
+   *
+   * The difference is which way round the argument works. A skill's arguments are the point of
+   * invoking it, so the menu hands the user a line to finish; a command's are optional, and
+   * `/compact focus on the auth work` is typed in full and sent without the menu being involved
+   * at all - by then the draft is no longer a bare token, so the menu has already closed.
+   */
+  const runCommand = (command: ComposerCommand) => {
+    setText('');
+    setDismissed(null);
+    onRunCommand?.(command.name, '');
+    textareaRef.current?.focus();
+  };
+
+  const takeMenuRow = (index: number) => {
+    const command = commandMatches[index];
+    if (command) {
+      runCommand(command);
+      return;
+    }
+    const skill = matches[index - commandMatches.length];
+    if (skill) pick(skill.name);
+  };
+
+  /**
    * Enter sends, Shift+Enter breaks the line, Tab takes the hint, Escape closes the menu or
    * stops the turn. Which is which lives in composerInput.ts, where the rule that accepting is
    * not sending and the rule that Escape stops a live turn are both stated and tested.
@@ -216,24 +280,13 @@ export function Composer({
       return;
     }
 
-    if (pickerOpen) {
-      if (matches.length > 0) {
-        if (event.key === 'ArrowDown') {
-          event.preventDefault();
-          setActiveIndex(current => (current + 1) % matches.length);
-          return;
-        }
-        if (event.key === 'ArrowUp') {
-          event.preventDefault();
-          setActiveIndex(current => (current - 1 + matches.length) % matches.length);
-          return;
-        }
-        if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
-          event.preventDefault();
-          pick(matches[Math.min(activeIndex, matches.length - 1)].name);
-          return;
-        }
-      }
+    const menu = composerMenuAction(event.key, event.shiftKey, { open: pickerOpen, count: menuCount });
+    if (menu !== 'default') {
+      event.preventDefault();
+      if (menu === 'next') setActiveIndex(current => (current + 1) % menuCount);
+      else if (menu === 'previous') setActiveIndex(current => (current - 1 + menuCount) % menuCount);
+      else takeMenuRow(Math.min(activeIndex, menuCount - 1));
+      return;
     }
 
     const action = composerKeyAction(event.key, event.shiftKey, !!shown);
@@ -319,13 +372,15 @@ export function Composer({
 
       {/* Above the input, where an autocomplete belongs: the list has to sit between what was
           typed and the transcript, not cover the transcript the user is answering. */}
-      {pickerOpen && skills && (
+      {pickerOpen && (
         <SkillPicker
+          commands={commandMatches}
           skills={matches}
           activeIndex={activeIndex}
-          untrustedProject={skills.untrustedProject}
+          untrustedProject={skills?.untrustedProject ?? null}
+          onPickCommand={runCommand}
           onPick={skill => pick(skill.name)}
-          onTrustProject={() => void skills.trustProject()}
+          onTrustProject={() => void skills?.trustProject()}
         />
       )}
 
@@ -378,7 +433,7 @@ export function Composer({
                   variant={buttonAction === 'stop' ? 'soft' : 'solid'}
                   color={buttonAction === 'stop' ? 'neutral' : 'primary'}
                   onClick={buttonAction === 'stop' ? onStop : submit}
-                  disabled={buttonAction !== 'stop' && !canSubmit}
+                  disabled={buttonAction !== 'stop' && !canSubmit && !commandDraft}
                   aria-label={COMPOSER_BUTTON_LABELS[buttonAction]}
                   data-composer-action={buttonAction}
                   data-testid="chat-send-btn"

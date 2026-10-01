@@ -181,9 +181,16 @@ export function contextTokens(message: ChatMessage | null | undefined): number |
  *
  * Messages typed since are deliberately skipped rather than counted - they will occupy the
  * window on the next request, and this reports what the last one actually used.
+ *
+ * The scan STOPS at a context boundary, which is what makes the indicator answer the question
+ * the user asked `/clear` or `/compact` to change. The request behind a reply from before the
+ * boundary measured a window that no longer exists, and reporting it would tell the user their
+ * compaction did nothing. With no reply since, the answer is null - not measured yet - and the
+ * figure reads as unknown until the next turn states a real one.
  */
 export function latestReply(messages: readonly ChatMessage[]): ChatMessage | null {
   for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index].boundary) return null;
     if (messages[index].role === 'assistant') return messages[index];
   }
   return null;

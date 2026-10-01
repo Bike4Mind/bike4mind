@@ -473,6 +473,13 @@ export interface ChatMessage {
    */
   artifacts?: ChatArtifact[];
   /**
+   * Set on the one message that marks a context boundary. See ChatContextBoundary.
+   *
+   * It is a marker rather than a property of the message after it, so `/clear` and `/compact`
+   * produce the same shape: one message, differing only in whether it carries a summary.
+   */
+  boundary?: ChatContextBoundary;
+  /**
    * Set when this user turn was a `/skill` invocation rather than typed prose.
    *
    * `content` still holds the EXPANDED body, because that is what the model was asked and the
@@ -482,6 +489,43 @@ export interface ChatMessage {
    * see which skill ran instead of a screen of prose they never wrote.
    */
   skill?: ChatMessageSkill;
+}
+
+/**
+ * A point in the transcript the model is shown nothing before.
+ *
+ * `/clear` and `/compact` are the same mechanism with one difference: whether a summary rides
+ * across. So the boundary is ONE message - `kind` says which command wrote it, and `content`
+ * holds the summary on a compaction and is empty on a clear. Adding a third command that keeps
+ * some other form of carry-over is then a new `kind`, not a second mechanism.
+ *
+ * Nothing is deleted. The messages before a boundary stay in the session file and in the
+ * transcript, folded away: a session is the user's record of their own work, and neither
+ * command is a delete. What changes is only what goes on the wire - see messagesSinceBoundary.
+ */
+export interface ChatContextBoundary {
+  kind: 'clear' | 'compact';
+}
+
+/** Index of the most recent boundary marker, or -1 when the conversation has none. */
+export function lastBoundaryIndex(messages: readonly ChatMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index].boundary) return index;
+  }
+  return -1;
+}
+
+/**
+ * The history a request may carry: everything from the most recent boundary on, the marker
+ * included so a compaction's summary is the first thing the model reads.
+ *
+ * The marker is INCLUSIVE and a later boundary supersedes an earlier one, which is what makes
+ * compacting a compacted conversation work without any bookkeeping: the scan only ever finds
+ * the last marker, and everything the previous summary stood for is already behind it.
+ */
+export function messagesSinceBoundary(messages: readonly ChatMessage[]): readonly ChatMessage[] {
+  const index = lastBoundaryIndex(messages);
+  return index < 0 ? messages : messages.slice(index);
 }
 
 /** Which skill a user turn ran. See ChatMessage.skill. */
@@ -930,6 +974,18 @@ export type SendMessageResult =
     }
   | { ok: true; queued: true; message: ChatQueuedMessage }
   | { ok: false; error: string };
+
+/**
+ * The answer to `/clear` and `/compact`.
+ *
+ * A refusal is a result rather than a thrown error, for the reason ChatMoveToBackgroundResult
+ * is: "this conversation is still replying" is a thing the user asked for and is entitled to
+ * read back, not a fault.
+ *
+ * `ok: true` carries the session as it now stands, so the window that asked draws the boundary
+ * without a second read.
+ */
+export type ContextBoundaryResult = { ok: true; session: ChatSession } | { ok: false; error: string };
 
 /**
  * Folders the tools are allowed to touch.

@@ -177,6 +177,30 @@ const PHRASES: Record<string, ToolPhrases> = {
     many: n => `Deleted ${n} sessions`,
     active: 'Deleting a session...',
   },
+  memory_read: {
+    did: 'Read',
+    didAlone: 'Read a memory',
+    to: 'read',
+    toAlone: 'read a memory',
+    many: n => `Recalled ${n} memories`,
+    active: 'Recalling...',
+  },
+  memory_write: {
+    did: 'Saved',
+    didAlone: 'Saved a memory',
+    to: 'save',
+    toAlone: 'save a memory',
+    many: n => `Saved ${n} memories`,
+    active: 'Saving a memory...',
+  },
+  memory_delete: {
+    did: 'Forgot',
+    didAlone: 'Forgot a memory',
+    to: 'forget',
+    toAlone: 'forget a memory',
+    many: n => `Forgot ${n} memories`,
+    active: 'Forgetting a memory...',
+  },
   generate_music: {
     didAlone: 'Generated music',
     toAlone: 'generate music',
@@ -217,7 +241,19 @@ const ARGUMENT_PRIORITY: Record<string, readonly string[]> = {
   // The title if it was given one, never the seed prompt: that is a paragraph, and a row
   // showing its first 56 characters names the task less well than "Started a session" does.
   session_spawn: ['title'],
+  memory_read: ['name'],
+  memory_write: ['name'],
+  memory_delete: ['name'],
 };
+
+/**
+ * Tools whose named argument is a memory slug, shown with the extension the file has.
+ *
+ * The row names the FILE - "Read local-dev-server-port.md" - rather than the memory's title,
+ * because that is what the folder holds and what the model chose; a title would be a second
+ * name for the same thing and would not match what memory_read was called with.
+ */
+const MEMORY_TOOLS = new Set(['memory_read', 'memory_write', 'memory_delete']);
 
 const DEFAULT_ARGUMENT_PRIORITY: readonly string[] = ['path', 'pattern', 'command', 'prompt', 'text', 'id'];
 
@@ -234,7 +270,8 @@ export function summarizeInput(call: ChatToolCall): string {
   const keys = [...(ARGUMENT_PRIORITY[call.name] ?? []), ...DEFAULT_ARGUMENT_PRIORITY];
   for (const key of keys) {
     const value = input[key];
-    if (typeof value === 'string' && value.length > 0) return value;
+    if (typeof value !== 'string' || value.length === 0) continue;
+    return MEMORY_TOOLS.has(call.name) && key === 'name' ? `${value}.md` : value;
   }
   return '';
 }

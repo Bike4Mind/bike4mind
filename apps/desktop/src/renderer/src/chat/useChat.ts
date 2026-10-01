@@ -261,6 +261,13 @@ export interface ConversationController {
   stop: () => void;
   /** Resume the last reply if the agent loop's budget cut it short. */
   continueReply: () => Promise<void>;
+  /**
+   * Run a slash command. Client-side actions only; nothing here reaches the model as a tool.
+   * A refusal lands in `sendError`, which is where the user is already looking for one.
+   */
+  runCommand: (name: string, args: string) => Promise<void>;
+  /** What a running command is doing, for the progress line. Null when none is. */
+  commandProgress: string | null;
   /** Messages typed ahead of the live turn, oldest first. Empty unless one is streaming. */
   queued: ChatQueuedMessage[];
   /** Take one back. Its text returns through `returned`, which is also how it is edited. */
@@ -312,6 +319,7 @@ export function useConversation(
   const [queued, setQueued] = useState<ChatQueuedMessage[]>([]);
   const [returned, setReturned] = useState<{ id: number; messages: ChatQueuedMessage[] } | null>(null);
   const [settledTurns, setSettledTurns] = useState(0);
+  const [commandProgress, setCommandProgress] = useState<string | null>(null);
   /**
    * Batch counter for returned text, monotonic for the life of this hook.
    *
@@ -336,6 +344,7 @@ export function useConversation(
     setProjectError(null);
     setReturned(null);
     setQueued([]);
+    setCommandProgress(null);
     if (!sessionId) {
       setSession(null);
       setMessages([]);
@@ -581,6 +590,41 @@ export function useConversation(
     const result = await window.b4m.chat.continueReply(sessionId);
     if (!result.ok) setSendError(result.error);
   }, [sessionId]);
+  /**
+   * Run `/clear` or `/compact`.
+   *
+   * Main owns both outcomes. The streaming check that refuses a compaction is made THERE for the
+   * reason queueing is: a turn that ends between a renderer-side check and the IPC call would
+   * otherwise let a summary be written against a conversation that had just grown.
+   *
+   * The message list is replaced from the session main returns, rather than patched here. A
+   * failure replaces nothing at all, which is the contract `/compact` turns on - see
+   * ChatService.compactContext.
+   */
+  const runCommand = useCallback(
+    async (name: string, args: string) => {
+      if (!sessionId) return;
+      setSendError(null);
+      setNotice(null);
+      setCommandProgress(name === 'compact' ? 'Summarising this conversation...' : null);
+      try {
+        const result =
+          name === 'compact'
+            ? await window.b4m.chat.compactContext(sessionId, args)
+            : await window.b4m.chat.clearContext(sessionId);
+        if (!result.ok) {
+          setSendError(result.error);
+          return;
+        }
+        setSession(result.session);
+        setMessages(result.session.messages);
+      } finally {
+        setCommandProgress(null);
+      }
+    },
+    [sessionId]
+  );
+
   const cancelQueued = useCallback(
     (queuedId: string) => {
       if (sessionId) void window.b4m.chat.cancelQueuedMessage(sessionId, queuedId);
@@ -747,6 +791,8 @@ export function useConversation(
     send,
     stop,
     continueReply,
+    runCommand,
+    commandProgress,
     queued,
     cancelQueued,
     returned,

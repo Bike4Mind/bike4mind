@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { isWithin, realpathNearest } from '../tools/paths';
 import { credentialPaths } from '../tools/sandbox';
+import { MEMORY_INDEX_FILE, type MemoryStore } from './memory';
 
 /**
  * Bytes of instructions that may reach the system prompt, across every file and every import
@@ -23,7 +24,7 @@ export function defaultUserInstructionsRoot(): string {
   return join(homedir(), '.claude');
 }
 
-export type InstructionScope = 'user' | 'project';
+export type InstructionScope = 'user' | 'project' | 'memory';
 
 export interface InstructionBlock {
   scope: InstructionScope;
@@ -32,6 +33,13 @@ export interface InstructionBlock {
   path: string;
   text: string;
 }
+
+type Continuation = (shownLines: number) => string;
+
+const fileReadContinuation =
+  (path: string): Continuation =>
+  shownLines =>
+    `Read the rest with file_read on ${path} with offset ${shownLines + 1}.`;
 
 /**
  * The shared byte allowance, spent in the order blocks are read rather than shared out evenly:
@@ -49,8 +57,14 @@ class Budget {
     return this.remaining <= 0;
   }
 
-  /** `raw` capped to what is left, or null once nothing is. */
-  take(raw: Buffer, path: string): string | null {
+  /**
+   * `raw` capped to what is left, or null once nothing is.
+   *
+   * `continuation` says how to reach the rest, because not every block is reachable the same
+   * way: the memory index sits outside every granted root, so telling the model to file_read it
+   * would name a call that is always denied.
+   */
+  take(raw: Buffer, path: string, continuation: Continuation = fileReadContinuation(path)): string | null {
     if (this.remaining <= 0) return null;
     if (raw.length <= this.remaining) {
       this.remaining -= raw.length;
@@ -64,8 +78,7 @@ class Budget {
     return [
       kept,
       '',
-      `[Truncated: showing the first ${shownLines} lines of ${raw.length} bytes. Read the rest with`,
-      `file_read on ${path} with offset ${shownLines + 1}.]`,
+      `[Truncated: showing the first ${shownLines} lines of ${raw.length} bytes. ${continuation(shownLines)}]`,
     ].join('\n');
   }
 }
@@ -94,7 +107,8 @@ interface ImportContext {
 export async function loadInstructions(
   workingDirectory: string | undefined,
   projectDirectory: string | undefined,
-  userInstructionsRoot: string
+  userInstructionsRoot: string,
+  memory?: MemoryStore
 ): Promise<InstructionBlock[]> {
   const directories = [workingDirectory, projectDirectory].filter((value): value is string => !!value);
   let allowed: Promise<Allowed> | null = null;
@@ -106,8 +120,32 @@ export async function loadInstructions(
   // Most specific first: it spends from the budget before the general file sees it.
   const project = await readBlock('project', await findProjectFile(directories), context);
   const user = await readBlock('user', await findFile(join(userInstructionsRoot, USER_INSTRUCTION_FILE)), context);
+  // Last on the same allowance, not an allowance of its own: the index is context the model
+  // recorded earlier, and a budget too tight for both must spend it on what the user and the
+  // project actually asked for. It is a few lines by design, so in practice it always fits.
+  const memoryIndex = memory ? await readMemoryIndex(memory, context) : null;
 
-  return [user, project].filter((block): block is InstructionBlock => block !== null);
+  return [user, project, memoryIndex].filter((block): block is InstructionBlock => block !== null);
+}
+
+/**
+ * The index alone - never the memories it points at. All of them together run to many times
+ * this budget, and loading them up front would spend the context on facts the turn has no use
+ * for; `memory_read` is how one is fetched when the index says it is relevant.
+ *
+ * Imports are deliberately NOT expanded here. The index is a list of pointers written by the
+ * model, not an instruction file, so there is no reason to give it a second way to pull a file
+ * into the system prompt.
+ */
+async function readMemoryIndex(memory: MemoryStore, context: ImportContext): Promise<InstructionBlock | null> {
+  const found = await findFile(join(memory.directory, MEMORY_INDEX_FILE));
+  if (!found) return null;
+  const text = context.budget.take(
+    found.raw,
+    found.path,
+    () => 'The rest is not shown; memory_read still reaches any memory by its name.'
+  );
+  return text === null ? null : { scope: 'memory', file: found.file, path: found.path, text };
 }
 
 async function resolveAllowed(directories: readonly string[], userInstructionsRoot: string): Promise<Allowed> {

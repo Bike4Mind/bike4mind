@@ -59,10 +59,12 @@ export const APPROVAL_MODE_OPTIONS: readonly ApprovalModeOption[] = [
 export const APPROVAL_MODE_FOOTNOTES: readonly string[] = [
   'In every mode, commands run as you and are not confined to the folders you have shared; file edits are.',
   '"Approve for me" runs this project\'s own test, lint and typecheck scripts without asking, whatever those scripts do.',
+  '"Approve for me" also runs read-only GitHub CLI commands, which reach GitHub as you.',
   'Image, speech and music generation always ask, in every mode, because they spend credits.',
   'Deleting a conversation always asks, in every mode, because it cannot be undone.',
   'Full access lasts until you quit: a conversation left on it reopens on "Ask for approval".',
   'A session the agent starts on its own never runs at full access; it inherits at most "Approve for me".',
+  'A new conversation starts in the mode you picked last, except "Full access", which is never carried over.',
 ];
 
 export function approvalModeOption(mode: ChatApprovalMode): ApprovalModeOption {

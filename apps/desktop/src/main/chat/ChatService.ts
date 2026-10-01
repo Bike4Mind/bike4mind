@@ -26,11 +26,12 @@ import type {
   ChatUsage,
   CreateCodeSessionRequest,
   CreateCodeSessionResult,
+  ContextBoundaryResult,
   SendMessageResult,
   UpdateProjectRequest,
   UpdateProjectResult,
 } from '@shared/chat';
-import { isTurnBudgetStop } from '@shared/chat';
+import { isTurnBudgetStop, messagesSinceBoundary } from '@shared/chat';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
 import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
@@ -40,6 +41,8 @@ import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
 import { isValidBranchName } from './project/branchName';
 import { branchExists, listWorktrees, projectDisplayName } from './project/git';
 import type { DependencyInstaller } from './project/dependencyInstall';
+import { defaultUserInstructionsRoot } from './project/instructions';
+import { type MemoryStore, memoryStoreFor } from './project/memory';
 import { ProjectContextCache } from './project/projectContext';
 import { resolveWorkspace, type WorkspaceOutcome } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
@@ -55,7 +58,7 @@ import {
 } from './completions';
 import { reasoningEffortFor, type ReasoningEffortSetting } from './reasoningEffort';
 import { addUsage, foldUsage } from './streamEvents';
-import { findStaleResults, historyRounds, toolResultContent } from './contextPruning';
+import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';
 import { stalePlanReminder, unfinishedPlanReminder } from './planReminder';
 import { buildExploreContext, shouldOfferExplore } from './explore';
 import { MediaApiClient } from './media/MediaApiClient';
@@ -63,6 +66,7 @@ import type { MediaStore } from './media/MediaStore';
 import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
 import { createThinkFilter, type ThinkSplit } from './thinkFilter';
+import { COMPACT_MAX_TOKENS, compactRequestMessages, renderForSummary, sanitizeSummary } from './compaction';
 import { pickTitleModel, sanitizeGeneratedTitle, TITLE_MAX_TOKENS, titleRequestMessages } from './sessionTitle';
 import {
   pickSuggestionModel,
@@ -194,6 +198,15 @@ const TITLE_TIMEOUT_MS = 15_000;
  * seconds is about as long as an empty composer stays empty.
  */
 const SUGGESTION_TIMEOUT_MS = 5_000;
+
+/**
+ * How long a compaction may take before it is abandoned.
+ *
+ * Generous where a title's is not: the user asked for this one and is watching it, the input is
+ * a whole conversation rather than one sentence, and the alternative to waiting is the context
+ * limit. Abandoning it changes nothing - see compactContext.
+ */
+const COMPACT_TIMEOUT_MS = 120_000;
 
 /**
  * How far a message may travel from the turn the USER typed, in agent-to-agent hops.
@@ -1004,6 +1017,123 @@ export class ChatService {
   }
 
   /**
+   * `/clear`: stop sending what came before, carrying nothing across.
+   *
+   * No round trip, so it is instant - that is the whole difference from `/compact`, which is the
+   * same insertion with a summary in the marker. Everything else about the conversation is
+   * untouched: its id, project, branch, approval mode and `remoteSessionId` all live on the
+   * session rather than on its messages, and nothing here writes to them. The notebook binding
+   * matters most of the three (see ChatSession.remoteSessionId): dropping it would strand every
+   * image this conversation has generated.
+   */
+  async clearContext(sessionId: string): Promise<ContextBoundaryResult> {
+    if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
+    const session = await this.deps.store.get(sessionId);
+    if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+    if (!hasClearableHistory(session.messages)) {
+      return { ok: false, error: 'There is nothing in this conversation to clear yet.' };
+    }
+    return this.applyBoundary(sessionId, 'clear', '');
+  }
+
+  /**
+   * `/compact`: summarise the conversation and carry only the summary across.
+   *
+   * ALL OR NOTHING. The boundary is written only once a usable summary is in hand, so every
+   * failure path - a refusal, a timeout, an empty answer, a dropped socket - leaves the message
+   * list exactly as it was. The alternative is the one outcome this must never have: history
+   * dropped with nothing put in its place, which loses the user's context irrecoverably and
+   * cannot be undone from the UI or from the file on disk.
+   *
+   * Refused while a turn is streaming rather than queued, because the conversation is still
+   * growing: a summary written against a moving transcript would be wrong about the work by the
+   * time it landed.
+   */
+  async compactContext(sessionId: string, focus = ''): Promise<ContextBoundaryResult> {
+    if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
+    if (this.active.has(sessionId)) {
+      return { ok: false, error: 'This conversation is still replying. Wait for the turn to finish, then compact it.' };
+    }
+
+    const api = this.deps.getApiClient();
+    if (!api) return { ok: false, error: 'Sign in to compact this conversation.' };
+
+    const session = await this.deps.store.get(sessionId);
+    if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+
+    if (!hasClearableHistory(session.messages)) {
+      return { ok: false, error: 'There is nothing in this conversation to compact yet.' };
+    }
+    const history = messagesSinceBoundary(session.messages);
+
+    const controller = new AbortController();
+    let timer: NodeJS.Timeout | undefined;
+    let answer = '';
+    try {
+      timer = setTimeout(() => controller.abort(), COMPACT_TIMEOUT_MS);
+      const { endpoint } = await this.resolveServerConfig(api);
+      await streamCompletion(
+        api.getAxiosInstance(),
+        endpoint,
+        {
+          // The session's own model, as asked: a summary of a long coding conversation is the
+          // kind of reading a small model does badly, and this one is the handoff everything
+          // after the boundary depends on.
+          model: session.model,
+          messages: compactRequestMessages(renderForSummary(history), focus),
+          tools: [],
+          maxTokens: COMPACT_MAX_TOKENS,
+        },
+        event => {
+          if (event.type === 'content') answer += event.text ?? '';
+        },
+        controller.signal
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.deps.logger.warn(`CHAT: could not compact ${sessionId}: ${message}`);
+      return { ok: false, error: `Could not summarise this conversation: ${message}` };
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const summary = sanitizeSummary(answer);
+    if (!summary) {
+      return { ok: false, error: 'The summary came back empty, so nothing was changed. Try again.' };
+    }
+    return this.applyBoundary(sessionId, 'compact', summary);
+  }
+
+  /**
+   * Write the marker, and tell every open window.
+   *
+   * Pushed as a 'message' event as well as returned, because a conversation can be open in more
+   * than one window and the boundary changes what the transcript means - a window that missed it
+   * would keep drawing the old history as live context.
+   */
+  private async applyBoundary(
+    sessionId: string,
+    kind: 'clear' | 'compact',
+    content: string
+  ): Promise<ContextBoundaryResult> {
+    const marker: ChatMessage = {
+      id: randomUUID(),
+      // A user turn because that is the only role out-of-band text reaches a stateless
+      // completions endpoint under, and `system` because nobody typed it - the same compromise
+      // a relay and a spawned session's report both make.
+      role: 'user',
+      content,
+      createdAt: new Date().toISOString(),
+      system: true,
+      boundary: { kind },
+    };
+    const session = await this.deps.store.appendMessage(sessionId, marker);
+    if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+    this.emit({ type: 'message', sessionId, message: marker });
+    return { ok: true, session };
+  }
+
+  /**
    * Put a reply in flight and own its lifetime. Returns the message id it will arrive under -
    * a fresh one, or the interrupted message's when this run is carrying that one on.
    */
@@ -1202,6 +1332,11 @@ export class ChatService {
       // Per turn, from the session's current model, so a model switch changes the edit tools
       // from the next turn on.
       const patchEdits = usesApplyPatch(session.model);
+      // Keyed on the project the user picked, not the worktree this session works in: branches
+      // come and go and the project's memories outlive them. See resolveMemoryStore.
+      const memory: MemoryStore | undefined = session.project
+        ? await memoryStoreFor(session.project.directory, defaultUserInstructionsRoot()).catch(() => undefined)
+        : undefined;
       const tools = toolsForRequest({
         modelId: session.model,
         roots,
@@ -1209,6 +1344,7 @@ export class ChatService {
         host: !!host,
         explore: !!explore,
         browser: !!browser,
+        memory: !!memory,
         mcp: mcpTools.map(binding => binding.definition.schema),
       });
       const project = session.mode === 'code' ? session.project : undefined;
@@ -1231,7 +1367,8 @@ export class ChatService {
           this.deps.dependencies?.promptLines(session.id) ?? [],
           projectContext,
           !!browser,
-          patchEdits
+          patchEdits,
+          !!memory
         )
       );
       // Taken whether or not it is used, so a nudge the model ignored once does not follow the
@@ -1346,7 +1483,7 @@ export class ChatService {
         thinking = turnThinking;
         const settled = await this.runTools(
           requested,
-          { roots, workingDirectory, media, host, explore, browser, patchEdits, title: session.title },
+          { roots, workingDirectory, media, host, explore, browser, memory, patchEdits, title: session.title },
           sessionId,
           replyId,
           controller.signal
@@ -1379,7 +1516,7 @@ export class ChatService {
         // messages and break the prompt-cache prefix on every later turn (see contextPruning).
         // The nudge is ephemeral by design: never stored on the call, never replayed.
         const nudge = stalePlanReminder(
-          activeTodos([...session.messages, replySoFar(toolCalls)], true),
+          activeTodos([...sentHistory(session.messages), replySoFar(toolCalls)], true),
           roundsSincePlanUpdate
         );
         const lastResult = results[results.length - 1];
@@ -1423,7 +1560,7 @@ export class ChatService {
       const lastRound = produced[produced.length - 1];
       if (!controller.signal.aborted && !isTurnBudgetStop(stopReason) && lastRound?.toolCallIds.length === 0) {
         const unfinished = lastRound.text.trim()
-          ? unfinishedPlanReminder(activeTodos([...session.messages, replySoFar(toolCalls)], false))
+          ? unfinishedPlanReminder(activeTodos([...sentHistory(session.messages), replySoFar(toolCalls)], false))
           : null;
         if (unfinished) this.pendingPlanReminder.set(sessionId, unfinished);
       }
@@ -1535,7 +1672,7 @@ export class ChatService {
 
     const ids = new Set(clearIds);
     const content = new Map<string, string>();
-    for (const call of [...session.messages.flatMap(message => message.toolCalls ?? []), ...toolCalls]) {
+    for (const call of [...sentHistory(session.messages).flatMap(message => message.toolCalls ?? []), ...toolCalls]) {
       if (!ids.has(call.id)) continue;
       call.cleared = true;
       content.set(call.id, toolResultContent(call));
@@ -1662,6 +1799,7 @@ export class ChatService {
       host: HostContext | undefined;
       explore: ExploreContext | undefined;
       browser: BrowserContext | undefined;
+      memory: MemoryStore | undefined;
       /** Whether this turn's model edits with apply_patch rather than file_edit and file_write. */
       patchEdits: boolean;
       /** The conversation's title, so a cross-session approval names it rather than its id. */
@@ -1671,7 +1809,7 @@ export class ChatService {
     messageId: string,
     signal: AbortSignal
   ): Promise<ChatToolCall[]> {
-    const { roots, workingDirectory, media, host, explore, browser, patchEdits } = scope;
+    const { roots, workingDirectory, media, host, explore, browser, memory, patchEdits } = scope;
     return Promise.all(
       requested.map(async request => {
         const call: ChatToolCall = {
@@ -1764,6 +1902,7 @@ export class ChatService {
           ...(host ? { host } : {}),
           ...(explore ? { explore } : {}),
           ...(browser ? { browser } : {}),
+          ...(memory ? { memory } : {}),
           report,
         };
 
@@ -2644,7 +2783,8 @@ function buildSystemMessage(
   dependencyLines: readonly string[] = [],
   projectContext = '',
   browser = false,
-  patchEdits = false
+  patchEdits = false,
+  memory = false
 ): CompletionMessage {
   if (roots.length === 0) {
     return {
@@ -2659,6 +2799,7 @@ function buildSystemMessage(
         'above the message box, and the sidebar card shares one with every conversation.',
         ...(media ? MEDIA_GUIDANCE : []),
         ...(host ? HOST_GUIDANCE : []),
+        ...(memory ? MEMORY_GUIDANCE : []),
         ...mcpGuidance(mcpServers),
         '',
         DESKTOP_ARTIFACT_PROMPT,
@@ -2762,6 +2903,7 @@ function buildSystemMessage(
       'return it, you do not know it.',
       ...(media ? MEDIA_GUIDANCE : []),
       ...(host ? HOST_GUIDANCE : []),
+      ...(memory ? MEMORY_GUIDANCE : []),
       ...mcpGuidance(mcpServers),
       '',
       DESKTOP_ARTIFACT_PROMPT,
@@ -2837,6 +2979,31 @@ const MEDIA_GUIDANCE: readonly string[] = [
   'flourish alongside a text answer. If they decline, do not try a variation; ask what they want.',
   'The result is shown or played to the USER and is never returned to you: you cannot see the',
   'image or hear the audio. Never describe what a generated image depicts or how audio sounds.',
+];
+
+/**
+ * What the model has to know about memory, in the voice of the guidance around it.
+ *
+ * Two failures to head off, and they pull opposite ways. A model given a memory tool writes
+ * down the turn it just had, which fills the index with what the commit log already says and
+ * buries the few facts actually worth carrying. And a model given an index reads every line of
+ * it before answering anything, which spends the context the index exists to save.
+ */
+const MEMORY_GUIDANCE: readonly string[] = [
+  'You keep memories for this project, across sessions. The index is in the block below, one',
+  'line per memory; memory_read fetches one by name, memory_write saves or replaces one, and',
+  'memory_delete removes one that turned out to be wrong.',
+  'Read a memory when its line in the index bears on what you are doing, not to survey what is',
+  'there. What a memory says was true when it was written: check a file, function or flag it',
+  'names still exists before you act on it.',
+  'Save a durable fact about the user, how they want you to work, or this project, that you',
+  'could not have got from the code or the commit history. Never save what the repository',
+  'already records - its structure, a fix you just made, what is in CLAUDE.md - and never save',
+  'what only matters until this conversation ends. One fact per memory. Before saving, look for',
+  'a memory already covering the same ground and update that one instead of adding a second.',
+  'Keep the index to one line per memory, holding the pointer and never the memory itself.',
+  'Saving and deleting need the user to approve the exact change first, so propose one when it',
+  'is worth their attention, not after every turn.',
 ];
 
 /**
@@ -2960,6 +3127,16 @@ function appendToLastUserTurn(wire: CompletionMessage[], text: string): void {
     else if (Array.isArray(message.content)) message.content.push({ type: 'text', text });
     return;
   }
+}
+
+/**
+ * Whether a second boundary would move anything.
+ *
+ * A marker on its own does not count, so clearing an already-cleared conversation is refused
+ * rather than filling the transcript with dividers that separate nothing.
+ */
+function hasClearableHistory(messages: readonly ChatMessage[]): boolean {
+  return messagesSinceBoundary(messages).some(message => !message.boundary);
 }
 
 /**
@@ -3155,11 +3332,13 @@ async function toCompletionMessages(
 ): Promise<CompletionMessage[]> {
   const wire: CompletionMessage[] = [];
 
-  for (const message of session.messages) {
+  // Not `session.messages`: everything before the last `/clear` or `/compact` is deliberately
+  // not sent. See contextPruning.sentHistory, including what it costs the prompt cache.
+  for (const message of sentHistory(session.messages)) {
     const calls = message.toolCalls ?? [];
     // Artifact markup is stripped out of the stored text, so it has to go back in here: a model
     // that cannot see the artifact it just wrote cannot revise it.
-    const text = frameRelay(message, restoreArtifactMarkup(message));
+    const text = frameBoundary(message, frameRelay(message, restoreArtifactMarkup(message)));
 
     if (calls.length === 0) {
       const attachments = message.attachments ?? [];
@@ -3192,6 +3371,25 @@ async function toCompletionMessages(
   }
 
   return wire;
+}
+
+/**
+ * Say what a carried summary is, on the wire.
+ *
+ * It travels as a user turn for the same reason a relay does - that is the only role out-of-band
+ * text has here - and unframed it would read as the user having typed a wall of notes about
+ * their own conversation. Framed, the model reads it as the record of what it has already done,
+ * which is what makes the turn after a compaction continue the work rather than restart it.
+ */
+function frameBoundary(message: ChatMessage, text: string): string {
+  if (message.boundary?.kind !== 'compact' || text.length === 0) return text;
+  return [
+    '[This conversation was compacted here. Everything before this point is no longer in your',
+    'context; what follows is a summary of it, written for you. Treat it as the record of what',
+    'has already happened, not as a new request, and carry on from where it leaves off.]',
+    '',
+    text,
+  ].join('\n');
 }
 
 /**

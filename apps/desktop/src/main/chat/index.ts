@@ -20,6 +20,7 @@ import { IPC_CHANNELS } from '@shared/ipc';
 import type { McpMutationResult, McpServerInput, McpServersState } from '@shared/mcp';
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
+import { ApprovalModePreference } from './ApprovalModePreference';
 import { AttachmentStore } from './AttachmentStore';
 import { BrowserManager } from './browser/BrowserManager';
 import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
@@ -152,12 +153,20 @@ export function registerChat(auth: AuthService): RegisteredChat {
     `CHAT: preferred model for new conversations: ${PREFERRED_MODEL} (${MODEL_OVERRIDE ? 'B4M_DESKTOP_DEFAULT_MODEL' : 'built-in default'})`
   );
   const userData = app.getPath('userData');
+  // Beside the sessions directory rather than inside it: everything in there is migrated into
+  // a scope folder on first use, and this records how the user likes to work rather than
+  // anything belonging to one conversation or one account.
+  const approvalModes = new ApprovalModePreference(join(userData, 'approval-mode.json'));
   // Scoped to the backend and the account, not just to this machine: one install reaches
   // production and a local server, and can be signed in as a different person on each. The
   // provider is read per operation, so a switch takes effect on the next list with nothing
   // here to invalidate. See ./sessionScope for the key and the one-time migration.
-  const store = new SessionStore(join(userData, 'sessions'), PREFERRED_MODEL, randomUUID(), () =>
-    sessionScopeFor(auth.getState())
+  const store = new SessionStore(
+    join(userData, 'sessions'),
+    PREFERRED_MODEL,
+    randomUUID(),
+    () => sessionScopeFor(auth.getState()),
+    approvalModes
   );
   const access = new AccessStore(join(userData, 'tool-access.json'));
   // Its own file beside tool-access.json, and for the same reason: both record a consent the
@@ -323,6 +332,10 @@ export function registerChat(auth: AuthService): RegisteredChat {
   );
   ipcMain.handle(IPC_CHANNELS.chatStopReply, (_event, sessionId: string) => service.stop(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatContinueReply, (_event, sessionId: string) => service.continueReply(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatClearContext, (_event, sessionId: string) => service.clearContext(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatCompactContext, (_event, sessionId: string, focus?: string) =>
+    service.compactContext(sessionId, focus ?? '')
+  );
   ipcMain.handle(IPC_CHANNELS.chatSuggestNextPrompt, (_event, sessionId: string) =>
     service.suggestNextPrompt(sessionId)
   );

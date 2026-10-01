@@ -233,6 +233,37 @@ describe('groupToolCalls', () => {
   });
 });
 
+describe('memory rows', () => {
+  it('names the file a memory is, not the slug the tool was called with', () => {
+    expect(toolRowLabel(call('1', 'memory_read', { name: 'local-backend-for-client-testing' }))).toBe(
+      'Read local-backend-for-client-testing.md'
+    );
+    expect(toolRowLabel(call('2', 'memory_write', { name: 'a-fact' }))).toBe('Saved a-fact.md');
+    expect(toolRowLabel(call('3', 'memory_delete', { name: 'a-fact' }))).toBe('Forgot a-fact.md');
+  });
+
+  it('heads a run of recalls with how many there were', () => {
+    const groups = groupToolCalls([
+      call('1', 'memory_read', { name: 'local-backend-for-client-testing' }),
+      call('2', 'memory_read', { name: 'always-port-3000' }),
+      call('3', 'memory_read', { name: 'testing-is-time-boxed' }),
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].label).toBe('Recalled 3 memories');
+    expect(groups[0].calls.map(member => toolRowLabel(member))).toEqual([
+      'Read local-backend-for-client-testing.md',
+      'Read always-port-3000.md',
+      'Read testing-is-time-boxed.md',
+    ]);
+  });
+
+  it('says what it failed to do rather than claiming it recalled anything', () => {
+    expect(toolRowLabel(call('1', 'memory_read', { name: 'a-fact' }, 'error'))).toBe('Failed to read a-fact.md');
+    expect(toolRowLabel(call('2', 'memory_write', { name: 'a-fact' }, 'denied'))).toBe('Did not save a-fact.md');
+  });
+});
+
 describe('apply_patch rows', () => {
   const patched = (extra: Partial<ChatToolCall> = {}): ChatToolCall => ({
     ...call('1', 'apply_patch', { patchText: '*** Begin Patch\n*** End Patch' }),

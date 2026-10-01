@@ -5,6 +5,7 @@ import { exploreTool } from './exploreTool';
 import { fileRead, globFiles, grepSearch } from './fileTools';
 import { sessionArchive, sessionDelete, sessionList, sessionRead, sessionSend, sessionSpawn } from './hostTools';
 import { generateImageTool, generateMusicTool, generateSoundEffectTool, generateSpeechTool } from './mediaTools';
+import { memoryDelete, memoryRead, memoryWrite } from './memoryTools';
 import { bashExecute } from './shellTools';
 import { todoWrite } from './todoTool';
 import { fileEdit, fileWrite } from './writeTools';
@@ -79,11 +80,20 @@ const HOST_TOOLS: readonly ToolDefinition[] = [
   sessionDelete,
 ];
 
+/**
+ * The project's long-term memory: recall what was recorded before, and record something new.
+ *
+ * A family of its own because its risk is neither the filesystem's nor the server's. The store
+ * sits outside every folder the user shared - see memoryTools.ts for why it has to - so reading
+ * is ungated like every other read here, and writing and deleting are gated exactly as the file
+ * tools are, with the bytes shown: the user is allowing a change somewhere they never granted.
+ */
+const MEMORY_TOOLS: readonly ToolDefinition[] = [memoryRead, memoryWrite, memoryDelete];
+
 const BY_NAME = new Map(
-  [...localTools(false), applyPatch, exploreTool, ...MEDIA_TOOLS, ...HOST_TOOLS, ...BROWSER_TOOLS].map(tool => [
-    tool.schema.name,
-    tool,
-  ])
+  [...localTools(false), applyPatch, exploreTool, ...MEDIA_TOOLS, ...HOST_TOOLS, ...BROWSER_TOOLS, ...MEMORY_TOOLS].map(
+    tool => [tool.schema.name, tool]
+  )
 );
 
 export function findTool(name: string): ToolDefinition | undefined {
@@ -115,6 +125,8 @@ export function toolsForRequest(options: {
   modelId?: string;
   /** A hidden browser for this session; Code sessions get one, to test what they build. */
   browser?: boolean;
+  /** A resolved memory store. Needs a project, which is what the store is keyed on. */
+  memory?: boolean;
   /**
    * Schemas contributed by the user's connected MCP servers, already namespaced and framed
    * (see chat/mcp/names.ts). They are appended rather than merged into a family above because
@@ -128,6 +140,7 @@ export function toolsForRequest(options: {
     ...(options.media ? MEDIA_TOOLS : []),
     ...(options.host ? HOST_TOOLS : []),
     ...(options.browser ? BROWSER_TOOLS : []),
+    ...(options.memory ? MEMORY_TOOLS : []),
   ];
   return [
     ...available.map(tool => ({ toolSchema: tool.schema })),

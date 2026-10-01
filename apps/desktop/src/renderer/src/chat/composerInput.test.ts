@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
+import { matchCommands, parseCommandInvocation } from './commands';
 import {
   COMPOSER_BUTTON_LABELS,
   composerButtonAction,
   composerEscapeAction,
   composerKeyAction,
+  composerMenuAction,
   composerPlaceholder,
+  composerSubmitAction,
   shownSuggestion,
 } from './composerInput';
+import { skillQuery } from './skillMenu';
 
 const KEYS: [string, boolean][] = [
   ['Tab', false],
@@ -170,4 +174,78 @@ describe('composerPlaceholder', () => {
   it('goes back to the ordinary prompt once the draft has content', () => {
     expect(composerPlaceholder({ ...base, text: 'Keep', suggestion: 'Add a test' })).toBe('Send a message...');
   });
+});
+
+describe('the `/` menu', () => {
+  it('opens on a slash typed into an empty composer', () => {
+    expect(skillQuery('/')).toBe('');
+    expect(matchCommands('').map(command => command.name)).toEqual(['clear', 'compact']);
+  });
+
+  // A slash mid-sentence is punctuation, and a path is a path. Either opening a menu would mean
+  // dismissing one to carry on typing an ordinary message.
+  it('does not open on a slash that is not the first character', () => {
+    expect(skillQuery('fix /clear')).toBeNull();
+    expect(skillQuery('see src/clear.ts')).toBeNull();
+  });
+
+  it('filters as the name is typed, and empties when nothing matches', () => {
+    expect(matchCommands('com').map(command => command.name)).toEqual(['compact']);
+    expect(matchCommands('cle').map(command => command.name)).toEqual(['clear']);
+    expect(matchCommands('zz')).toEqual([]);
+  });
+
+  it('runs the highlighted row on Enter and on Tab, and walks it with the arrows', () => {
+    const open = { open: true, count: 2 };
+    expect(composerMenuAction('Enter', false, open)).toBe('run');
+    expect(composerMenuAction('Tab', false, open)).toBe('run');
+    expect(composerMenuAction('ArrowDown', false, open)).toBe('next');
+    expect(composerMenuAction('ArrowUp', false, open)).toBe('previous');
+  });
+
+  it('claims nothing while it is closed, or open over no rows', () => {
+    // The empty case is what keeps "a slash naming nothing is an ordinary message" true at the
+    // keyboard: Enter has to reach the send path rather than being swallowed by a menu.
+    expect(composerMenuAction('Enter', false, { open: true, count: 0 })).toBe('default');
+    expect(composerMenuAction('Enter', false, { open: false, count: 2 })).toBe('default');
+    expect(composerMenuAction('Enter', true, { open: true, count: 2 })).toBe('default');
+    expect(composerMenuAction('a', false, { open: true, count: 2 })).toBe('default');
+  });
+
+  // Escape refuses this one menu and leaves the text where it is - the composer remembers the
+  // draft that was dismissed, so nothing typed is lost and nothing is sent.
+  it('closes on Escape without touching the turn', () => {
+    expect(composerEscapeAction({ pickerOpen: true, streaming: false })).toBe('dismiss-picker');
+    expect(composerEscapeAction({ pickerOpen: true, streaming: true })).toBe('dismiss-picker');
+  });
+});
+
+describe('composerSubmitAction', () => {
+  it('runs a command, with whatever followed its name', () => {
+    const action = composerSubmitAction('/compact focus on the auth work');
+    expect(action.kind).toBe('command');
+    if (action.kind !== 'command') throw new Error('expected a command');
+    expect(action.invocation.command.name).toBe('compact');
+    expect(action.invocation.args).toBe('focus on the auth work');
+  });
+
+  it('runs a bare command with no argument', () => {
+    const action = composerSubmitAction('/clear');
+    expect(action.kind).toBe('command');
+    if (action.kind !== 'command') throw new Error('expected a command');
+    expect(action.invocation.args).toBe('');
+  });
+
+  /**
+   * The rule the whole surface rests on: a slash this app does not recognise is the user's own
+   * text. Swallowing `/foo` would make a path, a skill and a typo all vanish into a command
+   * menu that has no entry for them.
+   */
+  it.each(['/foo', '/etc/hosts', '/review src/x.ts', 'clear', '/ clear', 'tell me about /compact'])(
+    'sends %s as an ordinary message',
+    text => {
+      expect(composerSubmitAction(text)).toEqual({ kind: 'send' });
+      expect(parseCommandInvocation(text)).toBeNull();
+    }
+  );
 });
