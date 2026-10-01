@@ -503,12 +503,14 @@ export const web = new sst.aws.Nextjs(
       // Reserved concurrency on `dev` only. Reserved is also a hard ceiling; prod peaks ~319
       // concurrent with 0 throttles today, so capping at 150 would throttle into 429s. A sized
       // prod reservation needs an account-limit increase — deferred to a follow-up. (#9148)
-      // `concurrency` is not exposed on the Nextjs `server` prop (a narrow FunctionArgs subset),
-      // so it must be applied via `transform.server`, which takes full FunctionArgs.
+      // `concurrency`/`logging` are not exposed on the Nextjs `server` prop (a narrow FunctionArgs subset),
+      // so they must be applied via `transform.server`, which takes full FunctionArgs.
       server: args => {
         if ($app.stage === 'dev') {
           args.concurrency = { reserved: 150 };
         }
+        // SST defaults the server log group to 1 month; bound it explicitly to limit retained request logs.
+        args.logging = { retention: '1 week' };
       },
     },
     // Order the frontend deploy strictly AFTER the database migration Invocation (CI only). The
