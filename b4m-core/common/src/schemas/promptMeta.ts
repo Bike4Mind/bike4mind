@@ -339,6 +339,16 @@ export const CitableSourceSchema = z.object({
        * stamps the wrong shape should fail here, not render a badge that silently names nobody.
        */
       conflictsWith: z.array(z.string()).optional(),
+      /** Chip label origin (CitableSourceOrigin); a writer that stamps the wrong shape should fail here. */
+      sourceOrigin: z
+        .discriminatedUnion('kind', [
+          z.object({
+            kind: z.literal('lake'),
+            lakes: z.array(z.object({ id: z.string(), name: z.string() })).min(1),
+          }),
+          z.object({ kind: z.literal('library'), owned: z.boolean() }),
+        ])
+        .optional(),
       /** web_search's provider-located place (WebSearchPlace), the only source of map coordinates. */
       place: z
         .object({
