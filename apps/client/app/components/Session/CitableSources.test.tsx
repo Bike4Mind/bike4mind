@@ -118,6 +118,43 @@ describe('CitableSources cited-passage anchor', () => {
     expect(onCitationClick.mock.calls[0][0]).toMatchObject({ id: 'file-1' });
     expect(useSessionLayout.getState().citedPassage).toBeNull();
   });
+
+  it('hands an internal chip to onInternalCitationClick instead of navigating or writing the anchor', () => {
+    const onInternalCitationClick = vi.fn();
+    render(
+      <TestWrapper>
+        <CitationInteractionProvider value={{ onInternalCitationClick }}>
+          <CitableSources
+            citables={[lakeChip({ sourceSystem: 'knowledge_base', chunkId: 'c1', fullContext: 'Text.' })]}
+          />
+        </CitationInteractionProvider>
+      </TestWrapper>
+    );
+
+    fireEvent.click(screen.getByTestId('citable-source-chip'));
+
+    expect(onInternalCitationClick).toHaveBeenCalledTimes(1);
+    expect(onInternalCitationClick.mock.calls[0][0]).toMatchObject({ id: 'file-1' });
+    expect(useSessionLayout.getState().citedPassage).toBeNull();
+  });
+
+  it('leaves an external chip as a plain link when only onInternalCitationClick is provided', () => {
+    const onInternalCitationClick = vi.fn();
+    render(
+      <TestWrapper>
+        <CitationInteractionProvider value={{ onInternalCitationClick }}>
+          <CitableSources citables={[baseCitable]} />
+        </CitationInteractionProvider>
+      </TestWrapper>
+    );
+
+    const chip = screen.getByTestId('citable-source-chip');
+    fireEvent.click(chip);
+
+    expect(chip.tagName).toBe('A');
+    expect(chip).toHaveAttribute('href', 'https://example.com/doc');
+    expect(onInternalCitationClick).not.toHaveBeenCalled();
+  });
 });
 
 /**
